@@ -65,6 +65,7 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "budget_usd",
   "budget_policy",
   "inputs",
+  "max_goal_gate_retries",
 ]);
 
 const ATTRACTOR_ONLY_EDGE_ATTRS: ReadonlyMap<string, string> = new Map([

@@ -11,13 +11,8 @@ import { enqueue, rig } from "./helpers.ts";
 
 describe("executor — goal-gate enforcement (§3.4)", () => {
   test("gate succeeds → run completes cleanly", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      gate [shape=box, goal_gate=true];
-      done [shape=Msquare];
-      start -> gate -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  gate: {type: llm, prompt: x, goal_gate: true}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -63,17 +58,16 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
     // Fail-edge routes the gate's failure straight to terminal, so §3.7
     // (per-node fail retarget) doesn't fire. §3.4 (goal-gate at terminal)
     // catches it instead.
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      gate [shape=box, goal_gate=true, retry_target=fix];
-      fix [shape=box];
-      done [shape=Msquare];
-      start -> gate;
-      gate -> done [outcome=fail];
-      gate -> done;
-      fix -> gate;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  gate:
+    type: llm
+    prompt: g
+    retry: fix
+    on: {success: exit}
+  fix: {type: llm, prompt: f, next: gate}
+`;
+    const r = rig({ yaml });
     let gateAttempts = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -158,13 +152,8 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
   });
 
   test("gate fails with no retry_target anywhere → halt with goal_gate_unsatisfied", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      gate [shape=box, goal_gate=true];
-      done [shape=Msquare];
-      start -> gate -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  gate: {type: llm, prompt: x, goal_gate: true}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -220,18 +209,17 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
   test("gate keeps failing past max_goal_gate_retries=1 → halt", async () => {
     // Same fail-edge structure as the success-on-retry case. With cap=1,
     // the second failed gate exhausts retries.
-    const dot = `digraph G {
-      graph [max_goal_gate_retries=1];
-      start [shape=Mdiamond];
-      gate [shape=box, goal_gate=true, retry_target=fix];
-      fix [shape=box];
-      done [shape=Msquare];
-      start -> gate;
-      gate -> done [outcome=fail];
-      gate -> done;
-      fix -> gate;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+max-goal-gate-retries: 1
+steps:
+  gate:
+    type: llm
+    prompt: g
+    retry: fix
+    on: {success: exit}
+  fix: {type: llm, prompt: f, next: gate}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -302,15 +290,12 @@ describe("executor — §3.7 fail-routing retarget", () => {
   // so the §3.4 path handles it. The §3.7 fallback path is effectively
   // unreachable from the parser.
   test.skip("node fails with no fail-edge but retry_target set → retargets", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      work [shape=box, retry_target=rescue];
-      rescue [shape=box];
-      done [shape=Msquare];
-      start -> work -> done;
-      rescue -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  work: {type: llm, prompt: x, retry_target: rescue}
+  rescue: {type: llm, prompt: r}
+`;
+    const r = rig({ yaml });
     let workAttempts = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",

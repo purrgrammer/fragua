@@ -13,15 +13,7 @@ import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 describe("executor — AbortRegistry is not leaked on a build-path throw", () => {
   test("a store fault thrown mid-build leaves the registry clean", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        impl  [shape=box];
-        done  [shape=Msquare];
-        start -> impl;
-        impl -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n` });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",

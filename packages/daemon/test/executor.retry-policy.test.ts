@@ -46,13 +46,8 @@ async function driveUntilTerminal(r: ReturnType<typeof rig>, runId: string): Pro
 
 describe("executor — retry-policy enforcement", () => {
   test("retry status under budget → re-dispatched and eventually succeeds", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      flaky [shape=box, max_retries=3, retry_policy="none"];
-      done [shape=Msquare];
-      start -> flaky -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  flaky: {type: llm, prompt: x, max_retries: 3, retry_policy: none}\n`;
+    const r = rig({ yaml });
     let attempts = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -99,13 +94,8 @@ describe("executor — retry-policy enforcement", () => {
     // Operator may know the underlying cause is fixed and resume
     // (one more attempt) or raise the cap via
     // intent.max_retries_adjusted.
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      flaky [shape=box, max_retries=0];
-      done [shape=Msquare];
-      start -> flaky -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  flaky: {type: llm, prompt: x, max_retries: 0}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -161,13 +151,8 @@ describe("executor — retry-policy enforcement", () => {
     // backoff doesn't hold a `status='running'` slot. claimNextRun
     // counts running runs, so other queued runs can claim while this
     // one waits for resumeAt.
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      flaky [shape=box, max_retries=3, retry_policy="standard"];
-      done [shape=Msquare];
-      start -> flaky -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  flaky: {type: llm, prompt: x, max_retries: 3, retry_policy: standard}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -215,13 +200,8 @@ describe("executor — retry-policy enforcement", () => {
   });
 
   test("allow_partial=true on exhaustion → advance with PARTIAL_SUCCESS", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      flaky [shape=box, max_retries=0, allow_partial=true];
-      done [shape=Msquare];
-      start -> flaky -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  flaky: {type: llm, prompt: x, max_retries: 0, allow_partial: true}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",

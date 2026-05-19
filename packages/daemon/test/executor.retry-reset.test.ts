@@ -44,13 +44,8 @@ async function driveUntilTerminal(r: ReturnType<typeof rig>, runId: string): Pro
 
 describe("executor — retry counter reset on success (§3.5)", () => {
   test("retry then success clears internal.retry_count.<node>", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      work [shape=box, max_retries=3, retry_policy="none"];
-      done [shape=Msquare];
-      start -> work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x, max_retries: 3}\n`;
+    const r = rig({ yaml });
     let attempts = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -99,15 +94,12 @@ describe("executor — retry counter reset on success (§3.5)", () => {
     // still complete here, but a node with max_retries=1 would be exhausted.
     // We assert the counter is 0 after the final success and that only one
     // node.retry_scheduled event appears per pass (two total, not three+).
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      work [shape=box, max_retries=2, retry_policy="none"];
-      gate [shape=box, goal_gate=true, retry_target=work];
-      done [shape=Msquare];
-      start -> work -> gate -> done;
-      gate -> done [condition="outcome=fail"];
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  work: {type: llm, prompt: x, max_retries: 2}
+  gate: {type: llm, prompt: g, retry: work}
+`;
+    const r = rig({ yaml });
     let workAttempts = 0;
     let gateAttempts = 0;
 

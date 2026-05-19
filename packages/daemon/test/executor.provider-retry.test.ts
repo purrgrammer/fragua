@@ -45,15 +45,7 @@ function startToImplement(r: ReturnType<typeof rig>, target: string): void {
 
 describe("provider auto-retry — pause classification", () => {
   test("429 → paused_auto with reason=provider_retry + retry-attempted fact + routing key", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        impl  [shape=box];
-        done  [shape=Msquare];
-        start -> impl;
-        impl -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n` });
     startToImplement(r, "impl");
     registerPauseProviderNode(r, "impl", 429);
     enqueue(r, "auto-429", "start");
@@ -95,15 +87,7 @@ describe("provider auto-retry — pause classification", () => {
   });
 
   test("401 → paused with reason=provider_error (manual; no auto-retry)", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        impl  [shape=box];
-        done  [shape=Msquare];
-        start -> impl;
-        impl -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n` });
     startToImplement(r, "impl");
     registerPauseProviderNode(r, "impl", 401);
     enqueue(r, "manual-401", "start");
@@ -133,15 +117,7 @@ describe("provider auto-retry — pause classification", () => {
   });
 
   test("Retry-After header is honoured exactly in the resumeAt timestamp", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        impl  [shape=box];
-        done  [shape=Msquare];
-        start -> impl;
-        impl -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n` });
     startToImplement(r, "impl");
     registerPauseProviderNode(r, "impl", 429, 60_000);
     enqueue(r, "retry-after", "start");

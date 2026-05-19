@@ -56,13 +56,8 @@ async function driveUntilSettled(r: ReturnType<typeof rig>, runId: string): Prom
 
 describe("executor — max_retries pause + operator resume", () => {
   test("retries to exhaustion → paused{reason:max_retries} → cap raise + resume → succeeds", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      work [shape=box, max_retries=1, retry_policy="none"];
-      done [shape=Msquare];
-      start -> work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x, max_retries: 1}\n`;
+    const r = rig({ yaml });
     let attempts = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -145,13 +140,8 @@ describe("executor — max_retries pause + operator resume", () => {
   });
 
   test("naked intent.resume (no cap raise) re-pauses with attempts incremented — no halt", async () => {
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      work [shape=box, max_retries=1, retry_policy="none"];
-      done [shape=Msquare];
-      start -> work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x, max_retries: 1}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -232,13 +222,8 @@ describe("intent.max_retries_adjusted — override read", () => {
     //       at cap=1, then raise to cap=5 via intent.max_retries_adjusted
     //       + intent.resume, then observe that the work node gets
     //       additional attempts (the executor reads the override).
-    const dot = `digraph G {
-      start [shape=Mdiamond];
-      work [shape=box, max_retries=1, retry_policy="none"];
-      done [shape=Msquare];
-      start -> work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x, max_retries: 1}\n`;
+    const r = rig({ yaml });
 
     // (a) Fold check. Append the intent against a fresh enqueued run
     // and run the fold directly to confirm the routing delta shape.

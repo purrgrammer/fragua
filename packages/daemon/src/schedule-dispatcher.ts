@@ -211,14 +211,14 @@ function resolveSchedulingWorkflow(
   cwd: string,
   homeDir: string | undefined,
 ): ResolvedSchedulingWorkflow | null {
-  const looksLikePath = arg.includes("/") || arg.includes("\\") || arg.endsWith(".dot");
+  const looksLikePath = arg.includes("/") || arg.includes("\\") || arg.endsWith(".yaml");
   if (!looksLikePath) {
     const globalDir = resolvePath(homeDir ?? homedir(), ".swarm/workflows");
-    const globalCandidate = resolvePath(globalDir, `${arg}.dot`);
+    const globalCandidate = resolvePath(globalDir, `${arg}.yaml`);
     if (existsSync(globalCandidate)) {
       return { dotPath: globalCandidate, name: arg, scope: "global" };
     }
-    const localCandidate = resolvePath(cwd, ".swarm/workflows", `${arg}.dot`);
+    const localCandidate = resolvePath(cwd, ".swarm/workflows", `${arg}.yaml`);
     if (existsSync(localCandidate)) {
       return { dotPath: localCandidate, name: arg, scope: "local" };
     }

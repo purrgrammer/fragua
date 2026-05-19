@@ -23,17 +23,15 @@ describe("buildSubstitutionArgs", () => {
 
 describe("executor — edge selection", () => {
   test("handler leaves nextNode unset → executor picks via condition (outcome=fail)", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      implement [shape=box];
-      verify [shape=box];
-      done [shape=Msquare];
-      start -> implement;
-      implement -> done [outcome=fail];
-      implement -> verify;
-      verify -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  implement:
+    type: llm
+    prompt: i
+    on: {success: verify, fail: exit}
+  verify: {type: llm, prompt: v}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -88,17 +86,15 @@ describe("executor — edge selection", () => {
   });
 
   test("outcome=success routes to unconditional edge, not the fail-conditioned one", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      implement [shape=box];
-      verify [shape=box];
-      done [shape=Msquare];
-      start -> implement;
-      implement -> done [outcome=fail];
-      implement -> verify;
-      verify -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  implement:
+    type: llm
+    prompt: i
+    on: {success: verify, fail: exit}
+  verify: {type: llm, prompt: v}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -154,17 +150,15 @@ describe("executor — edge selection", () => {
     // the fail-conditioned edge to done (Msquare terminal). The run
     // must NOT report status=completed — the graph exited via a failure
     // branch. Mapped to UI status="fail" via mapStatus(halted).
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      implement [shape=box];
-      verify [shape=box];
-      done [shape=Msquare];
-      start -> implement;
-      implement -> done [outcome=fail];
-      implement -> verify;
-      verify -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  implement:
+    type: llm
+    prompt: i
+    on: {success: verify, fail: exit}
+  verify: {type: llm, prompt: v}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -220,15 +214,14 @@ describe("executor — edge selection", () => {
     // result.failureReason → fact.run_halted.detail. Used to die at the
     // last hop because the detail was hardcoded to "reached <node> via
     // outcome=fail".
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      check [shape=box];
-      done [shape=Msquare];
-      start -> check;
-      check -> done [outcome=fail];
-      check -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  check:
+    type: llm
+    prompt: c
+    on: {success: exit, fail: exit}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -279,19 +272,16 @@ describe("executor — edge selection", () => {
     // fail outcome to a terminal halt — blocking review → fix recovery in
     // build-feature.dot. With the fix, fail flows through as a transition
     // and the edge selector picks the explicit fail-edge.
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      review [shape=box];
-      fix [shape=box];
-      verify [shape=box];
-      done [shape=Msquare];
-      start -> review;
-      review -> fix [outcome=fail, label="rejected"];
-      review -> verify;
-      fix -> verify;
-      verify -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  review:
+    type: llm
+    prompt: r
+    on: {success: verify, fail: fix}
+  fix: {type: llm, prompt: f, next: verify}
+  verify: {type: llm, prompt: v}
+`;
+    const r = rig({ yaml });
     let fixHandlerCalls = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -361,16 +351,12 @@ describe("executor — edge selection", () => {
     // Mirrors quick-change.dot's commit/merge nodes — no fail-edge means
     // a fail outcome should halt rather than route into the unconditional
     // success edge.
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      commit [shape=box];
-      merge [shape=box];
-      done [shape=Msquare];
-      start -> commit;
-      commit -> merge;
-      merge -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  commit: {type: llm, prompt: c, next: merge}
+  merge: {type: llm, prompt: m}
+`;
+    const r = rig({ yaml });
     let mergeHandlerCalls = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -694,14 +680,14 @@ describe("executor — allowed_tools hard filter at dispatch", () => {
     // narrows ctx.tools via ToolRegistry.select, so ctx.tools.get("bash")
     // throws synchronously — the outer executor maps that to a
     // HandlerResult halt and appends fact.run_halted { reason: "error" }.
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      restricted [shape=box, allowed_tools="read"];
-      done [shape=Msquare];
-      start -> restricted;
-      restricted -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  restricted:
+    type: llm
+    prompt: r
+    allowed-tools: [read]
+`;
+    const r = rig({ yaml });
 
     // Register the restricted tools in the registry so they exist at
     // the global level; allowed_tools is what restricts them per-node.
@@ -822,15 +808,13 @@ describe("executor — provider pause and resume", () => {
   }
 
   test("multi-step workflow: pause on step 3 → resume re-dispatches step 3 only, run completes", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      s1 [shape=box];
-      s2 [shape=box];
-      s3 [shape=box];
-      done [shape=Msquare];
-      start -> s1 -> s2 -> s3 -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  s1: {type: llm, prompt: a}
+  s2: {type: llm, prompt: b}
+  s3: {type: llm, prompt: c}
+`;
+    const r = rig({ yaml });
     const calls: Array<{ nodeId: string; iteration: number }> = [];
 
     r.dispatcher.register(r.workflowSha, "start", {
@@ -931,15 +915,13 @@ describe("executor — provider pause and resume", () => {
     // dispatch (s3 doesn't write any messages here — the assertion is
     // that the prior nodes' messages are preserved, scoped, and not
     // mixed into s3's scope).
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      s1 [shape=box];
-      s2 [shape=box];
-      s3 [shape=box];
-      done [shape=Msquare];
-      start -> s1 -> s2 -> s3 -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+steps:
+  s1: {type: llm, prompt: a}
+  s2: {type: llm, prompt: b}
+  s3: {type: llm, prompt: c}
+`;
+    const r = rig({ yaml });
 
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",

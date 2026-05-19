@@ -29,13 +29,8 @@ import { enqueue, rig } from "./helpers.ts";
 
 describe("executor — abort path surfaces handler-emitted cost.recorded as partial usage", () => {
   test("aborted codergen-shaped handler reports partial tokens/cost on fact.node_aborted and in run_state.metrics", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      impl [shape=box];
-      done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",

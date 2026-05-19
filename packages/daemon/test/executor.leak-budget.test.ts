@@ -39,13 +39,8 @@ function leakingHandler(): {
 
 describe("executor — leak budget", () => {
   test("first leak does not fire onLeakLimitExceeded; the Nth one does, exactly once", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      hang [shape=box];
-      done [shape=Msquare];
-      start -> hang -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  hang: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -119,13 +114,8 @@ describe("executor — leak budget", () => {
   });
 
   test("staying under the limit never fires the callback", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      hang [shape=box];
-      done [shape=Msquare];
-      start -> hang -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  hang: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -173,13 +163,8 @@ describe("executor — leak budget", () => {
   });
 
   test("ExecutorOpts.clock pins the fact.handler_timeout_leaked payload's leakedAt", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      hang [shape=box];
-      done [shape=Msquare];
-      start -> hang -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  hang: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",

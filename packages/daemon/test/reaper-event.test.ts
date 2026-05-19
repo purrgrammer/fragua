@@ -15,7 +15,7 @@ function rig(): {
   llmCall: handler.LlmCallFn;
 } {
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf", "t", "digraph{}");
+  store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   return {
     store,
     dispatcher: new Dispatcher(),

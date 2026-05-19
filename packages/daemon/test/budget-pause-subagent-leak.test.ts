@@ -31,7 +31,7 @@ describe("budget-pause sub-agent leak — overshoot measurement", () => {
   test("parent abort during in-flight sub-agent stream: cost events stop within a bounded window", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-budget-leak-"));
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("wf", "t", "digraph{}");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     store.enqueueRun({ runId: "test-leak", workflowSha: "wf" });
 
     const faux = registerFauxProvider({ tokensPerSecond: 100 });

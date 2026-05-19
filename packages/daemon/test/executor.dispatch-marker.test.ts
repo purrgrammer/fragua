@@ -12,14 +12,8 @@ import { enqueue, rig } from "./helpers.ts";
 
 describe("executor — fact.dispatch_started emission", () => {
   test("fires once per non-first dispatch; first dispatch covered by run_started", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      middle [shape=box];
-      tail [shape=Msquare];
-      start -> middle;
-      middle -> tail;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  middle: {type: llm, prompt: x, next: tail}\n  tail: {type: llm, prompt: y}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -83,8 +77,8 @@ describe("executor — fact.dispatch_started emission", () => {
     // mid-call. The handler reads run_state directly (it's pure SQL,
     // not the executor's local snapshot), so we see what other
     // observers would see.
-    const dot = `digraph { start [shape=Mdiamond]; start -> __end__ }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     let observedDispatchStartedAt: number | null | undefined;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",

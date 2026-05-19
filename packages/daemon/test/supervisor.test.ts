@@ -17,11 +17,7 @@ afterEach(() => {
 function makeRunningStore(runId: string, workflowSha: string): SqliteStore {
   const store = new SqliteStore({ path: ":memory:" });
   closers.push(() => store.close());
-  store.saveWorkflow(
-    workflowSha,
-    "t",
-    `digraph { start [shape=Mdiamond]; impl [shape=box]; done [shape=Msquare]; start -> impl -> done; }`,
-  );
+  store.saveWorkflow(workflowSha, "t", `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`);
   store.enqueueRun({ runId, workflowSha, initialRouting: { start_node: "start" } });
   store.claimNextRun(1);
   const facts = [

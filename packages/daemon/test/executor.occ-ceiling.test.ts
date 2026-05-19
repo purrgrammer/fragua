@@ -49,13 +49,7 @@ function wrapAppendFactWithOccBurst(
 
 describe("OCC ceiling — fact.run_started storm", () => {
   test("3 consecutive ConcurrencyError trips occ_exhausted halt with structured payload", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        done  [shape=Msquare];
-        start -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  work: {type: llm, prompt: x}\n` });
     enqueue(r, "occ-3", "start");
     r.store.claimNextRun(1);
 
@@ -99,13 +93,7 @@ describe("OCC ceiling — fact.run_started storm", () => {
   });
 
   test("2 consecutive ConcurrencyError emits one warning and recovers without halting", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        done  [shape=Msquare];
-        start -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  work: {type: llm, prompt: x}\n` });
     registerStartAndDone(r);
     enqueue(r, "occ-2", "start");
     r.store.claimNextRun(1);
@@ -137,13 +125,7 @@ describe("OCC ceiling — fact.run_started storm", () => {
   });
 
   test("1 ConcurrencyError followed by success — no warning, run proceeds", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        done  [shape=Msquare];
-        start -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  work: {type: llm, prompt: x}\n` });
     registerStartAndDone(r);
     enqueue(r, "occ-1", "start");
     r.store.claimNextRun(1);

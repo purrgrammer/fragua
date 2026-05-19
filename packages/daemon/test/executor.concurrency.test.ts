@@ -79,14 +79,8 @@ async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<b
 
 describe("executor — concurrency", () => {
   test("three runs execute in parallel up to maxConcurrentRuns", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      work [shape=box];
-      done [shape=Msquare];
-      start -> work;
-      work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     setupRun(r, "work", 200);
 
     enqueue(r, "run-a", "start");
@@ -135,14 +129,8 @@ describe("executor — concurrency", () => {
   test("shutdown drains quickly when in-flight runs finish promptly", async () => {
     // Handlers complete on their own within the drain budget — the
     // executor should wait for them and return only after all settled.
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      work [shape=box];
-      done [shape=Msquare];
-      start -> work;
-      work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     let entered = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -204,14 +192,8 @@ describe("executor — concurrency", () => {
     // budget. The executor must still return within ~drainMs (not
     // block forever) — the subsequent daemon startupSweep will
     // requeue any runs left in `running`.
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      work [shape=box];
-      done [shape=Msquare];
-      start -> work;
-      work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     let handlerEntered = false;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -264,14 +246,8 @@ describe("executor — concurrency", () => {
   });
 
   test("uncaught exception inside runOne lands fact.run_halted", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      work [shape=box];
-      done [shape=Msquare];
-      start -> work;
-      work -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     setupRun(r, "work", 10);
 
     enqueue(r, "boom", "start");

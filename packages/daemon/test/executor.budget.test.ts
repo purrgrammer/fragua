@@ -13,17 +13,13 @@ describe("executor — budget enforcement", () => {
     // Non-terminal next node so the pause path is exercised independent
     // of any terminal-transition interaction. See the
     // "breach on terminal turn → completed" test below for that case.
-    const dot = `digraph G {
-      graph [budget_usd=1.0];
-      start [shape=Mdiamond];
-      spend [shape=box];
-      checkpoint [shape=box];
-      done [shape=Msquare];
-      start -> spend;
-      spend -> checkpoint;
-      checkpoint -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+budget: 1.0
+steps:
+  spend: {type: llm, prompt: s, next: checkpoint}
+  checkpoint: {type: llm, prompt: c}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -101,15 +97,12 @@ describe("executor — budget enforcement", () => {
     // registered for <sha>::done" (or `__end__` if `done` itself had
     // a handler chain). Fix: skip the pause-fact swap when the
     // result is already terminal.
-    const dot = `digraph G {
-      graph [budget_usd=1.0];
-      start [shape=Mdiamond];
-      spend [shape=box];
-      done [shape=Msquare];
-      start -> spend;
-      spend -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+budget: 1.0
+steps:
+  spend: {type: llm, prompt: s}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -152,15 +145,13 @@ describe("executor — budget enforcement", () => {
   });
 
   test("budget_policy=stop; handler costs 1.5 → status=halted, reason=budget", async () => {
-    const dot = `digraph G {
-      graph [budget_usd=1.0, budget_policy="stop"];
-      start [shape=Mdiamond];
-      spend [shape=box];
-      done [shape=Msquare];
-      start -> spend;
-      spend -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+budget: 1.0
+budget-policy: stop
+steps:
+  spend: {type: llm, prompt: s}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -235,15 +226,13 @@ describe("executor — budget enforcement", () => {
   });
 
   test("budget_policy=warn → over-budget emits stop event but run completes", async () => {
-    const dot = `digraph G {
-      graph [budget_usd=1.0, budget_policy="warn"];
-      start [shape=Mdiamond];
-      spend [shape=box];
-      done [shape=Msquare];
-      start -> spend;
-      spend -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+budget: 1.0
+budget-policy: warn
+steps:
+  spend: {type: llm, prompt: s}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -289,17 +278,13 @@ describe("executor — budget enforcement", () => {
     // Two-step spend: first turn brings cumulative to 0.85 (above warn), second
     // turn brings it to 0.95 (still above warn but we already warned). Expect
     // exactly one budget.warn in the event stream.
-    const dot = `digraph G {
-      graph [budget_usd=1.0];
-      start [shape=Mdiamond];
-      a [shape=box];
-      b [shape=box];
-      done [shape=Msquare];
-      start -> a;
-      a -> b;
-      b -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+budget: 1.0
+steps:
+  a: {type: llm, prompt: x, next: b}
+  b: {type: llm, prompt: y}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -352,15 +337,13 @@ describe("executor — budget enforcement", () => {
     // first time cumulative spend crosses the ceiling, so overshoot
     // is bounded by one in-flight LLM message rather than the whole
     // sub-agent fan-out.
-    const dot = `digraph G {
-      graph [budget_usd=1.0, budget_policy="stop"];
-      start [shape=Mdiamond];
-      orchestrate [shape=box];
-      done [shape=Msquare];
-      start -> orchestrate;
-      orchestrate -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t
+budget: 1.0
+budget-policy: stop
+steps:
+  orchestrate: {type: llm, prompt: o}
+`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",

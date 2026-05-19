@@ -17,15 +17,7 @@ import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 describe("executor — pause mid-dispatch routes through abort-throw + next-fold", () => {
   test("handler throws AbortError when signal trips → run_paused (operator), not halted", async () => {
-    const r = rig({
-      dot: `digraph {
-        start [shape=Mdiamond];
-        impl  [shape=box];
-        done  [shape=Msquare];
-        start -> impl;
-        impl -> done;
-      }`,
-    });
+    const r = rig({ yaml: `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n` });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",

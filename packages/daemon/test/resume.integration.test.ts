@@ -35,11 +35,11 @@ interface Rig {
   cleanup: () => void;
 }
 
-function makeRig(dot: string, sha = "wf"): Rig {
+function makeRig(yaml: string, sha = "wf"): Rig {
   const dir = mkdtempSync(join(tmpdir(), "swarm-resume-"));
   const dbPath = join(dir, "swarm.db");
   const store = new SqliteStore({ path: dbPath });
-  store.saveWorkflow(sha, "wf", dot);
+  store.saveWorkflow(sha, "wf", yaml);
   return {
     store,
     dispatcher: new Dispatcher(),
@@ -81,8 +81,8 @@ async function runUntilSettled(store: SqliteStore, dispatcher: Dispatcher, runId
 
 describe("resume integration — activeMs, dispatch_started, crash recovery", () => {
   test("happy path: multi-node run accumulates activeMs > 0 in projection", async () => {
-    const dot = `digraph { start [shape=Mdiamond]; mid [shape=box]; tail [shape=box]; start -> mid; mid -> tail; tail -> __end__ }`;
-    const r = makeRig(dot);
+    const yaml = `name: t\nsteps:\n  mid: {type: llm, prompt: m}\n  tail: {type: llm, prompt: t}\n`;
+    const r = makeRig(yaml);
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -123,8 +123,8 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
   });
 
   test("crash mid-handler: sweep + new executor resumes and completes the run", async () => {
-    const dot = `digraph { start [shape=Mdiamond]; start -> __end__ }`;
-    const r = makeRig(dot);
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = makeRig(yaml);
 
     // Handler-1 hangs on a deferred. We'll abandon the runOne promise
     // mid-flight, then resolve the deferred at test end so the orphan
@@ -218,11 +218,8 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     // executor's `needsStart` then re-fired fact.run_started, and the
     // workflow re-ran from the start node end-to-end. Visible in the wild
     // as duplicate edges in selectedEdges and collapsed nodes[] state.
-    const dot = `digraph {
-      start [shape=Mdiamond]; collect [shape=box]; deep [shape=box];
-      start -> collect; collect -> deep; deep -> __end__
-    }`;
-    const r = makeRig(dot);
+    const yaml = `name: t\nsteps:\n  collect: {type: llm, prompt: c}\n  deep: {type: llm, prompt: d}\n`;
+    const r = makeRig(yaml);
     let resolveHang: (v: { kind: "halt"; reason: "error"; detail: string }) => void = () => undefined;
     const hangPromise = new Promise<{ kind: "halt"; reason: "error"; detail: string }>((res) => {
       resolveHang = res;
@@ -328,8 +325,8 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
   });
 
   test("pause-resume cycle emits fact.dispatch_started with resumeOf=paused_human", async () => {
-    const dot = `digraph { start [shape=Mdiamond]; start -> __end__ }`;
-    const r = makeRig(dot);
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = makeRig(yaml);
 
     // Pause the run programmatically by appending an intent that the
     // executor's foldIntents will turn into fact.run_paused_human.
@@ -387,8 +384,8 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     // Two-node workflow so we can interleave pauses and crashes between
     // dispatches. start hangs on a controllable promise per dispatch
     // (so we can trigger crashes) but resolves cleanly when allowed.
-    const dot = `digraph { start [shape=Mdiamond]; mid [shape=box]; start -> mid; mid -> __end__ }`;
-    const r = makeRig(dot);
+    const yaml = `name: t\nsteps:\n  mid: {type: llm, prompt: m}\n`;
+    const r = makeRig(yaml);
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -455,8 +452,8 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
   });
 
   test("per-node timeout emits fact.node_aborted (timeout cause), distinct from crash path", async () => {
-    const dot = `digraph { start [shape=Mdiamond]; start -> __end__ }`;
-    const r = makeRig(dot);
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = makeRig(yaml);
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -497,8 +494,8 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     // reaper-event.test.ts. This test focuses on the cross-cutting
     // assertion: daemon_events + per-run events + projection all
     // tell the same story.
-    const dot = `digraph { start [shape=Mdiamond]; start -> __end__ }`;
-    const r = makeRig(dot);
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = makeRig(yaml);
 
     // Phase 1 — start a run, dispatch hangs, abandon the runOne.
     let resolveHang: (v: { kind: "halt"; reason: "error"; detail: string }) => void = () => undefined;

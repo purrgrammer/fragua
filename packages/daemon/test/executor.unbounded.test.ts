@@ -19,13 +19,8 @@ import { enqueue, rig } from "./helpers.ts";
 
 describe("unbounded codergen — no AbortSignal.timeout fires", () => {
   test("a codergen spec with maxMs undefined does not abort a long-running handler past the 4h ceiling", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      impl [shape=box];
-      done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -111,13 +106,8 @@ describe("unbounded codergen — no AbortSignal.timeout fires", () => {
 
 describe("unbounded codergen — operator + shutdown aborts still apply", () => {
   test("a codergen spec with maxMs undefined still aborts on operator cancel", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      impl [shape=box];
-      done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     const registry = new AbortRegistry();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -171,13 +161,8 @@ describe("unbounded codergen — operator + shutdown aborts still apply", () => 
   });
 
   test("a codergen spec with maxMs undefined still aborts on shutdown signal", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      impl [shape=box];
-      done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     const shutdown = new AbortController();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",

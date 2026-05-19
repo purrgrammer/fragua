@@ -13,19 +13,10 @@ import {
   isTerminal as isTerminalStatus,
   SqliteStore,
 } from "@swarm/store";
-import { dotToYaml, lowerIfDot } from "../../core/test/helpers/dot-to-yaml.ts";
 import { scheduleDispatcherTick } from "../src/schedule-dispatcher.ts";
-void dotToYaml;
-// Monkey-patch saveWorkflow at the test-file level so inline DOT fixtures
-// keep working across the cutover. Lowers DOT → YAML on the way in.
-{
-  const _origSave = SqliteStore.prototype.saveWorkflow;
-  SqliteStore.prototype.saveWorkflow = function (sha: string, name: string, source: string) {
-    return _origSave.call(this, sha, name, lowerIfDot(source));
-  };
-}
 
 const HOUR_MS = 60 * 60 * 1000;
+const TRIVIAL_YAML = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
 
 interface Fixture {
   store: SqliteStore;
@@ -34,8 +25,8 @@ interface Fixture {
   cleanup: () => void;
   now: number;
   setNow: (t: number) => void;
-  /** Write `<homeDir>/.swarm/workflows/<name>.dot` with the given source. */
-  writeWorkflow: (name: string, dotSource: string) => string;
+  /** Write `<homeDir>/.swarm/workflows/<name>.yaml` with the given source. */
+  writeWorkflow: (name: string, yamlSource?: string) => string;
   tick: () => { fired: number; skipped: number; paused: number };
   freshRunId: () => string;
 }
@@ -60,9 +51,9 @@ function newFixture(): Fixture {
     setNow: (t) => {
       now = t;
     },
-    writeWorkflow: (name, dotSource) => {
+    writeWorkflow: (name, yamlSource) => {
       const path = join(home, ".swarm/workflows", `${name}.yaml`);
-      writeFileSync(path, lowerIfDot(dotSource));
+      writeFileSync(path, yamlSource ?? TRIVIAL_YAML);
       return path;
     },
     tick: () => {
@@ -93,9 +84,9 @@ afterEach(() => {
   f.cleanup();
 });
 
-describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () => {
+describe("schedule-dispatcher", () => {
   test("fires immediately on create when fireOnCreate=true and enqueues a run carrying scheduleId", () => {
-    f.writeWorkflow("analyze", "digraph G { a -> b }");
+    f.writeWorkflow("analyze", TRIVIAL_YAML);
     f.store.createSchedule(
       {
         id: "sch_a",
@@ -127,10 +118,10 @@ describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () =>
   });
 
   test("skips fire when overlap_policy=skip and last_run_id is non-terminal; advances next_fire_at", () => {
-    f.writeWorkflow("wf", "digraph G { a -> b }");
+    f.writeWorkflow("wf", TRIVIAL_YAML);
     // Manually seed a non-terminal prior run via the store API.
     const sha = "wf_sha_seed";
-    f.store.saveWorkflow(sha, "wf", "digraph G { a -> b }");
+    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML);
     const priorRun = "run_prior";
     f.store.enqueueRun({ runId: priorRun, workflowSha: sha, scheduleId: "sch_o" });
     expect(isTerminalStatus(f.store.getState(priorRun)!.status)).toBe(false);
@@ -162,9 +153,9 @@ describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () =>
   });
 
   test("queue overlap policy fires regardless of in-flight last run", () => {
-    f.writeWorkflow("wf", "digraph G { a -> b }");
+    f.writeWorkflow("wf", TRIVIAL_YAML);
     const sha = "wf_sha_q";
-    f.store.saveWorkflow(sha, "wf", "digraph G { a -> b }");
+    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML);
     const priorRun = "run_prior_q";
     f.store.enqueueRun({ runId: priorRun, workflowSha: sha });
 
@@ -190,7 +181,7 @@ describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () =>
   });
 
   test("emits fact.schedule_late with missedIntervals when next_fire_at is multiple intervals stale", () => {
-    f.writeWorkflow("wf", "digraph G { a -> b }");
+    f.writeWorkflow("wf", TRIVIAL_YAML);
     f.store.createSchedule(
       {
         id: "sch_l",
@@ -244,8 +235,8 @@ describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () =>
     expect((events[0]!.payload as { error: string }).error).toMatch(/not found/);
   });
 
-  test("auto-pauses when DOT source fails to parse", () => {
-    f.writeWorkflow("broken", "this is not valid dot {{{");
+  test("auto-pauses when YAML source fails to parse", () => {
+    f.writeWorkflow("broken", "this is not valid yaml: : :{{{");
     f.store.createSchedule(
       {
         id: "sch_bad",
@@ -267,7 +258,7 @@ describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () =>
   });
 
   test("paused schedules are not surfaced by getDueSchedules", () => {
-    f.writeWorkflow("wf", "digraph G { a -> b }");
+    f.writeWorkflow("wf", TRIVIAL_YAML);
     f.store.createSchedule(
       { id: "sch_p", workflowRef: "wf", cwd: f.cwd, intervalMs: HOUR_MS, intervalText: "1h" },
       f.now,
@@ -281,7 +272,7 @@ describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () =>
   });
 
   test("transient run failure does not pause the schedule", () => {
-    f.writeWorkflow("wf", "digraph G { a -> b }");
+    f.writeWorkflow("wf", TRIVIAL_YAML);
     f.store.createSchedule(
       { id: "sch_t", workflowRef: "wf", cwd: f.cwd, intervalMs: HOUR_MS, intervalText: "1h" },
       f.now,
@@ -303,7 +294,7 @@ describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () =>
   });
 
   test("wall-clock backwards jump leaves the schedule waiting (no double-fire)", () => {
-    f.writeWorkflow("wf", "digraph G { a -> b }");
+    f.writeWorkflow("wf", TRIVIAL_YAML);
     f.store.createSchedule(
       { id: "sch_back", workflowRef: "wf", cwd: f.cwd, intervalMs: HOUR_MS, intervalText: "1h" },
       f.now,

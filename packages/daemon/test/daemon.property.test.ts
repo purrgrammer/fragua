@@ -199,7 +199,7 @@ describe("P11 — HITL durability across simulated crash", () => {
 
     // Phase 1: open, pause at HITL.
     const s1 = new SqliteStore({ path: dbPath });
-    s1.saveWorkflow("wf", "t", "digraph{}");
+    s1.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     const dispatcher = new Dispatcher();
     dispatcher.register(
       "wf",

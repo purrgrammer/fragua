@@ -120,13 +120,8 @@ function registerHangingWorkflow(r: ReturnType<typeof rig>, implMaxMs: number): 
 
 describe("executor — timeout projects as fact.node_aborted cause=timeout", () => {
   test("hanging handler aborted by maxMs writes fact.node_aborted{cause:timeout}", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      impl [shape=box];
-      done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -180,11 +175,8 @@ describe("executor — timeout projects as fact.node_aborted cause=timeout", () 
 
 describe("executor — watchdog timeout pause-retry", () => {
   test("first watchdog timeout pauses the run as paused_auto{reason:'timeout_retry'}", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond]; impl [shape=box]; done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     registerHangingWorkflow(r, 20);
     enqueue(r, "wd-1", "start");
     await runOne("wd-1", {
@@ -240,11 +232,8 @@ describe("executor — watchdog timeout pause-retry", () => {
   });
 
   test("third consecutive watchdog timeout halts with reason=timeout_exhausted", async () => {
-    const dot = `digraph {
-      start [shape=Mdiamond]; impl [shape=box]; done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     registerHangingWorkflow(r, 10);
     enqueue(r, "wd-3", "start");
 
@@ -303,11 +292,8 @@ describe("executor — watchdog timeout pause-retry", () => {
     // DEFAULT_ABORT_LOOP_CEILING (=5) only if they accumulated. Since
     // they're now pause-retry paths, the ceiling never trips: the run
     // halts via timeout_exhausted at attempt 3, not via abort_loop.
-    const dot = `digraph {
-      start [shape=Mdiamond]; impl [shape=box]; done [shape=Msquare];
-      start -> impl -> done;
-    }`;
-    const r = rig({ dot });
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
     registerHangingWorkflow(r, 10);
     enqueue(r, "wd-2", "start");
     const opts = {
