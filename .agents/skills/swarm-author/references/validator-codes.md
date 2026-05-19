@@ -12,7 +12,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E004 | Edge references a node id that doesn't exist. Typo in source or target. |
 | E006 | Cycle with no reachable exit — the run can't terminate. |
 | E008 | `parallelogram` node without `tool_command=`. |
-| E009 | `hexagon` node has no outgoing edges — operator's selection has nowhere to route. |
+| E009 | Human node (`kind=human` / `shape=hexagon`) has no outgoing edges and no `routes=` — operator would have no choices. |
 | E010 | `hexagon` outgoing edges produce duplicate accelerator keys (e.g. two `[A] …`). |
 | E011 | `retry_target` / `fallback_retry_target` references an undefined node. |
 | E012 | Start node has incoming edges (attractor §11.2). |
@@ -20,6 +20,16 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E014 | Edge `condition` failed to parse — most often a literal containing whitespace. Quote the literal or use an underscored sentinel (e.g. `RANK_CLEAN`). |
 | E015 | `model_stylesheet` syntax error. Surfaces parse failures at validate-time. |
 | E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | wait.human | tool`). Typo or invented type — there is no extension surface. |
+| E017 | Routing node (non-empty `routes=`) has an outgoing edge with `outcome=`. Routing nodes must discriminate via `route=` only. |
+| E018 | Single edge sets both `outcome=` and `route=`. An edge must have exactly one discriminator. |
+| E019 | Edge `route=X` where source node either declares no `routes=`, or declares `routes=` that does not include `X`. |
+| E020 | Routing node has an outgoing edge with neither `route=` nor `outcome=` — every edge from a routing node must be annotated. |
+| E021 | Node declares `routes=…,X,…` but no outgoing edge has `route=X`. Undischarged route — missing edge or renamed value. |
+| E022 | Human node (`kind=human` / `shape=hexagon`) has no `routes=` declaration — operator needs at least one named route. |
+| E023 | Node combines `goal_gate=true` and `routes=` — mutually exclusive exit strategies. |
+| E024 | From a single source, two or more edges share the same `outcome=` value, or share the same `route=` value. Shadowed edge. |
+| E025 | Explicit `kind=` contradicts the shape's mapping via `SHAPE_TO_KIND` (e.g. `kind=codergen shape=hexagon`). Align `kind=` with the shape or change the shape. `shape=hexagon kind=human` is valid (alias). |
+| E026 | Node sets `text=` but is not a human node — `text=` is only meaningful on `kind=human` nodes. |
 
 ## Warnings
 
@@ -28,7 +38,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | W001 | Orphan node (no in-edges, not start). Usually a copy/paste leftover. |
 | W002 | Node unreachable from start. Dead code. |
 | W003 | Node has only conditional edges, no `outcome=fail` catch-all. |
-| W004 | Hexagon outgoing edge uses legacy `context.hitl.*` condition. Structured HITL routes by `[K] Label` accelerator (see SKILL §12). |
+| W004 | *(removed)* Was: hexagon outgoing edge uses legacy `context.hitl.*` condition. Rule deleted; routing is now discriminated by `route=` / `routes=`. |
 | W005 | Duplicate edge. |
 | W006 | Reserved / unused. |
 | W007 | `goal_gate=true` node has no retarget at any level — failure can only halt. |

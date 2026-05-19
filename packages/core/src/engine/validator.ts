@@ -2,7 +2,7 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import { parseAcceleratorKey } from "../accelerator.ts";
-import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType } from "../types/graph.ts";
+import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType, SHAPE_TO_KIND } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
 import { parseStylesheet, StylesheetParseError, selectorMatches } from "./stylesheet.ts";
@@ -316,45 +316,21 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E009: hexagon (wait.human) needs ≥1 outgoing edge — otherwise the
-  // operator has no choices to pick. Catches the same construction
-  // failure auto-dispatcher flags at runtime, but at validate-time so
-  // bad workflows never enqueue.
+  // E009: human node needs ≥1 outgoing edge — otherwise the operator has
+  // no choices. Human nodes declare those choices via routes= (for the
+  // route-discriminated model) or bare edges; either way an edgeless human
+  // node is always a dead end. Catches the construction failure at
+  // validate-time so bad workflows never enqueue.
   for (const n of nodes) {
-    if (n.shape !== "hexagon") continue;
+    if (n.attrs.kind !== "human") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
     if (out.length === 0) {
       diags.push({
         severity: "error",
         code: "E009",
-        message: `wait.human node "${n.id}" has no outgoing edges (operator would have no choices)`,
+        message: `human node "${n.id}" has no outgoing edges and no routes= (operator would have no choices)`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
-  }
-
-  // W004: hexagon outgoing edge carries a legacy `context.hitl.*`
-  // condition. The pre-structured-HITL handler wrote operator input to
-  // `routing["hitl.<nodeId>"]` so workflows could branch on it via
-  // edge conditions. The structured handler emits no routing writes
-  // and routes via `suggestedNextIds` + `preferredLabel`; the legacy
-  // condition will never match and the edge is dead code. Authors
-  // should drop the condition and rely on the `[K] Label` accelerator
-  // on the edge to drive routing.
-  for (const n of nodes) {
-    if (n.shape !== "hexagon") continue;
-    for (const e of graph.edges) {
-      if (e.from !== n.id) continue;
-      const cond = e.attrs.condition;
-      if (typeof cond !== "string") continue;
-      if (!/\bcontext\.hitl\b/.test(cond)) continue;
-      diags.push({
-        severity: "warning",
-        code: "W004",
-        message: `wait.human edge "${e.from}" → "${e.to}" uses a legacy "context.hitl.*" condition that the structured HITL handler never writes (use "[K] Label" on the edge instead)`,
-        edge: { from: e.from, to: e.to },
-        ...(e.loc !== undefined ? { loc: e.loc } : {}),
       });
     }
   }
@@ -585,6 +561,9 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // §4.2 registry, swarm has no extension surface). Silent fall-through
   // to the shape would mask typos like `type="codrgen"`; error so the
   // workflow fails at validate-time.
+  //
+  // E017–E026 follow: routing + human-node structural rules introduced
+  // by docs/proposals/llm-routing.md Phase 5.
   for (const n of nodes) {
     const t = n.attrs.type;
     if (typeof t !== "string" || t === "") continue;
@@ -599,11 +578,239 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
+  // E017: routing node (non-empty routes=) must not have outgoing edges
+  // keyed by outcome=. Routing nodes discriminate by route=; mixing the
+  // two discriminators on the same source node is always ambiguous.
+  for (const n of nodes) {
+    const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
+    if (routes.length === 0) continue;
+    for (const e of graph.edges) {
+      if (e.from !== n.id) continue;
+      if (typeof e.attrs.outcome !== "string") continue;
+      diags.push({
+        severity: "error",
+        code: "E017",
+        message: `routing node "${n.id}" has edge "${e.from}" → "${e.to}" with outcome="${e.attrs.outcome}" — routing nodes discriminate by route=, not outcome=`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    }
+  }
+
+  // E018: a single edge must not carry both outcome= and route=. An edge
+  // is discriminated by exactly one of the two; both together is
+  // always a model error.
+  for (const e of graph.edges) {
+    const hasOutcome = typeof e.attrs.outcome === "string";
+    const hasRoute = typeof e.attrs.route === "string" && e.attrs.route !== "";
+    if (hasOutcome && hasRoute) {
+      diags.push({
+        severity: "error",
+        code: "E018",
+        message: `edge "${e.from}" → "${e.to}" sets both outcome="${e.attrs.outcome}" and route="${e.attrs.route}" — use exactly one discriminator`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    }
+  }
+
+  // E019: edge with route= must reference a value that the source node
+  // declares in routes=. Route values not declared at the source node
+  // can never be selected and indicate an authoring mistake (typo or
+  // stale edge after a routes= edit).
+  for (const e of graph.edges) {
+    const edgeRoute = e.attrs.route;
+    if (typeof edgeRoute !== "string" || edgeRoute === "") continue;
+    const src = graph.nodes[e.from];
+    if (src === undefined) continue; // E004 already fired
+    const declared = Array.isArray(src.attrs.routes) ? src.attrs.routes : [];
+    if (declared.length === 0) {
+      diags.push({
+        severity: "error",
+        code: "E019",
+        message: `edge "${e.from}" → "${e.to}" has route="${edgeRoute}" but source node "${e.from}" declares no routes=`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    } else if (!declared.includes(edgeRoute)) {
+      diags.push({
+        severity: "error",
+        code: "E019",
+        message: `edge "${e.from}" → "${e.to}" has route="${edgeRoute}" but source node "${e.from}" only declares routes="${declared.join(",")}"`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    }
+  }
+
+  // E020: every outgoing edge from a routing node must carry exactly one
+  // of route= or outcome=. An unannotated edge from a routing node
+  // would be selected by an unrelated discriminator (or never), making
+  // the intent of the edge ambiguous.
+  for (const n of nodes) {
+    const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
+    if (routes.length === 0) continue;
+    for (const e of graph.edges) {
+      if (e.from !== n.id) continue;
+      const hasOutcome = typeof e.attrs.outcome === "string";
+      const hasRoute = typeof e.attrs.route === "string" && e.attrs.route !== "";
+      if (!hasOutcome && !hasRoute) {
+        diags.push({
+          severity: "error",
+          code: "E020",
+          message: `routing node "${n.id}" has edge "${e.from}" → "${e.to}" with neither route= nor outcome= — every edge from a routing node must be annotated`,
+          edge: { from: e.from, to: e.to },
+          ...(e.loc !== undefined ? { loc: e.loc } : {}),
+        });
+      }
+    }
+  }
+
+  // E021: every value declared in routes= must have a matching outgoing
+  // edge with route=<value>. Undischarged routes can never be taken;
+  // they represent a missing edge or a renamed route value.
+  for (const n of nodes) {
+    const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
+    if (routes.length === 0) continue;
+    const coveredRoutes = new Set(
+      graph.edges.filter((e) => e.from === n.id && typeof e.attrs.route === "string").map((e) => e.attrs.route),
+    );
+    for (const r of routes) {
+      if (!coveredRoutes.has(r)) {
+        diags.push({
+          severity: "error",
+          code: "E021",
+          message: `routing node "${n.id}" declares route "${r}" in routes= but no outgoing edge has route="${r}"`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      }
+    }
+  }
+
+  // E022: human nodes must declare routes= so the operator has a defined
+  // set of choices. A human node with no routes= has no structured
+  // vocabulary for operator dispatch.
+  for (const n of nodes) {
+    if (n.attrs.kind !== "human") continue;
+    const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
+    if (routes.length === 0) {
+      diags.push({
+        severity: "error",
+        code: "E022",
+        message: `human node "${n.id}" has no routes= declaration — operator needs at least one named route`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // E023: goal_gate and routes= are mutually exclusive. A goal gate
+  // is a binary pass/fail evaluation; routing is LLM-directed
+  // multi-branch selection. Combining them would make the node's exit
+  // semantics undefined.
+  for (const n of nodes) {
+    if (n.attrs.goal_gate !== true) continue;
+    const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
+    if (routes.length > 0) {
+      diags.push({
+        severity: "error",
+        code: "E023",
+        message: `node "${n.id}" combines goal_gate=true with routes= — these are mutually exclusive exit strategies`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // E024: duplicate discriminator values from the same source node.
+  // Two edges sharing the same outcome= or the same route= from a
+  // single source are ambiguous: the engine cannot decide which to
+  // take, and one of the edges is permanently shadowed.
+  {
+    const sourceEdges = new Map<string, typeof graph.edges>();
+    for (const e of graph.edges) {
+      const list = sourceEdges.get(e.from) ?? [];
+      list.push(e);
+      sourceEdges.set(e.from, list);
+    }
+    for (const [fromId, edges] of sourceEdges) {
+      const outcomeCounts = new Map<string, number>();
+      const routeCounts = new Map<string, number>();
+      for (const e of edges) {
+        if (typeof e.attrs.outcome === "string") {
+          outcomeCounts.set(e.attrs.outcome, (outcomeCounts.get(e.attrs.outcome) ?? 0) + 1);
+        }
+        if (typeof e.attrs.route === "string" && e.attrs.route !== "") {
+          routeCounts.set(e.attrs.route, (routeCounts.get(e.attrs.route) ?? 0) + 1);
+        }
+      }
+      for (const [val, count] of outcomeCounts) {
+        if (count < 2) continue;
+        diags.push({
+          severity: "error",
+          code: "E024",
+          message: `node "${fromId}" has ${count} edges with outcome="${val}" — each outcome= value must appear at most once per source`,
+          nodeId: fromId,
+        });
+      }
+      for (const [val, count] of routeCounts) {
+        if (count < 2) continue;
+        diags.push({
+          severity: "error",
+          code: "E024",
+          message: `node "${fromId}" has ${count} edges with route="${val}" — each route= value must appear at most once per source`,
+          nodeId: fromId,
+        });
+      }
+    }
+  }
+
+  // E025: explicit kind= contradicts the shape's canonical kind via
+  // SHAPE_TO_KIND. When the parser auto-derives kind from shape, the two
+  // are always consistent (kind left undefined → derived). A contradiction
+  // only arises when the author writes an explicit kind= that disagrees
+  // with the shape — e.g. kind=codergen shape=hexagon. The shape=hexagon
+  // with kind=human alias is explicitly valid (same mapping).
+  for (const n of nodes) {
+    const explicitKind = n.attrs.kind;
+    if (typeof explicitKind !== "string") continue;
+    const shapeKind = SHAPE_TO_KIND[n.shape as keyof typeof SHAPE_TO_KIND];
+    if (shapeKind === undefined) continue; // start/exit shapes have no kind mapping
+    if (shapeKind !== explicitKind) {
+      diags.push({
+        severity: "error",
+        code: "E025",
+        message: `node "${n.id}" has kind="${explicitKind}" but shape="${n.shape}" maps to kind="${shapeKind}" via SHAPE_TO_KIND — align kind= with the shape or change the shape`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // E026: text= is a human-node attribute (the prompt shown to the
+  // operator). Setting it on a non-human node has no effect at runtime;
+  // the diagnostic surfaces the authoring mistake at validate-time.
+  for (const n of nodes) {
+    if (typeof n.attrs.text !== "string" || n.attrs.text === "") continue;
+    if (n.attrs.kind === "human") continue;
+    diags.push({
+      severity: "error",
+      code: "E026",
+      message: `node "${n.id}" sets text= but is not a human node (kind="${n.attrs.kind ?? "codergen"}") — text= is only meaningful on human nodes`,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
+  }
+
   // W012: node's `type=` resolves to a different handler than its shape.
   // `type` wins at dispatch (attractor §2.6 + §4.2); the warning flags
   // the visual/runtime divergence so authors notice they're overriding
   // the shape's natural mapping. Suppressed when type matches the shape's
   // canonical handler (the redundant-explicit case is harmless).
+  // NOTE: the legacy W004 rule (context.hitl.* edge condition warning) was
+  // removed here — routing is now discriminated by route= and routes=,
+  // not by condition patterns on hexagon edges.
   for (const n of nodes) {
     const t = n.attrs.type;
     if (typeof t !== "string" || t === "") continue;

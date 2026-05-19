@@ -435,8 +435,17 @@ Common codes:
 
 - **E004** — edge references a non-existent node id (typo).
 - **E016** — `type=` names an unknown handler.
+- **E017** — routing node has outgoing `outcome=` edge (use `route=` instead).
+- **E018** — edge sets both `outcome=` and `route=`.
+- **E019** — edge `route=X` but `X` not in source node's `routes=`.
+- **E020** — routing node has unannotated outgoing edge (neither `route=` nor `outcome=`).
+- **E021** — route value declared in `routes=` but no outgoing edge has `route=<value>`.
+- **E022** — human node (`kind=human` / `shape=hexagon`) has no `routes=`.
+- **E023** — node combines `goal_gate=true` and `routes=` (mutually exclusive).
+- **E024** — two edges from the same source share the same `outcome=` or `route=` value.
+- **E025** — explicit `kind=` contradicts the shape's `SHAPE_TO_KIND` mapping.
+- **E026** — `text=` on a non-human node.
 - **W003** — only conditional edges, no `outcome=fail` catch-all.
-- **W004** — hexagon edge using legacy `context.hitl.*`.
 - **W007** — `goal_gate=true` with no retarget chain.
 - **W011** — bare `model=` / `provider=` (use `llm_model=` / `llm_provider=`).
 - **W013** — unrecognised attribute name (typo source).

@@ -163,7 +163,7 @@ describe("validate", () => {
 });
 
 describe("HITL (wait.human) lint rules", () => {
-  test("E009: hexagon node with no outgoing edges", () => {
+  test("E009: human node with no outgoing edges", () => {
     const diags = validate(
       parseDotSource(`
         digraph {
@@ -178,17 +178,21 @@ describe("HITL (wait.human) lint rules", () => {
     expect(e009).toBeDefined();
     expect(e009?.severity).toBe("error");
     expect(e009?.nodeId).toBe("gate");
-    expect(e009?.message).toMatch(/no outgoing edges/);
+    expect(e009?.message).toMatch(/routes=/);
   });
 
-  test("E009 not raised for hexagon with at least one outgoing edge", () => {
+  test("E009 not raised for human node with outgoing edges", () => {
     const diags = validate(
       parseDotSource(`
         digraph {
           s [shape=Mdiamond]
-          gate [shape=hexagon]
+          gate [shape=hexagon, routes="approve,reject"]
+          a [shape=box]
           done [shape=Msquare]
-          s -> gate -> done
+          s -> gate
+          gate -> a [route=approve]
+          gate -> done [route=reject]
+          a -> done
         }
       `),
     );
@@ -256,39 +260,17 @@ describe("HITL (wait.human) lint rules", () => {
     expect(diags.some((d) => d.code === "E010")).toBe(false);
   });
 
-  test("W004: legacy context.hitl.* condition on a hexagon outgoing edge", () => {
+  test("W004 rule is removed — context.hitl.* condition no longer emits W004", () => {
     const diags = validate(
       parseDotSource(`
         digraph {
           s [shape=Mdiamond]
-          gate [shape=hexagon]
+          gate [shape=hexagon, routes="approve,reject"]
           a [shape=box]
           done [shape=Msquare]
           s -> gate
-          gate -> a    [condition="context.hitl.gate=APPROVED"]
-          gate -> done
-          a -> done
-        }
-      `),
-    );
-    const w004 = diags.find((d) => d.code === "W004");
-    expect(w004).toBeDefined();
-    expect(w004?.severity).toBe("warning");
-    expect(w004?.edge).toEqual({ from: "gate", to: "a" });
-    expect(w004?.message).toMatch(/legacy/);
-  });
-
-  test("W004 not raised on non-hexagon edges or non-hitl conditions", () => {
-    const diags = validate(
-      parseDotSource(`
-        digraph {
-          s [shape=Mdiamond]
-          gate [shape=hexagon]
-          a [shape=box]
-          done [shape=Msquare]
-          s -> gate
-          gate -> a    [label="[A] Approve"]
-          gate -> done [label="[R] Reject"]
+          gate -> a    [route=approve]
+          gate -> done [route=reject]
           a -> done    [condition="outcome=success"]
         }
       `),
@@ -897,5 +879,483 @@ describe("validateOrThrow", () => {
 
   test("missing start throws ValidationError", () => {
     expect(() => validateOrThrow(parseDotSource(`digraph { a; b [shape=Msquare]; a -> b }`))).toThrow(ValidationError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Routing + human-node structural rules (E017–E026)
+// ---------------------------------------------------------------------------
+
+describe("routing node lints (E017–E021)", () => {
+  test("E017 fires when a routing node has an outgoing edge with outcome=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a,b", prompt="pick"]
+          done [shape=Msquare]
+          s -> router
+          router -> done [outcome=success]
+        }
+      `),
+    );
+    expect(diags.find((d) => d.code === "E017")).toBeDefined();
+  });
+
+  test("E017 not raised when routing node has only route= edges", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a,b", prompt="pick"]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> router
+          router -> a    [route=a]
+          router -> done [route=b]
+          a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E017")).toBe(false);
+  });
+
+  test("E018 fires when an edge has both outcome= and route=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a -> done [outcome=success, route=ok]
+        }
+      `),
+    );
+    expect(diags.find((d) => d.code === "E018")).toBeDefined();
+  });
+
+  test("E018 not raised on edge with only outcome= or only route=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="ok", prompt="go"]
+          a [shape=box, prompt="a"]
+          done [shape=Msquare]
+          s -> a
+          a -> router    [outcome=success]
+          router -> done [route=ok]
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E018")).toBe(false);
+  });
+
+  test("E019 fires when edge route= names a value not in source routes=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a,b", prompt="pick"]
+          done [shape=Msquare]
+          s -> router
+          router -> done [route=c]
+        }
+      `),
+    );
+    const e019 = diags.find((d) => d.code === "E019");
+    expect(e019).toBeDefined();
+    expect(e019?.message).toMatch(/c/);
+  });
+
+  test("E019 fires when source node declares no routes= at all", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [shape=box, prompt="plain"]
+          done [shape=Msquare]
+          s -> a -> done [route=x]
+        }
+      `),
+    );
+    expect(diags.find((d) => d.code === "E019")).toBeDefined();
+  });
+
+  test("E019 not raised when edge route= is included in source routes=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a,b", prompt="pick"]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> router
+          router -> a    [route=a]
+          router -> done [route=b]
+          a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E019")).toBe(false);
+  });
+
+  test("E020 fires when a routing node has an unannotated outgoing edge", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a", prompt="pick"]
+          done [shape=Msquare]
+          s -> router
+          router -> done
+        }
+      `),
+    );
+    expect(diags.find((d) => d.code === "E020")).toBeDefined();
+  });
+
+  test("E020 not raised when every edge from a routing node is annotated", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a", prompt="pick"]
+          done [shape=Msquare]
+          s -> router
+          router -> done [route=a]
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E020")).toBe(false);
+  });
+
+  test("E021 fires when a declared route has no matching outgoing edge", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a,b", prompt="pick"]
+          done [shape=Msquare]
+          s -> router
+          router -> done [route=a]
+        }
+      `),
+    );
+    const e021 = diags.find((d) => d.code === "E021");
+    expect(e021).toBeDefined();
+    expect(e021?.message).toMatch(/"b"/);
+  });
+
+  test("E021 not raised when every declared route has a matching edge", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          router [shape=box, routes="a,b", prompt="pick"]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> router
+          router -> a    [route=a]
+          router -> done [route=b]
+          a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E021")).toBe(false);
+  });
+});
+
+describe("human node lints (E022)", () => {
+  test("E022 fires on hexagon node (shape-derived kind=human) with no routes=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    const e022 = diags.find((d) => d.code === "E022");
+    expect(e022).toBeDefined();
+    expect(e022?.nodeId).toBe("gate");
+  });
+
+  test("E022 fires on explicit kind=human node with no routes=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=box, kind=human]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    expect(diags.find((d) => d.code === "E022")).toBeDefined();
+  });
+
+  test("E022 not raised on human node with routes= declared", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon, routes="approve,reject"]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> gate
+          gate -> a    [route=approve]
+          gate -> done [route=reject]
+          a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E022")).toBe(false);
+  });
+});
+
+describe("goal_gate + routes= mutual exclusion (E023)", () => {
+  test("E023 fires when node has both goal_gate=true and routes=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=box, goal_gate=true, routes="a,b", retry_target=s, prompt="eval"]
+          done [shape=Msquare]
+          s -> gate
+          gate -> done [route=a]
+          gate -> s    [route=b]
+        }
+      `),
+    );
+    expect(diags.find((d) => d.code === "E023")).toBeDefined();
+  });
+
+  test("E023 not raised when goal_gate=true without routes=", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=box, goal_gate=true, retry_target=s, prompt="eval"]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E023")).toBe(false);
+  });
+});
+
+describe("duplicate discriminator (E024)", () => {
+  test("E024 fires when two edges from the same source share the same outcome= value", () => {
+    const diags = validate({
+      id: "G",
+      directed: true,
+      attrs: {},
+      nodes: {
+        s: { id: "s", shape: "Mdiamond", attrs: {}, classes: [] },
+        a: { id: "a", shape: "box", attrs: {}, classes: [] },
+        b: { id: "b", shape: "box", attrs: {}, classes: [] },
+        done: { id: "done", shape: "Msquare", attrs: {}, classes: [] },
+      },
+      edges: [
+        { from: "s", to: "a", attrs: {} },
+        { from: "a", to: "b", attrs: { outcome: "success" } },
+        { from: "a", to: "done", attrs: { outcome: "success" } },
+      ],
+      subgraphs: [],
+    });
+    const e024 = diags.find((d) => d.code === "E024");
+    expect(e024).toBeDefined();
+    expect(e024?.message).toMatch(/success/);
+  });
+
+  test("E024 fires when two edges from the same source share the same route= value", () => {
+    const diags = validate({
+      id: "G",
+      directed: true,
+      attrs: {},
+      nodes: {
+        s: { id: "s", shape: "Mdiamond", attrs: { routes: ["ok"] }, classes: [] },
+        a: { id: "a", shape: "box", attrs: { routes: ["ok"] }, classes: [] },
+        b: { id: "b", shape: "box", attrs: {}, classes: [] },
+        done: { id: "done", shape: "Msquare", attrs: {}, classes: [] },
+      },
+      edges: [
+        { from: "s", to: "a", attrs: {} },
+        { from: "a", to: "b", attrs: { route: "ok" } },
+        { from: "a", to: "done", attrs: { route: "ok" } },
+      ],
+      subgraphs: [],
+    });
+    const e024 = diags.find((d) => d.code === "E024");
+    expect(e024).toBeDefined();
+    expect(e024?.message).toMatch(/ok/);
+  });
+
+  test("E024 not raised when discriminator values are distinct", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [shape=box, prompt="go"]
+          done [shape=Msquare]
+          s -> a
+          a -> done [outcome=success]
+          a -> s    [outcome=fail]
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E024")).toBe(false);
+  });
+});
+
+describe("kind/shape contradiction (E025)", () => {
+  test("E025 fires when explicit kind= contradicts the shape's SHAPE_TO_KIND mapping", () => {
+    // kind=codergen shape=hexagon — SHAPE_TO_KIND maps hexagon→human, contradiction.
+    // Must construct manually: the parser validates kind against the enum
+    // ["codergen","tool","human"] but does NOT reject contradictions itself.
+    const diags = validate({
+      id: "G",
+      directed: true,
+      attrs: {},
+      nodes: {
+        s: { id: "s", shape: "Mdiamond", attrs: {}, classes: [] },
+        gate: { id: "gate", shape: "hexagon", attrs: { kind: "codergen" }, classes: [] },
+        done: { id: "done", shape: "Msquare", attrs: {}, classes: [] },
+      },
+      edges: [
+        { from: "s", to: "gate", attrs: {} },
+        { from: "gate", to: "done", attrs: {} },
+      ],
+      subgraphs: [],
+    });
+    const e025 = diags.find((d) => d.code === "E025");
+    expect(e025).toBeDefined();
+    expect(e025?.nodeId).toBe("gate");
+    expect(e025?.message).toMatch(/codergen/);
+    expect(e025?.message).toMatch(/human/);
+  });
+
+  test("E025 not raised when kind=human and shape=hexagon (valid alias)", () => {
+    const diags = validate({
+      id: "G",
+      directed: true,
+      attrs: {},
+      nodes: {
+        s: { id: "s", shape: "Mdiamond", attrs: {}, classes: [] },
+        gate: { id: "gate", shape: "hexagon", attrs: { kind: "human", routes: ["approve", "reject"] }, classes: [] },
+        a: { id: "a", shape: "box", attrs: {}, classes: [] },
+        done: { id: "done", shape: "Msquare", attrs: {}, classes: [] },
+      },
+      edges: [
+        { from: "s", to: "gate", attrs: {} },
+        { from: "gate", to: "a", attrs: { route: "approve" } },
+        { from: "gate", to: "done", attrs: { route: "reject" } },
+        { from: "a", to: "done", attrs: {} },
+      ],
+      subgraphs: [],
+    });
+    expect(diags.some((d) => d.code === "E025")).toBe(false);
+  });
+});
+
+describe("text= on non-human node (E026)", () => {
+  test("E026 fires when text= is set on a codergen (box) node", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [shape=box, text="some display text", prompt="do the thing"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const e026 = diags.find((d) => d.code === "E026");
+    expect(e026).toBeDefined();
+    expect(e026?.nodeId).toBe("work");
+    expect(e026?.message).toMatch(/human/);
+  });
+
+  test("E026 not raised when text= is set on a human node", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon, routes="approve,reject", text="Please review the diff"]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> gate
+          gate -> a    [route=approve]
+          gate -> done [route=reject]
+          a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E026")).toBe(false);
+  });
+});
+
+describe("routing rule sanity checks", () => {
+  test("W004 context.hitl.* condition no longer emits any diagnostic with that code", () => {
+    // W004 was removed; verify no leftover W004 on a graph that previously would have triggered it.
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon, routes="approve,reject"]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> gate
+          gate -> a    [route=approve]
+          gate -> done [route=reject]
+          a -> done    [condition="outcome=success"]
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W004")).toBe(false);
+  });
+
+  test("E009 message contains routes= reference", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          done [shape=Msquare]
+          s -> gate
+        }
+      `),
+    );
+    const e009 = diags.find((d) => d.code === "E009");
+    expect(e009).toBeDefined();
+    expect(e009?.message).toMatch(/routes=/);
+  });
+
+  test("well-formed routing workflow with human node has no routing errors", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          analyse [shape=box, routes="small,large", prompt="Assess scope"]
+          review  [shape=hexagon, routes="approve,reject", text="Review the plan"]
+          impl    [shape=box, prompt="Implement"]
+          done    [shape=Msquare]
+          s       -> analyse
+          analyse -> impl [route=small]
+          analyse -> impl [route=large]
+          impl    -> review
+          review  -> done [route=approve]
+          review  -> s    [route=reject]
+        }
+      `),
+    );
+    const routingErrors = diags.filter((d) =>
+      ["E017", "E018", "E019", "E020", "E021", "E022", "E023", "E024", "E025", "E026"].includes(d.code),
+    );
+    expect(routingErrors).toHaveLength(0);
   });
 });
