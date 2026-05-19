@@ -310,6 +310,16 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         setStreaming(null);
         return;
       }
+      // `fact.message_appended` for an assistant row fires a few events
+      // before `agent.message_end` (the order is: …deltas → toolcall_end
+      // → fact.message_appended → agent.message_end). In that gap both
+      // the persisted assistant block AND the live streaming buffer
+      // render — producing a duplicate toolCall card (the rich
+      // "Bash · Running" alongside the streaming-buffer raw-JSON pending
+      // dump). Drop the buffer as soon as its persisted row lands.
+      if (type === "fact.message_appended" && payload?.["role"] === "assistant" && nodeId !== null) {
+        setStreaming((prev) => (prev?.nodeId === nodeId ? null : prev));
+      }
       if (type === "llm.text_delta" || type === "llm.thinking_delta" || type === "llm.toolcall_delta") {
         const delta = typeof payload?.["delta"] === "string" ? (payload["delta"] as string) : "";
         const index = typeof payload?.["content_index"] === "number" ? (payload["content_index"] as number) : 0;

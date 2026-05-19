@@ -282,4 +282,133 @@ describe("useRunLive — bootstrap fetch is gated on a settled snapshot", () => 
       mock.restore();
     }
   });
+
+  it("fact.message_appended for an assistant row clears the streaming buffer immediately (no duplicate toolCall card)", async () => {
+    // The duplicate-render bug: between `fact.message_appended` (role=
+    // assistant, persisted row lands) and `agent.message_end` (streaming
+    // buffer cleared) the rich persisted toolCall card AND the streaming-
+    // buffer raw-JSON pending card both render. Closing the gap on
+    // fact.message_appended eliminates the window.
+    const mock = installFetchMock({
+      "/api/runs/r1/messages": () =>
+        new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+    });
+    try {
+      FakeEventSource.instances = [];
+      const { result } = renderHook(() =>
+        useRunLive("r1", {
+          terminal: false,
+          sinceSeq: 0,
+          eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(FakeEventSource.instances.length).toBe(1);
+      });
+      const es = FakeEventSource.instances[0]!;
+      act(() => es._open());
+
+      // Open the streaming buffer for the assistant turn.
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "agent.message_start",
+            payload: { nodeId: "fix", role: "assistant" },
+          }),
+          "1",
+        );
+      });
+      // A toolcall_delta populates the streaming buffer with raw args.
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "llm.toolcall_delta",
+            payload: { nodeId: "fix", content_index: 0, delta: '{"command":"bun run ci"}' },
+          }),
+          "2",
+        );
+      });
+      await waitFor(() => {
+        expect(result.current.streaming?.nodeId).toBe("fix");
+        expect(result.current.streaming?.blocks.length).toBeGreaterThan(0);
+      });
+
+      // fact.message_appended for assistant lands → streaming buffer
+      // clears WITHOUT needing to wait for agent.message_end.
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "fact.message_appended",
+            payload: { ordinal: 1, role: "assistant", nodeId: "fix", iteration: 0 },
+          }),
+          "3",
+        );
+      });
+      await waitFor(() => {
+        expect(result.current.streaming).toBe(null);
+      });
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it("fact.message_appended for an UNRELATED nodeId leaves the streaming buffer alone", async () => {
+    // Defensive: in workflows with nested subagents, an assistant row may
+    // be appended for a different nodeId mid-stream. The clear must be
+    // scoped — clobbering the active buffer would drop in-flight deltas.
+    const mock = installFetchMock({
+      "/api/runs/r1/messages": () =>
+        new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+    });
+    try {
+      FakeEventSource.instances = [];
+      const { result } = renderHook(() =>
+        useRunLive("r1", {
+          terminal: false,
+          sinceSeq: 0,
+          eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        }),
+      );
+      await waitFor(() => {
+        expect(FakeEventSource.instances.length).toBe(1);
+      });
+      const es = FakeEventSource.instances[0]!;
+      act(() => es._open());
+
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "agent.message_start",
+            payload: { nodeId: "fix", role: "assistant" },
+          }),
+          "1",
+        );
+        es._emit(
+          JSON.stringify({
+            type: "llm.text_delta",
+            payload: { nodeId: "fix", content_index: 0, delta: "thinking…" },
+          }),
+          "2",
+        );
+      });
+      await waitFor(() => {
+        expect(result.current.streaming?.nodeId).toBe("fix");
+      });
+
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "fact.message_appended",
+            payload: { ordinal: 1, role: "assistant", nodeId: "implement", iteration: 0 },
+          }),
+          "3",
+        );
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(result.current.streaming?.nodeId).toBe("fix");
+    } finally {
+      mock.restore();
+    }
+  });
 });
