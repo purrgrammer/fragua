@@ -4,9 +4,40 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { isBlockedCommand } from "./blocklist.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
+
+/**
+ * Thrown by {@link LocalEnvironment} when a path argument resolves
+ * outside the environment's `_cwd`. Agent tools catch this and return
+ * a tool-error result so the model can self-correct on the next turn;
+ * untouched paths (existsSync, readdir, etc.) propagate it as a
+ * normal exception. A separate class (not a plain Error) lets callers
+ * `instanceof` it without string-matching messages.
+ */
+export class PathEscapeError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly resolved: string,
+    public readonly cwd: string,
+  ) {
+    super(
+      `path "${path}" resolves to "${resolved}" — outside the run's cwd "${cwd}". ` +
+        "Use a relative path inside cwd; absolute paths into the project root or " +
+        "elsewhere bypass worktree isolation.",
+    );
+    this.name = "PathEscapeError";
+  }
+}
+
+/** Refuse-list regex for bash commands that escape the run's cwd via
+ *  `cd <absolute-path>` segments. We only catch `cd` chains because
+ *  blanket absolute-path detection in arbitrary shell would have far
+ *  too many false positives (e.g. `/tmp/foo`, `/dev/null`, system
+ *  binaries). The agent-side mitigation is the system prompt — this
+ *  is the runtime backstop for the most common escape pattern. */
+const CD_ESCAPE_PATTERN = /\bcd\s+(['"]?)(\/[^\s'"&;|()]+)\1/g;
 
 export interface LocalEnvironmentOptions {
   /** Working directory. Defaults to process.cwd(). */
@@ -37,8 +68,25 @@ export class LocalEnvironment implements ExecutionEnvironment {
     return this._cwd;
   }
 
+  /**
+   * Resolve `path` against the env's cwd and verify it stays under it.
+   *
+   * The check turns silent isolation leaks (Phase 9 run
+   * 01ks01m6bt9ryccn4b: the agent passed
+   * `/Users/bandarra/swarm/.agents/skills/swarm-author/SKILL.md` as a
+   * write target while running in a `.swarm/worktrees/<runId>`
+   * environment; the resolved absolute path bypassed `_cwd` and
+   * landed in main) into loud {@link PathEscapeError}s. Tools catch
+   * these and surface them as tool errors so the LLM self-corrects
+   * with a relative path on its next turn rather than halting the run.
+   */
   private resolvePath(path: string): string {
-    return isAbsolute(path) ? path : resolve(this._cwd, path);
+    const resolved = isAbsolute(path) ? path : resolve(this._cwd, path);
+    const normalized = resolve(resolved);
+    if (normalized !== this._cwd && !normalized.startsWith(this._cwd + sep)) {
+      throw new PathEscapeError(path, normalized, this._cwd);
+    }
+    return normalized;
   }
 
   async readFile(path: string): Promise<string> {
@@ -99,6 +147,24 @@ export class LocalEnvironment implements ExecutionEnvironment {
       return {
         stdout: "",
         stderr: `[swarm: blocked command — matched pattern "${blocked}". Edit .swarm/config.jsonc blocklist to adjust.]`,
+        exitCode: 126,
+        durationMs: 0,
+      };
+    }
+    // Refuse `cd <abs-path-outside-cwd>` segments. Matches the agent's
+    // most common escape pattern (`cd /Users/bandarra/swarm && bun
+    // run …`) at Phase 9 run 01ks01m6bt9ryccn4b. Returned as a
+    // non-zero exit so the LLM sees an actionable error and
+    // self-corrects rather than halting the run.
+    const cdEscape = this.firstCdEscape(command);
+    if (cdEscape !== undefined) {
+      return {
+        stdout: "",
+        stderr:
+          `[swarm: command refused — \`cd ${cdEscape}\` escapes the run's cwd ${this._cwd}. ` +
+          "All work must stay inside cwd; do not cd outside the worktree. " +
+          "If you wanted to run tests/build commands, do so from cwd directly " +
+          "(`bun run --filter='@swarm/<pkg>' typecheck`, etc.) — the worktree is a full git checkout.]",
         exitCode: 126,
         durationMs: 0,
       };
@@ -212,5 +278,24 @@ export class LocalEnvironment implements ExecutionEnvironment {
         resolvePromise({ stdout, stderr: err.message, exitCode: 127, durationMs: Date.now() - start });
       });
     });
+  }
+
+  /** Scan a shell command for a `cd <abs-path>` segment whose target
+   *  is outside the env's cwd. Returns the offending path or undefined.
+   *  Used by {@link exec} to refuse the command before spawning. */
+  private firstCdEscape(command: string): string | undefined {
+    const cwdNorm = this._cwd;
+    CD_ESCAPE_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    // biome-ignore lint/suspicious/noAssignInExpressions: stdlib regex/exec idiom
+    while ((match = CD_ESCAPE_PATTERN.exec(command)) !== null) {
+      const target = match[2];
+      if (target === undefined) continue;
+      const normalized = resolve(target);
+      if (normalized !== cwdNorm && !normalized.startsWith(cwdNorm + sep)) {
+        return target;
+      }
+    }
+    return undefined;
   }
 }

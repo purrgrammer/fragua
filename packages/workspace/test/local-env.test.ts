@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LocalEnvironment } from "../src/local-env.ts";
+import { LocalEnvironment, PathEscapeError } from "../src/local-env.ts";
 
 describe("LocalEnvironment", () => {
   let scratch: string;
@@ -45,4 +45,53 @@ describe("LocalEnvironment", () => {
     expect(r.exitCode).toBe(124);
     expect(r.stderr).toContain("timed out");
   }, 5_000);
+
+  describe("path-escape isolation", () => {
+    test("writeFile throws PathEscapeError on absolute path outside cwd", async () => {
+      const outside = join(tmpdir(), "swarm-escape-target.txt");
+      await expect(env.writeFile(outside, "leak")).rejects.toBeInstanceOf(PathEscapeError);
+    });
+
+    test("writeFile throws PathEscapeError on `../` traversal escaping cwd", async () => {
+      await expect(env.writeFile("../escape.txt", "leak")).rejects.toBeInstanceOf(PathEscapeError);
+    });
+
+    test("readFile throws PathEscapeError on absolute path outside cwd", async () => {
+      const outside = join(tmpdir(), "swarm-escape-read.txt");
+      await expect(env.readFile(outside)).rejects.toBeInstanceOf(PathEscapeError);
+    });
+
+    test("exists throws PathEscapeError on out-of-cwd path", async () => {
+      const outside = join(tmpdir(), "swarm-escape-exists.txt");
+      expect(() => env.exists(outside)).toThrow(PathEscapeError);
+    });
+
+    test("paths inside cwd still work", async () => {
+      const absoluteInside = join(scratch, "ok.txt");
+      await env.writeFile(absoluteInside, "yes");
+      expect(await env.readFile("ok.txt")).toBe("yes");
+    });
+
+    test("exec refuses `cd <abs-path-outside-cwd>` with exitCode 126", async () => {
+      const r = await env.exec("cd /tmp && echo escaped");
+      expect(r.exitCode).toBe(126);
+      expect(r.stderr).toContain("escapes the run's cwd");
+      expect(r.stdout).toBe("");
+    });
+
+    test("exec allows `cd` to a subdir inside cwd", async () => {
+      await env.writeFile("sub/file.txt", "x");
+      const r = await env.exec(`cd ${join(scratch, "sub")} && pwd`);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("sub");
+    });
+
+    test("exec without `cd` runs in env's cwd by default", async () => {
+      // pwd resolves symlinks (macOS /var → /private/var); just assert
+      // the scratch dir name is in the output.
+      const r = await env.exec("pwd");
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("swarm-env-");
+    });
+  });
 });

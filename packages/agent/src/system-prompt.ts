@@ -237,6 +237,8 @@ export function renderRunEnvironment(env: RunEnvironment): string {
     "- File tools resolve paths relative to cwd.",
     "  ✅ README.md",
     `  ❌ ${cwd}/README.md`,
+    "- Do NOT `cd` outside cwd — runtime refuses (`cd /elsewhere && …`).",
+    "- Do NOT use absolute paths outside cwd — path-resolver returns a tool error.",
   ];
   if (env.bootstrapCommand) {
     lines.push(`- \`${env.bootstrapCommand}\` ran here. If you edit dep manifests, re-run before tests.`);

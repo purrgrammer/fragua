@@ -21,7 +21,7 @@
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { ExecutionEnvironment, SwarmToolContext, Tool, ToolOutput } from "@swarm/workspace";
-import { truncate } from "@swarm/workspace";
+import { PathEscapeError, truncate } from "@swarm/workspace";
 
 /** Anthropic's tool-name regex is `^[a-zA-Z0-9_-]{1,128}$` — `:` is rejected.
  * We encode namespaces with `__` on the wire and reverse at event-bridge time
@@ -101,12 +101,35 @@ export function toAgentTool(swarmTool: Tool, env: ExecutionEnvironment, swarmCon
           }
         : undefined;
 
-      const result = await swarmTool.execute(params as Record<string, unknown>, env, {
-        ...(signal ? { signal } : {}),
-        ...(adaptedOnUpdate ? { onUpdate: adaptedOnUpdate } : {}),
-        ...(swarmContext ? { swarmContext } : {}),
-        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
-      });
+      // PathEscapeError catch: the env's resolvePath throws when a
+      // tool argument references a path outside the run's cwd
+      // (Phase 9 leak — agent passed `/Users/bandarra/swarm/.agents/...`
+      // while running in a `.swarm/worktrees/<runId>` env). Convert to
+      // a tool-error result so the model self-corrects with a relative
+      // path on its next turn rather than halting the run.
+      let result: ToolOutput;
+      try {
+        result = await swarmTool.execute(params as Record<string, unknown>, env, {
+          ...(signal ? { signal } : {}),
+          ...(adaptedOnUpdate ? { onUpdate: adaptedOnUpdate } : {}),
+          ...(swarmContext ? { swarmContext } : {}),
+          ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+        });
+      } catch (err) {
+        if (err instanceof PathEscapeError) {
+          return {
+            content: [{ type: "text", text: err.message }],
+            details: {
+              swarm_tool: swarmTool.name,
+              is_error: true,
+              data: { path: err.path, resolved: err.resolved, cwd: err.cwd },
+              truncated: false,
+              original_length: err.message.length,
+            },
+          };
+        }
+        throw err;
+      }
       const built = buildContent(result, swarmTool.truncation);
       const data = result.data as { full_output_path?: string } | undefined;
       return {
