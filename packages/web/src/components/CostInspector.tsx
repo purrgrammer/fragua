@@ -313,19 +313,18 @@ function StepCostRowGroup({
   isLive: boolean;
 }): JSX.Element {
   const hasBranchChildren = branchChildren !== undefined && branchChildren.length > 0;
-  // Summary mode: the parent's displayed cost / tokens aggregate itself
-  // plus every child branch. The inspector's per-row breakdown still
-  // shows each branch's own cost, so total + per-branch read consistently.
-  const summary = hasBranchChildren ? aggregateSteps(step, branchChildren) : undefined;
+  // Every row — parent or branch child — shows its own LLM call's
+  // cost + context. A parent that fans out to sub-agents or parallel
+  // branches displays only what its own orchestrator turn spent;
+  // children carry their own spend on their own rows. Rolling parent
+  // + children into one summary on the parent row hides the
+  // distinction operators need ("did dispatch's prompt blow up?" vs
+  // "is one of the children doing the heavy lifting?") and inflates
+  // the parent row's context-utilisation chip with tokens that never
+  // touched its window.
   return (
     <>
-      <StepCostRow
-        step={step}
-        nextStartedAt={nextStartedAt}
-        isLive={isLive}
-        summary={summary}
-        hasChildren={hasBranchChildren}
-      />
+      <StepCostRow step={step} nextStartedAt={nextStartedAt} isLive={isLive} hasChildren={hasBranchChildren} />
       {hasBranchChildren
         ? branchChildren.map((child, j) => (
             <StepCostRow
@@ -339,47 +338,6 @@ function StepCostRowGroup({
         : null}
     </>
   );
-}
-
-/** Aggregate a parent step + its branch / sub-agent children into a
- *  single summary row. `cost` defaults to zeros so the popover still
- *  renders even when the parent had no LLM call of its own (the
- *  parallel handler doesn't open one for the component shell).
- *
- *  Cost and tokens are summed: each child spent its own money on top
- *  of whatever the parent spent. Duration is NOT summed — children
- *  run inside the parent's wall window (parallel branches run inline
- *  under the component's dispatch; sub-agents block the parent's LLM
- *  turn). `parent.durationMs` already covers them. Summing would
- *  produce a figure several times the actual wall clock — for a
- *  4-branch fan-out, ~5× the truth. */
-function aggregateSteps(
-  parent: StepSnapshot,
-  children: readonly StepSnapshot[],
-): NonNullable<StepSnapshot["cost"]> & { durationMs: number | undefined } {
-  let inputTokens = parent.cost?.input_tokens ?? 0;
-  let outputTokens = parent.cost?.output_tokens ?? 0;
-  let cacheReadTokens = parent.cost?.cache_read_tokens ?? 0;
-  let cacheWriteTokens = parent.cost?.cache_write_tokens ?? 0;
-  let billedTokens = parent.cost?.billed_tokens ?? 0;
-  let costUsd = parent.cost?.cost_usd ?? 0;
-  for (const c of children) {
-    inputTokens += c.cost?.input_tokens ?? 0;
-    outputTokens += c.cost?.output_tokens ?? 0;
-    cacheReadTokens += c.cost?.cache_read_tokens ?? 0;
-    cacheWriteTokens += c.cost?.cache_write_tokens ?? 0;
-    billedTokens += c.cost?.billed_tokens ?? 0;
-    costUsd += c.cost?.cost_usd ?? 0;
-  }
-  return {
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    cache_read_tokens: cacheReadTokens,
-    cache_write_tokens: cacheWriteTokens,
-    billed_tokens: billedTokens,
-    cost_usd: costUsd,
-    durationMs: parent.durationMs,
-  };
 }
 
 /**
@@ -402,20 +360,16 @@ function StepCostRow({
   step,
   nextStartedAt,
   isLive,
-  summary,
   hasChildren = false,
   isBranchChild = false,
 }: {
   step: StepSnapshot;
   nextStartedAt: string | undefined;
   isLive: boolean;
-  /** When set, the row's displayed cost / tokens / duration override
-   *  the step's own values — used for the parent summary that
-   *  aggregates parent + branch children. */
-  summary?: NonNullable<StepSnapshot["cost"]> & { durationMs: number | undefined };
   /** Parent has indented branch rows underneath. Marks the row with
    *  `data-summary="true"` for testability and applies a slightly
-   *  emphasised background. */
+   *  emphasised background; the row's own cost/tokens are still its
+   *  own. */
   hasChildren?: boolean;
   /** This row is a branch child — indent and tone down the chrome. */
   isBranchChild?: boolean;
@@ -446,14 +400,14 @@ function StepCostRow({
     resolvedDurationMs ?? (stepIsTicking ? Math.max(0, now - Date.parse(step.startedAt)) : undefined);
   const elapsedIsLive = stepIsTicking;
 
-  // Summary rows pull from the aggregated `summary` so the parent's
-  // displayed total includes every child branch's contribution.
-  const inputTokens = summary?.input_tokens ?? step.cost?.input_tokens ?? 0;
-  const outputTokens = summary?.output_tokens ?? step.cost?.output_tokens ?? 0;
-  const cacheReadTokens = summary?.cache_read_tokens ?? step.cost?.cache_read_tokens ?? 0;
-  const cacheWriteTokens = summary?.cache_write_tokens ?? step.cost?.cache_write_tokens ?? 0;
-  const displayedCostUsd = summary?.cost_usd ?? step.cost?.cost_usd;
-  const displayedDurationMs = summary?.durationMs ?? liveElapsedMs;
+  // Every row reflects only its own LLM call. Children appear on
+  // their own rows; nothing aggregates upward.
+  const inputTokens = step.cost?.input_tokens ?? 0;
+  const outputTokens = step.cost?.output_tokens ?? 0;
+  const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
+  const cacheWriteTokens = step.cost?.cache_write_tokens ?? 0;
+  const displayedCostUsd = step.cost?.cost_usd;
+  const displayedDurationMs = liveElapsedMs;
   // Fresh tokens — new content this step contributed: input + cache_write
   // (Anthropic puts the system prompt in cache_write on the first turn) +
   // output. Cache_read is reused content from a prior turn's cache_write,
@@ -542,7 +496,7 @@ function StepCostRow({
       </span>
       <span className={`${metricChipClass} justify-self-end`}>
         {displayedCostUsd !== undefined && (
-          <span className={metricChipClass} title={hasChildren ? "total cost (parent + branches)" : "cost"}>
+          <span className={metricChipClass} title="cost">
             <DollarSign className="size-3" aria-hidden />
             <AnimatedNumber value={displayedCostUsd} format={usdFormatOptions(displayedCostUsd)} />
           </span>
@@ -629,7 +583,7 @@ function StepCostRow({
                 </div>
               </ContextContentBody>
               <ContextContentFooter>
-                <span className="text-sw-muted">{hasChildren ? "Total (parent + branches)" : "Total cost"}</span>
+                <span className="text-sw-muted">Total cost</span>
                 <span className="tabular-nums">
                   {displayedCostUsd !== undefined ? (
                     <AnimatedNumber value={displayedCostUsd} format={usdFormatOptions(displayedCostUsd)} />

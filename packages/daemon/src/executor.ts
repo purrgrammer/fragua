@@ -1836,21 +1836,27 @@ function nodeRetryCount(routing: Record<string, unknown>): number {
 type ResumeOf = "fresh" | "crash" | "paused" | "paused_human" | "paused_auto" | "quarantined";
 
 /** Determine why this dispatch is starting, for fact.dispatch_started's
- * resumeOf field. Walks recent facts looking for the one that flipped
- * the run back to a dispatchable state:
+ * resumeOf field. Walks the latest facts looking for the one that
+ * flipped the run back to a dispatchable state:
  *   fact.run_resumed{fromStatus} → forward fromStatus
  *   fact.run_requeued_after_crash → "crash"
  *   any other fact (run_started, dispatch_started, node_*) → "fresh"
- * Bounded lookback — 20 events is plenty when the trigger fact is the
- * most recent one. We can't gate on status alone because claimNextRun
- * flips queued → running before this point. */
+ *
+ * The walk stops at the first significant fact, so a resume followed
+ * by a node hop produces "fresh" — the resume only labels the
+ * immediately-following dispatch. Provenance for downstream analytics
+ * still lives on fact.run_resumed.fromStatus.
+ *
+ * Uses getLatestEvents (DESC + LIMIT) rather than the prior
+ * getEvents(limit: 20) call: that one ordered ASC, so on any run
+ * with >20 events the lookback fetched the EARLIEST 20 events and
+ * always missed fact.run_resumed → always returned "fresh". */
 function deriveResumeOf(
-  store: { getEvents: (runId: string, opts?: { limit?: number }) => Array<{ type: string; payload: unknown }> },
+  store: { getLatestEvents: (runId: string, limit: number) => Array<{ type: string; payload: unknown }> },
   runId: string,
 ): ResumeOf {
-  const recent = store.getEvents(runId, { limit: 20 });
-  for (let i = recent.length - 1; i >= 0; i--) {
-    const e = recent[i];
+  const recent = store.getLatestEvents(runId, 20);
+  for (const e of recent) {
     if (e == null) continue;
     if (e.type === "fact.run_resumed") {
       const fs = (e.payload as { fromStatus?: string } | null)?.fromStatus;

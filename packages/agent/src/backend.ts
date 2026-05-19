@@ -654,8 +654,29 @@ export class PiCodergenBackend implements CodergenBackend {
         // envelope §I7). Full block structure round-trips: text,
         // thinking (with thinkingSignature / redacted), toolCall (with
         // thoughtSignature), toolResult (with toolCallId pairing).
+        //
+        // Skip empty-content error/abort envelopes — pi-agent-core
+        // synthesises an assistant message with `content: []` +
+        // `stopReason: "error" | "aborted"` + `errorMessage` for a
+        // provider transport failure or in-flight abort (see
+        // `handleRunFailure` in pi-agent-core/dist/agent.js). The
+        // row carries no tokens and no recoverable content; it's a
+        // pure failure marker. Persisting it bloats the `messages`
+        // table with N duplicates on every provider-error retry chain
+        // (the auto-resume path re-dispatches `resumeOf:"fresh"` and
+        // each fresh attempt that hits the same overloaded_error
+        // appends another empty assistant + system + user) and
+        // makes the conversation view look like the LLM is talking
+        // to itself. The corresponding `cost.recorded` event still
+        // fires above (with zeros), so cost accounting is unaffected.
         if (input.persistMessage) {
-          input.persistMessage(event.message);
+          const msg = event.message as AssistantMessage;
+          const isEmptyFailureEnvelope =
+            msg.role === "assistant" &&
+            (msg.stopReason === "error" || msg.stopReason === "aborted") &&
+            Array.isArray(msg.content) &&
+            msg.content.length === 0;
+          if (!isEmptyFailureEnvelope) input.persistMessage(event.message);
         }
       }
     });

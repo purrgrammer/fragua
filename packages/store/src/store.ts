@@ -60,6 +60,7 @@ import {
   selectGlobalEventsAtFloor,
   selectGlobalEventsForward,
   selectGlobalEventsLatest,
+  selectLatestEvents,
   selectNextPendingIntent,
   selectOrphanSideEffects,
   selectUnappliedIntents,
@@ -594,6 +595,10 @@ export class SqliteStore implements IEventStore {
 
   getEventsByType(runId: string, type: string): StoredEvent[] {
     return selectEventsByType(this.db, runId, type).map(rowToStoredEvent);
+  }
+
+  getLatestEvents(runId: string, limit: number): StoredEvent[] {
+    return selectLatestEvents(this.db, runId, limit).map(rowToStoredEvent);
   }
 
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[] {

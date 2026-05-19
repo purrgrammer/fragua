@@ -698,6 +698,13 @@ export interface IEventReader {
    */
   getEventsByType(runId: string, type: string): StoredEvent[];
   /**
+   * The last `limit` events for `runId`, newest first. Bounded
+   * backwards walk for callers that need "what just happened" without
+   * paying for a full scan. Covered by the `(run_id, seq)` primary
+   * key — cheap even on long-lived runs.
+   */
+  getLatestEvents(runId: string, limit: number): StoredEvent[];
+  /**
    * Forward direction of the global SSE feed: cross-run, ascending
    * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`
    * cursor, filtered by `kindIn`. Returns events in `(ts, run_id,

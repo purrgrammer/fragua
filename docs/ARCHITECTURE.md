@@ -545,6 +545,7 @@ export interface IEventReader {
   // Event log
   getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
   getEventsByType(runId: string, type: string): StoredEvent[];
+  getLatestEvents(runId: string, limit: number): StoredEvent[];
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
   getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];

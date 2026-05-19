@@ -140,7 +140,13 @@ describe("CostInspector", () => {
   });
 
   describe("CostInspector — parallel branches", () => {
-    it("indents step rows with parentNodeId under their parent and shows a parent summary aggregating cost + tokens", async () => {
+    it("indents step rows with parentNodeId under their parent; every row shows its own cost, no parent-side aggregation", async () => {
+      // Each row reflects only its own LLM call's cost / context.
+      // The parent's row is the parent's own orchestrator turn —
+      // hiding it inside a sum with children's spend masks where
+      // the money actually goes (operator question: "is dispatch's
+      // prompt blown up, or is one of the children doing the heavy
+      // lifting?"). Children render on their own indented rows.
       const steps = [
         makeStep({
           stepIdx: 0,
@@ -173,9 +179,12 @@ describe("CostInspector", () => {
       const parent = q.getByTestId("step-0");
       const lensA = q.getByTestId("step-1");
       const lensB = q.getByTestId("step-2");
-      // Parent has children → summary marker + summed cost ($0.06).
+      // Parent has children → keeps the structural marker so the UI
+      // can tone the row, but the dollar figure is the parent's own
+      // ($0.01) — NOT the $0.06 sum that used to land here.
       expect(parent.getAttribute("data-summary")).toBe("true");
-      expect(parent.textContent).toMatch(/0\.06/);
+      expect(parent.textContent).toMatch(/0\.01/);
+      expect(parent.textContent).not.toMatch(/0\.06/);
       // Children carry the parentNodeId attribution + branch-child class.
       expect(lensA.getAttribute("data-branch-child")).toBe("true");
       expect(lensA.getAttribute("data-parent-step")).toBe("fork");
@@ -184,7 +193,7 @@ describe("CostInspector", () => {
       // Indent class lands on the row container.
       expect(lensA.className).toMatch(/ml-6/);
       expect(lensB.className).toMatch(/ml-6/);
-      // Children render their own (non-summed) cost.
+      // Children render their own cost.
       expect(lensA.textContent).toMatch(/0\.02/);
       expect(lensB.textContent).toMatch(/0\.03/);
     });
@@ -251,7 +260,9 @@ describe("CostInspector", () => {
       // no top-level step with `nodeId="fanout"` to attach them to. We
       // synthesise a stand-in parent so the children render NESTED under
       // their parallel parent (operators rely on the indent to read the
-      // fan-out structure) and the aggregate cost/tokens summary fires.
+      // fan-out structure). The synth parent has no cost of its own
+      // and shows nothing in the cost chip — each child carries its
+      // own dollar figure on its own row.
       const steps = [
         makeStep({
           stepIdx: 0,
@@ -271,14 +282,17 @@ describe("CostInspector", () => {
       const synth = q.getByTestId("step--1");
       expect(synth.getAttribute("data-summary")).toBe("true");
       expect(synth.textContent).toMatch(/fanout/);
-      // Aggregated cost from the single child.
-      expect(synth.textContent).toMatch(/0\.028/);
-      // Branch child renders nested under the synth parent.
+      // No cost rollup on the synth parent — child's dollars belong
+      // to the child's row.
+      expect(synth.textContent).not.toMatch(/0\.028/);
+      // Branch child renders nested under the synth parent with its
+      // own cost displayed.
       const drift = q.getByTestId("step-0");
       expect(drift.getAttribute("data-branch-child")).toBe("true");
       expect(drift.getAttribute("data-parent-step")).toBe("fanout");
       expect(drift.className).toMatch(/ml-6/);
       expect(drift.textContent).toMatch(/drift/);
+      expect(drift.textContent).toMatch(/0\.028/);
     });
   });
 
@@ -383,19 +397,23 @@ describe("CostInspector", () => {
       expect(indexOf("step-4")).toBe(4);
       expect(indexOf("step-5")).toBe(5);
 
-      // The first parent's summary cost = its own ($0.01) + only its
-      // two sub-agents ($0.02 + $0.03) = $0.06. If grouping leaks
-      // across invocations, the summary picks up $0.05 + $0.06 from
-      // the second invocation's children too and reads $0.17.
+      // Each parent's row shows its own cost only — $0.01 for the
+      // first invocation, $0.04 for the second. The structural
+      // marker (data-summary) is preserved so the row stays
+      // visually grouped with its children, but the dollar figure
+      // is the parent's own LLM call. The original grouping-leak
+      // bug shows up as parent1 reading $0.06 (its real total) +
+      // $0.11 (cross-invocation pickup) = $0.17 instead of $0.01.
       const parent1 = q.getByTestId("step-0");
       expect(parent1.getAttribute("data-summary")).toBe("true");
-      expect(parent1.textContent).toMatch(/0\.06/);
+      expect(parent1.textContent).toMatch(/0\.01/);
+      expect(parent1.textContent).not.toMatch(/0\.06/);
       expect(parent1.textContent).not.toMatch(/0\.17/);
 
-      // Same for the second parent: $0.04 + $0.05 + $0.06 = $0.15.
       const parent2 = q.getByTestId("step-3");
       expect(parent2.getAttribute("data-summary")).toBe("true");
-      expect(parent2.textContent).toMatch(/0\.15/);
+      expect(parent2.textContent).toMatch(/0\.04/);
+      expect(parent2.textContent).not.toMatch(/0\.15/);
     });
   });
 

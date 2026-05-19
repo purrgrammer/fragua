@@ -113,6 +113,22 @@ export function selectEvents(db: Database, runId: string, opts: { sinceSeq: numb
   return db.query<EventRow, [string, number, number]>(SELECT_EVENTS_BY_RUN_SQL).all(runId, opts.sinceSeq, limit);
 }
 
+const SELECT_LATEST_EVENTS_SQL = `
+  SELECT run_id, seq, type, writer, payload, ts
+    FROM events
+   WHERE run_id = ?1
+   ORDER BY seq DESC
+   LIMIT ?2
+`;
+
+/** The last N events for `runId`, newest first. Bounded backwards walk
+ *  for callers that need "what just happened" without paying for a full
+ *  scan. The covering (run_id, seq) primary key makes this cheap even
+ *  on long-lived runs. */
+export function selectLatestEvents(db: Database, runId: string, limit: number): EventRow[] {
+  return db.query<EventRow, [string, number]>(SELECT_LATEST_EVENTS_SQL).all(runId, limit);
+}
+
 const SELECT_EVENTS_BY_TYPE_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events
