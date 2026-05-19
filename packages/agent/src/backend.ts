@@ -686,8 +686,11 @@ export class PiCodergenBackend implements CodergenBackend {
     // exits inside the executor's 10s leak window.
     const abortListener = () => agent.abort();
     if (input.signal) {
-      if (input.signal.aborted) agent.abort();
-      else input.signal.addEventListener("abort", abortListener, { once: true });
+      // Always register the listener — addEventListener does NOT fire
+      // synchronously for an already-aborted signal, and the
+      // already-aborted branch below queues the abort against the
+      // live activeRun.
+      input.signal.addEventListener("abort", abortListener, { once: true });
     }
 
     let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -695,6 +698,20 @@ export class PiCodergenBackend implements CodergenBackend {
       await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
     })();
+    // Already-aborted case: agent.abort() called before agent.prompt()
+    // existed is a no-op (no activeRun yet to abort). agent.prompt()
+    // synchronously creates activeRun inside its body before the
+    // first await, so a queueMicrotask scheduled AFTER promptDone's
+    // synchronous prologue hits the live controller. Without this
+    // the stream runs for the full ABORT_TEARDOWN_GRACE_MS (2s)
+    // window before the outer race rejects — real provider tokens
+    // get billed during those 2s. Hits the sub-agent fan-out case
+    // where the parent's abort already fired (executor's reactive
+    // budget gate) by the time spawn-subagent's child backend.run
+    // starts: the child's input.signal is aborted at entry.
+    if (input.signal?.aborted) {
+      queueMicrotask(() => agent.abort());
+    }
     const abortRace = input.signal
       ? new Promise<never>((_, reject) => {
           const arm = () => {

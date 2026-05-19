@@ -249,6 +249,176 @@ describe("makeSpawnSubagent", () => {
     store.close();
   });
 
+  test("pause-cancelled sub-agent: partial transcript persists; re-spawn with same tool_call_id hydrates it", async () => {
+    // End-to-end resume contract for the budget-pause case the user
+    // flagged: when a parent run pauses mid-flight, the sub-agent's
+    // work-so-far must survive and be hydratable by a subsequent
+    // spawn that reuses the same deterministic id.
+    //
+    // The deterministic subagent_id is sha256(parentRunId, parentNodeId,
+    // parentIteration, tool_call_id), so a re-execution path that
+    // preserves tool_call_id (sanitiseUnpairedToolCalls on rehydrate)
+    // picks the same id and the prior transcript is replayed.
+    //
+    // KNOWN GAP: graceful pause/resume through pi-agent today persists
+    // the cancelled toolResult as PAIRED. sanitiseUnpairedToolCalls
+    // never sees an unpaired tool call to re-execute, and any LLM-
+    // initiated retry generates a NEW tool_call_id → new subagent_id →
+    // hydration is bypassed. This test proves the lower-level
+    // mechanism works; closing the gap end-to-end needs a follow-up
+    // that either leaves the cancelled toolCall unpaired on pause or
+    // exposes the prior subagent_id to the LLM for explicit resume.
+    const store = freshStore();
+    seedParent(store, "parent-resume-cancel");
+    const registry = freshRegistry();
+    const ctrl = new AbortController();
+
+    // Spawn 1: emits two assistant messages (durable), then suspends
+    // until aborted.
+    const backend1 = new StubBackend((input) => {
+      input.persistMessage?.({
+        role: "user",
+        content: [{ type: "text", text: "work prompt" }],
+      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+      input.persistMessage?.({
+        role: "assistant",
+        content: [{ type: "text", text: "partial progress so far" }],
+        stopReason: "toolUse",
+      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+      return new Promise<Outcome>((_, reject) => {
+        const onAbort = (): void => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (input.signal?.aborted) onAbort();
+        else input.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+
+    const parentCtxBase = {
+      parentRunId: "parent-resume-cancel",
+      parentNodeId: "orchestrate",
+      parentIteration: 0,
+      parentSystemPrompt: "P",
+      parentSkills: [],
+      parentProvider: "anthropic",
+      parentModel: "claude-haiku-4-5",
+      parentEnv: STUB_ENV,
+      parentEmit: recordingEmit().emit,
+    } as const;
+
+    const spawn1 = makeSpawnSubagent(
+      { store, registry, backend: backend1, shutdownSignal: ctrl.signal },
+      parentCtxBase,
+    );
+
+    const parentSpec = new AbortController();
+    const result1Promise = spawn1({ prompt: "do task", signal: parentSpec.signal, tool_call_id: "toolu_resume" });
+    // Wait for backend to register its abort listener.
+    for (let i = 0; i < 50 && backend1.inputs.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    parentSpec.abort();
+    const result1 = await result1Promise;
+    expect(result1.status).toBe("cancelled");
+
+    // Determine the subagentNodeId the spawn used and verify the
+    // partial transcript is on disk.
+    const subagentId = createHash("sha256")
+      .update(`parent-resume-cancel orchestrate 0 toolu_resume`)
+      .digest("hex")
+      .slice(0, 32);
+    const subagentNodeId = `__subagent:${subagentId}`;
+    const persisted = store.getMessages("parent-resume-cancel", { nodeId: subagentNodeId });
+    // StubBackend prepends one canned assistant message; factory adds
+    // user + assistant. All three rows are durable, even though the
+    // backend rejected on abort.
+    expect(persisted.length).toBe(3);
+    const persistedRoles = persisted.map((m) => (m.content as { role: string }).role);
+    expect(persistedRoles).toEqual(["assistant", "user", "assistant"]);
+
+    // Spawn 2: same tool_call_id → same deterministic subagent_id →
+    // crash-resilience hydration MUST load the partial transcript and
+    // pass it to backend.run as priorMessages.
+    const backend2 = new StubBackend(() => ok({ notes: "" }));
+    const spawn2 = makeSpawnSubagent(
+      { store, registry, backend: backend2, shutdownSignal: ctrl.signal },
+      parentCtxBase,
+    );
+    await spawn2({ prompt: "do task", tool_call_id: "toolu_resume" });
+
+    const seenPrior = backend2.inputs[0]?.priorMessages;
+    expect(seenPrior).toBeDefined();
+    // Hydration replays every persisted non-system message — the canned
+    // assistant, the user prompt, the partial assistant turn.
+    expect(seenPrior!.length).toBe(3);
+    const lastText = (seenPrior![2] as { content: Array<{ type: string; text?: string }> }).content
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+    expect(lastText).toBe("partial progress so far");
+
+    store.close();
+  });
+
+  test("mid-flight parent abort propagates into sub-agent's already-running backend signal", async () => {
+    // The pre-flight test above covers the easy case (parent.signal
+    // already aborted before spawn). This test covers the live case:
+    // the sub-agent's backend.run() is suspended awaiting an LLM stream
+    // when the parent's budget gate trips and aborts the parent's
+    // signal. The cascade must reach the child's input.signal so the
+    // backend unwinds — otherwise children burn provider spend long
+    // after the parent run is paused.
+    const store = freshStore();
+    seedParent(store, "parent-mid");
+    const registry = freshRegistry();
+    let childSignal: AbortSignal | undefined;
+    let backendEntered = false;
+    const backend = new StubBackend((input) => {
+      childSignal = input.signal;
+      backendEntered = true;
+      return new Promise<Outcome>((resolve, reject) => {
+        const onAbort = (): void => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (input.signal?.aborted) onAbort();
+        else input.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-mid",
+        parentNodeId: "orchestrate",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    const parentSpec = new AbortController();
+    const spawnPromise = spawn({ prompt: "x", signal: parentSpec.signal, tool_call_id: "toolu_pm" });
+    // Wait for the stub backend to enter and register its abort listener.
+    for (let i = 0; i < 50 && !backendEntered; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(backendEntered).toBe(true);
+    expect(childSignal?.aborted).toBe(false);
+
+    parentSpec.abort();
+    const result = await spawnPromise;
+
+    expect(childSignal?.aborted).toBe(true);
+    expect(result.status).toBe("cancelled");
+    store.close();
+  });
+
   test("filtered skills land on the sub-agent's node attrs", async () => {
     const store = freshStore();
     seedParent(store, "parent-4");
