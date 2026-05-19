@@ -262,6 +262,22 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     });
   }
 
+  // E029: `start` is reserved for the synthesized entry node. Authors
+  // never declare it; the parser injects it pointing at the first step.
+  // Surfaces if a hand-built or tool-generated graph names a step `start`
+  // with any non-Mdiamond shape.
+  for (const n of nodes) {
+    if (n.id !== "start") continue;
+    if (n.shape === "Mdiamond") continue;
+    diags.push({
+      severity: "error",
+      code: "E029",
+      message: `node id "start" is reserved for the synthesized entry node — rename this step`,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
+  }
+
   // E009: human node needs ≥1 outgoing edge — otherwise the operator has
   // no choices. Human nodes declare those choices via routes= (for the
   // route-discriminated model) or bare edges; either way an edgeless human

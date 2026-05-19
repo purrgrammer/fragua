@@ -17,7 +17,7 @@ steps:
     expect(g.id).toBe("t");
     expect(g.directed).toBe(true);
     // Synthetic start node + user step + synthetic exit (linear default → exit).
-    expect(g.nodes["__start__"]?.shape).toBe("Mdiamond");
+    expect(g.nodes["start"]?.shape).toBe("Mdiamond");
     expect(g.nodes["work"]?.shape).toBe("box");
     expect(g.nodes["exit"]?.shape).toBe("Msquare");
   });
@@ -146,9 +146,9 @@ steps:
   b: {type: llm, prompt: y}
   c: {type: llm, prompt: z}
 `);
-    // __start__ -> a, a -> b (success), a -> exit (fail), b -> c (success), b -> exit (fail), c -> exit (success), c -> exit (fail)
+    // start -> a, a -> b (success), a -> exit (fail), b -> c (success), b -> exit (fail), c -> exit (success), c -> exit (fail)
     const edgeKeys = g.edges.map((e) => `${e.from}->${e.to}:${e.attrs.outcome ?? ""}:${e.attrs.route ?? ""}`);
-    expect(edgeKeys).toContain("__start__->a::");
+    expect(edgeKeys).toContain("start->a::");
     expect(edgeKeys).toContain("a->b:success:");
     expect(edgeKeys).toContain("a->exit:fail:");
     expect(edgeKeys).toContain("b->c:success:");

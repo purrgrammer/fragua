@@ -367,15 +367,17 @@ export function parseWorkflow(source: string): Graph {
   const nodes: Record<string, Node> = {};
   const edges: Edge[] = [];
 
-  // Synthesise the hidden start node and an edge to the first step. The
-  // engine still consumes Mdiamond entry; the operator never sees this.
-  nodes.__start__ = {
-    id: "__start__",
+  // Synthesise the entry-point start node and an edge to the first step.
+  // The engine looks for `routing.start_node` defaulting to "start" — so
+  // we name the synthetic node "start" (not __start__) for that to match.
+  // Authors don't declare it; validator E029 reserves the name.
+  nodes.start = {
+    id: "start",
     shape: "Mdiamond",
     attrs: { shape: "Mdiamond", type: "start", label: "start" } as NodeAttrs,
     classes: [],
   };
-  edges.push({ from: "__start__", to: stepIds[0]!, attrs: {} });
+  edges.push({ from: "start", to: stepIds[0]!, attrs: {} });
 
   // Track which user-defined step ids exist so `next: exit` is recognised
   // as the reserved sink and synthesised on demand.

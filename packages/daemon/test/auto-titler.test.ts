@@ -198,8 +198,8 @@ describe("AutoTitler — unit", () => {
 
 describe("AutoTitler — executor integration", () => {
   test("titleRun fires once per run right after fact.run_started", async () => {
-    const dot = `digraph wf { graph[goal="rename things"]; start [shape=Mdiamond]; done [shape=Msquare]; start -> done; }`;
-    const r = rig({ dot });
+    const yaml = `name: wf\ngoal: "rename things"\nsteps:\n  work: {type: llm, prompt: hi}\n`;
+    const r = rig({ yaml });
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
     // r1 is enqueued with no input; the titler should skip it.
     enqueue(r, "r1", "start");

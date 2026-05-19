@@ -1,6 +1,5 @@
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
-import { dotToYaml } from "../../core/test/helpers/dot-to-yaml.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 
 export interface TestRig {
@@ -11,10 +10,14 @@ export interface TestRig {
   workflowSha: string;
 }
 
-export function rig(workflow: { sha?: string; name?: string; dot?: string } = {}): TestRig {
+/** Trivial single-step workflow source — when a test doesn't care about
+ * graph topology, only the executor / store wiring. */
+const TRIVIAL_YAML = "name: t\nsteps:\n  start: {type: llm, prompt: hi}\n";
+
+export function rig(workflow: { sha?: string; name?: string; yaml?: string } = {}): TestRig {
   const store = new SqliteStore({ path: ":memory:" });
   const sha = workflow.sha ?? "wf";
-  const source = workflow.dot ? dotToYaml(workflow.dot) : "name: t\nnodes:\n  start: {type: start}\nedges: []\n";
+  const source = workflow.yaml ?? TRIVIAL_YAML;
   store.saveWorkflow(sha, workflow.name ?? "t", source);
   const dispatcher = new Dispatcher();
   const tools = new handler.InMemoryToolRegistry();
