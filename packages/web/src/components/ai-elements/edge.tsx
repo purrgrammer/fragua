@@ -11,7 +11,17 @@ type EdgeLabelProps = {
   tone?: EdgeTone;
   /** Fade when the executor didn't traverse this edge. */
   dim?: boolean;
+  /** Slot within a parallel-edge group (same source + target). When set
+   *  alongside `parallelCount > 1`, the label is offset cross-axis so
+   *  stacked routes (e.g. `triage -> plan [route=small|feature]`) don't
+   *  draw on top of each other. */
+  parallelIndex?: number;
+  parallelCount?: number;
 };
+
+/** Per-slot cross-axis offset for parallel edges. Roughly one pill height
+ *  so adjacent labels read as a stack, not a single overlapping blob. */
+const PARALLEL_LABEL_STEP = 22;
 
 /** Edges the executor never traversed render at reduced opacity. The same
  *  factor applies to both the SVG path and the HTML label pill so they
@@ -118,7 +128,7 @@ const bezierPoint = (
 // Small inline pill rendered at the edge's midpoint. Shows DOT edge
 // `condition` / `label` attrs ("outcome=success", etc.) so readers can
 // tell branching edges apart without opening the inspector.
-const EdgeLabel = ({ labelX, labelY, label, tone = "muted", dim }: EdgeLabelProps) => {
+const EdgeLabel = ({ labelX, labelY, label, tone = "muted", dim, parallelIndex, parallelCount }: EdgeLabelProps) => {
   const toneClass =
     tone === "warn"
       ? "bg-sw-surface text-sw-accent-warn border-sw-accent-warn/40"
@@ -129,12 +139,16 @@ const EdgeLabel = ({ labelX, labelY, label, tone = "muted", dim }: EdgeLabelProp
           : tone === "error"
             ? "bg-sw-surface text-sw-accent-error border-sw-accent-error/40"
             : "bg-sw-surface text-sw-muted border-sw-border";
+  const stackOffset =
+    typeof parallelIndex === "number" && typeof parallelCount === "number" && parallelCount > 1
+      ? (parallelIndex - (parallelCount - 1) / 2) * PARALLEL_LABEL_STEP
+      : 0;
   return (
     <EdgeLabelRenderer>
       <div
         style={{
           position: "absolute",
-          transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+          transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + stackOffset}px)`,
           // Non-interactive — click-throughs to underlying nodes when
           // the pill overlaps a node body on dense graphs.
           pointerEvents: "none",
@@ -164,6 +178,11 @@ type TemporaryData = {
    *  either the source or target has `kind=human`; Temporary picks up the
    *  matching stroke. */
   isHumanEdge?: boolean;
+  /** Slot within a parallel-edge group (same source + target). Lets the
+   *  label renderer stagger labels along the cross-axis so they don't
+   *  stack at the midpoint. */
+  parallelIndex?: number;
+  parallelCount?: number;
 };
 
 /** Outcome coloring — when set, the stroke + label pill track the
@@ -240,7 +259,15 @@ const Temporary = ({
         }}
       />
       {label ? (
-        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "muted"} dim={dim} />
+        <EdgeLabel
+          labelX={labelX}
+          labelY={labelY}
+          label={label}
+          tone={outcomeTone ?? "muted"}
+          dim={dim}
+          parallelIndex={d?.parallelIndex}
+          parallelCount={d?.parallelCount}
+        />
       ) : null}
     </>
   );
@@ -287,7 +314,15 @@ const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome
         }}
       />
       {label ? (
-        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "muted"} dim={dim} />
+        <EdgeLabel
+          labelX={labelX}
+          labelY={labelY}
+          label={label}
+          tone={outcomeTone ?? "muted"}
+          dim={dim}
+          parallelIndex={d?.parallelIndex}
+          parallelCount={d?.parallelCount}
+        />
       ) : null}
     </>
   );
@@ -343,7 +378,15 @@ const Animated = ({
         }}
       />
       {label ? (
-        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "thinking"} dim={dim} />
+        <EdgeLabel
+          labelX={labelX}
+          labelY={labelY}
+          label={label}
+          tone={outcomeTone ?? "thinking"}
+          dim={dim}
+          parallelIndex={d?.parallelIndex}
+          parallelCount={d?.parallelCount}
+        />
       ) : null}
     </>
   );

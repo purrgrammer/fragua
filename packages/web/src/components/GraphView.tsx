@@ -26,7 +26,6 @@
 // so existing tests (and any future Playwright) can target them.
 
 import {
-  DEFAULT_MAX_GOAL_GATE_RETRIES,
   type Graph,
   type Edge as GraphEdge,
   type Node as GraphNode,
@@ -256,10 +255,8 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 // branching / HITL / tool / validation structure without reading labels:
 //
 //   goal_gate     → success (green)       — "did we land it?"  (wins over handler)
-//   conditional   → warn    (orange)      — explicit decision split
-//   wait.human    → human   (steel blue)  — HITL / paused_human
+//   human         → human   (steel blue)  — HITL / paused_human (hexagon, kind=human)
 //   tool          → loop    (teal)        — deterministic shell step (no LLM)
-//   parallel*     → idle    (gray)        — structural fan-out / fan-in
 //   start / exit  → idle    (gray)        — lifecycle markers, dimmer presence
 //   codergen      → (no strip — neutral baseline; the LLM majority)
 //
@@ -271,9 +268,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 function typeStripTone(handler: string, goalGate: boolean): string | null {
   if (goalGate) return "bg-sw-accent-success";
   switch (handler) {
-    case "conditional":
-      return "bg-sw-accent-warn";
-    case "wait.human":
+    case "human":
       return "bg-sw-accent-human";
     case "start":
     case "exit":
@@ -530,6 +525,15 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
      *  load-bearing signal for back-edges, self-loops, and goal-gate
      *  retargets. */
     traversalCount?: number;
+    /** This edge's slot when multiple edges share the same (from, to)
+     *  pair — e.g. `triage -> plan [route=small]` + `triage -> plan
+     *  [route=feature]`. Drives per-edge label offset so route labels
+     *  don't stack on top of each other at the midpoint. Zero-indexed.
+     *  Absent when the (from, to) pair has only one edge. */
+    parallelIndex?: number;
+    /** Total edges sharing this edge's (from, to) pair. Paired with
+     *  `parallelIndex` so the renderer can centre the stack. */
+    parallelCount?: number;
   };
 };
 
@@ -549,8 +553,7 @@ interface SwarmNodeData extends Record<string, unknown> {
    *  label, so the header can suppress a title that'd just duplicate
    *  the id. */
   customLabel: string | undefined;
-  /** Semantic handler type (`codergen`, `conditional`, `wait.human`,
-   *  `parallel`, `parallel.fan_in`, `tool`, `start`, `exit`). */
+  /** Semantic handler type (`codergen`, `human`, `tool`, `start`, `exit`). */
   handler: string;
   /** Whether this node carries `goal_gate=true`. Drives the green
    *  left-edge strip so operators can spot validation gates even when
@@ -699,9 +702,9 @@ export function toFlowGraph(
   const positions = new Map(layoutDag(layoutInput, { orientation }).map((p) => [p.id, p.position]));
 
   // Per-depth max lateral extent. Used to size arc bulges so that a
-  // back-edge or skip-edge spanning a fanned-out parallel layer pushes
-  // its bulge OUTSIDE the rightmost (or leftmost) branch column instead
-  // of cutting through it. In TB orientation "lateral" is x; in LR the
+  // back-edge or skip-edge spanning a fanned-out layer pushes its bulge
+  // OUTSIDE the rightmost (or leftmost) branch column instead of
+  // cutting through it. In TB orientation "lateral" is x; in LR the
   // perpendicular axis is y — but arc-routed edges only use the right /
   // left handles in TB (bottom / top in LR), so for arc geometry we
   // care about the absolute value of the cross-axis coordinate.
@@ -805,6 +808,25 @@ export function toFlowGraph(
     rightArcIndexByEdge.set(r.idx, i);
   });
 
+  // Parallel-edge slots. Two `triage -> plan` edges (one per route) draw
+  // identical paths; their labels would stack at the same midpoint. Group
+  // by (from, to), assign each member an index + total so the renderer
+  // can offset labels along the cross-axis.
+  const parallelGroups = new Map<string, number[]>();
+  graph.edges.forEach((e, idx) => {
+    const k = edgeKey(e.from, e.to);
+    const bucket = parallelGroups.get(k);
+    if (bucket) bucket.push(idx);
+    else parallelGroups.set(k, [idx]);
+  });
+  const parallelSlotByEdge = new Map<number, { index: number; count: number }>();
+  for (const idxs of parallelGroups.values()) {
+    if (idxs.length < 2) continue;
+    idxs.forEach((edgeIdx, slot) => {
+      parallelSlotByEdge.set(edgeIdx, { index: slot, count: idxs.length });
+    });
+  }
+
   const flowEdges: FlowEdge[] = graph.edges.map((e, i) => {
     const sd = depthOf.get(e.from);
     const td = depthOf.get(e.to);
@@ -865,8 +887,8 @@ export function toFlowGraph(
     const arcIndex = rightArcIndexByEdge.get(i);
     // Arc extent floor — measured against the nodes sitting between
     // source-depth and target-depth. The edge renderer uses this to
-    // push the arc bulge past a wide parallel fan (otherwise the curve
-    // cuts through the rightmost / leftmost branch column).
+    // push the arc bulge past a wide fanned-out layer (otherwise the
+    // curve cuts through the rightmost / leftmost branch column).
     const arcExtent = useSideHandles || loopRestart ? arcExtentBetween(sd, td) : 0;
     // Human-node edges (adjacent to a `kind=human` node) carry operator
     // route choices. Promote them to the neutral idle-gray tone — same
@@ -907,6 +929,12 @@ export function toFlowGraph(
         ...(traversalCount > 0 ? { traversalCount } : {}),
         ...(arcIndex !== undefined ? { arcIndex } : {}),
         ...(arcExtent > 0 ? { arcExtent } : {}),
+        ...(parallelSlotByEdge.has(i)
+          ? {
+              parallelIndex: parallelSlotByEdge.get(i)?.index,
+              parallelCount: parallelSlotByEdge.get(i)?.count,
+            }
+          : {}),
       },
       sourceHandle: useSideHandles || loopRestart ? LOOP_HANDLE_SOURCE : undefined,
       targetHandle: useSideHandles || loopRestart ? LOOP_HANDLE_TARGET : undefined,
@@ -945,9 +973,7 @@ export function toFlowGraph(
     const gateVisits = gateOutgoingCounts.get(r.gateId) ?? 0;
     const retargetCount = gateVisits > 0 ? gateVisits - 1 : 0;
     const taken = retargetCount > 0;
-    const baseLabel = `retarget · cap ${goalGateCap}${
-      goalGateCap === DEFAULT_MAX_GOAL_GATE_RETRIES ? " (default)" : ""
-    }`;
+    const baseLabel = `retarget · cap ${goalGateCap}`;
     const capLabel = retargetCount > 0 ? `${baseLabel} · ×${retargetCount}` : baseLabel;
     return {
       id: `__retarget__${r.gateId}->${r.target}`,

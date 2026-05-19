@@ -808,7 +808,6 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(data.label?.startsWith("retarget")).toBe(true);
     // Default cap is 3 when graph doesn't override.
     expect(data.label).toContain("cap 3");
-    expect(data.label).toContain("default");
     // Synthetic retargets route through the LEFT-side handles so they
     // visually separate from real back-edges (right-side).
     expect(synth?.sourceHandle).toBe("retarget-source");

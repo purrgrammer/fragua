@@ -133,8 +133,11 @@ export function layoutDag(input: LayoutInput, opts: LayoutOptions = {}): Positio
   const orientation: LayoutOrientation = opts.orientation ?? "TB";
   // Defaults tuned for TB: layer spacing (vertical) tighter than cross
   // spacing (horizontal) so siblings fan out without burying the flow.
-  // LR defaults keep the older values so existing callers don't shift.
-  const layerSize = opts.layerSize ?? (orientation === "TB" ? 140 : 260);
+  // 180 keeps single-edge labels (e.g. `route=…` route names) inside the
+  // gap between cards — at 140 a 5-row codergen card and the next node
+  // left only ~20px for the label pill, so labels grazed the next card's
+  // header. LR defaults keep the older values so existing callers don't shift.
+  const layerSize = opts.layerSize ?? (orientation === "TB" ? 180 : 260);
   const crossSize = opts.crossSize ?? (orientation === "TB" ? 280 : 120);
 
   const { ids, depthOf } = classifyGraph(input);
