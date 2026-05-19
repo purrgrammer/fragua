@@ -6,7 +6,7 @@
 // change that reintroduces a thread-content flip on resume fails loudly.
 //
 // Scripted faux responses keep the Agent loop deterministic: each
-// `PiCodergenBackend.run()` invocation pops exactly one AssistantMessage
+// `PiLlmBackend.run()` invocation pops exactly one AssistantMessage
 // (no tool calls → stopReason="stop" → no second LLM turn). Comparing
 // two runs that differ only in their restart pattern then reduces to
 // comparing the final `AgentMessage[]` arrays.
@@ -19,8 +19,8 @@ import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import fc from "fast-check";
-import { PiCodergenBackend } from "../src/backend.ts";
-import { makeCodergenHandler } from "../src/handler-bridge.ts";
+import { PiLlmBackend } from "../src/backend.ts";
+import { makeLlmHandler } from "../src/handler-bridge.ts";
 
 // ───── Helpers ─────────────────────────────────────────────────────────
 
@@ -28,11 +28,11 @@ function nodeOn(threadId: string): Node {
   return {
     id: threadId,
     attrs: {
-      shape: "box",
+      type: "llm",
       prompt: `turn on ${threadId}`,
       thread_id: threadId,
     },
-    classes: [],
+
   } as unknown as Node;
 }
 
@@ -82,8 +82,8 @@ function scriptedResponses(seed: number, n: number): FauxResponseStep[] {
 
 interface DaemonHarness {
   store: SqliteStore;
-  makeBackend(inProcessWrites: Set<string>): PiCodergenBackend;
-  dispatch(backend: PiCodergenBackend, runId: string, threadId: string): Promise<{ finalMessages: AgentMessage[] }>;
+  makeBackend(inProcessWrites: Set<string>): PiLlmBackend;
+  dispatch(backend: PiLlmBackend, runId: string, threadId: string): Promise<{ finalMessages: AgentMessage[] }>;
   /** Tears down the faux registration. */
   dispose(): void;
 }
@@ -95,7 +95,7 @@ function newDaemon(store: SqliteStore, responses: FauxResponseStep[]): DaemonHar
   return {
     store,
     makeBackend(inProcessWrites) {
-      return new PiCodergenBackend({
+      return new PiLlmBackend({
         registry: new ToolRegistry(),
         env: new LocalEnvironment({ cwd: process.cwd() }),
         resolveModel: () => model,
@@ -105,7 +105,7 @@ function newDaemon(store: SqliteStore, responses: FauxResponseStep[]): DaemonHar
     },
     async dispatch(backend, runId, threadId) {
       const ctx = await ctxFor(runId, store, threadId);
-      const spec = makeCodergenHandler({ node: nodeOn(threadId), backend });
+      const spec = makeLlmHandler({ node: nodeOn(threadId), backend });
       await spec.handler(ctx);
       // Return the full persisted transcript for this run (all threads).
       const rows = store.getMessages(runId);

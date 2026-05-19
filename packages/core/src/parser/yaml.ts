@@ -81,7 +81,7 @@
 // reuse the same name table.
 
 import * as YAML from "yaml";
-import type { Edge, EdgeAttrs, Graph, GraphAttrs, Node, NodeAttrs, NodeShape } from "../types/graph.ts";
+import type { Edge, EdgeAttrs, Graph, GraphAttrs, Node, NodeAttrs, NodeType } from "../types/graph.ts";
 
 export class ParseError extends Error {
   constructor(
@@ -94,16 +94,7 @@ export class ParseError extends Error {
   }
 }
 
-// ---- Type → shape lowering --------------------------------------------
-
-const TYPE_TO_SHAPE: Readonly<Record<string, NodeShape>> = {
-  llm: "box",
-  human: "hexagon",
-  tool: "parallelogram",
-  exit: "Msquare",
-};
-
-const KNOWN_TYPES = new Set(Object.keys(TYPE_TO_SHAPE));
+const KNOWN_TYPES: ReadonlySet<NodeType> = new Set(["llm", "human", "tool", "exit"] as const);
 
 // ---- Authoring-key → IR-key rename table ------------------------------
 //
@@ -374,9 +365,8 @@ export function parseWorkflow(source: string): Graph {
   // Authors don't declare it; validator E029 reserves the name.
   nodes["start"] = {
     id: "start",
-    shape: "Mdiamond",
-    attrs: { shape: "Mdiamond", type: "start", label: "start" } as NodeAttrs,
-    classes: [],
+    type: "start",
+    attrs: { label: "start" } as NodeAttrs,
   };
   edges.push({ from: "start", to: stepIds[0]!, attrs: {} });
 
@@ -392,13 +382,13 @@ export function parseWorkflow(source: string): Graph {
     // ---- type discrimination ----
     const typeRaw = scalarValue(body.get("type", true));
     const typeStr = typeof typeRaw === "string" ? typeRaw : "llm"; // implicit llm
-    if (!KNOWN_TYPES.has(typeStr)) {
+    if (!KNOWN_TYPES.has(typeStr as NodeType)) {
       throw new ParseError(
         `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit)`,
         ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
       );
     }
-    const shape = TYPE_TO_SHAPE[typeStr] as NodeShape;
+    const nodeType = typeStr as NodeType;
 
     // ---- attribute walk ----
     const attrs: Record<string, unknown> = {};
@@ -428,18 +418,6 @@ export function parseWorkflow(source: string): Graph {
       attrs["goal_gate"] = true;
       attrs["retry_target"] = retryTo;
     }
-    // Lower type to IR kind/type for engine consumers.
-    attrs["shape"] = shape;
-    if (typeStr === "llm") {
-      attrs["kind"] = "llm";
-      attrs["type"] = "llm";
-    } else if (typeStr === "human" || typeStr === "tool") {
-      attrs["kind"] = typeStr;
-      attrs["type"] = typeStr;
-    } else if (typeStr === "exit") {
-      attrs["type"] = "exit";
-    }
-
     // ---- edge synthesis ----
     const nextNode = scalarValue(body.get("next", true));
     const onNode = body.get("on", true);
@@ -517,9 +495,8 @@ export function parseWorkflow(source: string): Graph {
     // ---- materialise the node ----
     nodes[stepId] = {
       id: stepId,
-      shape,
+      type: nodeType,
       attrs: attrs as NodeAttrs,
-      classes: [],
       loc: locOf(stepBodies.get(stepId), lineCounter),
     };
   }
@@ -528,9 +505,8 @@ export function parseWorkflow(source: string): Graph {
   if (needExit && !nodes["exit"]) {
     nodes["exit"] = {
       id: "exit",
-      shape: "Msquare",
-      attrs: { shape: "Msquare", type: "exit", label: "exit" } as NodeAttrs,
-      classes: [],
+      type: "exit",
+      attrs: { label: "exit" } as NodeAttrs,
     };
   }
 
@@ -540,7 +516,6 @@ export function parseWorkflow(source: string): Graph {
     attrs: graphAttrs as GraphAttrs,
     nodes,
     edges,
-    subgraphs: [],
   };
 }
 

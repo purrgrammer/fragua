@@ -105,7 +105,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   });
 
   // LLM-visible message transcript (§I9). Sourced from the messages
-  // table, populated by PiCodergenBackend as each agent turn ends.
+  // table, populated by PiLlmBackend as each agent turn ends.
   // Optional `?nodeId=` filter for per-thread history; `?sinceOrdinal=`
   // for resume-style pagination. AgentMessage JSON round-trips
   // losslessly — the messages table is the source of truth for

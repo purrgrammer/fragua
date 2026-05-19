@@ -1,6 +1,6 @@
 // Pure port for a small-model summariser backend. Concrete
 // implementations live outside @swarm/core (pi-ai wrapper in @swarm/agent,
-// test stubs in tests). Kept separate from CodergenBackend because:
+// test stubs in tests). Kept separate from LlmBackend because:
 //
 // 1. Summarisation runs on a different (cheaper) model than the node
 //    being summarised — exposing it as its own port makes that swap

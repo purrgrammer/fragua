@@ -336,7 +336,7 @@ describe("materialiseForChild", () => {
 });
 
 describe("materialiseForChild — Skill tool inheritance", () => {
-  // The Skill tool itself is force-included by `PiCodergenBackend`
+  // The Skill tool itself is force-included by `PiLlmBackend`
   // regardless of whether the child sees a non-empty skills catalogue.
   // What matters here is the `effectiveSkills` set the loader sees:
   // a `skill({name})` call resolves only against the filtered set.

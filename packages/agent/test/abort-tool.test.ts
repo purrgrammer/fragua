@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
 import type { EventType, NodeAttrs } from "@swarm/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { findAbortToolCall, PiCodergenBackend } from "../src/backend.ts";
+import { findAbortToolCall, PiLlmBackend } from "../src/backend.ts";
 
 describe("findAbortToolCall", () => {
   function assistant(...content: unknown[]) {
@@ -104,7 +104,7 @@ async function runWithAbort(opts: {
     ]);
 
     const env = new LocalEnvironment({ cwd: opts.scratch });
-    const backend = new PiCodergenBackend({
+    const backend = new PiLlmBackend({
       registry: opts.registry,
       env,
       resolveModel: () => model,
@@ -114,7 +114,7 @@ async function runWithAbort(opts: {
 
     const events: CapturedEvent[] = [];
     const outcome = await backend.run({
-      node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
+      node: { id: "n1", type: "llm", attrs: opts.attrs },
       prompt: "do the thing",
       thread_id: undefined,
       signal: new AbortController().signal,
@@ -130,7 +130,7 @@ async function runWithAbort(opts: {
   }
 }
 
-describe("PiCodergenBackend abort tool wiring", () => {
+describe("PiLlmBackend abort tool wiring", () => {
   test("an `abort` tool call yields a non-retryable fail outcome", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-abort-outcome-"));
     try {

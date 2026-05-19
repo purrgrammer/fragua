@@ -17,9 +17,9 @@ steps:
     expect(g.id).toBe("t");
     expect(g.directed).toBe(true);
     // Synthetic start node + user step + synthetic exit (linear default → exit).
-    expect(g.nodes["start"]?.shape).toBe("Mdiamond");
-    expect(g.nodes["work"]?.shape).toBe("box");
-    expect(g.nodes["exit"]?.shape).toBe("Msquare");
+    expect(g.nodes["start"]?.type).toBe("start");
+    expect(g.nodes["work"]?.type).toBe("llm");
+    expect(g.nodes["exit"]?.type).toBe("exit");
   });
 
   test("llm / human / tool / exit types map to in-memory shapes", () => {
@@ -40,9 +40,9 @@ steps:
     type: tool
     run: ls
 `);
-    expect(g.nodes["a"]?.shape).toBe("box");
-    expect(g.nodes["b"]?.shape).toBe("hexagon");
-    expect(g.nodes["c"]?.shape).toBe("parallelogram");
+    expect(g.nodes["a"]?.type).toBe("llm");
+    expect(g.nodes["b"]?.type).toBe("human");
+    expect(g.nodes["c"]?.type).toBe("tool");
   });
 
   test("block-scalar prompts read cleanly without escaping", () => {
@@ -276,14 +276,19 @@ inputs:
 steps:
   work: {type: llm, prompt: hi}
 `);
-    const inputs = g.attrs.inputs as Array<{ name: string; type: string; required: boolean; options?: string[] }>;
+    const inputs = g.attrs["inputs"] as unknown as Array<{
+      name: string;
+      type: string;
+      required: boolean;
+      options?: string[];
+    }>;
     expect(inputs).toHaveLength(3);
     const byName = Object.fromEntries(inputs.map((i) => [i.name, i]));
-    expect(byName.ticket?.type).toBe("string");
-    expect(byName.ticket?.required).toBe(true);
+    expect(byName["ticket"]?.type).toBe("string");
+    expect(byName["ticket"]?.required).toBe(true);
     expect(byName["dry-run"]?.type).toBe("boolean");
-    expect(byName.env?.type).toBe("choice");
-    expect(byName.env?.options).toEqual(["dev", "staging", "prod"]);
+    expect(byName["env"]?.type).toBe("choice");
+    expect(byName["env"]?.options).toEqual(["dev", "staging", "prod"]);
   });
 
   test("type=choice without options[] is a parse error", () => {

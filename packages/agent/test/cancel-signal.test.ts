@@ -12,9 +12,9 @@ import { join } from "node:path";
 import type { AssistantMessage, StreamOptions } from "@mariozechner/pi-ai";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 
-describe("PiCodergenBackend — cancel signal", () => {
+describe("PiLlmBackend — cancel signal", () => {
   test("aborting input.signal mid-run stops the agent", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-cancel-"));
     try {
@@ -40,7 +40,7 @@ describe("PiCodergenBackend — cancel signal", () => {
         const registry = new ToolRegistry();
         registry.registerAll(CORE_TOOLS);
         const env = new LocalEnvironment({ cwd: scratch });
-        const backend = new PiCodergenBackend({
+        const backend = new PiLlmBackend({
           registry,
           env,
           resolveModel: () => model,
@@ -53,7 +53,7 @@ describe("PiCodergenBackend — cancel signal", () => {
 
         const started = Date.now();
         const outcome = await backend.run({
-          node: { id: "n", shape: "box", attrs: {}, classes: [] },
+          node: { id: "n", type: "llm", attrs: {} },
           prompt: "do work",
           thread_id: undefined,
           signal: controller.signal,

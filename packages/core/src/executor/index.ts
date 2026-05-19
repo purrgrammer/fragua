@@ -1,1 +1,1 @@
-export type { CodergenBackend, CodergenInput } from "./types.ts";
+export type { LlmBackend, LlmInput } from "./types.ts";

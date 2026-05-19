@@ -1,6 +1,6 @@
 // Per-run registry of live agents + buffered steer messages.
 //
-// Extracted from PiCodergenBackend so the concurrency-critical slot-
+// Extracted from PiLlmBackend so the concurrency-critical slot-
 // management logic lives in one focused ~60-line class, independent of
 // pi-ai / pi-agent-core. This makes property-based tests tractable: the
 // PBT can exercise the registry directly with a minimal fake agent

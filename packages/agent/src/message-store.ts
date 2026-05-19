@@ -1,5 +1,5 @@
 // In-memory message store keyed by `(run_id, thread_id)`. Each
-// `PiCodergenBackend` holds one of these so nodes within a run that share
+// `PiLlmBackend` holds one of these so nodes within a run that share
 // a `thread_id` can actually share a transcript — pi-agent-core's
 // `sessionId` is only a provider cache hint, it does NOT restore messages
 // on its own. Without this store, every `backend.run()` would start with
@@ -7,7 +7,7 @@
 // thread_id") would be a lie.
 //
 // The runId is part of the key because backends are shared across runs
-// (one `PiCodergenBackend` per (workflow, node) — see
+// (one `PiLlmBackend` per (workflow, node) — see
 // `packages/cli/src/commands/daemon.ts`). Two concurrent runs hitting the
 // same backend with the same thread_id (e.g. `thread_id="dev"` in
 // build-feature.dot) would clobber each other's transcripts without the

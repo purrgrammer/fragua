@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { materialiseForChild } from "@swarm/agent";
-import type { CodergenBackend, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
+import type { LlmBackend, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
 import { fail } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import type { AnyTool, Skill, SubagentResult, SubagentSpec, ToolRegistry } from "@swarm/workspace";
@@ -33,7 +33,7 @@ import { stripAgentTool } from "@swarm/workspace";
 export interface SpawnSubagentDeps {
   store: IEventStore;
   registry: ToolRegistry;
-  backend: CodergenBackend;
+  backend: LlmBackend;
   shutdownSignal: AbortSignal;
 }
 
@@ -77,7 +77,7 @@ export interface SpawnSubagentParentCtx {
 const SUBAGENT_NODE_PREFIX = "__subagent:";
 
 /** Build a `spawnSubagent` closure scoped to one parent llm call.
- *  Wired by the daemon into `PiCodergenBackend.spawnSubagentFactory`
+ *  Wired by the daemon into `PiLlmBackend.spawnSubagentFactory`
  *  so `swarmContext.spawnSubagent` resolves per call. */
 export function makeSpawnSubagent(
   deps: SpawnSubagentDeps,
@@ -126,7 +126,7 @@ export function makeSpawnSubagent(
     // `__subagent:<id>`; the backend feeds them into pi-agent-core's
     // initialState so the child picks up where it left off. System
     // rows are stripped — pi-ai carries the system prompt separately
-    // (PiCodergenBackend rebuilds it per call) and double-feeding
+    // (PiLlmBackend rebuilds it per call) and double-feeding
     // would inject a stray turn into the transcript.
     const priorMessages: AgentMessage[] = deps.store
       .getMessages(parentCtx.parentRunId, { nodeId: subagentNodeId })
@@ -284,8 +284,7 @@ export function makeSpawnSubagent(
     // the parent's transcript table.
     const node: Node = {
       id: subagentNodeId,
-      shape: "box",
-      classes: [],
+      type: "llm",
       attrs: {
         ...(childSystemPrompt.length > 0 ? { system_prompt: childSystemPrompt } : {}),
         allowed_tools: childPool.map((t) => t.name),

@@ -199,46 +199,5 @@ describe("executor — retry-policy enforcement", () => {
     r.store.close();
   });
 
-  test("allow_partial=true on exhaustion → advance with PARTIAL_SUCCESS", async () => {
-    const yaml = `name: t\nsteps:\n  flaky: {type: llm, prompt: x, max_retries: 0, allow_partial: true}\n`;
-    const r = rig({ yaml });
-    r.dispatcher.register(r.workflowSha, "start", {
-      kind: "start",
-      sideEffect: "none",
-      maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "flaky", tokens: 0, costUsd: 0 }),
-    });
-    r.dispatcher.register(r.workflowSha, "flaky", {
-      kind: "llm",
-      sideEffect: "external",
-      maxMs: 100,
-      handler: async () => ({
-        kind: "transition",
-        outcomeStatus: "retry",
-        tokens: 0,
-        costUsd: 0,
-      }),
-    });
-    r.dispatcher.register(r.workflowSha, "done", {
-      kind: "exit",
-      sideEffect: "none",
-      maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
-    });
-    enqueue(r, "rp3", "start");
-    await driveUntilTerminal(r, "rp3");
-
-    const state = r.store.getState("rp3")!;
-    expect(state.status).toBe("completed");
-    const events = r.store.getEvents("rp3");
-    const accept = events.find((e) => e.type === "node.retry_partial_accept");
-    expect(accept).toBeDefined();
-    // The flaky node's node_completed payload reports outcome=success
-    // (advance_partial rewrites the status to success under the simplified model).
-    const completed = events
-      .filter((e) => e.type === "fact.node_completed")
-      .find((e) => (e.payload as { nodeId: string }).nodeId === "flaky");
-    expect((completed?.payload as { outcomeStatus?: string }).outcomeStatus).toBe("success");
-    r.store.close();
-  });
+  // allow_partial retired with the dead retry-policy preset machinery.
 });

@@ -15,9 +15,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerFauxProvider } from "@mariozechner/pi-ai";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 
-describe("PiCodergenBackend — empty registry guard", () => {
+describe("PiLlmBackend — empty registry guard", () => {
   test("allowed_tools set + empty registry → fail with explicit reason", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-registry-"));
     try {
@@ -26,7 +26,7 @@ describe("PiCodergenBackend — empty registry guard", () => {
         const model = faux.getModel();
         const registry = new ToolRegistry(); // deliberately EMPTY
         const env = new LocalEnvironment({ cwd: scratch });
-        const backend = new PiCodergenBackend({
+        const backend = new PiLlmBackend({
           registry,
           env,
           resolveModel: () => model,
@@ -36,9 +36,9 @@ describe("PiCodergenBackend — empty registry guard", () => {
         const outcome = await backend.run({
           node: {
             id: "implement",
-            shape: "box",
+            type: "llm",
             attrs: { allowed_tools: ["read", "write", "edit", "bash"] },
-            classes: [],
+
           },
           prompt: "do work",
           thread_id: undefined,
@@ -70,7 +70,7 @@ describe("PiCodergenBackend — empty registry guard", () => {
         const registry = new ToolRegistry();
         registry.registerAll(CORE_TOOLS);
         const env = new LocalEnvironment({ cwd: scratch });
-        const backend = new PiCodergenBackend({
+        const backend = new PiLlmBackend({
           registry,
           env,
           resolveModel: () => model,
@@ -82,9 +82,9 @@ describe("PiCodergenBackend — empty registry guard", () => {
         const outcome = await backend.run({
           node: {
             id: "implement",
-            shape: "box",
+            type: "llm",
             attrs: { allowed_tools: ["read", "bash"] },
-            classes: [],
+
           },
           prompt: "do work",
           thread_id: undefined,

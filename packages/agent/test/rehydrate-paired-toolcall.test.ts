@@ -25,9 +25,9 @@ import { join } from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 
-describe("PiCodergenBackend — rehydrate with paired toolCall+toolResult tail", () => {
+describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () => {
   test("paired [assistant{toolCall}, toolResult] hydrate tail: pi-agent streams the next turn, doesn't re-emit the prior", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-rehydrate-"));
     const faux = registerFauxProvider();
@@ -49,7 +49,7 @@ describe("PiCodergenBackend — rehydrate with paired toolCall+toolResult tail",
       const registry = new ToolRegistry();
       registry.registerAll(CORE_TOOLS);
       const env = new LocalEnvironment({ cwd: scratch });
-      const backend = new PiCodergenBackend({
+      const backend = new PiLlmBackend({
         registry,
         env,
         resolveModel: () => model,
@@ -91,9 +91,9 @@ describe("PiCodergenBackend — rehydrate with paired toolCall+toolResult tail",
       const outcome = await backend.run({
         node: {
           id: "n_parent",
-          shape: "box",
+          type: "llm",
           attrs: { allowed_tools: ["agent", "read"], thread_id: "t1" },
-          classes: [],
+
         },
         prompt: "what comes next?",
         thread_id: "t1",

@@ -86,36 +86,22 @@ export function checkGoalGates(graph: Graph, outcomes: GateOutcomes): GateCheck 
   return { satisfied: true };
 }
 
-/** Resolve the §3.4 retarget chain. Returns the first existing node id, or
- * null if no target resolves (run halts). */
+/** Resolve the §3.4 retarget. Returns the gate's `retry_target` when it
+ * resolves to an existing node, else null (run halts). */
 export function resolveRetargetChain(graph: Graph, failedGateId: string): string | null {
   const gate = graph.nodes[failedGateId];
-  const candidates: (string | undefined)[] = [
-    gate?.attrs.retry_target,
-    gate?.attrs.fallback_retry_target,
-    graph.attrs.retry_target,
-    graph.attrs.fallback_retry_target,
-  ];
-  for (const id of candidates) {
-    if (typeof id === "string" && id !== "" && graph.nodes[id] != null) return id;
-  }
+  const id = gate?.attrs.retry_target;
+  if (typeof id === "string" && id !== "" && graph.nodes[id] != null) return id;
   return null;
 }
 
-/** Resolve the §3.7 failure-routing retarget for a single node. Steps 2-3 of
- * the chain (the fail-edge case lives in edge-selection; pipeline termination
- * is the absence of any retarget here). Graph-level retry_target is NOT
- * consulted — that belongs to §3.4 (goal gates), not §3.7 (per-node failure).
- *
- * Returns null when the node has neither retarget set or both reference
- * undefined nodes; the caller should halt the run with the original
- * failure reason in that case. */
+/** Resolve the §3.7 failure-routing retarget for a single node. The
+ * fail-edge case lives in edge-selection; pipeline termination is the
+ * absence of any retarget here. */
 export function resolveFailRetarget(graph: Graph, sourceNodeId: string): string | null {
   const node = graph.nodes[sourceNodeId];
-  const candidates: (string | undefined)[] = [node?.attrs.retry_target, node?.attrs.fallback_retry_target];
-  for (const id of candidates) {
-    if (typeof id === "string" && id !== "" && graph.nodes[id] != null) return id;
-  }
+  const id = node?.attrs.retry_target;
+  if (typeof id === "string" && id !== "" && graph.nodes[id] != null) return id;
   return null;
 }
 

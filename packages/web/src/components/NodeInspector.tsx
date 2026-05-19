@@ -58,12 +58,11 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
   // an `llm_model` attr it'll never call.
   const llmRelevant = showsLlm(handler, attrs);
   const retryRelevant = canRetry(handler);
-  const skills = attrs.skills ?? [];
-  const allowedTools = attrs.allowed_tools ?? [];
-  const deniedTools = attrs.denied_tools ?? [];
-  const contextFiles = attrs.context_files ?? [];
+  const skills = (attrs.skills as string[] | undefined) ?? [];
+  const allowedTools = (attrs.allowed_tools as string[] | undefined) ?? [];
+  const deniedTools = (attrs.denied_tools as string[] | undefined) ?? [];
   const routes = Array.isArray(attrs.routes) ? (attrs.routes as string[]) : [];
-  const isHumanNode = attrs.kind === "human" || handler === "human";
+  const isHumanNode = node.type === "human";
 
   return (
     <aside
@@ -80,13 +79,6 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         <Field label="id" value={<code className="text-sw-text">{node.id}</code>} />
         {attrs.label && <Field label="label" value={attrs.label} />}
         <Field label="handler" value={<code className="text-sw-text">{handler}</code>} />
-        {/* class drives stylesheet `.classname` matching (§8.3). Show
-         *  comma-separated when multiple classes resolve (the parsed
-         *  Node.classes carries derived classes from subgraph membership
-         *  too — that's the source of truth, not the raw `class` attr). */}
-        {node.classes.length > 0 && (
-          <Field label="class" value={<code className="text-sw-text">{node.classes.join(", ")}</code>} />
-        )}
         {/* thread_id — shared LLM session marker. Identity rather than
          *  model-section because it's about *which conversation* this node
          *  joins, not what model handles it. Suppressed for non-LLM
@@ -105,29 +97,26 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
        *  for handlers that never call an LLM (tool / start / exit /
        *  conditional / heuristic parallel.fan_in) even when the
        *  stylesheet cascade resolved an llm_model. */}
-      {llmRelevant &&
-        (attrs.llm_model || attrs.llm_provider || attrs.summary || attrs.reasoning_effort) && (
-          <Section title="model & context">
-            {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
-            {attrs.llm_provider && (
-              <Field
-                label="provider"
-                value={
-                  <span className="inline-flex items-center gap-1.5">
-                    <ModelSelectorLogo provider={attrs.llm_provider} />
-                    <code className="text-sw-text">{attrs.llm_provider}</code>
-                  </span>
-                }
-              />
-            )}
-            {attrs.summary && (
-              <Field label="summary" value={<code className="text-sw-text">{attrs.summary}</code>} />
-            )}
-            {attrs.reasoning_effort && (
-              <Field label="reasoning" value={<code className="text-sw-text">{attrs.reasoning_effort}</code>} />
-            )}
-          </Section>
-        )}
+      {llmRelevant && (attrs.llm_model || attrs.llm_provider || attrs.summary || attrs.reasoning_effort) && (
+        <Section title="model & context">
+          {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
+          {attrs.llm_provider && (
+            <Field
+              label="provider"
+              value={
+                <span className="inline-flex items-center gap-1.5">
+                  <ModelSelectorLogo provider={attrs.llm_provider} />
+                  <code className="text-sw-text">{attrs.llm_provider}</code>
+                </span>
+              }
+            />
+          )}
+          {attrs.summary && <Field label="summary" value={<code className="text-sw-text">{attrs.summary}</code>} />}
+          {attrs.reasoning_effort && (
+            <Field label="reasoning" value={<code className="text-sw-text">{attrs.reasoning_effort}</code>} />
+          )}
+        </Section>
+      )}
 
       {/* Tool (graph-level shell step) */}
       {typeof attrs.tool_command === "string" && attrs.tool_command.length > 0 && (
@@ -155,53 +144,24 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
       )}
 
       {/* Skills */}
-      {(skills.length > 0 || attrs.skills_disabled) && (
+      {skills.length > 0 && (
         <Section title="skills">
-          {attrs.skills_disabled ? (
-            <Field label="status" value={<code className="text-sw-text">disabled</code>} />
-          ) : (
-            <ListField label="scoped" items={skills} />
-          )}
+          <ListField label="scoped" items={skills} />
         </Section>
       )}
 
-      {/* Context files */}
-      {contextFiles.length > 0 && (
-        <Section title="context files">
-          <ListField label="files" items={contextFiles} />
-        </Section>
-      )}
-
-      {/* Execution — retries, gates, timeouts, budget. Retry-shaped
-       *  rows (max_retries, retry_policy, retry_target,
-       *  fallback_retry_target) are gated on `canRetry(handler)` so
-       *  start / exit / parallel components don't surface a value
-       *  the executor can't act on. Budget + gate rows stay ungated:
-       *  `goal_gate`, `timeout`, `max_cost_usd`, etc. apply uniformly. */}
-      {((retryRelevant &&
-        (attrs.max_retries !== undefined ||
-          attrs.retry_policy !== undefined ||
-          attrs.retry_target !== undefined ||
-          attrs.fallback_retry_target !== undefined)) ||
+      {/* Execution — retries, gates, timeouts, budget. */}
+      {((retryRelevant && (attrs.max_retries !== undefined || attrs.retry_target !== undefined)) ||
         attrs.timeout !== undefined ||
-        attrs.idle_timeout !== undefined ||
         attrs.max_cost_usd !== undefined ||
         attrs.max_tokens !== undefined ||
-        attrs.goal_gate !== undefined ||
-        attrs.allow_partial !== undefined ||
-        attrs.auto_status !== undefined) && (
+        attrs.goal_gate !== undefined) && (
         <Section title="execution">
-          {retryRelevant && attrs.retry_policy !== undefined && (
-            <Field label="retry policy" value={<code className="text-sw-text">{attrs.retry_policy}</code>} />
-          )}
           {retryRelevant && attrs.max_retries !== undefined && (
             <Field label="max retries" value={<code className="text-sw-text">{attrs.max_retries}</code>} />
           )}
           {attrs.timeout !== undefined && (
             <Field label="timeout" value={<code className="text-sw-text">{attrs.timeout}</code>} />
-          )}
-          {attrs.idle_timeout !== undefined && (
-            <Field label="idle timeout" value={<code className="text-sw-text">{attrs.idle_timeout}s</code>} />
           )}
           {attrs.max_cost_usd !== undefined && (
             <Field label="max cost" value={<code className="text-sw-text">${attrs.max_cost_usd}</code>} />
@@ -212,25 +172,8 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
           {attrs.goal_gate !== undefined && (
             <Field label="goal gate" value={<code className="text-sw-text">{String(attrs.goal_gate)}</code>} />
           )}
-          {/* §3.4 retarget chain — gate-level only. Graph-level retarget
-           *  is set on the graph attrs, not the node, so we can't show it
-           *  from here without plumbing the parent in. */}
           {retryRelevant && typeof attrs.retry_target === "string" && attrs.retry_target.length > 0 && (
             <Field label="retry target" value={<code className="text-sw-text">{attrs.retry_target}</code>} />
-          )}
-          {retryRelevant &&
-            typeof attrs.fallback_retry_target === "string" &&
-            attrs.fallback_retry_target.length > 0 && (
-              <Field
-                label="fallback target"
-                value={<code className="text-sw-text">{attrs.fallback_retry_target}</code>}
-              />
-            )}
-          {attrs.allow_partial !== undefined && (
-            <Field label="allow partial" value={<code className="text-sw-text">{String(attrs.allow_partial)}</code>} />
-          )}
-          {attrs.auto_status !== undefined && (
-            <Field label="auto status" value={<code className="text-sw-text">{String(attrs.auto_status)}</code>} />
           )}
         </Section>
       )}
@@ -243,18 +186,6 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
             className="whitespace-pre-wrap break-words px-3 py-2 text-sw-xs text-sw-text"
           >
             {attrs.prompt}
-          </pre>
-        </Section>
-      )}
-
-      {/* System prompt override */}
-      {attrs.system_prompt && (
-        <Section title="system prompt override">
-          <pre
-            data-testid="node-inspector-system-prompt"
-            className="whitespace-pre-wrap break-words px-3 py-2 text-sw-xs text-sw-text"
-          >
-            {attrs.system_prompt}
           </pre>
         </Section>
       )}

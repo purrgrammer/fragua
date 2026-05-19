@@ -80,7 +80,7 @@ export function enqueue(rig: TestRig, runId: string, startNode: string, priority
  * sub-runs, etc. Keep this in `daemon/test/helpers.ts` rather than in
  * `core` — it's a test-time fixture, not a public stub.
  */
-export interface MockCodergenOpts {
+export interface MockLlmOpts {
   /** USD per LLM call. Default 0.05 — typical small turn. */
   costPerCall?: number;
   /** Number of `cost.recorded` events the stub emits before returning.
@@ -106,7 +106,7 @@ export interface MockCodergenOpts {
   modelName?: string;
 }
 
-export function mockCodergenSpec(opts: MockCodergenOpts = {}): handler.HandlerSpec {
+export function mockLlmSpec(opts: MockLlmOpts = {}): handler.HandlerSpec {
   const costPerCall = opts.costPerCall ?? 0.05;
   const calls = opts.calls ?? 1;
   const tokens = opts.tokensPerCall ?? { input: 100, output: 100 };

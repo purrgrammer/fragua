@@ -2,13 +2,7 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import { parseAcceleratorKey } from "../accelerator.ts";
-import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType, SHAPE_TO_KIND } from "../types/graph.ts";
-import { isRetryPresetName } from "./retry-policy.ts";
-
-/** The handler kinds a `type=` attribute may name. Union of `HANDLER_BY_SHAPE`
- * values — attractor §4.2's registry. Swarm has no extension surface for
- * custom handlers; anything outside this set is a typo (E016). */
-const KNOWN_HANDLER_TYPES: ReadonlySet<HandlerType> = new Set(Object.values(HANDLER_BY_SHAPE));
+import type { Edge, Graph } from "../types/graph.ts";
 
 /** Whitelist of known node attribute names. Anything outside this set
  * triggers W013 — surfaces typos like `goalgate=true` and parser passthrough
@@ -101,8 +95,8 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 
   const nodes = Object.values(graph.nodes);
   const nodeIds = new Set(nodes.map((n) => n.id));
-  const starts = nodes.filter((n) => n.shape === "Mdiamond");
-  const exits = nodes.filter((n) => n.shape === "Msquare");
+  const starts = nodes.filter((n) => n.type === "start");
+  const exits = nodes.filter((n) => n.type === "exit");
 
   // E001: start node required
   if (starts.length === 0) {
@@ -150,7 +144,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     inDegrees.set(e.to, (inDegrees.get(e.to) ?? 0) + 1);
   }
   for (const n of nodes) {
-    if (n.shape === "Mdiamond") continue;
+    if (n.type === "start") continue;
     if ((inDegrees.get(n.id) ?? 0) === 0) {
       diags.push({
         severity: "warning",
@@ -212,7 +206,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // empty leaves the LLM call with nothing to do. Catches "I forgot the
   // prompt" authoring mistakes.
   for (const n of nodes) {
-    if (n.shape !== "box") continue;
+    if (n.type !== "llm") continue;
     const promptEmpty = !(typeof n.attrs.prompt === "string" && n.attrs.prompt.trim() !== "");
     const labelEmpty = !(typeof n.attrs.label === "string" && n.attrs.label.trim() !== "");
     if (promptEmpty && labelEmpty) {
@@ -253,7 +247,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // implementation that bypasses declaration entirely).
   for (const n of nodes) {
     if (n.id !== "exit") continue;
-    if (n.shape === "Msquare") continue;
+    if (n.type === "exit") continue;
     diags.push({
       severity: "error",
       code: "E028",
@@ -269,7 +263,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // with any non-Mdiamond shape.
   for (const n of nodes) {
     if (n.id !== "start") continue;
-    if (n.shape === "Mdiamond") continue;
+    if (n.type === "start") continue;
     diags.push({
       severity: "error",
       code: "E029",
@@ -285,7 +279,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // node is always a dead end. Catches the construction failure at
   // validate-time so bad workflows never enqueue.
   for (const n of nodes) {
-    if (n.attrs.kind !== "human") continue;
+    if (n.type !== "human") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
     if (out.length === 0) {
       diags.push({
@@ -303,7 +297,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // would shadow each other in the option list (and the handler refuses
   // to construct). Surface at validate-time with the offending labels.
   for (const n of nodes) {
-    if (n.shape !== "hexagon") continue;
+    if (n.type !== "human") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
     if (out.length < 2) continue;
     const byKey = new Map<string, string[]>();
@@ -329,7 +323,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // E008: tool node (parallelogram) must carry a non-empty `tool_command`.
   // Without it the executor has nothing to spawn and halts at dispatch.
   for (const n of nodes) {
-    if (n.shape !== "parallelogram") continue;
+    if (n.type !== "tool") continue;
     const cmd = n.attrs.tool_command;
     if (typeof cmd !== "string" || cmd.trim().length === 0) {
       diags.push({
@@ -378,7 +372,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // bare keys are silently dropped and the run falls through to the
   // daemon default. Suppress when the prefixed equivalent is set.
   for (const n of nodes) {
-    if (n.shape !== "box") continue;
+    if (n.type !== "llm") continue;
     const PAIRS: Array<{ bare: "model" | "provider"; prefixed: "llm_model" | "llm_provider" }> = [
       { bare: "model", prefixed: "llm_model" },
       { bare: "provider", prefixed: "llm_provider" },
@@ -398,50 +392,17 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // W008: retry_policy / default_retry_policy value is not a known preset.
-  // Catches typos at validate-time. The runtime falls back to "none"
-  // silently otherwise.
-  for (const n of nodes) {
-    const rp = n.attrs.retry_policy;
-    if (typeof rp === "string" && rp !== "" && !isRetryPresetName(rp)) {
-      diags.push({
-        severity: "warning",
-        code: "W008",
-        message: `node "${n.id}" retry_policy="${rp}" is not a known preset (none|standard|aggressive|linear|patient)`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
-  }
-  {
-    const drp = graph.attrs.default_retry_policy;
-    if (typeof drp === "string" && drp !== "" && !isRetryPresetName(drp)) {
-      diags.push({
-        severity: "warning",
-        code: "W008",
-        message: `graph default_retry_policy="${drp}" is not a known preset (none|standard|aggressive|linear|patient)`,
-      });
-    }
-  }
-
-  // W007: node with goal_gate=true has no retarget at any level.
-  // The §3.4 retarget chain is gate.retry_target → gate.fallback_retry_target
-  // → graph.retry_target → graph.fallback_retry_target → halt. A goal gate
-  // with no chain anywhere can only halt the run on failure, never recover —
+  // W007: node with goal_gate=true has no retarget. A goal gate without a
+  // retry_target can only halt the run on failure, never recover —
   // almost certainly an authoring oversight.
   for (const n of nodes) {
     if (n.attrs.goal_gate !== true) continue;
-    const hasGateTarget =
-      (typeof n.attrs.retry_target === "string" && n.attrs.retry_target !== "") ||
-      (typeof n.attrs.fallback_retry_target === "string" && n.attrs.fallback_retry_target !== "");
-    const hasGraphTarget =
-      (typeof graph.attrs.retry_target === "string" && graph.attrs.retry_target !== "") ||
-      (typeof graph.attrs.fallback_retry_target === "string" && graph.attrs.fallback_retry_target !== "");
-    if (!hasGateTarget && !hasGraphTarget) {
+    const hasGateTarget = typeof n.attrs.retry_target === "string" && n.attrs.retry_target !== "";
+    if (!hasGateTarget) {
       diags.push({
         severity: "warning",
         code: "W007",
-        message: `goal_gate node "${n.id}" has no retry_target / fallback_retry_target at gate or graph level — failure can only halt`,
+        message: `goal_gate node "${n.id}" has no retry_target — failure can only halt`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
@@ -476,27 +437,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E006",
         message: `cycle ${sccNodes.join(" → ")} has no reachable exit node`,
-      });
-    }
-  }
-
-  // E016: node `type=` names a handler outside the known set (attractor
-  // §4.2 registry, swarm has no extension surface). Silent fall-through
-  // to the shape would mask typos like `type="codrgen"`; error so the
-  // workflow fails at validate-time.
-  //
-  // E017–E026 follow: routing + human-node structural rules introduced
-  // by docs/proposals/llm-routing.md Phase 5.
-  for (const n of nodes) {
-    const t = n.attrs.type;
-    if (typeof t !== "string" || t === "") continue;
-    if (!(KNOWN_HANDLER_TYPES as ReadonlySet<string>).has(t)) {
-      diags.push({
-        severity: "error",
-        code: "E016",
-        message: `node "${n.id}" type="${t}" is not a known handler (${[...KNOWN_HANDLER_TYPES].join(", ")})`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
     }
   }
@@ -615,7 +555,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // set of choices. A human node with no routes= has no structured
   // vocabulary for operator dispatch.
   for (const n of nodes) {
-    if (n.attrs.kind !== "human") continue;
+    if (n.type !== "human") continue;
     const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
     if (routes.length === 0) {
       diags.push({
@@ -689,65 +629,19 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E025: explicit kind= contradicts the shape's canonical kind via
-  // SHAPE_TO_KIND. When the parser auto-derives kind from shape, the two
-  // are always consistent (kind left undefined → derived). A contradiction
-  // only arises when the author writes an explicit kind= that disagrees
-  // with the shape — e.g. kind=llm shape=hexagon. The shape=hexagon
-  // with kind=human alias is explicitly valid (same mapping).
-  for (const n of nodes) {
-    const explicitKind = n.attrs.kind;
-    if (typeof explicitKind !== "string") continue;
-    const shapeKind = SHAPE_TO_KIND[n.shape as keyof typeof SHAPE_TO_KIND];
-    if (shapeKind === undefined) continue; // start/exit shapes have no kind mapping
-    if (shapeKind !== explicitKind) {
-      diags.push({
-        severity: "error",
-        code: "E025",
-        message: `node "${n.id}" has kind="${explicitKind}" but shape="${n.shape}" maps to kind="${shapeKind}" via SHAPE_TO_KIND — align kind= with the shape or change the shape`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
-  }
-
   // E026: text= is a human-node attribute (the prompt shown to the
   // operator). Setting it on a non-human node has no effect at runtime;
   // the diagnostic surfaces the authoring mistake at validate-time.
   for (const n of nodes) {
     if (typeof n.attrs.text !== "string" || n.attrs.text === "") continue;
-    if (n.attrs.kind === "human") continue;
+    if (n.type === "human") continue;
     diags.push({
       severity: "error",
       code: "E026",
-      message: `node "${n.id}" sets text= but is not a human node (kind="${n.attrs.kind ?? "llm"}") — text= is only meaningful on human nodes`,
+      message: `node "${n.id}" sets text= but is not a human node (type="${n.type}") — text= is only meaningful on human nodes`,
       nodeId: n.id,
       ...(n.loc !== undefined ? { loc: n.loc } : {}),
     });
-  }
-
-  // W012: node's `type=` resolves to a different handler than its shape.
-  // `type` wins at dispatch (attractor §2.6 + §4.2); the warning flags
-  // the visual/runtime divergence so authors notice they're overriding
-  // the shape's natural mapping. Suppressed when type matches the shape's
-  // canonical handler (the redundant-explicit case is harmless).
-  // NOTE: the legacy W004 rule (context.hitl.* edge condition warning) was
-  // removed here — routing is now discriminated by route= and routes=,
-  // not by condition patterns on hexagon edges.
-  for (const n of nodes) {
-    const t = n.attrs.type;
-    if (typeof t !== "string" || t === "") continue;
-    if (!(KNOWN_HANDLER_TYPES as ReadonlySet<string>).has(t)) continue; // E016 already fired
-    const shapeKind = HANDLER_BY_SHAPE[n.shape];
-    if (shapeKind !== t) {
-      diags.push({
-        severity: "warning",
-        code: "W012",
-        message: `node "${n.id}" shape="${n.shape}" resolves to "${shapeKind}" but type="${t}" overrides — using "${t}". Align the shape or drop type= to suppress.`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
   }
 
   // W013: unrecognised attribute name. Parser passthrough (NodeAttrs /

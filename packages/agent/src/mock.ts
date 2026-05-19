@@ -4,7 +4,7 @@
 import { type FauxResponseStep, fauxAssistantMessage, registerFauxProvider } from "@mariozechner/pi-ai";
 import type { SummariserBackend } from "@swarm/core";
 import type { ExecutionEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "./backend.ts";
+import { PiLlmBackend } from "./backend.ts";
 
 export interface PiMockBackendOptions {
   registry: ToolRegistry;
@@ -18,7 +18,7 @@ export interface PiMockBackendOptions {
 }
 
 export interface PiMockBackendHandle {
-  backend: PiCodergenBackend;
+  backend: PiLlmBackend;
   /** Replace the queued responses. */
   setResponses(responses: FauxResponseStep[]): void;
   /** Append responses to the queue. */
@@ -34,7 +34,7 @@ export function createPiMockBackend(opts: PiMockBackendOptions): PiMockBackendHa
   if (opts.responses) registration.setResponses(opts.responses);
 
   const model = registration.getModel();
-  const backend = new PiCodergenBackend({
+  const backend = new PiLlmBackend({
     registry: opts.registry,
     env: opts.env,
     resolveModel: () => model,

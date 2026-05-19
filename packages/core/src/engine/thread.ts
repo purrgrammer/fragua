@@ -11,7 +11,7 @@ export interface ThreadContext {
 }
 
 /** Resolve thread_id per precedence:
- *   target node → edge → graph → subgraph-derived class → previous node id.
+ *   target node → edge → graph → previous node id.
  *
  * Threads are the only context-sharing primitive: a node with a resolved
  * thread_id hydrates the prior transcript for that thread (full history);
@@ -22,7 +22,5 @@ export function resolveThreadId(ctx: ThreadContext): string | undefined {
   if (tn.attrs.thread_id) return tn.attrs.thread_id;
   if (ctx.edge?.attrs.thread_id) return ctx.edge.attrs.thread_id;
   if (ctx.graph.attrs.thread_id) return ctx.graph.attrs.thread_id;
-  const firstClass = tn.classes[0];
-  if (firstClass) return firstClass;
   return ctx.sourceNode?.id;
 }

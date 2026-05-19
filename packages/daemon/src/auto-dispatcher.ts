@@ -113,7 +113,7 @@ function specsForGraph(
   const specs = new Map<string, HandlerSpec>();
 
   for (const node of Object.values(graph.nodes)) {
-    const kind = handlerKindOf(node.attrs);
+    const kind: string = node.type;
     const edges = outgoing.get(node.id) ?? [];
     const first = edges[0]?.to ?? "__end__";
     let resolvedMaxMs: number | undefined;
@@ -134,7 +134,7 @@ function specsForGraph(
         : resolvedMaxMs;
       specs.set(node.id, codergenFactory(node, first, codergenMaxMs));
     } else {
-      specs.set(node.id, specForNode(node.id, edges, node.attrs, resolvedMaxMs));
+      specs.set(node.id, specForNode(node.id, kind, edges, node.attrs, resolvedMaxMs));
     }
   }
 
@@ -169,11 +169,9 @@ function malformedHumanSpec(nodeId: string, message: string): HandlerSpec {
 
 function specForNode(
   nodeId: string,
+  kind: string,
   edges: Array<{ to: string; label?: string; route?: string }>,
   attrs: {
-    shape?: string;
-    type?: string;
-    kind?: string;
     prompt?: string;
     label?: string;
     text?: string;
@@ -183,7 +181,6 @@ function specForNode(
   resolvedMaxMs: number | undefined,
 ): HandlerSpec {
   const first = edges[0]?.to ?? "__end__";
-  const kind = handlerKindOf(attrs);
 
   switch (kind) {
     case "human": {
@@ -258,25 +255,3 @@ function transitionSpec(kind: string, nextNode: string): HandlerSpec {
   };
 }
 
-function handlerKindOf(attrs: { shape?: string; type?: string; kind?: string }): string {
-  // `type=` is the legacy direct handler-dispatch override; keep it
-  // first for back-compat. `kind=` (Phase-7 first-class authoring
-  // attribute) wins over shape-based derivation but loses to `type=`.
-  if (typeof attrs.type === "string" && attrs.type.length > 0) return attrs.type;
-  if (typeof attrs.kind === "string" && attrs.kind.length > 0) {
-    // Authoring-kind names align with handler kinds for human/llm/tool.
-    return attrs.kind;
-  }
-  switch (attrs.shape) {
-    case "Mdiamond":
-      return "start";
-    case "Msquare":
-      return "exit";
-    case "hexagon":
-      return "human";
-    case "parallelogram":
-      return "tool";
-    default:
-      return "llm";
-  }
-}

@@ -1,18 +1,18 @@
-// handler-bridge — run a PiCodergenBackend inside a HandlerContext.
+// handler-bridge — run a PiLlmBackend inside a HandlerContext.
 //
 // This is the integration point that turns the DB-backed rearchitecture
 // into a real LLM-driven orchestrator. Given a ctx + a parsed Node, we
-// build a CodergenInput, run the backend, stream `emit` callbacks into
+// build a LlmInput, run the backend, stream `emit` callbacks into
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import { type CodergenBackend, type EventType, type Node, type Outcome, substitute } from "@swarm/core";
+import { type LlmBackend, type EventType, type Node, type Outcome, substitute } from "@swarm/core";
 import type * as handler from "@swarm/core/handler";
 import { MessageTooLargeError } from "@swarm/store";
 import type { AgentMessage } from "@swarm/types";
-import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
+import { PiLlmBackend, type PiLlmBackendOptions } from "./backend.ts";
 
-export interface MakeCodergenHandlerOpts {
+export interface MakeLlmHandlerOpts {
   /**
    * The parsed graph node this handler corresponds to. The backend reads
    * `node.attrs.prompt`, `node.attrs.llm_provider`, `node.attrs.llm_model`, etc.
@@ -24,11 +24,11 @@ export interface MakeCodergenHandlerOpts {
    */
   nextNode?: string;
   /** Backend instance used to drive the LLM. In production this is a
-   * `PiCodergenBackend`; tests and mock workflows can pass any
-   * `CodergenBackend`. Provide this OR `backendOpts`. */
-  backend?: CodergenBackend;
+   * `PiLlmBackend`; tests and mock workflows can pass any
+   * `LlmBackend`. Provide this OR `backendOpts`. */
+  backend?: LlmBackend;
   /** Builder used when `backend` is omitted. */
-  backendOpts?: PiCodergenBackendOptions;
+  backendOpts?: PiLlmBackendOptions;
   /** Hard per-call timeout; forwarded into HandlerSpec.maxMs.
    *
    *   - `number` — explicit ms ceiling; HandlerSpec.maxMs is set verbatim.
@@ -52,13 +52,13 @@ type HandlerResult = handler.HandlerResult;
 // See docs/proposals/llm-maxms-backstop.md for the framing.
 const DEFAULT_MAX_MS = 4 * 60 * 60 * 1000;
 
-export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec {
-  const backend: CodergenBackend =
+export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
+  const backend: LlmBackend =
     opts.backend ??
     (opts.backendOpts != null
-      ? new PiCodergenBackend(opts.backendOpts)
+      ? new PiLlmBackend(opts.backendOpts)
       : (() => {
-          throw new Error("makeCodergenHandler: provide `backend` or `backendOpts`");
+          throw new Error("makeLlmHandler: provide `backend` or `backendOpts`");
         })());
 
   const run: handler.Handler = async (ctx) => {

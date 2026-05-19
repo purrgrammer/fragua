@@ -14,7 +14,7 @@ import type { AssistantMessage, Context } from "@mariozechner/pi-ai";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
 import type { EventType, NodeAttrs } from "@swarm/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { findRouteToolCall, PiCodergenBackend } from "../src/backend.ts";
+import { findRouteToolCall, PiLlmBackend } from "../src/backend.ts";
 
 describe("findRouteToolCall", () => {
   function assistant(...content: unknown[]) {
@@ -103,7 +103,7 @@ async function runWithRoute(opts: RunWithRouteOpts): Promise<{
     faux.setResponses(factories);
 
     const env = new LocalEnvironment({ cwd: opts.scratch });
-    const backend = new PiCodergenBackend({
+    const backend = new PiLlmBackend({
       registry: opts.registry,
       env,
       resolveModel: () => model,
@@ -113,7 +113,7 @@ async function runWithRoute(opts: RunWithRouteOpts): Promise<{
 
     const events: CapturedEvent[] = [];
     const outcome = await backend.run({
-      node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
+      node: { id: "n1", type: "llm", attrs: opts.attrs },
       prompt: "decide a route",
       thread_id: undefined,
       signal: new AbortController().signal,
@@ -137,7 +137,7 @@ async function runWithRoute(opts: RunWithRouteOpts): Promise<{
   }
 }
 
-describe("PiCodergenBackend route tool synthesis", () => {
+describe("PiLlmBackend route tool synthesis", () => {
   test("routing node gets a route tool with the declared enum", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-route-enum-"));
     try {

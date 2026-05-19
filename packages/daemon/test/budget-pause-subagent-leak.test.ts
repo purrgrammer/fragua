@@ -6,7 +6,7 @@
 // (steerCtrl → input.signal → agent.abort() → tool.execute(signal) →
 // spec.signal → childCtrl → child input.signal → child agent.abort())
 // is provably wired in subagent.test.ts. This test exercises the same
-// cascade through real PiCodergenBackend instances + faux providers,
+// cascade through real PiLlmBackend instances + faux providers,
 // measuring overshoot: how many child cost.recorded events arrive
 // AFTER the parent's abort fires.
 //
@@ -22,7 +22,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
-import { PiCodergenBackend } from "@swarm/agent";
+import { PiLlmBackend } from "@swarm/agent";
 import { SqliteStore } from "@swarm/store";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { makeSpawnSubagent } from "../src/spawn-subagent.ts";
@@ -82,8 +82,8 @@ describe("budget-pause sub-agent leak — overshoot measurement", () => {
       // Forward-declare so the spawnSubagentFactory closure can refer
       // to the backend that's being constructed in the next statement.
       // eslint-disable-next-line prefer-const
-      let backend!: PiCodergenBackend;
-      backend = new PiCodergenBackend({
+      let backend!: PiLlmBackend;
+      backend = new PiLlmBackend({
         registry,
         env,
         resolveModel: () => model,
@@ -115,7 +115,7 @@ describe("budget-pause sub-agent leak — overshoot measurement", () => {
       let thrownStopReason: string | null = null;
       try {
         await backend.run({
-          node: { id: "n_parent", shape: "box", attrs: { allowed_tools: ["agent", "read"] }, classes: [] },
+          node: { id: "n_parent", type: "llm", attrs: { allowed_tools: ["agent", "read"] } },
           prompt: "spawn a slow sub-agent",
           thread_id: undefined,
           signal: parentSignal.signal,

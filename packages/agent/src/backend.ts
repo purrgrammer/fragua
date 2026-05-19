@@ -1,10 +1,10 @@
-// PiCodergenBackend — CodergenBackend backed by pi-agent-core + pi-ai.
+// PiLlmBackend — LlmBackend backed by pi-agent-core + pi-ai.
 
 import { createHash } from "node:crypto";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import type { CodergenBackend, CodergenInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
+import type { LlmBackend, LlmInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, failHalt, failProvider, ok } from "@swarm/core";
 import { makeHttpClient } from "@swarm/core/handler";
 import type {
@@ -32,11 +32,11 @@ import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type Run
 import { buildSummarySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./thread.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
-export interface PiCodergenBackendOptions {
+export interface PiLlmBackendOptions {
   registry: ToolRegistry;
-  /** Default shell/filesystem environment. Used when `CodergenInput.env`
+  /** Default shell/filesystem environment. Used when `LlmInput.env`
    * is unset (tests, bare LocalEnvironment daemons). Production daemons
-   * with a WorktreeProvisioner wire a per-run env via `CodergenInput`
+   * with a WorktreeProvisioner wire a per-run env via `LlmInput`
    * and can leave this unset. */
   env?: ExecutionEnvironment;
   /** Resolve an LLM model by provider + id. Defaults to pi-ai's getModel.
@@ -69,7 +69,7 @@ export interface PiCodergenBackendOptions {
    * that don't need the preamble. */
   runEnv?: RunEnvironment;
   /** Shared "threads we've written to" registry, keyed by `runId::threadId`.
-   * Each llm node builds its own `PiCodergenBackend` (see
+   * Each llm node builds its own `PiLlmBackend` (see
    * `packages/cli/src/commands/daemon.ts`), so a per-instance Set can't
    * tell "same daemon, different node on the shared thread" from
    * "different daemon after a restart". Pass a daemon-scoped Set here so
@@ -79,7 +79,7 @@ export interface PiCodergenBackendOptions {
    * tests/one-shots to get the per-instance behaviour. */
   inProcessWrites?: Set<string>;
   /** Shared per-run live-agent + steer-buffer registry. Each llm
-   * node builds its own `PiCodergenBackend`, so a per-instance registry
+   * node builds its own `PiLlmBackend`, so a per-instance registry
    * can't deliver a steer issued during node A to node B's agent on the
    * same run. Pass one daemon-scoped registry here and supervisor's
    * `onSteer` writes through to it; every backend that runs a node for
@@ -153,7 +153,7 @@ export interface SpawnSubagentParentCtx {
   parentEmit: (type: EventType, data: Record<string, unknown>) => Promise<void>;
 }
 
-export class PiCodergenBackend implements CodergenBackend {
+export class PiLlmBackend implements LlmBackend {
   private readonly registry: ToolRegistry;
   private readonly env: ExecutionEnvironment | undefined;
   private readonly resolveModel: (provider: string, modelId: string) => Model<string>;
@@ -184,7 +184,7 @@ export class PiCodergenBackend implements CodergenBackend {
    * is invariant across restarts, rehydration is byte-identical, and
    * provider caches either key off the stable thread_id (OpenAI Responses)
    * or the content itself (Anthropic / OpenAI Completions / Google). Shared
-   * across every PiCodergenBackend in the daemon when the caller wires
+   * across every PiLlmBackend in the daemon when the caller wires
    * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
@@ -193,7 +193,7 @@ export class PiCodergenBackend implements CodergenBackend {
     | undefined;
   private readonly agentDefinitions: readonly AgentDefinition[];
 
-  constructor(opts: PiCodergenBackendOptions) {
+  constructor(opts: PiLlmBackendOptions) {
     this.registry = opts.registry;
     this.env = opts.env;
     // biome-ignore lint/suspicious/noExplicitAny: getModel is overloaded with KnownProvider; we intentionally accept any string so custom/faux providers work.
@@ -237,7 +237,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.messageStore.hydrate(sessions);
   }
 
-  async run(input: CodergenInput): Promise<Outcome> {
+  async run(input: LlmInput): Promise<Outcome> {
     const provider = input.node.attrs.llm_provider ?? this.defaultModel.provider;
     const modelId = input.node.attrs.llm_model ?? this.defaultModel.model;
     let model: Model<string> | undefined;
@@ -295,7 +295,7 @@ export class PiCodergenBackend implements CodergenBackend {
     if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
     if (abortTool && !finalTools.some((t) => t.name === "abort")) finalTools = [...finalTools, abortTool];
 
-    // Prefer per-call env (wired via HandlerContext → CodergenInput by
+    // Prefer per-call env (wired via HandlerContext → LlmInput by
     // the executor when a WorktreeProvisioner is active). Falls back
     // to the construction-time env for tests + callers that still pass
     // a shared LocalEnvironment. Resolved here ahead of the catalogue
@@ -304,7 +304,7 @@ export class PiCodergenBackend implements CodergenBackend {
     const effectiveEnv = input.env ?? this.env;
     if (!effectiveEnv) {
       return fail(
-        "PiCodergenBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
+        "PiLlmBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
       );
     }
 
@@ -322,9 +322,7 @@ export class PiCodergenBackend implements CodergenBackend {
     // the system-prompt advertisement and the `skill` tool's name lookup
     // (via swarmContext.skillCatalog patched onto the closure below).
     const nodeSkills = input.node.attrs.skills as string[] | undefined;
-    const skillFilter: { skills?: readonly string[]; skills_disabled?: boolean } = {
-      skills_disabled: input.node.attrs.skills_disabled === true,
-    };
+    const skillFilter: { skills?: readonly string[] } = {};
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
     const effectiveSkills = filterSkillsForNode(runCwdSkills, skillFilter);
     const skillsCatalog = renderSkillsCatalog(effectiveSkills);
@@ -385,8 +383,7 @@ export class PiCodergenBackend implements CodergenBackend {
       tools.push(buildRouteTool(nodeRoutes));
     }
 
-    const declared = (input.node.attrs.context_files as string[] | undefined) ?? [];
-    const contextFiles = applyDefaultContextFiles(declared);
+    const contextFiles = applyDefaultContextFiles([]);
     const {
       text: contextBlock,
       warnings,
@@ -944,7 +941,7 @@ export function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvir
 }
 
 /** Pure resume-decision helper, extracted for unit testability.
-/** Inlined into PiCodergenBackend.run; kept as a no-op export for the
+/** Inlined into PiLlmBackend.run; kept as a no-op export for the
  * handful of callers that imported it for type only. Pre-release; will
  * be removed once those callers are updated. */
 

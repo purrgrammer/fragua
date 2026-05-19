@@ -7,7 +7,7 @@
 // Today the executor's abort path reads its own LlmAccounting
 // accumulator (turnBilled / totalCostUsd) which is fed only by
 // ctx.llm.call(). Llm handlers bypass ctx.llm and aggregate
-// cost.recorded into local closures inside makeCodergenHandler;
+// cost.recorded into local closures inside makeLlmHandler;
 // when the handler aborts mid-turn, those closures never reach
 // the executor and the resulting fact.node_aborted carries
 // partialTokens=0 / partialCostUsd=0. Real-world consequence on
@@ -40,7 +40,7 @@ describe("executor — abort path surfaces handler-emitted cost.recorded as part
     // Llm-shaped handler: emit cost.recorded the way
     // handler-bridge does (via ctx.emit, not via ctx.llm.call —
     // llm bypasses LlmAccounting entirely), then hang until
-    // maxMs trips. This mirrors what PiCodergenBackend does between
+    // maxMs trips. This mirrors what PiLlmBackend does between
     // the first message_end and the abort trigger on a long run.
     r.dispatcher.register(r.workflowSha, "impl", {
       kind: "llm",

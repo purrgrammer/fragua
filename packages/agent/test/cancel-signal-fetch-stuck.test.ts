@@ -23,9 +23,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerFauxProvider } from "@mariozechner/pi-ai";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 
-describe("PiCodergenBackend — cancel signal (fetch wedged)", () => {
+describe("PiLlmBackend — cancel signal (fetch wedged)", () => {
   test("aborting input.signal tears down a provider fetch that ignores signal", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-cancel-stuck-"));
     try {
@@ -43,7 +43,7 @@ describe("PiCodergenBackend — cancel signal (fetch wedged)", () => {
         const registry = new ToolRegistry();
         registry.registerAll(CORE_TOOLS);
         const env = new LocalEnvironment({ cwd: scratch });
-        const backend = new PiCodergenBackend({
+        const backend = new PiLlmBackend({
           registry,
           env,
           resolveModel: () => model,
@@ -62,7 +62,7 @@ describe("PiCodergenBackend — cancel signal (fetch wedged)", () => {
         let thrown: unknown;
         try {
           await backend.run({
-            node: { id: "n", shape: "box", attrs: {}, classes: [] },
+            node: { id: "n", type: "llm", attrs: {} },
             prompt: "do work",
             thread_id: undefined,
             signal: controller.signal,

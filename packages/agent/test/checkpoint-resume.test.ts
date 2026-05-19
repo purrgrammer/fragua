@@ -1,4 +1,4 @@
-// Checkpoint / resume — PiCodergenBackend survives a daemon restart.
+// Checkpoint / resume — PiLlmBackend survives a daemon restart.
 //
 // Invariants guarded here:
 //
@@ -16,24 +16,24 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { CodergenBackend, CodergenInput, Node } from "@swarm/core";
+import type { LlmBackend, LlmInput, Node } from "@swarm/core";
 import { ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
-import { makeCodergenHandler } from "../src/handler-bridge.ts";
+import { PiLlmBackend } from "../src/backend.ts";
+import { makeLlmHandler } from "../src/handler-bridge.ts";
 
 function node(overrides: Partial<Node> = {}): Node {
   return {
     id: overrides.id ?? "n1",
+    type: "llm",
     attrs: {
-      shape: "box",
       prompt: "hello",
       thread_id: overrides.id ?? "n1",
       ...(overrides.attrs ?? {}),
     },
-  } as Node;
+  };
 }
 
 async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
@@ -90,16 +90,16 @@ function assistantMsg(text: string): AgentMessage {
 interface CapturedCall {
   run_id: string;
   thread_id: string | undefined;
-  summary: CodergenInput["summary"];
+  summary: LlmInput["summary"];
   priorMessagesLen: number;
 }
 
 function makeInstrumentedBackend(): {
-  backend: CodergenBackend;
+  backend: LlmBackend;
   calls: CapturedCall[];
 } {
   const calls: CapturedCall[] = [];
-  const backend: CodergenBackend = {
+  const backend: LlmBackend = {
     async run(input) {
       calls.push({
         run_id: input.run_id,
@@ -119,7 +119,7 @@ describe("messages table populates on persistMessage", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r1", store, "n1");
     const { backend } = makeInstrumentedBackend();
-    await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
+    await makeLlmHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
 
     const msgs = store.getMessages("r1");
     expect(msgs).toHaveLength(1);
@@ -132,7 +132,7 @@ describe("messages table populates on persistMessage", () => {
   test("toolResult preserves tool_use pairing fields", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r2", store, "n1");
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run(input) {
         input.persistMessage?.({
           role: "toolResult",
@@ -145,7 +145,7 @@ describe("messages table populates on persistMessage", () => {
         return ok({ notes: "" });
       },
     };
-    await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
+    await makeLlmHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
     const msgs = store.getMessages("r2");
     const msg = msgs[0]?.content;
     expect(msg?.role).toBe("toolResult");
@@ -170,7 +170,7 @@ describe("handler-bridge priorMessages hydration", () => {
 
     const { backend, calls } = makeInstrumentedBackend();
     const ctx = await ctxFor("r1", store, "n1");
-    await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
+    await makeLlmHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.priorMessagesLen).toBe(1);
@@ -181,16 +181,16 @@ describe("handler-bridge priorMessages hydration", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3", store, "n1");
     const { backend, calls } = makeInstrumentedBackend();
-    await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
+    await makeLlmHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
     expect(calls[0]?.priorMessagesLen).toBe(0);
     expect(calls[0]?.summary).toBeUndefined();
     store.close();
   });
 });
 
-describe("PiCodergenBackend resume surface", () => {
+describe("PiLlmBackend resume surface", () => {
   test("hasInProcessWrite starts false for every (run, thread)", () => {
-    const b = new PiCodergenBackend({
+    const b = new PiLlmBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
     });
@@ -200,15 +200,15 @@ describe("PiCodergenBackend resume surface", () => {
   });
 });
 
-// Resume detection is inlined in PiCodergenBackend.run and is purely
+// Resume detection is inlined in PiLlmBackend.run and is purely
 // observational under the new thread model — the formula is simply:
 //   resumed = !!threadId && externalPrior !== undefined && stored.length > 0 && !inProcessWrites.has(...)
 // The shared-inProcessWrites tests below cover the integration behaviour.
 
-describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
+describe("PiLlmBackend — shared inProcessWrites across nodes", () => {
   // Regression for the build-feature false-positive resume: `implement`
   // and `verify` on the shared `thread_id="dev"` each run through their
-  // own `PiCodergenBackend` instance (one backend per node, per
+  // own `PiLlmBackend` instance (one backend per node, per
   // `packages/cli/src/commands/daemon.ts`). Without a shared Set, the
   // second node's fresh backend sees a non-empty prior transcript from
   // the messages table and no in-process write record, so resume detection
@@ -216,12 +216,12 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
   // thread model but historically used to drive fidelity degradation.
   test("two backends sharing a Set see each other's writes", () => {
     const shared = new Set<string>();
-    const a = new PiCodergenBackend({
+    const a = new PiLlmBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
       inProcessWrites: shared,
     });
-    const b = new PiCodergenBackend({
+    const b = new PiLlmBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
       inProcessWrites: shared,
@@ -239,11 +239,11 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
   });
 
   test("two backends with separate Sets each see only their own writes", () => {
-    const a = new PiCodergenBackend({
+    const a = new PiLlmBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
     });
-    const b = new PiCodergenBackend({
+    const b = new PiLlmBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
     });
@@ -254,7 +254,7 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
 
   test("forgetRun only clears the target run's keys from the shared Set", () => {
     const shared = new Set<string>();
-    const backend = new PiCodergenBackend({
+    const backend = new PiLlmBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
       inProcessWrites: shared,
@@ -287,7 +287,7 @@ describe("daemon-boot inProcessWrites reconstruction", () => {
 
     expect(seeded.has("r1::dev")).toBe(true);
     // With the in-process write recorded, resume detection (inlined in
-    // PiCodergenBackend.run) would be false — formula is `externalPrior &&
+    // PiLlmBackend.run) would be false — formula is `externalPrior &&
     // stored.length > 0 && !inProcessWrites.has(...)`.
     const resumed = 1 > 0 && !seeded.has("r1::dev");
     expect(resumed).toBe(false);
@@ -297,19 +297,19 @@ describe("daemon-boot inProcessWrites reconstruction", () => {
   test("reconstruction matches in-process Set after one dispatch", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const shared = new Set<string>();
-    const backend = new PiCodergenBackend({
+    const backend = new PiLlmBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
       inProcessWrites: shared,
     });
     const ctx = await ctxFor("r1", store, "dev");
-    const inner: CodergenBackend = {
+    const inner: LlmBackend = {
       async run(input) {
         input.persistMessage?.(assistantMsg("r1 dev"));
         return ok({ notes: "" });
       },
     };
-    await makeCodergenHandler({ node: node({ id: "dev" }), backend: inner }).handler(ctx);
+    await makeLlmHandler({ node: node({ id: "dev" }), backend: inner }).handler(ctx);
 
     const live = new Set<string>(shared);
     live.add("r1::dev");
@@ -330,14 +330,14 @@ describe("event payload cap (§I7) survives unbounded message content", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r5", store, "n1");
     const huge = "x".repeat(8192);
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run(input) {
         input.persistMessage?.(assistantMsg(huge));
         await input.emit?.("agent.message_end", { role: "assistant" });
         return ok({ notes: "" });
       },
     };
-    await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
+    await makeLlmHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
 
     const msgs = store.getMessages("r5");
     const msg = msgs[0]?.content;

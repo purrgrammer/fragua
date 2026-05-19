@@ -1221,7 +1221,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           result.nextNode === "__end__" ||
           result.nextNode === "end" ||
           result.nextNode === "done" ||
-          (result.nextNode != null && graph.nodes[result.nextNode]?.shape === "Msquare");
+          (result.nextNode != null && graph.nodes[result.nextNode]?.type === "exit");
         // Synthetic outcome map: prior gates from routing + this turn's gate.
         const priorOutcomes = readGateOutcomes(state.routing);
         const synthOutcomes = new Map(priorOutcomes);
@@ -1327,7 +1327,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const maxRetriesOverride = readNumber(effectiveRouting[maxRetriesOverrideKey(currentNode)]);
         const maxRetries =
           maxRetriesOverride > 0 ? maxRetriesOverride : resolveMaxRetries(completedNode.attrs, graph.attrs);
-        const allowPartial = completedNode.attrs.allow_partial === true;
+        // allow_partial was a legacy retry-policy escape hatch; dropped.
+        const allowPartial = false;
         const counterKey = retryCountKey(currentNode);
         const priorRetries = readNumber(state.routing[counterKey]);
         const action = retryStep({
@@ -1999,45 +2000,18 @@ function readNumber(v: unknown): number {
  * (node.retry_policy → graph.default_retry_policy → "none") plus the
  * custom-override attrs (retry_initial_delay_ms / retry_backoff_factor /
  * retry_max_delay_ms / retry_jitter). */
-function resolveBackoff(
-  nodeAttrs: NodeAttrs,
-  graphAttrs: GraphAttrs,
-): {
+function resolveBackoff(_nodeAttrs: NodeAttrs, _graphAttrs: GraphAttrs): {
   initialDelayMs: number;
   backoffFactor: number;
   maxDelayMs: number;
   jitter: boolean;
 } {
-  const presetName: RetryPresetName = isRetryPresetName(nodeAttrs.retry_policy)
-    ? nodeAttrs.retry_policy
-    : isRetryPresetName(graphAttrs.default_retry_policy)
-      ? graphAttrs.default_retry_policy
-      : "none";
-  const preset = RETRY_PRESETS[presetName];
-  return {
-    initialDelayMs:
-      typeof nodeAttrs.retry_initial_delay_ms === "number" ? nodeAttrs.retry_initial_delay_ms : preset.initialDelayMs,
-    backoffFactor:
-      typeof nodeAttrs.retry_backoff_factor === "number" ? nodeAttrs.retry_backoff_factor : preset.backoffFactor,
-    maxDelayMs: typeof nodeAttrs.retry_max_delay_ms === "number" ? nodeAttrs.retry_max_delay_ms : preset.maxDelayMs,
-    jitter: typeof nodeAttrs.retry_jitter === "boolean" ? nodeAttrs.retry_jitter : preset.jitter,
-  };
+  // Retry-preset machinery retired; default to "none" — no backoff.
+  return { ...RETRY_PRESETS.none };
 }
 
-/** Resolve max_retries (= max_attempts - 1, attractor §3.5). Precedence:
- * explicit node.max_retries → preset.maxAttempts - 1 →
- * graph.default_max_retries → 0. */
-function resolveMaxRetries(nodeAttrs: NodeAttrs, graphAttrs: GraphAttrs): number {
+/** Resolve max_retries. Returns `node.max_retries` if set, else 0. */
+function resolveMaxRetries(nodeAttrs: NodeAttrs, _graphAttrs: GraphAttrs): number {
   if (typeof nodeAttrs.max_retries === "number") return Math.max(0, Math.floor(nodeAttrs.max_retries));
-  const presetName: RetryPresetName = isRetryPresetName(nodeAttrs.retry_policy)
-    ? nodeAttrs.retry_policy
-    : isRetryPresetName(graphAttrs.default_retry_policy)
-      ? graphAttrs.default_retry_policy
-      : "none";
-  const preset = RETRY_PRESETS[presetName];
-  if (preset.maxAttempts > 0) return preset.maxAttempts - 1;
-  if (typeof graphAttrs.default_max_retries === "number") {
-    return Math.max(0, Math.floor(graphAttrs.default_max_retries));
-  }
   return 0;
 }

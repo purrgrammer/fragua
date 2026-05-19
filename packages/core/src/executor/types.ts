@@ -1,5 +1,5 @@
-// CodergenBackend / CodergenInput — the contract @swarm/agent's
-// PiCodergenBackend implements so makeCodergenHandler can drive it inside
+// LlmBackend / LlmInput — the contract @swarm/agent's
+// PiLlmBackend implements so makeLlmHandler can drive it inside
 // a HandlerContext.
 
 import type { AgentMessage } from "@swarm/types";
@@ -12,11 +12,11 @@ import type { SummaryLevel } from "../types/summary.ts";
 
 export type { BudgetSnapshotInput };
 
-export interface CodergenBackend {
-  run(input: CodergenInput): Promise<Outcome>;
+export interface LlmBackend {
+  run(input: LlmInput): Promise<Outcome>;
 }
 
-export interface CodergenInput {
+export interface LlmInput {
   node: Node;
   prompt: string;
   /** Workflow `goal` attribute, threaded for the agent's system-prompt

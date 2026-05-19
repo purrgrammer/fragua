@@ -3,7 +3,7 @@
 // titles / narratives as they arrive. Used by:
 //
 //   - execute() to generate the async run title from $ARGUMENTS
-//   - PiCodergenBackend to produce the tail for `summary=low|medium|high`
+//   - PiLlmBackend to produce the tail for `summary=low|medium|high`
 //
 // Each call rides as a synthetic node (see @swarm/core/types/summariser.ts).
 // Events are emitted via the `emit` callback on SummariseInput so the

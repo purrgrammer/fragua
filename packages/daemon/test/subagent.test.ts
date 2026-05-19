@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { CodergenInput, EventType, ExecutionEnvironment, Outcome } from "@swarm/core";
+import type { LlmInput, EventType, ExecutionEnvironment, Outcome } from "@swarm/core";
 import { ok } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
 import type { Skill } from "@swarm/workspace";
@@ -43,9 +43,9 @@ const STUB_ENV: ExecutionEnvironment = {
 };
 
 class StubBackend {
-  public readonly inputs: CodergenInput[] = [];
-  constructor(private readonly factory: (input: CodergenInput) => Outcome | Promise<Outcome>) {}
-  async run(input: CodergenInput): Promise<Outcome> {
+  public readonly inputs: LlmInput[] = [];
+  constructor(private readonly factory: (input: LlmInput) => Outcome | Promise<Outcome>) {}
+  async run(input: LlmInput): Promise<Outcome> {
     this.inputs.push(input);
     if (input.persistMessage) {
       input.persistMessage({
@@ -61,7 +61,7 @@ class StubBackend {
         },
         provider: "stub",
         model: "stub",
-      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+      } as Parameters<NonNullable<LlmInput["persistMessage"]>>[0]);
     }
     return await this.factory(input);
   }
@@ -280,12 +280,12 @@ describe("makeSpawnSubagent", () => {
       input.persistMessage?.({
         role: "user",
         content: [{ type: "text", text: "work prompt" }],
-      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+      } as Parameters<NonNullable<LlmInput["persistMessage"]>>[0]);
       input.persistMessage?.({
         role: "assistant",
         content: [{ type: "text", text: "partial progress so far" }],
         stopReason: "toolUse",
-      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+      } as Parameters<NonNullable<LlmInput["persistMessage"]>>[0]);
       return new Promise<Outcome>((_, reject) => {
         const onAbort = (): void => {
           const err = new Error("aborted");
@@ -916,7 +916,7 @@ describe("makeSpawnSubagent", () => {
         },
         provider: "stub",
         model: "stub",
-      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      } as Parameters<NonNullable<LlmInput["persistMessage"]>>[0],
       nodeId: seededNodeId,
       iteration: 0,
     });
@@ -968,9 +968,9 @@ describe("makeSpawnSubagent", () => {
     // mid-flight so spawn 2 actually exercises the LLM path with the
     // cumulative seed.
     class PartialBackend {
-      public readonly inputs: CodergenInput[] = [];
-      constructor(private readonly factory: (input: CodergenInput) => Promise<Outcome>) {}
-      async run(input: CodergenInput): Promise<Outcome> {
+      public readonly inputs: LlmInput[] = [];
+      constructor(private readonly factory: (input: LlmInput) => Promise<Outcome>) {}
+      async run(input: LlmInput): Promise<Outcome> {
         this.inputs.push(input);
         return await this.factory(input);
       }
@@ -1132,7 +1132,7 @@ describe("makeSpawnSubagent", () => {
         model: "stub",
         api: "stub",
         timestamp: 0,
-      } as unknown as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      } as unknown as Parameters<NonNullable<LlmInput["persistMessage"]>>[0],
       nodeId: seededNodeId,
       iteration: 0,
     });
@@ -1166,7 +1166,7 @@ describe("makeSpawnSubagent", () => {
         model: "stub",
         api: "stub",
         timestamp: 0,
-      } as unknown as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      } as unknown as Parameters<NonNullable<LlmInput["persistMessage"]>>[0],
       nodeId: seededNodeId,
       iteration: 0,
     });
@@ -1243,12 +1243,12 @@ describe("makeSpawnSubagent", () => {
         input.persistMessage?.({
           role: "user",
           content: [{ type: "text", text: "lens 1 prompt" }],
-        } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+        } as Parameters<NonNullable<LlmInput["persistMessage"]>>[0]);
         input.persistMessage?.({
           role: "assistant",
           content: [{ type: "text", text: "halfway through the review…" }],
           stopReason: "toolUse",
-        } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+        } as Parameters<NonNullable<LlmInput["persistMessage"]>>[0]);
         const err = new Error("cancelled mid-flight");
         err.name = "AbortError";
         throw err;

@@ -5,8 +5,8 @@ import type { Outcome } from "../../src/types/outcome.ts";
 
 function g(nodes: string[], edges: Edge[]): Graph {
   const n: Record<string, Node> = {};
-  for (const id of nodes) n[id] = { id, shape: "box", attrs: {}, classes: [] };
-  return { id: "G", directed: true, attrs: {}, nodes: n, edges, subgraphs: [] };
+  for (const id of nodes) n[id] = { id, type: "llm", attrs: {} };
+  return { id: "G", directed: true, attrs: {}, nodes: n, edges };
 }
 
 function edge(from: string, to: string, attrs: Edge["attrs"] = {}): Edge {
@@ -17,7 +17,7 @@ function outcome(partial: Partial<Outcome> = {}): Outcome {
   return { status: "success", notes: "", ...partial };
 }
 
-const nodeA: Node = { id: "A", shape: "box", attrs: {}, classes: [] };
+const nodeA: Node = { id: "A", type: "llm", attrs: {} };
 
 describe("outgoingEdges", () => {
   test("returns only edges from the given source", () => {
@@ -42,7 +42,7 @@ describe("selectEdge — boundary", () => {
   });
 
   test("non-routing source with no outgoing edges returns undefined", () => {
-    const routingNode: Node = { id: "A", shape: "box", attrs: { routes: ["x", "y"] }, classes: [] };
+    const routingNode: Node = { id: "A", type: "llm", attrs: { routes: ["x", "y"] } };
     const graph = g(["A"], []);
     expect(selectEdge({ graph, source: routingNode, outcome: outcome({ route: "x" }), context: {} })).toBeUndefined();
   });
@@ -110,7 +110,7 @@ describe("selectEdge — outcome case (non-routing source)", () => {
 // ─── Route case (routing source) ────────────────────────────────────────────
 
 describe("selectEdge — route case (routing source)", () => {
-  const routingNode: Node = { id: "A", shape: "box", attrs: { routes: ["small", "feature", "blocked"] }, classes: [] };
+  const routingNode: Node = { id: "A", type: "llm", attrs: { routes: ["small", "feature", "blocked"] } };
 
   test("route matches edge keyed by route=", () => {
     const graph = g(

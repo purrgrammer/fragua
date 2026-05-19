@@ -508,7 +508,7 @@ export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
 // followed by a user message containing tool_result blocks for every
 // id. The sanitiser pairs every trailing toolCall before the
 // transcript reaches `new Agent({initialState: {messages: ...}})` in
-// PiCodergenBackend.run.
+// PiLlmBackend.run.
 //
 // Per-block policy:
 //   - `name === "agent"`     re-execute via the registry. The agent
@@ -528,7 +528,7 @@ export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
 // See `docs/proposals/sub-agent-crash-resilience.md`.
 
 /** Per-call dependencies the sanitiser hands to re-executed tools.
- *  Mirrors the shape `PiCodergenBackend.run` already builds for the
+ *  Mirrors the shape `PiLlmBackend.run` already builds for the
  *  in-flight `toAgentTool` adapter. */
 export interface SanitiseUnpairedCtx {
   toolRegistry: ToolRegistry;

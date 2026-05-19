@@ -1,20 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import type { CodergenBackend, Node, OutcomeStatus } from "@swarm/core";
+import type { LlmBackend, Node, OutcomeStatus } from "@swarm/core";
 import { failProvider, ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@swarm/store";
 import fc from "fast-check";
-import { makeCodergenHandler } from "../src/handler-bridge.ts";
+import { makeLlmHandler } from "../src/handler-bridge.ts";
 
 function node(overrides: Partial<Node> = {}): Node {
   return {
     id: overrides.id ?? "n1",
+    type: "llm",
     attrs: {
-      shape: "box",
       prompt: "What is 2+2?",
       ...(overrides.attrs ?? {}),
     },
-  } as Node;
+  };
 }
 
 function stubBackend(
@@ -25,7 +25,7 @@ function stubBackend(
     assistantText?: string;
     toolText?: string;
   } = {},
-): CodergenBackend {
+): LlmBackend {
   return {
     async run(input) {
       if (emitScript.totalTokens != null || emitScript.costUsd != null) {
@@ -105,11 +105,11 @@ async function ctxFor(
   });
 }
 
-describe("makeCodergenHandler", () => {
+describe("makeLlmHandler", () => {
   test("runs the backend and returns a transition with tokens/cost/model", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r1", store, "n1");
-    const spec = makeCodergenHandler({
+    const spec = makeLlmHandler({
       node: node({ id: "n1" }),
       nextNode: "__end__",
       backend: stubBackend({
@@ -134,7 +134,7 @@ describe("makeCodergenHandler", () => {
   test("appends assistant + tool messages into ctx.messages", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r2", store, "n1");
-    const spec = makeCodergenHandler({
+    const spec = makeLlmHandler({
       node: node({ id: "n1" }),
       nextNode: "__end__",
       backend: stubBackend({
@@ -165,7 +165,7 @@ describe("makeCodergenHandler", () => {
     // field, which result-to-facts surfaces as `fact.run_halted.detail`.
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3", store, "n1");
-    const failing: CodergenBackend = {
+    const failing: LlmBackend = {
       async run() {
         return {
           status: "fail",
@@ -174,7 +174,7 @@ describe("makeCodergenHandler", () => {
         };
       },
     };
-    const spec = makeCodergenHandler({
+    const spec = makeLlmHandler({
       node: node({ id: "n1" }),
       nextNode: "__end__",
       backend: failing,
@@ -191,7 +191,7 @@ describe("makeCodergenHandler", () => {
   test("backend fail with empty failure_reason → no failureReason field", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3-empty", store, "n1");
-    const failing: CodergenBackend = {
+    const failing: LlmBackend = {
       async run() {
         return {
           status: "fail",
@@ -200,7 +200,7 @@ describe("makeCodergenHandler", () => {
         };
       },
     };
-    const spec = makeCodergenHandler({
+    const spec = makeLlmHandler({
       node: node({ id: "n1" }),
       nextNode: "__end__",
       backend: failing,
@@ -221,7 +221,7 @@ describe("makeCodergenHandler", () => {
     // handler-bridge no longer short-circuits to halt.
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3-retry", store, "n1");
-    const retrying: CodergenBackend = {
+    const retrying: LlmBackend = {
       async run() {
         return {
           status: "retry",
@@ -230,7 +230,7 @@ describe("makeCodergenHandler", () => {
         };
       },
     };
-    const spec = makeCodergenHandler({
+    const spec = makeLlmHandler({
       node: node({ id: "n1" }),
       nextNode: "__end__",
       backend: retrying,
@@ -247,14 +247,14 @@ describe("makeCodergenHandler", () => {
       $ARGUMENTS: "rename foo() to bar()",
     });
     let seenPrompt: string | undefined;
-    const capture: CodergenBackend = {
+    const capture: LlmBackend = {
       async run(input) {
         seenPrompt = input.prompt;
         return ok({});
       },
     };
-    const spec = makeCodergenHandler({
-      node: node({ attrs: { shape: "box", prompt: "Task: $ARGUMENTS" } }),
+    const spec = makeLlmHandler({
+      node: node({ attrs: { type: "llm", prompt: "Task: $ARGUMENTS" } }),
       nextNode: "__end__",
       backend: capture,
     });
@@ -267,14 +267,14 @@ describe("makeCodergenHandler", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-empty", store, "n1");
     let seenPrompt: string | undefined;
-    const capture: CodergenBackend = {
+    const capture: LlmBackend = {
       async run(input) {
         seenPrompt = input.prompt;
         return ok({});
       },
     };
-    const spec = makeCodergenHandler({
-      node: node({ attrs: { shape: "box", prompt: "[$ARGUMENTS]" } }),
+    const spec = makeLlmHandler({
+      node: node({ attrs: { type: "llm", prompt: "[$ARGUMENTS]" } }),
       nextNode: "__end__",
       backend: capture,
     });
@@ -322,7 +322,7 @@ describe("makeCodergenHandler", () => {
     const SYS = "you are a careful reviewer";
     const USR = "review the diff";
     let runCount = 0;
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run(input) {
         runCount += 1;
         input.persistMessage?.({ role: "system", content: SYS, timestamp: Date.now() });
@@ -332,7 +332,7 @@ describe("makeCodergenHandler", () => {
     };
 
     // Dispatch 1: fresh — both rows land.
-    const spec = makeCodergenHandler({ node: node({ id: "review" }), nextNode: "__end__", backend });
+    const spec = makeLlmHandler({ node: node({ id: "review" }), nextNode: "__end__", backend });
     await spec.handler(buildCtx());
     expect(runCount).toBe(1);
     let rows = store.getMessages("run-dedup", { nodeId: "review" }).map((r) => r.content.role);
@@ -348,14 +348,14 @@ describe("makeCodergenHandler", () => {
     // Dispatch 3 with a CHANGED system prompt → persists the new
     // one; the user prompt (still identical) is dropped.
     const NEW_SYS = "you are an even more careful reviewer";
-    const backendChangedSys: CodergenBackend = {
+    const backendChangedSys: LlmBackend = {
       async run(input) {
         input.persistMessage?.({ role: "system", content: NEW_SYS, timestamp: Date.now() });
         input.persistMessage?.({ role: "user", content: USR, timestamp: Date.now() });
         return ok({});
       },
     };
-    const spec3 = makeCodergenHandler({ node: node({ id: "review" }), nextNode: "__end__", backend: backendChangedSys });
+    const spec3 = makeLlmHandler({ node: node({ id: "review" }), nextNode: "__end__", backend: backendChangedSys });
     await spec3.handler(buildCtx());
     rows = store.getMessages("run-dedup", { nodeId: "review" }).map((r) => r.content.role);
     expect(rows).toEqual(["system", "user", "system"]);
@@ -365,7 +365,7 @@ describe("makeCodergenHandler", () => {
 
 // Regression / property suite for "llm routing belongs to the edge
 // selector, not the handler". Before this was locked in, the daemon's
-// codergenFactory forwarded `first = outbound[0]` to makeCodergenHandler,
+// codergenFactory forwarded `first = outbound[0]` to makeLlmHandler,
 // which meant every llm call forced its nextNode to whichever edge
 // happened to appear first in the DOT — bypassing the selector and
 // sending e.g. `outcome=success` runs down an `outcome=fail` branch
@@ -374,16 +374,16 @@ describe("makeCodergenHandler", () => {
 // The invariants these tests lock:
 //   (I1) No `nextNode` option → HandlerResult.nextNode is undefined (selector decides).
 //   (I2) Setting `nextNode` option propagates for transition-spec paths.
-describe("makeCodergenHandler — routing delegation invariants", () => {
+describe("makeLlmHandler — routing delegation invariants", () => {
   test("(I1) no nextNode option + no override → result.nextNode undefined", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-inv-1", store, "n1");
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run() {
         return ok({});
       },
     };
-    const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+    const spec = makeLlmHandler({ node: node({ id: "n1" }), backend });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") expect(result.nextNode).toBeUndefined();
@@ -393,12 +393,12 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
   test("(I2) nextNode option alone propagates when no override is set", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-inv-2", store, "n1");
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run() {
         return ok({});
       },
     };
-    const spec = makeCodergenHandler({ node: node({ id: "n1" }), nextNode: "legacy-target", backend });
+    const spec = makeLlmHandler({ node: node({ id: "n1" }), nextNode: "legacy-target", backend });
     const result = await spec.handler(ctx);
     if (result.kind === "transition") expect(result.nextNode).toBe("legacy-target");
     store.close();
@@ -411,12 +411,12 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
         const store = new SqliteStore({ path: ":memory:" });
         try {
           const ctx = await ctxFor(`r-prop-${Math.random()}`, store, "n1");
-          const backend: CodergenBackend = {
+          const backend: LlmBackend = {
             async run() {
               return { status, notes: "" };
             },
           };
-          const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+          const spec = makeLlmHandler({ node: node({ id: "n1" }), backend });
           const result = await spec.handler(ctx);
           // Invariant: no forced nextNode when the caller didn't supply one.
           // The executor's edge selector must be free to pick.
@@ -438,14 +438,14 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
 // handler nor swallow the message silently; the contract is to spill to
 // an artifact and persist a tiny placeholder so the transcript retains
 // a retrievable pointer.
-describe("makeCodergenHandler — oversized messages spill to artifact", () => {
+describe("makeLlmHandler — oversized messages spill to artifact", () => {
   test("persistMessage on a >1 MiB message survives: placeholder + artifact", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-big-msg", store, "n1");
 
     // Build an assistant message whose text is ~2 MiB — well past the cap.
     const filler = "x".repeat(MAX_MESSAGE_CONTENT_BYTES * 2);
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run(input) {
         input.persistMessage?.({
           role: "assistant",
@@ -468,7 +468,7 @@ describe("makeCodergenHandler — oversized messages spill to artifact", () => {
       },
     };
 
-    const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+    const spec = makeLlmHandler({ node: node({ id: "n1" }), backend });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("transition");
 
@@ -497,17 +497,17 @@ describe("makeCodergenHandler — oversized messages spill to artifact", () => {
   });
 });
 
-describe("makeCodergenHandler — provider error → pause_provider", () => {
+describe("makeLlmHandler — provider error → pause_provider", () => {
   test("outcome.provider_error translates to HandlerResult.kind=pause_provider", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-prov-1", store, "n1");
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run() {
         return failProvider("Insufficient balance", { httpStatus: 402, provider: "anthropic" });
       },
     };
 
-    const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+    const spec = makeLlmHandler({ node: node({ id: "n1" }), backend });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("pause_provider");
     if (result.kind === "pause_provider") {
@@ -521,13 +521,13 @@ describe("makeCodergenHandler — provider error → pause_provider", () => {
   test("outcome.provider_error with httpStatus=null (network error) round-trips", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-prov-2", store, "n1");
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run() {
         return failProvider("ECONNRESET", { httpStatus: null, provider: "anthropic" });
       },
     };
 
-    const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+    const spec = makeLlmHandler({ node: node({ id: "n1" }), backend });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("pause_provider");
     if (result.kind === "pause_provider") {
@@ -538,12 +538,12 @@ describe("makeCodergenHandler — provider error → pause_provider", () => {
   });
 });
 
-describe("makeCodergenHandler — priorMessages thread loading", () => {
+describe("makeLlmHandler — priorMessages thread loading", () => {
   // Captures the priorMessages the backend received so the test can assert
   // on what was hydrated for the shared thread.
-  function capturingBackend(): { calls: Array<readonly unknown[]>; backend: CodergenBackend } {
+  function capturingBackend(): { calls: Array<readonly unknown[]>; backend: LlmBackend } {
     const calls: Array<readonly unknown[]> = [];
-    const backend: CodergenBackend = {
+    const backend: LlmBackend = {
       async run(input) {
         calls.push(input.priorMessages ?? []);
         return ok({ notes: "done" });
@@ -613,8 +613,8 @@ describe("makeCodergenHandler — priorMessages thread loading", () => {
       timestamp: 6,
     });
 
-    const spec = makeCodergenHandler({
-      node: node({ id: "dispatch", attrs: { shape: "box", prompt: "…", thread_id: "review" } }),
+    const spec = makeLlmHandler({
+      node: node({ id: "dispatch", attrs: { type: "llm", prompt: "…", thread_id: "review" } }),
       backend,
     });
 
@@ -652,8 +652,8 @@ describe("makeCodergenHandler — priorMessages thread loading", () => {
       timestamp: 2,
     });
 
-    const spec = makeCodergenHandler({
-      node: node({ id: "implement", attrs: { shape: "box", prompt: "…", thread_id: "implement" } }),
+    const spec = makeLlmHandler({
+      node: node({ id: "implement", attrs: { type: "llm", prompt: "…", thread_id: "implement" } }),
       backend,
     });
 
@@ -667,20 +667,20 @@ describe("makeCodergenHandler — priorMessages thread loading", () => {
   });
 });
 
-describe("makeCodergenHandler — unbounded maxMs sentinel", () => {
+describe("makeLlmHandler — unbounded maxMs sentinel", () => {
   test('maxMs: "unbounded" produces HandlerSpec with maxMs absent', () => {
-    const spec = makeCodergenHandler({ node: node(), backend: stubBackend(), maxMs: "unbounded" });
+    const spec = makeLlmHandler({ node: node(), backend: stubBackend(), maxMs: "unbounded" });
     expect(spec.maxMs).toBeUndefined();
     expect("maxMs" in spec).toBe(false);
   });
 
   test("maxMs: undefined applies DEFAULT_MAX_MS (4h, regression)", () => {
-    const spec = makeCodergenHandler({ node: node(), backend: stubBackend() });
+    const spec = makeLlmHandler({ node: node(), backend: stubBackend() });
     expect(spec.maxMs).toBe(4 * 60 * 60 * 1000);
   });
 
   test("maxMs: 60_000 propagates verbatim", () => {
-    const spec = makeCodergenHandler({ node: node(), backend: stubBackend(), maxMs: 60_000 });
+    const spec = makeLlmHandler({ node: node(), backend: stubBackend(), maxMs: 60_000 });
     expect(spec.maxMs).toBe(60_000);
   });
 });

@@ -104,8 +104,6 @@ describe.skip("NodeInspector", () => {
     expect(text).toContain("standard"); // retry_policy preset
     expect(text).toContain("allow partial"); // label rendered
     expect(text).toContain("goal gate"); // label rendered
-    // Subgraph-derived class lands in node.classes.
-    expect(review.classes).toContain("dev");
     expect(text).toContain("dev");
   });
 

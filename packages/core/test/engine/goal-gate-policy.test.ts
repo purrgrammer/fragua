@@ -25,7 +25,7 @@ import {
 import type { Graph, Node, NodeAttrs } from "../../src/types/graph.ts";
 
 function node(id: string, attrs: NodeAttrs = {}): Node {
-  return { id, shape: "box", attrs, classes: [] };
+  return { id, type: "llm", attrs };
 }
 
 function graph(parts: { nodes: Node[]; attrs?: Graph["attrs"] }): Graph {
@@ -37,7 +37,6 @@ function graph(parts: { nodes: Node[]; attrs?: Graph["attrs"] }): Graph {
     attrs: parts.attrs ?? {},
     nodes,
     edges: [],
-    subgraphs: [],
   };
 }
 
@@ -88,38 +87,9 @@ describe("checkGoalGates", () => {
 describe("resolveRetargetChain", () => {
   test("gate.retry_target wins when set", () => {
     const g = graph({
-      nodes: [
-        node("gate", { goal_gate: true, retry_target: "x", fallback_retry_target: "y" }),
-        node("x"),
-        node("y"),
-        node("z"),
-      ],
-      attrs: { retry_target: "z" },
+      nodes: [node("gate", { goal_gate: true, retry_target: "x" }), node("x")],
     });
     expect(resolveRetargetChain(g, "gate")).toBe("x");
-  });
-
-  test("gate.fallback_retry_target when retry_target missing", () => {
-    const g = graph({
-      nodes: [node("gate", { goal_gate: true, fallback_retry_target: "y" }), node("y")],
-    });
-    expect(resolveRetargetChain(g, "gate")).toBe("y");
-  });
-
-  test("graph.retry_target when gate has none", () => {
-    const g = graph({
-      nodes: [node("gate", { goal_gate: true }), node("z")],
-      attrs: { retry_target: "z" },
-    });
-    expect(resolveRetargetChain(g, "gate")).toBe("z");
-  });
-
-  test("graph.fallback_retry_target when graph.retry_target missing", () => {
-    const g = graph({
-      nodes: [node("gate", { goal_gate: true }), node("w")],
-      attrs: { fallback_retry_target: "w" },
-    });
-    expect(resolveRetargetChain(g, "gate")).toBe("w");
   });
 
   test("nothing set → null", () => {
@@ -127,20 +97,18 @@ describe("resolveRetargetChain", () => {
     expect(resolveRetargetChain(g, "gate")).toBeNull();
   });
 
-  test("retarget references undefined node → fall through", () => {
+  test("retarget references undefined node → null", () => {
     const g = graph({
       nodes: [node("gate", { goal_gate: true, retry_target: "ghost" }), node("y")],
-      attrs: { fallback_retry_target: "y" },
     });
-    expect(resolveRetargetChain(g, "gate")).toBe("y");
+    expect(resolveRetargetChain(g, "gate")).toBeNull();
   });
 
-  test("empty-string retarget → fall through", () => {
+  test("empty-string retarget → null", () => {
     const g = graph({
       nodes: [node("gate", { goal_gate: true, retry_target: "" }), node("y")],
-      attrs: { retry_target: "y" },
     });
-    expect(resolveRetargetChain(g, "gate")).toBe("y");
+    expect(resolveRetargetChain(g, "gate")).toBeNull();
   });
 });
 
@@ -195,12 +163,6 @@ describe("resolveFailRetarget — §3.7", () => {
     expect(resolveFailRetarget(g, "a")).toBe("fix");
   });
 
-  test("falls back to fallback_retry_target", () => {
-    const g = graph({
-      nodes: [node("a", { fallback_retry_target: "rescue" }), node("rescue")],
-    });
-    expect(resolveFailRetarget(g, "a")).toBe("rescue");
-  });
 
   test("graph-level retarget NOT consulted (§3.7 is node-only)", () => {
     const g = graph({

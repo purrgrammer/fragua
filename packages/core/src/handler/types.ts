@@ -29,7 +29,7 @@ export interface LlmCallParams {
   /** Prompt-to-LLM message list — pi-ai's `Message` union
    * (`UserMessage | AssistantMessage | ToolResultMessage`). For richer
    * per-turn history (thinking, custom-type messages) use the agent
-   * surface via `makeCodergenHandler` instead; this low-level helper
+   * surface via `makeLlmHandler` instead; this low-level helper
    * is for bare single-call handlers. */
   messages: PiMessage[];
   /** Soft token cap; provider-specific. */

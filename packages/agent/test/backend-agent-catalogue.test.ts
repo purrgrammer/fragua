@@ -10,7 +10,7 @@ import type { AssistantMessage, Context, StreamOptions } from "@mariozechner/pi-
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import type { AgentDefinition } from "@swarm/types";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 
 function mkDef(name: string, description: string, projectCwd: string): AgentDefinition {
   return {
@@ -26,7 +26,7 @@ function mkDef(name: string, description: string, projectCwd: string): AgentDefi
   };
 }
 
-describe("PiCodergenBackend — agent catalogue injection", () => {
+describe("PiLlmBackend — agent catalogue injection", () => {
   test("agent tool present + agentDefinitions non-empty → catalogue rendered into systemPrompt", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-agent-cat-"));
     try {
@@ -43,7 +43,7 @@ describe("PiCodergenBackend — agent catalogue injection", () => {
         const registry = new ToolRegistry();
         registry.registerAll(CORE_TOOLS);
         const env = new LocalEnvironment({ cwd: scratch });
-        const backend = new PiCodergenBackend({
+        const backend = new PiLlmBackend({
           registry,
           env,
           resolveModel: () => model,
@@ -54,9 +54,9 @@ describe("PiCodergenBackend — agent catalogue injection", () => {
         await backend.run({
           node: {
             id: "implement",
-            shape: "box",
+            type: "llm",
             attrs: { allowed_tools: ["read", "agent"] },
-            classes: [],
+
           },
           prompt: "do work",
           thread_id: undefined,
@@ -95,7 +95,7 @@ describe("PiCodergenBackend — agent catalogue injection", () => {
         const registry = new ToolRegistry();
         registry.registerAll(CORE_TOOLS);
         const env = new LocalEnvironment({ cwd: scratch });
-        const backend = new PiCodergenBackend({
+        const backend = new PiLlmBackend({
           registry,
           env,
           resolveModel: () => model,
@@ -106,9 +106,9 @@ describe("PiCodergenBackend — agent catalogue injection", () => {
         await backend.run({
           node: {
             id: "implement",
-            shape: "box",
+            type: "llm",
             attrs: { allowed_tools: ["read"] }, // no `agent` in the pool
-            classes: [],
+
           },
           prompt: "do work",
           thread_id: undefined,

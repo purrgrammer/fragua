@@ -1,4 +1,4 @@
-// PiCodergenBackend honours an externally-supplied SteeringRegistry.
+// PiLlmBackend honours an externally-supplied SteeringRegistry.
 //
 // Each llm node builds its own backend (per packages/cli/src/commands/daemon.ts),
 // so per-instance steering registries can't deliver a steer issued while
@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 import { type SteerableAgent, SteeringRegistry } from "../src/steering-registry.ts";
 
 class FakeAgent implements SteerableAgent {
@@ -17,13 +17,13 @@ class FakeAgent implements SteerableAgent {
   }
 }
 
-describe("PiCodergenBackend — shared SteeringRegistry", () => {
+describe("PiLlmBackend — shared SteeringRegistry", () => {
   test("backend.steer routes through opts.steering when supplied", () => {
     const shared = new SteeringRegistry();
     const tools = new ToolRegistry();
     tools.registerAll(CORE_TOOLS);
     const env = new LocalEnvironment({ cwd: "/tmp" });
-    const backend = new PiCodergenBackend({
+    const backend = new PiLlmBackend({
       registry: tools,
       env,
       defaultModel: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
@@ -44,7 +44,7 @@ describe("PiCodergenBackend — shared SteeringRegistry", () => {
     tools.registerAll(CORE_TOOLS);
     const env = new LocalEnvironment({ cwd: "/tmp" });
     const make = () =>
-      new PiCodergenBackend({
+      new PiLlmBackend({
         registry: tools,
         env,
         defaultModel: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
@@ -67,7 +67,7 @@ describe("PiCodergenBackend — shared SteeringRegistry", () => {
     tools.registerAll(CORE_TOOLS);
     const env = new LocalEnvironment({ cwd: "/tmp" });
     const make = () =>
-      new PiCodergenBackend({
+      new PiLlmBackend({
         registry: tools,
         env,
         defaultModel: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },

@@ -97,7 +97,7 @@ function bridgeMessageUpdate(e: AssistantStreamEvent): BridgedEvent | undefined 
   switch (e.type) {
     case "start":
       // swarm's `llm.start` fires once per `backend.run()` with the resolved
-      // prompt + system prompt (see PiCodergenBackend.run). Don't duplicate
+      // prompt + system prompt (see PiLlmBackend.run). Don't duplicate
       // it on every pi-agent message_start — `agent.message_start` already
       // marks message boundaries inside a turn.
       return undefined;

@@ -118,7 +118,6 @@ export function evaluateBudget(input: BudgetInput): BudgetDecision {
           actual: c.cumulative,
           ...(c.scope === "node" ? { caller_node_id: input.completedNodeId } : {}),
           ...(input.graphAttrs.budget_usd !== undefined ? { run_max_cost_usd: input.graphAttrs.budget_usd } : {}),
-          ...(input.graphAttrs.budget_tokens !== undefined ? { run_max_tokens: input.graphAttrs.budget_tokens } : {}),
           reason: stopReason(c, input.completedNodeId),
         },
       });
@@ -137,7 +136,6 @@ export function evaluateBudget(input: BudgetInput): BudgetDecision {
           ratio: c.cumulative / c.ceiling,
           ...(c.scope === "node" ? { caller_node_id: input.completedNodeId } : {}),
           ...(input.graphAttrs.budget_usd !== undefined ? { run_max_cost_usd: input.graphAttrs.budget_usd } : {}),
-          ...(input.graphAttrs.budget_tokens !== undefined ? { run_max_tokens: input.graphAttrs.budget_tokens } : {}),
           reason: warnReason(c, input.completedNodeId),
         },
       });
@@ -179,7 +177,7 @@ function collectChecks(input: BudgetInput): Check[] {
       tag: "run:cost",
     });
   }
-  const runTokensCeiling = ovRun?.tokens ?? input.graphAttrs.budget_tokens;
+  const runTokensCeiling = ovRun?.tokens;
   if (typeof runTokensCeiling === "number") {
     out.push({
       scope: "run",

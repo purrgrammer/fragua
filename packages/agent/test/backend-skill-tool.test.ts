@@ -1,4 +1,4 @@
-// PiCodergenBackend — `skill` tool is force-included regardless of
+// PiLlmBackend — `skill` tool is force-included regardless of
 // node `allowed_tools` / `denied_tools`.
 //
 // We don't peek into the pi-agent-core `Agent` constructor's `tools`
@@ -18,7 +18,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } fr
 import type { EventType, NodeAttrs } from "@swarm/core";
 import type { Skill } from "@swarm/types";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 
 interface CapturedEvent {
   type: EventType;
@@ -70,7 +70,7 @@ async function runOnce(opts: {
     ]);
 
     const env = new LocalEnvironment({ cwd: opts.scratch });
-    const backend = new PiCodergenBackend({
+    const backend = new PiLlmBackend({
       registry: opts.registry,
       env,
       resolveModel: () => model,
@@ -80,7 +80,7 @@ async function runOnce(opts: {
 
     const events: CapturedEvent[] = [];
     const outcome = await backend.run({
-      node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
+      node: { id: "n1", type: "llm", attrs: opts.attrs },
       prompt: "load the frontend skill",
       thread_id: undefined,
       signal: new AbortController().signal,
@@ -96,7 +96,7 @@ async function runOnce(opts: {
   }
 }
 
-describe("PiCodergenBackend skill tool wiring", () => {
+describe("PiLlmBackend skill tool wiring", () => {
   test("skill tool is present even when node.attrs.allowed_tools omits it", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-skill-allow-"));
     try {

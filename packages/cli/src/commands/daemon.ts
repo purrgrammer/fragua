@@ -2,7 +2,7 @@
 //
 // Out of the box the daemon uses a stub LLM. Pass `--llm-provider` +
 // `--llm-model` (or omit both for the defaults) and the auto-dispatcher
-// routes every `box` node through a PiCodergenBackend so real LLM calls
+// routes every `box` node through a PiLlmBackend so real LLM calls
 // fire. Handlers of other shapes (Mdiamond start, Msquare exit, hexagon
 // wait.human, etc.) stay on the trivial transitions.
 
@@ -15,8 +15,8 @@ import {
   defaultSummariserModel,
   firstCredentialedProvider,
   ModelRegistry,
-  makeCodergenHandler,
-  PiCodergenBackend,
+  makeLlmHandler,
+  PiLlmBackend,
   PiSummariserBackend,
   type SpawnSubagentParentCtx,
   SteeringRegistry,
@@ -290,7 +290,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   let steeringRegistry: SteeringRegistry | undefined;
   if (useLlm) {
     // `env` is wired per-run via the WorktreeProvisioner below —
-    // the backend reads it off `CodergenInput` on each call, so we
+    // the backend reads it off `LlmInput` on each call, so we
     // intentionally leave `backendOpts.env` unset here.
     // Register the four core tools (read / write / edit / bash) on the
     // backend registry. Without this the registry is empty, pi-agent-core
@@ -356,7 +356,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       // capture the parent's per-node backend (which carries
       // node-scoped attrs irrelevant to the sub-agent).
       spawnSubagentFactory: (parentCtx: SpawnSubagentParentCtx) => {
-        const subagentBackend = new PiCodergenBackend(backendOpts);
+        const subagentBackend = new PiLlmBackend(backendOpts);
         return makeSpawnSubagent(
           {
             store,
@@ -368,7 +368,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
         );
       },
     };
-    // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
+    // `nextNode` is intentionally NOT forwarded to makeLlmHandler.
     // The factory receives the first outgoing edge as a legacy-compat
     // hint for tool/transition nodes, but for llm that would force
     // every call to route to whichever edge happens to appear first in
@@ -377,9 +377,9 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // (e.g. `implement -> done [condition="outcome=fail"]` vs the
     // unconditional `implement -> verify`).
     codergenFactory = (node, _nextNode, maxMs) => {
-      const factoryOpts: Parameters<typeof makeCodergenHandler>[0] = { node, backendOpts };
+      const factoryOpts: Parameters<typeof makeLlmHandler>[0] = { node, backendOpts };
       if (maxMs !== undefined) factoryOpts.maxMs = maxMs;
-      const inner = makeCodergenHandler(factoryOpts);
+      const inner = makeLlmHandler(factoryOpts);
       // Run auto-scan before the inner handler dispatches: if the run's
       // project cwd hasn't been catalogued yet, scan it and merge.
       // First-run-of-a-new-project pays one extra frontmatter walk;

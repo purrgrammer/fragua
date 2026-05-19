@@ -20,9 +20,9 @@ import { join } from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { registerFauxProvider } from "@mariozechner/pi-ai";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { PiCodergenBackend } from "../src/backend.ts";
+import { PiLlmBackend } from "../src/backend.ts";
 
-describe("PiCodergenBackend — empty-content failure envelopes are not persisted", () => {
+describe("PiLlmBackend — empty-content failure envelopes are not persisted", () => {
   test("provider transport error (stopReason=error, content=[]) does not reach persistMessage; cost.recorded still fires", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "swarm-persist-fail-"));
     const faux = registerFauxProvider();
@@ -40,7 +40,7 @@ describe("PiCodergenBackend — empty-content failure envelopes are not persiste
       const registry = new ToolRegistry();
       registry.registerAll(CORE_TOOLS);
       const env = new LocalEnvironment({ cwd: scratch });
-      const backend = new PiCodergenBackend({
+      const backend = new PiLlmBackend({
         registry,
         env,
         resolveModel: () => model,
@@ -50,7 +50,7 @@ describe("PiCodergenBackend — empty-content failure envelopes are not persiste
       const persisted: AgentMessage[] = [];
       let costRecordedCount = 0;
       await backend.run({
-        node: { id: "n", shape: "box", attrs: {}, classes: [] },
+        node: { id: "n", type: "llm", attrs: {} },
         prompt: "do work",
         thread_id: undefined,
         signal: new AbortController().signal,
@@ -103,7 +103,7 @@ describe("PiCodergenBackend — empty-content failure envelopes are not persiste
       const registry = new ToolRegistry();
       registry.registerAll(CORE_TOOLS);
       const env = new LocalEnvironment({ cwd: scratch });
-      const backend = new PiCodergenBackend({
+      const backend = new PiLlmBackend({
         registry,
         env,
         resolveModel: () => model,
@@ -116,7 +116,7 @@ describe("PiCodergenBackend — empty-content failure envelopes are not persiste
       const persisted: AgentMessage[] = [];
       try {
         await backend.run({
-          node: { id: "n", shape: "box", attrs: {}, classes: [] },
+          node: { id: "n", type: "llm", attrs: {} },
           prompt: "do work",
           thread_id: undefined,
           signal: controller.signal,
