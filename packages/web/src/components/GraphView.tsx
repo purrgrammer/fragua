@@ -561,12 +561,11 @@ interface SwarmNodeData extends Record<string, unknown> {
   goalGate: boolean;
   /** DOT model attribute, when set. */
   model: string | undefined;
-  /** DOT `llm_provider` attribute. Surfaced alongside model so
-   *  multi-provider workflows (anthropic + openai cascades via
-   *  `model_stylesheet`) read at a glance which backend a node will hit. */
+  /** `llm_provider` attribute. Surfaced alongside model so multi-provider
+   *  workflows read at a glance which backend a node will hit. */
   provider: string | undefined;
-  /** DOT `reasoning_effort` (low | medium | high). Cascade target of the
-   *  per-class stylesheet — invisible without surfacing it on the card. */
+  /** `reasoning_effort` (low | medium | high). Surfaced on the card so
+   *  high-effort nodes are visible at a glance. */
   reasoningEffort: "low" | "medium" | "high" | undefined;
   /** Shared LLM session key (DOT `thread_id`). Surfaced in the body so
    *  cluster_dev-style shared-session designs are visible at a glance. */

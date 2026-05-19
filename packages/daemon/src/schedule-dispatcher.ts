@@ -24,7 +24,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
-import { parseWorkflow, prepareGraph } from "@swarm/core";
+import { parseWorkflow } from "@swarm/core";
 import { type IEventStore, isTerminal as isTerminalStatus, sha256Hex } from "@swarm/store";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
@@ -135,8 +135,7 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
     }
 
     try {
-      const graph = parseWorkflow(dotSource);
-      prepareGraph(graph);
+      parseWorkflow(dotSource);
     } catch (err) {
       opts.store.pauseSchedule(row.id, now);
       opts.store.appendDaemonEvent({

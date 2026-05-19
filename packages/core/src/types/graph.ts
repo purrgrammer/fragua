@@ -156,7 +156,6 @@ export interface GraphAttrs {
    * Default 3. Prevents runaway retry loops when the retry target itself
    * keeps failing for the same reason. */
   max_goal_gate_retries?: number;
-  model_stylesheet?: string;
   thread_id?: string;
   /** Per-run cost ceiling in USD. Once the run's cumulative cost crosses
    * this, `budget.stop` fires and the run pauses (default), halts, or

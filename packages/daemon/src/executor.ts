@@ -21,7 +21,6 @@ import {
   isRetryPresetName,
   type NodeAttrs,
   parseWorkflow,
-  prepareGraph,
   RETRY_PRESETS,
   type RetryPresetName,
   readGateOutcomes,
@@ -324,11 +323,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
   let runEnv: ExecutionEnvironment | undefined;
   // Lazy per-run graph cache. Parsed once on first edge-selection need.
-  // The graph is run through `prepareGraph` so transforms (stylesheet,
-  // future variable-expansion, …) populate node.attrs before the
-  // executor reads them. Stylesheet syntax errors are dropped here —
-  // the validator catches them at upload-time via E015, so by the time
-  // a graph reaches the executor any stylesheet is well-formed.
   let cachedGraph: Graph | null = null;
   const graphFor = (workflowSha: string | null): Graph | null => {
     if (workflowSha == null) return null;
@@ -336,9 +330,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const wf = opts.store.getWorkflow(workflowSha);
     if (wf == null) return null;
     try {
-      const parsed = parseWorkflow(wf.dotSource);
-      prepareGraph(parsed);
-      cachedGraph = parsed;
+      cachedGraph = parseWorkflow(wf.dotSource);
       return cachedGraph;
     } catch {
       return null;

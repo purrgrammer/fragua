@@ -21,7 +21,7 @@
 // conditional/parallel) don't LLM-dispatch.
 
 import { join } from "node:path";
-import { parseWorkflow, prepareGraph } from "@swarm/core";
+import { parseWorkflow } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
 import type { ModelRegistry } from "./credentials/index.ts";
 import { AuthStorage, findByBareId, getSwarmHome, ModelRegistry as Registry } from "./credentials/index.ts";
@@ -64,11 +64,6 @@ export function validateWorkflowModels(
     // error surface elsewhere — don't fake model offenders for it.
     return { ok: true };
   }
-
-  // Expand `model_stylesheet` so node.attrs reflects the same resolved
-  // (provider, model) the dispatcher will see. Without this, stylesheet-
-  // defined models slip past validation and fail at first dispatch.
-  prepareGraph(graph);
 
   const offenders: ModelOffender[] = [];
 

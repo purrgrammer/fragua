@@ -5,7 +5,7 @@
 // node's spec is derived from its shape / `type` attribute.
 
 import type { Node, NodeAttrs } from "@swarm/core";
-import { InvalidDurationError, parseWorkflow, parseDurationMs, prepareGraph } from "@swarm/core";
+import { InvalidDurationError, parseWorkflow, parseDurationMs } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
@@ -99,7 +99,6 @@ function specsForGraph(
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
 ): Map<string, HandlerSpec> {
   const graph = parseWorkflow(dotSource);
-  prepareGraph(graph);
   const outgoing = new Map<string, Array<{ to: string; label?: string; route?: string }>>();
   for (const edge of graph.edges) {
     const list = outgoing.get(edge.from) ?? [];
