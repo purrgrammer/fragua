@@ -74,13 +74,13 @@ describe("executor — edge selection", () => {
       (e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "implement",
     );
     expect(completedImplement).not.toBeUndefined();
-    expect((completedImplement!.payload as { nextNode: string }).nextNode).toBe("done");
+    expect((completedImplement!.payload as { nextNode: string }).nextNode).toBe("exit");
 
     const edgeSelected = events.find((e) => e.type === "edge.selected");
     expect(edgeSelected).not.toBeUndefined();
     const sel = edgeSelected!.payload as { from: string; to: string; rule: string };
     expect(sel.from).toBe("implement");
-    expect(sel.to).toBe("done");
+    expect(sel.to).toBe("exit");
     // Two-case algorithm (Phase 9): outcome=fail edge picked via the
     // outcome attr; rule is "outcome", not the legacy "condition".
     expect(sel.rule).toBe("outcome");
@@ -208,7 +208,7 @@ describe("executor — edge selection", () => {
     const payload = halted!.payload as { reason: string; detail?: string };
     expect(payload.reason).toBe("aborted_exit");
     // Handler returned no failureReason — falls back to the generic detail.
-    expect(payload.detail).toBe("reached done via outcome=fail");
+    expect(payload.detail).toBe("reached exit via outcome=fail");
     // No run_completed event should have fired — the run didn't succeed.
     expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
     r.store.close();

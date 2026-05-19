@@ -344,7 +344,7 @@ export function parseWorkflow(source: string): Graph {
     const coerced = coerceScalar(irKey, scalarValue(item.value), graphAttrLocs.get(irKey) ?? { line: 0, col: 0 });
     if (coerced !== undefined) graphAttrs[irKey] = coerced;
   }
-  if (inputs.length > 0) graphAttrs.inputs = inputs;
+  if (inputs.length > 0) graphAttrs["inputs"] = inputs;
 
   // Walk steps in declaration order — order matters for implicit linear flow.
   const stepIds: string[] = [];
@@ -371,7 +371,7 @@ export function parseWorkflow(source: string): Graph {
   // The engine looks for `routing.start_node` defaulting to "start" — so
   // we name the synthetic node "start" (not __start__) for that to match.
   // Authors don't declare it; validator E029 reserves the name.
-  nodes.start = {
+  nodes["start"] = {
     id: "start",
     shape: "Mdiamond",
     attrs: { shape: "Mdiamond", type: "start", label: "start" } as NodeAttrs,
@@ -419,24 +419,24 @@ export function parseWorkflow(source: string): Graph {
     // `timeout-minutes` → max_ms.
     const tm = scalarValue(body.get("timeout-minutes", true));
     if (typeof tm === "number" && Number.isFinite(tm)) {
-      attrs.max_ms = Math.trunc(tm * 60_000);
+      attrs["max_ms"] = Math.trunc(tm * 60_000);
     }
     // `retry: <step>` → goal_gate=true + retry_target=<step>.
     const retryTo = scalarValue(body.get("retry", true));
     if (typeof retryTo === "string" && retryTo.length > 0) {
-      attrs.goal_gate = true;
-      attrs.retry_target = retryTo;
+      attrs["goal_gate"] = true;
+      attrs["retry_target"] = retryTo;
     }
     // Lower type to IR kind/type for engine consumers.
-    attrs.shape = shape;
+    attrs["shape"] = shape;
     if (typeStr === "llm") {
-      attrs.kind = "codergen";
-      attrs.type = "codergen";
+      attrs["kind"] = "codergen";
+      attrs["type"] = "codergen";
     } else if (typeStr === "human" || typeStr === "tool") {
-      attrs.kind = typeStr;
-      attrs.type = typeStr;
+      attrs["kind"] = typeStr;
+      attrs["type"] = typeStr;
     } else if (typeStr === "exit") {
-      attrs.type = "exit";
+      attrs["type"] = "exit";
     }
 
     // ---- edge synthesis ----
@@ -481,10 +481,10 @@ export function parseWorkflow(source: string): Graph {
         }
         if (to === "exit") needExit = true;
         const edgeAttrs: Record<string, unknown> = { route: rName };
-        if (label !== undefined) edgeAttrs.label = label;
+        if (label !== undefined) edgeAttrs["label"] = label;
         edges.push({ from: stepId, to, attrs: edgeAttrs as EdgeAttrs });
       }
-      attrs.routes = routeNames;
+      attrs["routes"] = routeNames;
     } else if (onNode !== undefined) {
       if (!YAML.isMap(onNode)) {
         throw new ParseError(`step "${stepId}" on: must be a mapping`, ...locArr(locOf(onNode, lineCounter)));
@@ -524,8 +524,8 @@ export function parseWorkflow(source: string): Graph {
   }
 
   // Synthesise the reserved exit sink iff anything routes to it.
-  if (needExit && !nodes.exit) {
-    nodes.exit = {
+  if (needExit && !nodes["exit"]) {
+    nodes["exit"] = {
       id: "exit",
       shape: "Msquare",
       attrs: { shape: "Msquare", type: "exit", label: "exit" } as NodeAttrs,

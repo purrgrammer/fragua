@@ -266,7 +266,9 @@ function nodeRetryCount(routing: Record<string, unknown>): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-/** Sentinel convention: a transition with nextNode === "__end__" terminates the run. */
+/** Sentinel convention: a transition with nextNode === "__end__" terminates the run.
+ * `exit` is the canonical reserved-sink name in the new GHA-style authoring
+ * shape; `end` / `done` are historical aliases retained for compat. */
 function isTerminalNode(nodeId: string): boolean {
-  return nodeId === "__end__" || nodeId === "end" || nodeId === "done";
+  return nodeId === "__end__" || nodeId === "exit" || nodeId === "end" || nodeId === "done";
 }

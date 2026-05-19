@@ -79,13 +79,9 @@ describe("unbounded codergen — no AbortSignal.timeout fires", () => {
     r.store.close();
   });
 
-  test("end-to-end — DOT max_ms=0 propagates through dispatcher to spec.maxMs undefined", () => {
+  test("end-to-end — max_ms=0 propagates through dispatcher to spec.maxMs undefined", () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `digraph { start [shape=Mdiamond]; impl [shape=box, max_ms=0]; done [shape=Msquare]; start -> impl -> done; }`,
-    );
+    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 0}\n`);
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(
       autoDispatcherResolver({

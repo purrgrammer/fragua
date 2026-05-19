@@ -78,19 +78,16 @@ async function rig(): Promise<Rig> {
 }
 
 describe("swarm run", () => {
-  test("round-trip: DOT file → upload → enqueue → stream → completed", async () => {
+  test("round-trip: YAML file → upload → enqueue → stream → completed", async () => {
     const r = await rig();
     try {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
-      const dotPath = join(workflowDir, "echo.yaml");
-      writeFileSync(
-        dotPath,
-        `name: echo\nnodes:\n  start: {type: start}\n  finish: {type: exit}\nedges:\n  - {from: start, to: finish}\n`,
-      );
+      const yamlPath = join(workflowDir, "echo.yaml");
+      writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
 
       const exitCode = await runCommand({
-        workflow: dotPath,
+        workflow: yamlPath,
         url: r.url,
       });
       expect(exitCode).toBe(0);
@@ -112,14 +109,14 @@ describe("swarm run", () => {
     try {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
-      const dotPath = join(workflowDir, "echo.yaml");
+      const yamlPath = join(workflowDir, "echo.yaml");
       writeFileSync(
-        dotPath,
-        `name: echo\nnodes:\n  start: {type: start}\n  end: {type: exit}\nedges:\n  - {from: start, to: end}\n`,
+        yamlPath,
+        `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`,
       );
 
       const code = await runCommand({
-        workflow: dotPath,
+        workflow: yamlPath,
         url: r.url,
         follow: false,
       });
@@ -134,14 +131,14 @@ describe("swarm run", () => {
     try {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
-      const dotPath = join(workflowDir, "echo.yaml");
+      const yamlPath = join(workflowDir, "echo.yaml");
       writeFileSync(
-        dotPath,
-        `name: echo\nnodes:\n  start: {type: start}\n  end: {type: exit}\nedges:\n  - {from: start, to: end}\n`,
+        yamlPath,
+        `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`,
       );
 
       const code = await runCommand({
-        workflow: dotPath,
+        workflow: yamlPath,
         url: r.url,
         follow: false,
         input: "rename foo to bar",

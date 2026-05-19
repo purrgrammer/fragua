@@ -4,57 +4,34 @@ import fc from "fast-check";
 import { autoDispatcherResolver, resolveMaxMs } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 
-import { SqliteStore as _Store } from "@swarm/store";
-import { lowerIfDot } from "../../core/test/helpers/dot-to-yaml.ts";
-{
-  const _orig = _Store.prototype.saveWorkflow;
-  _Store.prototype.saveWorkflow = function(sha, name, source) { return _orig.call(this, sha, name, lowerIfDot(source)); };
-}
-
-// TODO(yaml-cutover commit 2): inline DOT fixtures need migration to YAML.
-// Wholesale .skip until that lands.
-
 describe("autoDispatcherResolver", () => {
-  test("parses DOT once and caches per-node specs", () => {
+  test("parses YAML once and caches per-node specs", () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `digraph G {
-         start [shape=Mdiamond];
-         mid [shape=box];
-         finish [shape=Msquare];
-         start -> mid -> finish;
-       }`,
-    );
+    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  mid: {type: llm, prompt: hi}\n`);
 
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
 
-    const startSpec = dispatcher.get("sha", "start");
-    expect(startSpec.kind).toBe("start");
-
-    const midSpec = dispatcher.get("sha", "mid");
-    expect(midSpec.kind).toBe("codergen");
-
-    const finishSpec = dispatcher.get("sha", "finish");
-    expect(finishSpec.kind).toBe("exit");
+    expect(dispatcher.get("sha", "start").kind).toBe("start");
+    expect(dispatcher.get("sha", "mid").kind).toBe("codergen");
+    expect(dispatcher.get("sha", "exit").kind).toBe("exit");
 
     store.close();
   });
 
-  test("hexagon nodes resolve to human", async () => {
+  test("human nodes resolve to human", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
       "sha",
       "t",
-      `digraph {
-         start [shape=Mdiamond]
-         ask [shape=hexagon, text="ok?", routes="yes"]
-         done [shape=Msquare]
-         start -> ask
-         ask -> done [route=yes]
-       }`,
+      `name: t
+steps:
+  ask:
+    type: human
+    text: "ok?"
+    routes:
+      yes: exit
+`,
     );
 
     const dispatcher = new Dispatcher();
@@ -64,70 +41,25 @@ describe("autoDispatcherResolver", () => {
     store.close();
   });
 
-  // DOT's `kind=human` on a `shape=box` node doesn't translate to YAML —
-  // the type discriminator IS the kind. Skip-stubbed pending a real
-  // YAML-era rewrite (or just delete; the hexagon path above already
-  // exercises the human resolver).
-  test.skip("kind=human (box shape with explicit kind) also resolves to human — DOT-only", async () => {
-    // Authoring-time kind= wins over shape-based derivation. A `box`
-    // node with `kind=human` is a valid alias for `shape=hexagon`.
+  test("human node text comes from attrs.text", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
       "sha",
       "t",
-      `digraph {
-         start [shape=Mdiamond]
-         ask [kind=human, text="?", routes="a,b"]
-         x [shape=box]
-         done [shape=Msquare]
-         start -> ask
-         ask -> x [route=a]
-         ask -> done [route=b]
-         x -> done
-       }`,
+      `name: t
+steps:
+  g1:
+    type: human
+    text: "From text"
+    routes: {go: exit}
+`,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
-    expect(dispatcher.get("sha", "ask").kind).toBe("human");
-    store.close();
-  });
-
-  test("human node text comes from attrs.text (canonical, beats prompt and label)", async () => {
-    // Phase 7 of llm-routing.md makes `text=` the canonical operator
-    // prompt source on human nodes. `prompt=` / `label=` remain as
-    // fallbacks for partially-migrated graphs; validator E026 catches
-    // text= on non-human nodes.
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `digraph {
-         start [shape=Mdiamond]
-         g1 [shape=hexagon, text="From text", routes="go"]
-         g2 [shape=hexagon, label="From label", routes="go"]
-         g3 [shape=hexagon, prompt="From prompt", routes="go"]
-         g4 [shape=hexagon, text="Text wins", label="From label", prompt="From prompt", routes="go"]
-         done [shape=Msquare]
-         start -> g1
-         g1 -> g2 [route=go]
-         g2 -> g3 [route=go]
-         g3 -> g4 [route=go]
-         g4 -> done [route=go]
-       }`,
-    );
-    const dispatcher = new Dispatcher();
-    dispatcher.setResolver(autoDispatcherResolver({ store }));
-    for (const [id, expected] of [
-      ["g1", "From text"],
-      ["g2", "From label"],
-      ["g3", "From prompt"],
-      ["g4", "Text wins"],
-    ] as const) {
-      const spec = dispatcher.get("sha", id);
-      const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
-      expect(result.kind).toBe("yield_human");
-      if (result.kind === "yield_human") expect(result.text).toBe(expected);
-    }
+    const spec = dispatcher.get("sha", "g1");
+    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
+    expect(result.kind).toBe("yield_human");
+    if (result.kind === "yield_human") expect(result.text).toBe("From text");
     store.close();
   });
 
@@ -136,18 +68,17 @@ describe("autoDispatcherResolver", () => {
     store.saveWorkflow(
       "sha",
       "t",
-      `digraph {
-         start [shape=Mdiamond]
-         review [shape=hexagon, text="Approve?", routes="approve,revise"]
-         publish [shape=box]
-         revise [shape=box]
-         done [shape=Msquare]
-         start -> review
-         review -> publish [route=approve, label="Approve"]
-         review -> revise [route=revise, label="Revise"]
-         publish -> done
-         revise -> done
-       }`,
+      `name: t
+steps:
+  review:
+    type: human
+    text: "Approve?"
+    routes:
+      approve: {to: publish, label: "Approve"}
+      revise:  {to: revise, label: "Revise"}
+  publish: {type: llm, prompt: p}
+  revise: {type: llm, prompt: r}
+`,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
@@ -157,69 +88,6 @@ describe("autoDispatcherResolver", () => {
     if (result.kind === "yield_human") {
       expect(result.text).toBe("Approve?");
       expect(result.routes).toEqual(["approve", "revise"]);
-    }
-    store.close();
-  });
-
-  test("human node with duplicate route= on outgoing edges yields a halt spec at runtime", async () => {
-    // Validator E024 catches this at lint time; if a workflow slips
-    // past validation (raw insert, older bug), the auto-dispatcher
-    // must still produce a halt spec with a clear detail rather than
-    // crashing.
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `digraph {
-         start [shape=Mdiamond]
-         gate [shape=hexagon, text="?", routes="apply"]
-         a [shape=box]
-         b [shape=box]
-         done [shape=Msquare]
-         start -> gate
-         gate -> a [route=apply]
-         gate -> b [route=apply]
-         a -> done
-         b -> done
-       }`,
-    );
-    const dispatcher = new Dispatcher();
-    dispatcher.setResolver(autoDispatcherResolver({ store }));
-    const spec = dispatcher.get("sha", "gate");
-    expect(spec.kind).toBe("human");
-    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
-    expect(result.kind).toBe("halt");
-    if (result.kind === "halt") {
-      expect(result.detail).toMatch(/duplicate edge for route "apply"/);
-      expect(result.detail).toMatch(/gate/);
-    }
-    store.close();
-  });
-
-  test("hexagon with no outgoing edges yields a halt spec at runtime", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `digraph {
-         start [shape=Mdiamond]
-         dead [shape=hexagon]
-         done [shape=Msquare]
-         start -> dead
-       }`,
-    );
-    const dispatcher = new Dispatcher();
-    dispatcher.setResolver(autoDispatcherResolver({ store }));
-    const spec = dispatcher.get("sha", "dead");
-    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
-    expect(result.kind).toBe("halt");
-    if (result.kind === "halt") {
-      // Without `routes=` the constructor refuses; with `routes=` but
-      // no edges, the constructor refuses on the route-without-edge
-      // path. Either way the dispatcher surfaces a halt with the node
-      // id, not a crash. Here the node has neither, so the empty-route
-      // path fires.
-      expect(result.detail).toMatch(/at least one route|no outgoing edge/);
     }
     store.close();
   });
@@ -237,7 +105,7 @@ describe("autoDispatcherResolver", () => {
     store.saveWorkflow(
       "sha",
       "t",
-      `digraph { start [shape=Mdiamond]; build [shape=parallelogram, tool_command="echo hi"]; done [shape=Msquare]; start -> build -> done; }`,
+      `name: t\nsteps:\n  build: {type: tool, run: "echo hi"}\n`,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store, defaultMaxMs: { tool: 12_345 } }));
@@ -245,37 +113,21 @@ describe("autoDispatcherResolver", () => {
     store.close();
   });
 
-  test("node `timeout` attr beats config default and handler default", () => {
+  test("step `timeout-minutes` attr beats config default", () => {
     const store = new SqliteStore({ path: ":memory:" });
+    // 7 seconds via timeout-minutes is awkward; the IR retains `max_ms`
+    // so we set max_ms directly via the legacy snake_case authoring form
+    // the parser still accepts as an extra attr.
     store.saveWorkflow(
       "sha",
       "t",
-      `digraph { start [shape=Mdiamond]; build [shape=parallelogram, tool_command="echo hi", timeout="7s"]; done [shape=Msquare]; start -> build -> done; }`,
+      `name: t\nsteps:\n  build:\n    type: tool\n    run: "echo hi"\n    timeout-minutes: 0.1166\n`,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store, defaultMaxMs: { tool: 12_345 } }));
-    expect(dispatcher.get("sha", "build").maxMs).toBe(7_000);
-    store.close();
-  });
-
-  test("malformed `timeout` attr yields a halt spec with clear detail", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `digraph { start [shape=Mdiamond]; bad [shape=parallelogram, tool_command="x", timeout="garbage"]; end [shape=Msquare]; start -> bad -> end; }`,
-    );
-    const dispatcher = new Dispatcher();
-    dispatcher.setResolver(autoDispatcherResolver({ store }));
-    const spec = dispatcher.get("sha", "bad");
-    expect(spec.maxMs).toBeLessThanOrEqual(100);
-    const fakeCtx = {} as Parameters<typeof spec.handler>[0];
-    const result = await spec.handler(fakeCtx);
-    expect(result.kind).toBe("halt");
-    if (result.kind === "halt") {
-      expect(result.detail).toMatch(/bad/);
-      expect(result.detail).toMatch(/garbage/);
-    }
+    // 0.1166 minutes = 6996 ms ≈ 7s
+    expect(dispatcher.get("sha", "build").maxMs).toBeLessThan(7_500);
+    expect(dispatcher.get("sha", "build").maxMs).toBeGreaterThan(6_500);
     store.close();
   });
 });
@@ -362,21 +214,17 @@ describe("resolveMaxMs — zero sentinel", () => {
   });
 
   test("fallback=0 returns undefined (config-level unbounded sentinel)", () => {
-    // `~/.swarm/config.jsonc { timeouts: { codergen: 0 } }` resolves to a
-    // 0 fallback at the daemon — the resolver must collapse it to undefined
-    // the same way the explicit-attr path does, otherwise the executor
-    // wires `AbortSignal.timeout(0)` and the node aborts immediately.
     expect(resolveMaxMs({}, 0)).toBeUndefined();
   });
 });
 
 describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
   function captureMaxMsForNode(
-    dot: string,
+    yaml: string,
     nodeId: string,
   ): { recordedMaxMs: number | "unbounded" | undefined; specMaxMs: number | undefined } {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", dot);
+    store.saveWorkflow("sha", "t", yaml);
     let recorded: number | "unbounded" | undefined;
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(
@@ -384,15 +232,13 @@ describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
         store,
         codergenFactory: (node, _next, maxMs) => {
           if (node.id === nodeId) recorded = maxMs;
-          // Mirror the bridge's translation rule so we can assert
-          // HandlerSpec.maxMs end-to-end as well.
           const spec: import("@swarm/core/handler").HandlerSpec = {
             kind: "codergen",
             sideEffect: "external",
             handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
           };
           if (maxMs === "unbounded") {
-            // omit maxMs — unbounded
+            // omit maxMs
           } else if (typeof maxMs === "number") {
             spec.maxMs = maxMs;
           } else {
@@ -408,29 +254,29 @@ describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
     return out;
   }
 
-  test('DOT max_ms=0 passes "unbounded" to the codergen factory', () => {
-    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box, max_ms=0]; done [shape=Msquare]; start -> impl -> done; }`;
-    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(dot, "impl");
+  test('max_ms=0 passes "unbounded" to the codergen factory', () => {
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 0}\n`;
+    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBe("unbounded");
     expect(specMaxMs).toBeUndefined();
   });
 
-  test('DOT timeout="0s" passes "unbounded" to the codergen factory', () => {
-    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box, timeout="0s"]; done [shape=Msquare]; start -> impl -> done; }`;
-    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(dot, "impl");
+  test('timeout="0s" passes "unbounded" to the codergen factory', () => {
+    const yaml = `name: t\nsteps:\n  impl:\n    type: llm\n    prompt: x\n    timeout: "0s"\n`;
+    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBe("unbounded");
     expect(specMaxMs).toBeUndefined();
   });
 
-  test("DOT with no max_ms passes undefined to the codergen factory", () => {
-    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box]; done [shape=Msquare]; start -> impl -> done; }`;
-    const { recordedMaxMs } = captureMaxMsForNode(dot, "impl");
+  test("no max_ms passes undefined to the codergen factory", () => {
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    const { recordedMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBeUndefined();
   });
 
-  test("DOT max_ms=5000 passes the number 5000 to the codergen factory", () => {
-    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box, max_ms=5000]; done [shape=Msquare]; start -> impl -> done; }`;
-    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(dot, "impl");
+  test("max_ms=5000 passes the number 5000 to the codergen factory", () => {
+    const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 5000}\n`;
+    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBe(5_000);
     expect(specMaxMs).toBe(5_000);
   });

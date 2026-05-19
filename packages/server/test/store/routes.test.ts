@@ -113,13 +113,11 @@ describe("POST /workflows — upload", () => {
     const res = await req("POST", "/workflows", {
       name: "bad",
       dotSource: `name: bad
-nodes:
-  start: {type: start}
-  impl: {type: llm, prompt: x, timeout: "garbage"}
-  done: {type: exit}
-edges:
-  - {from: start, to: impl}
-  - {from: impl, to: done}
+steps:
+  impl:
+    type: llm
+    prompt: x
+    timeout: "garbage"
 `,
     });
     expect(res.status).toBe(400);
@@ -151,13 +149,11 @@ edges:
     const res = await req("POST", "/workflows", {
       name: "bad",
       dotSource: `name: bad
-nodes:
-  start: {type: start}
-  a: {type: llm, prompt: x, max_ms: -1}
-  done: {type: exit}
-edges:
-  - {from: start, to: a}
-  - {from: a, to: done}
+steps:
+  a:
+    type: llm
+    prompt: x
+    max_ms: -1
 `,
     });
     expect(res.status).toBe(400);
