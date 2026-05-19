@@ -8,23 +8,20 @@ describe("HitlChoice — labels + POST shape", () => {
   useDom();
   afterEach(() => cleanup());
 
-  it("uses option.label when present, falls back to humanized key when label is empty", () => {
-    const options = [
-      { key: "small", label: "", to: "small_path" },
-      { key: "large", label: "Big!", to: "large_path" },
-      { key: "needs_info", label: "Need more info", to: "info_path" },
-    ];
-    const { container } = renderWithClient(<HitlChoice runId="run-1" options={options} />);
+  it("uses routeLabels override when present, falls back to humanized route name otherwise", () => {
+    const options = ["small", "large", "needs_info"];
+    const routeLabels = { large: "Big!", needs_info: "Need more info" };
+    const { container } = renderWithClient(<HitlChoice runId="run-1" options={options} routeLabels={routeLabels} />);
     const text = container.textContent ?? "";
-    // Empty label → humanized key ("small" → "Small")
+    // No override → humanized route name ("small" → "Small")
     expect(text).toContain("Small");
-    // Non-empty label → verbatim
+    // Override → verbatim
     expect(text).toContain("Big!");
     expect(text).toContain("Need more info");
   });
 
   it("POSTs { route, note } to /api/runs/:id/human on button click", async () => {
-    const options = [{ key: "approve", label: "Approve", to: "ship" }];
+    const options = ["approve"];
     const HUMAN_URL = "/api/runs/run-42/human";
     const { calls, restore } = installFetchMock({
       [HUMAN_URL]: () =>

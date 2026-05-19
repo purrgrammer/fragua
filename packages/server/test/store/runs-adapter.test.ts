@@ -359,10 +359,7 @@ describe("runStateToDetail — HITL projection", () => {
     expect(detail.runStatus).toBe("paused_human");
     expect(detail.hitlNodeId).toBe("review");
     expect(detail.hitlLabel).toBe("Review the draft");
-    expect(detail.hitlOptions).toEqual([
-      { key: "approve", label: "approve", to: "" },
-      { key: "revise", label: "revise", to: "" },
-    ]);
+    expect(detail.hitlOptions).toEqual(["approve", "revise"]);
   });
 
   test("paused_human with multiple paused events picks the latest one (re-yield after revise)", () => {
@@ -378,7 +375,7 @@ describe("runStateToDetail — HITL projection", () => {
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.hitlLabel).toBe("second iteration");
-    expect(detail.hitlOptions?.[0]?.key).toBe("X");
+    expect(detail.hitlOptions?.[0]).toBe("X");
   });
 
   test("non-paused statuses leave HITL fields undefined", () => {

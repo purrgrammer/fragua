@@ -142,7 +142,10 @@ export interface RunDetail {
   input?: string;
   hitlNodeId?: string;
   hitlLabel?: string;
-  hitlOptions?: Array<{ key: string; label: string; to: string }>;
+  /** Declared route names from the paused human node's `routes=` attr;
+   *  one button rendered per route. Field name retained from the
+   *  wait.human → human rename for back-compat across the web layer. */
+  hitlOptions?: string[];
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;

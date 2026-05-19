@@ -7,7 +7,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@swarm/store";
-import type { HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
+import type { NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
 
@@ -170,10 +170,7 @@ export function runStateToDetail(
         // web `humanizeRouteName` reformats `output_only` -> "Output
         // Only" for the button label.
         if (Array.isArray(p.routes)) {
-          const synthesised: HitlOption[] = (p.routes as unknown[])
-            .filter((r): r is string => typeof r === "string")
-            .map((r) => ({ key: r, label: r, to: "" }));
-          detail.hitlOptions = synthesised;
+          detail.hitlOptions = (p.routes as unknown[]).filter((r): r is string => typeof r === "string");
         }
         break;
       }

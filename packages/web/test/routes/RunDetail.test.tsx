@@ -612,10 +612,7 @@ describe("RunDetail", () => {
         outputTokens: 0,
         hitlNodeId: "gate",
         hitlLabel: "Approve?",
-        hitlOptions: [
-          { key: "a", label: "Approve", to: "next" },
-          { key: "r", label: "Reject", to: "halt" },
-        ],
+        hitlOptions: ["approve", "reject"],
       };
       const { client, mock } = prepare("run-hitl", detail);
       try {

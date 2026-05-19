@@ -135,23 +135,23 @@ describe("foldDetailFrame", () => {
   });
 
   describe("HITL — fact.run_paused_human / fact.run_resumed", () => {
-    const opts = [
-      { key: "A", label: "[A] Approve", to: "publish" },
-      { key: "R", label: "[R] Revise", to: "draft" },
-    ];
+    // Human-node payload per docs/proposals/llm-routing.md §D6:
+    // `{ nodeId, text, routes }`. Route names are plain strings; per-edge
+    // `label=` overrides are applied UI-side from the graph descriptor.
+    const routes = ["approve", "revise"];
 
     test("fact.run_paused_human populates structured fields and flips status", () => {
       const out = fold(
         EMPTY_DETAIL_OVERLAY,
         "fact.run_paused_human",
-        { nodeId: "review", label: "Approve?", options: opts },
+        { nodeId: "review", text: "Approve?", routes },
         12,
       );
       expect(out.status).toBe("paused");
       expect(out.runStatus).toBe("paused_human");
       expect(out.hitlNodeId).toBe("review");
       expect(out.hitlLabel).toBe("Approve?");
-      expect(out.hitlOptions).toEqual(opts);
+      expect(out.hitlOptions).toEqual(routes);
     });
 
     test("fact.run_paused_provider_error flips status without touching HITL fields", () => {
@@ -177,12 +177,7 @@ describe("foldDetailFrame", () => {
     });
 
     test("fact.run_resumed clears HITL fields and re-flips status to running", () => {
-      let s = fold(
-        EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_human",
-        { nodeId: "review", label: "Approve?", options: opts },
-        12,
-      );
+      let s = fold(EMPTY_DETAIL_OVERLAY, "fact.run_paused_human", { nodeId: "review", text: "Approve?", routes }, 12);
       s = fold(s, "fact.run_resumed", { fromStatus: "paused_human" }, 13);
       expect(s.status).toBe("running");
       expect(s.runStatus).toBe("running");
@@ -191,11 +186,11 @@ describe("foldDetailFrame", () => {
       expect(s.hitlOptions).toBeNull();
     });
 
-    test("malformed paused_human (missing options array) → options stays null", () => {
+    test("malformed paused_human (missing routes array) → hitlOptions stays null", () => {
       const out = fold(
         EMPTY_DETAIL_OVERLAY,
         "fact.run_paused_human",
-        { nodeId: "review", label: "x" /* options omitted */ },
+        { nodeId: "review", text: "x" /* routes omitted */ },
         7,
       );
       expect(out.runStatus).toBe("paused_human");
@@ -343,14 +338,16 @@ describe("mergeDetail", () => {
   });
 
   describe("HITL fields", () => {
-    const opts = [{ key: "A", label: "[A] Approve", to: "publish" }];
+    // Human-node payload §D6: routes is a plain string[]; per-edge
+    // label overrides are applied UI-side, not stored in this field.
+    const opts: string[] = ["approve"];
 
     test("paused_human overlay propagates HITL fields onto the snapshot", () => {
       const snap = snapshot({ status: "running", runStatus: "running" });
       const overlay = fold(
         EMPTY_DETAIL_OVERLAY,
         "fact.run_paused_human",
-        { nodeId: "review", label: "Approve?", options: opts },
+        { nodeId: "review", text: "Approve?", routes: opts },
         12,
       );
       const merged = mergeDetail(snap, overlay);

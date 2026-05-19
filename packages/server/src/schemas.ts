@@ -3,13 +3,6 @@
 
 import { type Static, Type } from "@sinclair/typebox";
 
-export const HitlOption = Type.Object({
-  key: Type.String(),
-  label: Type.String(),
-  to: Type.String(),
-});
-export type HitlOption = Static<typeof HitlOption>;
-
 /** Coarse UI status — one badge per category. The Inbox / fine-grained
  * filters use `runStatus` (the raw store status) instead. */
 const UiStatus = Type.Union([
@@ -112,8 +105,13 @@ export const RunDetail = Type.Object({
   title: Type.Optional(Type.String()),
   input: Type.Optional(Type.String()),
   hitlNodeId: Type.Optional(Type.String()),
+  /** Operator-facing question text from the paused human node's `text=`
+   *  attr (when `runStatus === 'paused_human'`). */
   hitlLabel: Type.Optional(Type.String()),
-  hitlOptions: Type.Optional(Type.Array(HitlOption)),
+  /** Declared route names from the paused human node's `routes=` attr;
+   *  one button rendered per route. Field name retained from the
+   *  wait.human → human rename to avoid churn across the web layer. */
+  hitlOptions: Type.Optional(Type.Array(Type.String())),
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),

@@ -1,10 +1,11 @@
 // HitlChoice — structured operator input for a paused human node.
 //
-// Renders the question label, one button per route, and an optional
-// freeform notes textarea. Notes are recorded in the intent.human_input
-// event payload for audit; they don't flow to downstream nodes via
-// routing. Button label uses the per-edge label when present; falls back
-// to a humanized form of the route key (titleCaseFromSnake).
+// Renders the question text, one button per declared route, and an
+// optional freeform notes textarea. The note rides inside the
+// intent.human_input payload for audit but does not influence routing.
+// Button labels derive from a humanized form of the route name; per-edge
+// label overrides (proposal §D6) layer in via the optional
+// `routeLabels` map when callers have them.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -13,24 +14,26 @@ import { humanizeRouteName } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { Button } from "./ui/button.tsx";
 
-export interface HitlOption {
-  key: string;
-  label: string;
-  to: string;
-}
-
 export interface HitlChoiceProps {
   runId: string;
+  /** Operator-facing question from the human node's `text=` attr.
+   *  Surfaced via `RunDetail.hitlLabel` (field name retained from the
+   *  wait.human → human rename for back-compat). */
   label?: string | null;
-  options: HitlOption[];
+  /** Declared route names from the node's `routes=` attr; one button each.
+   *  Surfaced via `RunDetail.hitlOptions`. */
+  options: string[];
+  /** Optional per-route button label override (from the outgoing edge's
+   *  `label=` attr). Keys are route names. */
+  routeLabels?: Record<string, string>;
 }
 
-export function HitlChoice({ runId, label, options }: HitlChoiceProps): JSX.Element | null {
+export function HitlChoice({ runId, label, options, routeLabels }: HitlChoiceProps): JSX.Element | null {
   const [note, setNote] = useState("");
   const qc = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: (selected: string) => submitHitlChoice(runId, selected, note.trim() || undefined),
+    mutationFn: (route: string) => submitHitlChoice(runId, route, note.trim() || undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queries.runs.all() });
     },
@@ -48,18 +51,21 @@ export function HitlChoice({ runId, label, options }: HitlChoiceProps): JSX.Elem
       </p>
 
       <div className="flex flex-wrap gap-2" data-testid="hitl-choice-options">
-        {options.map((opt) => (
-          <Button
-            key={opt.key}
-            variant="outline"
-            size="sm"
-            disabled={mutation.isPending}
-            onClick={() => mutation.mutate(opt.key)}
-            data-testid={`hitl-choice-${opt.key.toLowerCase()}`}
-          >
-            {opt.label.trim().length > 0 ? opt.label : humanizeRouteName(opt.key)}
-          </Button>
-        ))}
+        {options.map((route) => {
+          const override = routeLabels?.[route]?.trim();
+          return (
+            <Button
+              key={route}
+              variant="outline"
+              size="sm"
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate(route)}
+              data-testid={`hitl-choice-${route.toLowerCase()}`}
+            >
+              {override && override.length > 0 ? override : humanizeRouteName(route)}
+            </Button>
+          );
+        })}
       </div>
 
       <textarea
