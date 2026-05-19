@@ -8,7 +8,6 @@
 
 import type { BundledLanguage } from "shiki";
 import { FileTreeFile, FileTreeFolder } from "../components/ai-elements/file-tree.tsx";
-import type { ProjectTreeEntry } from "./api.ts";
 
 export interface TreeNode {
   name: string;
@@ -21,7 +20,7 @@ export interface TreeNode {
  *  shape `<FileTree>` consumes. Folders appear in the input only when
  *  they contain at least one file (the server includes every ancestor),
  *  so we don't need to invent empty directories here. */
-export function buildTree(entries: ProjectTreeEntry[]): TreeNode {
+export function buildTree(entries: ReadonlyArray<{ path: string; type: "file" | "dir" }>): TreeNode {
   const root: TreeNode = { name: "", path: "", type: "dir", children: [] };
   const dirByPath = new Map<string, TreeNode>();
   dirByPath.set("", root);

@@ -34,14 +34,13 @@ describe("FileViewer", () => {
     expect(within(container).getByTestId("file-viewer-empty")).toBeTruthy();
   });
 
-  test("text/markdown → markdown viewer with default Rendered mode", async () => {
+  test("text/markdown → raw text viewer", async () => {
     installFileFetch(enc.encode("# heading\n\nbody"), "text/markdown; charset=utf-8");
     const { container } = renderWithClient(<FileViewer locId="x" path="SKILL.md" />);
-    const md = await waitFor(() => within(container).getByTestId("file-viewer-markdown"));
-    expect(md).toBeTruthy();
-    // Default mode is rendered — the raw <pre> is hidden until the user toggles.
-    expect(within(container).queryByTestId("file-viewer-markdown-rendered")).toBeTruthy();
-    expect(within(container).queryByTestId("file-viewer-markdown-raw")).toBeNull();
+    const text = await waitFor(() => within(container).getByTestId("file-viewer-text"));
+    expect(text.textContent).toContain("# heading");
+    // No markdown-rendered pane — raw source only.
+    expect(within(container).queryByTestId("file-viewer-markdown")).toBeNull();
   });
 
   test("text/plain → monospace text viewer", async () => {
