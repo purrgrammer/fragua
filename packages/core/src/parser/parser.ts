@@ -411,6 +411,7 @@ const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied
  */
 const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["budget_policy", new Set(["warn", "stop", "pause"])],
+  ["outcome", new Set(["success", "fail"])],
 ]);
 
 function coerceScalar(key: string, raw: string | number | boolean): string | number | boolean | string[] | undefined {

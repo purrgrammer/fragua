@@ -112,6 +112,14 @@ export interface EdgeAttrs {
   weight?: number;
   fidelity?: FidelityMode;
   thread_id?: string;
+  /** Outcome-keyed edge — selected when the source node's last fact reports
+   * this outcome. Phase 1: parsed and validated, no runtime selection effect
+   * yet — see docs/proposals/llm-routing.md. */
+  outcome?: "success" | "fail";
+  /** Route-keyed edge — selected when the source node's codergen call exits
+   * via `route({name: …})`. Phase 1: parsed and validated, no runtime
+   * selection effect yet — see docs/proposals/llm-routing.md. */
+  route?: string;
   [extra: string]: AttrScalar | undefined;
 }
 

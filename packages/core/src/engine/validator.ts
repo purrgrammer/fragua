@@ -62,6 +62,8 @@ const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set([
   "fidelity",
   "thread_id",
   "loop_restart",
+  "outcome",
+  "route",
 ]);
 
 /** Whitelist of known graph attribute names. See KNOWN_NODE_ATTRS. */

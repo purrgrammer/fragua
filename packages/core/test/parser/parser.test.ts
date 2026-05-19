@@ -205,4 +205,23 @@ describe("parseDotSource", () => {
       /invalid value for budget_policy/i,
     );
   });
+
+  test("edge [outcome=success] round-trips to Edge.attrs.outcome === 'success'", () => {
+    const g = parseDotSource(`digraph { a -> b [outcome=success] }`);
+    expect(g.edges[0]!.attrs.outcome).toBe("success");
+  });
+
+  test("edge [outcome=fail] round-trips to Edge.attrs.outcome === 'fail'", () => {
+    const g = parseDotSource(`digraph { a -> b [outcome=fail] }`);
+    expect(g.edges[0]!.attrs.outcome).toBe("fail");
+  });
+
+  test("edge [route=foo] round-trips to Edge.attrs.route === 'foo'", () => {
+    const g = parseDotSource(`digraph { a -> b [route=foo] }`);
+    expect(g.edges[0]!.attrs.route).toBe("foo");
+  });
+
+  test("edge outcome rejects values outside {success, fail}", () => {
+    expect(() => parseDotSource(`digraph { a -> b [outcome=bogus] }`)).toThrow(/invalid value for outcome/i);
+  });
 });
