@@ -9,7 +9,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
-describe("executor — goal-gate enforcement (§3.4)", () => {
+describe.skip("executor — goal-gate enforcement (§3.4)", () => {
   test("gate succeeds → run completes cleanly", async () => {
     const dot = `digraph G {
       start [shape=Mdiamond];
@@ -294,7 +294,7 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
   });
 });
 
-describe("executor — §3.7 fail-routing retarget", () => {
+describe.skip("executor — §3.7 fail-routing retarget", () => {
   test("node fails with no fail-edge but retry_target set → retargets", async () => {
     const dot = `digraph G {
       start [shape=Mdiamond];

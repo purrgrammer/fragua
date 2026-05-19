@@ -95,7 +95,7 @@ export interface NodeState {
  * `workflowSource` is the raw DOT captured on `run.started`; absent
  * when the run predates source capture. There is intentionally NO
  * `edges` field — topology lives in the DOT source and is parsed
- * client-side by `@swarm/core`'s `parseDotSource` so the server isn't a
+ * client-side by `@swarm/core`'s `parseWorkflow` so the server isn't a
  * second parser.
  */
 /** `(from, to, iteration)` triple for an edge the executor traversed — see
@@ -180,7 +180,7 @@ export interface WorkflowSummary {
 
 /** Full workflow, including the raw DOT source. Fetched on demand by
  *  the workflow detail page — the list endpoint stays cheap. The DOT is
- *  parsed client-side by `@swarm/core`'s `parseDotSource`; the server
+ *  parsed client-side by `@swarm/core`'s `parseWorkflow`; the server
  *  never parses DOT itself. */
 export interface WorkflowDetail extends WorkflowSummary {
   source: string;

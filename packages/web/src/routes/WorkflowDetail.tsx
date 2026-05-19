@@ -5,7 +5,7 @@
 // uncropped while the operator inspects details.
 // No live run is involved — this is the "what does this workflow do?"
 // answer before you press launch. Topology is parsed client-side via
-// `@swarm/core`'s `parseDotSource`; on parse failure the server's raw
+// `@swarm/core`'s `parseWorkflow`; on parse failure the server's raw
 // DOT is still rendered so operators can debug the source.
 //
 // Route params / data:

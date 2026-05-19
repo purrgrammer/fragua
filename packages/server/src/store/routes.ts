@@ -4,7 +4,7 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
+import { InvalidDurationError, parseWorkflow, parseDurationMs } from "@swarm/core";
 import {
   FEED_EVENT_KINDS,
   type IEventStore,
@@ -91,9 +91,9 @@ const DEFAULT_SSE_BATCH_SIZE = 500;
 function findInvalidTimeoutAttr(
   dotSource: string,
 ): { nodeId: string; attr: "timeout" | "max_ms"; value: unknown; detail: string } | null {
-  let graph: ReturnType<typeof parseDotSource>;
+  let graph: ReturnType<typeof parseWorkflow>;
   try {
-    graph = parseDotSource(dotSource);
+    graph = parseWorkflow(dotSource);
   } catch {
     return null;
   }

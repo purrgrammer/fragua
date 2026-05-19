@@ -66,6 +66,7 @@
       "dependencies": {
         "@sinclair/typebox": "0.34.41",
         "@swarm/types": "workspace:*",
+        "yaml": "2.7.0",
       },
       "devDependencies": {
         "@swarm/store": "workspace:*",

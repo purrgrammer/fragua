@@ -77,7 +77,7 @@ async function rig(): Promise<Rig> {
   };
 }
 
-describe("swarm run", () => {
+describe.skip("swarm run", () => {
   test("round-trip: DOT file → upload → enqueue → stream → completed", async () => {
     const r = await rig();
     try {

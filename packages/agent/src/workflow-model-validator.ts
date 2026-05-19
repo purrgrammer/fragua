@@ -21,7 +21,7 @@
 // conditional/parallel) don't LLM-dispatch.
 
 import { join } from "node:path";
-import { parseDotSource, prepareGraph } from "@swarm/core";
+import { parseWorkflow, prepareGraph } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
 import type { ModelRegistry } from "./credentials/index.ts";
 import { AuthStorage, findByBareId, getSwarmHome, ModelRegistry as Registry } from "./credentials/index.ts";
@@ -56,9 +56,9 @@ export function validateWorkflowModels(
   dotSource: string,
   registry: ModelRegistry = getDefaultRegistry(),
 ): WorkflowModelValidationResult {
-  let graph: ReturnType<typeof parseDotSource>;
+  let graph: ReturnType<typeof parseWorkflow>;
   try {
-    graph = parseDotSource(dotSource);
+    graph = parseWorkflow(dotSource);
   } catch {
     // If the DOT itself can't be parsed, let the downstream parse-time
     // error surface elsewhere — don't fake model offenders for it.

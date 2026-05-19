@@ -14,7 +14,7 @@
 //
 // Data path notes:
 //   - Topology is ALWAYS parsed from DOT via `@swarm/core`'s
-//     `parseDotSource` — the same parser the runtime uses. One source
+//     `parseWorkflow` — the same parser the runtime uses. One source
 //     of truth, zero risk of drift.
 //   - There is NO `detail.edges` field on the server — topology lives
 //     in the DOT source and is parsed client-side. Reject any PR that

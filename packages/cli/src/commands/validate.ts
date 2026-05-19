@@ -4,7 +4,7 @@
 
 import { readFile } from "node:fs/promises";
 import { validateWorkflowModels } from "@swarm/agent";
-import { parseDotSource, validate } from "@swarm/core";
+import { parseWorkflow, validate } from "@swarm/core";
 import chalk from "chalk";
 import { resolveWorkflow } from "../workflow-path.ts";
 
@@ -20,7 +20,7 @@ export async function validateCommand(workflow: string): Promise<number> {
     return 1;
   }
   const source = await readFile(resolved.dotPath, "utf8");
-  const graph = parseDotSource(source);
+  const graph = parseWorkflow(source);
   const diags = validate(graph);
   const modelCheck = validateWorkflowModels(source);
 

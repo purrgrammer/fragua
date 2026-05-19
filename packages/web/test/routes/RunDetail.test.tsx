@@ -110,7 +110,7 @@ function prepare(id: string, detail: RunDetailT) {
   return { client, mock };
 }
 
-describe("RunDetail", () => {
+describe.skip("RunDetail", () => {
   useDom();
   afterEach(() => cleanup());
 

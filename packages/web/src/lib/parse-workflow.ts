@@ -1,6 +1,6 @@
 // Parse + prepare a workflow's DOT source for client-side rendering.
 //
-// `parseDotSource` alone returns the raw graph; the §8 model_stylesheet
+// `parseWorkflow` alone returns the raw graph; the §8 model_stylesheet
 // cascade lives in a separate `prepareGraph` pass that the daemon runs
 // before dispatch. Without this helper, web callers see `node.attrs`
 // missing every llm_model/llm_provider/reasoning_effort that came from a
@@ -10,10 +10,10 @@
 // Stylesheet parse errors are non-fatal here — the daemon still surfaces
 // them as the source of truth via E015 / run halts. We only render.
 
-import { type Graph, parseDotSource, prepareGraph } from "@swarm/core";
+import { type Graph, parseWorkflow, prepareGraph } from "@swarm/core";
 
 export function parseAndPrepare(source: string): Graph {
-  const graph = parseDotSource(source);
+  const graph = parseWorkflow(source);
   const { errors } = prepareGraph(graph);
   if (errors.length > 0) {
     console.warn(
