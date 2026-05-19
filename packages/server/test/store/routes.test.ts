@@ -9,18 +9,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SqliteStore, sha256Hex } from "@swarm/store";
 import { FEED_EVENT_KINDS } from "@swarm/types";
-import { lowerIfDot } from "../../../core/test/helpers/dot-to-yaml.ts";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
-
-// Lower inline DOT fixtures to YAML on the way into the store across
-// the cutover. Tests author DOT; production stores YAML.
-{
-  const _origSave = SqliteStore.prototype.saveWorkflow;
-  SqliteStore.prototype.saveWorkflow = function (sha: string, name: string, source: string) {
-    return _origSave.call(this, sha, name, lowerIfDot(source));
-  };
-}
 
 let store: SqliteStore;
 let server: { fetch: (req: Request) => Response | Promise<Response> };
@@ -64,7 +54,7 @@ function createTestWorkflowReader(): TestWorkflowReader {
 
 beforeEach(() => {
   store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf", "t", "digraph {}");
+  store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   workflowReader = createTestWorkflowReader();
   server = createRoutes({ store, workflowReader });
 });
@@ -83,10 +73,10 @@ async function req(method: string, path: string, body?: unknown): Promise<Respon
 }
 
 describe("POST /workflows — upload", () => {
-  test("accepts DOT source, returns sha, persists via saveWorkflow", async () => {
+  test("accepts YAML source, returns sha, persists via saveWorkflow", async () => {
     const res = await req("POST", "/workflows", {
       name: "hello",
-      dotSource: "digraph Hello { a -> b }",
+      source: "name: hello\nsteps:\n  work: {type: llm, prompt: x}\n",
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { sha: string; name: string };
@@ -98,21 +88,21 @@ describe("POST /workflows — upload", () => {
   test("rejects missing fields", async () => {
     const res1 = await req("POST", "/workflows", { name: "x" });
     expect(res1.status).toBe(400);
-    const res2 = await req("POST", "/workflows", { dotSource: "digraph{}" });
+    const res2 = await req("POST", "/workflows", { source: "name: t\nsteps:\n  work: {type: llm, prompt: x}\n" });
     expect(res2.status).toBe(400);
   });
 
   test("idempotent on same source — same sha, no duplicate row", async () => {
-    const src = "digraph X { a -> b }";
-    const a = (await (await req("POST", "/workflows", { name: "x", dotSource: src })).json()) as { sha: string };
-    const b = (await (await req("POST", "/workflows", { name: "x", dotSource: src })).json()) as { sha: string };
+    const src = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const a = (await (await req("POST", "/workflows", { name: "x", source: src })).json()) as { sha: string };
+    const b = (await (await req("POST", "/workflows", { name: "x", source: src })).json()) as { sha: string };
     expect(a.sha).toBe(b.sha);
   });
 
   test("rejects malformed timeout attr with 400 + invalid_timeout_attr code", async () => {
     const res = await req("POST", "/workflows", {
       name: "bad",
-      dotSource: `name: bad
+      source: `name: bad
 steps:
   impl:
     type: llm
@@ -132,7 +122,7 @@ steps:
   test("accepts max_ms=0 as the unbounded sentinel for codergen", async () => {
     const res = await req("POST", "/workflows", {
       name: "ok",
-      dotSource: `name: ok
+      source: `name: ok
 nodes:
   start: {type: start}
   a: {type: llm, prompt: x, max_ms: 0}
@@ -148,7 +138,7 @@ edges:
   test("rejects negative max_ms", async () => {
     const res = await req("POST", "/workflows", {
       name: "bad",
-      dotSource: `name: bad
+      source: `name: bad
 steps:
   a:
     type: llm
@@ -165,7 +155,7 @@ steps:
     for (const t of ["0", "0s", "0ms"]) {
       const res = await req("POST", "/workflows", {
         name: "ok",
-        dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, timeout="${t}"]; done [shape=Msquare]; start -> a -> done; }`,
+        source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, timeout: "${t}"}\n`,
       });
       expect(res.status).toBe(200);
     }
@@ -175,7 +165,7 @@ steps:
     for (const t of ["500ms", "30s", "5m", "2h"]) {
       const res = await req("POST", "/workflows", {
         name: "ok",
-        dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, timeout="${t}"]; done [shape=Msquare]; start -> a -> done; }`,
+        source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, timeout: "${t}"}\n`,
       });
       expect(res.status).toBe(200);
     }
@@ -184,7 +174,7 @@ steps:
   test("accepts valid numeric max_ms", async () => {
     const res = await req("POST", "/workflows", {
       name: "ok",
-      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=1500]; done [shape=Msquare]; start -> a -> done; }`,
+      source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, max_ms: 1500}\n`,
     });
     expect(res.status).toBe(200);
   });
@@ -196,8 +186,8 @@ steps:
     const localStore = new SqliteStore({ path: ":memory:" });
     const local = createRoutes({
       store: localStore,
-      validateWorkflowModels: (dotSource) => {
-        if (dotSource.includes("claude-sonnet-4-6")) {
+      validateWorkflowModels: (yamlSource) => {
+        if (yamlSource.includes("claude-sonnet-4-6")) {
           return {
             ok: false as const,
             offenders: [
@@ -220,7 +210,7 @@ steps:
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: "bad",
-          dotSource: `digraph { impl [shape=box, model="claude-sonnet-4-6", provider="openrouter"]; }`,
+          source: `name: bad\nsteps:\n  impl: {type: llm, prompt: x, model: "claude-sonnet-4-6", provider: "openrouter"}\n`,
         }),
       }),
     );
@@ -239,7 +229,7 @@ steps:
       new Request("http://test/workflows", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "good", dotSource: "digraph { a -> b }" }),
+        body: JSON.stringify({ name: "good", source: "name: good\nsteps:\n  work: {type: llm, prompt: x}\n" }),
       }),
     );
     expect(goodRes.status).toBe(200);
@@ -293,8 +283,8 @@ describe("POST /runs — enqueue", () => {
     // earlier sha-pinned flow that mismatched the listing's short sha
     // against the route's full sha and always 400'd.
     const projectCwd = "/projects/alpha";
-    const dotSource = "digraph WebComposer { a -> b }";
-    workflowReader.set("change", dotSource, { cwd: projectCwd });
+    const yamlSource = "name: change\nsteps:\n  work: {type: llm, prompt: x}\n";
+    workflowReader.set("change", yamlSource, { cwd: projectCwd });
 
     const res = await req("POST", "/runs", {
       cwd: projectCwd,
@@ -306,7 +296,7 @@ describe("POST /runs — enqueue", () => {
     const body = (await res.json()) as { runId: string };
     const state = store.getState(body.runId);
     expect(state).not.toBeNull();
-    expect(state!.workflowSha).toBe(sha256Hex(dotSource));
+    expect(state!.workflowSha).toBe(sha256Hex(yamlSource));
     expect(state!.workflowName).toBe("change");
     expect(state!.cwd).toBe(projectCwd);
     // Server registered the resolved workflow so subsequent runs
@@ -315,9 +305,9 @@ describe("POST /runs — enqueue", () => {
   });
 
   test("simple flow: workflowScope:'global' pins lookup to the global source", async () => {
-    const dotSource = "digraph G { x -> y }";
-    workflowReader.set("change", "digraph LocalOnly { x -> y }", { cwd: "/projects/alpha" });
-    workflowReader.set("change", dotSource); // global
+    const yamlSource = "name: change-global\nsteps:\n  work: {type: llm, prompt: g}\n";
+    workflowReader.set("change", "name: change-local\nsteps:\n  work: {type: llm, prompt: l}\n", { cwd: "/projects/alpha" });
+    workflowReader.set("change", yamlSource); // global
 
     const res = await req("POST", "/runs", {
       cwd: "/projects/alpha",
@@ -327,7 +317,7 @@ describe("POST /runs — enqueue", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { runId: string };
     const state = store.getState(body.runId);
-    expect(state!.workflowSha).toBe(sha256Hex(dotSource));
+    expect(state!.workflowSha).toBe(sha256Hex(yamlSource));
     expect(state!.workflowScope).toBe("global");
   });
 
@@ -438,7 +428,7 @@ describe("POST /runs — enqueue", () => {
   test("preflightProviders returning ok:false rejects with code=provider_unavailable", async () => {
     const { createRoutes: fresh } = await import("../../src/store/routes.ts");
     const s = new SqliteStore({ path: ":memory:" });
-    s.saveWorkflow("wf", "t", "digraph {}");
+    s.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     const app = fresh({
       store: s,
       preflightProviders: () => ({ ok: false, detail: "no keys set" }),
@@ -460,7 +450,7 @@ describe("POST /runs — enqueue", () => {
   test("preflightProviders returning ok:true allows the enqueue through", async () => {
     const { createRoutes: fresh } = await import("../../src/store/routes.ts");
     const s = new SqliteStore({ path: ":memory:" });
-    s.saveWorkflow("wf", "t", "digraph {}");
+    s.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     const app = fresh({
       store: s,
       preflightProviders: () => ({ ok: true }),
@@ -1165,7 +1155,7 @@ describe("global event feed (cross-run)", () => {
     let nowVal = 1_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "digraph {}");
+      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
       // Window 1 @ ts=1_000_000
       enqueueWithStart(tStore, "r1", "wf");
       // Window 2 @ ts=1_000_500 (500 ms later)
@@ -1201,7 +1191,7 @@ describe("global event feed (cross-run)", () => {
     let nowVal = 2_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "digraph {}");
+      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
       // ts windows: 2_000_000, 2_000_100, 2_000_200
       enqueueWithStart(tStore, "r1", "wf");
       nowVal = 2_000_100;
@@ -1243,7 +1233,7 @@ describe("global event feed (cross-run)", () => {
     const nowVal = 5_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "digraph {}");
+      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
       // Seed run "z" first, then take its last delivered event as the cursor.
       enqueueWithStart(tStore, "z", "wf");
       const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
@@ -1278,7 +1268,7 @@ describe("global event feed (cross-run)", () => {
     const nowVal = 12_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "digraph {}");
+      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
       const runIds = ["r01", "r02", "r03", "r04", "r05", "r06", "r07", "r08"];
       for (const rid of runIds) enqueueWithStart(tStore, rid, "wf");
 

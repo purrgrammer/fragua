@@ -117,9 +117,9 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   }
   const { dotPath, name, scope } = resolved;
 
-  let dotSource: string;
+  let source: string;
   try {
-    dotSource = await readFile(dotPath, "utf8");
+    source = await readFile(dotPath, "utf8");
   } catch (err) {
     console.error(chalk.red(`run: cannot read ${dotPath}: ${(err as Error).message}`));
     return 1;
@@ -128,7 +128,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   // 1. Upload workflow
   const uploadRes = await postJson(`${baseUrl}/workflows`, {
     name,
-    dotSource,
+    source,
   });
   if (!uploadRes.ok) {
     return fail(`upload failed (${uploadRes.status})`, uploadRes);

@@ -24,7 +24,7 @@ import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runS
  * non-empty array of node-level offenders when one or more declared
  * `(provider, model)` pairs don't resolve in the provider registry. */
 export type WorkflowModelValidator = (
-  dotSource: string,
+  source: string,
 ) =>
   | { ok: true }
   | { ok: false; offenders: Array<{ nodeId: string; provider?: string; model: string; reason: string }> };
@@ -89,11 +89,11 @@ const DEFAULT_SSE_BATCH_SIZE = 500;
  * nothing is set.
  */
 function findInvalidTimeoutAttr(
-  dotSource: string,
+  source: string,
 ): { nodeId: string; attr: "timeout" | "max_ms"; value: unknown; detail: string } | null {
   let graph: ReturnType<typeof parseWorkflow>;
   try {
-    graph = parseWorkflow(dotSource);
+    graph = parseWorkflow(source);
   } catch {
     return null;
   }
@@ -159,18 +159,18 @@ export function createRoutes(deps: ServerDeps): Hono {
   // ─── Workflow upload ────────────────────────────────────────
 
   app.post("/workflows", async (c) => {
-    const body = await readJson<{ name?: string; dotSource?: string }>(c);
+    const body = await readJson<{ name?: string; source?: string }>(c);
     if (
       !body ||
       typeof body.name !== "string" ||
       body.name.length === 0 ||
-      typeof body.dotSource !== "string" ||
-      body.dotSource.length === 0
+      typeof body.source !== "string" ||
+      body.source.length === 0
     ) {
-      return c.json({ error: "name and dotSource required" }, 400);
+      return c.json({ error: "name and source required" }, 400);
     }
     if (deps.validateWorkflowModels != null) {
-      const check = deps.validateWorkflowModels(body.dotSource);
+      const check = deps.validateWorkflowModels(body.source);
       if (!check.ok) {
         return c.json(
           {
@@ -182,7 +182,7 @@ export function createRoutes(deps: ServerDeps): Hono {
         );
       }
     }
-    const timeoutOffender = findInvalidTimeoutAttr(body.dotSource);
+    const timeoutOffender = findInvalidTimeoutAttr(body.source);
     if (timeoutOffender != null) {
       return c.json(
         {
@@ -193,8 +193,8 @@ export function createRoutes(deps: ServerDeps): Hono {
         400,
       );
     }
-    const sha = sha256Hex(body.dotSource);
-    deps.store.saveWorkflow(sha, body.name, body.dotSource);
+    const sha = sha256Hex(body.source);
+    deps.store.saveWorkflow(sha, body.name, body.source);
     return c.json({ sha, name: body.name });
   });
 
