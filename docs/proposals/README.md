@@ -33,8 +33,9 @@ qualification (drift-lint enforces this). Partially-landed work stays
 
 | Proposal | Maturity | Notes |
 |---|---|---|
-| [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
-| [Worktree snapshots at node boundaries](./worktree-snapshots.md) | designed | capture worktree state as a git tree under `refs/swarm/snapshots/<runId>/<eventIdx>` after every `fact.node_completed` and on HITL pause. Three payoffs — diff-on-HITL, race-free UI files/diff view, prerequisite for run forkability. No branches, no tags, no synthetic refs in the user's namespace. Composes with [parallel sub-runs](./parallel.md) and supersedes the snapshot subset of [file-server](./file-server.md) |
+| [Worktrees](./worktrees.md) | designed | per-run worktree isolation + tree snapshots at HITL/terminal boundaries + operator-triggered post-run primitives (branch / commit / merge / discard) on two non-porcelain ref namespaces (`refs/swarm/snapshots/<runId>/<eventIdx>` + `refs/swarm/heads/<runId>`); terminal runs with non-empty diff vs base land in an operator **inbox**; clean runs disappear quietly. Replaces [worktree-design.md](./worktree-design.md) and [worktree-snapshots.md](./worktree-snapshots.md) |
+| [Worktree design](./worktree-design.md) | sketch | superseded by [worktrees.md](./worktrees.md); kept for context until that lands |
+| [Worktree snapshots at node boundaries](./worktree-snapshots.md) | designed | superseded by [worktrees.md](./worktrees.md); kept for context until that lands |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
 | [Analytics — follow-up roadmap](./analytics.md) | sketch | menu of charts cut from v1 |
 | [Per-workflow analytics](./per-workflow-analytics.md) | sketch | workflow filter on `/analytics`; identity = `(scope, name)` not sha; metric decomposition (input/output/cache-read/cache-write) |
