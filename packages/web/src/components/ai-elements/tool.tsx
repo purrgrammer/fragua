@@ -17,6 +17,7 @@ import {
   OctagonXIcon,
   PencilIcon,
   SearchIcon,
+  SignpostIcon,
   TerminalIcon,
   WrenchIcon,
   XCircleIcon,
@@ -158,6 +159,7 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   agent: { icon: BotIcon, label: "Agent" },
   skill: { icon: BookOpenIcon, label: "Skill" },
   abort: { icon: OctagonXIcon, label: "Abort" },
+  route: { icon: SignpostIcon, label: "Route" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare
