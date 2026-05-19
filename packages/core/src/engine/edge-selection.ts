@@ -13,7 +13,7 @@ import type { Edge, Graph, Node } from "../types/graph.ts";
 import type { Outcome } from "../types/outcome.ts";
 import { type ConditionEnv, evaluateConditionSource, isEmptyCondition } from "./condition.ts";
 
-export type EdgeSelectionRule = "condition" | "preferred_label" | "suggested_next_ids" | "weight" | "lexical";
+export type EdgeSelectionRule = "route" | "condition" | "preferred_label" | "suggested_next_ids" | "weight" | "lexical";
 
 export interface EdgeSelection {
   edge: Edge;
@@ -61,22 +61,55 @@ export function selectEdge(input: EdgeSelectionInput): EdgeSelection | undefined
   const edges = outgoingEdges(input.graph, input.source.id);
   if (edges.length === 0) return undefined;
 
+  // Step 0 (route): when the source is a routing node (declares
+  // `routes=`) and the outcome carries a chosen route, find the edge
+  // keyed `route=<name>`. Routing nodes are an exclusive surface —
+  // unmatched route is a structural failure, not a fall-through to
+  // outcome / condition edges. See docs/proposals/llm-routing.md D10.
+  const sourceRoutes = input.source.attrs.routes;
+  if (
+    Array.isArray(sourceRoutes) &&
+    sourceRoutes.length > 0 &&
+    typeof input.outcome.route === "string" &&
+    input.outcome.route.length > 0
+  ) {
+    const chosen = input.outcome.route;
+    const match = edges.find((e) => e.attrs.route === chosen);
+    if (match) return { edge: match, rule: "route", matched: chosen };
+    return undefined;
+  }
+
   const env: ConditionEnv = {
     outcome: input.outcome.status,
     context: { ...input.context } as ConditionEnv["context"],
   };
 
-  // Step 1: condition matching — only consider edges with a non-empty condition
-  const conditional: { edge: Edge; matched: string }[] = [];
+  // Step 1: condition matching. Two surfaces pool together:
+  //   (a) `condition="outcome=X && …"` DSL edges — the legacy authoring
+  //       form; `matched` carries the literal condition string.
+  //   (b) `outcome=<success|fail>` attribute edges (Phase 1 of
+  //       llm-routing.md) — implicit condition match on outcome status;
+  //       `matched` left undefined since there is no source expression.
+  // Both share the same `pickBestByWeightThenLexical` tiebreak so a
+  // mixed graph still routes deterministically.
+  const conditional: { edge: Edge; matched: string | undefined }[] = [];
   for (const e of edges) {
     const cond = e.attrs.condition;
-    if (isEmptyCondition(cond)) continue;
-    if (evaluateConditionSource(cond!, env)) conditional.push({ edge: e, matched: cond! });
+    if (!isEmptyCondition(cond)) {
+      if (evaluateConditionSource(cond!, env)) conditional.push({ edge: e, matched: cond! });
+      continue;
+    }
+    const outcomeAttr = e.attrs.outcome;
+    if (typeof outcomeAttr === "string" && outcomeAttr === input.outcome.status) {
+      conditional.push({ edge: e, matched: undefined });
+    }
   }
   if (conditional.length > 0) {
     const best = pickBestByWeightThenLexical(conditional.map((c) => c.edge))!;
-    const matched = conditional.find((c) => c.edge === best)!.matched;
-    return { edge: best, rule: "condition", matched };
+    const matchedEntry = conditional.find((c) => c.edge === best)!;
+    const selection: EdgeSelection = { edge: best, rule: "condition" };
+    if (matchedEntry.matched !== undefined) selection.matched = matchedEntry.matched;
+    return selection;
   }
 
   // `outcome=fail` must NOT silently fall through to unconditional success
@@ -87,8 +120,11 @@ export function selectEdge(input: EdgeSelectionInput): EdgeSelection | undefined
   // `condition="outcome=fail"` edge; absence of one is the halt signal.
   if (input.outcome.status === "fail") return undefined;
 
-  // Candidate pool for remaining steps: unconditional edges only
-  const unconditional = edges.filter((e) => isEmptyCondition(e.attrs.condition));
+  // Candidate pool for remaining steps: edges with neither a condition
+  // nor an `outcome=` attribute. Outcome-attr edges that didn't match
+  // the status are exclusive (like condition edges) — they don't fall
+  // through to the weight/lexical tiebreak.
+  const unconditional = edges.filter((e) => isEmptyCondition(e.attrs.condition) && e.attrs.outcome === undefined);
 
   // Step 2: preferred_label match (first match wins in graph source order)
   if (input.outcome.preferred_label) {

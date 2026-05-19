@@ -59,6 +59,11 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       };
       if (result.modelName != null) payload.modelName = result.modelName;
       if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
+      // Route field lands on the fact only when a routing-node codergen
+      // committed to a branch via the synthesised `route` tool
+      // (docs/proposals/llm-routing.md D8). Non-routing nodes leave
+      // `result.route` undefined; the field stays absent from the JSON.
+      if (result.route != null && result.route.length > 0) payload.route = result.route;
       // Input/output/cache split — emit only when non-zero so legacy
       // handlers without the split keep their payload size unchanged
       // (§I7 keeps events ≤4KB).

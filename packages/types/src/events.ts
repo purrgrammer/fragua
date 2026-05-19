@@ -227,7 +227,22 @@ export type EventWriter = "daemon" | "web";
  * failures, the workflow author's `<abort>` sentinel, the opt-in
  * `budget_policy="stop"` path, and the watchdog-cap exhaustion that
  * paused-class `timeout_retry` escalates to. */
-export type HaltReason = "budget" | "schema_drift" | "error" | "aborted_exit" | "occ_exhausted" | "timeout_exhausted";
+export type HaltReason =
+  | "budget"
+  | "schema_drift"
+  | "error"
+  | "aborted_exit"
+  | "occ_exhausted"
+  | "timeout_exhausted"
+  /** Routing node's codergen turn ended without an isolated call to the
+   * synthesised `route` tool. See docs/proposals/llm-routing.md D3. */
+  | "route_not_picked"
+  /** Routing node's `route` tool call shared an assistant response with
+   * other tool calls — side-effect isolation violation. */
+  | "route_call_not_isolated"
+  /** Handler reported a route/outcome and no outgoing edge matched.
+   * Validator should prevent this statically; runtime backstop. */
+  | "edge_no_match";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
@@ -372,6 +387,10 @@ export type FactEvent =
          * UI distinguish "completed OK" from "completed with outcome=fail"
          * without walking `edge.selected` / `fact.run_halted`. */
         outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+        /** Present iff the source node declared `routes=` and the codergen
+         * agent exited via the synthesised `route` tool. The chosen route
+         * name; the engine's Step-0 edge selector keys on this. */
+        route?: string;
       };
     }
   | {

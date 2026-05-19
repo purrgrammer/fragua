@@ -1,10 +1,11 @@
 // PiCodergenBackend — CodergenBackend backed by pi-agent-core + pi-ai.
 
 import { createHash } from "node:crypto";
-import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
+import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
-import { fail, failProvider, ok } from "@swarm/core";
+import { fail, failHalt, failProvider, ok } from "@swarm/core";
 import { makeHttpClient } from "@swarm/core/handler";
 import type {
   AgentDefinition,
@@ -363,7 +364,26 @@ export class PiCodergenBackend implements CodergenBackend {
         : () => {},
       ...(summariser ? { summarise: (i) => summariser.summarise(i) } : {}),
     };
-    const tools = finalTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
+    const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
+
+    // Route-tool synthesis (docs/proposals/llm-routing.md D2). When the
+    // node declares `routes=`, append an ephemeral, per-call `route`
+    // tool whose `name` parameter is enum-constrained to the declared
+    // routes. Provider rejects off-list values at the tool-call layer,
+    // so an unknown route never reaches the handler. The tool sets
+    // `terminate: true` so pi-agent-core stops the loop after the
+    // batch — same loop-terminator pattern as the `abort` tool. The
+    // chosen route is recovered post-loop by `findRouteToolCall`
+    // scanning the transcript; the synthesised tool itself is purely a
+    // loop-end signal. Force-included regardless of
+    // `allowed_tools`/`denied_tools` because the route surface is
+    // structural for a routing node — excluding it would leave the
+    // model with no way to exit and the run would land
+    // `route_not_picked`.
+    const nodeRoutes = input.node.attrs.routes as string[] | undefined;
+    if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
+      tools.push(buildRouteTool(nodeRoutes));
+    }
 
     const declared = (input.node.attrs.context_files as string[] | undefined) ?? [];
     const contextFiles = applyDefaultContextFiles(declared);
@@ -790,6 +810,20 @@ export class PiCodergenBackend implements CodergenBackend {
     const aborted = findAbortToolCall(agent.state.messages);
     if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
+    // Route-tool resolution (docs/proposals/llm-routing.md D3). Only
+    // considered when the node opted into routing via `routes=`. Abort
+    // wins above — a self-abort cancels the route concern entirely.
+    if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
+      const routeCall = findRouteToolCall(agent.state.messages);
+      if (routeCall == null) {
+        return failHalt("route_not_picked", "agent ended turn without calling route()");
+      }
+      if (!routeCall.isolated) {
+        return failHalt("route_call_not_isolated", "route() shared an assistant response with other tool calls");
+      }
+      return ok({ notes, route: routeCall.route });
+    }
+
     return ok({ notes });
   }
 
@@ -963,6 +997,86 @@ export function findAbortToolCall(
     }
   }
   return null;
+}
+
+/**
+ * Scan the transcript for a call to the synthesised `route` tool
+ * (docs/proposals/llm-routing.md D2/D3). The tool only exists for the
+ * lifetime of one codergen call — see `buildRouteTool` — and its sole
+ * effect is to terminate the agent loop. The chosen route is recovered
+ * here from the assistant's tool-call block.
+ *
+ * Returns `{ route, isolated }`:
+ *  - `route`: the `name` argument from the first `route` tool-call block.
+ *  - `isolated`: false when the assistant message containing the `route`
+ *    call also contains any other `toolCall` block (any tool name). The
+ *    isolation rule (D3) prevents side effects from sharing a response
+ *    with the route exit — the model must commit to the route on a
+ *    response of its own.
+ *
+ * First `route` call wins (the loop terminates on the tool's
+ * `terminate: true`, so in practice there's only one). Returns `null`
+ * when no `route` call is present in the transcript.
+ *
+ * Exported so tests can rely on the exact contract without
+ * reimplementing the scan.
+ */
+export function findRouteToolCall(
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
+): { route: string; isolated: boolean } | null {
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const blocks = message.content as Array<{ type: string; name?: string; arguments?: Record<string, unknown> }>;
+    let routeBlock: { name?: string; arguments?: Record<string, unknown> } | undefined;
+    let otherToolCalls = 0;
+    for (const block of blocks) {
+      if (block.type !== "toolCall") continue;
+      if (block.name === "route" && routeBlock === undefined) {
+        routeBlock = block;
+        continue;
+      }
+      otherToolCalls += 1;
+    }
+    if (routeBlock === undefined) continue;
+    const raw = typeof routeBlock.arguments?.["name"] === "string" ? routeBlock.arguments["name"] : "";
+    const route = raw.trim();
+    return { route, isolated: otherToolCalls === 0 };
+  }
+  return null;
+}
+
+/**
+ * Build the ephemeral `route` tool for one routing-node invocation.
+ * Inline (not a static module): the enum is materialised from the
+ * node's `routes=` attribute on every call. `terminate: true` ends
+ * the agent loop after the call batch — same loop-stop mechanism as
+ * the `abort` tool. The chosen route is recovered from the transcript
+ * by `findRouteToolCall`; the tool's execute() output exists only to
+ * satisfy pi-agent-core's tool-result contract.
+ */
+function buildRouteTool(routes: readonly string[]): AgentTool {
+  const nameSchema = Type.Union(routes.map((r) => Type.Literal(r)));
+  const parameters = Type.Object(
+    {
+      name: nameSchema,
+    },
+    { additionalProperties: false },
+  );
+  return {
+    name: "route",
+    label: "route",
+    description:
+      "Exit this node with the chosen route. Call exactly once when decided. Call this alone in the response; do not pair it with other tool calls.",
+    parameters,
+    async execute(_toolCallId, params) {
+      const chosen = (params as { name: string }).name;
+      return {
+        content: [{ type: "text", text: `route: ${chosen}` }],
+        details: { swarm_tool: "route", is_error: false, data: { route: chosen } },
+        terminate: true,
+      };
+    },
+  };
 }
 
 function sha256Hex(value: string): string {

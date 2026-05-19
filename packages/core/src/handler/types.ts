@@ -247,6 +247,12 @@ export type HandlerResult =
       /** Outcome status — matched against edge `condition="outcome=<s>"`
        * clauses by the executor's edge selector. Defaults to "success". */
       outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+      /** Set by the codergen backend when the agent exited the node via
+       * the synthesised `route` tool (see
+       * docs/proposals/llm-routing.md D2). The engine's Step-0 edge
+       * selector keys on this; the daemon persists it onto
+       * `fact.node_completed.payload.route`. */
+      route?: string;
       /** Preferred edge label — matched against unconditional edges'
        * `label` attr after condition matching fails. */
       preferredLabel?: string;
@@ -308,7 +314,22 @@ export type HandlerResult =
       // converted reasons `"abort_loop"` and `"provider_exhausted"`
       // are emitted by the executor directly as `fact.run_paused`,
       // never as halts.
-      reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
+      // Routing-node halts emitted by the codergen agent boundary
+      // (docs/proposals/llm-routing.md D3) flow through verbatim —
+      // result-to-facts does not translate them, they land as
+      // `fact.run_halted` with the matching `HaltReason`.
+      // `edge_no_match` is set by the executor's edge-selection path
+      // when a routing-node outcome carries a route the graph doesn't
+      // handle.
+      reason:
+        | "budget"
+        | "max_loops"
+        | "error"
+        | "goal_gate_unsatisfied"
+        | "max_retries_exceeded"
+        | "route_not_picked"
+        | "route_call_not_isolated"
+        | "edge_no_match";
       detail?: string;
       /** Optional context for halts that result-to-facts converts into
        * operator-resumable pauses. The executor sets

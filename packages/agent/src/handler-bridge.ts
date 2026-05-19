@@ -180,6 +180,27 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       return result satisfies HandlerResult;
     }
 
+    // Hard-halt outcomes from the codergen agent boundary
+    // (docs/proposals/llm-routing.md D3 — `route_not_picked` /
+    // `route_call_not_isolated`). The backend never constructs a
+    // `HandlerResult.halt` itself; it signals via `outcome.halt_reason`
+    // and we translate here so the executor's `case "halt"` path emits
+    // `fact.run_halted` with the right reason. `failureReason` becomes
+    // the halt `detail`. Restricted to the `halt` union's accepted
+    // reasons via the type assertion below — the handler-contract halt
+    // shape doesn't carry every HaltReason literal (some are
+    // executor-only).
+    if (outcome.halt_reason != null) {
+      const result: Extract<HandlerResult, { kind: "halt" }> = {
+        kind: "halt",
+        reason: outcome.halt_reason as Extract<HandlerResult, { kind: "halt" }>["reason"],
+      };
+      if (outcome.failure_reason != null && outcome.failure_reason.length > 0) {
+        result.detail = outcome.failure_reason;
+      }
+      return result satisfies HandlerResult;
+    }
+
     // retry / partial_success now flow through as transitions. The executor
     // consults retryStep (engine/retry-policy.ts) on outcomeStatus="retry"
     // to decide between sleep+re-dispatch, halt(max_retries_exceeded), or
@@ -206,6 +227,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     const result: HandlerResult = {
       kind: "transition",
       outcomeStatus: outcome.status,
+      ...(outcome.route !== undefined && outcome.route.length > 0 ? { route: outcome.route } : {}),
       ...(outcome.preferred_label.length > 0 ? { preferredLabel: outcome.preferred_label } : {}),
       ...(outcome.suggested_next_ids.length > 0 ? { suggestedNextIds: outcome.suggested_next_ids } : {}),
       ...(explicitNext != null ? { nextNode: explicitNext } : {}),

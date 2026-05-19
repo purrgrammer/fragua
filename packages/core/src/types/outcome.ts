@@ -1,6 +1,7 @@
 // Outcome: the result returned by every handler. See docs/SPEC.md §3.7.
 
 import { type Static, Type } from "@sinclair/typebox";
+import type { HaltReason } from "@swarm/types";
 
 export type OutcomeStatus = "success" | "partial_success" | "fail" | "retry" | "skipped";
 
@@ -49,6 +50,32 @@ export const OutcomeSchema = Type.Object(
          * back to its own backoff. */
         retryAfterMs: Type.Optional(Type.Number()),
       }),
+    ),
+    /** Set by the codergen agent boundary when the LLM exited the node
+     * via the synthesised `route` tool (see
+     * docs/proposals/llm-routing.md D2). The handler-bridge forwards
+     * this onto `HandlerResult.transition.route`, which the daemon
+     * persists into `fact.node_completed.payload.route`. Absent on
+     * non-routing nodes. */
+    route: Type.Optional(Type.String()),
+    /** Set by the codergen agent boundary when a routing-node turn ended
+     * with no isolated `route` tool call (or the call was paired with
+     * other tool calls). The handler-bridge converts this into a
+     * `HandlerResult.halt` with this reason; the daemon emits
+     * `fact.run_halted` verbatim. Never constructed by ordinary handlers
+     * — use `failHalt()`. */
+    halt_reason: Type.Optional(
+      Type.Union([
+        Type.Literal("budget"),
+        Type.Literal("schema_drift"),
+        Type.Literal("error"),
+        Type.Literal("aborted_exit"),
+        Type.Literal("occ_exhausted"),
+        Type.Literal("timeout_exhausted"),
+        Type.Literal("route_not_picked"),
+        Type.Literal("route_call_not_isolated"),
+        Type.Literal("edge_no_match"),
+      ]),
     ),
   },
   { $id: "Outcome" },
@@ -106,5 +133,28 @@ export function failProvider(
       errorMessage,
       ...(detail.retryAfterMs !== undefined ? { retryAfterMs: detail.retryAfterMs } : {}),
     },
+  };
+}
+
+/**
+ * Mark an outcome as a hard halt with a named HaltReason. The codergen
+ * agent boundary uses this for routing-node failure modes
+ * (`route_not_picked`, `route_call_not_isolated`) so the handler-bridge
+ * converts the outcome into `HandlerResult { kind: "halt", reason }`
+ * instead of a transition. Status stays "fail" so any downstream code
+ * that checks status alone still treats this as not-success;
+ * `non_retryable: true` keeps the goal-gate retry machinery from
+ * relaunching the run after a structural failure.
+ */
+export function failHalt(reason: HaltReason, message: string): Outcome {
+  return {
+    status: "fail",
+    context_updates: {},
+    preferred_label: "",
+    suggested_next_ids: [],
+    notes: message,
+    failure_reason: message,
+    non_retryable: true,
+    halt_reason: reason,
   };
 }

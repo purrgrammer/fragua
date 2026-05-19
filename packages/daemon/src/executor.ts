@@ -1112,21 +1112,36 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const graph = graphFor(state.workflowSha);
         const srcNode = graph?.nodes[currentNode];
         if (graph != null && srcNode != null) {
+          const selectorOutcome: Parameters<typeof selectEdge>[0]["outcome"] = {
+            status: result.outcomeStatus ?? "success",
+            context_updates: {},
+            preferred_label: result.preferredLabel ?? "",
+            suggested_next_ids: result.suggestedNextIds ?? [],
+            notes: "",
+          };
+          if (result.route !== undefined && result.route.length > 0) selectorOutcome.route = result.route;
           const selection = selectEdge({
             graph,
             source: srcNode,
-            outcome: {
-              status: result.outcomeStatus ?? "success",
-              context_updates: {},
-              preferred_label: result.preferredLabel ?? "",
-              suggested_next_ids: result.suggestedNextIds ?? [],
-              notes: "",
-            },
+            outcome: selectorOutcome,
             context: state.routing,
           });
           if (selection != null) {
             result.nextNode = selection.edge.to;
             pendingEdgeSelection = selection;
+          } else if (result.route !== undefined && result.route.length > 0) {
+            // Routing node carried a chosen route but no outgoing edge
+            // matched (docs/proposals/llm-routing.md D8 — runtime
+            // backstop for `edge_no_match`). Convert into a halt so
+            // the existing `case "halt"` arm in result-to-facts emits
+            // `fact.run_halted{reason:"edge_no_match"}` with a
+            // diagnostic detail; validator should make this
+            // unreachable for a pinned graph.
+            result = {
+              kind: "halt",
+              reason: "edge_no_match",
+              detail: `no edge keyed route="${result.route}" from ${currentNode}`,
+            };
           } else if (result.outcomeStatus === "fail") {
             // §3.7 step 2/3 — when no fail-edge claimed the failure,
             // consult the source node's retry_target / fallback_retry_target

@@ -105,6 +105,7 @@ return {
   kind: "transition",
   nextNode?: "next",                    // omit to route via the 5-rule edge selector (condition → preferredLabel → suggestedNextIds → weight → lexical); set to "__end__" to terminate
   outcomeStatus?: "success",            // matched against edge `condition="outcome=<s>"` clauses; defaults to "success"
+  route?: "feature",                    // set by the codergen backend when the agent exited via the synthesised `route` tool (docs/proposals/llm-routing.md D2); the engine's Step-0 edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
   preferredLabel?: "go-on",             // matched against unconditional edges' `label` attr
   suggestedNextIds?: ["publish"],       // matched against unconditional edges' `to` after label matching fails
   failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
