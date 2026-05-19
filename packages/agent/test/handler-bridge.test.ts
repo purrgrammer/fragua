@@ -522,6 +522,135 @@ describe("makeCodergenHandler — provider error → pause_provider", () => {
   });
 });
 
+describe("makeCodergenHandler — priorMessages thread loading", () => {
+  // Captures the priorMessages the backend received so the test can assert
+  // on what was hydrated for the shared thread.
+  function capturingBackend(): { calls: Array<readonly unknown[]>; backend: CodergenBackend } {
+    const calls: Array<readonly unknown[]> = [];
+    const backend: CodergenBackend = {
+      async run(input) {
+        calls.push(input.priorMessages ?? []);
+        return ok({ notes: "done", context_updates: {} });
+      },
+    };
+    return { calls, backend };
+  }
+
+  // Seeds the messages table directly so the test exercises the hydration
+  // path without running a real backend twice.
+  function seed(store: SqliteStore, runId: string, nodeId: string, content: unknown): void {
+    store.appendMessage(runId, {
+      nodeId,
+      iteration: 0,
+      content: content as never,
+    });
+  }
+
+  test("excludes __subagent:* messages from the shared-thread fallback (regression)", async () => {
+    // Repro for the bug that crashed review.dot's dispatch retry: when
+    // `thread_id="review"` doesn't equal any single node_id, the loader
+    // used to fall back to ALL persisted messages. That spliced sub-agent
+    // tool_use blocks (under node_id `__subagent:<id>`) into the parent's
+    // API call, and Anthropic rejected with
+    // `unexpected tool_use_id found in tool_result blocks` because the
+    // sub-agent's tool_use never appears in the parent's assistant turn.
+    const store = new SqliteStore({ path: ":memory:" });
+    const { calls, backend } = capturingBackend();
+    const ctx = await ctxFor("r1", store, "dispatch");
+
+    // Parent-level messages on the shared thread.
+    seed(store, "r1", "scope", {
+      role: "user",
+      content: [{ type: "text", text: "scope user" }],
+      timestamp: 1,
+    });
+    seed(store, "r1", "scope", {
+      role: "assistant",
+      content: [{ type: "text", text: "PATHS: …" }],
+      timestamp: 2,
+    });
+    seed(store, "r1", "dispatch", {
+      role: "user",
+      content: [{ type: "text", text: "dispatch user" }],
+      timestamp: 3,
+    });
+    seed(store, "r1", "dispatch", {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "toolu_parent", name: "agent", arguments: {} }],
+      timestamp: 4,
+    });
+
+    // Sub-agent internal turn — its tool_use must NOT leak into the parent's
+    // thread. The corresponding toolResult under the same __subagent:* node
+    // would otherwise compound the bug.
+    seed(store, "r1", "__subagent:abc123", {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "toolu_subagent_internal", name: "grep", arguments: {} }],
+      timestamp: 5,
+    });
+    seed(store, "r1", "__subagent:abc123", {
+      role: "toolResult",
+      toolCallId: "toolu_subagent_internal",
+      toolName: "grep",
+      content: [{ type: "text", text: "grep result" }],
+      isError: false,
+      timestamp: 6,
+    });
+
+    const spec = makeCodergenHandler({
+      node: node({ id: "dispatch", attrs: { shape: "box", prompt: "…", thread_id: "review" } }),
+      backend,
+    });
+
+    await spec.handler(ctx);
+
+    const prior = calls[0] as ReadonlyArray<{ role: string; content?: unknown[]; toolCallId?: string }>;
+    expect(prior).toBeDefined();
+    // No message in the hydrated history may reference the sub-agent's
+    // internal tool_use_id, either as a toolCall block or as a toolResult.
+    const serialised = JSON.stringify(prior);
+    expect(serialised).not.toContain("toolu_subagent_internal");
+    expect(serialised).toContain("toolu_parent");
+    // Parent-level shape preserved: scope user/assistant + dispatch
+    // user/assistant.
+    expect(prior).toHaveLength(4);
+    store.close();
+  });
+
+  test("thread_id matching a single node_id still scopes to that node only", async () => {
+    // When thread_id equals an exact node_id, the loader takes the
+    // node-scoped branch (no fallback). Sub-agent exclusion must apply
+    // there too in case some future workflow names a sub-agent thread id.
+    const store = new SqliteStore({ path: ":memory:" });
+    const { calls, backend } = capturingBackend();
+    const ctx = await ctxFor("r2", store, "implement");
+
+    seed(store, "r2", "implement", {
+      role: "assistant",
+      content: [{ type: "text", text: "PLAN_REALISED" }],
+      timestamp: 1,
+    });
+    seed(store, "r2", "other", {
+      role: "assistant",
+      content: [{ type: "text", text: "should not appear" }],
+      timestamp: 2,
+    });
+
+    const spec = makeCodergenHandler({
+      node: node({ id: "implement", attrs: { shape: "box", prompt: "…", thread_id: "implement" } }),
+      backend,
+    });
+
+    await spec.handler(ctx);
+
+    const prior = calls[0] as ReadonlyArray<{ role: string; content?: unknown[] }>;
+    expect(prior).toHaveLength(1);
+    expect(JSON.stringify(prior)).toContain("PLAN_REALISED");
+    expect(JSON.stringify(prior)).not.toContain("should not appear");
+    store.close();
+  });
+});
+
 describe("makeCodergenHandler — unbounded maxMs sentinel", () => {
   test('maxMs: "unbounded" produces HandlerSpec with maxMs absent', () => {
     const spec = makeCodergenHandler({ node: node(), backend: stubBackend(), maxMs: "unbounded" });

@@ -255,16 +255,26 @@ function strAt(data: Record<string, unknown>, key: string): string | undefined {
  * full AgentMessage as JSON (§I9), so this is a read-and-filter — no
  * synthesis, no shape reconstruction. Filters by `node_id` when the
  * thread id equals a node id (the common case); falls back to all
- * messages otherwise so authors who set `thread_id="dev"` get their
- * cross-node history. Swarm-internal `system` rows (the assembled
- * system prompt — pi-ai carries it separately via
+ * graph-level messages otherwise so authors who set `thread_id="dev"`
+ * get their cross-node history. Swarm-internal `system` rows (the
+ * assembled system prompt — pi-ai carries it separately via
  * `Context.systemPrompt`) and `tool_node` rows (graph-level shell
  * step output, not conversational; pi-ai's `Message` union has no
- * such role) are stripped. Returns `undefined` when nothing is
- * persisted. */
+ * such role) are stripped.
+ *
+ * Sub-agent messages (node_id `__subagent:<id>`) are always excluded:
+ * sub-agents have their own conversation namespace per §8.2 and are
+ * never part of a parent-level thread. Letting them through the
+ * fallback path silently splices a sub-agent's internal `tool_use`
+ * blocks into the parent's API call without their paired assistant
+ * turns, which Anthropic rejects with `unexpected tool_use_id found
+ * in tool_result blocks`.
+ *
+ * Returns `undefined` when nothing is persisted. */
 function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly AgentMessage[] | undefined {
-  const byNode = ctx.messages.since(0).filter((m) => m.nodeId === threadId);
-  const rows = byNode.length > 0 ? byNode : ctx.messages.since(0);
+  const graphLevel = ctx.messages.since(0).filter((m) => !m.nodeId?.startsWith("__subagent:"));
+  const byNode = graphLevel.filter((m) => m.nodeId === threadId);
+  const rows = byNode.length > 0 ? byNode : graphLevel;
   if (rows.length === 0) return undefined;
   const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
   return messages.length > 0 ? messages : undefined;
