@@ -12,6 +12,7 @@
 // statements in the enclosing scope (subgraph-local).
 
 import type { Edge, EdgeAttrs, Graph, GraphAttrs, Node, NodeAttrs, NodeShape, Subgraph } from "../types/graph.ts";
+import { SHAPE_TO_KIND } from "../types/graph.ts";
 import { type Keyword, LexError, type Token, tokenize } from "./lexer.ts";
 
 export class ParseError extends Error {
@@ -296,6 +297,10 @@ function ensureNode(nodes: Record<string, Node>, idTok: Token, scope: Scope, att
     const shape = resolveShape(merged, scope);
     existing.shape = shape;
     existing.attrs = coerceAttrs<NodeAttrs>({ ...scope.nodeDefaults, ...merged });
+    if (existing.attrs.kind === undefined) {
+      const derived = SHAPE_TO_KIND[shape as keyof typeof SHAPE_TO_KIND];
+      if (derived !== undefined) existing.attrs.kind = derived;
+    }
     // Merge class list
     for (const c of scope.subgraphClasses) if (!existing.classes.includes(c)) existing.classes.push(c);
     const classStr = merged["class"];
@@ -330,6 +335,10 @@ function ensureNode(nodes: Record<string, Node>, idTok: Token, scope: Scope, att
     classes,
     loc: { line: idTok.line, col: idTok.col },
   };
+  if (node.attrs.kind === undefined) {
+    const derived = SHAPE_TO_KIND[shape as keyof typeof SHAPE_TO_KIND];
+    if (derived !== undefined) node.attrs.kind = derived;
+  }
   nodes[id] = node;
   return node;
 }
@@ -403,7 +412,13 @@ const NUMBER_KEYS: ReadonlySet<string> = new Set([
   "retry_backoff_factor",
 ]);
 
-const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "context_files", "skills"]);
+const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set([
+  "allowed_tools",
+  "denied_tools",
+  "context_files",
+  "skills",
+  "routes",
+]);
 
 /**
  * Keys whose value must be one of a closed set of strings. Anything else
@@ -412,6 +427,7 @@ const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied
 const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["budget_policy", new Set(["warn", "stop", "pause"])],
   ["outcome", new Set(["success", "fail"])],
+  ["kind", new Set(["codergen", "tool", "human"])],
 ]);
 
 function coerceScalar(key: string, raw: string | number | boolean): string | number | boolean | string[] | undefined {

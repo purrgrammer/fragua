@@ -224,4 +224,34 @@ describe("parseDotSource", () => {
   test("edge outcome rejects values outside {success, fail}", () => {
     expect(() => parseDotSource(`digraph { a -> b [outcome=bogus] }`)).toThrow(/invalid value for outcome/i);
   });
+
+  test("routes parsed as comma-split string array", () => {
+    const g = parseDotSource(`digraph { n [routes="a,b,c"] }`);
+    expect(g.nodes["n"]!.attrs.routes).toEqual(["a", "b", "c"]);
+  });
+
+  test("kind=human accepted as explicit enum value", () => {
+    const g = parseDotSource(`digraph { n [kind=human] }`);
+    expect(g.nodes["n"]!.attrs.kind).toBe("human");
+  });
+
+  test("text attribute round-trips as free-form string", () => {
+    const g = parseDotSource(`digraph { n [text="hello"] }`);
+    expect(g.nodes["n"]!.attrs.text).toBe("hello");
+  });
+
+  test("shape=hexagon derives kind=human when kind is not set", () => {
+    const g = parseDotSource(`digraph { n [shape=hexagon] }`);
+    expect(g.nodes["n"]!.shape).toBe("hexagon");
+    expect(g.nodes["n"]!.attrs.kind).toBe("human");
+  });
+
+  test("explicit kind= overrides shape-derived kind", () => {
+    const g = parseDotSource(`digraph { n [shape=box, kind=human] }`);
+    expect(g.nodes["n"]!.attrs.kind).toBe("human");
+  });
+
+  test("kind rejects values outside the enum", () => {
+    expect(() => parseDotSource(`digraph { n [kind=bogus] }`)).toThrow(/invalid value for kind/i);
+  });
 });

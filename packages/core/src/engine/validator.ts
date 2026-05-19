@@ -50,6 +50,9 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "max_tokens",
   "skills",
   "skills_disabled",
+  "routes",
+  "kind",
+  "text",
   "model",
   "provider",
 ]);

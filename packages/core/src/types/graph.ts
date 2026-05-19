@@ -23,6 +23,19 @@ export const HANDLER_BY_SHAPE = {
 
 export type HandlerType = (typeof HANDLER_BY_SHAPE)[NodeShape];
 
+/** Authoring-time node kind. Separate from `HandlerType`/`HANDLER_BY_SHAPE`
+ * (which drives runtime handler dispatch). Populated from an explicit
+ * `kind=` attribute, or derived from `shape` via `SHAPE_TO_KIND`. */
+export type NodeKind = "codergen" | "tool" | "human";
+
+/** Maps node shapes to their `NodeKind` for shape→kind derivation.
+ * Start/exit shapes have no kind; explicit `kind=` always wins. */
+export const SHAPE_TO_KIND = {
+  box: "codergen",
+  hexagon: "human",
+  parallelogram: "tool",
+} as const satisfies Partial<Record<NodeShape, NodeKind>>;
+
 export type ContextMode = "fresh" | "shared";
 
 /** Attribute values that survive DOT parsing + coercion. */
@@ -103,6 +116,15 @@ export interface NodeAttrs {
   skills?: string[];
   /** Hard opt-out — no skills catalog in the system prompt for this node. */
   skills_disabled?: boolean;
+  /** Routing targets this node may exit to via the `route` tool.
+   * Comma-separated in DOT; coerced to string[]. */
+  routes?: string[];
+  /** Authoring-time node kind. Derived from `shape` via `SHAPE_TO_KIND`
+   * when not explicitly set. */
+  kind?: NodeKind;
+  /** Free-form text shown to the operator or used as the human-node
+   * prompt (Phase 3 of the LLM-routing proposal). */
+  text?: string;
   [extra: string]: AttrScalar | undefined;
 }
 
