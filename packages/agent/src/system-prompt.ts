@@ -113,10 +113,14 @@ export function mergeSystemPrompt(base: string, extension: string): string {
  * bootstrap command ran. `undefined` omits the block entirely (e.g.
  * single-process runs that don't use a worktree). */
 export interface RunEnvironment {
-  /** Absolute path the agent is working inside. Surfaced to the model
-   * as `cwd:` (model-agnostic; works whether or not the path is a git
-   * worktree). */
-  worktreePath: string;
+  /** Absolute path the agent is working inside — the resolved
+   * `ExecutionEnvironment.cwd()` for this run. Always set; mirrors
+   * whatever env the executor wired (a `WorktreeEnvironment`'s
+   * `worktreePath`, or a bare `LocalEnvironment`'s `cwd`). Surfaced to
+   * the model as `cwd:` so every codergen call sees a uniform
+   * `<environment>` block regardless of env implementation — no
+   * brittle structural probe for `worktreePath`. */
+  cwd: string;
   /** Opaque session id, stable across the whole run. Surfaced to the
    * agent as `run_id:` so artifacts can cite their producing run. */
   runId: string;
@@ -222,7 +226,7 @@ export function buildSystemPrompt({
  * it. Positive instruction comes first; the ❌ is illustration, not a
  * standalone rule. */
 export function renderRunEnvironment(env: RunEnvironment): string {
-  const cwd = env.worktreePath;
+  const cwd = env.cwd;
   const lines: string[] = [
     "<environment>",
     `cwd: ${cwd}`,

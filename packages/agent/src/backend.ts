@@ -377,11 +377,18 @@ export class PiCodergenBackend implements CodergenBackend {
     }
     const perNodeSystemPrompt =
       typeof input.node.attrs["system_prompt"] === "string" ? (input.node.attrs["system_prompt"] as string) : undefined;
-    // Prefer a per-call RunEnvironment derived from the provisioned
-    // worktree env. Falls back to the construction-time runEnv for
-    // tests. We detect a `WorktreeEnvironment` structurally so this
-    // module stays free of the workspace-layer dependency.
-    const effectiveRunEnv = deriveRunEnv(effectiveEnv, input.run_id) ?? this.runEnv;
+    // Derive the per-call RunEnvironment from the resolved env.
+    // `deriveRunEnv` always returns a value (every env has `cwd()`),
+    // so every codergen call sees an `<environment>` block in its
+    // system prompt regardless of env implementation. The
+    // construction-time `this.runEnv` is honoured only as a fallback
+    // for callers that wired it explicitly — it can override the
+    // derived bootstrap line without affecting `cwd` / `runId`, which
+    // must reflect the actual env.
+    const effectiveRunEnv: RunEnvironment = deriveRunEnv(effectiveEnv, input.run_id);
+    if (this.runEnv?.bootstrapCommand !== undefined && effectiveRunEnv.bootstrapCommand === undefined) {
+      effectiveRunEnv.bootstrapCommand = this.runEnv.bootstrapCommand;
+    }
     // Sub-agent path: `skipFrameworkSystemPrompt` makes the perNode
     // string the COMPLETE system prompt — no protocol wrap, no skills
     // catalog, no context-files, no run-env block. The calling LLM has
@@ -394,7 +401,7 @@ export class PiCodergenBackend implements CodergenBackend {
           contextBlock,
           skillsCatalog,
           agentsCatalog,
-          ...(effectiveRunEnv !== undefined ? { runEnv: effectiveRunEnv } : {}),
+          runEnv: effectiveRunEnv,
         });
 
     // Now that the parent's system prompt is fully resolved, wire the
@@ -426,7 +433,7 @@ export class PiCodergenBackend implements CodergenBackend {
         parentModel: modelId,
         parentEnv: effectiveEnv,
         parentEmit,
-        ...(effectiveRunEnv !== undefined ? { parentRunEnv: effectiveRunEnv } : {}),
+        parentRunEnv: effectiveRunEnv,
         ...(allow !== undefined ? { parentAllowedTools: allow } : {}),
         ...(deny !== undefined ? { parentDeniedTools: deny } : {}),
       };
@@ -853,19 +860,19 @@ function parseRetryAfterMs(headers: Record<string, string>): number | undefined 
   return Math.floor(seconds * 1000);
 }
 
-/** Structurally derive a `RunEnvironment` from the execution env when
- * it looks like a `WorktreeEnvironment` (has `worktreePath` / `runId`).
- * Returns `undefined` for a bare `LocalEnvironment` so the system-prompt
- * block is omitted — there's no worktree to describe. */
-function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvironment | undefined {
+/** Derive a `RunEnvironment` from the execution env. Always returns a
+ *  value — every env has `cwd()`, so every codergen call gets a uniform
+ *  `<environment>` block (no structural `worktreePath` probe that
+ *  silently skipped `LocalEnvironment`). A `WorktreeEnvironment`'s own
+ *  `runId` / `bootstrapCommand` are picked up when present so the
+ *  block surfaces the bootstrap-ran signal. Exported for unit tests. */
+export function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvironment {
   const wt = env as unknown as {
-    worktreePath?: unknown;
     runId?: unknown;
     bootstrapCommand?: unknown;
   };
-  if (typeof wt.worktreePath !== "string" || wt.worktreePath.length === 0) return undefined;
   const out: RunEnvironment = {
-    worktreePath: wt.worktreePath,
+    cwd: env.cwd(),
     runId: typeof wt.runId === "string" ? wt.runId : runId,
   };
   if (typeof wt.bootstrapCommand === "string") out.bootstrapCommand = wt.bootstrapCommand;

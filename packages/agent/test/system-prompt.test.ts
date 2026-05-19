@@ -142,7 +142,7 @@ describe("mergeSystemPrompt", () => {
 describe("renderRunEnvironment", () => {
   test("with bootstrap command", () => {
     const block = renderRunEnvironment({
-      worktreePath: "/wt/abc",
+      cwd: "/wt/abc",
       runId: "abc",
       bootstrapCommand: "bun install --frozen-lockfile",
     });
@@ -164,7 +164,7 @@ describe("renderRunEnvironment", () => {
 
   test("without bootstrap, omits the bootstrap line", () => {
     const block = renderRunEnvironment({
-      worktreePath: "/wt/x",
+      cwd: "/wt/x",
       runId: "x",
     });
     expect(block).toContain("cwd: /wt/x");
@@ -175,7 +175,7 @@ describe("renderRunEnvironment", () => {
 
   test("surfaces run_id alongside cwd", () => {
     const block = renderRunEnvironment({
-      worktreePath: "/wt/x",
+      cwd: "/wt/x",
       runId: "01jx-this-id-should-appear",
     });
     expect(block).toContain("01jx-this-id-should-appear");
@@ -184,7 +184,7 @@ describe("renderRunEnvironment", () => {
 
   test("no `worktree:` label — terminology stays env-agnostic", () => {
     const block = renderRunEnvironment({
-      worktreePath: "/some/path",
+      cwd: "/some/path",
       runId: "x",
     });
     expect(block).not.toContain("worktree:");
@@ -197,7 +197,7 @@ describe("buildSystemPrompt with runEnv", () => {
       global: "you are the agent",
       perNode: undefined,
       contextBlock: "<project-conventions>rules</project-conventions>",
-      runEnv: { worktreePath: "/wt/abc", runId: "abc" },
+      runEnv: { cwd: "/wt/abc", runId: "abc" },
     });
     const envIdx = out.indexOf("<environment>");
     const conventionsIdx = out.indexOf("<project-conventions>");
@@ -272,7 +272,7 @@ describe("materialiseForChild", () => {
   // facts the parent saw, with the child's persona appended last.
   const parentFramework = {
     contextBlock: "<project-conventions>\nproject AGENTS.md\n</project-conventions>",
-    runEnv: { worktreePath: "/tmp/wt", runId: "run-1" } as const,
+    runEnv: { cwd: "/tmp/wt", runId: "run-1" } as const,
   };
   const parentSkills: Skill[] = [makeSkill("a"), makeSkill("b"), makeSkill("c")];
 
