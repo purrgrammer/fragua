@@ -68,7 +68,7 @@ const failOut: SummariseOutput = {
   duration_ms: 1,
 };
 
-describe.skip("AutoTitler — unit", () => {
+describe("AutoTitler — unit", () => {
   let abortCtrl: AbortController;
   beforeEach(() => {
     abortCtrl = new AbortController();
@@ -196,7 +196,7 @@ describe.skip("AutoTitler — unit", () => {
   });
 });
 
-describe.skip("AutoTitler — executor integration", () => {
+describe("AutoTitler — executor integration", () => {
   test("titleRun fires once per run right after fact.run_started", async () => {
     const dot = `digraph wf { graph[goal="rename things"]; start [shape=Mdiamond]; done [shape=Msquare]; start -> done; }`;
     const r = rig({ dot });

@@ -8,7 +8,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
-describe.skip("executor — budget enforcement", () => {
+describe("executor — budget enforcement", () => {
   test("graph budget_usd=1.0 (default policy=pause); breach mid-run → paused, reason=budget", async () => {
     // Non-terminal next node so the pause path is exercised independent
     // of any terminal-transition interaction. See the

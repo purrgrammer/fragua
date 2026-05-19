@@ -42,7 +42,7 @@ async function driveUntilTerminal(r: ReturnType<typeof rig>, runId: string): Pro
   throw new Error(`run ${runId} did not reach terminal within 100 cycles`);
 }
 
-describe.skip("executor — retry counter reset on success (§3.5)", () => {
+describe("executor — retry counter reset on success (§3.5)", () => {
   test("retry then success clears internal.retry_count.<node>", async () => {
     const dot = `digraph G {
       start [shape=Mdiamond];

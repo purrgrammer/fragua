@@ -17,7 +17,7 @@ import { runOne } from "../src/executor.ts";
 import { IntentArrivedError } from "../src/supervisor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
-describe.skip("unbounded codergen — no AbortSignal.timeout fires", () => {
+describe("unbounded codergen — no AbortSignal.timeout fires", () => {
   test("a codergen spec with maxMs undefined does not abort a long-running handler past the 4h ceiling", async () => {
     const dot = `digraph {
       start [shape=Mdiamond];
@@ -113,7 +113,7 @@ describe.skip("unbounded codergen — no AbortSignal.timeout fires", () => {
   });
 });
 
-describe.skip("unbounded codergen — operator + shutdown aborts still apply", () => {
+describe("unbounded codergen — operator + shutdown aborts still apply", () => {
   test("a codergen spec with maxMs undefined still aborts on operator cancel", async () => {
     const dot = `digraph {
       start [shape=Mdiamond];

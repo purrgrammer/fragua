@@ -8,7 +8,7 @@ import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 // TODO(yaml-cutover commit 2): inline DOT fixtures need migration to YAML.
 // Wholesale .skip until that lands.
 
-describe.skip("buildSubstitutionArgs", () => {
+describe("buildSubstitutionArgs", () => {
   test("sets $ARGUMENTS from routing.input when it is a string", () => {
     const args = buildSubstitutionArgs("r", { input: "rename foo to bar" });
     expect(args["$ARGUMENTS"]).toBe("rename foo to bar");
@@ -21,7 +21,7 @@ describe.skip("buildSubstitutionArgs", () => {
   });
 });
 
-describe.skip("executor — edge selection", () => {
+describe("executor — edge selection", () => {
   test("handler leaves nextNode unset → executor picks via condition (outcome=fail)", async () => {
     const dot = `digraph {
       start [shape=Mdiamond];
@@ -442,7 +442,7 @@ describe.skip("executor — edge selection", () => {
   });
 });
 
-describe.skip("executor — observability emission", () => {
+describe("executor — observability emission", () => {
   test("ctx.emit(type, data) calls land in the store as verbatim events", async () => {
     const r = rig();
     // Custom handler that emits a small agent.* trail before transitioning.
@@ -523,7 +523,7 @@ describe.skip("executor — observability emission", () => {
   });
 });
 
-describe.skip("executor — happy path", () => {
+describe("executor — happy path", () => {
   test("queued → running → completed via terminal echo", async () => {
     const r = rig();
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
@@ -553,7 +553,7 @@ describe.skip("executor — happy path", () => {
   });
 });
 
-describe.skip("executor — multi-step graph", () => {
+describe("executor — multi-step graph", () => {
   test("start → middle → end", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {
@@ -607,7 +607,7 @@ describe.skip("executor — multi-step graph", () => {
   });
 });
 
-describe.skip("executor — HITL yield and resume", () => {
+describe("executor — HITL yield and resume", () => {
   test("yields paused_human, resumes after intent.human_input", async () => {
     const r = rig();
     r.dispatcher.register(
@@ -650,7 +650,7 @@ describe.skip("executor — HITL yield and resume", () => {
   });
 });
 
-describe.skip("executor — cancel", () => {
+describe("executor — cancel", () => {
   test("intent.cancel_requested terminates run", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "n", {
@@ -687,7 +687,7 @@ describe.skip("executor — cancel", () => {
   });
 });
 
-describe.skip("executor — allowed_tools hard filter at dispatch", () => {
+describe("executor — allowed_tools hard filter at dispatch", () => {
   test("a handler that reaches for a non-allowed tool halts cleanly, no leaked state", async () => {
     // Node declares allowed_tools=["read"]; the handler violates the
     // contract by asking for "bash". The executor's HandlerContext
@@ -759,7 +759,7 @@ describe.skip("executor — allowed_tools hard filter at dispatch", () => {
   });
 });
 
-describe.skip("executor — schema drift", () => {
+describe("executor — schema drift", () => {
   test("run with mismatched schema_version halts with schema_drift", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {
@@ -798,7 +798,7 @@ describe.skip("executor — schema drift", () => {
   });
 });
 
-describe.skip("executor — provider pause and resume", () => {
+describe("executor — provider pause and resume", () => {
   /** Run the executor's claim → dispatch loop until the run leaves the
    * `queued` state. Bounded so a runaway test fails loudly instead of
    * hanging — every step either advances or pauses. */

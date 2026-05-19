@@ -13,7 +13,17 @@ import {
   isTerminal as isTerminalStatus,
   SqliteStore,
 } from "@swarm/store";
+import { dotToYaml, lowerIfDot } from "../../core/test/helpers/dot-to-yaml.ts";
 import { scheduleDispatcherTick } from "../src/schedule-dispatcher.ts";
+void dotToYaml;
+// Monkey-patch saveWorkflow at the test-file level so inline DOT fixtures
+// keep working across the cutover. Lowers DOT → YAML on the way in.
+{
+  const _origSave = SqliteStore.prototype.saveWorkflow;
+  SqliteStore.prototype.saveWorkflow = function (sha: string, name: string, source: string) {
+    return _origSave.call(this, sha, name, lowerIfDot(source));
+  };
+}
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -51,8 +61,8 @@ function newFixture(): Fixture {
       now = t;
     },
     writeWorkflow: (name, dotSource) => {
-      const path = join(home, ".swarm/workflows", `${name}.dot`);
-      writeFileSync(path, dotSource);
+      const path = join(home, ".swarm/workflows", `${name}.yaml`);
+      writeFileSync(path, lowerIfDot(dotSource));
       return path;
     },
     tick: () => {
@@ -83,7 +93,7 @@ afterEach(() => {
   f.cleanup();
 });
 
-describe.skip("schedule-dispatcher", () => {
+describe.skip("schedule-dispatcher — fixture-heavy YAML migration TODO", () => {
   test("fires immediately on create when fireOnCreate=true and enqueues a run carrying scheduleId", () => {
     f.writeWorkflow("analyze", "digraph G { a -> b }");
     f.store.createSchedule(

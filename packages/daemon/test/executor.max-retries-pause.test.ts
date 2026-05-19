@@ -54,7 +54,7 @@ async function driveUntilSettled(r: ReturnType<typeof rig>, runId: string): Prom
   throw new Error(`run ${runId} did not settle within 100 cycles`);
 }
 
-describe.skip("executor — max_retries pause + operator resume", () => {
+describe("executor — max_retries pause + operator resume", () => {
   test("retries to exhaustion → paused{reason:max_retries} → cap raise + resume → succeeds", async () => {
     const dot = `digraph G {
       start [shape=Mdiamond];
@@ -222,7 +222,7 @@ describe.skip("executor — max_retries pause + operator resume", () => {
   });
 });
 
-describe.skip("intent.max_retries_adjusted — override read", () => {
+describe("intent.max_retries_adjusted — override read", () => {
   test("max_retries_override.<nodeId> lands in routing and is preferred by the executor over the static attr", async () => {
     // Two halves:
     //   (a) Pure fold check — synthesize an unapplied-intents batch,

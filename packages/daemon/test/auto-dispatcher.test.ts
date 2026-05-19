@@ -4,10 +4,17 @@ import fc from "fast-check";
 import { autoDispatcherResolver, resolveMaxMs } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 
+import { SqliteStore as _Store } from "@swarm/store";
+import { lowerIfDot } from "../../core/test/helpers/dot-to-yaml.ts";
+{
+  const _orig = _Store.prototype.saveWorkflow;
+  _Store.prototype.saveWorkflow = function(sha, name, source) { return _orig.call(this, sha, name, lowerIfDot(source)); };
+}
+
 // TODO(yaml-cutover commit 2): inline DOT fixtures need migration to YAML.
 // Wholesale .skip until that lands.
 
-describe.skip("autoDispatcherResolver", () => {
+describe("autoDispatcherResolver", () => {
   test("parses DOT once and caches per-node specs", () => {
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
@@ -57,7 +64,11 @@ describe.skip("autoDispatcherResolver", () => {
     store.close();
   });
 
-  test("kind=human (box shape with explicit kind) also resolves to human", async () => {
+  // DOT's `kind=human` on a `shape=box` node doesn't translate to YAML —
+  // the type discriminator IS the kind. Skip-stubbed pending a real
+  // YAML-era rewrite (or just delete; the hexagon path above already
+  // exercises the human resolver).
+  test.skip("kind=human (box shape with explicit kind) also resolves to human — DOT-only", async () => {
     // Authoring-time kind= wins over shape-based derivation. A `box`
     // node with `kind=human` is a valid alias for `shape=hexagon`.
     const store = new SqliteStore({ path: ":memory:" });
@@ -269,7 +280,7 @@ describe.skip("autoDispatcherResolver", () => {
   });
 });
 
-describe.skip("resolveMaxMs — properties", () => {
+describe("resolveMaxMs — properties", () => {
   const nodeAttrsWithTimeout = fc.tuple(fc.integer({ min: 1, max: 10_000 }), fc.constantFrom("ms", "s", "m", "h")).map(
     ([n, u]) =>
       ({
@@ -330,7 +341,7 @@ describe.skip("resolveMaxMs — properties", () => {
   });
 });
 
-describe.skip("resolveMaxMs — zero sentinel", () => {
+describe("resolveMaxMs — zero sentinel", () => {
   test("max_ms=0 returns undefined", () => {
     expect(resolveMaxMs({ max_ms: 0 }, 1_000)).toBeUndefined();
   });
@@ -359,7 +370,7 @@ describe.skip("resolveMaxMs — zero sentinel", () => {
   });
 });
 
-describe.skip("auto-dispatcher → codergenFactory unbounded propagation", () => {
+describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
   function captureMaxMsForNode(
     dot: string,
     nodeId: string,

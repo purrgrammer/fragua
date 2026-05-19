@@ -1,5 +1,6 @@
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
+import { dotToYaml } from "../../core/test/helpers/dot-to-yaml.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 
 export interface TestRig {
@@ -13,7 +14,8 @@ export interface TestRig {
 export function rig(workflow: { sha?: string; name?: string; dot?: string } = {}): TestRig {
   const store = new SqliteStore({ path: ":memory:" });
   const sha = workflow.sha ?? "wf";
-  store.saveWorkflow(sha, workflow.name ?? "t", workflow.dot ?? "digraph{}");
+  const source = workflow.dot ? dotToYaml(workflow.dot) : "name: t\nnodes:\n  start: {type: start}\nedges: []\n";
+  store.saveWorkflow(sha, workflow.name ?? "t", source);
   const dispatcher = new Dispatcher();
   const tools = new handler.InMemoryToolRegistry();
   const llmCall: handler.LlmCallFn = async () => ({

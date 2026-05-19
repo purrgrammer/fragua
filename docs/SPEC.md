@@ -6,7 +6,7 @@
 
 ## 1. Vision
 
-**swarm** is a universal AI agent orchestrator. It takes a text-first declarative workflow (Graphviz DOT), executes it through a deterministic state machine that drives LLM-based agents across any provider, and produces a complete, replayable audit trail.
+**swarm** is a universal AI agent orchestrator. It takes a declarative YAML workflow, executes it through a deterministic state machine that drives LLM-based agents across any provider, and produces a complete, replayable audit trail.
 
 Core values, in priority order:
 
@@ -60,7 +60,7 @@ Single machine, one harness process, one SQLite database. The harness supervises
 
 ### 3.1 Workflows
 
-A workflow is a Graphviz DOT graph. Each node has a shape that maps to a handler kind:
+A workflow is a YAML document with `name`, `nodes`, `edges` at the root. Each node declares a `type:` discriminator (`start | exit | llm | human | tool`) that maps to a handler kind:
 
 | Shape | Handler kind |
 |---|---|
@@ -291,6 +291,6 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 
 **Surfaced as warnings, not errors:**
 
-- Unknown attribute names on nodes / edges / graph (`W013`) — the DOT parser accepts any name through index-signature passthrough; the validator catches typos at validate-time.
+- Unknown attribute names on nodes / edges / graph (`W013`) — the YAML parser accepts any name through index-signature passthrough; the validator catches typos at validate-time.
 
 Validator code lookup table: [`.agents/skills/swarm-author/references/validator-codes.md`](../.agents/skills/swarm-author/references/validator-codes.md).

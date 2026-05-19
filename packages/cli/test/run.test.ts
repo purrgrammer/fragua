@@ -77,20 +77,16 @@ async function rig(): Promise<Rig> {
   };
 }
 
-describe.skip("swarm run", () => {
+describe("swarm run", () => {
   test("round-trip: DOT file → upload → enqueue → stream → completed", async () => {
     const r = await rig();
     try {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
-      const dotPath = join(workflowDir, "echo.dot");
+      const dotPath = join(workflowDir, "echo.yaml");
       writeFileSync(
         dotPath,
-        `digraph Echo {
-           start [shape=Mdiamond];
-           finish [shape=Msquare];
-           start -> finish;
-         }`,
+        `name: echo\nnodes:\n  start: {type: start}\n  finish: {type: exit}\nedges:\n  - {from: start, to: finish}\n`,
       );
 
       const exitCode = await runCommand({
@@ -116,8 +112,11 @@ describe.skip("swarm run", () => {
     try {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
-      const dotPath = join(workflowDir, "echo.dot");
-      writeFileSync(dotPath, `digraph { start [shape=Mdiamond]; end [shape=Msquare]; start -> end; }`);
+      const dotPath = join(workflowDir, "echo.yaml");
+      writeFileSync(
+        dotPath,
+        `name: echo\nnodes:\n  start: {type: start}\n  end: {type: exit}\nedges:\n  - {from: start, to: end}\n`,
+      );
 
       const code = await runCommand({
         workflow: dotPath,
@@ -135,8 +134,11 @@ describe.skip("swarm run", () => {
     try {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
-      const dotPath = join(workflowDir, "echo.dot");
-      writeFileSync(dotPath, `digraph { start [shape=Mdiamond]; end [shape=Msquare]; start -> end; }`);
+      const dotPath = join(workflowDir, "echo.yaml");
+      writeFileSync(
+        dotPath,
+        `name: echo\nnodes:\n  start: {type: start}\n  end: {type: exit}\nedges:\n  - {from: start, to: end}\n`,
+      );
 
       const code = await runCommand({
         workflow: dotPath,

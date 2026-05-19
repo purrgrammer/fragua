@@ -1,16 +1,7 @@
 // Workflow-coverage smoke test.
 //
-// Two invariants over the shipped `.swarm/workflows/*.dot` examples:
-//
-//   1. Every .dot file in the repo's `.swarm/workflows/` directory
-//      parses AND validates cleanly. A broken example is broken
-//      onboarding.
-//
-//   2. Together, the shipped workflows exercise every canonical node
-//      handler kind from attractor-spec §2.8 — so when someone removes
-//      a shape from NodeShape without an accompanying workflow update,
-//      this test fails and the omission is visible in CI instead of
-//      showing up as a runtime dispatch mismatch months later.
+// Every `.yaml` file in the repo's `.swarm/workflows/` directory parses
+// AND validates cleanly. A broken example is broken onboarding.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
@@ -21,13 +12,11 @@ const WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "..", ".swarm", "workflo
 
 function listWorkflowFiles(): string[] {
   return readdirSync(WORKFLOWS_DIR)
-    .filter((f) => f.endsWith(".dot"))
+    .filter((f) => f.endsWith(".yaml"))
     .map((f) => join(WORKFLOWS_DIR, f));
 }
 
-// TODO(yaml-cutover commit 2): switch the listing to `*.yaml` once the
-// workflow files are migrated. Skipping until then.
-describe.skip(".swarm/workflows/*.dot — coverage + validity", () => {
+describe(".swarm/workflows/*.yaml — coverage + validity", () => {
   const files = listWorkflowFiles();
 
   test("repo ships at least one workflow", () => {

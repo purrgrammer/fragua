@@ -9,8 +9,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SqliteStore, sha256Hex } from "@swarm/store";
 import { FEED_EVENT_KINDS } from "@swarm/types";
+import { lowerIfDot } from "../../../core/test/helpers/dot-to-yaml.ts";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
+
+// Lower inline DOT fixtures to YAML on the way into the store across
+// the cutover. Tests author DOT; production stores YAML.
+{
+  const _origSave = SqliteStore.prototype.saveWorkflow;
+  SqliteStore.prototype.saveWorkflow = function (sha: string, name: string, source: string) {
+    return _origSave.call(this, sha, name, lowerIfDot(source));
+  };
+}
 
 let store: SqliteStore;
 let server: { fetch: (req: Request) => Response | Promise<Response> };
@@ -72,7 +82,7 @@ async function req(method: string, path: string, body?: unknown): Promise<Respon
   return server.fetch(new Request(`http://test${path}`, init));
 }
 
-describe.skip("POST /workflows — upload", () => {
+describe("POST /workflows — upload", () => {
   test("accepts DOT source, returns sha, persists via saveWorkflow", async () => {
     const res = await req("POST", "/workflows", {
       name: "hello",
@@ -102,7 +112,15 @@ describe.skip("POST /workflows — upload", () => {
   test("rejects malformed timeout attr with 400 + invalid_timeout_attr code", async () => {
     const res = await req("POST", "/workflows", {
       name: "bad",
-      dotSource: `digraph { start [shape=Mdiamond]; impl [shape=box, timeout="garbage"]; done [shape=Msquare]; start -> impl -> done; }`,
+      dotSource: `name: bad
+nodes:
+  start: {type: start}
+  impl: {type: llm, prompt: x, timeout: "garbage"}
+  done: {type: exit}
+edges:
+  - {from: start, to: impl}
+  - {from: impl, to: done}
+`,
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; code: string; offender: { nodeId: string; attr: string } };
@@ -116,7 +134,15 @@ describe.skip("POST /workflows — upload", () => {
   test("accepts max_ms=0 as the unbounded sentinel for codergen", async () => {
     const res = await req("POST", "/workflows", {
       name: "ok",
-      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=0]; done [shape=Msquare]; start -> a -> done; }`,
+      dotSource: `name: ok
+nodes:
+  start: {type: start}
+  a: {type: llm, prompt: x, max_ms: 0}
+  done: {type: exit}
+edges:
+  - {from: start, to: a}
+  - {from: a, to: done}
+`,
     });
     expect(res.status).toBe(200);
   });
@@ -124,7 +150,15 @@ describe.skip("POST /workflows — upload", () => {
   test("rejects negative max_ms", async () => {
     const res = await req("POST", "/workflows", {
       name: "bad",
-      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=-1]; done [shape=Msquare]; start -> a -> done; }`,
+      dotSource: `name: bad
+nodes:
+  start: {type: start}
+  a: {type: llm, prompt: x, max_ms: -1}
+  done: {type: exit}
+edges:
+  - {from: start, to: a}
+  - {from: a, to: done}
+`,
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { code: string };
@@ -218,7 +252,7 @@ describe.skip("POST /workflows — upload", () => {
   });
 });
 
-describe.skip("POST /runs — enqueue", () => {
+describe("POST /runs — enqueue", () => {
   test("enqueues a run and returns the generated id", async () => {
     const res = await req("POST", "/runs", { workflowSha: "wf", priority: 3 });
     expect(res.status).toBe(200);
@@ -452,7 +486,7 @@ describe.skip("POST /runs — enqueue", () => {
   });
 });
 
-describe.skip("GET /runs/:id/steps", () => {
+describe("GET /runs/:id/steps", () => {
   test("unknown run → 404 with code=not_found", async () => {
     // Note: this test lives alongside the other /runs/ read tests which
     // mount `createRoutes()` (intent writes + SSE). The steps endpoint is
@@ -510,7 +544,7 @@ describe.skip("GET /runs/:id/steps", () => {
   });
 });
 
-describe.skip("GET /runs?status= filter", () => {
+describe("GET /runs?status= filter", () => {
   test("accepts paused_auto — regression: VALID_STATUSES used to drop the literal", async () => {
     const { createServer } = await import("../../src/index.ts");
     const app = createServer({ store });
@@ -551,7 +585,7 @@ describe.skip("GET /runs?status= filter", () => {
   });
 });
 
-describe.skip("GET /runs/:id/messages", () => {
+describe("GET /runs/:id/messages", () => {
   test("unknown run → 404 with code=not_found", async () => {
     const { createServer } = await import("../../src/index.ts");
     const app = createServer({ store });
@@ -611,7 +645,7 @@ describe.skip("GET /runs/:id/messages", () => {
   });
 });
 
-describe.skip("intent-write routes", () => {
+describe("intent-write routes", () => {
   test.each([
     ["steer", "/steer", { text: "go" }, "intent.steering_requested"],
     ["pause", "/pause", undefined, "intent.pause_requested"],
@@ -686,7 +720,7 @@ describe.skip("intent-write routes", () => {
   });
 });
 
-describe.skip("reads", () => {
+describe("reads", () => {
   test("GET /runs/:id/events supports since= filter", async () => {
     store.enqueueRun({ runId: "r", workflowSha: "wf" });
     store.appendIntent("r", { type: "intent.pause_requested", payload: {} });
@@ -705,7 +739,7 @@ describe.skip("reads", () => {
   });
 });
 
-describe.skip("GET /metrics/global", () => {
+describe("GET /metrics/global", () => {
   test("sums generated columns + pivots model breakdown", async () => {
     store.enqueueRun({ runId: "r1", workflowSha: "wf" });
     const s = store.getState("r1")!;
@@ -763,7 +797,7 @@ describe.skip("GET /metrics/global", () => {
   });
 });
 
-describe.skip("P19 — SSE replay via Last-Event-ID", () => {
+describe("P19 — SSE replay via Last-Event-ID", () => {
   /** Seed `r` with four intents, producing events at seq 1..4 (the
    * enqueue is seq 1; each appendIntent adds one more). Returned for
    * tests that want to assert which subset crosses the wire. */
@@ -973,7 +1007,7 @@ describe.skip("P19 — SSE replay via Last-Event-ID", () => {
   });
 });
 
-describe.skip("global event feed (cross-run)", () => {
+describe("global event feed (cross-run)", () => {
   /** Drain SSE response into a single string, capped at deadline or
    * once `marker` appears. Mirrors the per-run helper above; private
    * here so each describe block has its own. */
@@ -1333,7 +1367,7 @@ describe.skip("global event feed (cross-run)", () => {
   });
 });
 
-describe.skip("GET /projects + GET /runs?cwd= — project surface", () => {
+describe("GET /projects + GET /runs?cwd= — project surface", () => {
   test("/projects returns one row per distinct cwd, with basename + counts", async () => {
     store.enqueueRun({ runId: "a1", workflowSha: "wf", cwd: "/repos/alpha" });
     store.enqueueRun({ runId: "a2", workflowSha: "wf", cwd: "/repos/alpha" });

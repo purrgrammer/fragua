@@ -3,9 +3,14 @@
 // before we spend tokens on a plan phase only to halt at implement.
 
 import { describe, expect, test } from "bun:test";
-import { validateWorkflowModels } from "../src/workflow-model-validator.ts";
+import { validateWorkflowModels as _validateWorkflowModels } from "../src/workflow-model-validator.ts";
+import { lowerIfDot } from "../../core/test/helpers/dot-to-yaml.ts";
 
-describe.skip("validateWorkflowModels", () => {
+// Lower DOT fixtures to YAML transparently; tests author DOT.
+const validateWorkflowModels: typeof _validateWorkflowModels = (src, ...rest) =>
+  _validateWorkflowModels(lowerIfDot(src), ...rest);
+
+describe("validateWorkflowModels", () => {
   test("accepts a workflow with no model declarations (runtime default)", () => {
     const dot = `digraph {
       start [shape=Mdiamond];
@@ -137,7 +142,10 @@ describe.skip("validateWorkflowModels", () => {
     expect(r.ok).toBe(true);
   });
 
-  test("rejects an unknown model declared via model_stylesheet (regression: 01kqs7aq2qha5ke3b2)", () => {
+  // model_stylesheet retired (commit 137f176b). Resolution chain is now
+  // per-node attr → daemon default; the validator catches per-node
+  // typos directly.
+  test.skip("rejects an unknown model declared via model_stylesheet — retired", () => {
     // The failing run used merge.dot sha 6b06ea3 with:
     //   model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
     //                       #preflight { llm_model: claude-haiku-4-6; }"

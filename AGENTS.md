@@ -6,7 +6,7 @@
 
 ## What this is
 
-**swarm** is a universal AI agent orchestrator. Text-first DOT workflows → deterministic state machine → LLM-based agents across any provider → replayable event log on top of a single SQLite store.
+**swarm** is a universal AI agent orchestrator. YAML workflows → deterministic state machine → LLM-based agents across any provider → replayable event log on top of a single SQLite store.
 
 Authoritative docs:
 
@@ -33,7 +33,7 @@ bun run swarm harness                    # default entry point: daemon + HTTP, ~
 bun run swarm daemon --db <path>         # CI primitive: executor only against an explicit DB
 bun run swarm serve  --db <path>         # CI primitive: standalone HTTP + SSE, default :3000
 bun run swarm run <workflow|name> [--input "…"]    # upload + enqueue + stream events; bare names resolve against ~/.swarm/workflows/, then <cwd>/.swarm/workflows/
-bun run swarm validate <workflow.dot>    # parse + lint, no execution
+bun run swarm validate <workflow.yaml>   # parse + lint, no execution
 bun run swarm db {vacuum,gc-blobs,backup --to <path>}
 bun run dev:web                          # Vite dev server (:5173), proxies /api/** to harness; run harness first
 ```
@@ -46,7 +46,7 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 |---|---|---|
 | `@swarm/types` | `src/index.ts`, `src/swarm-events.ts`, `src/agents.ts`, `src/skills.ts`, `src/events.ts` | Shared `AgentMessage` + swarm-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
 | `@swarm/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
-| `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy}.ts`, `src/parser/` | Pure types; DOT parser; handler contract; engine reducers |
+| `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy,thread}.ts`, `src/parser/yaml.ts` | Pure types; YAML parser; handler contract; engine reducers |
 | `@swarm/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
 | `@swarm/agent` | `src/{backend,handler-bridge,system-prompt,thread,event-bridge,tool-adapter}.ts` | `PiCodergenBackend`; pi-ai → handler bridge; per-run system-prompt builder |
 | `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/`, `src/agents/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills + agent-definition discovery |
