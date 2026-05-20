@@ -191,10 +191,14 @@ type OutcomeProp = { outcome?: "success" | "fail" };
 
 type TemporaryProps = EdgeProps &
   OutcomeProp & {
-    /** When true, route the edge via a wide right-side arc instead of the
-     *  default bezier. Used for forward skip-edges so their labels don't
-     *  sit behind the intermediate node column. */
+    /** When true, route the edge via a wide arc instead of the default
+     *  bezier. Used for forward skip-edges so their labels don't sit behind
+     *  the intermediate node column. */
     arcOut?: boolean;
+    /** Which side the `arcOut` arc bulges toward. Defaults to right; the host
+     *  passes `"left"` when the source node leans left so the arc stays on
+     *  its own side instead of crossing the graph. */
+    arcSide?: "left" | "right";
   };
 
 const strokeForOutcome = (outcome: OutcomeProp["outcome"]): string | null => {
@@ -220,13 +224,14 @@ const Temporary = ({
   markerEnd,
   data,
   arcOut,
+  arcSide = "right",
   outcome,
 }: TemporaryProps) => {
   const d = data as TemporaryData | undefined;
   const arcIndex = typeof d?.arcIndex === "number" ? d.arcIndex : 0;
   const arcExtent = typeof d?.arcExtent === "number" ? d.arcExtent : 0;
   const [edgePath, labelX, labelY] = arcOut
-    ? wideArcPath(sourceX, sourceY, targetX, targetY, "right", arcIndex, arcExtent)
+    ? wideArcPath(sourceX, sourceY, targetX, targetY, arcSide, arcIndex, arcExtent)
     : getSimpleBezierPath({
         sourcePosition,
         sourceX,

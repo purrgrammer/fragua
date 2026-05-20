@@ -476,7 +476,8 @@ function SwarmEdge(props: FlowEdgeRenderProps): JSX.Element {
     const arcSide = d?.isRetargetEdge ? "left" : "right";
     return <AiEdge.Loop {...props} outcome={outcome} arcSide={arcSide} />;
   }
-  if (d?.isSkipEdge || d?.isParallelArc) return <AiEdge.Temporary {...props} arcOut outcome={outcome} />;
+  if (d?.isSkipEdge || d?.isParallelArc)
+    return <AiEdge.Temporary {...props} arcOut arcSide={d?.arcSide ?? "right"} outcome={outcome} />;
   if (d?.animated) return <AiEdge.Animated {...props} outcome={outcome} />;
   return <AiEdge.Temporary {...props} outcome={outcome} />;
 }
@@ -487,10 +488,14 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
     isBackEdge?: boolean;
     isSkipEdge?: boolean;
     /** Non-primary member of a same-target group (`parallelIndex > 0`).
-     *  Routed through the right-side handles + a wide arc so it doesn't
+     *  Routed through the side handles + a wide arc so it doesn't
      *  draw on top of the straight primary edge — e.g. a `fail` edge and
      *  a `success` edge both landing on `exit`. */
     isParallelArc?: boolean;
+    /** Side a skip / parallel arc bulges toward — `"left"` when the source
+     *  node sits left of the target so the long edge stays on its own side.
+     *  Left arcs mount on the retarget (left) handles. Default `"right"`. */
+    arcSide?: "left" | "right";
     label?: string;
     outcome?: "success" | "fail";
     dim?: boolean;
@@ -919,6 +924,15 @@ export function toFlowGraph(
           : isHumanEdge
             ? MARKER_RETRY
             : MARKER_DEFAULT;
+    // Skip / parallel arcs bulge to the side their source leans (left node →
+    // left arc) so a left branch's long edge stays on its own side instead of
+    // crossing the graph. Structural loops (back / self / loop_restart) keep
+    // the right channel. A left arc mounts on the left (retarget) handles.
+    const arcSide: "left" | "right" =
+      (isSkipEdge || parallelArc) && (positions.get(e.from)?.x ?? 0) < (positions.get(e.to)?.x ?? 0) - 1
+        ? "left"
+        : "right";
+    const leftArc = arcSide === "left";
     return {
       id: `${e.from}->${e.to}#${i}`,
       source: e.from,
@@ -931,6 +945,7 @@ export function toFlowGraph(
         isBackEdge: isBackEdge || isSelfLoop || loopRestart,
         isSkipEdge,
         isParallelArc: parallelArc,
+        arcSide,
         label,
         outcome,
         dim,
@@ -946,8 +961,16 @@ export function toFlowGraph(
             }
           : {}),
       },
-      sourceHandle: useSideHandles || loopRestart || parallelArc ? LOOP_HANDLE_SOURCE : undefined,
-      targetHandle: useSideHandles || loopRestart || parallelArc ? LOOP_HANDLE_TARGET : undefined,
+      sourceHandle: leftArc
+        ? RETARGET_HANDLE_SOURCE
+        : useSideHandles || loopRestart || parallelArc
+          ? LOOP_HANDLE_SOURCE
+          : undefined,
+      targetHandle: leftArc
+        ? RETARGET_HANDLE_TARGET
+        : useSideHandles || loopRestart || parallelArc
+          ? LOOP_HANDLE_TARGET
+          : undefined,
       markerEnd: marker,
     };
   });
