@@ -123,20 +123,14 @@ Upcasters are the price: every breaking IR-shape change ships an
 unchanged workflow's sha is stable across the bump. That maintenance is the
 mechanism that keeps identity stable across representation churn.
 
-### One open question for you
+### `id`/`name` is excluded from the hash
 
-**Is the workflow `id` (the `name:`) part of the content hash?** Two readings:
-
-- **Exclude it** (recommended): `id` is a *handle*, the `(scope, name) → sha`
-  alias carries it, and renaming a workflow doesn't mint a new version. Two
-  identically-structured workflows with different names collapse to one sha —
-  which is correct for a content-addressed store (they *are* the same
-  content). Closest to "content addressing".
-- **Include it**: a rename counts as a new version; identical-but-differently-
-  named workflows stay distinct. Simpler mental model ("the file is the
-  unit") but couples identity to a label.
-
-I lean exclude. Flagging because it's a genuine judgment call, not derivable.
+Decided: the workflow `id` (`name:`) is **not** in the content hash. It's a
+*handle*, carried by the lineage table (§Identity & lineage), so a rename
+doesn't mint a version and two identically-structured workflows under
+different names collapse to one sha — correct for a content-addressed store
+(they *are* the same content). `id` is therefore stripped by the normal form
+alongside `loc`/`directed`/`Node.id`.
 
 ## Storage
 
@@ -149,10 +143,62 @@ I lean exclude. Flagging because it's a genuine judgment call, not derivable.
 | `ir_version` (INTEGER) | representation version of the stored `ir`; gates the upcast-on-read. |
 | `created_at` | unchanged. |
 
-`dot_source` is **gone** (not renamed — there's no source at rest). On read:
-if `ir_version < CURRENT_IR_VERSION`, run the upcast chain to current and (optionally) rewrite the row. The daemon hydrates `ir` directly — no
-`parseWorkflow` at dispatch. `name` moves to the `(scope, name) → sha` alias
-table (orthogonal; can land with or before this).
+`dot_source` is **gone** (not renamed — there's no source at rest), and so is
+`name` (it lives in the lineage table below — the content row is name-free and
+scope-free, so the same IR under any handle dedups to one row). On read: if
+`ir_version < CURRENT_IR_VERSION`, run the upcast chain to current; the daemon
+hydrates `ir` directly — no `parseWorkflow` at dispatch.
+
+## Identity & lineage
+
+Excluding `name` from the hash splits the model cleanly: **content** is the
+`workflows` table above (`sha → ir`, name-free, scope-free, dedup'd);
+**identity** is a handle's history of which content it pointed at — a new
+table:
+
+```sql
+CREATE TABLE workflow_versions (
+  scope         TEXT NOT NULL,    -- 'global' | 'local'
+  project_root  TEXT NOT NULL,    -- <cwd> for local; '' for global
+  name          TEXT NOT NULL,    -- the bare handle
+  sha           TEXT NOT NULL REFERENCES workflows(sha),
+  version       INTEGER NOT NULL, -- monotonic per (scope, project_root, name): 1,2,3…
+  registered_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, project_root, name, version)
+) STRICT;
+```
+
+- **`project_root` is in the key.** Local workflows resolve under
+  `<cwd>/.swarm/workflows/<name>`, so two projects each own an independent
+  `work` lineage; global workflows use `project_root = ''`. `path` /
+  `ephemeral` scopes are anonymous one-offs — they register content into
+  `workflows` but get **no** `workflow_versions` row (no handle to track).
+
+**Register = version-iff-changed.** On `POST /workflows` (or the disk-resolved
+enqueue): parse → IR → `sha`; `INSERT OR IGNORE` the content row; then for the
+handle, read the latest version's `sha` — if it equals this `sha`, **no-op**
+(idempotent re-register of identical content); else append
+`version = prev+1, sha, registered_at = now`. A new version is minted *iff the
+IR sha changed for that handle* — the same predicate as the hash, so "new
+version" means exactly "the workflow changed."
+
+**Lineage falls out:**
+
+| Question | How |
+|---|---|
+| Current version | `… WHERE scope=? AND project_root=? AND name=? ORDER BY version DESC LIMIT 1` |
+| Full ordered history | `… ORDER BY version` → `(version, sha, registered_at)` |
+| What changed v2→v3 | hydrate both shas' IRs, structural diff |
+| Which version a run used | `run_state.workflow_sha` already pins the exact content; join back to `(scope, project_root, name, version)` |
+| Rollback | re-register old content → a *new* version whose `sha` equals an earlier one (content dedups; the handle advances) |
+
+**`run_state`** keeps `workflow_sha` (the exact content FK), `workflow_scope`,
+`workflow_name` — resolution provenance, unchanged. Optionally denormalise the
+resolved `version` at enqueue for cheap display; it's derivable from the join.
+
+**GC:** a `workflows` content row is live iff a `workflow_versions` row *or* a
+`run_state.workflow_sha` references it. Version rows are cheap history — keep
+them.
 
 ## Migration (pre-release — clean reset)
 
@@ -165,10 +211,9 @@ truncate dev runs). The `dot_source` identifier sweep deferred in
 
 ## Deferred / open
 
-- The `id`-in-hash question above.
-- `(scope, name)` alias table — orthogonal lineage; spec separately if not
-  folded in here.
 - Typebox-first IR schema in `@swarm/types` (one source generates the
   validator + the JSON Schema for editor IntelliSense + the upcast targets).
 - `POST /workflows` accepting a pre-built IR (non-YAML clients) — only on
   demand.
+- Whether to denormalise the resolved `version` onto `run_state` at enqueue
+  (display convenience) or always derive it from the lineage join.
