@@ -42,7 +42,7 @@ A node that decides *which* branch to take (a `routes:` step, or any triage) is 
 - **Prompt chaining** — linear `A → B → C`. `rollup`, `analyze`.
 - **Routing** — a step declares `routes:` and exits via the `route` tool; edges fan out per route. `work::triage`.
 - **Orchestrator-workers** — one step with `agent` in its tools fans out sub-agents dynamically. `review::dispatch`, `doc-sync::audit`.
-- **Evaluator-optimizer** — a step generates, the next judges, rejection retargets the generator (`retry:`). The daily-driver pattern. `work::review`, `fix-bug::reproduce`.
+- **Evaluator-optimizer** — a step generates, the next judges, rejection retargets the generator (`retry:`). The daily-driver pattern. `work::review`, `review::verify`.
 
 A real workflow usually **mixes** these — the patterns name the *shape of an edge or step*, not the whole graph. `work` is routing (`triage`) → prompt chaining (`plan → implement → review`) → evaluator-optimizer (`review` retargets `implement`) → tool steps (`format`, `ci`). `review` is routing (`scope`) → orchestrator-workers (`dispatch`) → evaluator-optimizer (`verify` retargets `synthesize`). Reach for whichever pattern fits each seam; don't force one over the whole run.
 
