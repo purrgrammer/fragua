@@ -5,14 +5,16 @@
 # rigor where it matters. The tier is classified from the DIFF (fresh
 # evidence), never inherited from how the change was authored.
 #
-#   skip  → no review (doc/typo/whitespace/generated) — scope LGTMs, auto-approves the PR
+#   skip  → no review pass (doc/typo/whitespace/generated) — scope LGTMs
 #   quick → one focused pass (small, single-concern change); no fan-out / synthesis / gate
 #   full  → parallel lenses (dispatch prunes to the relevant ones) → synthesize → verify gate
 #
-# quick and full both land at a `signoff` HITL; `skip` bypasses it. From
-# signoff the operator approves the PR, posts the review as feedback
-# (request-changes if it has blocking findings, else a comment), or keeps it
-# local. Each PR action consumes the review body + PR# from the thread.
+# All three tiers converge at the `signoff` HITL, where the operator decides
+# the PR action — approve, post the review as feedback (request-changes if it
+# has blocking findings, else a comment), or keep it local. The classifier only
+# ever decides review *depth*; the human always authorizes the *action* — no
+# path mutates the PR without a human. Each PR action consumes the review body
+# + PR# from the thread.
 #
 # Two decisions: DEPTH is topology (skip/quick/full); within `full`, the LENS
 # SET is the dispatcher's call (orchestrator-workers) — correctness always,
@@ -77,7 +79,7 @@ steps:
 
       For `skip`, that one line is the whole review — make it a clean `LGTM: <reason>`.
     routes:
-      skip:  {to: pr_approve,   label: "No substantive changes"}
+      skip:  {to: signoff,      label: "No substantive changes"}
       quick: {to: review_quick, label: "Quick review"}
       full:  {to: dispatch,     label: "Full review"}
 
@@ -159,14 +161,14 @@ steps:
       feedback: {to: pr_feedback, label: "Post feedback"}
       accept:   {to: exit,        label: "Keep local"}
 
-  pr_approve:                          # post the review + APPROVE the PR (also the skip auto-approve)
+  pr_approve:                          # post the review + APPROVE the PR
     type: llm
     thread: review
     allowed-tools: [bash]
     max-cost: 0.15
     next: exit
     prompt: |
-      The PR number (PR: <n>) and the review (or skip LGTM) are above in this thread.
+      The PR number (PR: <n>) and the review are above in this thread.
       If PR is `none` (local diff, no PR), emit `LGTM (no PR to approve)` and stop — don't post.
       Otherwise write the review body to a temp file (heredoc), `gh pr review <PR> --approve --body-file <tmp>`, and emit `APPROVED: PR <n> <url>`.
 
