@@ -661,32 +661,41 @@ swarm inbox [--limit N]    # list runs with inbox_status='pending'
 
 ### GC
 
-Retention sweep (lives in `packages/store/src/store.ts`, coordinated
-with the run-aging policy in `db-retention.md`):
+> Status: landed as `swarm gc --snapshots` (operator-invoked), not the
+> automatic run-aging sweep originally sketched here. The automatic sweep
+> waits on `db-retention.md`'s outstanding `swarm db prune` (run-aging
+> doesn't exist yet); ref-GC is deliberately decoupled from row deletion —
+> refs are the bulky git objects, rows are tiny, so the run row + event log
+> stay queryable after the reclaimable git objects are reclaimed.
 
 ```sh
-# Two refs per run, not N — see the namespace table.
+swarm gc --snapshots [--older-than 30d] [--dry-run] [--cwd <repo>] [--db <path>]
+# Per eligible run, two refs — not N (see the namespace table):
 git update-ref -d "refs/swarm/snapshots/$RUN_ID"
 git update-ref -d "refs/swarm/heads/$RUN_ID"
+git pack-refs --all   # once, after deletions
 ```
 
-Deleting the snapshots tip drops the whole parented chain; next
-`git gc --auto` reclaims the orphaned commits + trees + blobs. Retention
-rule:
+Eligibility (`store.getGcEligibleSnapshotRuns({ cwd, cutoff })`): the run is
+settled (`completed`/`halted`/`cancelled`), in this `cwd`, `updated_at` older
+than the window, and `inbox_status != 'pending'`. Deleting the snapshots tip
+drops the whole parented chain; next `git gc --auto` reclaims the orphaned
+commits + trees + blobs. Retention rule:
 
-- `inbox_status = 'pending'` → keep refs indefinitely (operator hasn't
-  decided yet).
-- `inbox_status IN ('acted', 'discarded')` → eligible for normal
-  run-aging GC.
-- `inbox_status IS NULL` (clean terminal) → eligible immediately on
-  run-aging.
+- `inbox_status = 'pending'` → kept indefinitely (operator hasn't decided).
+- `acted` → kept inside the window so branch/commit/merge can still compose;
+  eligible once aged out.
+- `discarded` → refs already deleted by the discard primitive (no-op here).
+- `NULL` (clean terminal) → eligible once aged out; only the run's
+  reclaimable git objects go (the Diff tab then surfaces the existing
+  410 "snapshot disposed" path).
 
-**Loose-ref hygiene.** Even at two refs/run, thousands of live runs
-leave thousands of loose refs that slow every ref walk. The sweep runs
-`git pack-refs --all` after deletions so the live set stays packed; ref
-*creation* during a run is unavoidably loose, but a periodic pack keeps
-the steady state compact. (The single-tip design already cut the loose
-count by the per-step factor — this handles the cross-run residue.)
+**Loose-ref hygiene.** Even at two refs/run, thousands of live runs leave
+thousands of loose refs that slow every ref walk. The sweep runs `git
+pack-refs --all` after deletions so the live set stays packed; ref *creation*
+during a run is unavoidably loose, but a periodic pack keeps the steady state
+compact. (The single-tip design already cut the loose count by the per-step
+factor — this handles the cross-run residue.)
 
 ---
 

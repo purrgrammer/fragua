@@ -100,6 +100,7 @@ import {
   claimQueuedRun,
   countQueuedRuns,
   countRunningRuns,
+  type GcSnapshotRunRow,
   type GlobalMetricsTotalsRow,
   type GlobalModelBreakdownRow,
   insertRunState,
@@ -114,6 +115,7 @@ import {
   type RunSummaryRow,
   type StepAggregateRow,
   selectCwds,
+  selectGcEligibleSnapshotRuns,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
   selectInboxActionCandidates,
@@ -640,6 +642,10 @@ export class SqliteStore implements IEventStore {
 
   getInboxActionCandidates(): WakeCandidateRow[] {
     return selectInboxActionCandidates(this.db);
+  }
+
+  getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[] {
+    return selectGcEligibleSnapshotRuns(this.db, opts);
   }
 
   getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null {

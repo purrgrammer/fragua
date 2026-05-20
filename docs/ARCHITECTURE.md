@@ -578,6 +578,7 @@ export interface IEventReader {
   getUnappliedIntents(runId: string): StoredEvent[];
   getWakeCandidates(opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number }): WakeCandidateRow[];
   getInboxActionCandidates(): WakeCandidateRow[];
+  getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[];
   getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null;
   findOrphanSideEffects(runId: string): OrphanSideEffectRow[];
 

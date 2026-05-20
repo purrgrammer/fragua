@@ -40,6 +40,7 @@ import type {
 } from "./analytics-queries.ts";
 import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 import type {
+  GcSnapshotRunRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
@@ -91,6 +92,7 @@ export type {
 export { decodeCursor, encodeCursor, getFirstRunAt } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 export type {
+  GcSnapshotRunRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
@@ -773,6 +775,13 @@ export interface IEventReader {
    * `getWakeCandidates`.
    */
   getInboxActionCandidates(): WakeCandidateRow[];
+  /**
+   * Terminal runs in `cwd` whose worktree snapshot refs are eligible for
+   * GC: settled status, older than `cutoff` (ms epoch), and not awaiting an
+   * operator decision (`inbox_status` not `pending`). Drives
+   * `swarm gc --snapshots`. See docs/proposals/worktrees.md §GC.
+   */
+  getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[];
   /**
    * The next unapplied intent of the given `type` strictly after
    * `sinceSeq`, or `null`. Payload is parsed JSON. Used by the daemon's

@@ -329,6 +329,31 @@ export function selectInboxActionCandidates(db: Database): WakeCandidateRow[] {
   return db.query<WakeCandidateRow, []>(SELECT_INBOX_ACTION_CANDIDATES_SQL).all();
 }
 
+export interface GcSnapshotRunRow {
+  runId: string;
+  status: RunStatus;
+  updatedAt: number;
+}
+
+const SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL = `
+  SELECT run_id AS runId, status, updated_at AS updatedAt
+    FROM run_state
+   WHERE cwd = ?
+     AND status IN ('completed', 'halted', 'cancelled')
+     AND updated_at < ?
+     AND (inbox_status IS NULL OR inbox_status <> 'pending')
+   ORDER BY updated_at ASC
+`;
+
+/** Terminal runs in `cwd` whose snapshot refs are eligible for GC: settled
+ *  (not `running`/`queued`/`paused`), older than `cutoff` (ms epoch), and
+ *  not awaiting an operator decision (`inbox_status` not `pending`). The
+ *  caller deletes each run's `refs/swarm/{snapshots,heads}/<runId>`; runs
+ *  that never used a worktree simply have no such refs (a no-op delete). */
+export function selectGcEligibleSnapshotRuns(db: Database, opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[] {
+  return db.query<GcSnapshotRunRow, [string, number]>(SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL).all(opts.cwd, opts.cutoff);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Writes — run lifecycle
 // ─────────────────────────────────────────────────────────────────────

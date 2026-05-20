@@ -17,6 +17,14 @@ last-reviewed: 2026-05-01
 - `swarm db vacuum` — SQLite fragmentation reclaim.
 - `swarm db gc-blobs` — sweep unreferenced artifact blobs.
 - `swarm db backup --to <path>` — full-DB snapshot.
+- `swarm gc --snapshots [--older-than <dur>] [--dry-run]` — reclaim worktree
+  snapshot refs (`refs/swarm/{snapshots,heads}/<runId>`) for settled runs
+  older than the window that aren't awaiting an operator decision
+  (`inbox_status != 'pending'`), then `git pack-refs --all`. Operator-invoked,
+  same model as the prune CLIs below. Decouples ref-GC (the bulky git
+  objects) from `run_state` row deletion — the row + event log stay
+  queryable; only the reclaimable git objects go. See
+  [`worktrees.md`](worktrees.md) §GC.
 
 ## Outstanding
 

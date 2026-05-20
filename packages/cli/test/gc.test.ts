@@ -18,119 +18,133 @@ afterEach(() => {
   }
 });
 
-/** Build a repo with a populated DB and a `swarm/runs/<id>` branch
- * pointing at a real commit, then mutate the run's `updated_at` to
- * simulate aging. Returns the cwd. */
-function makeRepoWithBranchedRun(opts: { runId: string; ageMs: number }): string {
+function git(cwd: string, ...args: string[]): string {
+  const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  return r.stdout?.trim() ?? "";
+}
+
+function refExists(cwd: string, ref: string): boolean {
+  return spawnSync("git", ["-C", cwd, "rev-parse", "--verify", "--quiet", ref]).status === 0;
+}
+
+/** Build a repo + DB with a terminal run that owns
+ * `refs/swarm/{snapshots,heads}/<id>`, backdated by `ageMs`. When `pending`,
+ * the run's terminal snapshot leaves recoverable work (inbox_status=pending,
+ * so GC must keep it). */
+function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?: boolean }): string {
   const cwd = mkdtempSync(join(tmpdir(), "swarm-gc-"));
   workdirs.push(cwd);
   mkdirSync(join(cwd, ".swarm"), { recursive: true });
 
   spawnSync("git", ["init", "-b", "main", cwd], { stdio: "ignore" });
-  spawnSync("git", ["-C", cwd, "config", "user.email", "test@test"], { stdio: "ignore" });
-  spawnSync("git", ["-C", cwd, "config", "user.name", "test"], { stdio: "ignore" });
-  spawnSync("git", ["-C", cwd, "config", "commit.gpgsign", "false"], { stdio: "ignore" });
+  git(cwd, "config", "user.email", "test@test");
+  git(cwd, "config", "user.name", "test");
+  git(cwd, "config", "commit.gpgsign", "false");
   writeFileSync(join(cwd, "README.md"), "# x\n");
-  spawnSync("git", ["-C", cwd, "add", "-A"], { stdio: "ignore" });
-  spawnSync("git", ["-C", cwd, "commit", "-m", "init"], { stdio: "ignore" });
-  spawnSync("git", ["-C", cwd, "branch", `swarm/runs/${opts.runId}`], { stdio: "ignore" });
+  git(cwd, "add", "-A");
+  git(cwd, "commit", "-m", "init");
+  const head = git(cwd, "rev-parse", "HEAD");
+  git(cwd, "update-ref", `refs/swarm/snapshots/${opts.runId}`, head);
+  git(cwd, "update-ref", `refs/swarm/heads/${opts.runId}`, head);
 
   const dbPath = join(cwd, ".swarm/swarm.db");
   const store = new SqliteStore({ path: dbPath });
   store.saveWorkflow("sha", "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
-  store.enqueueRun({ runId: opts.runId, workflowSha: "sha" });
+  store.enqueueRun({ runId: opts.runId, workflowSha: "sha", cwd });
+  const s0 = store.getState(opts.runId)!;
+  store.appendFact(
+    opts.runId,
+    [
+      {
+        type: "fact.run_started",
+        payload: {
+          workflowSha: "sha",
+          schemaVersion: s0.schemaVersion,
+          startNode: "work",
+          baseGitSha: head,
+          baseGitRef: "main",
+        },
+      },
+    ],
+    s0.version,
+  );
+  const s1 = store.getState(opts.runId)!;
+  store.appendFact(opts.runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], s1.version);
+  if (opts.pending === true) {
+    const s2 = store.getState(opts.runId)!;
+    store.appendFact(
+      opts.runId,
+      [
+        {
+          type: "fact.snapshot_recorded",
+          payload: {
+            eventIdx: 3,
+            treeSha: head,
+            commitSha: head,
+            parentSnap: "",
+            headSha: null,
+            headRef: null,
+            diffBaseSha: head,
+            committed: null,
+            uncommitted: { filesChanged: 1, insertions: 2, deletions: 0 },
+          },
+        },
+      ],
+      s2.version,
+    );
+  }
   store.close();
 
-  // Backdate the run so it falls outside / inside the retention window.
-  const fakedUpdatedAt = Date.now() - opts.ageMs;
   const db = new Database(dbPath);
-  db.query("UPDATE run_state SET updated_at = ? WHERE run_id = ?").run(fakedUpdatedAt, opts.runId);
+  db.query("UPDATE run_state SET updated_at = ? WHERE run_id = ?").run(Date.now() - opts.ageMs, opts.runId);
   db.close();
 
   return cwd;
 }
 
-describe("swarm gc --branches", () => {
-  test("dry-run reports old branches without deleting", async () => {
-    const cwd = makeRepoWithBranchedRun({
-      runId: "old-run",
-      ageMs: 60 * 24 * 60 * 60 * 1000, // 60 days ago
-    });
+const MONTH = 30 * 24 * 60 * 60 * 1000;
 
-    const code = await gcCommand({
-      target: "branches",
-      cwd,
-      olderThanMs: 30 * 24 * 60 * 60 * 1000,
-      dryRun: true,
-    });
+describe("swarm gc --snapshots", () => {
+  test("dry-run reports eligible refs without deleting", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
+    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH, dryRun: true });
     expect(code).toBe(0);
-
-    const branches = spawnSync("git", ["-C", cwd, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).toContain("swarm/runs/old-run");
+    expect(refExists(cwd, "refs/swarm/snapshots/old-run")).toBe(true);
+    expect(refExists(cwd, "refs/swarm/heads/old-run")).toBe(true);
   });
 
-  test("real run deletes branches outside the retention window", async () => {
-    const cwd = makeRepoWithBranchedRun({
-      runId: "old-run",
-      ageMs: 60 * 24 * 60 * 60 * 1000,
-    });
-
-    const code = await gcCommand({
-      target: "branches",
-      cwd,
-      olderThanMs: 30 * 24 * 60 * 60 * 1000,
-    });
+  test("deletes both refs for a settled run outside the retention window", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
+    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
-
-    const branches = spawnSync("git", ["-C", cwd, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).not.toContain("swarm/runs/old-run");
+    expect(refExists(cwd, "refs/swarm/snapshots/old-run")).toBe(false);
+    expect(refExists(cwd, "refs/swarm/heads/old-run")).toBe(false);
   });
 
-  test("branches inside the retention window survive", async () => {
-    const cwd = makeRepoWithBranchedRun({
-      runId: "fresh-run",
-      ageMs: 1 * 24 * 60 * 60 * 1000, // 1 day ago
-    });
-
-    const code = await gcCommand({
-      target: "branches",
-      cwd,
-      olderThanMs: 30 * 24 * 60 * 60 * 1000,
-    });
+  test("refs inside the retention window survive", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "fresh-run", ageMs: 1 * 24 * 60 * 60 * 1000 });
+    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
-
-    const branches = spawnSync("git", ["-C", cwd, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).toContain("swarm/runs/fresh-run");
+    expect(refExists(cwd, "refs/swarm/snapshots/fresh-run")).toBe(true);
   });
 
-  test("branches with no run_state row are left alone", async () => {
-    const cwd = makeRepoWithBranchedRun({
-      runId: "tracked",
-      ageMs: 60 * 24 * 60 * 60 * 1000,
-    });
-    // Manually create a stray branch — no matching DB row.
-    spawnSync("git", ["-C", cwd, "branch", "swarm/runs/stray-branch"], { stdio: "ignore" });
-
-    await gcCommand({
-      target: "branches",
-      cwd,
-      olderThanMs: 30 * 24 * 60 * 60 * 1000,
-    });
-
-    const branches = spawnSync("git", ["-C", cwd, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).toContain("swarm/runs/stray-branch");
-    expect(branches.stdout).not.toContain("swarm/runs/tracked");
+  test("pending (inbox) runs are kept regardless of age", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "pending-run", ageMs: 60 * 24 * 60 * 60 * 1000, pending: true });
+    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(refExists(cwd, "refs/swarm/snapshots/pending-run")).toBe(true);
+    expect(refExists(cwd, "refs/swarm/heads/pending-run")).toBe(true);
   });
 });
 
 describe("parseDuration", () => {
   test("default", () => {
-    expect(parseDuration(undefined)).toBe(30 * 24 * 60 * 60 * 1000);
-    expect(parseDuration("")).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(parseDuration(undefined)).toBe(MONTH);
+    expect(parseDuration("")).toBe(MONTH);
   });
 
   test("days, hours, weeks, minutes", () => {
-    expect(parseDuration("30d")).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(parseDuration("30d")).toBe(MONTH);
     expect(parseDuration("12h")).toBe(12 * 60 * 60 * 1000);
     expect(parseDuration("2w")).toBe(2 * 7 * 24 * 60 * 60 * 1000);
     expect(parseDuration("90m")).toBe(90 * 60 * 1000);

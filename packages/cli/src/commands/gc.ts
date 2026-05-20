@@ -1,13 +1,20 @@
-// `swarm gc --branches` — prune `swarm/runs/*` branches whose runs are
-// older than the retention window. The branch is the only artifact
-// `dispose()` leaves behind, so without GC the refspace grows linearly
-// with run count. See `docs/proposals/run-isolation.md`.
+// `swarm gc --snapshots` — reclaim worktree snapshot refs (docs/proposals/
+// worktrees.md §GC). Per-run snapshots live under two non-porcelain refs,
+// `refs/swarm/snapshots/<runId>` (the parented tip) and
+// `refs/swarm/heads/<runId>`; deleting the tip drops the whole chain so the
+// next `git gc --auto` reclaims its commits + trees + blobs.
 //
-// Default retention: 30 days. Source of truth for "how old": the run's
-// `run_state.updated_at`, which freezes once the terminal fact applies
-// (no later writes mutate it). Branches with no matching run row (e.g.
-// the run was deleted, or the branch was created out of band) are kept
-// — we only delete what we can prove we own.
+// Retention (operator-invoked, not an automatic sweep — pairs with the
+// `swarm db prune` model in docs/proposals/db-retention.md):
+//   - `inbox_status = 'pending'`  → kept (operator hasn't decided).
+//   - everything else, once the run is settled and older than the window
+//     (default 30d) → eligible. `acted` runs are kept inside the window so
+//     branch/commit/merge can still compose; `discarded` runs already had
+//     their refs deleted (a no-op here); clean (`NULL`) runs lose only their
+//     reclaimable git objects — the run row + event log stay queryable.
+//
+// "How old" is `run_state.updated_at`, frozen once the terminal fact lands.
+// A trailing `git pack-refs --all` keeps the live ref set compact.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -15,14 +22,12 @@ import { resolve } from "node:path";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 
-const SWARM_RUN_BRANCH_PREFIX = "swarm/runs/";
 const DEFAULT_OLDER_THAN_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface GcCommandOptions {
-  /** What to garbage-collect. Branches today; future hooks (worktrees,
-   * blobs) reuse this command surface. */
-  target: "branches";
-  /** Repo root the branches live in. Default `process.cwd()`. */
+  /** What to garbage-collect. Worktree snapshot refs today. */
+  target: "snapshots";
+  /** Repo root the refs live in. Default `process.cwd()`. */
   cwd?: string;
   /** Explicit DB path. Default `<cwd>/.swarm/swarm.db`. */
   dbPath?: string;
@@ -33,81 +38,84 @@ export interface GcCommandOptions {
 }
 
 export async function gcCommand(opts: GcCommandOptions): Promise<number> {
-  if (opts.target !== "branches") {
+  if (opts.target !== "snapshots") {
     console.error(chalk.red(`gc: unknown target "${opts.target}"`));
     return 1;
   }
   const cwd = resolve(opts.cwd ?? process.cwd());
   const dbPath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
   if (!existsSync(dbPath)) {
-    console.error(chalk.red(`gc --branches: no store at ${dbPath}`));
+    console.error(chalk.red(`gc --snapshots: no store at ${dbPath}`));
     return 1;
   }
   const olderThanMs = opts.olderThanMs ?? DEFAULT_OLDER_THAN_MS;
   const cutoff = Date.now() - olderThanMs;
   const dryRun = opts.dryRun === true;
 
-  const branches = await listSwarmRunBranches(cwd);
-  if (branches.length === 0) {
-    console.log(chalk.dim("gc --branches: no swarm/runs/* branches found"));
-    return 0;
-  }
-
+  const existing = await listSwarmRefs(cwd);
   const store = new SqliteStore({ path: dbPath });
-  let deleted = 0;
-  let kept = 0;
-  let unknown = 0;
+  let runsCleaned = 0;
+  let refsDeleted = 0;
   try {
-    for (const branch of branches) {
-      const runId = branch.slice(SWARM_RUN_BRANCH_PREFIX.length);
-      const state = store.getState(runId);
-      if (state == null) {
-        // Branch with no matching run row — leave it alone, the operator
-        // may have created it manually or pruned the DB selectively.
-        unknown += 1;
-        if (dryRun) console.log(chalk.dim(`  skip ${branch} — no run_state row`));
-        continue;
-      }
-      if (state.updatedAt >= cutoff) {
-        kept += 1;
-        continue;
-      }
+    const eligible = store.getGcEligibleSnapshotRuns({ cwd, cutoff });
+    for (const run of eligible) {
+      const refs = [`refs/swarm/snapshots/${run.runId}`, `refs/swarm/heads/${run.runId}`].filter((r) =>
+        existing.has(r),
+      );
+      if (refs.length === 0) continue; // bare-cwd run, or already discarded
       if (dryRun) {
-        console.log(chalk.yellow(`  would delete ${branch} (status=${state.status}, age=${ageStr(state.updatedAt)})`));
-      } else {
+        console.log(
+          chalk.yellow(
+            `  would delete ${refs.length} ref(s) for ${run.runId} (status=${run.status}, age=${ageStr(run.updatedAt)})`,
+          ),
+        );
+        runsCleaned += 1;
+        refsDeleted += refs.length;
+        continue;
+      }
+      for (const ref of refs) {
         try {
-          await runGit(cwd, ["branch", "-D", branch]);
-          console.log(chalk.green(`  deleted ${branch} (status=${state.status}, age=${ageStr(state.updatedAt)})`));
+          await runGit(cwd, ["update-ref", "-d", ref]);
+          refsDeleted += 1;
         } catch (err) {
-          console.error(chalk.red(`  failed to delete ${branch}: ${err instanceof Error ? err.message : String(err)}`));
-          continue;
+          console.error(chalk.red(`  failed to delete ${ref}: ${err instanceof Error ? err.message : String(err)}`));
         }
       }
-      deleted += 1;
+      runsCleaned += 1;
     }
   } finally {
     store.close();
   }
 
+  if (!dryRun && refsDeleted > 0) {
+    try {
+      await runGit(cwd, ["pack-refs", "--all"]);
+    } catch (err) {
+      console.error(
+        chalk.yellow(`  pack-refs --all failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`),
+      );
+    }
+  }
+
   const verb = dryRun ? "would delete" : "deleted";
-  console.log(
-    chalk.bold(
-      `gc --branches: ${verb} ${deleted}, kept ${kept} within retention, ` + `${unknown} unknown (no run row).`,
-    ),
-  );
+  console.log(chalk.bold(`gc --snapshots: ${verb} ${refsDeleted} ref(s) across ${runsCleaned} run(s).`));
   return 0;
 }
 
-async function listSwarmRunBranches(cwd: string): Promise<string[]> {
+/** Every existing `refs/swarm/{snapshots,heads}/*` ref in `cwd`, by full name. */
+async function listSwarmRefs(cwd: string): Promise<Set<string>> {
   const { stdout } = await runGitCapture(cwd, [
     "for-each-ref",
-    "--format=%(refname:short)",
-    `refs/heads/${SWARM_RUN_BRANCH_PREFIX}`,
+    "--format=%(refname)",
+    "refs/swarm/snapshots/",
+    "refs/swarm/heads/",
   ]);
-  return stdout
-    .split("\n")
-    .map((s) => s.trim())
-    .filter((s) => s.startsWith(SWARM_RUN_BRANCH_PREFIX));
+  return new Set(
+    stdout
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
 }
 
 function ageStr(updatedAt: number): string {

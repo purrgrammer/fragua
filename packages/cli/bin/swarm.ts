@@ -288,7 +288,7 @@ cli
 
 cli
   .command("gc", "Garbage-collect run artefacts")
-  .option("--branches", "Prune `swarm/runs/*` branches whose runs are past the retention window")
+  .option("--snapshots", "Reclaim worktree snapshot refs for settled runs past the retention window")
   .option("--older-than <duration>", "Retention window (e.g. 30d, 12h, 2w). Default 30d.")
   .option("--dry-run", "Report what would be deleted without touching anything")
   .option("--cwd <path>", "Repo root (default process.cwd)")
@@ -298,8 +298,8 @@ cli
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
-    if (options["branches"] !== true) {
-      console.error(chalk.red("gc: --branches is required (no other targets supported yet)"));
+    if (options["snapshots"] !== true) {
+      console.error(chalk.red("gc: --snapshots is required (no other targets supported yet)"));
       process.exit(1);
     }
     let olderThanMs: number;
@@ -310,7 +310,7 @@ cli
       process.exit(1);
     }
     const code = await gcCommand({
-      target: "branches",
+      target: "snapshots",
       olderThanMs,
       ...(options["dryRun"] === true ? { dryRun: true } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
