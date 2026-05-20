@@ -661,6 +661,7 @@ steps:
   review:
     type: llm
     retry: implement
+    max-retries: 3
 `;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
@@ -672,7 +673,7 @@ steps:
     expect(data.isRetargetEdge).toBe(true);
     expect(data.isBackEdge).toBe(true);
     expect(data.label?.startsWith("retarget")).toBe(true);
-    // Default cap is 3 when graph doesn't override.
+    // Cap comes from the gate's own max-retries.
     expect(data.label).toContain("cap 3");
     // Synthetic retargets route through the LEFT-side handles so they
     // visually separate from real back-edges (right-side).

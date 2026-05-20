@@ -34,7 +34,7 @@ defaults:
   thread: dev          # every llm step joins `dev` unless it sets its own thread
 ```
 
-Other graph-level knobs: `budget` / `budget-policy`, `max-goal-gate-retries`.
+Other graph-level knobs: `budget` / `budget-policy`.
 
 > **No retry-policy presets.** Backoff-preset machinery (`retry_policy`) was retired — the executor no longer reads it. Handler-level retry is just `max-retries` (a flat cap, no backoff). The two control-flow loop idioms are in SKILL.md §5: edge-cycle (`on: {fail: <upstream>}` + `max-retries`) and goal-gate (`retry:`).
 

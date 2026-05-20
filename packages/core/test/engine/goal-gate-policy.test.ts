@@ -6,17 +6,15 @@
 //   3. PARTIAL_SUCCESS satisfies a gate per spec ("SUCCESS or PARTIAL_SUCCESS")
 //   4. Retarget chain precedence: gate.retry_target → gate.fallback_retry_target
 //      → graph.retry_target → graph.fallback_retry_target
-//   5. Counter bounded by max_goal_gate_retries (default 3)
+//   5. Counter bounded by the failing gate's own max_retries
 //   6. Missing retarget at every level → halt
 
 import { describe, expect, test } from "bun:test";
 import {
   checkGoalGates,
-  DEFAULT_MAX_GOAL_GATE_RETRIES,
   type GateOutcomes,
   goalGateOutcomeKey,
   goalGateStep,
-  maxGoalGateRetries,
   readGateOutcomes,
   readGoalGateRetries,
   resolveFailRetarget,
@@ -182,41 +180,19 @@ describe("resolveFailRetarget — §3.7", () => {
   });
 });
 
-describe("maxGoalGateRetries", () => {
-  test("default when unset", () => {
-    expect(maxGoalGateRetries({})).toBe(DEFAULT_MAX_GOAL_GATE_RETRIES);
-  });
-
-  test("explicit value", () => {
-    expect(maxGoalGateRetries({ max_goal_gate_retries: 7 })).toBe(7);
-  });
-
-  test("0 means no retries", () => {
-    expect(maxGoalGateRetries({ max_goal_gate_retries: 0 })).toBe(0);
-  });
-
-  test("negative clamps to 0", () => {
-    expect(maxGoalGateRetries({ max_goal_gate_retries: -2 })).toBe(0);
-  });
-
-  test("non-finite falls back to default", () => {
-    expect(maxGoalGateRetries({ max_goal_gate_retries: Number.NaN })).toBe(DEFAULT_MAX_GOAL_GATE_RETRIES);
-  });
-});
-
-describe("goalGateStep", () => {
+describe("goalGateStep — per-gate cap", () => {
   test("all gates satisfied → exit", () => {
     const g = graph({ nodes: [node("a", { goal_gate: true })] });
-    expect(goalGateStep({ graph: g, outcomes: outcomes({ a: "success" }), retries: 0 })).toEqual({
+    expect(goalGateStep({ graph: g, outcomes: outcomes({ a: "success" }), retries: 0, gateCap: 2 })).toEqual({
       kind: "exit",
     });
   });
 
   test("unsatisfied + retarget within budget → retarget", () => {
     const g = graph({
-      nodes: [node("gate", { goal_gate: true, retry_target: "fix" }), node("fix")],
+      nodes: [node("gate", { goal_gate: true, retry_target: "fix", max_retries: 2 }), node("fix")],
     });
-    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 0 })).toEqual({
+    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 0, gateCap: 2 })).toEqual({
       kind: "retarget",
       gate: "gate",
       target: "fix",
@@ -226,41 +202,49 @@ describe("goalGateStep", () => {
 
   test("unsatisfied + no retarget anywhere → halt", () => {
     const g = graph({ nodes: [node("gate", { goal_gate: true })] });
-    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 0 })).toEqual({
+    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 0, gateCap: 2 })).toEqual({
       kind: "halt",
       reason: "goal_gate_unsatisfied",
       gate: "gate",
     });
+  });
+
+  test("cap comes from the failing gate's max_retries — halts when retries === gateCap", () => {
+    const g = graph({
+      nodes: [node("gate", { goal_gate: true, retry_target: "fix", max_retries: 2 }), node("fix")],
+    });
+    const o = outcomes({ gate: "fail" });
+    expect(goalGateStep({ graph: g, outcomes: o, retries: 1, gateCap: 2 })).toMatchObject({ kind: "retarget" });
+    expect(goalGateStep({ graph: g, outcomes: o, retries: 2, gateCap: 2 })).toMatchObject({ kind: "halt" });
+  });
+
+  test("missing max_retries on the gate (gateCap=0) → halt immediately", () => {
+    const g = graph({
+      nodes: [node("gate", { goal_gate: true, retry_target: "fix" }), node("fix")],
+    });
+    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 0, gateCap: 0 })).toMatchObject({
+      kind: "halt",
+    });
+  });
+
+  test("capOverride still takes precedence over gateCap", () => {
+    const g = graph({
+      nodes: [node("gate", { goal_gate: true, retry_target: "fix", max_retries: 1 }), node("fix")],
+    });
+    // retries=5 exceeds gateCap=1, but capOverride=7 wins → retarget
+    expect(
+      goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 5, gateCap: 1, capOverride: 7 }),
+    ).toMatchObject({ kind: "retarget" });
   });
 
   test("unsatisfied + retarget exists but counter exhausted → halt", () => {
     const g = graph({
-      nodes: [node("gate", { goal_gate: true, retry_target: "fix" }), node("fix")],
-      attrs: { max_goal_gate_retries: 2 },
+      nodes: [node("gate", { goal_gate: true, retry_target: "fix", max_retries: 2 }), node("fix")],
     });
-    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 2 })).toEqual({
+    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 2, gateCap: 2 })).toEqual({
       kind: "halt",
       reason: "goal_gate_unsatisfied",
       gate: "gate",
-    });
-  });
-
-  test("default cap of 3 — third retry still allowed, fourth halts", () => {
-    const g = graph({
-      nodes: [node("gate", { goal_gate: true, retry_target: "fix" }), node("fix")],
-    });
-    const o = outcomes({ gate: "fail" });
-    expect(goalGateStep({ graph: g, outcomes: o, retries: 2 })).toMatchObject({ kind: "retarget" });
-    expect(goalGateStep({ graph: g, outcomes: o, retries: 3 })).toMatchObject({ kind: "halt" });
-  });
-
-  test("retry_target=0 (max_goal_gate_retries) and a failed gate → halt immediately", () => {
-    const g = graph({
-      nodes: [node("gate", { goal_gate: true, retry_target: "fix" }), node("fix")],
-      attrs: { max_goal_gate_retries: 0 },
-    });
-    expect(goalGateStep({ graph: g, outcomes: outcomes({ gate: "fail" }), retries: 0 })).toMatchObject({
-      kind: "halt",
     });
   });
 });

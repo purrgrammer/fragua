@@ -200,6 +200,62 @@ describe("validate — structural", () => {
   });
 });
 
+describe("validate — E031 retry gate without max_retries", () => {
+  test("goal_gate=true + retry_target set but no max_retries → E031 error", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        gate: { type: "llm", attrs: { goal_gate: true, retry_target: "fix" } },
+        fix: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "gate"],
+        ["gate", "done"],
+        ["fix", "gate"],
+      ],
+    });
+    const e031 = validate(g).filter((d) => d.code === "E031");
+    expect(e031).toHaveLength(1);
+    expect(e031[0]?.nodeId).toBe("gate");
+    expect(e031[0]?.severity).toBe("error");
+  });
+
+  test("goal_gate=true + retry_target set WITH max_retries → no E031", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        gate: { type: "llm", attrs: { goal_gate: true, retry_target: "fix", max_retries: 2 } },
+        fix: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "gate"],
+        ["gate", "done"],
+        ["fix", "gate"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E031");
+  });
+
+  test("goal_gate=true WITHOUT retry_target does not trip E031 (W007 fires instead)", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        gate: { type: "llm", attrs: { goal_gate: true } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "gate"],
+        ["gate", "done"],
+      ],
+    });
+    // E031 only fires when retry_target IS set (i.e. authored via retry:).
+    expect(codesOf(g)).not.toContain("E031");
+    expect(codesOf(g)).toContain("W007");
+  });
+});
+
 describe("validate — handler lints", () => {
   test("E008 tool node missing tool_command", () => {
     const g = mkGraph({

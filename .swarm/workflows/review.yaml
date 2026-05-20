@@ -37,9 +37,6 @@ name: review
 goal: Code review scaled to the change — minimum work for trivial diffs, full multi-lens rigor where it matters.
 budget: 2.50
 
-# Bounds the verify→synthesize retarget loop.
-max-goal-gate-retries: 2
-
 inputs:
   target:
     type: string
@@ -143,6 +140,7 @@ steps:
     type: llm
     thread: review
     retry: synthesize                  # REJECT ⇒ re-synthesise (capped)
+    max-retries: 2
     allowed-tools: [read, grep]
     max-cost: 0.30
     next: signoff

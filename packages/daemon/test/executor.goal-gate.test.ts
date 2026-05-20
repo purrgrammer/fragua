@@ -1,13 +1,28 @@
 // Goal-gate enforcement — end-to-end through the executor.
 // Attractor §3.4: terminal exit gated on every visited goal_gate=true node
 // having outcome SUCCESS or PARTIAL_SUCCESS. Otherwise the §3.4 retarget
-// chain redirects, bounded by max_goal_gate_retries; on exhaustion the run
-// halts with reason="goal_gate_unsatisfied".
+// chain redirects, bounded by the failing gate's own max_retries; on
+// exhaustion the run pauses with reason="goal_gate".
 
 import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
+import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
+
+async function driveOnce(r: ReturnType<typeof rig>, runId: string): Promise<void> {
+  r.store.claimNextRun(1);
+  await runOne(runId, {
+    store: r.store,
+    dispatcher: r.dispatcher,
+    registry: new AbortRegistry(),
+    tools: r.tools,
+    llmCall: r.llmCall,
+    maxConcurrentRuns: 1,
+    maxTurnsForTesting: 30,
+    shutdownSignal: new AbortController().signal,
+  });
+}
 
 describe("executor — goal-gate enforcement (§3.4)", () => {
   test("gate succeeds → run completes cleanly", async () => {
@@ -57,13 +72,14 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
   test("gate fails with retry_target=fix; §3.4 retargets on terminal arrival", async () => {
     // Fail-edge routes the gate's failure straight to terminal, so §3.7
     // (per-node fail retarget) doesn't fire. §3.4 (goal-gate at terminal)
-    // catches it instead.
+    // catches it instead. max-retries:2 satisfies the E031 requirement.
     const yaml = `name: t
 steps:
   gate:
     type: llm
     prompt: g
     retry: fix
+    max-retries: 2
     on: {success: exit}
   fix: {type: llm, prompt: f, next: gate}
 `;
@@ -206,16 +222,16 @@ steps:
     r.store.close();
   });
 
-  test("gate keeps failing past max_goal_gate_retries=1 → halt", async () => {
-    // Same fail-edge structure as the success-on-retry case. With cap=1,
-    // the second failed gate exhausts retries.
+  test("gate keeps failing past its own max-retries cap → pause goal_gate", async () => {
+    // Same fail-edge structure as the success-on-retry case. With cap=1
+    // on the gate itself, the second failed gate exhausts retries.
     const yaml = `name: t
-max-goal-gate-retries: 1
 steps:
   gate:
     type: llm
     prompt: g
     retry: fix
+    max-retries: 1
     on: {success: exit}
   fix: {type: llm, prompt: f, next: gate}
 `;
@@ -358,6 +374,82 @@ steps:
       .map((e) => (e.payload as { nodeId: string }).nodeId);
     expect(completedNodes).toContain("work");
     expect(completedNodes).toContain("rescue");
+    r.store.close();
+  });
+});
+
+describe("executor — operator goal_gate_adjusted override", () => {
+  test("intent.goal_gate_adjusted raises the gate cap above its max-retries", async () => {
+    // Gate has max-retries: 1. After the first retarget it pauses with
+    // reason=goal_gate. Operator injects goal_gate_adjusted{newLimit:3} +
+    // resume. The run retargets twice more (total 3) before the gate finally
+    // succeeds, confirming the operator lever survives the refactor.
+    const yaml = `name: t
+steps:
+  gate:
+    type: llm
+    prompt: g
+    retry: fix
+    max-retries: 1
+    on: {success: exit}
+  fix: {type: llm, prompt: f, next: gate}
+`;
+    const r = rig({ yaml });
+    let gateAttempts = 0;
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "gate", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "gate", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        gateAttempts++;
+        // Succeed on attempt 4 (after 3 retargets with raised cap).
+        return {
+          kind: "transition",
+          outcomeStatus: gateAttempts >= 4 ? "success" : "fail",
+          tokens: 0,
+          costUsd: 0,
+        };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "fix", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        nextNode: "gate",
+        outcomeStatus: "success",
+        tokens: 0,
+        costUsd: 0,
+      }),
+    });
+
+    enqueue(r, "gg-ov", "start");
+    // First drive: gate fails twice, pauses at max-retries=1.
+    await driveOnce(r, "gg-ov");
+    expect(r.store.getState("gg-ov")!.status).toBe("paused");
+    const pauseReason = r.store
+      .getEvents("gg-ov")
+      .filter((e) => e.type === "fact.run_paused")
+      .pop();
+    expect((pauseReason?.payload as { reason: string }).reason).toBe("goal_gate");
+
+    // Operator raises the cap and resumes.
+    r.store.appendIntent("gg-ov", { type: "intent.goal_gate_adjusted", payload: { newLimit: 3 } });
+    r.store.appendIntent("gg-ov", { type: "intent.resume", payload: {} });
+    const wake = wakePending(r.store);
+    expect(wake.resumed).toContain("gg-ov");
+
+    // Second drive: override allows retargets 2 and 3; gate succeeds on attempt 4.
+    await driveOnce(r, "gg-ov");
+    expect(r.store.getState("gg-ov")!.status).toBe("completed");
+    expect(gateAttempts).toBe(4);
     r.store.close();
   });
 });

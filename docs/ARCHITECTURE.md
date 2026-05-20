@@ -399,7 +399,7 @@ CREATE TABLE provider_config (
 | `intent.priority_adjusted` | `newPriority: number`, `note?: string` | Operator bump |
 | `intent.budget_adjusted` | `scope: 'node'\|'run'`, `metric: 'cost'\|'tokens'`, `newLimit: number` (>0), `note?: string` | Operator raises a budget ceiling on a `paused{reason:'budget'}` run; folded into `routing.budget_override.<scope>.<metric>` so the next turn-boundary budget check uses the new ceiling. Web bundles a follow-up `intent.resume` ("Raise & Resume"); intents stay separate at the protocol level |
 | `intent.max_retries_adjusted` | `nodeId: string`, `newLimit: number` (>0), `note?: string` | Operator raises a node's `max_retries` cap on a `paused{reason:'max_retries'}` run; folded into `routing.max_retries_override.<nodeId>`. Stage 3 of recoverable-budget-pause.md |
-| `intent.goal_gate_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises `max_goal_gate_retries` on a `paused{reason:'goal_gate'}` run; folded into `routing.max_goal_gate_retries_override` |
+| `intent.goal_gate_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the failing gate's retarget cap on a `paused{reason:'goal_gate'}` run; folded into `routing.max_goal_gate_retries_override` (takes precedence over the gate's `max_retries`) |
 | `intent.max_loops_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the per-run dispatch ceiling on a `paused{reason:'max_loops'}` run; folded into `routing.max_loops_override` |
 
 ### Fact events (writer: `daemon`, OCC-checked)

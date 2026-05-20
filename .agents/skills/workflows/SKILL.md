@@ -67,7 +67,6 @@ defaults:                      # applied to every llm step that omits the key
 
 budget: 5.00                   # USD ceiling (run-level)
 budget-policy: pause           # warn | stop | pause
-max-goal-gate-retries: 3       # cap on goal-gate retargets (§5)
 
 steps:
   plan:                        # FIRST step = entry point (a `start` node is synthesized)
@@ -168,19 +167,18 @@ fix:
 
 ### Goal gate (judge → re-run the author)
 
-`retry: <step>` marks the step a **goal gate** (it must succeed before the run completes) and retargets to `<step>` on failure. Idiomatic for an LLM quality gate that re-runs the work:
+`retry: <step>` marks the step a **goal gate** (it must succeed before the run completes) and retargets to `<step>` on failure. **`max-retries:` is required on every `retry:` gate** (E031) — it is the per-gate retarget cap. Idiomatic for an LLM quality gate that re-runs the work:
 
 ```yaml
 review:
   type: llm
   retry: implement    # ⇒ goal_gate + retry_target=implement
+  max-retries: 2     # cap: after 2 retargets the run pauses goal_gate
   prompt: |
     Judge `git diff HEAD`. Reply `APPROVE: <one line>`, or `abort` with `REJECT: <one line>`.
 ```
 
-On REJECT, the engine retargets to `implement` (capped by graph-level **`max-goal-gate-retries`**, default 3); after the cap, the run pauses `goal_gate`. The retarget chain (gate `retry_target` → graph `retry_target`) is documented in SPEC §3.4.
-
-> **`max-retries` is not the goal-gate cap.** `max-retries` is per-step (handler-level retries within one pass / back-edge firings). The goal-gate retarget cap is the graph-level `max-goal-gate-retries`. Don't put `max-retries` on a `retry:` gate expecting it to bound the retarget — set `max-goal-gate-retries` at the top.
+On REJECT, the engine retargets to `implement`; after `max-retries` retargets the run pauses `goal_gate`. Operators raise the live cap via `intent.goal_gate_adjusted`. The retarget chain (gate `retry_target` → graph `retry_target`) is documented in SPEC §3.4.
 
 ---
 
@@ -316,6 +314,7 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 - **E027** — `summary:` without a `thread`.
 - **E028 / E029** — step id `exit` / `start` is reserved.
 - **E030** — `${{ inputs.x }}` references an undeclared input.
+- **E031** — a `retry:` gate has no `max-retries:` (the per-gate retarget cap is required).
 - **W007** — `goal_gate` (`retry:`) with no retarget chain.
 - **W013** — unrecognised attribute (typo).
 
@@ -343,7 +342,6 @@ Full table, including removed codes: `references/validator-codes.md`.
 ```yaml
 name: my-thing
 goal: One-sentence purpose.
-max-goal-gate-retries: 2
 inputs:
   task: { type: string, required: true, description: The task }
 defaults:
@@ -380,6 +378,7 @@ steps:
   review:
     thread: build
     retry: implement                # goal gate → re-run implement on REJECT
+    max-retries: 2                  # required: per-gate retarget cap (E031)
     allowed-tools: [read, grep, bash]
     prompt: |
       Judge `git diff HEAD` against PLAN_REALISED. `APPROVE: <one line>`, or `abort` with `REJECT: <one line>`.

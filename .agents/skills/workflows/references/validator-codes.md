@@ -29,6 +29,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E028 | Step id `exit` is reserved for the graceful sink — target it (`next: exit` / `on: {fail: exit}`), don't declare a regular step named `exit`. |
 | E029 | Step id `start` is reserved for the synthesized entry node — rename the step. |
 | E030 | `${{ inputs.x }}` references an input not declared in the workflow's `inputs:` block (scans `prompt` / `text` / `run`). Add it to `inputs:` or fix the typo. |
+| E031 | A goal-gate step (uses `retry:`) has no `max-retries:` — the per-gate retarget cap is required on every `retry:` gate. Add `max-retries: N` to the gate step. |
 
 ## Warnings
 

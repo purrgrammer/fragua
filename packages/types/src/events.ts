@@ -292,10 +292,10 @@ export type IntentEvent =
       payload: { nodeId: string; newLimit: number; note?: string };
     }
   | {
-      /** Operator raises `max_goal_gate_retries` on a
+      /** Operator raises the failing gate's retarget cap on a
        * `paused{reason:"goal_gate"}` run. Recorded in
-       * `routing.max_goal_gate_retries_override`; the goal-gate
-       * resolver reads it before consulting the graph attr. */
+       * `routing.max_goal_gate_retries_override`; takes precedence
+       * over the gate's own `max_retries`. */
       type: "intent.goal_gate_adjusted";
       payload: { newLimit: number; note?: string };
     }
@@ -571,8 +571,8 @@ export type FactEvent =
             attempts: number;
           }
         | {
-            /** Goal-gate retarget chain capped at
-             * `max_goal_gate_retries`. Operator may grant more cycles
+            /** Goal-gate retarget chain capped at the failing
+             * gate's `max_retries`. Operator may grant more cycles
              * via `intent.goal_gate_adjusted` (writes
              * `routing.max_goal_gate_retries_override`). */
             reason: "goal_gate";

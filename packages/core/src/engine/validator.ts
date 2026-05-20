@@ -49,7 +49,6 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "budget_usd",
   "budget_policy",
   "inputs",
-  "max_goal_gate_retries",
 ]);
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
@@ -367,6 +366,23 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
     }
+  }
+
+  // E031: a goal gate authored via `retry:` (goal_gate=true AND retry_target
+  // set) must declare max_retries — the per-gate retarget cap is co-located
+  // with the gate that owns the loop.
+  for (const n of nodes) {
+    if (n.attrs.goal_gate !== true) continue;
+    const hasGateTarget = typeof n.attrs.retry_target === "string" && n.attrs.retry_target !== "";
+    if (!hasGateTarget) continue; // W007 fires; E031 only applies when retry_target IS set
+    if (typeof n.attrs.max_retries === "number") continue;
+    diags.push({
+      severity: "error",
+      code: "E031",
+      message: `goal-gate step "${n.id}" uses \`retry:\` but has no \`max-retries:\` — add a per-gate retarget cap`,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
   }
 
   // W005: duplicate edges (same from/to pair with identical attributes)

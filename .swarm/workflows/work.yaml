@@ -23,9 +23,6 @@
 name: work
 goal: Triage a task and route it through a scope-appropriate plan/implement/review/ship pipeline.
 
-# Cumulative cap across both goal gates (reproduce self-retarget + review→implement).
-max-goal-gate-retries: 4
-
 inputs:
   task:
     type: string
@@ -73,6 +70,7 @@ steps:
     type: llm
     thread: build
     retry: reproduce                   # no asserting failing test ⇒ retarget self (capped)
+    max-retries: 2
     allowed-tools: [read, write, edit, grep, find, bash]
     prompt: |
       Bug: ${{ inputs.task }}.
@@ -101,6 +99,7 @@ steps:
     type: llm
     thread: build
     retry: implement                   # REJECT ⇒ revision loop back to implement (capped)
+    max-retries: 2
     allowed-tools: [read, grep, bash]
     prompt: |
       Judge `git diff HEAD` — against PLAN_REALISED if present, else on its own merits.

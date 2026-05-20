@@ -102,9 +102,6 @@ export interface InputDecl {
 export interface GraphAttrs {
   goal?: string;
   label?: string;
-  /** Cap how many times a failing goal gate routes back to `retry_target`.
-   * Default 3. Prevents runaway retry loops. */
-  max_goal_gate_retries?: number;
   thread_id?: string;
   /** Per-run cost ceiling in USD. */
   budget_usd?: number;

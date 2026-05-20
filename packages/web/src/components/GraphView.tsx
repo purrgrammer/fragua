@@ -30,7 +30,6 @@ import {
   type Edge as GraphEdge,
   type Node as GraphNode,
   handlerOf,
-  maxGoalGateRetries,
   parseWorkflow,
   resolveRetargetChain,
 } from "@swarm/core";
@@ -991,13 +990,13 @@ export function toFlowGraph(
   // warns about at validate-time.
   // Synthetic retargets — sort source-depth descending so the topmost
   // gate gets the widest left-side arc, mirroring the right-side rule.
-  const goalGateCap = maxGoalGateRetries(graph.attrs);
-  const retargetCandidates: { gateId: string; target: string; depth: number }[] = [];
+  const retargetCandidates: { gateId: string; target: string; depth: number; cap: number }[] = [];
   for (const node of Object.values(graph.nodes)) {
     if (node.attrs.goal_gate !== true) continue;
     const target = resolveRetargetChain(graph, node.id);
     if (target === null || target === node.id) continue;
-    retargetCandidates.push({ gateId: node.id, target, depth: depthOf.get(node.id) ?? 0 });
+    const cap = typeof node.attrs.max_retries === "number" ? node.attrs.max_retries : 0;
+    retargetCandidates.push({ gateId: node.id, target, depth: depthOf.get(node.id) ?? 0, cap });
   }
   retargetCandidates.sort((a, b) => b.depth - a.depth || a.gateId.localeCompare(b.gateId));
   const synthEdges: FlowEdge[] = retargetCandidates.map((r, leftArcIndex) => {
@@ -1011,7 +1010,7 @@ export function toFlowGraph(
     const gateVisits = gateOutgoingCounts.get(r.gateId) ?? 0;
     const retargetCount = gateVisits > 0 ? gateVisits - 1 : 0;
     const taken = retargetCount > 0;
-    const baseLabel = `retarget · cap ${goalGateCap}`;
+    const baseLabel = `retarget · cap ${r.cap}`;
     const capLabel = retargetCount > 0 ? `${baseLabel} · ×${retargetCount}` : baseLabel;
     return {
       id: `__retarget__${r.gateId}->${r.target}`,

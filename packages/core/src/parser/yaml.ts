@@ -137,7 +137,6 @@ const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
   thread: "thread_id",
   budget: "budget_usd",
   "budget-policy": "budget_policy",
-  "max-goal-gate-retries": "max_goal_gate_retries",
 };
 
 // Keys consumed by the parser at the step level (not stored in attrs):
@@ -149,7 +148,7 @@ const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults"]);
 
 const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["goal_gate"]);
 
-const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "max_tokens", "max_ms", "max_goal_gate_retries"]);
+const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "max_tokens", "max_ms"]);
 
 const NUMBER_KEYS: ReadonlySet<string> = new Set(["max_cost_usd", "budget_usd"]);
 

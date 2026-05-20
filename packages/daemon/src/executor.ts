@@ -10,6 +10,7 @@
 
 import {
   AUTO_RESUME_AT_KEY,
+  checkGoalGates,
   type EdgeSelection,
   type ExecutionEnvironment,
   evaluateBudget,
@@ -1248,11 +1249,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           synthOutcomes.set(currentNode, result.outcomeStatus);
         }
         if (isTerminalNext) {
-          const goalGateOverride = readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]);
+          // Read override from effectiveRouting (state.routing merged with
+          // this turn's routingDelta) so intent.goal_gate_adjusted applied
+          // in the same dispatch cycle is immediately visible.
+          const goalGateOverride = readNumber(effectiveRouting[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]);
+          // Pre-check to discover the failing gate so we can read its cap.
+          const gateCheck = checkGoalGates(graph, synthOutcomes);
+          const gateCap = gateCheck.satisfied ? 0 : readNumber(graph.nodes[gateCheck.failedGate]?.attrs.max_retries);
           const action = goalGateStep({
             graph,
             outcomes: synthOutcomes,
             retries: readGoalGateRetries(state.routing),
+            gateCap,
             ...(goalGateOverride > 0 ? { capOverride: goalGateOverride } : {}),
           });
           if (action.kind === "retarget") {
@@ -1269,8 +1277,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               payload: { gate: action.gate },
             });
             const goalGateLimit =
-              readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]) ||
-              (typeof graph.attrs.max_goal_gate_retries === "number" ? graph.attrs.max_goal_gate_retries : 3);
+              readNumber(effectiveRouting[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]) ||
+              readNumber(graph.nodes[action.gate]?.attrs.max_retries);
             result = {
               kind: "halt",
               reason: "goal_gate_unsatisfied",

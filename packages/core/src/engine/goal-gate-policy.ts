@@ -11,19 +11,16 @@
 //
 // If no target resolves, the run halts with `goal_gate_unsatisfied`.
 //
-// Swarm caps the retarget loop with `max_goal_gate_retries` (graph attr,
-// default 3) so a misconfigured retry target can't burn the run forever.
-// Attractor §3.4 step 4 is unbounded; this is a swarm-local safety guard
-// (see docs/SPEC.md §6.4).
+// Swarm caps each retarget loop with the failing gate's own `max_retries`
+// so a misconfigured retry target can't burn the run forever. The cap is
+// required (E031) on every step authored via `retry:`. Operators raise the
+// live cap via `intent.goal_gate_adjusted` → `routing.max_goal_gate_retries_override`.
 //
 // This module is the pure reducer the executor consults. Property tests
 // exercise the chain without spinning the executor.
 
-import type { Graph, NodeAttrs } from "../types/graph.ts";
+import type { Graph } from "../types/graph.ts";
 import type { OutcomeStatus } from "../types/outcome.ts";
-
-/** Default retarget cap when graph.attrs.max_goal_gate_retries is unset. */
-export const DEFAULT_MAX_GOAL_GATE_RETRIES = 3;
 
 /** Routing-key prefix for per-gate outcome records. Folded across the run
  * by appending `goal_gates.<nodeId>: <outcomeStatus>` to the routing patch
@@ -105,15 +102,6 @@ export function resolveFailRetarget(graph: Graph, sourceNodeId: string): string 
   return null;
 }
 
-/** Effective `max_goal_gate_retries` for a graph. Falls back to
- * `DEFAULT_MAX_GOAL_GATE_RETRIES` when unset. Negative or non-finite
- * values clamp to 0 (no retries permitted). */
-export function maxGoalGateRetries(attrs: NodeAttrs | { max_goal_gate_retries?: number }): number {
-  const raw = (attrs as { max_goal_gate_retries?: number }).max_goal_gate_retries;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_MAX_GOAL_GATE_RETRIES;
-  return Math.max(0, Math.floor(raw));
-}
-
 export type GoalGateAction =
   /** All gates satisfied — let the terminal exit emit `fact.run_completed`. */
   | { kind: "exit" }
@@ -128,11 +116,13 @@ export interface GoalGateInput {
   /** Cumulative retarget count for this run; starts at 0. Bumped each
    * time the executor jumps back via this reducer. */
   retries: number;
-  /** Operator override for the per-run retarget cap, threaded by the
+  /** The failing gate node's own `max_retries` value (required on every
+   * `retry:` gate via E031). The executor reads this from the gate node
+   * and passes it in explicitly so the policy stays pure. */
+  gateCap: number;
+  /** Operator override for the per-gate retarget cap, threaded by the
    * executor from `routing.max_goal_gate_retries_override` (set via
-   * `intent.goal_gate_adjusted`). Takes precedence over the static
-   * `graph.attrs.max_goal_gate_retries`. Stage 3 of
-   * docs/proposals/recoverable-budget-pause.md. */
+   * `intent.goal_gate_adjusted`). Takes precedence over `gateCap`. */
   capOverride?: number;
 }
 
@@ -141,7 +131,7 @@ export function goalGateStep(input: GoalGateInput): GoalGateAction {
   const check = checkGoalGates(input.graph, input.outcomes);
   if (check.satisfied) return { kind: "exit" };
 
-  const cap = input.capOverride && input.capOverride > 0 ? input.capOverride : maxGoalGateRetries(input.graph.attrs);
+  const cap = input.capOverride && input.capOverride > 0 ? input.capOverride : input.gateCap;
   if (input.retries >= cap) {
     return { kind: "halt", reason: "goal_gate_unsatisfied", gate: check.failedGate };
   }

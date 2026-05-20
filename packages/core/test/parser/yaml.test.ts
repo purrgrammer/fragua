@@ -3,6 +3,7 @@
 // at the engine layer with Graph objects constructed via mkGraph.
 
 import { describe, expect, test } from "bun:test";
+import { validate } from "../../src/engine/validator.ts";
 import { ParseError, parseWorkflow } from "../../src/parser/yaml.ts";
 
 describe("parseWorkflow — basics", () => {
@@ -134,6 +135,26 @@ steps:
     // explicit overrides default
     expect(g.nodes["b"]?.attrs.provider).toBe("anthropic");
     expect(g.nodes["b"]?.attrs.model).toBe("claude-haiku-4-5");
+  });
+});
+
+describe("parseWorkflow — graph attrs", () => {
+  test("`max-goal-gate-retries` is no longer a known graph attr — becomes W013 unknown-attr warning", () => {
+    // After the removal from GRAPH_KEY_TO_IR it passes through as an
+    // unrecognised key and trips the W013 unknown-graph-attr warning.
+    const g = parseWorkflow(`
+name: t
+max-goal-gate-retries: 3
+steps:
+  work: {type: llm, prompt: x}
+`);
+    const diags = validate(g);
+    const w013 = diags.filter((d) => d.code === "W013");
+    expect(
+      w013.some((d) => d.message.includes("max_goal_gate_retries") || d.message.includes("max-goal-gate-retries")),
+    ).toBe(true);
+    // The key must NOT land on graph.attrs as a recognised integer field.
+    expect((g.attrs as Record<string, unknown>)["max_goal_gate_retries"]).toBeUndefined();
   });
 });
 

@@ -116,7 +116,7 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
   | `payment_required` | LLM provider returned 402 | Top up off-ledger → `intent.resume` |
   | `budget` | `budget_usd` / `max_cost_usd` / `budget_tokens` / `max_tokens` ceiling crossed under `budget_policy="pause"` | `intent.budget_adjusted { scope, metric, newLimit }` → `intent.resume` |
   | `max_retries` | Node exhausted `max_retries` on `outcome=retry` | `intent.max_retries_adjusted { nodeId, newLimit }` → `intent.resume` |
-  | `goal_gate` | `max_goal_gate_retries` retarget cap reached | `intent.goal_gate_adjusted { newLimit }` → `intent.resume` |
+  | `goal_gate` | failing gate's `max_retries` retarget cap reached | `intent.goal_gate_adjusted { newLimit }` → `intent.resume` |
   | `max_loops` | Per-run dispatch ceiling reached | `intent.max_loops_adjusted { newLimit }` → `intent.resume` |
   | `abort_loop` | LLM agent called `abort` repeatedly within the same node | `intent.resume` (operator decision) |
   | `provider_exhausted` | All configured providers in the model's fallback chain refused | `intent.resume` after fixing provider config |
@@ -152,7 +152,7 @@ All operator actions are intent writes. Every endpoint validates its body and re
 | `POST /runs/:id/priority` | `{ newPriority: number, note?: string }` | Appends `intent.priority_adjusted`; bumps queue priority. |
 | `POST /runs/:id/budget` | `{ scope: "node" \| "run", metric: "cost" \| "tokens", newLimit: number, note?: string }` | Raises a budget ceiling on a `paused{reason:"budget"}` run. Folded into `routing.budget_override.<scope>.<metric>`. |
 | `POST /runs/:id/max_retries` | `{ nodeId: string, newLimit: number, note?: string }` | Raises `max_retries` on a `paused{reason:"max_retries"}` run. |
-| `POST /runs/:id/goal_gate` | `{ newLimit: number, note?: string }` | Raises `max_goal_gate_retries` on a `paused{reason:"goal_gate"}` run. |
+| `POST /runs/:id/goal_gate` | `{ newLimit: number, note?: string }` | Raises the failing gate's retarget cap on a `paused{reason:"goal_gate"}` run. Folded into `routing.max_goal_gate_retries_override`. |
 | `POST /runs/:id/max_loops` | `{ newLimit: number, note?: string }` | Raises the per-run dispatch ceiling on a `paused{reason:"max_loops"}` run. |
 
 The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_loops`) raise per-run ceilings but do not themselves resume — the operator pairs each with `intent.resume` (the web UI bundles both clicks into a single "Raise & Resume" action).
@@ -201,9 +201,9 @@ Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcom
 
 1. The failing gate's `retry_target` (then `fallback_retry_target`).
 2. The graph-level `retry_target` (then `fallback_retry_target`).
-3. Halt — `fact.run_paused{reason:"goal_gate"}` after `max_goal_gate_retries` (graph attr, default 3) retargets are exhausted.
+3. Halt — `fact.run_paused{reason:"goal_gate"}` after the failing gate's own `max_retries` retargets are exhausted.
 
-`max_goal_gate_retries` bounds the chain so a perpetually-failing `retry_target` can't loop forever. Operators raise the cap via `intent.goal_gate_adjusted`.
+The gate's `max_retries` bounds the chain so a perpetually-failing `retry_target` can't loop forever; it is required on every step authored via `retry:` (E031). Operators raise the live cap via `intent.goal_gate_adjusted` → `routing.max_goal_gate_retries_override`.
 
 ### 3.8 Substitution
 
