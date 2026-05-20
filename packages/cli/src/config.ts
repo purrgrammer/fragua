@@ -266,42 +266,57 @@ function stripJsonc(src: string): string {
   return out.replace(/,(\s*[}\]])/g, "$1");
 }
 
-/** Parse a JSONC body. Returns the parsed object or throws with a
- * "parse error in <path>" message. */
-function parseJsoncBody(body: string, filePath: string): unknown {
-  let parsed: unknown;
+/** Parse a JSONC body. Returns the parsed object or null on parse
+ * failure (caller will warn and return {}). */
+function parseJsoncBody(body: string, filePath: string): unknown | null {
   try {
-    parsed = JSON.parse(stripJsonc(body));
+    return JSON.parse(stripJsonc(body));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`config: parse error in ${filePath}: ${msg}`);
+    console.warn(`config: parse error in ${filePath}: ${msg} — ignoring file, using defaults`);
+    return null;
   }
-  return parsed;
 }
 
-/** Parse a YAML body. Returns the parsed object or throws with a
- * "parse error in <path>" message. */
-function parseYamlBody(body: string, filePath: string): unknown {
+/** Parse a YAML body. Returns the parsed object, or null on parse
+ * failure (caller will warn and return {}). */
+function parseYamlBody(body: string, filePath: string): unknown | null {
   try {
     // An empty or comments-only document parses to null — treat it as an
     // empty config object (a project may ship only commented-out knobs).
     return YAML.parse(body) ?? {};
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`config: parse error in ${filePath}: ${msg}`);
+    console.warn(`config: parse error in ${filePath}: ${msg} — ignoring file, using defaults`);
+    return null;
   }
 }
 
-/** Validate the parsed value against SwarmConfigSchema. Throws on failure. */
+/** Validate the parsed value against SwarmConfigSchema.
+ * Non-fatal: unknown/extra properties are stripped with a warning;
+ * wrong-typed top-level values are dropped with a warning.
+ * Returns the salvaged (schema-valid) config, or {} when the root
+ * is not an object at all. */
 function validateParsed(parsed: unknown, filePath: string): SwarmConfig {
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`config: ${filePath} must be a JSON object`);
+    console.warn(`config: ${filePath} must be a JSON object — ignoring file, using defaults`);
+    return {};
   }
-  if (!Value.Check(SwarmConfigSchema, parsed)) {
-    const msg = formatValidationErrors(Value.Errors(SwarmConfigSchema, parsed));
-    throw new Error(`config: validation failed in ${filePath}: ${msg}`);
+  if (Value.Check(SwarmConfigSchema, parsed)) {
+    return parsed;
   }
-  return parsed;
+  // Capture errors before mutating.
+  const errors = [...Value.Errors(SwarmConfigSchema, parsed)];
+  const msg = formatValidationErrors(errors);
+  console.warn(`config: validation issues in ${filePath}: ${msg} — unknown/invalid keys will be ignored`);
+  // Step 1: strip unknown properties at all nesting levels.
+  const cleaned = Value.Clean(SwarmConfigSchema, structuredClone(parsed)) as Record<string, unknown>;
+  // Step 2: drop any top-level key that still has a type error after cleaning.
+  for (const err of Value.Errors(SwarmConfigSchema, cleaned)) {
+    const topKey = err.path.split("/").filter(Boolean)[0];
+    if (topKey !== undefined) delete cleaned[topKey];
+  }
+  return cleaned as SwarmConfig;
 }
 
 /** Parse and validate one config layer from a directory.
@@ -336,16 +351,19 @@ async function loadConfigFile(layerDir: string, layerLabel: "global" | "project"
     console.warn(
       `config (${layerLabel}): ${jsoncPath} is shadowed by ${yamlPath} — delete the .jsonc file to silence this warning`,
     );
-    return validateParsed(parseYamlBody(yamlBody, yamlPath), yamlPath);
+    const parsed = parseYamlBody(yamlBody, yamlPath);
+    return parsed === null ? {} : validateParsed(parsed, yamlPath);
   }
 
   if (yamlBody !== null) {
-    return validateParsed(parseYamlBody(yamlBody, yamlPath), yamlPath);
+    const parsed = parseYamlBody(yamlBody, yamlPath);
+    return parsed === null ? {} : validateParsed(parsed, yamlPath);
   }
 
   // jsoncBody is non-null — legacy path
   console.warn(`config (${layerLabel}): ${jsoncPath} is deprecated — rename it to config.yaml to silence this warning`);
-  return validateParsed(parseJsoncBody(jsoncBody!, jsoncPath), jsoncPath);
+  const parsed = parseJsoncBody(jsoncBody!, jsoncPath);
+  return parsed === null ? {} : validateParsed(parsed, jsoncPath);
 }
 
 /** One-level deep merge: top-level scalars from `overlay` win; nested

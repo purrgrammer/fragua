@@ -53,29 +53,86 @@ defaults:
     expect(cfg.defaults?.model).toBe("anthropic/claude-opus-4.7");
   });
 
-  test("throws on malformed YAML (no silent fallback)", async () => {
+  test("warns and returns {} on malformed YAML (non-fatal)", async () => {
     await write("key: [unclosed");
-    await expect(load()).rejects.toThrow(/parse error/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect(cfg).toEqual({});
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("parse error"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
-  test("throws when the root is not a mapping", async () => {
+  test("warns and returns {} when the root is not a mapping (non-fatal)", async () => {
     await write(`"just-a-string"`);
-    await expect(load()).rejects.toThrow(/must be a JSON object/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect(cfg).toEqual({});
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("must be a JSON object"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
-  test("throws on schema violation (typo'd key)", async () => {
+  test("warns on schema violation (typo'd key) and drops the bad key (non-fatal)", async () => {
     await write(`autoTitler: true`);
-    await expect(load()).rejects.toThrow(/validation failed/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect((cfg as Record<string, unknown>)["autoTitler"]).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
-  test("throws on snake_case key from the legacy YAML schema", async () => {
+  test("warns on snake_case key from the legacy YAML schema and drops it (non-fatal)", async () => {
     await write(`auto_title: true`);
-    await expect(load()).rejects.toThrow(/validation failed/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect((cfg as Record<string, unknown>)["auto_title"]).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
-  test("rejects the pre-rename camelCase key (autoTitle)", async () => {
+  test("warns on pre-rename camelCase key (autoTitle) and drops it (non-fatal)", async () => {
     await write(`autoTitle: true`);
-    await expect(load()).rejects.toThrow(/validation failed/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect((cfg as Record<string, unknown>)["autoTitle"]).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("unknown top-level key: warns, drops it, preserves valid keys", async () => {
+    await write(`
+auto-title: false
+staleRenamedKey: somevalue
+`);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect(cfg["auto-title"]).toBe(false);
+      expect((cfg as Record<string, unknown>)["staleRenamedKey"]).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("parses runtime ceilings: max-queued-runs, abort-loop-ceiling, max-leaked-handlers", async () => {
@@ -173,13 +230,21 @@ summariser:
     expect(cfg.summariser?.model).toBe("claude-haiku-4-5");
   });
 
-  test("rejects legacy defaults.summariser nesting", async () => {
+  test("warns on legacy defaults.summariser nesting and drops the bad key (non-fatal)", async () => {
     await writeGlobal(`
 defaults:
   summariser:
     provider: anthropic
 `);
-    await expect(load()).rejects.toThrow(/validation failed/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect((cfg.defaults as Record<string, unknown> | undefined)?.["summariser"]).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("global only: project file absent, global config flows through", async () => {
@@ -201,12 +266,20 @@ web:
     expect(cfg.web?.port).toBe(9999);
   });
 
-  test("rejects out-of-range web.port", async () => {
+  test("warns on out-of-range web.port and drops the bad value (non-fatal)", async () => {
     await writeGlobal(`
 web:
   port: 70000
 `);
-    await expect(load()).rejects.toThrow(/validation failed/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect(cfg.web?.port).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   // ─── YAML format tests ──────────────────────────────────────────────
@@ -257,14 +330,30 @@ defaults:
       }
     });
 
-    test("throws on malformed YAML (no silent fallback)", async () => {
+    test("warns and returns {} on malformed YAML (non-fatal)", async () => {
       await write("key: [unclosed bracket");
-      await expect(load()).rejects.toThrow(/parse error/);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect(cfg).toEqual({});
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("parse error"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
-    test("throws on YAML schema violation", async () => {
+    test("warns on YAML schema violation and drops bad key (non-fatal)", async () => {
       await write(`auto_title: true`);
-      await expect(load()).rejects.toThrow(/validation failed/);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect((cfg as Record<string, unknown>)["auto_title"]).toBeUndefined();
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("validation"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     test("YAML supports the full cascade", async () => {
@@ -290,9 +379,17 @@ defaults:
       expect(cfg["auto-title"]).toBe(true);
     });
 
-    test("rejects YAML root that is not a mapping", async () => {
+    test("warns and returns {} when YAML root is not a mapping (non-fatal)", async () => {
       await write(`- item1\n- item2`);
-      await expect(load()).rejects.toThrow(/must be a JSON object/);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect(cfg).toEqual({});
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("must be a JSON object"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 
@@ -318,24 +415,56 @@ defaults:
       }
     });
 
-    test("throws on malformed JSONC (no silent fallback)", async () => {
+    test("warns and returns {} on malformed JSONC (non-fatal)", async () => {
       await write("{ this is not json }", "jsonc");
-      await expect(load()).rejects.toThrow(/parse error/);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect(cfg).toEqual({});
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("parse error"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
-    test("throws when the root is not an object (JSONC)", async () => {
+    test("warns and returns {} when the root is not an object (JSONC, non-fatal)", async () => {
       await write(`"just-a-string"`, "jsonc");
-      await expect(load()).rejects.toThrow(/must be a JSON object/);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect(cfg).toEqual({});
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("must be a JSON object"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
-    test("throws on schema violation in JSONC (typo'd key)", async () => {
+    test("warns on schema violation in JSONC and drops bad key (non-fatal)", async () => {
       await write(`{ "autoTitler": true }`, "jsonc");
-      await expect(load()).rejects.toThrow(/validation failed/);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect((cfg as Record<string, unknown>)["autoTitler"]).toBeUndefined();
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("validation"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
-    test("throws on snake_case key from the legacy YAML schema (in JSONC)", async () => {
+    test("warns on snake_case key (JSONC) and drops it (non-fatal)", async () => {
       await write(`{ "auto_title": true }`, "jsonc");
-      await expect(load()).rejects.toThrow(/validation failed/);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect((cfg as Record<string, unknown>)["auto_title"]).toBeUndefined();
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("validation"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     test("global → project cascade works with JSONC files", async () => {
@@ -404,10 +533,18 @@ describe("loadProjectConfig", () => {
     }
   });
 
-  test("propagates parse + validation errors (no silent fallback)", async () => {
+  test("warns on validation error and drops bad value (non-fatal)", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
     await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: 123`, "utf8");
-    await expect(loadProjectConfig(scratch)).rejects.toThrow(/validation failed/);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await loadProjectConfig(scratch);
+      expect(cfg.bootstrap).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
