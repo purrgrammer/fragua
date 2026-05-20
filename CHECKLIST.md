@@ -5,7 +5,6 @@ Pre-publish punch list. Drop or update items as you decide.
 - [ ] YAML authoring format 
 - [ ] YAML cleanup
 - [ ] JSON IR, versioned workflows by sha
-- [ ] Sample workflows
 - [ ] Worktrees
 - [ ] Collapse migrations
 - [ ] Rename to fragua
