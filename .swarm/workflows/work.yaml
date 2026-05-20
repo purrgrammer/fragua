@@ -1,20 +1,30 @@
-# work.yaml — triage → plan → implement → review → format → ci → commit.
+# work.yaml — triage → (scope preamble) → implement → review → ship.
 #
-# Replaces change + feature with one routed workflow. A triage step classifies
-# the task (small / feature / blocked) via the `route` tool, and the wider
-# pipeline shapes itself accordingly through shared thread context. After
-# review, a small classifier (`needs_human`) decides whether the diff is
-# contract-touching enough to warrant a human approver before CI.
+# A pure classifier (`triage`) dispatches to a preamble that frames the work;
+# a shared spine then implements, reviews, gates, and lands it:
 #
-# Demonstrates the routing primitives in one workflow:
-#   - LLM-directed routing (`routes:` + ephemeral `route` tool) on
-#     `triage` and `needs_human`.
-#   - Human-step routing (`type: human` + `routes:`) on `approve`.
+#   small   → (no preamble)              → implement
+#   feature → plan (deep, cross-package) → implement
+#   bugfix  → reproduce (failing test)   → implement   (ci validates the regression)
+#   blocked → abort
+#
+# Principles encoded here:
+#   - Classification is TOPOLOGY (the path), never a thread label re-read later.
+#   - A classifier/router is a pure function (evidence → one route): isolated,
+#     cheap. `triage` reads the task; `gate` reads the diff.
+#   - One thread (`build`) for the one real conversation (plan / reproduce ↔
+#     implement ↔ review). Every classifier and mechanical step is stateless.
+#   - `gate` decides human review from the DIFF, never from how triage classified.
+#   - `feedback` (signoff) and REJECT (review) are revision LOOPS to implement.
 #
 #   bun run swarm run work --input task="add a touch tool to @swarm/workspace"
+#   bun run swarm run work --input task="fix: bash tool hangs when a command writes to stdin"
 
 name: work
-goal: Triage a task and route it through the right plan/implement/review/ci pipeline.
+goal: Triage a task and route it through a scope-appropriate plan/implement/review/ship pipeline.
+
+# Cumulative cap across both goal gates (reproduce self-retarget + review→implement).
+max-goal-gate-retries: 4
 
 inputs:
   task:
@@ -24,97 +34,105 @@ inputs:
 
 defaults:
   provider: anthropic
-  thread: dev
+  model: claude-sonnet-4-6
 
 steps:
-  triage:
+  triage:                              # pure classifier — isolated, no shared thread
     type: llm
-    model: claude-opus-4-7
     allowed-tools: [read, grep, find]
     prompt: |
       Task: ${{ inputs.task }}.
 
-      Classify with the `route` tool (call it exactly once on a response of its own):
-        - small: ≤3 packages, no shared-contract changes (HandlerContext, executor internals, store schema, event envelope), ≤500 lines non-test
-        - feature: multi-package OR shared contracts OR backed by a docs/proposals/*.md file
-        - blocked: empty / ambiguous / shipped (check proposal frontmatter `status: shipped`)
+      Classify with the `route` tool (once, on its own response):
+        small   — ≤3 packages, no shared-contract changes (HandlerContext, executor internals, store schema, event envelope), ≤500 non-test lines
+        feature — multi-package OR shared contracts OR proposal-backed
+        bugfix  — a reported defect to reproduce, then fix
 
-      Read just enough to decide. Don't plan or implement; the downstream steps do that.
+      Empty / ambiguous / already-shipped → `abort` with the reason instead of routing.
+      Don't plan, reproduce, or implement.
     routes:
-      small:   {to: plan, label: "Small change"}
-      feature: {to: plan, label: "Feature scope"}
-      blocked: {to: exit, label: "Blocked"}
+      small:   {to: implement, label: "Small change"}
+      feature: {to: plan,      label: "Feature scope"}
+      bugfix:  {to: reproduce, label: "Bug fix"}
 
-  plan:
+  plan:                                # feature preamble — writes the plan into `build`
     type: llm
     model: claude-opus-4-7
+    thread: build
     allowed-tools: [read, grep, find, ls]
     prompt: |
-      Read triage's classification from the prior message in this shared thread. Produce a numbered plan suited to that scope:
-
-        1. Files to create/modify (full paths, grouped by package for feature-scope).
+      Produce a numbered plan for this feature-scope task: ${{ inputs.task }}.
+        1. Files to create/modify (full paths, grouped by package).
         2. Tests to add: file path, exact describe/test name, one assertion sentence.
         3. Public exports added/changed (symbol + package).
-        4. Implementation notes per file (cite existing symbols + line numbers).
-        5. For feature-scope: cross-package dependency order; same-PR doc obligations from AGENTS.md §1.
+        4. Per-file notes citing existing symbols + line numbers.
+        5. Cross-package order; same-PR doc obligations (AGENTS.md §1).
+    next: implement
 
-      If triage said `blocked`, abort with the reason it gave.
-
-  implement:
+  reproduce:                           # bugfix preamble — writes a failing test into `build`
     type: llm
-    model: claude-sonnet-4-6
+    thread: build
+    retry: reproduce                   # no asserting failing test ⇒ retarget self (capped)
+    allowed-tools: [read, write, edit, grep, find, bash]
+    prompt: |
+      Bug: ${{ inputs.task }}.
+
+      Localise the scope, write a FAILING test in the repo's existing framework and conventional location, and confirm it fails for the stated reason (not a setup error).
+      Output: source + test paths, the test identifier, the failing assertion in one sentence.
+      Cannot localise after a reasonable read → `abort` with `cannot reproduce: <why>`.
+    next: implement
+
+  implement:                           # shared spine — realises whatever `build` establishes
+    type: llm
+    thread: build
     allowed-tools: [read, write, edit, grep, bash]
     prompt: |
-      Implement the plan. Stay inside the package(s) it names. After edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; cap typecheck-fix at 5 cycles per package, then abort with `typecheck blocked: <top error>`.
+      Implement ${{ inputs.task }}.
 
-      For every test in plan §2: grep the file for the describe/test name. If missing or weaker than promised, add it; re-typecheck.
+      Plan in this thread → realise it exactly, only the package(s) it names.
+      Failing test in this thread → make it pass without weakening it.
+      Neither → triaged small; scope it yourself.
 
-      End with a PLAN_REALISED block listing files / tests / exports / doc_updates / skipped (one line each, with the status: created | modified | skipped | added | already-present).
+      Per modified package: `bun run --filter='@swarm/<pkg>' typecheck`; cap fixes at 5 cycles, then `abort` with `typecheck blocked: <top error>`.
+      Realise every test the plan promised.
+      End with PLAN_REALISED: files / tests / exports / doc_updates / skipped (status each).
 
-  review:
+  review:                              # shared spine — judges the established contract
     type: llm
-    model: claude-sonnet-4-6
-    retry: implement
-    max-retries: 3
+    thread: build
+    retry: implement                   # REJECT ⇒ revision loop back to implement (capped)
     allowed-tools: [read, grep, bash]
     prompt: |
-      Judge `git diff HEAD` against PLAN_REALISED.
-
-      Check:
-        (a) Diff matches PLAN_REALISED — every claimed file/test/export is present, nothing else.
-        (b) Every test in PLAN_REALISED is realised (file exists, name matches, assertion is non-trivial).
-        (c) Bugs, type errors, security issues.
-        (d) Scope creep beyond what the triage classification justifies.
-        (e) Doc-state claims match reality — verify any prose asserting shipped / outstanding / on-paper against the filesystem.
-
-      Reply `APPROVE: <one line>` on success. Abort with `REJECT: <one line>. fixes: <numbered list, 1-5 items>` on rejection.
+      Judge `git diff HEAD` — against PLAN_REALISED if present, else on its own merits.
+        (a) diff matches PLAN_REALISED, nothing extra.
+        (b) every promised test realised (exists, named, non-trivial); for a bugfix, the reproduced test now passes.
+        (c) bugs, type errors, security.
+        (d) scope creep past the plan / the bug.
+        (e) doc-state claims match the filesystem.
+      `APPROVE: <one line>`, or `abort` with `REJECT: <one line>. fixes: <1-5>`.
 
   format:
     type: tool
     run: bun run format
 
-  needs_human:
+  gate:                                # pure classifier — isolated, diff-only, cheap
     type: llm
     model: claude-haiku-4-5
-    allowed-tools: [read, bash]
+    allowed-tools: [bash, read]
     prompt: |
-      Look at `git diff HEAD` and the triage classification in the shared thread. Use the `route` tool to decide whether a human should approve this before CI:
-
-        - yes: shared contracts touched (HandlerContext, executor internals, store schema, event envelope), security-sensitive code, public API breaks, or triage said `feature`.
-        - no: contained change, no contract surface, triage said `small`.
-
-      Call route() exactly once on a response of its own.
+      Read `git diff HEAD` only. Route with the `route` tool (once, on its own response):
+        auto  — contained change, no contract surface.
+        human — touches shared contracts (HandlerContext, executor internals, store schema, event envelope), security-sensitive, or breaks a public API.
     routes:
-      no:  {to: ci,      label: "Auto-promote"}
-      yes: {to: approve, label: "Needs human"}
+      auto:  {to: ci,      label: "Auto-promote"}
+      human: {to: signoff, label: "Needs review"}
 
-  approve:
+  signoff:
     type: human
-    text: "Reviewer approved this change. Promote to CI?"
+    text: "Approve this change for CI?"
     routes:
-      yes:   {to: ci,   label: "Promote"}
-      no:    {to: exit, label: "Send back"}
-      defer: {to: exit, label: "Defer"}
+      approve:  {to: ci,        label: "Approve"}
+      feedback: {to: implement, label: "Request changes"}
 
   ci:
     type: tool
@@ -126,21 +144,17 @@ steps:
 
   fix:
     type: llm
-    model: claude-sonnet-4-6
     allowed-tools: [read, write, edit, bash]
     max-cost: 0.30
     max-tokens: 800000
     prompt: |
-      CI failed. Re-run `bun run ci` via the bash tool, read the failure log from its output, then make the minimal fix and stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters.
+      CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
     next: ci
 
   commit:
     type: llm
-    model: claude-sonnet-4-6
     allowed-tools: [read, write, edit, bash]
     prompt: |
       Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.
-
-      If `git status --short` is empty, emit `COMMITTED: no changes`.
-
-      Else: `git add` explicit paths (group related files; multi-package work may warrant multiple commits, one per logical chunk), commit each with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha or sha list>`. Don't push.
+      Empty `git status --short` → `COMMITTED: no changes`.
+      Else `git add` explicit paths (one commit per logical chunk), HEREDOC message `[<subsystem>] imperative subject ≤72 chars` + standalone body. No --amend / --no-verify / Co-Authored-By. Emit `COMMITTED: <sha(s)>`. Don't push.

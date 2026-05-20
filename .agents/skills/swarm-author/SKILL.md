@@ -28,6 +28,19 @@ Authoritative references: `docs/SPEC.md` §3 (primitives) + §4 (validation), `d
 
 Eight patterns cover ~all reasonable workflows. Names from Anthropic's "Building Effective Agents." Pick before you start drawing; the shape follows.
 
+### Workflow boundaries — decide this first
+
+The unit of a workflow is its **deliverable** — what the run produces: a commit (code change), a report (analysis / review / drift), applied edits (`doc-sync`), or an action (`merge`, `ci-gate`). One deliverable, one workflow.
+
+Within a deliverable, sub-kinds differ only in their **preamble** — the step that frames the work before a shared spine (e.g. `feature` plans, `bugfix` reproduces a failing test, `small` does neither, then all converge on implement → review → ship). That stays one flat workflow.
+
+Two smells mean you've drawn the boundary wrong:
+
+- **Divergent tail** (one branch skips CI, another commits nothing) → that's a different *deliverable*. Make a separate workflow; don't conditionalise the tail.
+- **Divergent parameter** (urgency, target) → that's an *input*, not a branch. `--input urgent=true`, read where it matters.
+
+And classification belongs in the **topology** — the path the run takes — never as a label re-read from a shared thread downstream. A classifier/router node is a pure function (evidence → one route): give it its own isolated context and the cheapest model that gets the call right.
+
 ### Augmented LLM
 
 One codergen node with a thoughtful tool pool. The whole "agent loop" lives inside that one node's tool-use cycle, bounded by `max_cost_usd` / `max_ms`. Use when subtasks aren't known upfront or the shape isn't worth pinning.
