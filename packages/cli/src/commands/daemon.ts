@@ -2,9 +2,9 @@
 //
 // Out of the box the daemon uses a stub LLM. Pass `--provider` +
 // `--model` (or omit both for the defaults) and the auto-dispatcher
-// routes every `box` node through a PiLlmBackend so real LLM calls
-// fire. Handlers of other shapes (start, exit, human
-// wait.human, etc.) stay on the trivial transitions.
+// routes every `llm` node through a PiLlmBackend so real LLM calls
+// fire. Handlers of other kinds (start, exit, tool, human) stay on
+// the trivial transitions.
 
 import { mkdirSync } from "node:fs";
 import { homedir, hostname as osHostname } from "node:os";

@@ -17,8 +17,8 @@
 //     registry; reject only when no provider recognises it.
 //   - Neither set → skip (the daemon's default is applied at runtime).
 //
-// Llm nodes only — other handler kinds (start/exit/tool/wait.human/
-// conditional/parallel) don't LLM-dispatch.
+// Llm nodes only — other handler kinds (start/exit/tool/human)
+// don't LLM-dispatch.
 
 import { join } from "node:path";
 import { parseWorkflow } from "@swarm/core";

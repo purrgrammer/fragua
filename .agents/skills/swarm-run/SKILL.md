@@ -179,7 +179,7 @@ Wait for `fact.node_aborted { cause:"steer", intentSeq: <returned seq> }` → `f
 
 ### Pause + resume
 
-Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/human` is for `kind=human` (hexagon) nodes only; sending it to an operator-paused run is the wrong shape.
+Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/human` is for `type: human` nodes only; sending it to an operator-paused run is the wrong shape.
 
 ### Cancel
 
@@ -187,7 +187,7 @@ Final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` + decide la
 
 ### Human inputs
 
-For human-node (hexagon) gates. `route` must match one of `fact.run_paused_human.payload.routes`. See §5 + workflows §14.
+For `type: human` gates. `route` must match one of `fact.run_paused_human.payload.routes`. See §5 + workflows §14.
 
 ### Priority + budget
 

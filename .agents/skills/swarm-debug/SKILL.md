@@ -260,7 +260,7 @@ cat "$(dirname "$DB")/blobs/${SHA:0:2}/$SHA"
 
 Conventional keys:
 
-- `<nodeId>:stdout` / `<nodeId>:stderr` — `tool` (parallelogram) shell captures, kept for debugging / replay (tool nodes don't feed data forward).
+- `<nodeId>:stdout` / `<nodeId>:stderr` — `type: tool` shell captures, kept for debugging / replay (tool nodes don't feed data forward).
 
 Binary artifacts (mime ≠ text/*) — copy to disk, don't `cat` in-terminal.
 
