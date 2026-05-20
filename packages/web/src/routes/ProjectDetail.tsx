@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Play } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import YAML from "yaml";
 import { AgentsList } from "../components/agents/agents-list.tsx";
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { FileTree } from "../components/ai-elements/file-tree.tsx";
@@ -32,7 +33,8 @@ import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { formatDuration } from "../lib/time.ts";
 
-const CONFIG_PATH = ".swarm/config.jsonc";
+const CONFIG_PATH_YAML = ".swarm/config.yaml";
+const CONFIG_PATH_JSONC = ".swarm/config.jsonc";
 
 export function ProjectDetail(): JSX.Element {
   const { cwdEnc = "" } = useParams();
@@ -70,17 +72,35 @@ export function ProjectDetail(): JSX.Element {
   });
 
   const {
-    data: configText,
-    error: configError,
-    isFetching: configLoading,
+    data: configYamlText,
+    error: configYamlError,
+    isFetching: configYamlLoading,
   } = useQuery({
-    ...queries.projects.blob(cwdEnc, CONFIG_PATH),
+    ...queries.projects.blob(cwdEnc, CONFIG_PATH_YAML),
     enabled: cwd !== null && cwdEnc.length > 0,
     retry: false,
   });
 
+  const {
+    data: configJsoncText,
+    error: configJsoncError,
+    isFetching: configJsoncLoading,
+  } = useQuery({
+    ...queries.projects.blob(cwdEnc, CONFIG_PATH_JSONC),
+    enabled: cwd !== null && cwdEnc.length > 0 && configYamlText === undefined,
+    retry: false,
+  });
+
+  const resolvedConfig = useMemo(
+    () => pickConfigSource(configYamlText, configJsoncText, configYamlError, configJsoncError),
+    [configYamlText, configJsoncText, configYamlError, configJsoncError],
+  );
+
   const stats = useMemo(() => computeStats(rows ?? []), [rows]);
-  const parsedConfig = useMemo(() => (configText !== undefined ? parseJsonc(configText) : null), [configText]);
+  const parsedConfig = useMemo(
+    () => (resolvedConfig.text !== undefined ? parseConfig(resolvedConfig.text, resolvedConfig.kind) : null),
+    [resolvedConfig],
+  );
 
   useEffect(() => {
     if (error)
@@ -139,7 +159,7 @@ export function ProjectDetail(): JSX.Element {
   }
 
   const name = basename(cwd);
-  const configMissing = configError instanceof ApiError && configError.status === 404;
+  const configMissing = resolvedConfig.missing;
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-4">
@@ -190,10 +210,11 @@ export function ProjectDetail(): JSX.Element {
       </section>
 
       <ConfigSummary
-        loading={configLoading && configText === undefined}
+        loading={(configYamlLoading || configJsoncLoading) && resolvedConfig.text === undefined}
         missing={configMissing}
-        errored={!configMissing && configError != null}
+        errored={!configMissing && resolvedConfig.errored}
         parsed={parsedConfig}
+        configPath={resolvedConfig.path}
       />
 
       <Tabs value={tab} onValueChange={handleTabChange} className="flex flex-col gap-3" data-testid="project-tabs">
@@ -413,9 +434,11 @@ interface ConfigSummaryProps {
   missing: boolean;
   errored: boolean;
   parsed: ConfigShape | null;
+  configPath: string;
 }
 
-function ConfigSummary({ loading, missing, errored, parsed }: ConfigSummaryProps): JSX.Element {
+function ConfigSummary({ loading, missing, errored, parsed, configPath }: ConfigSummaryProps): JSX.Element {
+  const displayPath = configPath || CONFIG_PATH_YAML;
   return (
     <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-config-section">
       <h3 className="text-sw-sm font-medium text-sw-muted">Config</h3>
@@ -425,7 +448,7 @@ function ConfigSummary({ loading, missing, errored, parsed }: ConfigSummaryProps
           title="No project config"
           description={
             <span>
-              Expected at <code className="font-mono">{CONFIG_PATH}</code>.
+              Expected at <code className="font-mono">{CONFIG_PATH_YAML}</code>.
             </span>
           }
         />
@@ -434,7 +457,7 @@ function ConfigSummary({ loading, missing, errored, parsed }: ConfigSummaryProps
           className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted"
           data-testid="project-config-error"
         >
-          Couldn't load {CONFIG_PATH}.
+          Couldn't load {displayPath}.
         </div>
       ) : loading ? (
         <div className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted">
@@ -445,7 +468,7 @@ function ConfigSummary({ loading, missing, errored, parsed }: ConfigSummaryProps
           className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted"
           data-testid="project-config-unparsable"
         >
-          Couldn't parse {CONFIG_PATH}.
+          Couldn't parse {displayPath}.
         </div>
       ) : (
         <ConfigValues parsed={parsed} />
@@ -540,7 +563,7 @@ function ConfigValues({ parsed }: { parsed: ConfigShape }): JSX.Element {
         className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted"
         data-testid="project-config-defaults"
       >
-        Project uses defaults — no overrides set in <code className="font-mono">{CONFIG_PATH}</code>.
+        Project uses defaults — no overrides set in <code className="font-mono">{CONFIG_PATH_YAML}</code>.
       </div>
     );
   }
@@ -560,13 +583,69 @@ function ConfigValues({ parsed }: { parsed: ConfigShape }): JSX.Element {
   );
 }
 
-// ─── JSONC parsing ─────────────────────────────────────────────────
-//
-// The .swarm/config.jsonc file allows comments and trailing commas, so
-// JSON.parse alone won't handle real-world configs. This stripper keeps
-// a tiny state machine for strings (so `//` inside a value isn't
-// mistaken for a comment) and handles the three JSONC affordances:
-// line comments, block comments, and trailing commas.
+// ─── Config source resolution ──────────────────────────────────────
+
+interface ResolvedConfigSource {
+  path: string;
+  kind: "yaml" | "jsonc";
+  text: string | undefined;
+  missing: boolean;
+  errored: boolean;
+}
+
+function pickConfigSource(
+  yamlText: string | undefined,
+  jsoncText: string | undefined,
+  yamlError: unknown,
+  jsoncError: unknown,
+): ResolvedConfigSource {
+  const yamlMissing = yamlError instanceof ApiError && yamlError.status === 404;
+  const jsoncMissing = jsoncError instanceof ApiError && jsoncError.status === 404;
+
+  if (yamlText !== undefined) {
+    return { path: CONFIG_PATH_YAML, kind: "yaml", text: yamlText, missing: false, errored: false };
+  }
+  if (jsoncText !== undefined) {
+    return { path: CONFIG_PATH_JSONC, kind: "jsonc", text: jsoncText, missing: false, errored: false };
+  }
+  if (!yamlMissing && yamlError != null) {
+    return { path: CONFIG_PATH_YAML, kind: "yaml", text: undefined, missing: false, errored: true };
+  }
+  if (!jsoncMissing && jsoncError != null) {
+    return { path: CONFIG_PATH_JSONC, kind: "jsonc", text: undefined, missing: false, errored: true };
+  }
+  // Both missing (or neither query has resolved yet)
+  return {
+    path: CONFIG_PATH_YAML,
+    kind: "yaml",
+    text: undefined,
+    missing: yamlMissing && jsoncMissing,
+    errored: false,
+  };
+}
+
+// ─── Config parsers ─────────────────────────────────────────────────
+
+function parseConfig(src: string, kind: "yaml" | "jsonc"): ConfigShape | null {
+  if (kind === "yaml") {
+    return parseYamlConfig(src);
+  }
+  return parseJsoncConfig(src);
+}
+
+function parseYamlConfig(src: string): ConfigShape | null {
+  try {
+    const value = YAML.parse(src);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value as ConfigShape;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Legacy JSONC parser (retained for the deprecation-window reader)
 function stripJsonc(src: string): string {
   let out = "";
   let i = 0;
@@ -626,7 +705,7 @@ function stripJsonc(src: string): string {
   return out.replace(/,(\s*[}\]])/g, "$1");
 }
 
-function parseJsonc(src: string): ConfigShape | null {
+function parseJsoncConfig(src: string): ConfigShape | null {
   try {
     const value = JSON.parse(stripJsonc(src));
     if (value && typeof value === "object" && !Array.isArray(value)) {
