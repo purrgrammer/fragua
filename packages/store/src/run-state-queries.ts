@@ -47,6 +47,13 @@ export interface RunStateRow {
   base_git_sha: string | null;
   base_git_ref: string | null;
   branch: string | null;
+  final_git_sha: string | null;
+  final_head_ref: string | null;
+  diff_base_sha: string | null;
+  change_stat: string | null;
+  inbox_status: string | null;
+  final_commit: string | null;
+  merged_into: string | null;
   schedule_id: string | null;
 }
 
@@ -70,7 +77,9 @@ const SELECT_RUN_STATE_FULL_SQL = `
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
          cwd, workflow_name, workflow_scope, workflow_path,
-         base_git_sha, base_git_ref, branch, schedule_id
+         base_git_sha, base_git_ref, branch,
+         final_git_sha, final_head_ref, diff_base_sha, change_stat,
+         inbox_status, final_commit, merged_into, schedule_id
     FROM run_state
    WHERE run_id = ?
 `;
@@ -413,7 +422,14 @@ const WRITE_PROJECTION_SQL = `
     updated_at          = ?,
     base_git_sha        = ?,
     base_git_ref        = ?,
-    branch              = ?
+    branch              = ?,
+    final_git_sha       = ?,
+    final_head_ref      = ?,
+    diff_base_sha       = ?,
+    change_stat         = ?,
+    inbox_status        = ?,
+    final_commit        = ?,
+    merged_into         = ?
   WHERE run_id = ?
 `;
 
@@ -438,6 +454,13 @@ export function writeRunStateProjection(
     baseGitSha: string | null;
     baseGitRef: string | null;
     branch: string | null;
+    finalGitSha: string | null;
+    finalHeadRef: string | null;
+    diffBaseSha: string | null;
+    changeStatJson: string | null;
+    inboxStatus: string | null;
+    finalCommit: string | null;
+    mergedInto: string | null;
   },
 ): void {
   db.query(WRITE_PROJECTION_SQL).run(
@@ -455,6 +478,13 @@ export function writeRunStateProjection(
     args.baseGitSha,
     args.baseGitRef,
     args.branch,
+    args.finalGitSha,
+    args.finalHeadRef,
+    args.diffBaseSha,
+    args.changeStatJson,
+    args.inboxStatus,
+    args.finalCommit,
+    args.mergedInto,
     args.runId,
   );
 }

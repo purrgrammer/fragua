@@ -209,11 +209,23 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.handler_timeout_leaked":
     case "fact.daemon_takeover":
     case "fact.provider_retry_attempted":
-    // fact.snapshot_recorded will project change_stat / inbox_status / final_*
-    // — wired with the executor emitter (docs/proposals/worktrees.md step 3).
-    // No-op until the emitter lands.
-    case "fact.snapshot_recorded":
       return next;
+    case "fact.snapshot_recorded": {
+      // Terminal worktree snapshot → inbox + diff projection
+      // (docs/proposals/worktrees.md).
+      next.finalGitSha = fact.payload.headSha;
+      next.finalHeadRef = fact.payload.headRef;
+      next.diffBaseSha = fact.payload.diffBaseSha;
+      const hasStat = fact.payload.committed !== null || fact.payload.uncommitted !== null;
+      next.changeStat = hasStat ? { committed: fact.payload.committed, uncommitted: fact.payload.uncommitted } : null;
+      // Inbox gate is recoverable agent work, not "diff vs base != 0": a pure
+      // review that checked out another line (relocated) with no dirt has a
+      // large committed delta that isn't the agent's work — it stays out.
+      const relocated = fact.payload.diffBaseSha !== next.baseGitSha;
+      const recoverable = fact.payload.uncommitted !== null || (fact.payload.committed !== null && !relocated);
+      next.inboxStatus = recoverable ? "pending" : null;
+      return next;
+    }
   }
   return next;
 }

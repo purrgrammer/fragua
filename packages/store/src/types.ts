@@ -8,12 +8,14 @@
 import type {
   AgentMessage,
   AnyEvent as AnyEventFromTypes,
+  ChangeStat,
   DaemonEvent as DaemonEventFromTypes,
   EventEnvelope,
   EventWriter as EventWriterFromTypes,
   FactEvent as FactEventFromTypes,
   FactType as FactTypeFromTypes,
   HaltReason as HaltReasonFromTypes,
+  InboxStatus,
   IntentEvent as IntentEventFromTypes,
   IntentType as IntentTypeFromTypes,
   MessageRole as MessageRoleFromTypes,
@@ -218,6 +220,20 @@ export interface RunState {
    * for clean-tree runs (nothing to commit), and for runs without a
    * worktree. Convention: `swarm/runs/<run_id>`. */
   branch: string | null;
+  /** Worktree snapshot + inbox projection (docs/proposals/worktrees.md),
+   * written by the terminal `fact.snapshot_recorded`. All `null` while the
+   * run is live and for bare-cwd runs. `finalGitSha` / `finalHeadRef` =
+   * worktree HEAD + its branch at terminal; `diffBaseSha` = the honest diff
+   * base (== `baseGitSha` unless HEAD relocated); `changeStat` = committed +
+   * uncommitted deltas; `inboxStatus` drives the inbox. `finalCommit` /
+   * `mergedInto` are set later by operator-action facts (branch/commit/merge). */
+  finalGitSha: string | null;
+  finalHeadRef: string | null;
+  diffBaseSha: string | null;
+  changeStat: ChangeStat | null;
+  inboxStatus: InboxStatus | null;
+  finalCommit: string | null;
+  mergedInto: string | null;
   /** Absolute project root the run was enqueued from. Only project
    * identifier in the harness-by-default model. `null` for runs
    * enqueued without filesystem context (CI, tests). */

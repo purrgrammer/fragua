@@ -29,6 +29,7 @@ export {
   type AnyEvent,
   type AnyEventType,
   AUTO_WAKE_PAUSE_REASONS,
+  type ChangeStat,
   type DaemonEvent,
   type DaemonEventEnvelope,
   type DaemonEventType,
@@ -40,6 +41,7 @@ export {
   FEED_EVENT_KINDS,
   type FeedEvent,
   type HaltReason,
+  type InboxStatus,
   type IntentEvent,
   type IntentType,
   type MessageRole,
@@ -47,6 +49,8 @@ export {
   type QuarantineReason,
   type RawEvent,
   type RunStatus,
+  type SnapshotCapturedData,
+  type SnapshotStat,
 } from "./events.ts";
 export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "./skills.ts";
 

@@ -338,6 +338,17 @@ export type SnapshotStat = {
   deletions: number;
 };
 
+/** Run-level terminal diff projection: workflow-authored commits
+ * (`committed`) vs. agent dirt (`uncommitted`); either null when absent.
+ * Stored as JSON on `run_state.change_stat`. */
+export type ChangeStat = {
+  committed: SnapshotStat | null;
+  uncommitted: SnapshotStat | null;
+};
+
+/** Inbox lifecycle for a terminal run carrying recoverable work. */
+export type InboxStatus = "pending" | "acted" | "discarded";
+
 /** Payload of the `snapshot.captured` observability event — a per-step (nodeId
  * set) or HITL (nodeId null) worktree snapshot. Addressed by `commitSha`; the
  * run's single tip ref keeps it reachable. `headRef` / `diffBaseSha` / stats

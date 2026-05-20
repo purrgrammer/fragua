@@ -26,6 +26,13 @@ function blankState(): RunState {
     title: null,
     baseGitSha: null,
     baseGitRef: null,
+    finalGitSha: null,
+    finalHeadRef: null,
+    diffBaseSha: null,
+    changeStat: null,
+    inboxStatus: null,
+    finalCommit: null,
+    mergedInto: null,
     branch: null,
     cwd: null,
     workflowName: null,
@@ -224,5 +231,62 @@ describe("dispatch interval bookkeeping", () => {
     const a = foldFacts(blankState(), facts, 1234);
     const b = foldFacts(blankState(), facts, 1234);
     expect(a).toEqual(b);
+  });
+});
+
+describe("fact.snapshot_recorded projection (worktrees.md)", () => {
+  const BASE = "base-sha";
+  function snap(p: Partial<Extract<FactEvent, { type: "fact.snapshot_recorded" }>["payload"]>): FactEvent {
+    return {
+      type: "fact.snapshot_recorded",
+      payload: {
+        eventIdx: 1,
+        treeSha: "tree",
+        commitSha: "commit",
+        parentSnap: "parent",
+        headSha: "head",
+        headRef: null,
+        diffBaseSha: BASE,
+        committed: null,
+        uncommitted: null,
+        ...p,
+      },
+    };
+  }
+  function base(): RunState {
+    return { ...blankState(), baseGitSha: BASE };
+  }
+
+  test("uncommitted dirt → inbox pending + changeStat + final fields", () => {
+    const s = applyFact(base(), snap({ uncommitted: { filesChanged: 2, insertions: 5, deletions: 1 } }), 1);
+    expect(s.inboxStatus).toBe("pending");
+    expect(s.changeStat).toEqual({
+      committed: null,
+      uncommitted: { filesChanged: 2, insertions: 5, deletions: 1 },
+    });
+    expect(s.finalGitSha).toBe("head");
+    expect(s.diffBaseSha).toBe(BASE);
+  });
+
+  test("committed on base (not relocated) → inbox pending", () => {
+    const s = applyFact(base(), snap({ committed: { filesChanged: 1, insertions: 3, deletions: 0 } }), 1);
+    expect(s.inboxStatus).toBe("pending");
+  });
+
+  test("relocated HEAD, committed delta but no dirt → stays out of inbox", () => {
+    // diffBaseSha != baseGitSha: the workflow checked out another line, so the
+    // committed delta is that branch's content, not the agent's work.
+    const s = applyFact(
+      base(),
+      snap({ diffBaseSha: "fork-point", committed: { filesChanged: 9, insertions: 99, deletions: 9 } }),
+      1,
+    );
+    expect(s.inboxStatus).toBeNull();
+  });
+
+  test("clean run → no changeStat, not in inbox", () => {
+    const s = applyFact(base(), snap({}), 1);
+    expect(s.changeStat).toBeNull();
+    expect(s.inboxStatus).toBeNull();
   });
 });

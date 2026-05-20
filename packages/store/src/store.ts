@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { ChangeStat, InboxStatus } from "@swarm/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -262,6 +263,13 @@ function rowToRunState(row: RunStateRow): RunState {
     baseGitSha: row.base_git_sha,
     baseGitRef: row.base_git_ref,
     branch: row.branch,
+    finalGitSha: row.final_git_sha,
+    finalHeadRef: row.final_head_ref,
+    diffBaseSha: row.diff_base_sha,
+    changeStat: row.change_stat != null ? (JSON.parse(row.change_stat) as ChangeStat) : null,
+    inboxStatus: row.inbox_status as InboxStatus | null,
+    finalCommit: row.final_commit,
+    mergedInto: row.merged_into,
     cwd: row.cwd,
     workflowName: row.workflow_name,
     workflowScope: row.workflow_scope,
@@ -1220,6 +1228,7 @@ export class SqliteStore implements IEventStore {
       throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
     }
     const metrics = JSON.stringify(state.metrics);
+    const changeStatJson = state.changeStat != null ? JSON.stringify(state.changeStat) : null;
     writeRunStateProjection(this.db, {
       runId: state.runId,
       version: state.version,
@@ -1236,6 +1245,13 @@ export class SqliteStore implements IEventStore {
       baseGitSha: state.baseGitSha,
       baseGitRef: state.baseGitRef,
       branch: state.branch,
+      finalGitSha: state.finalGitSha,
+      finalHeadRef: state.finalHeadRef,
+      diffBaseSha: state.diffBaseSha,
+      changeStatJson,
+      inboxStatus: state.inboxStatus,
+      finalCommit: state.finalCommit,
+      mergedInto: state.mergedInto,
     });
   }
 
