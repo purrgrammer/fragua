@@ -268,3 +268,55 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
     }
   });
 });
+
+describe("WorktreeProvisioner — snapshots (worktrees.md)", () => {
+  function initRepo(): string {
+    const repo = mkdtempSync(join(tmpdir(), "swarm-prov-snap-"));
+    if (Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: repo }).exitCode !== 0) {
+      throw new Error("git init failed");
+    }
+    Bun.spawnSync({
+      cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init", "-q"],
+      cwd: repo,
+    });
+    return repo;
+  }
+  function refSha(repo: string, ref: string): string | null {
+    const r = Bun.spawnSync({ cmd: ["git", "rev-parse", "--verify", "--quiet", ref], cwd: repo });
+    return r.exitCode === 0 ? r.stdout.toString().trim() : null;
+  }
+
+  test("captures dirt, moves the tip ref, advances the cursor, and delta-suppresses", async () => {
+    const repo = initRepo();
+    try {
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-snap", { cwd: repo });
+      await env.writeFile("agent.txt", "agent output\n");
+
+      const first = await p.snapshot("r-snap", "terminal");
+      expect(first).not.toBeNull();
+      expect(first?.uncommitted).not.toBeNull();
+      // Tip ref points at the snapshot commit.
+      expect(refSha(repo, "refs/swarm/snapshots/r-snap")).toBe(first?.commitSha ?? "");
+
+      // No further change → a step snapshot is delta-suppressed (cursor treeSha matches).
+      const second = await p.snapshot("r-snap", "step");
+      expect(second).toBeNull();
+
+      await p.dispose("r-snap");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("bare-cwd run (LocalEnvironment) → snapshot returns null", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "swarm-prov-snap-local-"));
+    try {
+      const p = new WorktreeProvisioner();
+      await p.ensure("r-local", { cwd: nonGit });
+      expect(await p.snapshot("r-local", "terminal")).toBeNull();
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+});

@@ -101,6 +101,22 @@ export function parseShortstat(out: string): SnapshotStat | null {
 }
 
 /**
+ * Resolve the lineage parent for the next snapshot: the run's existing tip
+ * ref `refs/swarm/snapshots/<runId>` if present (so a daemon that restarted
+ * mid-run continues the chain — keeping every prior snapshot reachable under
+ * the single tip), else `baseGitSha`. The executor prefers its in-memory
+ * cursor and only falls back here on a cold resume.
+ */
+export async function resolveSnapshotParent(worktree: string, runId: string, baseGitSha: string): Promise<string> {
+  try {
+    const sha = await git(worktree, ["rev-parse", "--verify", "--quiet", `refs/swarm/snapshots/${runId}`]);
+    return sha !== "" ? sha : baseGitSha;
+  } catch {
+    return baseGitSha;
+  }
+}
+
+/**
  * Capture a snapshot of `worktree`. Returns the result, or `null` when a
  * `step` snapshot is delta-suppressed (tree unchanged since `prevTreeSha`).
  *

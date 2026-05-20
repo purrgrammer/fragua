@@ -39,6 +39,7 @@ import {
   LocalEnvironment,
   WorktreeEnvironment,
 } from "@swarm/workspace";
+import { captureSnapshot, resolveSnapshotParent, type SnapshotBoundary, type SnapshotResult } from "./snapshotter.ts";
 
 /** Bootstrap pair resolved for a single run against its project root.
  * Used to honour `<run.cwd>/.swarm/config.yaml` when a single daemon
@@ -112,6 +113,11 @@ export interface Provisioner {
    * post-run merge/commit target default (docs/proposals/worktrees.md).
    * `null` for non-worktree envs or a detached/tag/unborn source HEAD. */
   baseGitRef(runId: string): string | null;
+  /** Capture a worktree snapshot at a boundary (docs/proposals/worktrees.md).
+   * Returns the result, or `null` when delta-suppressed (unchanged tree on a
+   * `step` boundary) or when the run isn't worktree-backed (bare cwd). Moves
+   * the run's tip ref forward and advances the in-memory lineage cursor. */
+  snapshot(runId: string, boundary: SnapshotBoundary): Promise<SnapshotResult | null>;
 }
 
 export class WorktreeProvisioner implements Provisioner {
@@ -125,6 +131,11 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly resolveRunBootstrap: ((cwd: string) => Promise<ResolvedRunBootstrap>) | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
+  /** Lineage cursor per run: the last recorded snapshot's commit + tree shas.
+   * `commitSha` parents the next snapshot; `treeSha` drives delta-suppression.
+   * Empty after a daemon restart — `snapshot()` then falls back to the tip ref
+   * (resolveSnapshotParent) so the chain stays connected. */
+  private readonly snapshotCursor = new Map<string, { commitSha: string; treeSha: string }>();
 
   constructor(opts: WorktreeProvisionerOptions = {}) {
     this.repoRoot = opts.repoRoot ?? process.cwd();
@@ -174,6 +185,7 @@ export class WorktreeProvisioner implements Provisioner {
     const env = this.envs.get(runId);
     if (!env) return { branch: null };
     this.envs.delete(runId);
+    this.snapshotCursor.delete(runId);
     if (env instanceof WorktreeEnvironment) {
       return env.dispose(ctx);
     }
@@ -194,6 +206,26 @@ export class WorktreeProvisioner implements Provisioner {
     const env = this.envs.get(runId);
     if (env instanceof WorktreeEnvironment) return env.baseGitRef;
     return null;
+  }
+
+  async snapshot(runId: string, boundary: SnapshotBoundary): Promise<SnapshotResult | null> {
+    const env = this.envs.get(runId);
+    if (!(env instanceof WorktreeEnvironment)) return null; // bare cwd → no snapshots
+    const baseGitSha = env.baseGitSha ?? "";
+    const cursor = this.snapshotCursor.get(runId);
+    const parentSnap = cursor?.commitSha ?? (await resolveSnapshotParent(env.worktreePath, runId, baseGitSha));
+    const result = await captureSnapshot({
+      worktree: env.worktreePath,
+      runId,
+      baseGitSha,
+      parentSnap,
+      boundary,
+      prevTreeSha: cursor?.treeSha ?? null,
+    });
+    if (result !== null) {
+      this.snapshotCursor.set(runId, { commitSha: result.commitSha, treeSha: result.treeSha });
+    }
+    return result;
   }
 
   private async create(runId: string, provisionOpts: ProvisionOpts): Promise<ExecutionEnvironment> {

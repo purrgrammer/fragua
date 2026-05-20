@@ -58,6 +58,9 @@ class RecordingProvisioner implements Provisioner {
   baseGitRef(_runId: string): string | null {
     return this.opts.baseGitRef ?? null;
   }
+  async snapshot(): Promise<null> {
+    return null;
+  }
 }
 
 describe("executor + worktree provisioner", () => {
@@ -206,6 +209,9 @@ describe("executor + worktree provisioner", () => {
         return null;
       },
       baseGitRef() {
+        return null;
+      },
+      async snapshot() {
         return null;
       },
     };
