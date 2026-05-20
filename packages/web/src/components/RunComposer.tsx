@@ -15,28 +15,18 @@
 // `queries.workflows.detail` to get the parsed `inputs:` block.
 // Typed inputs are rendered via `WorkflowInputsForm`; required inputs
 // that are unbound keep the submit button disabled. The free-form
-// `input` textarea remains for the run description / auto-title seed
+// description textarea remains for the run description / auto-title seed
 // (separate from typed inputs per SPEC §3.8).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SelectGroup, SelectLabel } from "@/components/ui/select";
-import { type CreateRunInput, createRun, type WorkflowSummary } from "../lib/api.ts";
+import type { CreateRunInput, WorkflowSummary } from "../lib/api.ts";
+import { createRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
-import {
-  PromptInput,
-  PromptInputFooter,
-  PromptInputHeader,
-  type PromptInputMessage,
-  PromptInputSelect,
-  PromptInputSelectContent,
-  PromptInputSelectItem,
-  PromptInputSelectTrigger,
-  PromptInputSelectValue,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "./ai-elements/prompt-input.tsx";
+import { Button } from "./ui/button.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
+import { Textarea } from "./ui/textarea.tsx";
 import { WorkflowInputsForm } from "./WorkflowInputsForm.tsx";
 
 export interface RunComposerProps {
@@ -131,16 +121,11 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
 
   const canSubmit = selected.length > 0 && !mutation.isPending && missingRequired.length === 0;
 
-  const submitStatus: "submitted" | "error" | undefined = mutation.isPending
-    ? "submitted"
-    : mutation.isError
-      ? "error"
-      : undefined;
-
   const errorMessage =
     mutation.error instanceof Error ? mutation.error.message : mutation.error ? String(mutation.error) : null;
 
-  const handleSubmit = (message: PromptInputMessage): void => {
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>): void => {
+    e.preventDefault();
     const opt = optionsById.get(selected);
     if (!opt) return;
     const w = opt.workflow;
@@ -148,7 +133,7 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
       cwd,
       workflowName: w.name,
       workflowScope: opt.scope,
-      input: message.text,
+      input,
     };
     if (Object.keys(typedInputs).length > 0) {
       vars.inputs = typedInputs;
@@ -157,12 +142,9 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
   };
 
   // Drop a stale enqueue error the moment the operator edits the
-  // input. The submit button's status="error" state (rendered as an X
-  // by PromptInputSubmit) and the inline error message both bind to
-  // `mutation.error`, so resetting the mutation drops both at once.
+  // input. Resetting the mutation drops the inline error message.
   // isError + reset are read through a ref so this effect runs only
-  // when `input` changes; depending on isError would re-trigger when
-  // the error first appears and hide it instantly.
+  // when `input` changes.
   const mutationRef = useRef({ isError: mutation.isError, reset: mutation.reset });
   mutationRef.current = { isError: mutation.isError, reset: mutation.reset };
   // biome-ignore lint/correctness/useExhaustiveDependencies: `input` is the trigger; isError/reset are intentionally captured via ref so this effect only fires on input change.
@@ -178,76 +160,74 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
 
   return (
     <div className="flex flex-col gap-[var(--sw-space-2)]" data-testid="run-composer">
-      <PromptInput onSubmit={handleSubmit} data-testid="run-composer-form">
-        <PromptInputHeader>
-          <PromptInputTools>
-            <PromptInputSelect
-              value={selected}
-              onValueChange={(v) => {
-                if (v) setSelected(v);
-              }}
-              disabled={!hasOptions}
-            >
-              <PromptInputSelectTrigger data-testid="run-composer-trigger" aria-label="Workflow">
-                <PromptInputSelectValue placeholder="Select workflow…" />
-              </PromptInputSelectTrigger>
-              <PromptInputSelectContent>
-                {local.length > 0 && (
-                  <SelectGroup>
-                    <SelectLabel data-testid="run-composer-group-local">This project</SelectLabel>
-                    {local.map((opt) => (
-                      <PromptInputSelectItem
-                        key={opt.id}
-                        value={opt.id}
-                        data-testid={`run-composer-item-local-${opt.workflow.name}`}
-                      >
-                        {opt.workflow.label ?? opt.workflow.name}
-                      </PromptInputSelectItem>
-                    ))}
-                  </SelectGroup>
-                )}
-                {global.length > 0 && (
-                  <SelectGroup>
-                    <SelectLabel data-testid="run-composer-group-global">Global</SelectLabel>
-                    {global.map((opt) => (
-                      <PromptInputSelectItem
-                        key={opt.id}
-                        value={opt.id}
-                        data-testid={`run-composer-item-global-${opt.workflow.name}`}
-                      >
-                        {opt.workflow.label ?? opt.workflow.name}
-                      </PromptInputSelectItem>
-                    ))}
-                  </SelectGroup>
-                )}
-              </PromptInputSelectContent>
-            </PromptInputSelect>
-          </PromptInputTools>
-        </PromptInputHeader>
+      <form
+        onSubmit={handleSubmit}
+        data-testid="run-composer-form"
+        className="flex flex-col gap-[var(--sw-space-2)] rounded-sw-card border border-sw-border bg-sw-surface p-[var(--sw-space-3)]"
+      >
+        <Select
+          value={selected}
+          onValueChange={(v) => {
+            if (v) setSelected(v);
+          }}
+          disabled={!hasOptions}
+        >
+          <SelectTrigger data-testid="run-composer-trigger" aria-label="Workflow" className="w-full">
+            <SelectValue placeholder="Select workflow…" />
+          </SelectTrigger>
+          <SelectContent>
+            {local.length > 0 && (
+              <SelectGroup>
+                <SelectLabel data-testid="run-composer-group-local">This project</SelectLabel>
+                {local.map((opt) => (
+                  <SelectItem key={opt.id} value={opt.id} data-testid={`run-composer-item-local-${opt.workflow.name}`}>
+                    {opt.workflow.label ?? opt.workflow.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
+            {global.length > 0 && (
+              <SelectGroup>
+                <SelectLabel data-testid="run-composer-group-global">Global</SelectLabel>
+                {global.map((opt) => (
+                  <SelectItem key={opt.id} value={opt.id} data-testid={`run-composer-item-global-${opt.workflow.name}`}>
+                    {opt.workflow.label ?? opt.workflow.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
+          </SelectContent>
+        </Select>
 
         {declaredInputs.length > 0 && (
-          <div className="px-[var(--sw-space-2)] py-[var(--sw-space-2)]">
-            <WorkflowInputsForm
-              inputs={declaredInputs}
-              value={typedInputs}
-              onChange={setTypedInputs}
-              onErrors={handleErrors}
-            />
-          </div>
+          <WorkflowInputsForm
+            inputs={declaredInputs}
+            value={typedInputs}
+            onChange={setTypedInputs}
+            onErrors={handleErrors}
+          />
         )}
 
-        <PromptInputTextarea
+        <Textarea
           placeholder={hasOptions ? "Describe what the workflow should do (optional)…" : "No workflows available"}
           value={input}
           onChange={(e) => setInput(e.currentTarget.value)}
           data-testid="run-composer-input"
+          disabled={!hasOptions}
         />
 
-        <PromptInputFooter>
-          <PromptInputTools />
-          <PromptInputSubmit disabled={!canSubmit} data-testid="run-composer-submit" status={submitStatus} />
-        </PromptInputFooter>
-      </PromptInput>
+        <div className="flex items-center justify-end">
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!canSubmit}
+            data-testid="run-composer-submit"
+            aria-busy={mutation.isPending}
+          >
+            {mutation.isPending ? "Running…" : "Run"}
+          </Button>
+        </div>
+      </form>
 
       {errorMessage && (
         <p className="text-xs text-[var(--sw-accent-error)]" role="alert" data-testid="run-composer-error">
