@@ -538,20 +538,66 @@ export interface SanitiseUnpairedCtx {
 }
 
 /** Replace unpaired toolCall blocks at the tail of `messages` with a
- *  paired `toolResult` user message. Returns the input array
- *  reference unchanged when no pairing is needed (no trailing
- *  assistant, no toolCalls). */
+ *  paired `toolResult` user message AND drop orphan `toolResult`
+ *  messages whose `toolCallId` has no preceding assistant `toolCall`.
+ *
+ *  Two crash windows produce unpaired shapes Anthropic rejects with
+ *  `messages.N.content.K: unexpected tool_use_id found in
+ *  tool_result blocks`:
+ *
+ *    (a) The assistant turn issuing a `toolCall` is persisted but the
+ *        daemon dies before the `toolResult` lands  → trailing
+ *        unpaired `toolCall` (handled by the per-tool re-execute /
+ *        synthesise-error policy below).
+ *    (b) The `toolResult` was persisted but the assistant turn that
+ *        issued it never made it to the messages table (e.g. the
+ *        assistant message was being assembled when the crash hit)
+ *        → a `toolResult` with no matching upstream `toolCall.id`.
+ *        These orphans cannot be "paired" — there's no tool_use to
+ *        attach to — so we drop them.
+ *
+ *  Returns the input array reference unchanged when no pairing or
+ *  dropping is needed. */
 export async function sanitiseUnpairedToolCalls(
   messages: AgentMessage[],
   ctx: SanitiseUnpairedCtx,
 ): Promise<AgentMessage[]> {
   if (messages.length === 0) return messages;
-  const last = messages[messages.length - 1];
-  if (!last || last.role !== "assistant" || !Array.isArray(last.content)) return messages;
 
   type ToolCallBlock = { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> };
-  const toolCalls = (last.content as Array<{ type: string }>).filter((b): b is ToolCallBlock => b.type === "toolCall");
-  if (toolCalls.length === 0) return messages;
+
+  const knownToolUseIds = new Set<string>();
+  let cleaned: AgentMessage[] | null = null;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i] as AgentMessage;
+    const role = (m as { role?: string }).role;
+    if (role === "assistant" && Array.isArray((m as { content?: unknown }).content)) {
+      for (const block of (m as { content: Array<{ type?: string; id?: string }> }).content) {
+        if (block?.type === "toolCall" && typeof block.id === "string") knownToolUseIds.add(block.id);
+      }
+      if (cleaned !== null) cleaned.push(m);
+    } else if (role === "toolResult") {
+      const id = (m as { toolCallId?: string }).toolCallId;
+      if (typeof id === "string" && !knownToolUseIds.has(id)) {
+        if (cleaned === null) cleaned = messages.slice(0, i);
+      } else if (cleaned !== null) {
+        cleaned.push(m);
+      }
+    } else if (cleaned !== null) {
+      cleaned.push(m);
+    }
+  }
+  const stripped = cleaned ?? messages;
+
+  if (stripped.length === 0) return stripped;
+  const last = stripped[stripped.length - 1];
+  if (!last || last.role !== "assistant" || !Array.isArray(last.content)) return stripped;
+
+  const trailingToolCalls = (last.content as Array<{ type: string }>).filter(
+    (b): b is ToolCallBlock => b.type === "toolCall",
+  );
+  if (trailingToolCalls.length === 0) return stripped;
+  const toolCalls = trailingToolCalls;
 
   const synthesised: AgentMessage[] = [];
   for (const tc of toolCalls) {
@@ -608,7 +654,7 @@ export async function sanitiseUnpairedToolCalls(
     }
   }
 
-  return [...messages, ...synthesised];
+  return [...stripped, ...synthesised];
 }
 
 async function readFileBytes(absolutePath: string): Promise<Buffer> {
