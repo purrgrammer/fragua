@@ -1,21 +1,25 @@
-// Inline run composer: pick a workflow, type optional input, POST /runs.
+// Inline run composer: pick a workflow, fill typed inputs (when declared),
+// type optional description, POST /runs.
 //
 // Source of truth for the workflow list is the parent — RunComposer never
-// fetches. Names can collide across sources (a project-local workflow can
-// share a `name` with a global one), so we key options by `${scope}:${path}`
-// rather than by name.
+// fetches the list. Names can collide across sources (a project-local
+// workflow can share a `name` with a global one), so we key options by
+// `${scope}:${path}` rather than by name.
 //
 // `workflowScope` is derived from each summary's `cwd`:
 //   cwd === currentCwd  → "local"   (workflow lives under <currentCwd>/.swarm/workflows)
 //   cwd == null         → "global"  (workflow lives under ~/.swarm/workflows)
 //   anything else       → "path"    (workflow tied to a different project)
 //
-// The run's `cwd` is always the project we're viewing, even when the source
-// workflow is global — the run lands in this project, executed against the
-// global workflow.
+// When a workflow is selected the composer fetches its detail via
+// `queries.workflows.detail` to get the parsed `inputs:` block.
+// Typed inputs are rendered via `WorkflowInputsForm`; required inputs
+// that are unbound keep the submit button disabled. The free-form
+// `input` textarea remains for the run description / auto-title seed
+// (separate from typed inputs per SPEC §3.8).
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SelectGroup, SelectLabel } from "@/components/ui/select";
 import { type CreateRunInput, createRun, type WorkflowSummary } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
@@ -33,6 +37,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "./ai-elements/prompt-input.tsx";
+import { WorkflowInputsForm } from "./WorkflowInputsForm.tsx";
 
 export interface RunComposerProps {
   /** Project root the run will be enqueued against. Always sent on
@@ -83,6 +88,10 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
 
   const [selected, setSelected] = useState<string>("");
   const [input, setInput] = useState<string>("");
+  // Typed input bindings: name → string value.
+  const [typedInputs, setTypedInputs] = useState<Record<string, string>>({});
+  // Names of required inputs that are currently unbound.
+  const [missingRequired, setMissingRequired] = useState<string[]>([]);
 
   // Seed once a workflow becomes available. Don't overwrite on
   // subsequent listings — the operator may have picked manually since.
@@ -92,15 +101,35 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
     if (first) setSelected(first);
   }, [selected, local, global]);
 
+  // Reset typed inputs whenever a different workflow is selected.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selected is the trigger; setters are stable
+  useEffect(() => {
+    setTypedInputs({});
+    setMissingRequired([]);
+  }, [selected]);
+
+  // Fetch the detail for the currently selected workflow to get its inputs.
+  const selectedOpt = selected ? optionsById.get(selected) : undefined;
+  const selectedWorkflow = selectedOpt?.workflow;
+  const detailQuery = useQuery({
+    ...queries.workflows.detail(
+      selectedWorkflow?.name ?? "",
+      selectedOpt?.scope === "local" ? cwd : selectedOpt?.scope === "global" ? "" : undefined,
+    ),
+    enabled: selectedWorkflow !== undefined,
+  });
+  const declaredInputs = detailQuery.data?.inputs ?? [];
+
   const mutation = useMutation({
     mutationFn: (vars: CreateRunInput) => createRun(vars),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queries.runs.lists() });
       setInput("");
+      setTypedInputs({});
     },
   });
 
-  const canSubmit = selected.length > 0 && !mutation.isPending;
+  const canSubmit = selected.length > 0 && !mutation.isPending && missingRequired.length === 0;
 
   const submitStatus: "submitted" | "error" | undefined = mutation.isPending
     ? "submitted"
@@ -121,6 +150,9 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
       workflowScope: opt.scope,
       input: message.text,
     };
+    if (Object.keys(typedInputs).length > 0) {
+      vars.inputs = typedInputs;
+    }
     mutation.mutate(vars);
   };
 
@@ -139,6 +171,10 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
   }, [input]);
 
   const hasOptions = local.length + global.length > 0;
+
+  const handleErrors = useCallback((missing: string[]) => {
+    setMissingRequired(missing);
+  }, []);
 
   return (
     <div className="flex flex-col gap-[var(--sw-space-2)]" data-testid="run-composer">
@@ -188,6 +224,17 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
             </PromptInputSelect>
           </PromptInputTools>
         </PromptInputHeader>
+
+        {declaredInputs.length > 0 && (
+          <div className="px-[var(--sw-space-2)] py-[var(--sw-space-2)]">
+            <WorkflowInputsForm
+              inputs={declaredInputs}
+              value={typedInputs}
+              onChange={setTypedInputs}
+              onErrors={handleErrors}
+            />
+          </div>
+        )}
 
         <PromptInputTextarea
           placeholder={hasOptions ? "Describe what the workflow should do (optional)…" : "No workflows available"}

@@ -178,12 +178,28 @@ export interface WorkflowSummary {
   cwd?: string;
 }
 
+/** A typed input declaration from a workflow's `inputs:` block. Mirrors
+ *  `InputDecl` from `@swarm/core` — kept local so the web bundle doesn't
+ *  import the core package directly. */
+export interface WorkflowInputDecl {
+  name: string;
+  type: "string" | "boolean" | "number" | "choice";
+  required: boolean;
+  description?: string;
+  default?: string | number | boolean;
+  options?: string[];
+}
+
 /** Full workflow, including the raw workflow source. Fetched on demand by
  *  the workflow detail page — the list endpoint stays cheap. The source is
  *  parsed client-side by `@swarm/core`'s `parseWorkflow`; the server
  *  never parses the source itself. */
 export interface WorkflowDetail extends WorkflowSummary {
   source: string;
+  /** Parsed `inputs:` declarations from the workflow. Absent when the
+   *  workflow declares no inputs or when talking to an older server
+   *  that does not emit the field. */
+  inputs?: WorkflowInputDecl[];
 }
 
 export interface SkillSummary {
@@ -756,6 +772,10 @@ export interface CreateRunInput {
   workflowName: string;
   workflowScope?: "global" | "local" | "path" | "ephemeral";
   input?: string;
+  /** Typed input bindings for the workflow's `inputs:` block. Keys are
+   *  input names; values are string-coerced values (booleans/numbers
+   *  serialise as "true" / "42" etc.). Forwarded as `inputs` on POST /runs. */
+  inputs?: Record<string, string>;
   priority?: number;
 }
 
@@ -766,6 +786,7 @@ export async function createRun(args: CreateRunInput): Promise<{ runId: string }
   };
   if (args.workflowScope !== undefined) body["workflowScope"] = args.workflowScope;
   if (args.input !== undefined) body["input"] = args.input;
+  if (args.inputs !== undefined) body["inputs"] = args.inputs;
   if (args.priority !== undefined) body["priority"] = args.priority;
   return postJson(
     "/runs",
@@ -1251,7 +1272,11 @@ function isWorkflowSummary(v: unknown): v is WorkflowSummary {
 
 function isWorkflowDetail(v: unknown): v is WorkflowDetail {
   if (!isWorkflowSummary(v)) return false;
-  return typeof (v as { source?: unknown }).source === "string";
+  if (typeof (v as { source?: unknown }).source !== "string") return false;
+  // `inputs` is optional — older servers omit it; soft-validate when present.
+  const inputs = (v as { inputs?: unknown }).inputs;
+  if (inputs !== undefined && !Array.isArray(inputs)) return false;
+  return true;
 }
 
 function isJobStatus(v: unknown): v is JobStatus {

@@ -11,7 +11,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { RunComposer } from "../../src/components/RunComposer.tsx";
 import type { WorkflowSummary } from "../../src/lib/api.ts";
-import { queries } from "../../src/lib/queries.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
@@ -219,36 +218,41 @@ describe("RunComposer", () => {
   });
 
   it("invalidates the runs list query on success", async () => {
+    let invalidateCalled = false;
     const mock = installFetchMock({
       "/api/runs": async ({ method }) => {
         if (method !== "POST") return new Response("not allowed", { status: 405 });
         return json({ runId: "r-5" });
       },
+      // Provide a no-inputs detail response so the workflow detail query
+      // resolves cleanly without leaving a pending async error in the queue.
+      "/api/workflows/local-a?cwd=%2Fwork%2Fproj-a": async () =>
+        json({
+          name: "local-a",
+          path: "workflows/local-a.yaml",
+          sha: "sha-local-a",
+          source: "name: local-a\nsteps:\n  work:\n    type: llm\n    prompt: x\n",
+        }),
     });
     try {
       const client = createTestQueryClient();
-      // Seed a runs-list cache entry; assert it gets invalidated.
-      const filter = { cwd: PROJECT_CWD };
-      client.setQueryData(queries.runs.list(filter).queryKey, []);
+      // Wrap invalidateQueries to observe the call without polling stale cache.
+      const orig = client.invalidateQueries.bind(client);
+      client.invalidateQueries = async (...args: Parameters<typeof orig>) => {
+        invalidateCalled = true;
+        return orig(...args);
+      };
 
       const workflows: WorkflowSummary[] = [workflow("local-a", { cwd: PROJECT_CWD })];
-      const { getByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />, { client });
+      renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />, { client });
 
-      const before = client.getQueryState(queries.runs.list(filter).queryKey);
-      expect(before?.isInvalidated ?? false).toBe(false);
-
-      const form = getByTestId("run-composer-form") as HTMLFormElement;
+      const form = document.querySelector("[data-testid='run-composer-form']") as HTMLFormElement;
       await act(async () => {
         fireEvent.submit(form);
       });
 
       await waitFor(() => {
-        const state = client.getQueryState(queries.runs.list(filter).queryKey);
-        // Either the entry is marked invalidated OR it has been refetched
-        // (queries with no observer go straight from invalidated to a
-        // fresh fetch attempt; with retry: false + no fetcher in the
-        // route, the marker is what we observe).
-        expect(state?.isInvalidated || (state?.dataUpdateCount ?? 0) > 1).toBe(true);
+        expect(invalidateCalled).toBe(true);
       });
     } finally {
       mock.restore();
@@ -283,6 +287,187 @@ describe("RunComposer", () => {
       expect(errEl.textContent ?? "").toContain("500");
 
       // Submit re-enables after the failure (mutation no longer pending).
+      await waitFor(() => {
+        expect((getByTestId("run-composer-submit") as HTMLButtonElement).disabled).toBe(false);
+      });
+    } finally {
+      mock.restore();
+    }
+  });
+
+  // ── Typed inputs tests ──────────────────────────────────────────────
+
+  it("renders WorkflowInputsForm when the selected workflow declares inputs[]", async () => {
+    const source = [
+      "name: local-a",
+      "inputs:",
+      "  ticket:",
+      "    type: string",
+      "    required: true",
+      "steps:",
+      "  work:",
+      "    type: llm",
+      "    prompt: Work on ${{ inputs.ticket }}",
+    ].join("\n");
+    const mock = installFetchMock({
+      "/api/workflows/local-a?cwd=%2Fwork%2Fproj-a": async () =>
+        json({
+          name: "local-a",
+          path: "workflows/local-a.yaml",
+          sha: "sha-local-a",
+          source,
+          inputs: [{ name: "ticket", type: "string", required: true }],
+        }),
+    });
+    try {
+      const workflows: WorkflowSummary[] = [workflow("local-a", { cwd: PROJECT_CWD })];
+      const { findByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
+      // WorkflowInputsForm should appear once the detail query resolves.
+      const form = await findByTestId("workflow-inputs-form");
+      expect(form).toBeTruthy();
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it("does not render WorkflowInputsForm when the workflow has no inputs", async () => {
+    const mock = installFetchMock({
+      "/api/workflows/local-a?cwd=%2Fwork%2Fproj-a": async () =>
+        json({
+          name: "local-a",
+          path: "workflows/local-a.yaml",
+          sha: "sha-local-a",
+          source: "name: local-a\nsteps:\n  work:\n    type: llm\n    prompt: x\n",
+        }),
+    });
+    try {
+      const workflows: WorkflowSummary[] = [workflow("local-a", { cwd: PROJECT_CWD })];
+      const { queryByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
+      // Give the query time to resolve.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(queryByTestId("workflow-inputs-form")).toBeNull();
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it("POST /runs body includes inputs map when typed inputs are filled", async () => {
+    const source = [
+      "name: local-a",
+      "inputs:",
+      "  ticket:",
+      "    type: string",
+      "    required: false",
+      "    default: BUG-1",
+      "steps:",
+      "  work:",
+      "    type: llm",
+      "    prompt: Work on ${{ inputs.ticket }}",
+    ].join("\n");
+    let lastBody: unknown;
+    const mock = installFetchMock({
+      "/api/workflows/local-a?cwd=%2Fwork%2Fproj-a": async () =>
+        json({
+          name: "local-a",
+          path: "workflows/local-a.yaml",
+          sha: "sha-local-a",
+          source,
+          inputs: [{ name: "ticket", type: "string", required: false, default: "BUG-1" }],
+        }),
+      "/api/runs": async ({ method, init }) => {
+        if (method !== "POST") return new Response("not allowed", { status: 405 });
+        if (typeof init?.body === "string") lastBody = JSON.parse(init.body);
+        return json({ runId: "r-typed" });
+      },
+    });
+    try {
+      const workflows: WorkflowSummary[] = [workflow("local-a", { cwd: PROJECT_CWD })];
+      const { getByTestId, findByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
+      // Wait for the inputs form to appear (detail query resolved).
+      await findByTestId("workflow-inputs-form");
+      // The default value is seeded; submit immediately.
+      const form = getByTestId("run-composer-form") as HTMLFormElement;
+      await act(async () => {
+        fireEvent.submit(form);
+      });
+      await waitFor(() => {
+        expect(lastBody).toBeTruthy();
+      });
+      const body = lastBody as Record<string, unknown>;
+      expect(body["inputs"]).toEqual({ ticket: "BUG-1" });
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it("submit is disabled while a required typed input is empty", async () => {
+    const source = [
+      "name: local-a",
+      "inputs:",
+      "  ticket:",
+      "    type: string",
+      "    required: true",
+      "steps:",
+      "  work:",
+      "    type: llm",
+      "    prompt: Work on ${{ inputs.ticket }}",
+    ].join("\n");
+    const mock = installFetchMock({
+      "/api/workflows/local-a?cwd=%2Fwork%2Fproj-a": async () =>
+        json({
+          name: "local-a",
+          path: "workflows/local-a.yaml",
+          sha: "sha-local-a",
+          source,
+          inputs: [{ name: "ticket", type: "string", required: true }],
+        }),
+    });
+    try {
+      const workflows: WorkflowSummary[] = [workflow("local-a", { cwd: PROJECT_CWD })];
+      const { getByTestId, findByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
+      // Wait for the inputs form (detail resolved).
+      await findByTestId("workflow-inputs-form");
+      // Required input is empty — submit must be disabled.
+      await waitFor(() => {
+        expect((getByTestId("run-composer-submit") as HTMLButtonElement).disabled).toBe(true);
+      });
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it("submit re-enables once every required input has a default value", async () => {
+    const source = [
+      "name: local-a",
+      "inputs:",
+      "  ticket:",
+      "    type: string",
+      "    required: true",
+      "    default: BUG-42",
+      "steps:",
+      "  work:",
+      "    type: llm",
+      "    prompt: Work on ${{ inputs.ticket }}",
+    ].join("\n");
+    const mock = installFetchMock({
+      "/api/workflows/local-a?cwd=%2Fwork%2Fproj-a": async () =>
+        json({
+          name: "local-a",
+          path: "workflows/local-a.yaml",
+          sha: "sha-local-a",
+          source,
+          inputs: [{ name: "ticket", type: "string", required: true, default: "BUG-42" }],
+        }),
+    });
+    try {
+      const workflows: WorkflowSummary[] = [workflow("local-a", { cwd: PROJECT_CWD })];
+      const { getByTestId, findByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
+      // Wait for the inputs form.
+      await findByTestId("workflow-inputs-form");
+      // The required input has a default — submit should be enabled once
+      // the seeding effect fires.
       await waitFor(() => {
         expect((getByTestId("run-composer-submit") as HTMLButtonElement).disabled).toBe(false);
       });
