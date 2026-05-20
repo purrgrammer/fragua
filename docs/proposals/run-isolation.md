@@ -46,7 +46,7 @@ Provisioning:
 
 1. `git worktree add .swarm/worktrees/<run_id> <ref>`
 2. Capture `git rev-parse HEAD` → `run_state.base_git_sha`
-3. Run the project's bootstrap command (`config.jsonc` `bootstrap` field), if any.
+3. Run the project's bootstrap command (`config.yaml` `bootstrap` field), if any.
 4. Handlers execute against the worktree as `cwd`.
 
 Dispose, on terminal status:

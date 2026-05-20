@@ -265,7 +265,7 @@ Per CLAUDE.md ground rule #1:
    makes the ranking debuggable from the event log alone.
 3. **Conversation split: tabs vs. columns vs. hybrid threshold?**
    3-branch threshold is a guess. Could be a user setting under
-   `~/.swarm/config.jsonc:web`.
+   `~/.swarm/config.yaml:web`.
 4. **Should the proposal land in one PR or split P0 / P1 / P2?**
    Recommend P0 alone first (smallest unit that fixes the substitution
    correctness bug; UI work can follow without a runtime change).

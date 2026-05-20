@@ -80,7 +80,7 @@ Three site changes:
 
 ## Operator surface
 
-- **Today**: `timeouts.codergen: "999h"` in `~/.swarm/config.jsonc` (the workaround this proposal
+- **Today**: `timeouts.codergen: "999h"` in `~/.swarm/config.yaml` (the workaround this proposal
   obsoletes).
 - **After this PR**: omit `timeouts.codergen` entirely. Set `max_tokens` / `max_cost_usd` on the
   codergen node attrs (or rely on workflow-level / per-class defaults via `model_stylesheet`).

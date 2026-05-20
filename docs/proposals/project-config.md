@@ -1,6 +1,6 @@
 ---
 title: Project config file
-summary: "<project>/.swarm/config.jsonc"
+summary: "<project>/.swarm/config.yaml"
 status: shipped
 maturity: specified
 last-reviewed: 2026-05-01
@@ -8,12 +8,12 @@ last-reviewed: 2026-05-01
 
 # Project config file
 
-> Project-scoped only. Cascading global config (`~/.swarm/config.jsonc`)
+> Project-scoped only. Cascading global config (`~/.swarm/config.yaml`)
 > is still part of the [harness](./harness.md) subproject.
 
 ## What landed
 
-`<project>/.swarm/config.jsonc` — the single config + identity file:
+`<project>/.swarm/config.yaml` — the single config + identity file:
 
 ```jsonc
 {
@@ -28,7 +28,7 @@ last-reviewed: 2026-05-01
 }
 ```
 
-- **Filename**: `config.jsonc` (not `swarm.jsonc` from the original
+- **Filename**: `config.yaml` (not `swarm.jsonc` from the original
   proposal — `swarm` is already the directory prefix; doubling it
   added no signal).
 - **Format**: JSONC via `jsonc-parser@3.3.1` (pinned). Comments + trailing
@@ -45,7 +45,7 @@ last-reviewed: 2026-05-01
 `swarm init`:
 
 - mints the UUIDv7
-- writes `.swarm/config.jsonc`
+- writes `.swarm/config.yaml`
 - creates `.swarm/workflows/`
 - idempotently merges runtime patterns into `.gitignore`
 - pre-registers the project in the daemon's `projects` display cache
@@ -53,7 +53,7 @@ last-reviewed: 2026-05-01
   project shows up in `swarm projects ls` / the UI immediately,
   without waiting for first run
 - hard-fails on non-git directories (with hint to run `git init`)
-- refuses to re-init when `.swarm/config.jsonc` is reachable from `HEAD`
+- refuses to re-init when `.swarm/config.yaml` is reachable from `HEAD`
 
 `enqueueRun` UPSERTs the same row (last-runner wins) so the cache
 re-syncs on every run — init's pre-registration is a fast-path for
@@ -78,7 +78,7 @@ These weren't in the original v0 but landed in the same arc:
   UPSERT on every `POST /runs` keyed off the request body's
   `projectId` + `projectName` + `projectRoot`. Last-runner wins. Load-bearing
   for UI labels under the eventual harness — a daemon serving many
-  projects can't read every clone's `config.jsonc`.
+  projects can't read every clone's `config.yaml`.
 - **Workflow directory resolution** (`.swarm/workflows/<name>.dot` glob
   via bare-name) shipped as a paired ship with `swarm run` and
   `swarm validate`. See [workflow-resolution](./workflow-resolution.md).
@@ -101,7 +101,7 @@ These weren't in the original v0 but landed in the same arc:
 .swarm/serve.json
 
 # swarm — always commit these (negative patterns for clarity)
-!.swarm/config.jsonc
+!.swarm/config.yaml
 !.swarm/workflows/
 ```
 
@@ -109,7 +109,7 @@ These weren't in the original v0 but landed in the same arc:
 
 Still deferred (now part of the [harness](./harness.md) subproject):
 
-- `~/.swarm/config.jsonc` (global file).
+- `~/.swarm/config.yaml` (global file).
 - Credentials block — the [credentials](./credentials.md) subproject.
 - Cascading semantics. `swarm config show --origin` lands with the cascade.
 - JSON Schema served at a public URL for editor IntelliSense — local

@@ -10,7 +10,7 @@ last-reviewed: 2026-05-03
 > Deferred. In the harness-by-default model, projects are emergent —
 > any directory `swarm run` has executed in shows up under the global
 > daemon's purview. There's no `swarm init`-style enrollment for new
-> users, no `<project>/.swarm/config.jsonc` minted by default, and so
+> users, no `<project>/.swarm/config.yaml` minted by default, and so
 > no per-project knobs to override.
 >
 > The shipped [project-config](./project-config.md) file remains
@@ -22,11 +22,11 @@ last-reviewed: 2026-05-03
 - `config.bootstrap` — the per-worktree shell command (`bun install
   --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
   …). Project-specific by nature: the command depends on the project's
-  stack. Stays in `<project>/.swarm/config.jsonc`.
+  stack. Stays in `<project>/.swarm/config.yaml`.
 
 ## What's global
 
-`~/.swarm/config.jsonc` is the user-preference layer. Project config
+`~/.swarm/config.yaml` is the user-preference layer. Project config
 overlays it; project keys win, nested objects merge one level deep.
 
 - `defaults.{llm_provider, llm_model, permissions, summariser}` — LLM
