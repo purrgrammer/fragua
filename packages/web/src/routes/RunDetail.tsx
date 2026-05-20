@@ -217,6 +217,16 @@ export function RunDetail(): JSX.Element {
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
                 subagentByToolCallId={subagentByToolCallId}
+                hitl={
+                  detail?.runStatus === "paused_human" && detail.hitlNodeId
+                    ? {
+                        runId: id,
+                        nodeId: detail.hitlNodeId,
+                        label: detail.hitlLabel ?? null,
+                        options: detail.hitlOptions ?? [],
+                      }
+                    : null
+                }
               />
             </TabsContent>
             <TabsContent value="graph" className="h-full">
