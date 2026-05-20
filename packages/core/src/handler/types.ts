@@ -179,7 +179,7 @@ export interface HandlerContext {
    * abort — buffered events flush even if the handler throws.
    */
   readonly emit: (type: string, payload: Record<string, unknown>) => void;
-  /** Optional: human input delivered to a resumed wait.human node. */
+  /** Optional: human input delivered to a resumed human node. */
   readonly humanInput?: HumanInput | string;
   /** Optional: steering text folded in before this node run. */
   readonly steering?: string;

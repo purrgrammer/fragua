@@ -9,7 +9,7 @@
 //   -------------------|----------|----------|---------------|------------
 //   llm           |  yes     |  yes     |  no           |  no
 //   conditional        |  no*     |  yes     |  no           |  no
-//   wait.human         |  no      |  yes     |  no           |  no
+//   human              |  no      |  yes     |  no           |  no
 //   tool               |  no      |  yes     |  yes          |  no
 //   parallel           |  no      |  no      |  no           |  yes
 //   parallel.fan_in    |  iff prompt set     |  yes     |  no  |  yes

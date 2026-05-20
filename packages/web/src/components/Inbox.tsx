@@ -1,7 +1,7 @@
 // Inbox — runs that need operator attention.
 //
 // "Attention" is anything in `paused_human` (awaiting input on a
-// wait.human gate), `paused` (operator-resumable: provider error,
+// human gate), `paused` (operator-resumable: provider error,
 // payment required, budget hit, or operator pause), or `quarantined`
 // (sweep marked the run unreachable). `halted` is terminal,
 // `requeued_after_crash` self-heals; both belong in Feed only.

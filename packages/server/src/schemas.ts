@@ -109,8 +109,7 @@ export const RunDetail = Type.Object({
    *  attr (when `runStatus === 'paused_human'`). */
   hitlLabel: Type.Optional(Type.String()),
   /** Declared route names from the paused human node's `routes=` attr;
-   *  one button rendered per route. Field name retained from the
-   *  wait.human → human rename to avoid churn across the web layer. */
+   *  one button rendered per route. */
   hitlOptions: Type.Optional(Type.Array(Type.String())),
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */

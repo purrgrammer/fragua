@@ -15,9 +15,9 @@ type HandlerSpec = handler.HandlerSpec;
 export interface AutoDispatcherOpts {
   store: IEventStore;
   /**
-   * Optional factory that builds a real llm handler for `box`-shape
+   * Optional factory that builds a real llm handler for `llm`
    * nodes. When provided, the auto-dispatcher uses it instead of the
-   * trivial noop transition so any box node that reaches the daemon is
+   * trivial noop transition so any llm node that reaches the daemon is
    * executed via a real LLM backend. `nextNode` is passed as a legacy
    * fallback for factories that don't rely on the executor's edge
    * selector; factories are free to ignore it. `maxMs` is resolved from

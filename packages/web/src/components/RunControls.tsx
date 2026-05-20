@@ -100,7 +100,7 @@ export function RunControls({
   // substatuses handle their own surface:
   //   - paused                  → RunPausedNotice (Resume + Cancel)
   //   - paused_human with options → HitlChoice (option buttons)
-  // paused_human with NO options is the workflow-authored wait.human
+  // paused_human with NO options is the workflow-authored human-node
   // resume case (operator pauses route to `paused` now).
   // paused_auto auto-resumes on a timer; manual Resume short-circuits
   // the wait — handled in RunPausedNotice for those reasons.

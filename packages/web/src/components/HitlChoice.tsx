@@ -17,8 +17,7 @@ import { Button } from "./ui/button.tsx";
 export interface HitlChoiceProps {
   runId: string;
   /** Operator-facing question from the human node's `text=` attr.
-   *  Surfaced via `RunDetail.hitlLabel` (field name retained from the
-   *  wait.human → human rename for back-compat). */
+   *  Surfaced via `RunDetail.hitlLabel`. */
   label?: string | null;
   /** Declared route names from the node's `routes=` attr; one button each.
    *  Surfaced via `RunDetail.hitlOptions`. */
