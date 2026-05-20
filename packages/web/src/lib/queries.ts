@@ -101,6 +101,22 @@ export const queries = {
         staleTime: 30_000,
         retry: noRetryOnGone,
       }),
+    snapshots: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), id, "snapshots"] as const,
+        queryFn: () => api.listRunSnapshots(id),
+        enabled: id.length > 0,
+        staleTime: 30_000,
+        retry: noRetryOnGone,
+      }),
+    snapshotDiff: (id: string, eventIdx: number, against: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), id, "snapshot-diff", eventIdx, against] as const,
+        queryFn: () => api.getRunSnapshotDiff(id, eventIdx, { against }),
+        enabled: id.length > 0 && eventIdx >= 0,
+        staleTime: 30_000,
+        retry: noRetryOnGone,
+      }),
   },
 
   skills: {

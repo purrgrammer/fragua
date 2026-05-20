@@ -565,6 +565,70 @@ export async function getRunBlob(runId: string, path: string): Promise<string> {
   return res.text();
 }
 
+/** Change-stat shape for a snapshot's committed or uncommitted deltas. */
+export interface SnapshotChangeStat {
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
+/** One entry from `GET /runs/:id/snapshots`. */
+export interface RunSnapshot {
+  eventIdx: number;
+  nodeId: string | null;
+  label: "step" | "hitl" | "terminal";
+  commitSha: string;
+  treeSha: string;
+  committed: SnapshotChangeStat | null;
+  uncommitted: SnapshotChangeStat | null;
+}
+
+function isSnapshotChangeStat(v: unknown): v is SnapshotChangeStat {
+  if (typeof v !== "object" || v === null) return false;
+  const s = v as Record<string, unknown>;
+  return typeof s["files"] === "number" && typeof s["additions"] === "number" && typeof s["deletions"] === "number";
+}
+
+function isRunSnapshot(v: unknown): v is RunSnapshot {
+  if (typeof v !== "object" || v === null) return false;
+  const s = v as Record<string, unknown>;
+  return (
+    typeof s["eventIdx"] === "number" &&
+    (s["nodeId"] === null || typeof s["nodeId"] === "string") &&
+    (s["label"] === "step" || s["label"] === "hitl" || s["label"] === "terminal") &&
+    typeof s["commitSha"] === "string" &&
+    typeof s["treeSha"] === "string" &&
+    (s["committed"] === null || isSnapshotChangeStat(s["committed"])) &&
+    (s["uncommitted"] === null || isSnapshotChangeStat(s["uncommitted"]))
+  );
+}
+
+export async function listRunSnapshots(runId: string): Promise<RunSnapshot[]> {
+  return getJson(
+    `/runs/${encodeURIComponent(runId)}/snapshots`,
+    (v): v is RunSnapshot[] => Array.isArray(v) && v.every(isRunSnapshot),
+  );
+}
+
+export async function getRunSnapshotDiff(
+  runId: string,
+  eventIdx: number,
+  opts?: { against?: string; path?: string },
+): Promise<string> {
+  const params = new URLSearchParams();
+  if (opts?.against) params.set("against", opts.against);
+  if (opts?.path) params.set("path", opts.path);
+  const qs = params.toString();
+  const u = url(
+    `/runs/${encodeURIComponent(runId)}/snapshots/${encodeURIComponent(String(eventIdx))}/diff${qs ? `?${qs}` : ""}`,
+  );
+  const res = await fetch(u);
+  if (!res.ok) {
+    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  }
+  return res.text();
+}
+
 export async function getRunDiff(runId: string): Promise<string> {
   const u = url(`/runs/${encodeURIComponent(runId)}/diff`);
   const res = await fetch(u);

@@ -686,4 +686,193 @@ steps:
       }
     });
   });
+
+  describe("RunDetail — Diff tab", () => {
+    const snapshots = [
+      {
+        eventIdx: 10,
+        nodeId: "build",
+        label: "step" as const,
+        commitSha: "abc",
+        treeSha: "def",
+        committed: { files: 2, additions: 10, deletions: 3 },
+        uncommitted: null,
+      },
+      {
+        eventIdx: 20,
+        nodeId: "review",
+        label: "step" as const,
+        commitSha: "bcd",
+        treeSha: "efg",
+        committed: { files: 1, additions: 5, deletions: 0 },
+        uncommitted: null,
+      },
+      {
+        eventIdx: 30,
+        nodeId: null,
+        label: "terminal" as const,
+        commitSha: "cde",
+        treeSha: "fgh",
+        committed: null,
+        uncommitted: null,
+      },
+    ];
+
+    function prepareWithDiff(id: string, detail: RunDetailT, diffResponses: Record<string, string> = {}) {
+      const client = createTestQueryClient();
+      client.setQueryData(queries.runs.detail(id).queryKey, detail);
+      const routes: Record<string, () => Response> = {
+        [`/api/runs/${encodeURIComponent(id)}/events.json`]: () => json([]),
+        [`/api/runs/${encodeURIComponent(id)}/messages`]: () => json([]),
+        [`/api/runs/${encodeURIComponent(id)}/steps`]: () => json([]),
+        [`/api/runs/${encodeURIComponent(id)}`]: () => json(detail),
+        [`/api/runs/${encodeURIComponent(id)}/snapshots`]: () => json(snapshots),
+      };
+      for (const [key, body] of Object.entries(diffResponses)) {
+        routes[key] = () => new Response(body, { headers: { "content-type": "text/x-diff" } });
+      }
+      const mock = installFetchMock(routes, () => json([]));
+      return { client, mock };
+    }
+
+    it("shows the Diff tab trigger when the run has a cwd", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-cwd",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 30,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cwd: "/home/user/project",
+      };
+      const { client, mock } = prepareWithDiff("run-diff-cwd", detail);
+      try {
+        const { container } = mount(client, "/runs/run-diff-cwd");
+        await waitFor(() => {
+          expect(within(container).getByTestId("detail-status")).toBeTruthy();
+        });
+        expect(within(container).getByTestId("view-tab-diff")).toBeTruthy();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("hides the Diff tab when the run has no cwd", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-nocwd",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        // no cwd field
+      };
+      const { client, mock } = prepareWithDiff("run-diff-nocwd", detail);
+      try {
+        const { container } = mount(client, "/runs/run-diff-nocwd");
+        await waitFor(() => {
+          expect(within(container).getByTestId("detail-status")).toBeTruthy();
+        });
+        expect(within(container).queryByTestId("view-tab-diff")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("navigates to /conversation when /diff is opened for a no-cwd run", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-redir",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      const { client, mock } = prepareWithDiff("run-diff-redir", detail);
+      try {
+        const { container } = mount(client, "/runs/run-diff-redir/diff");
+        await waitFor(() => {
+          expect(within(container).getByTestId("conversation-region")).toBeTruthy();
+        });
+        expect(within(container).queryByTestId("diff-region")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("renders the scrubber with all snapshot rows when the Diff tab is active", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-scrub",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 30,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cwd: "/home/user/project",
+      };
+      const diffText = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
+      const { client, mock } = prepareWithDiff("run-diff-scrub", detail, {
+        "/api/runs/run-diff-scrub/snapshots/30/diff": diffText,
+        "/api/runs/run-diff-scrub/snapshots/30/diff?against=base": diffText,
+      });
+      try {
+        const { container } = mount(client, "/runs/run-diff-scrub/diff");
+        await waitFor(() => {
+          expect(within(container).getByTestId("snapshot-scrubber")).toBeTruthy();
+        });
+        expect(within(container).getByTestId("snapshot-row-10")).toBeTruthy();
+        expect(within(container).getByTestId("snapshot-row-20")).toBeTruthy();
+        expect(within(container).getByTestId("snapshot-row-30")).toBeTruthy();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("shows EmptyState when /snapshots returns an empty array", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-empty",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cwd: "/home/user/project",
+      };
+      const client = createTestQueryClient();
+      client.setQueryData(queries.runs.detail("run-diff-empty").queryKey, detail);
+      const mock = installFetchMock(
+        {
+          "/api/runs/run-diff-empty/events.json": () => json([]),
+          "/api/runs/run-diff-empty/messages": () => json([]),
+          "/api/runs/run-diff-empty/steps": () => json([]),
+          "/api/runs/run-diff-empty": () => json(detail),
+          "/api/runs/run-diff-empty/snapshots": () => json([]),
+        },
+        () => json([]),
+      );
+      try {
+        const { container } = mount(client, "/runs/run-diff-empty/diff");
+        await waitFor(() => {
+          expect(within(container).getByTestId("run-diff-empty")).toBeTruthy();
+        });
+      } finally {
+        mock.restore();
+      }
+    });
+  });
 });
