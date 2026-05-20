@@ -89,9 +89,6 @@ const Web = Type.Object(
 
 export const SwarmConfigSchema = Type.Object(
   {
-    // Schema version. Currently always 1; bumped when the on-disk shape
-    // changes in a way readers must opt into.
-    version: Type.Optional(Type.Literal(1)),
     // UUIDv7 stable project identity, minted by `swarm init`. Optional
     // here so hand-rolled configs (e.g. `swarm init` predates the field)
     // don't fail validation. Routing keys on the daemon's internal
@@ -270,7 +267,9 @@ function parseJsoncBody(body: string, filePath: string): unknown {
  * "parse error in <path>" message. */
 function parseYamlBody(body: string, filePath: string): unknown {
   try {
-    return YAML.parse(body);
+    // An empty or comments-only document parses to null — treat it as an
+    // empty config object (a project may ship only commented-out knobs).
+    return YAML.parse(body) ?? {};
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`config: parse error in ${filePath}: ${msg}`);

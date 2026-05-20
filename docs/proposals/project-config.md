@@ -17,7 +17,6 @@ last-reviewed: 2026-05-01
 
 ```jsonc
 {
-  "version": 1,
   "id": "019de01e-5ccd-7010-9184-defb237e74db",   // UUIDv7 minted by `swarm init`
   "name": "swarm",
   "bootstrap": "bun install --frozen-lockfile",

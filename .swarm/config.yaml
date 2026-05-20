@@ -2,8 +2,6 @@
 # Project-specific knobs only. Generic preferences live in
 # ~/.swarm/config.yaml and cascade under this file.
 
-version: 1
-
 # Stack-agnostic bootstrap. Runs inside each fresh worktree before the
 # first node fires, after `git worktree add`. Non-zero exit fails the
 # run. Project-specific because the command depends on the project's

@@ -47,8 +47,9 @@ describe("initCommand", () => {
     expect(code).toBe(0);
     expect(await exists(".swarm/config.yaml")).toBe(true);
     expect(await exists(".swarm/config.jsonc")).toBe(false);
+    // The default template is comments-only — loads as an empty config.
     const cfg = await loadProjectConfig(scratch);
-    expect(cfg.version).toBe(1);
+    expect(cfg).toEqual({});
   });
 
   test(".gitignore allowlists both .swarm/config.yaml and .swarm/config.jsonc", async () => {
@@ -60,17 +61,17 @@ describe("initCommand", () => {
 
   test("refuses to overwrite an existing .swarm/config.yaml", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `version: 1\n`, "utf8");
+    await writeFile(join(scratch, ".swarm/config.yaml"), `autoTitle: false\n`, "utf8");
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(1);
     // File is untouched
     const content = await readFile(join(scratch, ".swarm/config.yaml"), "utf8");
-    expect(content).toBe(`version: 1\n`);
+    expect(content).toBe(`autoTitle: false\n`);
   });
 
   test("refuses to overwrite an existing .swarm/config.jsonc (legacy)", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "version": 1 }`, "utf8");
+    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "autoTitle": false }`, "utf8");
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(1);
     // JSONC untouched, no YAML written

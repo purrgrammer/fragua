@@ -71,7 +71,6 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
 function renderConfig(): string {
   return `# swarm project config — project-specific knobs only.
 # Generic preferences live in ~/.swarm/config.yaml.
-version: 1
 
 # Uncomment if the project needs a per-worktree bootstrap command:
 # bootstrap: "bun install --frozen-lockfile"
