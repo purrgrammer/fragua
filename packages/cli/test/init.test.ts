@@ -61,17 +61,17 @@ describe("initCommand", () => {
 
   test("refuses to overwrite an existing .swarm/config.yaml", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `autoTitle: false\n`, "utf8");
+    await writeFile(join(scratch, ".swarm/config.yaml"), `auto-title: false\n`, "utf8");
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(1);
     // File is untouched
     const content = await readFile(join(scratch, ".swarm/config.yaml"), "utf8");
-    expect(content).toBe(`autoTitle: false\n`);
+    expect(content).toBe(`auto-title: false\n`);
   });
 
   test("refuses to overwrite an existing .swarm/config.jsonc (legacy)", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "autoTitle": false }`, "utf8");
+    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "auto-title": false }`, "utf8");
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(1);
     // JSONC untouched, no YAML written

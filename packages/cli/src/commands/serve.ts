@@ -79,6 +79,12 @@ export interface ServeCommandOptions {
    * this and rely on the discovery so they don't pay a vite build.
    */
   webDistDir?: string | undefined;
+  /**
+   * Override the home directory used to locate the global config
+   * (`~/.swarm/config.yaml`). Intended for test isolation — omit in
+   * production callers so the real `homedir()` is used.
+   */
+  homeDir?: string;
 }
 
 export interface ServerHandle {
@@ -136,10 +142,10 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // Backpressure cap on `status='queued'` runs from `.swarm/config.yaml`.
   // Opt-in (default uncapped); non-positive / unparseable values are
   // silently ignored.
-  const cfg = await loadConfig(cwd);
+  const cfg = await loadConfig(cwd, opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
   const maxQueuedRuns =
-    typeof cfg.maxQueuedRuns === "number" && Number.isFinite(cfg.maxQueuedRuns) && cfg.maxQueuedRuns > 0
-      ? cfg.maxQueuedRuns
+    typeof cfg["max-queued-runs"] === "number" && Number.isFinite(cfg["max-queued-runs"]) && cfg["max-queued-runs"] > 0
+      ? cfg["max-queued-runs"]
       : undefined;
   const app = createServer({
     cwd,

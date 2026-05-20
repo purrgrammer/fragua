@@ -408,7 +408,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // Auto-title summariser — cheap cross-run call that labels each run
   // post-enqueue. Uses `summariser.{provider,model}` when set;
   // otherwise defaults to the cheapest known model for the
-  // primary provider. `autoTitle: false` disables even when a backend
+  // primary provider. `auto-title: false` disables even when a backend
   // is configured.
   const autoTitler = buildAutoTitler({
     store,
@@ -439,12 +439,12 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     const projectTimeouts = resolveTimeouts(projectCfg);
     const out: { bootstrap?: string; bootstrapTimeoutMs?: number } = {};
     if (projectCfg.bootstrap !== undefined) out.bootstrap = projectCfg.bootstrap;
-    // Top-level `bootstrapTimeoutMs` wins over nested `timeouts.bootstrap`
+    // Top-level `bootstrap-timeout-ms` wins over nested `timeouts.bootstrap`
     // when both are set — the top-level form is more explicit about
-    // pairing with `bootstrap`. `timeouts.bootstrap` stays supported for
-    // back-compat and for users who prefer duration strings ("10m").
-    if (projectCfg.bootstrapTimeoutMs !== undefined) {
-      out.bootstrapTimeoutMs = projectCfg.bootstrapTimeoutMs;
+    // pairing with `bootstrap`. `timeouts.bootstrap` stays supported and
+    // accepts duration strings ("10m").
+    if (projectCfg["bootstrap-timeout-ms"] !== undefined) {
+      out.bootstrapTimeoutMs = projectCfg["bootstrap-timeout-ms"];
     } else if (projectTimeouts.bootstrap !== undefined) {
       out.bootstrapTimeoutMs = projectTimeouts.bootstrap;
     }
@@ -503,18 +503,18 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     if (timeouts.leakGrace !== undefined) daemonOpts.leakGraceMs = timeouts.leakGrace;
     if (timeouts.shutdownDrain !== undefined) daemonOpts.shutdownDrainMs = timeouts.shutdownDrain;
     if (timeouts.http !== undefined) daemonOpts.defaultHttpTimeoutMs = timeouts.http;
-    if (config.maxLoops !== undefined) daemonOpts.maxLoops = config.maxLoops;
-    if (config.abortLoopCeiling !== undefined) daemonOpts.abortLoopCeiling = config.abortLoopCeiling;
-    if (config.maxLeakedHandlers !== undefined) daemonOpts.maxLeakedHandlers = config.maxLeakedHandlers;
-    if (config.blobGc?.interval !== undefined) {
+    if (config["max-loops"] !== undefined) daemonOpts.maxLoops = config["max-loops"];
+    if (config["abort-loop-ceiling"] !== undefined) daemonOpts.abortLoopCeiling = config["abort-loop-ceiling"];
+    if (config["max-leaked-handlers"] !== undefined) daemonOpts.maxLeakedHandlers = config["max-leaked-handlers"];
+    if (config["blob-gc"]?.interval !== undefined) {
       try {
-        daemonOpts.blobGcIntervalMs = parseDurationMs(config.blobGc.interval);
+        daemonOpts.blobGcIntervalMs = parseDurationMs(config["blob-gc"].interval);
       } catch (err) {
-        console.error(chalk.red(`config: blobGc.interval: ${(err as Error).message}`));
+        console.error(chalk.red(`config: blob-gc.interval: ${(err as Error).message}`));
         return 1;
       }
     }
-    if (config.blobGc?.maxRows !== undefined) daemonOpts.blobGcMaxRows = config.blobGc.maxRows;
+    if (config["blob-gc"]?.["max-rows"] !== undefined) daemonOpts.blobGcMaxRows = config["blob-gc"]["max-rows"];
     if (steeringRegistry !== undefined) {
       const reg = steeringRegistry;
       daemonOpts.onSteer = (runId, text) => reg.steer(runId, text);
@@ -583,7 +583,7 @@ function buildAutoTitler(args: {
   shutdownSignal: AbortSignal;
 }): { titler: AutoTitler | undefined; label: string | undefined } {
   const { store, config, summariser, shutdownSignal } = args;
-  if (config.autoTitle === false) {
+  if (config["auto-title"] === false) {
     return { titler: undefined, label: "off (config)" };
   }
   if (!summariser.backend) {

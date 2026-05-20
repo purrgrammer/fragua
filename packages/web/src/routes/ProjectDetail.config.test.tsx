@@ -122,4 +122,18 @@ describe("ProjectDetail · Config tab", () => {
     const { container } = renderAt(`/projects/${TEST_ENC}`);
     await waitFor(() => within(container).getByTestId("project-config-empty"));
   });
+
+  test("renders auto-title / max-loops / bootstrap-timeout-ms from kebab keys", async () => {
+    installFetchWithConfig({
+      yamlConfig: `auto-title: false\nmax-loops: 7\nbootstrap-timeout-ms: 30000\n`,
+      jsoncConfig: null,
+    });
+    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    const autoTitleRow = await waitFor(() => within(container).getByTestId("project-config-auto-title"));
+    expect(autoTitleRow.textContent).toContain("Off");
+    const maxLoopsRow = await waitFor(() => within(container).getByTestId("project-config-max-loops"));
+    expect(maxLoopsRow.textContent).toContain("7");
+    const bootstrapTimeoutRow = await waitFor(() => within(container).getByTestId("project-config-bootstrap-timeout"));
+    expect(bootstrapTimeoutRow.textContent).toBeTruthy();
+  });
 });

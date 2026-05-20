@@ -83,7 +83,7 @@ swarm serve  --db <path>       # standalone HTTP + SSE on :3000
 ## Config
 
 Two-layer cascade — global `~/.swarm/config.yaml` (defaults,
-autoTitle, blocklist, …) overlaid by `<project>/.swarm/config.yaml`.
+auto-title, blocklist, …) overlaid by `<project>/.swarm/config.yaml`.
 Legacy `config.jsonc` is read with a deprecation warning for one release—rename to `config.yaml` to silence it.
 Project keys win; nested objects merge one level deep.
 

@@ -34,7 +34,7 @@ interface Root {
 
 export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverResult> {
   const config = opts.config ?? {};
-  const trustProject = config.trustProject ?? true;
+  const trustProject = config["trust-project"] ?? true;
   const disabledSet = new Set(config.disabled ?? []);
 
   const roots = buildRoots(opts, config);
@@ -55,7 +55,7 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverRes
       if (disabledSet.has(skill.name)) continue;
       if (skill.scope === "project") {
         if (!trustProject) {
-          skill.disabled_reason = "project scope hidden (skills.trustProject=false)";
+          skill.disabled_reason = "project scope hidden (skills.trust-project=false)";
         }
         if (root.projectCwd !== undefined) {
           skill.project_cwd = root.projectCwd;

@@ -70,7 +70,7 @@ export interface SkillsConfig {
    * dropped before the precedence merge — they do not appear in the
    * agent catalog, on GET /skills, or in the web UI. Use this when you
    * want to pretend a skill isn't installed. For temporary soft-hiding
-   * that keeps the skill visible in /skills, use `trustProject: false`
+   * that keeps the skill visible in /skills, use `"trust-project": false`
    * on project-scope skills instead. */
   disabled?: string[];
   /** Trust gate for project-scope skills. Default true — swarm agents
@@ -78,7 +78,7 @@ export interface SkillsConfig {
    * adds friction without a real security delta. Flip to false in
    * untrusted clones where project-scope skills should be hidden until
    * reviewed. */
-  trustProject?: boolean;
+  "trust-project"?: boolean;
 }
 
 /** Durable per-skill record emitted on `llm.start.skills[]`. Compact

@@ -73,33 +73,67 @@ defaults:
     await expect(load()).rejects.toThrow(/validation failed/);
   });
 
-  test("parses runtime ceilings: maxQueuedRuns, abortLoopCeiling, maxLeakedHandlers", async () => {
-    await write(`
-maxQueuedRuns: 500
-abortLoopCeiling: 8
-maxLeakedHandlers: 2
-`);
-    const cfg = await load();
-    expect(cfg.maxQueuedRuns).toBe(500);
-    expect(cfg.abortLoopCeiling).toBe(8);
-    expect(cfg.maxLeakedHandlers).toBe(2);
+  test("rejects the pre-rename camelCase key (autoTitle)", async () => {
+    await write(`autoTitle: true`);
+    await expect(load()).rejects.toThrow(/validation failed/);
   });
 
-  test("parses the timeouts section with leakGrace + shutdownDrain", async () => {
+  test("parses runtime ceilings: max-queued-runs, abort-loop-ceiling, max-leaked-handlers", async () => {
+    await write(`
+max-queued-runs: 500
+abort-loop-ceiling: 8
+max-leaked-handlers: 2
+`);
+    const cfg = await load();
+    expect(cfg["max-queued-runs"]).toBe(500);
+    expect(cfg["abort-loop-ceiling"]).toBe(8);
+    expect(cfg["max-leaked-handlers"]).toBe(2);
+  });
+
+  test("parses the timeouts section with leak-grace + shutdown-drain", async () => {
     await write(`
 timeouts:
   llm: "30m"
   tool: "5m"
   http: "30s"
-  leakGrace: "10s"
-  shutdownDrain: "30s"
+  leak-grace: "10s"
+  shutdown-drain: "30s"
 `);
     const cfg = await load();
     expect(cfg.timeouts?.llm).toBe("30m");
     expect(cfg.timeouts?.tool).toBe("5m");
     expect(cfg.timeouts?.http).toBe("30s");
-    expect(cfg.timeouts?.leakGrace).toBe("10s");
-    expect(cfg.timeouts?.shutdownDrain).toBe("30s");
+    expect(cfg.timeouts?.["leak-grace"]).toBe("10s");
+    expect(cfg.timeouts?.["shutdown-drain"]).toBe("30s");
+  });
+
+  test("parses every renamed kebab key end-to-end", async () => {
+    await writeGlobal(`
+auto-title: false
+max-loops: 42
+max-queued-runs: 10
+abort-loop-ceiling: 3
+max-leaked-handlers: 5
+bootstrap-timeout-ms: 60000
+blob-gc:
+  max-rows: 200
+skills:
+  trust-project: false
+timeouts:
+  leak-grace: "5s"
+  shutdown-drain: "15s"
+`);
+    const cfg = await load();
+    expect(cfg["auto-title"]).toBe(false);
+    expect(cfg["max-loops"]).toBe(42);
+    expect(cfg["max-queued-runs"]).toBe(10);
+    expect(cfg["abort-loop-ceiling"]).toBe(3);
+    expect(cfg["max-leaked-handlers"]).toBe(5);
+    expect(cfg["bootstrap-timeout-ms"]).toBe(60000);
+    expect(cfg["blob-gc"]?.["max-rows"]).toBe(200);
+    expect(cfg.skills?.["trust-project"]).toBe(false);
+    expect(cfg.timeouts?.["leak-grace"]).toBe("5s");
+    expect(cfg.timeouts?.["shutdown-drain"]).toBe("15s");
   });
 
   test("global → project cascade: project keys win, nested objects merge one level deep", async () => {
@@ -110,7 +144,7 @@ defaults:
 summariser:
   provider: anthropic
   model: claude-haiku-4.6
-autoTitle: true
+auto-title: true
 blocklist:
   - "sudo "
 `);
@@ -124,7 +158,7 @@ defaults:
     expect(cfg.defaults?.provider).toBe("anthropic"); // from global
     expect(cfg.defaults?.model).toBe("claude-opus-4.7"); // project override
     expect(cfg.summariser?.model).toBe("claude-haiku-4.6"); // global wins (project didn't set)
-    expect(cfg.autoTitle).toBe(true); // global only
+    expect(cfg["auto-title"]).toBe(true); // global only
     expect(cfg.blocklist).toEqual(["sudo "]); // global only
   });
 
@@ -150,11 +184,11 @@ defaults:
 
   test("global only: project file absent, global config flows through", async () => {
     await writeGlobal(`
-autoTitle: false
+auto-title: false
 concurrency: 2
 `);
     const cfg = await load();
-    expect(cfg.autoTitle).toBe(false);
+    expect(cfg["auto-title"]).toBe(false);
     expect(cfg.concurrency).toBe(2);
   });
 
@@ -241,7 +275,7 @@ defaults:
 summariser:
   provider: anthropic
   model: claude-haiku-4.6
-autoTitle: true
+auto-title: true
 `);
       await write(`
 bootstrap: "bun install --frozen-lockfile"
@@ -253,7 +287,7 @@ defaults:
       expect(cfg.defaults?.provider).toBe("anthropic");
       expect(cfg.defaults?.model).toBe("claude-opus-4.7");
       expect(cfg.summariser?.model).toBe("claude-haiku-4.6");
-      expect(cfg.autoTitle).toBe(true);
+      expect(cfg["auto-title"]).toBe(true);
     });
 
     test("rejects YAML root that is not a mapping", async () => {
@@ -305,13 +339,13 @@ defaults:
     });
 
     test("global → project cascade works with JSONC files", async () => {
-      await writeGlobal(`{ "autoTitle": true, "blocklist": ["sudo "] }`, "jsonc");
+      await writeGlobal(`{ "auto-title": true, "blocklist": ["sudo "] }`, "jsonc");
       await write(`{ "bootstrap": "pnpm install --frozen-lockfile" }`, "jsonc");
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
       try {
         const cfg = await load();
         expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
-        expect(cfg.autoTitle).toBe(true);
+        expect(cfg["auto-title"]).toBe(true);
       } finally {
         warnSpy.mockRestore();
       }
@@ -390,8 +424,8 @@ describe("resolveTimeouts", () => {
         bootstrap: 600_000,
         shell: "30s",
         http: "30s",
-        leakGrace: "10s",
-        shutdownDrain: "30s",
+        "leak-grace": "10s",
+        "shutdown-drain": "30s",
       },
     });
     expect(r.llm).toBe(30 * 60 * 1000);
@@ -403,8 +437,20 @@ describe("resolveTimeouts", () => {
     expect(r.shutdownDrain).toBe(30_000);
   });
 
+  test("reads leak-grace + shutdown-drain from the kebab source keys", () => {
+    const r = resolveTimeouts({
+      timeouts: { "leak-grace": "10s", "shutdown-drain": "30s" },
+    });
+    expect(r.leakGrace).toBe(10_000);
+    expect(r.shutdownDrain).toBe(30_000);
+  });
+
   test("invalid value throws with config-prefixed message", () => {
     expect(() => resolveTimeouts({ timeouts: { llm: "garbage" } })).toThrow(/config: timeouts\.llm:/);
+  });
+
+  test("invalid leak-grace throws with config-prefixed message including source key", () => {
+    expect(() => resolveTimeouts({ timeouts: { "leak-grace": "bad" } })).toThrow(/config: timeouts\.leak-grace:/);
   });
 
   test("unset keys stay undefined (caller falls through to handler defaults)", () => {

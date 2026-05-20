@@ -33,7 +33,7 @@ export interface AutoTitlerOpts {
    * daemon wires this from `.swarm/config.yaml`'s `summariser:` block,
    * and omits the backend when no provider/model is configured. */
   backend?: SummariserBackend;
-  /** Policy toggle — `autoTitle: false` in config disables even when a
+  /** Policy toggle — `auto-title: false` in config disables even when a
    * backend is configured. Defaults to `true`. */
   enabled?: boolean;
   store: IEventStore;

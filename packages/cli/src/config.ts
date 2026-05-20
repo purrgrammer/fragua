@@ -1,6 +1,6 @@
 // User-preference config for swarm. Two-layer cascade:
 //   global   ~/.swarm/config.yaml   — generic preferences (LLM defaults,
-//                                      autoTitle, blocklist, concurrency,
+//                                      auto-title, blocklist, concurrency,
 //                                      timeouts, blob GC, skills paths, …)
 //   project  <cwd>/.swarm/config.yaml — project-specific knobs only
 //                                      (today: `bootstrap`). Overlays
@@ -11,7 +11,7 @@
 // wins and a "shadowed" warning is emitted. Delete `.jsonc` to silence it.
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
-// (`defaults`, `blobGc`, `skills`, `timeouts`, `summariser`) merge one level
+// (`defaults`, `blob-gc`, `skills`, `timeouts`, `summariser`) merge one level
 // deep so a project config can override `defaults.model` without losing
 // the global `summariser` block.
 //
@@ -49,7 +49,7 @@ const Defaults = Type.Object(
 const BlobGc = Type.Object(
   {
     interval: Type.Optional(TimeoutValue),
-    maxRows: Type.Optional(Type.Integer({ minimum: 1 })),
+    "max-rows": Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
 );
@@ -58,7 +58,7 @@ const Skills = Type.Object(
   {
     paths: Type.Optional(Type.Array(Type.String())),
     disabled: Type.Optional(Type.Array(Type.String())),
-    trustProject: Type.Optional(Type.Boolean()),
+    "trust-project": Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -70,8 +70,8 @@ const Timeouts = Type.Object(
     bootstrap: Type.Optional(TimeoutValue),
     shell: Type.Optional(TimeoutValue),
     http: Type.Optional(TimeoutValue),
-    leakGrace: Type.Optional(TimeoutValue),
-    shutdownDrain: Type.Optional(TimeoutValue),
+    "leak-grace": Type.Optional(TimeoutValue),
+    "shutdown-drain": Type.Optional(TimeoutValue),
   },
   { additionalProperties: false },
 );
@@ -109,12 +109,12 @@ export const SwarmConfigSchema = Type.Object(
     // doesn't have to split across `bootstrap` + `timeouts.bootstrap`.
     // When both this and `timeouts.bootstrap` are set, this top-level
     // value wins (it's more explicit about belonging to bootstrap).
-    // `timeouts.bootstrap` stays supported for back-compat and accepts
-    // duration strings like `"10m"` — use that form when you'd rather
-    // express "10 minutes" than "600000".
-    bootstrapTimeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    // `timeouts.bootstrap` stays supported and accepts duration strings
+    // like `"10m"` — use that form when you'd rather express "10 minutes"
+    // than "600000".
+    "bootstrap-timeout-ms": Type.Optional(Type.Integer({ minimum: 0 })),
     defaults: Type.Optional(Defaults),
-    // Weak-model summariser. Powers async run-title generation (autoTitle)
+    // Weak-model summariser. Powers async run-title generation (auto-title)
     // and per-node `summary=low|medium|high` transcript compression. Always
     // cheaper than the primary coding model. Omit to disable both paths.
     summariser: Type.Optional(Summariser),
@@ -122,7 +122,7 @@ export const SwarmConfigSchema = Type.Object(
     // true (default) kicks off
     // a fire-and-forget summariser call at run start. false disables.
     // CLI flag --no-auto-title wins over this.
-    autoTitle: Type.Optional(Type.Boolean()),
+    "auto-title": Type.Optional(Type.Boolean()),
     // Command blocklist applied even in unsafe mode. Matched as literal
     // substrings against the shell command.
     blocklist: Type.Optional(Type.Array(Type.String())),
@@ -131,18 +131,18 @@ export const SwarmConfigSchema = Type.Object(
     concurrency: Type.Optional(Type.Integer({ minimum: 1 })),
     // Per-run ceiling on handler dispatches. A workflow that loops
     // indefinitely halts with `reason: "max_loops"`. Default 1000.
-    maxLoops: Type.Optional(Type.Integer({ minimum: 1 })),
+    "max-loops": Type.Optional(Type.Integer({ minimum: 1 })),
     // Backpressure cap on `status='queued'` runs. POST /runs returns 429
     // when queue depth reaches this. Absent = uncapped.
-    maxQueuedRuns: Type.Optional(Type.Integer({ minimum: 1 })),
+    "max-queued-runs": Type.Optional(Type.Integer({ minimum: 1 })),
     // Max consecutive handler aborts on the same node before halt with
     // `reason: "abort_loop"`. Default 5.
-    abortLoopCeiling: Type.Optional(Type.Integer({ minimum: 1 })),
+    "abort-loop-ceiling": Type.Optional(Type.Integer({ minimum: 1 })),
     // Cap on per-process leaked handlers (handler ignored AbortSignal
-    // past `maxMs + leakGrace`). Daemon shuts down when crossed.
+    // past `maxMs + leak-grace`). Daemon shuts down when crossed.
     // Default 3.
-    maxLeakedHandlers: Type.Optional(Type.Integer({ minimum: 1 })),
-    blobGc: Type.Optional(BlobGc),
+    "max-leaked-handlers": Type.Optional(Type.Integer({ minimum: 1 })),
+    "blob-gc": Type.Optional(BlobGc),
     skills: Type.Optional(Skills),
     timeouts: Type.Optional(Timeouts),
     web: Type.Optional(Web),
@@ -170,8 +170,10 @@ export interface ResolvedTimeouts {
 export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
   const out: ResolvedTimeouts = {};
   if (cfg.timeouts == null) return out;
-  const keys = ["llm", "tool", "bootstrap", "shell", "http", "leakGrace", "shutdownDrain"] as const;
-  for (const key of keys) {
+  // Single-word keys map to themselves in ResolvedTimeouts; hyphenated
+  // source keys map to their camelCase output counterparts.
+  const single = ["llm", "tool", "bootstrap", "shell", "http"] as const;
+  for (const key of single) {
     const raw = cfg.timeouts[key];
     if (raw == null) continue;
     try {
@@ -179,6 +181,20 @@ export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`config: timeouts.${key}: ${msg}`);
+    }
+  }
+  const hyphenated = [
+    ["leak-grace", "leakGrace"],
+    ["shutdown-drain", "shutdownDrain"],
+  ] as const;
+  for (const [srcKey, outKey] of hyphenated) {
+    const raw = cfg.timeouts[srcKey];
+    if (raw == null) continue;
+    try {
+      out[outKey] = parseDurationMs(raw);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`config: timeouts.${srcKey}: ${msg}`);
     }
   }
   return out;

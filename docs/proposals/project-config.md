@@ -21,9 +21,9 @@ last-reviewed: 2026-05-01
   "name": "swarm",
   "bootstrap": "bun install --frozen-lockfile",
   "defaults": { "provider": "ppq", "model": "claude-sonnet-4.6", /* … */ },
-  "autoTitle": true,
+  "auto-title": true,
   "blocklist": [ /* … */ ]
-  // every existing knob from the YAML predecessor, camelCased
+  // every existing knob from the YAML predecessor, kebab-cased
 }
 ```
 
@@ -32,8 +32,8 @@ last-reviewed: 2026-05-01
   added no signal).
 - **Format**: JSONC via `jsonc-parser@3.3.1` (pinned). Comments + trailing
   commas, no Norway problem, predictable parsing.
-- **Naming**: every key camelCase. The legacy `auto_title: on` Norway-trap
-  is now `"autoTitle": true`.
+- **Naming**: every key kebab-case. The legacy `auto_title: on` Norway-trap
+  is now `"auto-title": true`.
 - **Validation**: TypeBox schemas in `packages/cli/src/config.ts` —
   `additionalProperties: false` so typos throw at load time instead of
   silently mis-routing.

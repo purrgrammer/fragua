@@ -32,7 +32,7 @@ export interface SkillsRoutesOpts {
    * project-scope skills. */
   cwd: string;
   /** Project-config skills override — same shape the daemon honours.
-   * When set, its `paths` / `disabled` / `trustProject` apply globally
+   * When set, its `paths` / `disabled` / `trust-project` apply globally
    * across all enumerated project cwds (per-project config reading
    * is out of scope here). */
   skillsConfig?: SkillsConfig;

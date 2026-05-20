@@ -31,9 +31,9 @@ overlays it; project keys win, nested objects merge one level deep.
 
 - `defaults.{provider, model, permissions, summariser}` — LLM
   + permission preferences.
-- `autoTitle`, `blocklist`, `concurrency`, `maxLoops`,
-  `maxQueuedRuns`, `abortLoopCeiling`, `maxLeakedHandlers`.
-- `blobGc`, `skills`, `timeouts` — daemon behavior.
+- `auto-title`, `blocklist`, `concurrency`, `max-loops`,
+  `max-queued-runs`, `abort-loop-ceiling`, `max-leaked-handlers`.
+- `blob-gc`, `skills`, `timeouts` — daemon behavior.
 
 ## What's NOT happening for now
 
@@ -41,7 +41,7 @@ overlays it; project keys win, nested objects merge one level deep.
   `defaults.model`). Global-only.
 - Per-project summariser config. Global-only.
 - Per-project blocklist. Global-only.
-- Per-project `autoTitle` toggle. Global-only.
+- Per-project `auto-title` toggle. Global-only.
 - Per-project concurrency. Global-only.
 - Per-project workflows directory (`<project>/.swarm/workflows/`).
   See [workflow-resolution](./workflow-resolution.md).

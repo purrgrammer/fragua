@@ -480,10 +480,10 @@ function ConfigSummary({ loading, missing, errored, parsed, configPath }: Config
 interface ConfigShape {
   name?: string;
   bootstrap?: string;
-  bootstrapTimeoutMs?: number;
-  autoTitle?: boolean;
+  "bootstrap-timeout-ms"?: number;
+  "auto-title"?: boolean;
   concurrency?: number;
-  maxLoops?: number;
+  "max-loops"?: number;
   defaults?: {
     provider?: string;
     model?: string;
@@ -528,10 +528,11 @@ function ConfigValues({ parsed }: { parsed: ConfigShape }): JSX.Element {
       testid: "project-config-bootstrap",
     });
   }
-  if (parsed.bootstrapTimeoutMs !== undefined) {
+  const bootstrapTimeoutMs = parsed["bootstrap-timeout-ms"];
+  if (bootstrapTimeoutMs !== undefined) {
     rows.push({
       label: "Bootstrap timeout",
-      value: <span className="text-sw-text">{formatDuration(parsed.bootstrapTimeoutMs)}</span>,
+      value: <span className="text-sw-text">{formatDuration(bootstrapTimeoutMs)}</span>,
       testid: "project-config-bootstrap-timeout",
     });
   }
@@ -542,17 +543,19 @@ function ConfigValues({ parsed }: { parsed: ConfigShape }): JSX.Element {
       testid: "project-config-concurrency",
     });
   }
-  if (parsed.maxLoops !== undefined) {
+  const maxLoops = parsed["max-loops"];
+  if (maxLoops !== undefined) {
     rows.push({
       label: "Max loops",
-      value: <span className="text-sw-text">{parsed.maxLoops}</span>,
+      value: <span className="text-sw-text">{maxLoops}</span>,
       testid: "project-config-max-loops",
     });
   }
-  if (parsed.autoTitle !== undefined) {
+  const autoTitle = parsed["auto-title"];
+  if (autoTitle !== undefined) {
     rows.push({
       label: "Auto-title",
-      value: <span className="text-sw-text">{parsed.autoTitle ? "On" : "Off"}</span>,
+      value: <span className="text-sw-text">{autoTitle ? "On" : "Off"}</span>,
       testid: "project-config-auto-title",
     });
   }

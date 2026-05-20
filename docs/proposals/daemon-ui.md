@@ -159,7 +159,7 @@ GET /api/daemon/stats
               errored: number, quarantined: number },
       db: { path: string, sizeBytes: number, lastVacuumTs: number | null,
             walMode: boolean },
-      concurrency: { max: number, autoDispatch: boolean, autoTitle: boolean },
+      concurrency: { max: number, autoDispatch: boolean, "auto-title": boolean },
       window: { fromTs: number, toTs: number },          // last 24h default
       activityByBucket: Array<{ bucketTs: number, count: number }>,
       dbSizeByBucket: Array<{ bucketTs: number, bytes: number }>,
