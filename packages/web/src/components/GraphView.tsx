@@ -253,18 +253,19 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 // archetype gets its own hue so a glance across the graph tells you the
 // branching / HITL / tool / validation structure without reading labels:
 //
-//   goal_gate     → success (green)       — "did we land it?"  (wins over handler)
-//   human         → human   (steel blue)  — HITL / paused_human (human, kind=human)
-//   tool          → loop    (teal)        — deterministic shell step (no LLM)
-//   start / exit  → idle    (gray)        — lifecycle markers, dimmer presence
-//   llm      → (no strip — neutral baseline; the LLM majority)
+//   goal_gate       → success  (green)       — "did we land it?"  (wins over handler)
+//   human           → human    (steel blue)  — HITL / paused_human (incl. human routers)
+//   router (routes=) → thinking (violet)      — control-flow decision point (llm fork)
+//   tool            → loop     (teal)         — deterministic shell step (no LLM)
+//   start / exit    → idle     (gray)         — lifecycle markers, dimmer presence
+//   llm             → (no strip — neutral baseline; the LLM majority)
 //
-// `goal_gate` wins over handler: a llm node with goal_gate=true
-// acts as a validation gate, which is the more specific signal. Tool
-// nodes keep their own hue even if some future workflow flags them as
-// gates — but goal_gate isn't currently meaningful on tool nodes, so
-// the precedence isn't load-bearing.
-function typeStripTone(handler: string, goalGate: boolean): string | null {
+// Precedence: `goal_gate` wins (a validation gate is the more specific
+// signal; mutually exclusive with `routes=` per E023). `human` wins over
+// router so a human gate reads as HITL first — its routes are the button
+// set, not the headline. An llm node with `routes=` is the only one that
+// picks up the router hue.
+function typeStripTone(handler: string, goalGate: boolean, isRouter: boolean): string | null {
   if (goalGate) return "bg-sw-accent-success";
   switch (handler) {
     case "human":
@@ -275,7 +276,7 @@ function typeStripTone(handler: string, goalGate: boolean): string | null {
     case "tool":
       return "bg-sw-accent-loop";
     default:
-      return null;
+      return isRouter ? "bg-sw-accent-thinking" : null;
   }
 }
 
@@ -287,7 +288,7 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
   // archetype stays legible via the eyebrow + idle-gray strip; the
   // body rows (id / model / retries / …) would only ever be empty.
   const isTerminal = handlerLabel === "start" || handlerLabel === "exit";
-  const stripTone = typeStripTone(handlerLabel, d.goalGate);
+  const stripTone = typeStripTone(handlerLabel, d.goalGate, d.routeCount !== undefined);
   // Extra handles carry back-edges ("loop" returns) so they route around
   // the forward-flow column. In TB flow the arc lives on the right; in
   // LR, on the bottom. xyflow allows multiple handles per node as long
