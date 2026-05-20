@@ -136,6 +136,14 @@ const SELECT_EVENTS_BY_TYPE_SQL = `
    ORDER BY seq ASC
 `;
 
+const SELECT_SNAPSHOT_EVENTS_SQL = `
+  SELECT run_id, seq, type, writer, payload, ts
+    FROM events
+   WHERE run_id = ?1
+     AND type IN ('snapshot.captured','fact.snapshot_recorded')
+   ORDER BY seq ASC
+`;
+
 /** Every event of `type` for `runId` in seq order. Cheap (covered by
  *  the `events(run_id, seq)` primary key with a type filter scan).
  *  Currently the only caller is `spawn-subagent.ts`, seeding the
@@ -145,6 +153,15 @@ const SELECT_EVENTS_BY_TYPE_SQL = `
  *  pre-crash + 1 resumed bracket. */
 export function selectEventsByType(db: Database, runId: string, type: string): EventRow[] {
   return db.query<EventRow, [string, string]>(SELECT_EVENTS_BY_TYPE_SQL).all(runId, type);
+}
+
+/** All worktree-snapshot events for `runId` in seq order: both the
+ *  per-step / HITL `snapshot.captured` observability events and the
+ *  terminal `fact.snapshot_recorded` fact. These are the two event
+ *  types that make up the Diff scrubber feed
+ *  (docs/proposals/worktrees.md §Server endpoints). */
+export function selectSnapshotEvents(db: Database, runId: string): EventRow[] {
+  return db.query<EventRow, [string]>(SELECT_SNAPSHOT_EVENTS_SQL).all(runId);
 }
 
 const SELECT_EVENTS_UNAPPLIED_INTENTS_SQL = `

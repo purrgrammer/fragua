@@ -471,3 +471,91 @@ describe("listRunIds + listCwds — cwd surface", () => {
 // Sub-agents are not runs — `enqueueConversation` and the
 // `kind`/`parent_*` columns were removed in v7. The agent-tool seam
 // is exercised in `packages/daemon/test/subagent.test.ts`.
+
+describe("getSnapshotEvents", () => {
+  test("empty array for run with no snapshots", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(store.getSnapshotEvents(runId)).toEqual([]);
+    store.close();
+  });
+
+  test("returns snapshot.captured + fact.snapshot_recorded in seq order", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+
+    // Seed unrelated facts first (should be filtered out)
+    const state = store.getState(runId);
+    if (state == null) throw new Error("no state");
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: 1, startNode: "n1" } }],
+      state.version,
+    );
+
+    // Two snapshot.captured observability events
+    store.appendObservabilityEvents(runId, [
+      {
+        type: "snapshot.captured",
+        payload: {
+          runId,
+          eventIdx: 2,
+          nodeId: "step1",
+          treeSha: "tree1",
+          commitSha: "commit1",
+          parentSnap: "",
+          headSha: null,
+        },
+      },
+      {
+        type: "snapshot.captured",
+        payload: {
+          runId,
+          eventIdx: 3,
+          nodeId: null,
+          treeSha: "tree2",
+          commitSha: "commit2",
+          parentSnap: "commit1",
+          headSha: null,
+        },
+      },
+    ]);
+
+    // One terminal fact.snapshot_recorded
+    const state2 = store.getState(runId);
+    if (state2 == null) throw new Error("no state");
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.snapshot_recorded",
+          payload: {
+            eventIdx: 4,
+            treeSha: "tree3",
+            commitSha: "commit3",
+            parentSnap: "commit2",
+            headSha: null,
+            headRef: null,
+            diffBaseSha: "base0",
+            committed: null,
+            uncommitted: null,
+          },
+        },
+      ],
+      state2.version,
+    );
+
+    const events = store.getSnapshotEvents(runId);
+    expect(events.length).toBe(3);
+
+    const types = events.map((e) => e.type);
+    expect(types).toEqual(["snapshot.captured", "snapshot.captured", "fact.snapshot_recorded"]);
+
+    // Must be in ascending seq order
+    const seqs = events.map((e) => e.seq);
+    expect(seqs[0]! < seqs[1]!).toBe(true);
+    expect(seqs[1]! < seqs[2]!).toBe(true);
+
+    store.close();
+  });
+});

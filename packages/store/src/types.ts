@@ -719,6 +719,13 @@ export interface IEventReader {
    */
   getEventsByType(runId: string, type: string): StoredEvent[];
   /**
+   * All worktree-snapshot events for `runId` in seq order: both the
+   * per-step / HITL `snapshot.captured` observability events and the
+   * terminal `fact.snapshot_recorded` fact. The Diff scrubber feed
+   * (docs/proposals/worktrees.md §Server endpoints).
+   */
+  getSnapshotEvents(runId: string): StoredEvent[];
+  /**
    * The last `limit` events for `runId`, newest first. Bounded
    * backwards walk for callers that need "what just happened" without
    * paying for a full scan. Covered by the `(run_id, seq)` primary

@@ -64,6 +64,7 @@ import {
   selectLatestEvents,
   selectNextPendingIntent,
   selectOrphanSideEffects,
+  selectSnapshotEvents,
   selectUnappliedIntents,
 } from "./event-queries.ts";
 import {
@@ -604,6 +605,10 @@ export class SqliteStore implements IEventStore {
 
   getEventsByType(runId: string, type: string): StoredEvent[] {
     return selectEventsByType(this.db, runId, type).map(rowToStoredEvent);
+  }
+
+  getSnapshotEvents(runId: string): StoredEvent[] {
+    return selectSnapshotEvents(this.db, runId).map(rowToStoredEvent);
   }
 
   getLatestEvents(runId: string, limit: number): StoredEvent[] {
