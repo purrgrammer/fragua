@@ -10,7 +10,7 @@ import * as handler from "@swarm/core/handler";
 import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@swarm/daemon";
 import { createServer } from "@swarm/server";
 import { SqliteStore } from "@swarm/store";
-import { runCommand } from "../src/commands/run.ts";
+import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
 
 interface Rig {
   url: string;
@@ -154,5 +154,34 @@ describe("swarm run", () => {
       globalThis.fetch = originalFetch;
       await r.close();
     }
+  });
+});
+
+describe("resolveInputArgs", () => {
+  test("parses repeated name=value pairs; value may contain '='", async () => {
+    const out = await resolveInputArgs(["env=prod", "url=a=b"]);
+    expect(out).toEqual({ env: "prod", url: "a=b" });
+  });
+
+  test("a single flag arrives as a string, not an array", async () => {
+    expect(await resolveInputArgs("ticket=BUG-1")).toEqual({ ticket: "BUG-1" });
+  });
+
+  test("undefined → empty map", async () => {
+    expect(await resolveInputArgs(undefined)).toEqual({});
+  });
+
+  test("@path sources the value verbatim from a file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "swarm-input-"));
+    tmps.push(dir);
+    const specPath = join(dir, "spec.md");
+    writeFileSync(specPath, "add a touch tool\nwith two lines\n");
+    const out = await resolveInputArgs([`task=@${specPath}`]);
+    expect(out["task"]).toBe("add a touch tool\nwith two lines\n");
+  });
+
+  test("malformed entry (no '=' / empty name) throws", async () => {
+    await expect(resolveInputArgs(["nokey"])).rejects.toThrow(/name=value/);
+    await expect(resolveInputArgs(["=value"])).rejects.toThrow(/name=value/);
   });
 });

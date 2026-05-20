@@ -65,11 +65,12 @@ bun run swarm harness
 # authored workflows under ~/.swarm/workflows/<name>.yaml (resolved first)
 # or <cwd>/.swarm/workflows/<name>.yaml. The CLI discovers the running
 # harness via the global DB — works from any directory.
-# Pass workflow inputs with --input name=value — repeat the flag for
-# several (one name=value each), validated against the inputs: block.
-# --title names the run; without it the title is auto-summarised.
-bun run swarm run path/to/your-workflow.yaml --input env=prod --input ticket=BUG-1
-bun run swarm run work --input task="add a touch tool to @swarm/workspace" --title "Touch tool"
+# Pass workflow inputs with -i/--input name=value — repeat the flag for
+# several (one name=value each), validated against the inputs: block. A
+# value of @path reads a file, @- reads stdin. --title names the run;
+# without it the title is auto-summarised.
+bun run swarm run path/to/your-workflow.yaml -i env=prod -i ticket=BUG-1
+bun run swarm run work --input task=@task.md --title "Touch tool"
 ```
 
 This repo ships a small set of workflows under `.swarm/workflows/`

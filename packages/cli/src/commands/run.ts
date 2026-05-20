@@ -22,6 +22,36 @@ import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
+/** Parse repeated `--input name=value` args into a resolved map. A value
+ * of `@<path>` reads the file verbatim; `@-` reads stdin (once, cached for
+ * reuse). Type coercion is the server's job (against the workflow's
+ * `inputs:` schema) — this only resolves the string. Throws on a malformed
+ * entry (missing `=` or empty name) or an unreadable `@` source. */
+export async function resolveInputArgs(raw: string | string[] | undefined): Promise<Record<string, string>> {
+  const list = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+  const out: Record<string, string> = {};
+  let stdinCache: string | undefined;
+  for (const entry of list) {
+    const s = String(entry);
+    const eq = s.indexOf("=");
+    if (eq <= 0) throw new Error(`--input must be name=value (got ${JSON.stringify(s)})`);
+    const name = s.slice(0, eq);
+    const rawVal = s.slice(eq + 1);
+    if (rawVal.startsWith("@")) {
+      const src = rawVal.slice(1);
+      if (src === "-") {
+        stdinCache ??= await Bun.stdin.text();
+        out[name] = stdinCache;
+      } else {
+        out[name] = await readFile(src, "utf8");
+      }
+    } else {
+      out[name] = rawVal;
+    }
+  }
+  return out;
+}
+
 async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
   try {
     const raw = await readFile(searchPath, "utf8");

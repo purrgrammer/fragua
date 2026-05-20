@@ -28,7 +28,7 @@ import {
   providersTestCommand,
 } from "../src/commands/providers.ts";
 import type { ModelOpsFlags } from "../src/commands/providers-custom.ts";
-import { runCommand } from "../src/commands/run.ts";
+import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
 import {
   scheduleAddCommand,
   scheduleHelp,
@@ -362,8 +362,8 @@ cli
   )
   .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
   .option(
-    "--input <name=value>",
-    "Typed run input, gh-style; repeat for multiple (e.g. --input env=prod --input ticket=BUG-1)",
+    "-i, --input <name=value>",
+    "Run input; repeat for multiple (one name=value each). Value @path reads a file, @- reads stdin (e.g. --input task=@spec.md)",
   )
   .option("--title <text>", "Explicit run title (skips auto-titling)")
   .option("--priority <n>", "Priority tie-breaker (default 0)")
@@ -383,20 +383,14 @@ cli
           ? Number.parseInt(priorityRaw, 10)
           : undefined;
     // --input name=value (repeatable). cac yields a string for one flag,
-    // an array for several. Each must contain '='; the key is everything
-    // before the first '=', the value everything after (values may
-    // themselves contain '=').
-    const rawInputs = options["input"];
-    const inputList = rawInputs === undefined ? [] : Array.isArray(rawInputs) ? rawInputs : [rawInputs];
-    const inputs: Record<string, string> = {};
-    for (const entry of inputList) {
-      const s = String(entry);
-      const eq = s.indexOf("=");
-      if (eq <= 0) {
-        console.error(`--input must be name=value (got ${JSON.stringify(s)})`);
-        process.exit(2);
-      }
-      inputs[s.slice(0, eq)] = s.slice(eq + 1);
+    // an array for several. Each must contain '='; a value of @path / @-
+    // is sourced from a file / stdin (resolveInputArgs).
+    let inputs: Record<string, string> = {};
+    try {
+      inputs = await resolveInputArgs(options["input"] as string | string[] | undefined);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(2);
     }
     const code = await runCommand({
       workflow,
