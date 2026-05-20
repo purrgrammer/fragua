@@ -355,22 +355,22 @@ cli
 
 cli
   .command(
-    "run <workflow> [...input]",
+    "run <workflow>",
     "Upload a workflow, enqueue a run, stream events to stdout. " +
-      "Trailing positional args are joined with ' ' as the run's free-form " +
-      "description (seeds the auto-title). Inputs that substitute into the " +
-      "workflow go through --input name=value (repeatable)",
+      "Pass workflow inputs with --input name=value (repeatable); set an " +
+      "explicit run title with --title (otherwise the title is auto-summarised).",
   )
   .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
   .option(
     "--input <name=value>",
     "Typed run input, gh-style; repeat for multiple (e.g. --input env=prod --input ticket=BUG-1)",
   )
+  .option("--title <text>", "Explicit run title (skips auto-titling)")
   .option("--priority <n>", "Priority tie-breaker (default 0)")
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
   .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
-  .action(async (workflow: string, positional: string[], options: Record<string, unknown>) => {
+  .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
       return typeof v === "string" ? v : undefined;
@@ -398,14 +398,13 @@ cli
       }
       inputs[s.slice(0, eq)] = s.slice(eq + 1);
     }
-    const joined = Array.isArray(positional) && positional.length > 0 ? positional.join(" ") : undefined;
     const code = await runCommand({
       workflow,
       ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
       ...(priority !== undefined && Number.isFinite(priority) ? { priority } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-      ...(joined !== undefined ? { input: joined } : {}),
+      ...(pick("title") !== undefined ? { title: pick("title")! } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
       ...(options["follow"] === false ? { follow: false } : {}),

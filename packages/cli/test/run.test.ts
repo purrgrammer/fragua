@@ -123,8 +123,17 @@ describe("swarm run", () => {
     }
   });
 
-  test("opts.input is carried into routing.input on the enqueued run", async () => {
+  test("--title is sent on the enqueue body; the free-form input is no longer sent", async () => {
     const r = await rig();
+    const originalFetch = globalThis.fetch;
+    let runsBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url.endsWith("/runs") && init?.method === "POST" && typeof init.body === "string") {
+        runsBody = JSON.parse(init.body) as Record<string, unknown>;
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
     try {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
@@ -135,19 +144,14 @@ describe("swarm run", () => {
         workflow: yamlPath,
         url: r.url,
         follow: false,
-        input: "rename foo to bar",
+        title: "Rename foo to bar",
       });
       expect(code).toBe(0);
-      // Peek at the most-recently-enqueued run. The round-trip test above
-      // also enqueues one; isolate by checking the max-seq intent payload.
-      const db = (r.store as unknown as { db: import("bun:sqlite").Database }).db;
-      const row = db
-        .query<{ run_id: string }, []>(`SELECT run_id FROM run_state ORDER BY enqueued_at DESC LIMIT 1`)
-        .get();
-      expect(row).not.toBeNull();
-      const state = r.store.getState(row!.run_id);
-      expect(state!.routing["input"]).toBe("rename foo to bar");
+      expect(runsBody).toBeDefined();
+      expect(runsBody!["title"]).toBe("Rename foo to bar");
+      expect("input" in runsBody!).toBe(false);
     } finally {
+      globalThis.fetch = originalFetch;
       await r.close();
     }
   });

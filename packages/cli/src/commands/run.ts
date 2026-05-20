@@ -60,10 +60,9 @@ export interface RunCommandOptions {
   priority?: number;
   /** Starting routing entries injected into run_state.routing. */
   routing?: Record<string, unknown>;
-  /** Positional input — the run's free-form description, stored on
-   * `routing.input` to seed the auto-title. Not substituted into the
-   * workflow; use `inputs` for `${{ inputs.name }}` substitution. */
-  input?: string;
+  /** Explicit run title (`--title`). When set, the daemon uses it verbatim
+   * and skips auto-titling; otherwise the title is summarised from `inputs`. */
+  title?: string;
   /** Typed run inputs (`--input name=value`). Validated against the
    * workflow's `inputs:` block and substituted as `${{ inputs.name }}`. */
   inputs?: Record<string, string>;
@@ -150,7 +149,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   if (scope === "global" || scope === "local") enqueueBody["workflowName"] = name;
   if (opts.priority !== undefined) enqueueBody["priority"] = opts.priority;
   if (opts.routing !== undefined) enqueueBody["routing"] = opts.routing;
-  if (opts.input !== undefined) enqueueBody["input"] = opts.input;
+  if (opts.title !== undefined) enqueueBody["title"] = opts.title;
   if (opts.inputs !== undefined && Object.keys(opts.inputs).length > 0) enqueueBody["inputs"] = opts.inputs;
   const enqueueRes = await postJson(`${baseUrl}/runs`, enqueueBody);
   if (!enqueueRes.ok) {
