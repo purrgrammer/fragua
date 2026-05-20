@@ -105,6 +105,12 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    * `null` until `init()` runs; the executor reads this to populate
    * `fact.run_started.payload.baseGitSha`. */
   baseGitSha: string | null = null;
+  /** Symbolic ref (branch short name) of the *source repo* HEAD at
+   * provision — the merge/commit target default for post-run primitives
+   * (docs/proposals/worktrees.md). `null` when the source checkout is
+   * detached, on a tag, or an unborn branch. Distinct from the worktree
+   * itself, which is always detached. */
+  baseGitRef: string | null = null;
   private readonly baseRef: string | undefined;
   private readonly keepAfterDispose: boolean;
   private readonly bootstrap: BootstrapSpec | undefined;
@@ -156,6 +162,16 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
 
     const { stdout: headStdout } = await runGitCapture(this.worktreePath, ["rev-parse", "HEAD"]);
     this.baseGitSha = headStdout.trim();
+
+    // Branch the source repo is on at provision — the post-run merge/commit
+    // target default. The worktree is detached, so this is read from the
+    // source repo, not the worktree. Detached / tag / unborn → null.
+    try {
+      const { stdout: refStdout } = await runGitCapture(this.repoRoot, ["symbolic-ref", "--short", "HEAD"]);
+      this.baseGitRef = refStdout.trim() || null;
+    } catch {
+      this.baseGitRef = null;
+    }
 
     // Only bootstrap on FRESH provisioning — a resumed run's worktree
     // already has dependencies installed from the pre-crash life, and

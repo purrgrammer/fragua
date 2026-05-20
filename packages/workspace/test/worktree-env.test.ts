@@ -45,6 +45,20 @@ describe("WorktreeEnvironment", () => {
     const head = spawnSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
     expect(env.baseGitSha).toBe(head);
 
+    // baseGitRef matches the source repo's current branch (the post-run
+    // merge/commit target default).
+    const ref = spawnSync("git", ["-C", repo, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" }).stdout.trim();
+    expect(env.baseGitRef).toBe(ref);
+
+    await env.dispose();
+  });
+
+  test("init records baseGitRef = null when the source repo is on a detached HEAD", async () => {
+    spawnSync("git", ["-C", repo, "checkout", "--detach", "HEAD"], { encoding: "utf8" });
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "detached-run" });
+    await env.init();
+    expect(env.baseGitSha).not.toBeNull();
+    expect(env.baseGitRef).toBeNull();
     await env.dispose();
   });
 

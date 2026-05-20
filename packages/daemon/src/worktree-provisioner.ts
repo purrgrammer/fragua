@@ -108,6 +108,10 @@ export interface Provisioner {
    * `null` for runs the provisioner doesn't track or for non-worktree
    * envs (LocalEnvironment). */
   baseGitSha(runId: string): string | null;
+  /** Branch short name of the source repo HEAD at provision — the
+   * post-run merge/commit target default (docs/proposals/worktrees.md).
+   * `null` for non-worktree envs or a detached/tag/unborn source HEAD. */
+  baseGitRef(runId: string): string | null;
 }
 
 export class WorktreeProvisioner implements Provisioner {
@@ -183,6 +187,12 @@ export class WorktreeProvisioner implements Provisioner {
   baseGitSha(runId: string): string | null {
     const env = this.envs.get(runId);
     if (env instanceof WorktreeEnvironment) return env.baseGitSha;
+    return null;
+  }
+
+  baseGitRef(runId: string): string | null {
+    const env = this.envs.get(runId);
+    if (env instanceof WorktreeEnvironment) return env.baseGitRef;
     return null;
   }
 

@@ -55,6 +55,9 @@ class RecordingProvisioner implements Provisioner {
   baseGitSha(_runId: string): string | null {
     return this.opts.baseGitSha ?? null;
   }
+  baseGitRef(_runId: string): string | null {
+    return null;
+  }
 }
 
 describe("executor + worktree provisioner", () => {
@@ -197,6 +200,9 @@ describe("executor + worktree provisioner", () => {
         return undefined;
       },
       baseGitSha() {
+        return null;
+      },
+      baseGitRef() {
         return null;
       },
     };
