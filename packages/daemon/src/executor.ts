@@ -468,6 +468,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (needsStart) {
       const start = routingString(state.routing, "start_node") ?? "start";
       const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
+      const baseGitRef = opts.provisioner?.baseGitRef(runId) ?? undefined;
       const startFacts: FactEvent[] = [
         {
           type: "fact.run_started",
@@ -476,6 +477,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             schemaVersion: state.schemaVersion,
             startNode: start,
             ...(baseGitSha != null ? { baseGitSha } : {}),
+            ...(baseGitRef != null ? { baseGitRef } : {}),
           },
         },
       ];

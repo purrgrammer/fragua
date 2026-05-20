@@ -260,6 +260,7 @@ function rowToRunState(row: RunStateRow): RunState {
     updatedAt: row.updated_at,
     title: row.title,
     baseGitSha: row.base_git_sha,
+    baseGitRef: row.base_git_ref,
     branch: row.branch,
     cwd: row.cwd,
     workflowName: row.workflow_name,
@@ -1233,6 +1234,7 @@ export class SqliteStore implements IEventStore {
       dispatchStartedAt: state.dispatchStartedAt,
       updatedAt: state.updatedAt,
       baseGitSha: state.baseGitSha,
+      baseGitRef: state.baseGitRef,
       branch: state.branch,
     });
   }

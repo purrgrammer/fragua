@@ -50,6 +50,9 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       if (fact.payload.baseGitSha !== undefined) {
         next.baseGitSha = fact.payload.baseGitSha;
       }
+      if (fact.payload.baseGitRef !== undefined) {
+        next.baseGitRef = fact.payload.baseGitRef;
+      }
       return next;
     }
     case "fact.dispatch_started": {

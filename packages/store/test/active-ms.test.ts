@@ -25,6 +25,7 @@ function blankState(): RunState {
     updatedAt: 0,
     title: null,
     baseGitSha: null,
+    baseGitRef: null,
     branch: null,
     cwd: null,
     workflowName: null,

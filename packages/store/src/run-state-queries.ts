@@ -45,6 +45,7 @@ export interface RunStateRow {
   workflow_scope: "global" | "local" | "path" | "ephemeral" | null;
   workflow_path: string | null;
   base_git_sha: string | null;
+  base_git_ref: string | null;
   branch: string | null;
   schedule_id: string | null;
 }
@@ -69,7 +70,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
          cwd, workflow_name, workflow_scope, workflow_path,
-         base_git_sha, branch, schedule_id
+         base_git_sha, base_git_ref, branch, schedule_id
     FROM run_state
    WHERE run_id = ?
 `;
@@ -411,6 +412,7 @@ const WRITE_PROJECTION_SQL = `
     dispatch_started_at = ?,
     updated_at          = ?,
     base_git_sha        = ?,
+    base_git_ref        = ?,
     branch              = ?
   WHERE run_id = ?
 `;
@@ -434,6 +436,7 @@ export function writeRunStateProjection(
     dispatchStartedAt: number | null;
     updatedAt: number;
     baseGitSha: string | null;
+    baseGitRef: string | null;
     branch: string | null;
   },
 ): void {
@@ -450,6 +453,7 @@ export function writeRunStateProjection(
     args.dispatchStartedAt,
     args.updatedAt,
     args.baseGitSha,
+    args.baseGitRef,
     args.branch,
     args.runId,
   );

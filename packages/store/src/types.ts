@@ -207,6 +207,11 @@ export interface RunState {
    * `fact.run_started` when a `WorktreeProvisioner` is configured.
    * `null` for runs without a worktree (LocalEnvironment / no provisioner). */
   baseGitSha: string | null;
+  /** Branch short name of the source repo HEAD at provision — the post-run
+   * merge/commit target default (docs/proposals/worktrees.md). Set by the
+   * executor on `fact.run_started`. `null` when the source checkout is
+   * detached / on a tag / unborn, or for runs without a provisioner. */
+  baseGitRef: string | null;
   /** Branch preserved at dispose time when the worktree had a non-empty
    * `git status --porcelain`. Set by `fact.run_branched`, emitted from
    * the executor's terminal-cleanup path. `null` while the run is live,

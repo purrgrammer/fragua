@@ -34,7 +34,7 @@ class RecordingProvisioner implements Provisioner {
   private readonly envs = new Map<string, ExecutionEnvironment>();
   constructor(
     private readonly make: (runId: string) => ExecutionEnvironment,
-    private readonly opts: { branchOnDispose?: string; baseGitSha?: string } = {},
+    private readonly opts: { branchOnDispose?: string; baseGitSha?: string; baseGitRef?: string } = {},
   ) {}
   async ensure(runId: string): Promise<ExecutionEnvironment> {
     this.ensureCalls.push(runId);
@@ -56,7 +56,7 @@ class RecordingProvisioner implements Provisioner {
     return this.opts.baseGitSha ?? null;
   }
   baseGitRef(_runId: string): string | null {
-    return null;
+    return this.opts.baseGitRef ?? null;
   }
 }
 
@@ -87,7 +87,7 @@ describe("executor + worktree provisioner", () => {
     r.store.close();
   });
 
-  test("baseGitSha from the provisioner is stamped on fact.run_started + run_state", async () => {
+  test("baseGitSha + baseGitRef from the provisioner are stamped on fact.run_started + run_state", async () => {
     const r = rig();
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
     enqueue(r, "run-sha", "start");
@@ -95,6 +95,7 @@ describe("executor + worktree provisioner", () => {
 
     const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), {
       baseGitSha: "deadbeef0123456789abcdef0123456789abcdef",
+      baseGitRef: "main",
     });
     const ctrl = new AbortController();
     await runOne("run-sha", {
@@ -112,11 +113,13 @@ describe("executor + worktree provisioner", () => {
     const events = r.store.getEvents("run-sha");
     const started = events.find((e) => e.type === "fact.run_started");
     expect(started).toBeDefined();
-    const payload = started!.payload as { baseGitSha?: string };
+    const payload = started!.payload as { baseGitSha?: string; baseGitRef?: string };
     expect(payload.baseGitSha).toBe("deadbeef0123456789abcdef0123456789abcdef");
+    expect(payload.baseGitRef).toBe("main");
 
     const state = r.store.getState("run-sha");
     expect(state?.baseGitSha).toBe("deadbeef0123456789abcdef0123456789abcdef");
+    expect(state?.baseGitRef).toBe("main");
 
     r.store.close();
   });

@@ -50,6 +50,7 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     updatedAt: 1_000_000,
     title: null,
     baseGitSha: null,
+    baseGitRef: null,
     branch: null,
     cwd: null,
     workflowName: null,
