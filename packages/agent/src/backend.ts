@@ -775,11 +775,23 @@ export class PiLlmBackend implements LlmBackend {
 
     if (last.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
       if (last.stopReason === "error") {
-        const httpIs4xx5xx = lastHttpStatus !== null && lastHttpStatus >= 400 && lastHttpStatus < 600;
+        // pi-ai's `onResponse` only fires once a stream begins. A
+        // provider that rejects pre-stream (e.g. Anthropic 400
+        // `invalid_request_error` on a malformed message history)
+        // never invokes it, so `lastHttpStatus` stays `null` even
+        // though the error envelope itself carries the status as the
+        // leading token of `errorMessage`. Recover it here so the
+        // `pause_provider` outcome reaches the daemon with the real
+        // status — otherwise the provider-retry classifier mistakes
+        // a manual 400 for a pre-response network failure and burns
+        // the whole auto-retry budget against a deterministic failure.
+        const extracted =
+          lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null);
+        const httpIs4xx5xx = extracted !== null && extracted >= 400 && extracted < 600;
         const noContent = !Array.isArray(last.content) || last.content.length === 0;
         if (httpIs4xx5xx || noContent) {
-          return failProvider(last.errorMessage ?? `provider stream error (HTTP ${lastHttpStatus ?? "n/a"})`, {
-            httpStatus: lastHttpStatus,
+          return failProvider(last.errorMessage ?? `provider stream error (HTTP ${extracted ?? "n/a"})`, {
+            httpStatus: extracted,
             provider,
             ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
           });
@@ -919,6 +931,37 @@ function parseRetryAfterMs(headers: Record<string, string>): number | undefined 
   const seconds = Number(raw.trim());
   if (!Number.isFinite(seconds) || seconds < 0) return undefined;
   return Math.floor(seconds * 1000);
+}
+
+/** Extract a leading HTTP status code from a pi-ai error message.
+ *
+ * pi-ai's stream surfaces a provider transport rejection (e.g. an
+ * Anthropic 400 `invalid_request_error`) as a `stopReason="error"`
+ * AssistantMessage whose `errorMessage` starts with the bare HTTP
+ * status followed by the JSON body — for example:
+ *
+ *   `400 {"type":"error","error":{"type":"invalid_request_error",...}}`
+ *
+ * The response-header capture (`onResponse`) does not fire for this
+ * class — pi-ai rejects pre-stream, so `lastHttpStatus` stays `null`
+ * and the `pause_provider` outcome reaches the daemon without a
+ * status. The provider-retry classifier then treats `null` as a
+ * pre-response network failure (auto-retryable) and burns the full
+ * chain budget against a deterministically-failing request before
+ * halting with `provider_exhausted`, instead of pausing immediately
+ * as `provider_error` for the operator.
+ *
+ * Recognise a 1xx–5xx leading token (whitespace-bounded) and return
+ * it; otherwise return `null`. Conservative on purpose — a bare
+ * 3-digit number inside the body must not be confused with a status
+ * code. */
+export function extractHttpStatusFromErrorMessage(message: string): number | null {
+  if (typeof message !== "string" || message.length === 0) return null;
+  const match = /^(\d{3})(?:\s|$)/.exec(message);
+  if (!match) return null;
+  const status = Number(match[1]);
+  if (!Number.isFinite(status) || status < 100 || status > 599) return null;
+  return status;
 }
 
 /** Derive a `RunEnvironment` from the execution env. Always returns a
