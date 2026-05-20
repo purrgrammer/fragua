@@ -718,10 +718,15 @@ export function toFlowGraph(
   // left handles in TB (bottom / top in LR), so for arc geometry we
   // care about the absolute value of the cross-axis coordinate.
   const lateral = (p: { x: number; y: number }): number => (orientation === "TB" ? Math.abs(p.x) : Math.abs(p.y));
+  // Node cards are a fixed width (`w-60` = 240px); adding half of that makes the
+  // extent reach a card's far EDGE, not just its center — otherwise an arc that
+  // clears the center still clips a wide intermediate card (and its label lands
+  // on top of it). Cross-axis only; the along-axis half doesn't gate the bulge.
+  const NODE_HALF_CROSS = 120;
   const lateralByDepth = new Map<number, number>();
   for (const [id, pos] of positions) {
     const d = depthOf.get(id) ?? 0;
-    lateralByDepth.set(d, Math.max(lateralByDepth.get(d) ?? 0, lateral(pos)));
+    lateralByDepth.set(d, Math.max(lateralByDepth.get(d) ?? 0, lateral(pos) + NODE_HALF_CROSS));
   }
   // For an arc-routed edge between depths sd and td (either direction),
   // return the max lateral extent of nodes sitting STRICTLY between
