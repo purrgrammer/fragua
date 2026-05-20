@@ -41,8 +41,8 @@ Example before (`config.jsonc`):
 {
   // pin the default model
   "defaults": {
-    "llm_provider": "anthropic",
-    "llm_model": "claude-sonnet-4.7"
+    "provider": "anthropic",
+    "model": "claude-sonnet-4.7"
   },
   "bootstrap": "bun install --frozen-lockfile"
 }

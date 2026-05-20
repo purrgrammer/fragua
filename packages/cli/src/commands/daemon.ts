@@ -1,7 +1,7 @@
 // `swarm daemon` — run the packages/daemon process against the local store.
 //
-// Out of the box the daemon uses a stub LLM. Pass `--llm-provider` +
-// `--llm-model` (or omit both for the defaults) and the auto-dispatcher
+// Out of the box the daemon uses a stub LLM. Pass `--provider` +
+// `--model` (or omit both for the defaults) and the auto-dispatcher
 // routes every `box` node through a PiLlmBackend so real LLM calls
 // fire. Handlers of other shapes (start, exit, human
 // wait.human, etc.) stay on the trivial transitions.
@@ -466,7 +466,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.yaml)" : "";
   const llmLabel = useLlm
     ? `${provider}/${model}${sourceSuffix}`
-    : "stub (set a provider API key, or pass --llm-provider + --llm-model)";
+    : "stub (set a provider API key, or pass --provider + --model)";
   console.log(chalk.dim(`  llm default: ${llmLabel}`));
   if (useLlm) {
     console.log(chalk.dim(`  nodes can override via \`provider=\`/\`model=\` attrs`));
