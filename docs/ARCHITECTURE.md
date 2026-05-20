@@ -947,6 +947,7 @@ app.post("/runs", async (c) => {
     workflowName?: string;   // resolved name when the caller passed a bare name
     workflowScope?: "global" | "local" | "path" | "ephemeral";
     workflowPath?: string;   // filesystem path of the workflow file at resolution time
+    title?: string;          // explicit run title; stored immediately and suppresses the auto-titler
   };
 
   // Preflight 1: at least one provider credential must be reachable.

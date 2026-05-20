@@ -539,6 +539,32 @@ steps:
     const res = await req("POST", "/runs", { workflowSha: "wf" });
     expect(res.status).toBe(200);
   });
+
+  test("explicit title is stored immediately on the run", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf", title: "My explicit title" });
+    expect(res.status).toBe(200);
+    const { runId } = (await res.json()) as { runId: string };
+    const state = store.getState(runId);
+    expect(state).not.toBeNull();
+    expect(state!.title).toBe("My explicit title");
+  });
+
+  test("absent title leaves run.title null (auto-titler path unchanged)", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf" });
+    expect(res.status).toBe(200);
+    const { runId } = (await res.json()) as { runId: string };
+    const state = store.getState(runId);
+    expect(state).not.toBeNull();
+    expect(state!.title).toBeNull();
+  });
+
+  test("empty-string title is treated as absent (no title stored)", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf", title: "" });
+    expect(res.status).toBe(200);
+    const { runId } = (await res.json()) as { runId: string };
+    const state = store.getState(runId);
+    expect(state!.title).toBeNull();
+  });
 });
 
 describe("GET /runs/:id/steps", () => {

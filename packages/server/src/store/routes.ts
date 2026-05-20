@@ -237,6 +237,9 @@ export function createRoutes(deps: ServerDeps): Hono {
        *  invoking from disk; the web UI omits it (the server resolves
        *  the path itself via `workflowReader`). */
       workflowPath?: string;
+      /** Explicit run title. When present, stored immediately after enqueue
+       * and prevents the auto-titler from overwriting it. */
+      title?: string;
     }>(c);
     if (!body) {
       return c.json({ error: "request body required" }, 400);
@@ -367,6 +370,9 @@ export function createRoutes(deps: ServerDeps): Hono {
           : {}),
         ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
       });
+      if (typeof body.title === "string" && body.title.length > 0) {
+        deps.store.setRunTitle(runId, body.title);
+      }
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }

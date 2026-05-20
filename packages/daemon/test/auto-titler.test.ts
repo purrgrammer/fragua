@@ -242,4 +242,47 @@ describe("AutoTitler — executor integration", () => {
     ctrl.abort();
     r.store.close();
   });
+
+  test("titleRun is skipped when the run already has a title (explicit title gate)", async () => {
+    const yaml = `name: wf\nsteps:\n  work: {type: llm, prompt: hi}\n`;
+    const r = rig({ yaml });
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+
+    // Enqueue with a routing.input so the titler would normally fire.
+    r.store.enqueueRun({
+      runId: "r-titled",
+      workflowSha: r.workflowSha,
+      initialRouting: { start_node: "start", input: "please rename things" },
+    });
+    // Pre-set a title (simulating what POST /runs does when body.title is present).
+    r.store.setRunTitle("r-titled", "Pre-set title");
+
+    const backend = new StubBackend(() => okOut("should not be called"));
+    const ctrl = new AbortController();
+    const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: ctrl.signal });
+    const registry = new AbortRegistry();
+
+    const executorOpts: Parameters<typeof runOne>[1] = {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry,
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 10,
+      autoTitler: titler,
+    };
+    r.store.claimNextRun(4);
+    await runOne("r-titled", executorOpts);
+    await titler.drain();
+
+    // Title must remain as originally set — auto-titler must not overwrite it.
+    expect(r.store.getState("r-titled")?.title).toBe("Pre-set title");
+    // Backend must never have been called.
+    expect(backend.calls).toHaveLength(0);
+
+    ctrl.abort();
+    r.store.close();
+  });
 });

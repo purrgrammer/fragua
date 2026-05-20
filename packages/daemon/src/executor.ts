@@ -511,7 +511,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         return { kind: "continue" };
       }
       onOccResolved(start, 0);
-      if (opts.autoTitler) {
+      if (opts.autoTitler && state.title == null) {
         const input = routingString(state.routing, "input") ?? "";
         const goal = graphFor(workflowSha)?.attrs.goal;
         const req: TitleRequest = {

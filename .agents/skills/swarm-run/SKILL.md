@@ -109,7 +109,7 @@ RUN=$(curl -fsS -X POST "$URL/runs" \
 curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
 ```
 
-`workflowSha` is sha256 of the workflow source — same source twice → same sha → cheap re-enqueue. `runId` is a ULID when omitted. `cwd` becomes the run's project root (worktree base, project listing key); omit for ephemeral CI runs.
+`workflowSha` is sha256 of the workflow source — same source twice → same sha → cheap re-enqueue. `runId` is a ULID when omitted. `cwd` becomes the run's project root (worktree base, project listing key); omit for ephemeral CI runs. `title` (optional string) sets the run title immediately at enqueue and suppresses the auto-titler; omit to let the daemon generate a title from `input`.
 
 ---
 
