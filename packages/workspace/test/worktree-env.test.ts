@@ -66,8 +66,7 @@ describe("WorktreeEnvironment", () => {
     const env = new WorktreeEnvironment({ repoRoot: repo, runId: "clean-run" });
     await env.init();
 
-    const result = await env.dispose();
-    expect(result.branch).toBeNull();
+    await env.dispose();
     expect(existsSync(env.worktreePath)).toBe(false);
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
     expect(branches.stdout).not.toContain("swarm/runs/clean-run");
@@ -86,8 +85,7 @@ describe("WorktreeEnvironment", () => {
     await env.writeFile("dirty.ts", "export const u = 2;\n"); // uncommitted
     await env.writeFile("brand-new.log", "untracked output"); // untracked
 
-    const result = await env.dispose();
-    expect(result.branch).toBeNull();
+    await env.dispose();
     expect(existsSync(env.worktreePath)).toBe(false);
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
     expect(branches.stdout).not.toContain("swarm/runs/teardown-run");

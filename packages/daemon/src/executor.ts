@@ -1723,12 +1723,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // on resume. completed / cancelled / halted / quarantined are all
     // truly terminal — the run will never execute another node.
     //
-    // Dispose may preserve the worktree's working state on a fresh
-    // `swarm/runs/<runId>` branch. When it does, emit a follow-up
-    // `fact.run_branched` so `run_state.branch` is set and `swarm gc
-    // --branches` can later reason about the ref. The terminal fact has
-    // already landed by this point — `fact.run_branched` is post-terminal
-    // metadata, not a status transition.
+    // Before dispose removes the worktree, capture the terminal snapshot
+    // (refs/swarm/{snapshots,heads}/<runId>) — the only thing preserving the
+    // run's work. Its fact drives the inbox + change_stat projection. A
+    // capture failure GATES dispose so work is never lost.
     if (opts.provisioner) {
       const finalState = opts.store.getState(runId);
       const terminalStatuses = new Set(["completed", "cancelled", "halted", "quarantined"]);

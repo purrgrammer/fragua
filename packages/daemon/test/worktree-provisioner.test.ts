@@ -117,19 +117,19 @@ describe("WorktreeProvisioner", () => {
     expect(p.envFor("r1")?.cwd()).toBe("/fake/r1");
   });
 
-  test("dispose on an unknown runId is a no-op (returns null branch)", async () => {
+  test("dispose on an unknown runId is a no-op", async () => {
     const p = new WorktreeProvisioner({
       factory: async (runId) => stubEnv(`/fake/${runId}`),
     });
-    await expect(p.dispose("never-existed")).resolves.toEqual({ branch: null });
+    await expect(p.dispose("never-existed")).resolves.toBeUndefined();
   });
 
-  test("dispose on a factory-produced env (not a WorktreeEnvironment) returns null branch", async () => {
+  test("dispose on a factory-produced env (not a WorktreeEnvironment) drops it", async () => {
     const p = new WorktreeProvisioner({
       factory: async (runId) => stubEnv(`/fake/${runId}`),
     });
     await p.ensure("r1");
-    await expect(p.dispose("r1")).resolves.toEqual({ branch: null });
+    await expect(p.dispose("r1")).resolves.toBeUndefined();
     expect(p.envFor("r1")).toBeUndefined();
   });
 });

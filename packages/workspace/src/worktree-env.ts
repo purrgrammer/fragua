@@ -12,11 +12,10 @@
 // requirements.txt`). The command runs inside the fresh worktree before the
 // first node executes; a non-zero exit fails the run.
 //
-// Dispose just removes the worktree — it no longer creates a porcelain
-// `swarm/runs/<run-id>` branch. Recoverability is structural: the snapshotter
-// captures the run's tree (committed + uncommitted) and HEAD into
-// `refs/swarm/snapshots/<run-id>` + `refs/swarm/heads/<run-id>` at the terminal
-// boundary, before dispose. See `docs/proposals/worktrees.md` and `dispose()`.
+// Dispose removes the worktree, nothing more. Recoverability is structural:
+// the snapshotter captures the run's tree (committed + uncommitted) and HEAD
+// into `refs/swarm/snapshots/<run-id>` + `refs/swarm/heads/<run-id>` at the
+// terminal boundary, before dispose. See `docs/proposals/worktrees.md`.
 
 import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
@@ -32,13 +31,13 @@ export type BootstrapSpec = string | ((env: ExecutionEnvironment) => Promise<voi
 export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions, "cwd"> {
   /** The repo that owns the worktree. Defaults to process.cwd(). */
   repoRoot?: string;
-  /** Opaque session identifier — becomes branch suffix + worktree dirname. */
+  /** Opaque session identifier — becomes the worktree dirname. */
   runId: string;
   /** Directory under repoRoot where worktrees live. Default `.swarm/worktrees`. */
   worktreesDir?: string;
   /** Starting branch/commit for the worktree. Default current HEAD. */
   baseRef?: string;
-  /** Keep the worktree + branch after dispose() (for post-mortem). Default false. */
+  /** Keep the worktree after dispose() (for post-mortem). Default false. */
   keepAfterDispose?: boolean;
   /** Per-worktree dependency install. Stack-agnostic — pass whatever the
    * project needs (`bun install --frozen-lockfile`, `pnpm install`, a
@@ -48,37 +47,9 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
   bootstrapTimeoutMs?: number;
 }
 
-/** Metadata folded into the dispose-time commit message so `git log`
- * gives operators enough context to triage without cross-referencing the
- * event log. Provided by the executor at dispose time — the worktree
- * itself doesn't know its workflow / terminal status. */
-export interface DisposeContext {
-  /** Terminal status that triggered dispose. */
-  status: string;
-  /** Human-readable workflow name (from `workflows.name`). */
-  workflowName: string;
-  /** Workflow content sha — full hex, abbreviated to 8 chars in the
-   * commit subject. */
-  workflowSha: string;
-}
-
-/** Result of `dispose()`. `branch` is non-null exactly when dispose
- * preserved the worktree's state on a new `swarm/runs/<runId>` ref —
- * either because `git status --porcelain` was non-empty (working-tree
- * delta) or because `git rev-list <baseGitSha>..HEAD --count` was
- * non-zero (in-worktree commits ahead of base), or both. */
-export interface DisposeResult {
-  branch: string | null;
-}
-
 export class WorktreeEnvironment implements ExecutionEnvironment {
   private readonly repoRoot: string;
   readonly runId: string;
-  /** Branch name preserved by `dispose()`, following the
-   * `swarm/runs/<runId>` convention. The branch is created LAZILY — it
-   * does not exist in the repo until dispose commits a non-empty working
-   * tree. Read this name to know what GC will scan. */
-  readonly branch: string;
   readonly worktreePath: string;
   readonly bootstrapRan: boolean = false;
   readonly bootstrapCommand: string | undefined;
@@ -103,7 +74,6 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   constructor(opts: WorktreeEnvironmentOptions) {
     this.repoRoot = resolve(opts.repoRoot ?? process.cwd());
     this.runId = opts.runId;
-    this.branch = `swarm/runs/${opts.runId}`;
     const dir = opts.worktreesDir ?? ".swarm/worktrees";
     this.worktreePath = isAbsolute(dir) ? join(dir, opts.runId) : join(this.repoRoot, dir, opts.runId);
     if (opts.baseRef !== undefined) this.baseRef = opts.baseRef;
@@ -126,10 +96,8 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    * re-bootstrap) so a HITL-paused run can survive a daemon restart
    * without double-provisioning.
    *
-   * No branch is created here — `swarm/runs/<runId>` is born lazily in
-   * `dispose()` only when there's actual work to preserve. Captures the
-   * worktree's HEAD into `baseGitSha` so the executor can stamp it onto
-   * `fact.run_started`. */
+   * Captures the worktree's HEAD into `baseGitSha` so the executor can
+   * stamp it onto `fact.run_started`. */
   async init(): Promise<void> {
     if (this.initialized) return;
     await mkdir(join(this.repoRoot, ".swarm", "worktrees"), { recursive: true });
@@ -211,30 +179,25 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     }
   }
 
-  /** Tear down the worktree — just remove the directory + registration.
+  /** Tear down the worktree — remove the directory + registration.
    *
    * Recoverability is structural, not derived here: the snapshotter captures
    * the run's tree (incl. uncommitted dirt) and HEAD into
    * `refs/swarm/snapshots/<runId>` + `refs/swarm/heads/<runId>` at the terminal
-   * boundary, BEFORE dispose runs (docs/proposals/worktrees.md). So dispose no
-   * longer inspects the tree or creates a porcelain `swarm/runs/<runId>` branch
-   * — that mechanism leaked synthetic refs into porcelain and mis-preserved
-   * branches a workflow merely checked out. The executor gates dispose on the
-   * terminal snapshot succeeding, so a captured snapshot is the precondition
-   * for removal.
+   * boundary, BEFORE dispose runs (docs/proposals/worktrees.md). The executor
+   * gates dispose on that terminal snapshot succeeding, so a captured snapshot
+   * is the precondition for removal.
    *
-   * `branch` in the result is always null now (kept for interface compat).
    * No-op if `keepAfterDispose` is true or `dispose()` already ran. Tolerates
    * an already-removed worktree. */
-  async dispose(_ctx?: DisposeContext): Promise<DisposeResult> {
-    if (this.disposed || this.keepAfterDispose) return { branch: null };
+  async dispose(): Promise<void> {
+    if (this.disposed || this.keepAfterDispose) return;
     this.disposed = true;
     try {
       await runGit(this.repoRoot, ["worktree", "remove", "--force", this.worktreePath]);
     } catch {
       // worktree may already be gone (removed out of band)
     }
-    return { branch: null };
   }
 
   cwd(): string {

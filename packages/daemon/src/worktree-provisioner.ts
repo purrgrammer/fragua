@@ -2,9 +2,9 @@
 //
 // The executor calls `ensure(runId)` before dispatching the run's first
 // node. On success, every turn's HandlerContext carries the same env
-// so handlers + agents operate inside an isolated `git worktree`
-// linked branch. On terminal status, the executor calls `dispose(runId)`
-// to tear the worktree + branch down.
+// so handlers + agents operate inside an isolated `git worktree` on a
+// detached HEAD. On terminal status, the executor calls `dispose(runId)`
+// to remove the worktree.
 //
 // Design points:
 //
@@ -15,15 +15,15 @@
 //   - `ensure` is idempotent: the same runId returns the same env.
 //     After a daemon crash the map restarts empty, so the provisioner
 //     hands `WorktreeEnvironment.init()` the resume-aware path (see
-//     the comment there) — re-initialising an existing worktree must
-//     not double-create the branch.
+//     the comment there) — re-initialising reuses an existing worktree
+//     rather than failing on `git worktree add`.
 //   - Failure mode: `ensure` throws when `init()` rejects. The executor
 //     catches and emits a `fact.run_halted` with `reason=error`,
 //     `detail=worktree_provision_failed: ...`. The run can be
 //     inspected via intent.unquarantine or manually cleaned up.
 //   - Dispose uses `WorktreeEnvironment.dispose()` which is a best-
-//     effort cleanup: it tolerates already-removed worktrees and
-//     branches (user may have merged + deleted them out of band).
+//     effort cleanup: it tolerates an already-removed worktree (e.g.
+//     removed out of band).
 //   - Per-run worktree-vs-local fallback: the daemon serves runs from
 //     many cwds. `create()` checks `isGitRepo(<run cwd>)` per run;
 //     non-git cwds get a `LocalEnvironment` rooted at the run's own
@@ -32,13 +32,7 @@
 
 import { spawn } from "node:child_process";
 import type { ExecutionEnvironment } from "@swarm/core";
-import {
-  type BootstrapSpec,
-  type DisposeContext,
-  type DisposeResult,
-  LocalEnvironment,
-  WorktreeEnvironment,
-} from "@swarm/workspace";
+import { type BootstrapSpec, LocalEnvironment, WorktreeEnvironment } from "@swarm/workspace";
 import { captureSnapshot, resolveSnapshotParent, type SnapshotBoundary, type SnapshotResult } from "./snapshotter.ts";
 
 /** Bootstrap pair resolved for a single run against its project root.
@@ -98,12 +92,10 @@ export interface ProvisionOpts {
 
 export interface Provisioner {
   ensure(runId: string, opts?: ProvisionOpts): Promise<ExecutionEnvironment>;
-  /** Tear down the run's environment. `ctx` lets the impl tag a
-   * dispose-time commit with the run's terminal status + workflow
-   * identity (worktree backends only). `branch` in the result is
-   * non-null exactly when a `swarm/runs/<runId>` ref now exists in the
-   * repo, so the executor can emit `fact.run_branched`. */
-  dispose(runId: string, ctx?: DisposeContext): Promise<DisposeResult>;
+  /** Tear down the run's environment (worktree removal for worktree
+   * backends). Recoverability is structural via the terminal snapshot the
+   * executor captures before calling this — dispose creates no refs. */
+  dispose(runId: string): Promise<void>;
   envFor(runId: string): ExecutionEnvironment | undefined;
   /** HEAD sha captured at provision time for runs backed by a worktree.
    * `null` for runs the provisioner doesn't track or for non-worktree
@@ -181,15 +173,14 @@ export class WorktreeProvisioner implements Provisioner {
     }
   }
 
-  async dispose(runId: string, ctx?: DisposeContext): Promise<DisposeResult> {
+  async dispose(runId: string): Promise<void> {
     const env = this.envs.get(runId);
-    if (!env) return { branch: null };
+    if (!env) return;
     this.envs.delete(runId);
     this.snapshotCursor.delete(runId);
     if (env instanceof WorktreeEnvironment) {
-      return env.dispose(ctx);
+      await env.dispose();
     }
-    return { branch: null };
   }
 
   envFor(runId: string): ExecutionEnvironment | undefined {

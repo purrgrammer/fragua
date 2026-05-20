@@ -31,12 +31,11 @@ function stubEnv(cwd: string, extras: Record<string, unknown> = {}): ExecutionEn
 
 class RecordingProvisioner implements Provisioner {
   ensureCalls: string[] = [];
-  disposeCalls: Array<{ runId: string; status?: string }> = [];
+  disposeCalls: Array<{ runId: string }> = [];
   private readonly envs = new Map<string, ExecutionEnvironment>();
   constructor(
     private readonly make: (runId: string) => ExecutionEnvironment,
     private readonly opts: {
-      branchOnDispose?: string;
       baseGitSha?: string;
       baseGitRef?: string;
       snapshotResult?: SnapshotResult | null;
@@ -50,10 +49,9 @@ class RecordingProvisioner implements Provisioner {
     this.envs.set(runId, env);
     return env;
   }
-  async dispose(runId: string, ctx?: { status: string }): Promise<{ branch: string | null }> {
-    this.disposeCalls.push({ runId, ...(ctx?.status != null ? { status: ctx.status } : {}) });
+  async dispose(runId: string): Promise<void> {
+    this.disposeCalls.push({ runId });
     this.envs.delete(runId);
-    return { branch: this.opts.branchOnDispose ?? null };
   }
   envFor(runId: string): ExecutionEnvironment | undefined {
     return this.envs.get(runId);
@@ -173,9 +171,7 @@ describe("executor + worktree provisioner", () => {
       async ensure() {
         throw new Error("no disk space");
       },
-      async dispose() {
-        return { branch: null };
-      },
+      async dispose() {},
       envFor() {
         return undefined;
       },
