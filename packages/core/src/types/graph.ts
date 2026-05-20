@@ -18,6 +18,15 @@ type AttrScalar = string | number | boolean | string[];
 export interface NodeAttrs {
   label?: string;
   prompt?: string;
+  /** Override the global system prompt for this step (authoring: `system-prompt`). */
+  system_prompt?: string;
+  /** Repo-relative files prepended to the system prompt as
+   * `<project-conventions>` blocks (authoring: `context-files`). `AGENTS.md`
+   * is auto-prepended. */
+  context_files?: string[];
+  /** Drop the skills catalogue from this step's system prompt
+   * (authoring: `skills-disabled`). */
+  skills_disabled?: boolean;
   /** Provider-native LLM model id. Examples: `claude-opus-4-7`. */
   llm_model?: string;
   /** Provider key. E.g. `anthropic`, `openai`. */
@@ -44,6 +53,9 @@ export interface NodeAttrs {
   /** Goal-gate retarget destination. Set by the parser when authoring
    * uses `retry: <step>`. References a step id. */
   retry_target?: string;
+  /** Secondary goal-gate retarget, tried when `retry_target` is unset
+   * (SPEC §3.4 chain). References a step id. */
+  fallback_retry_target?: string;
   /** Tool-step config (type:tool). Shell command executed by the tool
    * handler. */
   tool_command?: string;

@@ -224,7 +224,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 | `run` | string | Shell command (`tool` steps only). |
 | `timeout-minutes` | number | Wall-clock backstop (→ `max_ms`). |
 
-Advanced (authored snake_case; see `references/advanced-attrs.md`): `context_files`, `system_prompt`, `skills_disabled`, `retry_policy` / `default_retry_policy`. Full attribute list: `packages/core/src/types/graph.ts`. W013 flags an unrecognised key (typo).
+Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-prompt`, `skills-disabled`. Full attribute list: `packages/core/src/types/graph.ts` (`NodeAttrs`). W013 flags an unrecognised key (typo).
 
 ### Tool steps
 

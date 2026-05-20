@@ -244,27 +244,6 @@ describe("validate — handler lints", () => {
     expect(validate(g).some((d) => d.code === "W009")).toBe(false);
   });
 
-  test("W011 llm bare `model` (no llm_ prefix)", () => {
-    const g = mkGraph({
-      nodes: { s: "start", work: { type: "llm", attrs: { prompt: "x", model: "claude-opus-4-7" } }, done: "exit" },
-      edges: [
-        ["s", "work"],
-        ["work", "done"],
-      ],
-    });
-    expect(codesOf(g)).toContain("W011");
-  });
-
-  test("W011 not raised when llm_model is set", () => {
-    const g = mkGraph({
-      nodes: { s: "start", work: { type: "llm", attrs: { prompt: "x", llm_model: "claude-opus-4-7" } }, done: "exit" },
-      edges: [
-        ["s", "work"],
-        ["work", "done"],
-      ],
-    });
-    expect(validate(g).some((d) => d.code === "W011")).toBe(false);
-  });
 });
 
 describe("validate — retry / goal-gate lints", () => {

@@ -4,45 +4,38 @@
 import type { Edge, Graph } from "../types/graph.ts";
 import { inputReferences } from "./substitution.ts";
 
-/** Whitelist of known node attribute names. Anything outside this set
- * triggers W013 — surfaces typos like `goalgate=true` and parser passthrough
- * (`NodeAttrs[extra: string]`) that would otherwise silently no-op. The list
- * is the union of `NodeAttrs` declared fields plus bare aliases (`model`,
- * `provider`) that have their own dedicated W011. */
+/** Whitelist of known node attribute names — the IR (snake_case) field set
+ * the validator runs against, *after* the parser has lowered authoring keys
+ * (`thread:` → `thread_id`, `model:` → `llm_model`, `context-files:` →
+ * `context_files`, …). Anything outside this set trips W013, surfacing typos
+ * and parser passthrough that would otherwise silently no-op. Keep in sync
+ * with `NodeAttrs` declared fields in `types/graph.ts`. */
 const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "label",
-  "shape",
   "type",
   "prompt",
   "system_prompt",
+  "context_files",
+  "skills_disabled",
   "llm_model",
   "llm_provider",
   "summary",
   "thread_id",
   "goal_gate",
   "max_retries",
-  "retry_policy",
-  "retry_initial_delay_ms",
-  "retry_backoff_factor",
-  "retry_max_delay_ms",
-  "retry_jitter",
   "timeout",
   "max_ms",
   "reasoning_effort",
   "allowed_tools",
   "denied_tools",
-  "context_files",
   "retry_target",
   "fallback_retry_target",
   "tool_command",
   "max_cost_usd",
   "max_tokens",
   "skills",
-  "skills_disabled",
   "routes",
   "text",
-  "model",
-  "provider",
 ]);
 
 /** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
@@ -355,31 +348,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E011",
         message: `graph ${key}="${target}" references undefined node`,
-      });
-    }
-  }
-
-  // W011: llm node declares bare `model` / `provider` without the `llm_`
-  // prefix. The agent backend reads only `llm_model` / `llm_provider`;
-  // bare keys are silently dropped and the run falls through to the
-  // daemon default. Suppress when the prefixed equivalent is set.
-  for (const n of nodes) {
-    if (n.type !== "llm") continue;
-    const PAIRS: Array<{ bare: "model" | "provider"; prefixed: "llm_model" | "llm_provider" }> = [
-      { bare: "model", prefixed: "llm_model" },
-      { bare: "provider", prefixed: "llm_provider" },
-    ];
-    for (const { bare, prefixed } of PAIRS) {
-      const bareVal = (n.attrs as Record<string, unknown>)[bare];
-      if (typeof bareVal !== "string" || bareVal === "") continue;
-      const prefixedVal = (n.attrs as Record<string, unknown>)[prefixed];
-      if (typeof prefixedVal === "string" && prefixedVal !== "") continue;
-      diags.push({
-        severity: "warning",
-        code: "W011",
-        message: `llm node "${n.id}" declares ${bare}="${bareVal}" but the agent backend only reads \`${prefixed}\` — value is silently ignored. Use \`${prefixed}: ${bareVal}\`.`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
     }
   }

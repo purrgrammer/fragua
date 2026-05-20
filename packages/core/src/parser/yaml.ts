@@ -125,6 +125,9 @@ const STEP_KEY_TO_IR: Readonly<Record<string, string>> = {
   "max-cost": "max_cost_usd",
   "max-tokens": "max_tokens",
   "max-retries": "max_retries",
+  "context-files": "context_files",
+  "system-prompt": "system_prompt",
+  "skills-disabled": "skills_disabled",
   run: "tool_command",
 };
 
