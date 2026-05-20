@@ -10,9 +10,9 @@
 #   full  → parallel lenses (dispatch prunes to the relevant ones) → synthesize → verify gate
 #
 # quick and full both land at a `signoff` HITL; `skip` bypasses it. From
-# signoff the operator can act on the PR — approve / request-changes / comment
-# (each consumes the review body + PR# from the thread) — accept locally, or
-# ask for a deeper pass.
+# signoff the operator approves the PR, posts the review as feedback
+# (request-changes if it has blocking findings, else a comment), or keeps it
+# local. Each PR action consumes the review body + PR# from the thread.
 #
 # Two decisions: DEPTH is topology (skip/quick/full); within `full`, the LENS
 # SET is the dispatcher's call (orchestrator-workers) — correctness always,
@@ -153,13 +153,11 @@ steps:
 
   signoff:                             # human gate after quick + full (skip bypasses it)
     type: human
-    text: "Review ready above. Act on the PR, accept locally, or ask for a deeper pass?"
+    text: "Review ready above. Approve the PR, post it as feedback, or keep it local?"
     routes:
-      approve:         {to: pr_approve,         label: "Approve PR"}
-      request_changes: {to: pr_request_changes, label: "Request changes"}
-      comment:         {to: pr_comment,         label: "Comment only"}
-      accept:          {to: exit,               label: "Keep local"}
-      deeper:          {to: dispatch,           label: "Deeper review"}
+      approve:  {to: pr_approve,  label: "Approve PR"}
+      feedback: {to: pr_feedback, label: "Post feedback"}
+      accept:   {to: exit,        label: "Keep local"}
 
   pr_approve:                          # post the review + APPROVE the PR
     type: llm
@@ -172,7 +170,7 @@ steps:
       Write the review body to a temp file (heredoc), then `gh pr review <PR> --approve --body-file <tmp>`.
       Emit `APPROVED: PR <n> <url>`.
 
-  pr_request_changes:                  # post the review + REQUEST CHANGES on the PR
+  pr_feedback:                         # post the review; request-changes if blocking, else comment
     type: llm
     thread: review
     allowed-tools: [bash]
@@ -180,16 +178,5 @@ steps:
     next: exit
     prompt: |
       The PR number (PR: <n>) and the review are above in this thread. If PR is `none`, `abort` with `no PR to act on`.
-      Write the review body to a temp file (heredoc), then `gh pr review <PR> --request-changes --body-file <tmp>`.
-      Emit `CHANGES_REQUESTED: PR <n> <url>`.
-
-  pr_comment:                          # post the review as a PR comment, no verdict
-    type: llm
-    thread: review
-    allowed-tools: [bash]
-    max-cost: 0.15
-    next: exit
-    prompt: |
-      The PR number (PR: <n>) and the review are above in this thread. If PR is `none`, `abort` with `no PR to act on`.
-      Write the review body to a temp file (heredoc), then `gh pr review <PR> --comment --body-file <tmp>`.
-      Emit `COMMENTED: PR <n> <url>`.
+      Write the review body to a temp file (heredoc). If the review has any Critical or High finding, `gh pr review <PR> --request-changes --body-file <tmp>`; otherwise `gh pr review <PR> --comment --body-file <tmp>`.
+      Emit `POSTED: PR <n> <changes|comment> <url>`.
