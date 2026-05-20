@@ -1,7 +1,7 @@
 // GET /runs/:runId/tree           — flat {path,type}[] under the run's worktree.
 // GET /runs/:runId/blob?path=…    — raw text of one file inside the worktree.
 // GET /runs/:runId/changes        — git diff numstat + name-status from
-//                                   `baseGitSha..refs/heads/swarm/runs/<id>`.
+//                                   `diff_base_sha..refs/swarm/snapshots/<id>`.
 //
 // Lookup model:
 //
@@ -15,12 +15,13 @@
 //      "this used to exist; it doesn't anymore" status, which lets the
 //      web branch on `error.status === 410` to keep the diff view but
 //      drop the live file tree.
-//   3) `/changes` doesn't need the worktree on disk — it runs git
-//      against the run's project root (`state.cwd`) and reads the
-//      `swarm/runs/<runId>` ref `WorktreeEnvironment.dispose()`
-//      preserves (worktree-env.ts §`branch` doc) plus the `baseGitSha`
-//      stamped on `fact.run_started` (worktree-env.ts:158). Survives
-//      worktree disposal by design.
+//   3) `/changes` + `/diff` don't need the worktree on disk — they run git
+//      against the run's project root (`state.cwd`) and read the run's
+//      snapshot tip `refs/swarm/snapshots/<runId>` (the terminal snapshot
+//      commit, committed + dirty tree) against the honest base
+//      `run_state.diff_base_sha` (== `baseGitSha` unless the workflow
+//      relocated HEAD). The snapshotter writes the ref before dispose, so
+//      this survives worktree disposal by design (docs/proposals/worktrees.md).
 //
 // All filesystem reads inside the worktree go through the same
 // `ProjectTreeReader` the projects routes use — only the root path
@@ -109,13 +110,13 @@ export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
     if (state == null) return c.json({ error: "not_found" }, 404);
     if (state.cwd == null) return c.json([]);
 
-    const baseGitSha = pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
-    if (baseGitSha == null) return c.json([]);
+    const base = state.diffBaseSha ?? pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
+    if (base == null) return c.json([]);
 
-    const tip = await resolveRunTip(state.cwd, runId);
+    const tip = await resolveSnapshotTip(state.cwd, runId);
     if (tip == null) return c.json([]);
 
-    const changes = await diffNumstatNameStatus(state.cwd, baseGitSha, tip);
+    const changes = await diffNumstatNameStatus(state.cwd, base, tip);
     return c.json(changes.slice(0, MAX_CHANGES));
   });
 
@@ -124,15 +125,15 @@ export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
     const state = store.getState(runId);
     if (state == null) return c.json({ error: "not_found" }, 404);
 
-    const baseGitSha = pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
-    if (baseGitSha == null || state.cwd == null) {
+    const base = state.diffBaseSha ?? pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
+    if (base == null || state.cwd == null) {
       return c.json({ error: "base_missing" }, 410);
     }
 
-    const tip = await resolveRunTip(state.cwd, runId);
-    if (tip == null) return c.json({ error: "branch_missing" }, 410);
+    const tip = await resolveSnapshotTip(state.cwd, runId);
+    if (tip == null) return c.json({ error: "snapshot_missing" }, 410);
 
-    const diff = await runGitCapture(state.cwd, ["diff", `${baseGitSha}..${tip}`]);
+    const diff = await runGitCapture(state.cwd, ["diff", `${base}..${tip}`]);
     return new Response(diff, {
       status: 200,
       headers: { "content-type": "text/x-diff; charset=utf-8" },
@@ -186,9 +187,14 @@ function pickBaseGitSha(projected: string | null, events: StoredEvent[]): string
 /** `git rev-parse refs/heads/swarm/runs/<runId>` from the run's project
  *  root. Returns null if the ref doesn't exist (run never had its
  *  worktree disposed with content) or git itself is unavailable. */
-async function resolveRunTip(cwd: string, runId: string): Promise<string | null> {
+/** Resolve the run's snapshot tip — `refs/swarm/snapshots/<runId>`, the
+ *  terminal snapshot commit whose tree carries the run's committed + dirty
+ *  state (docs/proposals/worktrees.md). Replaces the old dispose-preserved
+ *  `swarm/runs/<runId>` branch. `null` for runs without a snapshot yet
+ *  (live, or pre-terminal / bare-cwd). */
+async function resolveSnapshotTip(cwd: string, runId: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", `refs/heads/swarm/runs/${runId}`], {
+    const { stdout } = await execFileAsync("git", ["rev-parse", `refs/swarm/snapshots/${runId}`], {
       cwd,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,

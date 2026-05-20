@@ -141,11 +141,10 @@ interface GitFixture {
 }
 
 // Build a real git repo with a base commit (keep.txt + remove.txt +
-// edit.txt). When `withTip` is true, also create a second commit on
-// `refs/heads/swarm/runs/<id>` that edits edit.txt, removes
-// remove.txt, and adds new.txt — the same shape
-// `WorktreeEnvironment.dispose()` would leave behind. baseGitSha is
-// stamped onto the projection via `fact.run_started`.
+// edit.txt). When `withTip` is true, also create a delta commit and point
+// `refs/swarm/snapshots/<id>` at it (edits edit.txt, removes remove.txt,
+// adds new.txt) — the shape the snapshotter writes at the terminal
+// boundary. baseGitSha is stamped onto the projection via `fact.run_started`.
 async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string }): Promise<GitFixture> {
   const cwd = await mkdtemp(join(tmpdir(), `swarm-run-files-${opts.slug}-`));
   const runId = opts.runId;
@@ -163,12 +162,15 @@ async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string
   const baseSha = (await git(cwd, ["rev-parse", "HEAD"])).trim();
 
   if (opts.withTip) {
-    await git(cwd, ["checkout", "-b", `swarm/runs/${runId}`, "--quiet"]);
+    // Build the run's delta and point the snapshot tip ref at it — mirrors
+    // what the snapshotter writes (refs/swarm/snapshots/<id>), no porcelain branch.
     await writeFile(join(cwd, "edit.txt"), "line1\nline2 changed\nline3\n");
     await rm(join(cwd, "remove.txt"));
     await writeFile(join(cwd, "new.txt"), "fresh\n");
     await git(cwd, ["add", "-A"]);
     await git(cwd, ["commit", "-m", "run delta", "--no-gpg-sign", "--quiet"]);
+    const tipSha = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+    await git(cwd, ["update-ref", `refs/swarm/snapshots/${runId}`, tipSha]);
   }
 
   const store = new SqliteStore({ path: ":memory:" });
@@ -247,12 +249,12 @@ describe("GET /runs/:runId/diff", () => {
     expect(body.error).toBe("not_found");
   });
 
-  test("410 when swarm/runs/<id> branch missing", async () => {
+  test("410 when the run's snapshot ref is missing", async () => {
     const g = await setupGitRun({ withTip: false, runId: "r-diff-410", slug: "diff-gone" });
     const res = await g.app.fetch(new Request(`http://test/runs/${g.runId}/diff`));
     expect(res.status).toBe(410);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toBe("branch_missing");
+    expect(body.error).toBe("snapshot_missing");
 
     g.store.close();
     await rm(g.cwd, { recursive: true, force: true });
