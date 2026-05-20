@@ -64,7 +64,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 
 | Proposal | Maturity | Rationale |
 |---|---|---|
-| [Reserved `fail` sink](./fail-sink.md) | sketch | a route/edge to a `fail` terminal mirroring `exit`. Existing primitives cover every case — `abort(reason)` (llm), loop edges (redo), `exit` (graceful), `intent.cancel(note)` (operator discard-as-failure, which is the lone human-node residual). Kept the four-mechanism terminal model (now in swarm-author SKILL §1); dropped the primitive. Reopens only if a human rejection must read `halted` not `cancelled` |
+| [Reserved `fail` sink](./fail-sink.md) | sketch | a route/edge to a `fail` terminal mirroring `exit`. Existing primitives cover every case — `abort(reason)` (llm), loop edges (redo), `exit` (graceful), `intent.cancel(note)` (operator discard-as-failure, which is the lone human-node residual). Kept the four-mechanism terminal model (now in workflows SKILL §1); dropped the primitive. Reopens only if a human rejection must read `halted` not `cancelled` |
 
 ## Shipped
 

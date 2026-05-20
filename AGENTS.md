@@ -60,7 +60,7 @@ Runtime state: `~/.swarm/swarm.db` (the global store the harness binds to by def
 
 Config cascade: `~/.swarm/config.jsonc` (global — defaults, autoTitle, blocklist, concurrency, …) overlaid by `<cwd>/.swarm/config.jsonc` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep.
 
-Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `swarm-author`, `swarm-debug`, `swarm-run`). The daemon scans both at boot. Load before touching any file in a skill's domain.
+Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `swarm-debug`, `swarm-run`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 
 Named sub-agent profiles live alongside skills under `.agents/agents/` (project) and `~/.agents/agents/` (user); `.claude/agents/` is scanned as a cross-client fallback. Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, optional `model` / `provider` / `allowed_tools`); the body becomes the sub-agent's system prompt. Project beats user on collisions. The daemon scans them at boot and the catalogue lands on every llm call whose tool pool includes `agent` — see [`docs/proposals/agent-definitions.md`](docs/proposals/agent-definitions.md).
 
@@ -80,7 +80,7 @@ Named sub-agent profiles live alongside skills under `.agents/agents/` (project)
    | `packages/types/src/events.ts` — status / intent / fact / halt / quarantine types, or `DaemonEvent` literals | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` — §4.1 for new informational fact types, §8 for new halt/quarantine reasons or paused statuses, §8.1 for new schedule daemon-events, §8.2 for new subagent observability events; `STATUS.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the doc claims |
    | `packages/core/src/handler/types.ts` | `handler-contract.md` |
    | `packages/core/src/handler/intent-fold.ts` | `docs/intent-fold.md` |
-   | `packages/core/src/engine/validator.ts` — error/warning codes (E001–E0NN, W001–W0NN) | `.agents/skills/swarm-author/SKILL.md` validator-codes table |
+   | `packages/core/src/engine/validator.ts` — error/warning codes (E001–E0NN, W001–W0NN) | `.agents/skills/workflows/SKILL.md` validator-codes table |
    | `packages/server/src/store/routes.ts` / `runs-routes.ts` — operator endpoint shapes | `.agents/skills/swarm-run/SKILL.md` cheat sheet; `ARCHITECTURE.md` §7 |
    | `packages/store/src/schema.sql` — blobs / artifacts layout | `.agents/skills/swarm-debug/SKILL.md` §7 (artifact read path) |
    | `packages/cli/bin/swarm.ts` (new entry point) or `packages/cli/src/commands/*` (default-changing flag, renamed flag, or new subcommand) | `README.md` (Quick tour: command invocations, default ports, storage paths) |

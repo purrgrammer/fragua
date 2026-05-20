@@ -1,6 +1,6 @@
 ---
 title: Reserved `fail` sink — a failure terminal mirroring `exit`
-summary: "DISCARDED. Considered adding `fail` as a second reserved terminal (mirror of `exit`) so routing nodes could author a failure terminal. Existing primitives cover every case: `abort(reason)` for llm failure, bounded loop-back edges for redo, `exit` for graceful, and `intent.cancel(note)` for operator discard-as-failure. The valuable output — the four-mechanism terminal model — is recorded in the swarm-author SKILL. Kept as the design record."
+summary: "DISCARDED. Considered adding `fail` as a second reserved terminal (mirror of `exit`) so routing nodes could author a failure terminal. Existing primitives cover every case: `abort(reason)` for llm failure, bounded loop-back edges for redo, `exit` for graceful, and `intent.cancel(note)` for operator discard-as-failure. The valuable output — the four-mechanism terminal model — is recorded in the workflows SKILL. Kept as the design record."
 status: discarded
 maturity: sketch
 last-reviewed: 2026-05-20
@@ -18,7 +18,7 @@ last-reviewed: 2026-05-20
 > the run as failed — is exactly `cancel`. The only thing that would reopen
 > this: wanting a human rejection to project `halted` (red) rather than
 > `cancelled` in the feed; today `cancelled` is judged sufficient. The
-> authoring guidance lives in `.agents/skills/swarm-author/SKILL.md` §1
+> authoring guidance lives in `.agents/skills/workflows/SKILL.md` §1
 > (workflow boundaries / four-mechanism terminals).
 >
 > Before: there is exactly one reserved terminal, `exit`. After the opt-in
@@ -190,7 +190,7 @@ route landing on `fail` wins over a mid-flight gate retarget.
   `fail` halts ahead of the goal-gate check.
 - `packages/web/src/components/GraphView.tsx` — render the `fail` sink (red
   terminal, mirror of the `exit` chip); HITL panel reason box on fail routes.
-- Docs: SPEC §3.6, handler-contract, swarm-author SKILL +
+- Docs: SPEC §3.6, handler-contract, workflows SKILL +
   `references/validator-codes.md` (E031); ARCHITECTURE §3 only if `rejected`.
 
 ## Workflow migrations (after the primitive lands)

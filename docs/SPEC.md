@@ -293,4 +293,4 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 
 - Unknown attribute names on nodes / edges / graph (`W013`) — the YAML parser accepts any name through index-signature passthrough; the validator catches typos at validate-time.
 
-Validator code lookup table: [`.agents/skills/swarm-author/references/validator-codes.md`](../.agents/skills/swarm-author/references/validator-codes.md).
+Validator code lookup table: [`.agents/skills/workflows/references/validator-codes.md`](../.agents/skills/workflows/references/validator-codes.md).

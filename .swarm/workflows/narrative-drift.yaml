@@ -14,7 +14,7 @@
 # only a structured ~350-word summary returns.
 #
 #   bun run swarm run narrative-drift
-#   bun run swarm run narrative-drift --input filter="only swarm-author"
+#   bun run swarm run narrative-drift --input filter="only workflows"
 #
 # Cadence: weekly. Pairs with structural-drift (literal cross-ref + apply
 # tail) and rollup (weekly post-mortem consuming both).
@@ -28,7 +28,7 @@ inputs:
   filter:
     type: string
     default: ""
-    description: Optional scope filter (e.g. "only swarm-author")
+    description: Optional scope filter (e.g. "only workflows")
 
 defaults:
   provider: anthropic
@@ -108,7 +108,7 @@ steps:
 
         | Severity | Source | SKILL.md / doc location | Code surface | Drift |
         |---|---|---|---|---|
-        | CRITICAL | swarm-author | SKILL.md §6 (validator codes) | packages/core/src/engine/validator.ts:120 | E016 not in skill table |
+        | CRITICAL | workflows | SKILL.md §6 (validator codes) | packages/core/src/engine/validator.ts:120 | E016 not in skill table |
         | MEDIUM | claims+proposals | STATUS.md:14 'workflow_resolution' | (no evidence found) | UNBACKED |
 
       Walk every subagent section ('## skill:<name>' and '## claims+proposals') and copy each finding into the table verbatim. Do not invent, drop, or paraphrase. Keep severity labels exactly as the subagents reported them.

@@ -187,7 +187,7 @@ Final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` + decide la
 
 ### Human inputs
 
-For human-node (hexagon) gates. `route` must match one of `fact.run_paused_human.payload.routes`. See §5 + swarm-author §14.
+For human-node (hexagon) gates. `route` must match one of `fact.run_paused_human.payload.routes`. See §5 + workflows §14.
 
 ### Priority + budget
 

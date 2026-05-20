@@ -11,9 +11,9 @@
 //   1. status              — verbatim 'delivers today' / 'does not deliver' sections from STATUS.md and README.md (whichever has them)
 //   2. proposals           — front-matter (title/status/maturity/last_reviewed) per proposal
 //   3. proposals_index     — verbatim docs/proposals/README.md (the index doc)
-//   4. skills              — per `swarm-*` skill: path, name, frontmatter description, lines + sha256_12, target_hint.
-//                            The other skills (frontend / design / backend) are repo-specific to swarm itself —
-//                            their drift is not in scope for this audit.
+//   4. skills              — per `swarm-*` skill (plus `workflows`): path, name, frontmatter description, lines + sha256_12, target_hint.
+//                            `workflows` is audited too — it documents swarm's own workflow-authoring surface. The other
+//                            skills (frontend / design / backend) are repo-specific to swarm itself — their drift is not in scope.
 //
 // Structural surfaces (schema, event taxonomy, handler contract, intent fold,
 // doc code blocks, recent commits) live in structural-drift/collect.ts.
@@ -28,8 +28,8 @@ const SKILL_ROOTS = [".agents/skills"] as const;
 // fan-out subagent has a starting point without re-discovering it. The audit
 // node's dispatcher passes these to per-skill subagents verbatim.
 const SKILL_TARGET_HINTS: Record<string, string> = {
-  "swarm-author":
-    "DOT shapes / attrs / validator codes (E001+, W001+) / substitution tokens / retry-policy presets — cross-reference packages/core/src/engine/{validator,substitution,retry-policy}.ts and packages/core/src/types/graph.ts.",
+  workflows:
+    "YAML workflow authoring — steps / next / on / routes / inputs / defaults, the four terminal mechanisms, goal-gate vs edge-cycle loops, validator codes. Cross-reference packages/core/src/parser/yaml.ts, packages/core/src/engine/{validator,substitution}.ts, packages/core/src/types/graph.ts.",
   "swarm-run":
     "Operator HTTP routes (POST /runs/:id/{steer,pause,cancel,hitl,resume,unquarantine,priority,budget}) — cross-reference packages/server/src/store/routes.ts and runs-routes.ts; flag examples whose body shape would 4xx.",
   "swarm-debug":
@@ -144,8 +144,9 @@ function collectSkills(): Skill[] {
     for (const name of entries) {
       // Repo-specific skills (frontend / design / backend) live alongside the
       // generic swarm-* skills but their drift is bound to swarm's own code
-      // surface, not to the universal swarm narrative. Audit only swarm-*.
-      if (!name.startsWith("swarm-")) continue;
+      // surface, not to the universal swarm narrative. Audit swarm-* plus the
+      // `workflows` skill, which documents swarm's own authoring surface.
+      if (!name.startsWith("swarm-") && name !== "workflows") continue;
       const skillDir = resolve(dir, name);
       let isDir = false;
       try {

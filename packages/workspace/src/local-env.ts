@@ -111,7 +111,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
    *
    * The check turns silent isolation leaks (Phase 9 run
    * 01ks01m6bt9ryccn4b: the agent passed
-   * `/Users/bandarra/swarm/.agents/skills/swarm-author/SKILL.md` as a
+   * `/Users/bandarra/swarm/.agents/skills/workflows/SKILL.md` as a
    * write target while running in a `.swarm/worktrees/<runId>`
    * environment; the resolved absolute path bypassed `_cwd` and
    * landed in main) into loud {@link PathEscapeError}s. Tools catch
