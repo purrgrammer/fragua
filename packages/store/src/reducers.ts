@@ -176,8 +176,27 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.nodeStartedAt = null;
       return next;
     }
+    // Operator post-run primitives (docs/proposals/worktrees.md). branch /
+    // commit / merge are composable and leave the inbox `acted`; discard is
+    // terminal-terminal (`discarded`). The handler enforces the state machine
+    // (refusing actions after discard); the reducer just projects.
     case "fact.run_branched": {
       next.branch = fact.payload.branch;
+      next.inboxStatus = "acted";
+      return next;
+    }
+    case "fact.run_committed": {
+      next.finalCommit = fact.payload.sha;
+      next.inboxStatus = "acted";
+      return next;
+    }
+    case "fact.run_merged": {
+      next.mergedInto = fact.payload.targetBranch;
+      next.inboxStatus = "acted";
+      return next;
+    }
+    case "fact.run_discarded": {
+      next.inboxStatus = "discarded";
       return next;
     }
     case "fact.run_requeued_after_crash": {

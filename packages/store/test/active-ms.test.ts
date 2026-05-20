@@ -305,3 +305,40 @@ describe("fact.snapshot_recorded projection (worktrees.md)", () => {
     expect(s.inboxStatus).toBeNull(); // checked out, not authored → out of inbox
   });
 });
+
+describe("operator post-run primitives projection (worktrees.md)", () => {
+  function pending(): RunState {
+    return { ...blankState(), inboxStatus: "pending" };
+  }
+
+  test("fact.run_branched → branch set, inbox acted", () => {
+    const s = applyFact(pending(), { type: "fact.run_branched", payload: { branch: "feature/x", sha: "abc" } }, 1);
+    expect(s.branch).toBe("feature/x");
+    expect(s.inboxStatus).toBe("acted");
+  });
+
+  test("fact.run_committed → final_commit set, inbox acted", () => {
+    const s = applyFact(
+      pending(),
+      { type: "fact.run_committed", payload: { targetBranch: "main", sha: "c0ffee", message: "m", parentSha: "p" } },
+      1,
+    );
+    expect(s.finalCommit).toBe("c0ffee");
+    expect(s.inboxStatus).toBe("acted");
+  });
+
+  test("fact.run_merged → merged_into set, inbox acted", () => {
+    const s = applyFact(
+      pending(),
+      { type: "fact.run_merged", payload: { targetBranch: "main", mode: "ff", sha: "m1", parentShas: ["p"] } },
+      1,
+    );
+    expect(s.mergedInto).toBe("main");
+    expect(s.inboxStatus).toBe("acted");
+  });
+
+  test("fact.run_discarded → inbox discarded", () => {
+    const s = applyFact(pending(), { type: "fact.run_discarded", payload: { refs: ["refs/swarm/snapshots/r"] } }, 1);
+    expect(s.inboxStatus).toBe("discarded");
+  });
+});

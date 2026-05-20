@@ -186,7 +186,10 @@ Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`.
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep recovered a run that was `running` when the prior daemon died. The reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs`. |
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without honoring `ctx.signal`. Handler bug per `docs/handler-contract.md` §4 rule 1. Per-process leak counter advances; daemon shuts down at `LEAK_LIMIT`. |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Another daemon reclaimed a stale lock. Expect `fact.run_requeued_after_crash` rows on in-flight runs nearby. |
-| `fact.run_branched` | `branch` | Post-terminal: `dispose()` preserved a branch because `git status --porcelain` was non-empty. Lands AFTER the terminal status fact. `swarm gc --branches` joins these against the refspace. |
+| `fact.run_branched` | `branch`, `sha` | Operator post-run primitive (`intent.branch_run`): created `refs/heads/<branch>` at the run's heads-ref sha. Sets `run_state.branch`; inbox `pending → acted`. No longer dispose-emitted (worktrees.md step 6). |
+| `fact.run_committed` | `targetBranch`, `sha`, `message`, `parentSha` | Operator (`intent.commit_run`): committed the run's snapshot tree onto `targetBranch`. Sets `final_commit`; inbox `pending → acted`. |
+| `fact.run_merged` | `targetBranch`, `mode`, `sha`, `parentShas` | Operator (`intent.merge_run`): merged the run's heads-ref into `targetBranch`. Sets `merged_into`; inbox `pending → acted`. |
+| `fact.run_discarded` | `refs[]` | Operator (`intent.discard_run`): deleted the run's `refs/swarm/{snapshots,heads}/<id>`. Inbox `pending → discarded`. |
 | `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (worktrees.md). Once per worktree-backed run, after the terminal status fact; projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event (no fact). |
 
 ---

@@ -1420,7 +1420,7 @@ describe("global event feed (cross-run)", () => {
     // is permissive about logical transitions, so we can chain them.
     const c2 = store.appendFact(
       "c",
-      [{ type: "fact.run_branched", payload: { branch: "swarm/runs/c" } }],
+      [{ type: "fact.run_branched", payload: { branch: "swarm/runs/c", sha: "abc123" } }],
       c1.newVersion,
     );
     store.appendFact(

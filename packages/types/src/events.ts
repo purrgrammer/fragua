@@ -754,15 +754,32 @@ export type FactEvent =
     }
   | { type: "fact.daemon_takeover"; payload: { reclaimedFrom: number; at: number } }
   | {
-      /** Emitted by the executor's terminal-cleanup path after the
-       * worktree's dispose() preserved a branch (because the working tree
-       * had a non-empty `git status --porcelain`). Sets `run_state.branch`
-       * so `swarm gc --branches` can later join the refspace against
-       * terminated runs. Not emitted when dispose drops a clean tree
-       * (no branch was created) or when the run had no worktree
-       * provisioner. Lands AFTER the terminal status fact. */
+      /** Operator-driven (`intent.branch_run`): created a porcelain
+       * `refs/heads/<branch>` at the run's heads-ref sha. Post-terminal; sets
+       * `run_state.branch` and transitions the inbox `pending → acted`. No
+       * longer dispose-emitted (docs/proposals/worktrees.md step 6). */
       type: "fact.run_branched";
-      payload: { branch: string };
+      payload: { branch: string; sha: string };
+    }
+  | {
+      /** Operator-driven (`intent.commit_run`): committed the run's snapshot
+       * tree onto a target branch via commit-tree. Sets `run_state.final_commit`;
+       * inbox `pending → acted`. */
+      type: "fact.run_committed";
+      payload: { targetBranch: string; sha: string; message: string; parentSha: string };
+    }
+  | {
+      /** Operator-driven (`intent.merge_run`): merged the run's heads-ref into a
+       * target branch. Sets `run_state.merged_into`; inbox `pending → acted`. */
+      type: "fact.run_merged";
+      payload: { targetBranch: string; mode: "ff" | "merge" | "squash"; sha: string; parentShas: string[] };
+    }
+  | {
+      /** Operator-driven (`intent.discard_run`): deleted the run's
+       * `refs/swarm/{snapshots,heads}/<id>`. Inbox `pending → discarded`
+       * (terminal-terminal — subsequent actions fail). */
+      type: "fact.run_discarded";
+      payload: { refs: string[] };
     };
 
 // Note: there are no dedicated `fact.subagent.*` events. Sub-agents
