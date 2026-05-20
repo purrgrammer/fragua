@@ -30,6 +30,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E029 | Step id `start` is reserved for the synthesized entry node — rename the step. |
 | E030 | `${{ inputs.x }}` references an input not declared in the workflow's `inputs:` block (scans `prompt` / `text` / `run`). Add it to `inputs:` or fix the typo. |
 | E031 | A goal-gate step (uses `retry:`) has no `max-retries:` — the per-gate retarget cap is required on every `retry:` gate. Add `max-retries: N` to the gate step. |
+| E032 | A step declares no success successor. Flow is explicit — there is no linear fall-through to the next declared step. Add `next:` / `on: {success: …}` / `routes:`, or `next: exit` to finish a branch. |
 
 ## Warnings
 
@@ -40,9 +41,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W005 | Duplicate edge. |
 | W007 | A goal-gate (`retry:`) with no retarget at any level — failure can only halt. |
 | W009 | An `llm` step with empty `prompt` and empty label — the call has nothing to do. |
-| W011 | The IR carries a bare `model` / `provider` (no `llm_` prefix), which the agent backend ignores. In YAML you write `model:` / `provider:` and the parser maps them correctly, so you typically won't hit this. |
 | W013 | Unrecognised attribute on a step / edge / graph. The parser passes unknown keys through silently; this catches typos (`goalgate: true`, `max_seconds:`). Canonical list: `packages/core/src/types/graph.ts`. |
-| W014 | An attractor-only attribute swarm intentionally doesn't honor (`auto_status` on a step, `loop_restart` on an edge). Drop it or accept the no-op. |
 
 ## Removed (DOT-era)
 

@@ -30,12 +30,13 @@
 //       type: llm
 //       prompt: |
 //         Plan ticket ${{ inputs.ticket }}.
-//       # implicit next: implement (next declared step)
+//       next: implement
 //
 //     implement:
 //       type: llm
 //       prompt: |
 //         Implement.
+//       next: review
 //
 //     review:
 //       type: llm
@@ -43,6 +44,7 @@
 //         Review.
 //       retry: implement
 //       max-retries: 3
+//       next: ci
 //
 //     ci:
 //       type: tool
@@ -60,10 +62,13 @@
 //       type: llm
 //       prompt: |
 //         Commit.
+//       next: exit
 //
 // Authoring rules:
-//   - Linear by default: a step with no `next:`/`on:`/`routes:` flows to the
-//     next declared step on success (last step flows to `exit`).
+//   - Control flow is explicit: every step declares its success successor via
+//     `next:` / `on:` / `routes:`. There is no linear fall-through. A step
+//     left without a success successor trips validator E032; terminate a
+//     branch by routing to the reserved `exit` sink (`next: exit`).
 //   - `next: X` ≡ `on: {success: X}`. Neither synthesizes a fail edge — a
 //     node that fails with no declared fail route halts the run
 //     (`aborted_exit`). Failure handling is opt-in: write `on: {fail: Y}`.
@@ -333,7 +338,8 @@ export function parseWorkflow(source: string): Graph {
   }
   if (inputs.length > 0) graphAttrs["inputs"] = inputs;
 
-  // Walk steps in declaration order — order matters for implicit linear flow.
+  // Walk steps in declaration order. The first declared step is the entry
+  // point; order is otherwise immaterial now that flow is explicit.
   const stepIds: string[] = [];
   const stepBodies = new Map<string, YAML.YAMLMap>();
   for (const item of stepsNode.items) {
@@ -473,12 +479,12 @@ export function parseWorkflow(source: string): Graph {
       }
       // No implicit fail edge: a node with no declared fail route halts on
       // failure (executor → aborted_exit). Failure handling is opt-in.
-    } else if (typeStr !== "exit") {
-      // No explicit routing → linear default: success to next declared step
-      // (or exit if last). No fail edge — unhandled failure halts.
-      const successTo = typeof nextNode === "string" && nextNode.length > 0 ? nextNode : (stepIds[i + 1] ?? "exit");
-      if (successTo === "exit") needExit = true;
-      edges.push({ from: stepId, to: successTo, attrs: { outcome: "success" } });
+    } else if (typeStr !== "exit" && typeof nextNode === "string" && nextNode.length > 0) {
+      // `next: X` ≡ on.success → X. The only success successor — there is no
+      // linear fall-through to the next declared step. A step left with no
+      // success successor trips validator E032; terminate via `next: exit`.
+      if (nextNode === "exit") needExit = true;
+      edges.push({ from: stepId, to: nextNode, attrs: { outcome: "success" } });
     }
 
     // ---- materialise the node ----

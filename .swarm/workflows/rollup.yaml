@@ -27,6 +27,7 @@ steps:
     type: llm
     model: claude-haiku-4-5
     thread: rollup
+    next: synthesize
     allowed-tools: [bash]
     max-cost: 0.10
     prompt: |
@@ -41,6 +42,7 @@ steps:
     model: claude-opus-4-7
     effort: high
     thread: rollup
+    next: verify
     allowed-tools: [read]
     max-cost: 2.50
     prompt: |
@@ -71,6 +73,7 @@ steps:
     thread: rollup
     retry: synthesize
     max-retries: 2
+    next: exit
     max-cost: 0.75
     allowed-tools: [read]
     prompt: |

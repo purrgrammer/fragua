@@ -73,20 +73,22 @@ steps:
     type: llm                  # llm (default if omitted) | tool | human | exit
     prompt: |
       Plan ${{ inputs.ticket }}.
-    # no next/on/routes → linear: flows to the next declared step on success
+    next: implement            # every step names its success successor — no magic
 
   implement:
     prompt: |
       Implement the plan.
+    next: done
 
-  done:                        # last step → flows to `exit` on success
+  done:                        # terminate by routing to the reserved `exit` sink
     prompt: |
       Summarise what changed.
+    next: exit
 ```
 
 **Step types:** `llm` (default), `tool`, `human`, `exit`. `start` is synthesized from the first declared step — never declare it (E029). `exit` is the reserved graceful-completion sink — target it, don't declare a regular step named `exit` (E028).
 
-**Linear by default:** a step with no `next:` / `on:` / `routes:` flows to the next *declared* step on success (the last step flows to `exit`). Declaration order is the spine.
+**Flow is explicit:** every step declares its success successor via `next:` / `on:` / `routes:`. There is no linear fall-through — a step left without a success successor is a validation error (E032). Terminate a branch by routing to the reserved `exit` sink (`next: exit`).
 
 ---
 
@@ -120,7 +122,7 @@ Reference inputs in prompts as if the value is present: `Plan ticket ${{ inputs.
 
 ## 4. Wiring steps — and the four terminal mechanisms
 
-Every non-spine connection is one of `next:`, `on:`, or `routes:` (mutually exclusive per step).
+Every step's success successor is declared by exactly one of `next:`, `on:`, or `routes:` (mutually exclusive per step). There is no implicit spine — a step with none is a validation error (E032).
 
 - **`next: X`** ≡ `on: {success: X}` — the success successor.
 - **`on: {success: X, fail: Y}`** — outcome-based branching. `fail:` is the failure successor.
@@ -140,7 +142,7 @@ When you connect steps, every "where does this go?" answer is one of **four mech
 - An `llm` step that decides it can't proceed calls the built-in **`abort`** tool with a one-sentence reason → halts with that reason as the detail. `abort` is force-included on every llm step.
 - A **human** rejection that should end the run as failed is the operator's **`cancel`** (carries an optional note) — human steps don't get a `fail` sink; "reject" is usually a *redo* loop, and "discard" is `cancel`.
 
-> **Branch landings need an explicit successor.** A step reached only via a route (not the linear spine) must declare its own `next:`/`on:`/`routes:` — otherwise the linear default sends it to the *next declared step*, which usually belongs to a different branch. (This bites: a `quick` branch's terminal step silently falling through into the `full` branch.)
+> **Every step declares its own successor (E032).** There is no linear fall-through to the next declared step — flow is fully explicit. A step that finishes a branch routes to the reserved `exit` sink (`next: exit`); a step that hands off names the next step. This is what stops a `quick` branch's terminal step from silently flowing into the `full` branch — the connection has to be written, never inferred from declaration order.
 
 ---
 
@@ -315,6 +317,7 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 - **E028 / E029** — step id `exit` / `start` is reserved.
 - **E030** — `${{ inputs.x }}` references an undeclared input.
 - **E031** — a `retry:` gate has no `max-retries:` (the per-gate retarget cap is required).
+- **E032** — a step declares no success successor — add `next:` / `on: {success: …}` / `routes:` (`next: exit` to finish). There is no linear fall-through.
 - **W007** — `goal_gate` (`retry:`) with no retarget chain.
 - **W013** — unrecognised attribute (typo).
 
@@ -374,11 +377,13 @@ steps:
     prompt: |
       Implement ${{ inputs.task }} (a plan in this thread → realise it; none → scope it yourself).
       End with a PLAN_REALISED block.
+    next: review
 
   review:
     thread: build
     retry: implement                # goal gate → re-run implement on REJECT
     max-retries: 2                  # required: per-gate retarget cap (E031)
+    next: ci                        # success successor — explicit (no fall-through)
     allowed-tools: [read, grep, bash]
     prompt: |
       Judge `git diff HEAD` against PLAN_REALISED. `APPROVE: <one line>`, or `abort` with `REJECT: <one line>`.
@@ -399,6 +404,7 @@ steps:
     allowed-tools: [read, write, edit, bash]
     prompt: |
       Commit per AGENTS.md conventions. Fresh thread — read state via git.
+    next: exit
 ```
 
 ```sh

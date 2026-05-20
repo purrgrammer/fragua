@@ -38,6 +38,7 @@ steps:
     type: llm
     model: claude-haiku-4-5
     thread: audit
+    next: audit
     allowed-tools: [bash]
     max-cost: 0.10
     prompt: |
@@ -51,6 +52,7 @@ steps:
     type: llm
     model: claude-sonnet-4-6
     thread: audit
+    next: review
     allowed-tools: [agent, read, grep, find]
     max-cost: 2.50
     prompt: |
@@ -121,6 +123,7 @@ steps:
     thread: audit
     retry: audit
     max-retries: 2
+    next: exit
     allowed-tools: [read]
     max-cost: 0.80
     prompt: |

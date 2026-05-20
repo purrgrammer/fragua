@@ -14,10 +14,11 @@ steps:
   work:
     type: llm
     prompt: hi
+    next: exit
 `);
     expect(g.id).toBe("t");
     expect(g.directed).toBe(true);
-    // Synthetic start node + user step + synthetic exit (linear default → exit).
+    // Synthetic start node + user step + synthetic exit (work routes to exit).
     expect(g.nodes["start"]?.type).toBe("start");
     expect(g.nodes["work"]?.type).toBe("llm");
     expect(g.nodes["exit"]?.type).toBe("exit");
@@ -159,15 +160,15 @@ steps:
 });
 
 describe("parseWorkflow — edge synthesis", () => {
-  test("implicit linear: step with no routing flows to next declared step", () => {
+  test("explicit chain: only declared `next:` edges exist — no linear fall-through", () => {
     const g = parseWorkflow(`
 name: t
 steps:
-  a: {type: llm, prompt: x}
-  b: {type: llm, prompt: y}
-  c: {type: llm, prompt: z}
+  a: {type: llm, prompt: x, next: b}
+  b: {type: llm, prompt: y, next: c}
+  c: {type: llm, prompt: z, next: exit}
 `);
-    // Success-only chain: start -> a, a -> b, b -> c, c -> exit. No fail
+    // Flow is fully explicit: start -> a, then each declared next. No fail
     // edges are synthesized — an unhandled failure halts the run.
     const edgeKeys = g.edges.map((e) => `${e.from}->${e.to}:${e.attrs.outcome ?? ""}:${e.attrs.route ?? ""}`);
     expect(edgeKeys).toContain("start->a::");
@@ -175,6 +176,19 @@ steps:
     expect(edgeKeys).toContain("b->c:success:");
     expect(edgeKeys).toContain("c->exit:success:");
     expect(edgeKeys.filter((k) => k.includes(":fail:"))).toEqual([]);
+  });
+
+  test("no linear fall-through: a step with no next/on/routes gets no outgoing edge", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  a: {type: llm, prompt: x, next: b}
+  b: {type: llm, prompt: y}
+`);
+    // `b` declares no successor — the parser leaves it edgeless rather than
+    // synthesizing a fall-through to the next declared step. Validator E032
+    // rejects the edgeless step.
+    expect(g.edges.filter((e) => e.from === "b")).toEqual([]);
   });
 
   test("`next: X` is shorthand for on.success — no fail edge synthesized", () => {

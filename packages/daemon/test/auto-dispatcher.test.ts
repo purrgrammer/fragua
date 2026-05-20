@@ -7,7 +7,7 @@ import { Dispatcher } from "../src/dispatch.ts";
 describe("autoDispatcherResolver", () => {
   test("parses YAML once and caches per-node specs", () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  mid: {type: llm, prompt: hi}\n`);
+    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  mid: {type: llm, prompt: hi, next: exit}\n`);
 
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));

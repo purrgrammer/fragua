@@ -847,9 +847,9 @@ describe("executor — provider pause and resume", () => {
   test("multi-step workflow: pause on step 3 → resume re-dispatches step 3 only, run completes", async () => {
     const yaml = `name: t
 steps:
-  s1: {type: llm, prompt: a}
-  s2: {type: llm, prompt: b}
-  s3: {type: llm, prompt: c}
+  s1: {type: llm, prompt: a, next: s2}
+  s2: {type: llm, prompt: b, next: s3}
+  s3: {type: llm, prompt: c, next: exit}
 `;
     const r = rig({ yaml });
     const calls: Array<{ nodeId: string; iteration: number }> = [];
@@ -954,9 +954,9 @@ steps:
     // mixed into s3's scope).
     const yaml = `name: t
 steps:
-  s1: {type: llm, prompt: a}
-  s2: {type: llm, prompt: b}
-  s3: {type: llm, prompt: c}
+  s1: {type: llm, prompt: a, next: s2}
+  s2: {type: llm, prompt: b, next: s3}
+  s3: {type: llm, prompt: c, next: exit}
 `;
     const r = rig({ yaml });
 

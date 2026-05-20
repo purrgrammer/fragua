@@ -20,6 +20,7 @@ defaults:
 steps:
   snapshot:
     type: llm
+    next: exit
     allowed-tools: [bash, read]
     max-cost: 0.05
     prompt: |

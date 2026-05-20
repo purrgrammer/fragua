@@ -256,6 +256,55 @@ describe("validate — E031 retry gate without max_retries", () => {
   });
 });
 
+describe("validate — E032 step without a success successor", () => {
+  test("llm step with no outgoing edge → E032", () => {
+    const g = mkGraph({
+      nodes: { s: "start", work: "llm", done: "exit" },
+      edges: [["s", "work"]],
+    });
+    const e032 = validate(g).filter((d) => d.code === "E032");
+    expect(e032).toHaveLength(1);
+    expect(e032[0]?.nodeId).toBe("work");
+    expect(e032[0]?.severity).toBe("error");
+  });
+
+  test("step with only a fail edge (success dead-ends) → E032", () => {
+    const g = mkGraph({
+      nodes: { s: "start", work: "llm", recover: "llm", done: "exit" },
+      edges: [
+        ["s", "work"],
+        ["work", "recover", { outcome: "fail" }],
+        ["recover", "done"],
+      ],
+    });
+    const e032 = validate(g).filter((d) => d.code === "E032");
+    expect(e032.map((d) => d.nodeId)).toContain("work");
+  });
+
+  test("step with a success edge → no E032", () => {
+    const g = mkGraph({
+      nodes: { s: "start", work: "llm", done: "exit" },
+      edges: [
+        ["s", "work"],
+        ["work", "done", { outcome: "success" }],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E032");
+  });
+
+  test("router step with only route edges → no E032", () => {
+    const g = mkGraph({
+      nodes: { s: "start", triage: { type: "llm", attrs: { routes: ["a", "b"] } }, done: "exit" },
+      edges: [
+        ["s", "triage"],
+        ["triage", "done", { route: "a" }],
+        ["triage", "done", { route: "b" }],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E032");
+  });
+});
+
 describe("validate — handler lints", () => {
   test("E008 tool node missing tool_command", () => {
     const g = mkGraph({

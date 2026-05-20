@@ -37,6 +37,7 @@ steps:
     type: llm
     model: claude-haiku-4-5
     thread: drift
+    next: drift
     allowed-tools: [bash]
     max-cost: 0.10
     prompt: |
@@ -51,6 +52,7 @@ steps:
     model: claude-opus-4-7
     effort: high
     thread: drift
+    next: review
     allowed-tools: [read, grep, find]
     max-cost: 4.00
     prompt: |
@@ -78,6 +80,7 @@ steps:
     thread: drift
     retry: drift
     max-retries: 2
+    next: exit
     allowed-tools: [read]
     max-cost: 0.80
     prompt: |

@@ -83,6 +83,7 @@ steps:
   implement:                           # shared spine — realises whatever `build` establishes
     type: llm
     thread: build
+    next: review
     allowed-tools: [read, write, edit, grep, bash]
     prompt: |
       Implement ${{ inputs.task }}.
@@ -100,6 +101,7 @@ steps:
     thread: build
     retry: implement                   # REJECT ⇒ revision loop back to implement (capped)
     max-retries: 2
+    next: format
     allowed-tools: [read, grep, bash]
     prompt: |
       Judge `git diff HEAD` — against PLAN_REALISED if present, else on its own merits.
@@ -113,6 +115,7 @@ steps:
   format:
     type: tool
     run: bun run format
+    next: gate
 
   gate:                                # pure classifier — isolated, diff-only, cheap
     type: llm
@@ -152,6 +155,7 @@ steps:
 
   commit:
     type: llm
+    next: exit
     allowed-tools: [read, write, edit, bash]
     prompt: |
       Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.

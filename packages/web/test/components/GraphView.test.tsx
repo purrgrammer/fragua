@@ -41,6 +41,7 @@ steps:
   middle:
     type: llm
     label: middle
+    next: exit
 `;
 
 function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
@@ -116,8 +117,10 @@ describe("toFlowGraph — back-edge detection + edge labels", () => {
 steps:
   a:
     type: llm
+    next: b
   b:
     type: llm
+    next: c
   c:
     type: llm
     on: {success: exit, fail: a}
@@ -434,6 +437,7 @@ steps:
 steps:
   a:
     type: llm
+    next: exit
 `;
     for (const id of ["start", "exit"]) {
       const d = dataOf(src, id);
@@ -496,8 +500,10 @@ describe("toFlowGraph — layout + metadata", () => {
 steps:
   a:
     type: llm
+    next: b
   b:
     type: llm
+    next: exit
 `;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(makeDetail({ workflowSource: src, nodes: [] }), graph);
@@ -515,6 +521,7 @@ steps:
 steps:
   a:
     type: llm
+    next: exit
 `;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(makeDetail({ workflowSource: src, nodes: [] }), graph, { orientation: "LR" });
@@ -554,6 +561,7 @@ steps:
 steps:
   a:
     type: llm
+    next: exit
 `;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph, { selectedNodeId: "exit" });
@@ -756,6 +764,7 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
 steps:
   audit:
     type: llm
+    next: review
   review:
     type: llm
     on: {success: exit, fail: audit}
@@ -791,8 +800,10 @@ steps:
 steps:
   a:
     type: llm
+    next: b
   b:
     type: llm
+    next: exit
 `;
     const graph = parseWorkflow(src);
     const detail = makeDetail({

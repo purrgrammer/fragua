@@ -96,12 +96,13 @@ describe("executor — retry counter reset on success (§3.5)", () => {
     // node.retry_scheduled event appears per pass (two total, not three+).
     const yaml = `name: t
 steps:
-  work: {type: llm, prompt: x, max_retries: 2}
+  work: {type: llm, prompt: x, max_retries: 2, next: gate}
   gate:
     type: llm
     prompt: g
     retry: work
     max-retries: 2
+    next: exit
 `;
     const r = rig({ yaml });
     let workAttempts = 0;

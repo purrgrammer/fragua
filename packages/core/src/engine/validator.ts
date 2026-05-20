@@ -385,6 +385,30 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     });
   }
 
+  // E032: a non-terminal step must declare an explicit success successor.
+  // Linear-by-default fall-through was removed — every llm/tool step needs
+  // `next:` / `on: {success: …}` / `routes:`, otherwise it dead-ends on
+  // success. Terminate a branch by routing to the reserved `exit` sink.
+  // Human steps are covered by E009 (no outgoing edges); start/exit are
+  // the synthesized source/sink.
+  for (const n of nodes) {
+    if (n.type !== "llm" && n.type !== "tool") continue;
+    const out = graph.edges.filter((e) => e.from === n.id);
+    // A step has a success path if it has any outgoing edge that can fire on
+    // success: an explicit `outcome: success`, a `route`, or a bare
+    // unconditional edge. Only a pure `fail` edge leaves success dead-ended.
+    const hasSuccessPath = out.some((e) => e.attrs.outcome !== "fail");
+    if (!hasSuccessPath) {
+      diags.push({
+        severity: "error",
+        code: "E032",
+        message: `step "${n.id}" declares no success successor — add \`next:\`, \`on: {success: …}\`, or \`routes:\` (use \`next: exit\` to finish)`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
   // W005: duplicate edges (same from/to pair with identical attributes)
   const seen = new Map<string, Edge>();
   for (const e of graph.edges) {

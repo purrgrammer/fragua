@@ -102,6 +102,7 @@ steps:
     thread: review
     allowed-tools: [agent]
     max-cost: 1.20
+    next: synthesize
     prompt: |
       Dispatch review lenses against the scope above — only the lenses the diff actually implicates. Always include correctness. Add:
         security     — iff trust boundaries / auth / input parsing / crypto / secrets are touched.
@@ -123,6 +124,7 @@ steps:
     thread: review
     allowed-tools: [read]
     max-cost: 0.60
+    next: verify
     prompt: |
       Integrate the lens results into one ranked review — emit verbatim. Headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
