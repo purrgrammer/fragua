@@ -187,6 +187,7 @@ Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`.
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without honoring `ctx.signal`. Handler bug per `docs/handler-contract.md` §4 rule 1. Per-process leak counter advances; daemon shuts down at `LEAK_LIMIT`. |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Another daemon reclaimed a stale lock. Expect `fact.run_requeued_after_crash` rows on in-flight runs nearby. |
 | `fact.run_branched` | `branch` | Post-terminal: `dispose()` preserved a branch because `git status --porcelain` was non-empty. Lands AFTER the terminal status fact. `swarm gc --branches` joins these against the refspace. |
+| `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (worktrees.md). Once per worktree-backed run, after the terminal status fact; projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event (no fact). |
 
 ---
 

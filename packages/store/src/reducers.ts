@@ -206,6 +206,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.handler_timeout_leaked":
     case "fact.daemon_takeover":
     case "fact.provider_retry_attempted":
+    // fact.snapshot_recorded will project change_stat / inbox_status / final_*
+    // — wired with the executor emitter (docs/proposals/worktrees.md step 3).
+    // No-op until the emitter lands.
+    case "fact.snapshot_recorded":
       return next;
   }
   return next;

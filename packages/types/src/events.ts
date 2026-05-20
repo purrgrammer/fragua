@@ -73,6 +73,10 @@ export type EventType =
   | "budget.stop"
   // Cost
   | "cost.recorded"
+  // Worktree tree snapshot at a step / HITL boundary (observability;
+  // docs/proposals/worktrees.md). The Diff scrubber's feed. Terminal
+  // snapshots are the `fact.snapshot_recorded` fact, not this.
+  | "snapshot.captured"
   // Sub-agent boundaries (observability-only). Bracket the slice of
   // events produced by an inline `agent`-tool spawn on the parent's
   // stream; every event in between carries `subagent_id` on its
@@ -139,6 +143,7 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "budget.warn",
   "budget.stop",
   "cost.recorded",
+  "snapshot.captured",
   "subagent.start",
   "subagent.end",
   "subagent.resumed",
@@ -325,6 +330,32 @@ export type IntentType = IntentEvent["type"];
  * server translates `PayloadTooLargeError` to a 413 so callers see a
  * typed `code: "payload_too_large"` instead of a 500.
  */
+/** Diff stat shared by snapshot payloads and the `run_state` projection
+ * (docs/proposals/worktrees.md). */
+export type SnapshotStat = {
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+};
+
+/** Payload of the `snapshot.captured` observability event — a per-step (nodeId
+ * set) or HITL (nodeId null) worktree snapshot. Addressed by `commitSha`; the
+ * run's single tip ref keeps it reachable. `headRef` / `diffBaseSha` / stats
+ * are present at HITL, omitted per step. */
+export type SnapshotCapturedData = {
+  runId: string;
+  eventIdx: number;
+  nodeId: string | null;
+  treeSha: string;
+  commitSha: string;
+  parentSnap: string;
+  headSha: string | null;
+  headRef?: string | null;
+  diffBaseSha?: string;
+  committed?: SnapshotStat | null;
+  uncommitted?: SnapshotStat | null;
+};
+
 export type FactEvent =
   | {
       type: "fact.run_started";
@@ -338,6 +369,10 @@ export type FactEvent =
          * to reconstruct the starting tree even after the worktree dir
          * and `swarm/runs/<runId>` branch are gone. */
         baseGitSha?: string;
+        /** Branch short name of the source repo HEAD at provision — the
+         * post-run merge/commit target default (docs/proposals/worktrees.md).
+         * Absent when detached / tag / unborn or no provisioner. */
+        baseGitRef?: string;
       };
     }
   | {
@@ -473,6 +508,19 @@ export type FactEvent =
          * button label resolves via the matching outgoing edge's
          * `label=` override, falling back to `humanize(route)`. */
         routes: string[];
+        /** Worktree snapshot at this pause, embedded for the operator's first
+         * paint without a server roundtrip (docs/proposals/worktrees.md).
+         * Absent for bare-cwd runs (no provisioner). */
+        snapshot?: {
+          treeSha: string;
+          commitSha: string;
+          headSha: string | null;
+          headRef: string | null;
+          baseGitSha: string;
+          diffBaseSha: string;
+          committed: SnapshotStat | null;
+          uncommitted: SnapshotStat | null;
+        };
       };
     }
   | {
@@ -653,6 +701,25 @@ export type FactEvent =
       };
     }
   | { type: "fact.run_cancelled"; payload: { intentSeq: number } }
+  | {
+      /** Terminal worktree snapshot (docs/proposals/worktrees.md). Fires once
+       * per run, after the terminal status fact, only for worktree-backed
+       * runs. The reducer projects `change_stat` / `inbox_status` / `final_*`
+       * from this payload in the same transaction. Per-step + HITL snapshots
+       * are the `snapshot.captured` observability event, not facts. */
+      type: "fact.snapshot_recorded";
+      payload: {
+        eventIdx: number;
+        treeSha: string;
+        commitSha: string;
+        parentSnap: string;
+        headSha: string | null;
+        headRef: string | null;
+        diffBaseSha: string;
+        committed: SnapshotStat | null;
+        uncommitted: SnapshotStat | null;
+      };
+    }
   | {
       type: "fact.run_quarantined";
       payload: { reason: QuarantineReason; orphanedIntents?: number[] };
