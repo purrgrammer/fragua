@@ -23,7 +23,7 @@
 # PRECONDITION for PR / branch inputs: clean working tree. `scope` checks out
 # the PR/branch so lenses read files on disk; `git checkout -` to return.
 #
-# Input forms ($ARGUMENTS resolved by `scope`):
+# Input forms (the `target` input, resolved by `scope`):
 #   - empty                 → uncommitted changes (`git diff HEAD`)
 #   - "<commitish>"         → e.g. "HEAD~3..HEAD", a sha
 #   - "<path-or-glob>"      → e.g. "packages/server/src"
@@ -79,7 +79,7 @@ steps:
 
       For `skip`, that one line is the whole review — make it a clean `LGTM: <reason>`.
     routes:
-      skip:  {to: signoff,      label: "No substantive changes"}
+      skip:  {to: signoff,      label: "Trivial"}
       quick: {to: review_quick, label: "Quick review"}
       full:  {to: dispatch,     label: "Full review"}
 

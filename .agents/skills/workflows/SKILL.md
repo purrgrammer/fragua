@@ -22,7 +22,7 @@ Authoritative: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITE
 
 ## 1. Decide the boundary before you draw
 
-The unit of a workflow is its **deliverable** — what the run produces: a **commit** (code change → `work`), a **report** (analysis / review / drift → `analyze`, `review`, `*-drift`), **applied edits** (`doc-sync`), or an **action** (`merge`, `ci-gate`). One deliverable, one workflow.
+The unit of a workflow is its **deliverable** — what the run produces: a **commit** (code change → `work`), a **report** (analysis / review / drift → `analyze`, `review`, `*-drift`), **applied edits** (`doc-sync`), or an **action** (`merge`). One deliverable, one workflow.
 
 Within a deliverable, sub-kinds differ only in their **preamble** — the step that frames the work before a shared spine. In `work`: `feature` plans, `bugfix` reproduces a failing test, `small` does neither — then all converge on implement → review → ship. That stays *one* flat workflow.
 
@@ -38,11 +38,13 @@ A node that decides *which* branch to take (a `routes:` step, or any triage) is 
 
 ### Patterns (names from Anthropic's "Building Effective Agents")
 
-- **Augmented LLM** — one `llm` step, broad tool pool, the agent loop lives in its tool-use cycle. `orchestrate`, `merge`.
-- **Prompt chaining** — linear `A → B → C`. `ci-gate`, `analyze`.
+- **Augmented LLM** — one `llm` step, broad tool pool, the agent loop lives in its tool-use cycle. `health`, `merge`.
+- **Prompt chaining** — linear `A → B → C`. `rollup`, `analyze`.
 - **Routing** — a step declares `routes:` and exits via the `route` tool; edges fan out per route. `work::triage`.
-- **Orchestrator-workers** — one step with `agent` in its tools fans out sub-agents dynamically. `orchestrate`, `review::dispatch`, `doc-sync::audit`.
+- **Orchestrator-workers** — one step with `agent` in its tools fans out sub-agents dynamically. `review::dispatch`, `doc-sync::audit`.
 - **Evaluator-optimizer** — a step generates, the next judges, rejection retargets the generator (`retry:`). The daily-driver pattern. `work::review`, `fix-bug::reproduce`.
+
+A real workflow usually **mixes** these — the patterns name the *shape of an edge or step*, not the whole graph. `work` is routing (`triage`) → prompt chaining (`plan → implement → review`) → evaluator-optimizer (`review` retargets `implement`) → tool steps (`format`, `ci`). `review` is routing (`scope`) → orchestrator-workers (`dispatch`) → evaluator-optimizer (`verify` retargets `synthesize`). Reach for whichever pattern fits each seam; don't force one over the whole run.
 
 Pick the pattern before drawing; topology follows.
 
