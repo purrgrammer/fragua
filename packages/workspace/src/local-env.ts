@@ -195,7 +195,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
     if (blocked) {
       return {
         stdout: "",
-        stderr: `[swarm: blocked command — matched pattern "${blocked}". Edit .swarm/config.jsonc blocklist to adjust.]`,
+        stderr: `[swarm: blocked command — matched pattern "${blocked}". Edit .swarm/config.yaml blocklist to adjust.]`,
         exitCode: 126,
         durationMs: 0,
       };

@@ -1,9 +1,10 @@
-// `swarm init` — bootstrap a project's `.swarm/config.jsonc` and merge
+// `swarm init` — bootstrap a project's `.swarm/config.yaml` and merge
 // the runtime patterns into `.gitignore`. Hard-fails on non-git
-// directories. Refuses to overwrite an existing `.swarm/config.jsonc`.
+// directories. Refuses to overwrite an existing `.swarm/config.yaml`
+// (or the legacy `.swarm/config.jsonc`).
 //
 // Side effects on success:
-//   - writes `<cwd>/.swarm/config.jsonc`
+//   - writes `<cwd>/.swarm/config.yaml`
 //   - creates `<cwd>/.swarm/workflows/` if absent
 //   - merges runtime patterns into `<cwd>/.gitignore` (idempotent)
 //
@@ -24,6 +25,7 @@ const GITIGNORE_BLOCK = `# swarm runtime — never commit these
 .swarm/serve.json
 
 # swarm — always commit these (negative patterns for clarity)
+!.swarm/config.yaml
 !.swarm/config.jsonc
 !.swarm/workflows/
 `;
@@ -37,7 +39,8 @@ export interface InitCommandOptions {
 
 export async function initCommand(opts: InitCommandOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const configPath = resolve(cwd, ".swarm/config.jsonc");
+  const configPath = resolve(cwd, ".swarm/config.yaml");
+  const legacyPath = resolve(cwd, ".swarm/config.jsonc");
 
   if (!(await isGitRepo(cwd))) {
     console.error(chalk.red("init: not a git repository"));
@@ -47,6 +50,12 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
 
   if (await pathExists(configPath)) {
     console.error(chalk.red(`init: ${configPath} already exists — refusing to overwrite`));
+    return 1;
+  }
+
+  if (await pathExists(legacyPath)) {
+    console.error(chalk.red(`init: ${legacyPath} already exists — refusing to overwrite`));
+    console.error(chalk.dim(`  hint: rename it to config.yaml: mv .swarm/config.jsonc .swarm/config.yaml`));
     return 1;
   }
 
@@ -60,14 +69,12 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
 }
 
 function renderConfig(): string {
-  return `{
-  // swarm project config — project-specific knobs only. Generic
-  // preferences live in ~/.swarm/config.jsonc.
-  "version": 1
+  return `# swarm project config — project-specific knobs only.
+# Generic preferences live in ~/.swarm/config.yaml.
+version: 1
 
-  // Uncomment if the project needs a per-worktree bootstrap command:
-  // "bootstrap": "bun install --frozen-lockfile"
-}
+# Uncomment if the project needs a per-worktree bootstrap command:
+# bootstrap: "bun install --frozen-lockfile"
 `;
 }
 

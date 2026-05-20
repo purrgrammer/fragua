@@ -14,7 +14,7 @@ export interface DiscoverAgentsOptions {
    *  `~/.claude/agents/`. Pass empty string to skip user-scope
    *  discovery. */
   homeDir: string;
-  /** Merged config from `.swarm/config.jsonc`. Treated as global. */
+  /** Merged config from `.swarm/config.yaml`. Treated as global. */
   config?: import("@swarm/types").AgentDefinitionsConfig;
 }
 

@@ -1,10 +1,14 @@
 // User-preference config for swarm. Two-layer cascade:
-//   global   ~/.swarm/config.jsonc   — generic preferences (LLM defaults,
-//                                       autoTitle, blocklist, concurrency,
-//                                       timeouts, blob GC, skills paths, …)
-//   project  <cwd>/.swarm/config.jsonc — project-specific knobs only
-//                                       (today: `bootstrap`). Overlays
-//                                       global; project keys win.
+//   global   ~/.swarm/config.yaml   — generic preferences (LLM defaults,
+//                                      autoTitle, blocklist, concurrency,
+//                                      timeouts, blob GC, skills paths, …)
+//   project  <cwd>/.swarm/config.yaml — project-specific knobs only
+//                                      (today: `bootstrap`). Overlays
+//                                      global; project keys win.
+//
+// Legacy: `.swarm/config.jsonc` is read with a deprecation warning for one
+// release. When both `.yaml` and `.jsonc` exist in the same layer, YAML
+// wins and a "shadowed" warning is emitted. Delete `.jsonc` to silence it.
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
 // (`defaults`, `blobGc`, `skills`, `timeouts`, `summariser`) merge one level
@@ -21,7 +25,7 @@ import { resolve } from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { parseDurationMs } from "@swarm/core";
-import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
+import YAML from "yaml";
 
 const TimeoutValue = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
 
@@ -101,7 +105,7 @@ export const SwarmConfigSchema = Type.Object(
     // --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
     // `./scripts/bootstrap.sh`, etc. Omit for source-only projects.
     // Non-zero exit fails the run. Project-specific by nature; lives in
-    // `<project>/.swarm/config.jsonc`, not the global config.
+    // `<project>/.swarm/config.yaml`, not the global config.
     bootstrap: Type.Optional(Type.String()),
     // Per-bootstrap timeout in milliseconds. Pairs with `bootstrap` —
     // ergonomically grouped at top level so a project that pins both
@@ -183,41 +187,150 @@ export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
   return out;
 }
 
-function formatParseErrors(errors: ParseError[]): string {
-  return errors
-    .slice(0, 3)
-    .map((e) => `${printParseErrorCode(e.error)} at offset ${e.offset}`)
-    .join("; ");
-}
-
 function formatValidationErrors(errors: Iterable<{ path: string; message: string }>): string {
   const list = [...errors].slice(0, 3);
   return list.map((e) => `${e.path || "<root>"}: ${e.message}`).join("; ");
 }
 
-/** Parse and validate one config file. Returns `{}` if the file is
- * missing. Throws on parse or schema errors so typos surface
- * immediately. */
-async function loadConfigFile(path: string): Promise<SwarmConfig> {
-  let body: string;
+// ─── Legacy JSONC stripper (retained for the deprecation-window reader) ───
+
+function stripJsonc(src: string): string {
+  let out = "";
+  let i = 0;
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  while (i < src.length) {
+    const c = src[i];
+    const next = src[i + 1];
+    if (inLineComment) {
+      if (c === "\n") {
+        inLineComment = false;
+        out += c;
+      }
+      i++;
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === "*" && next === "/") {
+        inBlockComment = false;
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (inString) {
+      if (c === "\\" && i + 1 < src.length) {
+        out += src.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (c === '"') inString = false;
+      out += c;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      inLineComment = true;
+      i += 2;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** Parse a JSONC body. Returns the parsed object or throws with a
+ * "parse error in <path>" message. */
+function parseJsoncBody(body: string, filePath: string): unknown {
+  let parsed: unknown;
   try {
-    body = await readFile(path, "utf8");
-  } catch {
-    return {};
+    parsed = JSON.parse(stripJsonc(body));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`config: parse error in ${filePath}: ${msg}`);
   }
-  const errors: ParseError[] = [];
-  const parsed = parse(body, errors, { allowTrailingComma: true, disallowComments: false });
-  if (errors.length > 0) {
-    throw new Error(`config: parse error in ${path}: ${formatParseErrors(errors)}`);
+  return parsed;
+}
+
+/** Parse a YAML body. Returns the parsed object or throws with a
+ * "parse error in <path>" message. */
+function parseYamlBody(body: string, filePath: string): unknown {
+  try {
+    return YAML.parse(body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`config: parse error in ${filePath}: ${msg}`);
   }
+}
+
+/** Validate the parsed value against SwarmConfigSchema. Throws on failure. */
+function validateParsed(parsed: unknown, filePath: string): SwarmConfig {
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`config: ${path} must be a JSON object`);
+    throw new Error(`config: ${filePath} must be a JSON object`);
   }
   if (!Value.Check(SwarmConfigSchema, parsed)) {
     const msg = formatValidationErrors(Value.Errors(SwarmConfigSchema, parsed));
-    throw new Error(`config: validation failed in ${path}: ${msg}`);
+    throw new Error(`config: validation failed in ${filePath}: ${msg}`);
   }
   return parsed;
+}
+
+/** Parse and validate one config layer from a directory.
+ *
+ * Resolution order (per layer directory):
+ *   1. `<dir>/.swarm/config.yaml` — canonical
+ *   2. `<dir>/.swarm/config.jsonc` — legacy, emits a deprecation warning
+ *
+ * When both exist, YAML wins and a "shadowed" warning is emitted.
+ * Returns `{}` when neither file is present. */
+async function loadConfigFile(layerDir: string, layerLabel: "global" | "project"): Promise<SwarmConfig> {
+  const yamlPath = resolve(layerDir, ".swarm/config.yaml");
+  const jsoncPath = resolve(layerDir, ".swarm/config.jsonc");
+
+  let yamlBody: string | null = null;
+  let jsoncBody: string | null = null;
+
+  try {
+    yamlBody = await readFile(yamlPath, "utf8");
+  } catch {
+    // absent
+  }
+  try {
+    jsoncBody = await readFile(jsoncPath, "utf8");
+  } catch {
+    // absent
+  }
+
+  if (yamlBody === null && jsoncBody === null) return {};
+
+  if (yamlBody !== null && jsoncBody !== null) {
+    console.warn(
+      `config (${layerLabel}): ${jsoncPath} is shadowed by ${yamlPath} — delete the .jsonc file to silence this warning`,
+    );
+    return validateParsed(parseYamlBody(yamlBody, yamlPath), yamlPath);
+  }
+
+  if (yamlBody !== null) {
+    return validateParsed(parseYamlBody(yamlBody, yamlPath), yamlPath);
+  }
+
+  // jsoncBody is non-null — legacy path
+  console.warn(`config (${layerLabel}): ${jsoncPath} is deprecated — rename it to config.yaml to silence this warning`);
+  return validateParsed(parseJsoncBody(jsoncBody!, jsoncPath), jsoncPath);
 }
 
 /** One-level deep merge: top-level scalars from `overlay` win; nested
@@ -238,25 +351,24 @@ function mergeConfig(base: SwarmConfig, overlay: SwarmConfig): SwarmConfig {
   return out as SwarmConfig;
 }
 
-/** Load the merged user config: `~/.swarm/config.jsonc` (global) overlaid
- * by `<cwd>/.swarm/config.jsonc` (project). Either layer may be absent.
+/** Load the merged user config: `~/.swarm/config.yaml` (global) overlaid
+ * by `<cwd>/.swarm/config.yaml` (project). Either layer may be absent.
+ * Legacy `.swarm/config.jsonc` is read with a deprecation warning.
  * Project keys win on collisions; nested objects merge one level deep.
  *
  * `opts.homeDir` overrides the global path's base — used by tests to
  * isolate from the user's real `~/.swarm/`. Production callers omit it. */
 export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): Promise<SwarmConfig> {
-  const globalPath = resolve(opts.homeDir ?? homedir(), ".swarm/config.jsonc");
-  const projectPath = resolve(cwd, ".swarm/config.jsonc");
-  const [global, project] = await Promise.all([loadConfigFile(globalPath), loadConfigFile(projectPath)]);
+  const globalDir = opts.homeDir ?? homedir();
+  const [global, project] = await Promise.all([loadConfigFile(globalDir, "global"), loadConfigFile(cwd, "project")]);
   return mergeConfig(global, project);
 }
 
-/** Load *only* `<cwd>/.swarm/config.jsonc` — no global cascade. Used
+/** Load *only* `<cwd>/.swarm/config.yaml` — no global cascade. Used
  * for keys that must be strictly project-scoped (e.g. `bootstrap`,
  * which is per-project tooling and would silently leak between
  * projects if the global layer was allowed to supply a default).
  * Returns `{}` when the project file is absent. */
 export async function loadProjectConfig(cwd: string): Promise<SwarmConfig> {
-  const projectPath = resolve(cwd, ".swarm/config.jsonc");
-  return loadConfigFile(projectPath);
+  return loadConfigFile(cwd, "project");
 }

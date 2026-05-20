@@ -11,7 +11,7 @@
 //
 // Full isolation: untracked/ignored paths (node_modules, .env, etc.) are NOT
 // shared with the main repo. If the project needs dependencies installed,
-// set `.swarm/config.jsonc` `bootstrap` to the appropriate command
+// set `.swarm/config.yaml` `bootstrap` to the appropriate command
 // (e.g. `bun install --frozen-lockfile`, `pnpm install`, `pip install -r
 // requirements.txt`). The command runs inside the fresh worktree before the
 // first node executes; a non-zero exit fails the run.

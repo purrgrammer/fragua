@@ -40,7 +40,7 @@ export interface HarnessCommandOptions {
   /** Store path. Default `~/.swarm/swarm.db`. */
   dbPath?: string;
   /** TCP port for the HTTP server. When omitted, `startServer` resolves
-   * via `web.port` from `~/.swarm/config.jsonc`, then `DEFAULT_WEB_PORT`
+   * via `web.port` from `~/.swarm/config.yaml`, then `DEFAULT_WEB_PORT`
    * (6767). Pass 0 for an ephemeral bind. */
   port?: number;
 }
@@ -62,7 +62,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   // 1. HTTP server (in-process). Binds before the daemon spawns so the
   //    URL is ready to publish the moment the daemon takes the lock.
   //    Port resolution lives in startServer: `--port` (when set) >
-  //    `web.port` from ~/.swarm/config.jsonc > DEFAULT_WEB_PORT (6767).
+  //    `web.port` from ~/.swarm/config.yaml > DEFAULT_WEB_PORT (6767).
   let serverHandle: Awaited<ReturnType<typeof startServer>>;
   try {
     const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir };

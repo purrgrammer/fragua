@@ -41,7 +41,7 @@ import {
 } from "@swarm/workspace";
 
 /** Bootstrap pair resolved for a single run against its project root.
- * Used to honour `<run.cwd>/.swarm/config.jsonc` when a single daemon
+ * Used to honour `<run.cwd>/.swarm/config.yaml` when a single daemon
  * serves runs from many projects. */
 export interface ResolvedRunBootstrap {
   bootstrap?: BootstrapSpec;
@@ -57,7 +57,7 @@ export interface WorktreeProvisionerOptions {
    * Used only when no `resolveRunBootstrap` is supplied (e.g. tests
    * bypassing the CLI wiring). The CLI path passes a resolver and
    * leaves this unset — bootstrap is then **project-local or
-   * nothing**: read from `<run.cwd>/.swarm/config.jsonc` for each
+   * nothing**: read from `<run.cwd>/.swarm/config.yaml` for each
    * fresh worktree, with no daemon-startup-cwd fallback. */
   bootstrap?: BootstrapSpec;
   /** Directory under `repoRoot` where worktrees live. Default
@@ -82,7 +82,7 @@ export interface WorktreeProvisionerOptions {
    * is constructed. Authoritative when set: its return value is used
    * verbatim, with no fallback to the constructor `bootstrap` /
    * `bootstrapTimeoutMs`. Returning `{}` means "no bootstrap" for
-   * this run. Lets one daemon honour `<project>/.swarm/config.jsonc`
+   * this run. Lets one daemon honour `<project>/.swarm/config.yaml`
    * for runs from many projects, with no global default leaking in. */
   resolveRunBootstrap?: (cwd: string) => Promise<ResolvedRunBootstrap>;
 }
@@ -136,7 +136,7 @@ export class WorktreeProvisioner implements Provisioner {
   /** Resolve the bootstrap pair for a fresh worktree at `cwd`. When
    * `resolveRunBootstrap` is set its return is authoritative — no
    * fallback to constructor `bootstrap` / `bootstrapTimeoutMs`, so
-   * a project with no `.swarm/config.jsonc` bootstrap field gets
+   * a project with no `.swarm/config.yaml` bootstrap field gets
    * **no** bootstrap (not the daemon-startup-cwd's default). When
    * unset, the constructor values are returned. Exposed for tests. */
   async resolveBootstrapFor(cwd: string): Promise<ResolvedRunBootstrap> {
