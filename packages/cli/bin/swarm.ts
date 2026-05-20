@@ -13,6 +13,7 @@ import { dbCommand } from "../src/commands/db.ts";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
+import { branchCommand, commitCommand, diffCommand, discardCommand, mergeCommand } from "../src/commands/operator.ts";
 import {
   providersAddCommand,
   providersAddCustomCommand,
@@ -402,6 +403,104 @@ cli
       ...(options["follow"] === false ? { follow: false } : {}),
     });
     process.exit(code);
+  });
+
+// Post-run operator primitives (docs/proposals/worktrees.md §7). Each acts
+// on a terminal run that left recoverable work in the inbox.
+const pickStr = (options: Record<string, unknown>, key: string): string | undefined => {
+  const v = options[key];
+  return typeof v === "string" ? v : undefined;
+};
+const discovery = (options: Record<string, unknown>): { url?: string; cwd?: string; dbPath?: string } => ({
+  ...(pickStr(options, "url") !== undefined ? { url: pickStr(options, "url")! } : {}),
+  ...(pickStr(options, "cwd") !== undefined ? { cwd: pickStr(options, "cwd")! } : {}),
+  ...(pickStr(options, "db") !== undefined ? { dbPath: pickStr(options, "db")! } : {}),
+});
+
+cli
+  .command("branch <runId> <branch>", "Promote a terminal run's committed history to a porcelain branch")
+  .option("--force", "Overwrite an existing branch (git branch --force semantics)")
+  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--cwd <dir>", "Project root for server discovery")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .action(async (runId: string, branch: string, options: Record<string, unknown>) => {
+    process.exit(
+      await branchCommand({
+        runId,
+        branch,
+        ...(options["force"] === true ? { force: true } : {}),
+        ...discovery(options),
+      }),
+    );
+  });
+
+cli
+  .command("commit <runId>", "Commit a terminal run's full snapshot tree (incl. uncommitted dirt) onto a branch")
+  .option("-m, --message <msg>", "Commit message (required)")
+  .option("--onto <branch>", "Target branch (default: the run's base branch)")
+  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--cwd <dir>", "Project root for server discovery")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .action(async (runId: string, options: Record<string, unknown>) => {
+    process.exit(
+      await commitCommand({
+        runId,
+        ...(pickStr(options, "message") !== undefined ? { message: pickStr(options, "message")! } : {}),
+        ...(pickStr(options, "onto") !== undefined ? { onto: pickStr(options, "onto")! } : {}),
+        ...discovery(options),
+      }),
+    );
+  });
+
+cli
+  .command("merge <runId>", "Merge a terminal run's committed history into a branch (fast-forward by default)")
+  .option("--no-ff", "Create a merge commit instead of fast-forwarding")
+  .option("--squash", "Squash the run's history into a single commit on the target")
+  .option("--into <branch>", "Target branch (default: the run's base branch)")
+  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--cwd <dir>", "Project root for server discovery")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .action(async (runId: string, options: Record<string, unknown>) => {
+    process.exit(
+      await mergeCommand({
+        runId,
+        // cac renders `--no-ff` as `options.ff === false`.
+        ...(options["ff"] === false ? { noFf: true } : {}),
+        ...(options["squash"] === true ? { squash: true } : {}),
+        ...(pickStr(options, "into") !== undefined ? { into: pickStr(options, "into")! } : {}),
+        ...discovery(options),
+      }),
+    );
+  });
+
+cli
+  .command("discard <runId>", "Discard a terminal run's recoverable work (delete its swarm refs)")
+  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--cwd <dir>", "Project root for server discovery")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .action(async (runId: string, options: Record<string, unknown>) => {
+    process.exit(await discardCommand({ runId, ...discovery(options) }));
+  });
+
+cli
+  .command("diff <runId>", "Print a terminal run's snapshot diff")
+  .option("--against <ref>", "Compare against base | previous | <eventIdx> (default base)")
+  .option("--snap <eventIdx>", "Snapshot to diff (default: the run's latest)")
+  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--cwd <dir>", "Project root for server discovery")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .action(async (runId: string, options: Record<string, unknown>) => {
+    const snapRaw = options["snap"];
+    const snap =
+      typeof snapRaw === "number" ? snapRaw : typeof snapRaw === "string" ? Number.parseInt(snapRaw, 10) : undefined;
+    process.exit(
+      await diffCommand({
+        runId,
+        ...(pickStr(options, "against") !== undefined ? { against: pickStr(options, "against")! } : {}),
+        ...(snap !== undefined && Number.isFinite(snap) ? { snap } : {}),
+        ...discovery(options),
+      }),
+    );
   });
 
 cli

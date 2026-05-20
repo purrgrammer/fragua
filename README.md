@@ -99,6 +99,20 @@ bun run swarm db backup --to backup.db   # snapshot via SQLite serialize()
 (CI primitive) → `~/.swarm/swarm.db` `daemon_lock.http_url` (harness) →
 `http://localhost:3000` last-resort default.
 
+### Post-run primitives
+
+A finished run that left recoverable changes waits in an inbox. Promote
+or drop its work from the terminal — no checkout, nothing in your `git
+branch` until you ask for it:
+
+```sh
+bun run swarm diff   <runId> [--against base|previous|<idx>]  # review what it changed
+bun run swarm branch <runId> <branch> [--force]               # committed history → a branch
+bun run swarm commit <runId> -m "msg" [--onto <branch>]       # full tree (incl. dirt) → one commit
+bun run swarm merge  <runId> [--no-ff|--squash] [--into <branch>]   # fast-forward by default
+bun run swarm discard <runId>                                 # drop the run's swarm refs
+```
+
 ## Status & docs
 
 - **[STATUS.md](STATUS.md)** — what's working today, what's not yet
