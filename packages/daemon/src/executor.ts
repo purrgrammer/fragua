@@ -1730,6 +1730,47 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       const finalState = opts.store.getState(runId);
       const terminalStatuses = new Set(["completed", "cancelled", "halted", "quarantined"]);
       if (finalState != null && terminalStatuses.has(finalState.status) && finalState.workflowSha != null) {
+        // Terminal worktree snapshot — BEFORE dispose, which removes the
+        // worktree. The fact drives the inbox + change_stat projection
+        // (docs/proposals/worktrees.md). Non-fatal: a capture failure logs a
+        // daemon event and falls through to dispose (the existing
+        // branch-preservation still protects the work until step 6's rework).
+        let expectedVersion = finalState.version;
+        try {
+          const snap = await opts.provisioner.snapshot(runId, "terminal");
+          if (snap != null) {
+            const appended = await tryAppendFact(opts.store, runId, expectedVersion, [
+              {
+                type: "fact.snapshot_recorded",
+                payload: {
+                  eventIdx: finalState.nextSeq - 1,
+                  treeSha: snap.treeSha,
+                  commitSha: snap.commitSha,
+                  parentSnap: snap.parentSnap,
+                  headSha: snap.headSha,
+                  headRef: snap.headRef ?? null,
+                  diffBaseSha: snap.diffBaseSha ?? finalState.baseGitSha ?? "",
+                  committed: snap.committed ?? null,
+                  uncommitted: snap.uncommitted ?? null,
+                },
+              },
+            ]);
+            if (appended) expectedVersion = opts.store.getState(runId)?.version ?? expectedVersion;
+          }
+        } catch (err) {
+          opts.store.appendDaemonEvent(
+            {
+              type: "daemon.worktree_provisioned",
+              payload: {
+                runId,
+                ok: false,
+                errorDetail: `terminal snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+              },
+            },
+            { runId },
+          );
+        }
+
         const workflow = opts.store.getWorkflow(finalState.workflowSha);
         const ctx = {
           status: finalState.status,
@@ -1742,7 +1783,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             // Best-effort — if the OCC retry races us, the run is
             // already terminal and the executor is exiting, so a single
             // append attempt is enough. Don't loop.
-            await tryAppendFact(opts.store, runId, finalState.version, [
+            await tryAppendFact(opts.store, runId, expectedVersion, [
               { type: "fact.run_branched", payload: { branch } },
             ]);
           }

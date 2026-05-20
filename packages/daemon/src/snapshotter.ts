@@ -53,6 +53,9 @@ export type CaptureSnapshotOpts = {
 export type SnapshotResult = {
   treeSha: string;
   commitSha: string;
+  /** Lineage parent (the previous snapshot's commit, or baseGitSha for the
+   * first). Carried so the caller can stamp the event payload. */
+  parentSnap: string;
   headSha: string;
   /** Present on `hitl` / `terminal` boundaries only. */
   headRef?: string | null;
@@ -162,7 +165,7 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
       await updateRefWithRetry(worktree, `refs/swarm/heads/${runId}`, headSha);
     }
 
-    const result: SnapshotResult = { treeSha, commitSha, headSha };
+    const result: SnapshotResult = { treeSha, commitSha, parentSnap, headSha };
 
     if (boundary !== "step") {
       let headRef: string | null = null;

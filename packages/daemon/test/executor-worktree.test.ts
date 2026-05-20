@@ -11,6 +11,7 @@ import type { ExecutionEnvironment } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
+import type { SnapshotResult } from "../src/snapshotter.ts";
 import type { Provisioner } from "../src/worktree-provisioner.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
@@ -34,7 +35,12 @@ class RecordingProvisioner implements Provisioner {
   private readonly envs = new Map<string, ExecutionEnvironment>();
   constructor(
     private readonly make: (runId: string) => ExecutionEnvironment,
-    private readonly opts: { branchOnDispose?: string; baseGitSha?: string; baseGitRef?: string } = {},
+    private readonly opts: {
+      branchOnDispose?: string;
+      baseGitSha?: string;
+      baseGitRef?: string;
+      snapshotResult?: SnapshotResult | null;
+    } = {},
   ) {}
   async ensure(runId: string): Promise<ExecutionEnvironment> {
     this.ensureCalls.push(runId);
@@ -58,8 +64,10 @@ class RecordingProvisioner implements Provisioner {
   baseGitRef(_runId: string): string | null {
     return this.opts.baseGitRef ?? null;
   }
-  async snapshot(): Promise<null> {
-    return null;
+  snapshotCalls: string[] = [];
+  async snapshot(_runId: string, boundary: string): Promise<SnapshotResult | null> {
+    this.snapshotCalls.push(boundary);
+    return this.opts.snapshotResult ?? null;
   }
 }
 
@@ -246,6 +254,54 @@ describe("executor + worktree provisioner", () => {
     expect(provPayload.runId).toBe("run-fail");
     expect(provPayload.ok).toBe(false);
     expect(provPayload.errorDetail).toContain("no disk space");
+
+    r.store.close();
+  });
+
+  test("terminal snapshot result → fact.snapshot_recorded + inbox/final projection", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    enqueue(r, "run-snap", "start");
+    r.store.claimNextRun(4);
+
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), {
+      snapshotResult: {
+        treeSha: "tree1",
+        commitSha: "commit1",
+        parentSnap: "base1",
+        headSha: "head1",
+        headRef: null,
+        diffBaseSha: "base1",
+        committed: null,
+        uncommitted: { filesChanged: 1, insertions: 2, deletions: 0 },
+      },
+    });
+    const ctrl = new AbortController();
+    await runOne("run-snap", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 20,
+      provisioner,
+    });
+
+    // The executor captured at the terminal boundary, before dispose.
+    expect(provisioner.snapshotCalls).toContain("terminal");
+
+    const events = r.store.getEvents("run-snap");
+    const snap = events.find((e) => e.type === "fact.snapshot_recorded");
+    expect(snap).toBeDefined();
+    expect((snap!.payload as { commitSha: string }).commitSha).toBe("commit1");
+
+    const state = r.store.getState("run-snap");
+    expect(state?.finalGitSha).toBe("head1");
+    // uncommitted dirt present → recoverable → inbox pending.
+    expect(state?.inboxStatus).toBe("pending");
+    expect(state?.changeStat?.uncommitted).toEqual({ filesChanged: 1, insertions: 2, deletions: 0 });
 
     r.store.close();
   });
