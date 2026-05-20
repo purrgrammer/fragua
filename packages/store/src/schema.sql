@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 14
+-- swarm event store schema — Revision 15
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -138,7 +138,22 @@ CREATE TABLE IF NOT EXISTS run_state (
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
-    (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED,
+  -- Worktree snapshot + inbox projection (docs/proposals/worktrees.md).
+  -- Added dormant in the foundation migration (v15); populated by later
+  -- steps (snapshotter wiring, dispose rework, operator primitives).
+  -- `base_git_ref` is the merge/commit target default captured at provision;
+  -- `diff_base_sha` is the honest diff base at terminal (== base_git_sha
+  -- unless the workflow relocated HEAD); `change_stat` is JSON
+  -- {committed, uncommitted}; `inbox_status` drives the inbox.
+  base_git_ref TEXT,
+  final_git_sha TEXT,
+  final_head_ref TEXT,
+  diff_base_sha TEXT,
+  change_stat TEXT CHECK (change_stat IS NULL OR length(change_stat) < 1024),
+  inbox_status TEXT CHECK (inbox_status IS NULL OR inbox_status IN ('pending','acted','discarded')),
+  final_commit TEXT,
+  merged_into TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_run_state_queue
@@ -149,6 +164,9 @@ CREATE INDEX IF NOT EXISTS idx_run_state_status ON run_state(status);
 CREATE INDEX IF NOT EXISTS idx_run_state_workflow ON run_state(workflow_sha);
 CREATE INDEX IF NOT EXISTS idx_run_state_updated ON run_state(updated_at);
 CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
+CREATE INDEX IF NOT EXISTS idx_run_state_inbox
+  ON run_state(updated_at DESC)
+  WHERE inbox_status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
   ON run_state(schedule_id)
   WHERE schedule_id IS NOT NULL;

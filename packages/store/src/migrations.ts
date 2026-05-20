@@ -42,6 +42,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [12, MIGRATION_012_PROVIDER_CONFIG()],
   [13, MIGRATION_013_DROP_PARALLEL_SUBRUNS()],
   [14, MIGRATION_014_PAUSED_HUMAN_RENAME()],
+  [15, MIGRATION_015_WORKTREE_SNAPSHOTS()],
 ]);
 
 /**
@@ -1244,5 +1245,30 @@ function MIGRATION_014_PAUSED_HUMAN_RENAME(): string {
     CREATE INDEX idx_runs_by_schedule
       ON run_state(schedule_id)
       WHERE schedule_id IS NOT NULL;
+  `;
+}
+
+/**
+ * v15 — worktree snapshot + inbox foundation (docs/proposals/worktrees.md).
+ *
+ * Purely additive: eight dormant `run_state` columns for the snapshot /
+ * inbox projection, populated by later steps (snapshotter wiring, dispose
+ * rework, operator primitives). No table rebuild, no consumer changes —
+ * the `branch` -> `final_branch` rename and its readers land with the
+ * dispose rework, not here. `idx_run_state_inbox` is created by the
+ * post-migration `schema.sql` re-run (it carries `IF NOT EXISTS`).
+ */
+function MIGRATION_015_WORKTREE_SNAPSHOTS(): string {
+  return `
+    ALTER TABLE run_state ADD COLUMN base_git_ref TEXT;
+    ALTER TABLE run_state ADD COLUMN final_git_sha TEXT;
+    ALTER TABLE run_state ADD COLUMN final_head_ref TEXT;
+    ALTER TABLE run_state ADD COLUMN diff_base_sha TEXT;
+    ALTER TABLE run_state ADD COLUMN change_stat TEXT
+      CHECK (change_stat IS NULL OR length(change_stat) < 1024);
+    ALTER TABLE run_state ADD COLUMN inbox_status TEXT
+      CHECK (inbox_status IS NULL OR inbox_status IN ('pending','acted','discarded'));
+    ALTER TABLE run_state ADD COLUMN final_commit TEXT;
+    ALTER TABLE run_state ADD COLUMN merged_into TEXT;
   `;
 }

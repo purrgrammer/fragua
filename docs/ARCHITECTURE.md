@@ -140,7 +140,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 14`. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 15`. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -208,7 +208,18 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
-    (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED,
+  -- Worktree snapshot + inbox projection (docs/proposals/worktrees.md); added
+  -- dormant in v15, populated by later steps. branch -> final_branch rename
+  -- lands with the dispose rework.
+  base_git_ref TEXT,                              -- symbolic-ref --short HEAD of user-cwd at provision; merge/commit target default
+  final_git_sha TEXT,                             -- worktree HEAD at last snapshot boundary; NULL pre-terminal
+  final_head_ref TEXT,                            -- worktree's HEAD branch at terminal; NULL when detached
+  diff_base_sha TEXT,                             -- honest terminal diff base; == base_git_sha unless HEAD relocated
+  change_stat TEXT,                               -- JSON {committed, uncommitted}; NULL pre-terminal / clean
+  inbox_status TEXT,                              -- pending|acted|discarded; NULL = not an inbox candidate
+  final_commit TEXT,                              -- projection: last commit_run sha
+  merged_into TEXT                                -- projection: last merge_run target
 ) STRICT;
 
 -- Partial index = queue in disguise; O(log N) claim
@@ -222,6 +233,8 @@ CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
 CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
 CREATE INDEX idx_runs_by_schedule
   ON run_state(schedule_id) WHERE schedule_id IS NOT NULL;
+CREATE INDEX idx_run_state_inbox                 -- inbox list: pending, terminal-time desc
+  ON run_state(updated_at DESC) WHERE inbox_status = 'pending';
 
 CREATE TABLE events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
