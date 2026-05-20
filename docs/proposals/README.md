@@ -18,6 +18,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 
 | Proposal | Maturity | Outstanding |
 |---|---|---|
+| [YAML as canonical config format](./config-yaml-migration.md) | specified | JSONC reader removal is the outstanding piece — the loader and `swarm init` changes are shipped |
 | [Budget controls](./budget-controls.md) | specified | per-project cost cap cascading from project config |
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | archival path for the synthesised review (route through `ctx.artifacts.put(...)` keyed by date) is the only outstanding piece — workflow + primitives shipped |

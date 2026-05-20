@@ -89,7 +89,7 @@ cli.command("validate <workflow>", "Parse + lint a workflow without executing").
 });
 
 cli
-  .command("init", "Initialize this directory as a swarm project (writes .swarm/config.jsonc)")
+  .command("init", "Initialize this directory as a swarm project (writes .swarm/config.yaml)")
   .option("--cwd <path>", "Project root (default process.cwd)")
   .action(async (options: Record<string, unknown>) => {
     const cwd = typeof options["cwd"] === "string" ? (options["cwd"] as string) : undefined;
@@ -191,7 +191,7 @@ cli
 
 cli
   .command("harness", "Supervise the daemon + HTTP server as a foreground process (Ctrl-C to stop)")
-  .option("--port <n>", "TCP port for HTTP (default 6767, configurable via web.port in ~/.swarm/config.jsonc)")
+  .option("--port <n>", "TCP port for HTTP (default 6767, configurable via web.port in ~/.swarm/config.yaml)")
   .option("--db <path>", "Store path (default ~/.swarm/swarm.db)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {

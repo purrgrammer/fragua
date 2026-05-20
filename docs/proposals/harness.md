@@ -20,7 +20,7 @@ last-reviewed: 2026-05-04
 `swarm harness` supervises the daemon (subprocess) and HTTP server
 (in-process via `startServer`) as a single foreground process. Default
 DB `~/.swarm/swarm.db`; default port 6767, configurable via `web.port`
-in `~/.swarm/config.jsonc` or `--port` (collisions auto-bump to
+in `~/.swarm/config.yaml` or `--port` (collisions auto-bump to
 6768/6769/… on the default path; `--port` hard-fails). The web bundle
 auto-rebuilds when sources are newer than `dist/`. The `ready` line
 prints an OSC 8 hyperlink so modern terminals render the URL clickable.
@@ -113,8 +113,8 @@ always will.
 - Workflow listing aggregates global + every project cwd's
   `.swarm/workflows/` (cross-source name collisions disambiguate by
   `cwd`)
-- Two-layer config cascade — `~/.swarm/config.jsonc` overlaid by
-  `<cwd>/.swarm/config.jsonc`
+- Two-layer config cascade — `~/.swarm/config.yaml` overlaid by
+  `<cwd>/.swarm/config.yaml`
 
 ## What does not change
 

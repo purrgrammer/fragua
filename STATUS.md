@@ -13,7 +13,7 @@ see [`docs/proposals/`](docs/proposals/README.md).
 - Event store with intent/fact split, OCC on facts, content-addressed blobs on disk
 - 5 node kinds: `start`, `exit`, `llm` (LLM agent), `human` (operator-gated routing), `tool` (graph-level shell). Concurrent dispatch lives inside an llm step via the `agent` tool
 - Replayable **control plane** (state machine, edge selection, intent fold). LLM bodies are best-effort and depend on provider determinism
-- Two-layer config cascade — global `~/.swarm/config.jsonc` (defaults, autoTitle, blocklist, …) overlaid by `<project>/.swarm/config.jsonc` (project-specific bootstrap). Project keys win; nested objects merge one level deep
+- Two-layer config cascade — global `~/.swarm/config.yaml` (defaults, autoTitle, blocklist, …) overlaid by `<project>/.swarm/config.yaml` (project-specific bootstrap). Project keys win; nested objects merge one level deep. Legacy `config.jsonc` is read with a deprecation warning for one release.
 
 **Agents**
 

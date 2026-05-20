@@ -29,7 +29,7 @@ import { ensureWebBundle } from "../web-build.ts";
 const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
 
 /** TCP port used when neither `--port` nor `web.port` (in
- * `~/.swarm/config.jsonc`) is set. Picked once and stable so the user
+ * `~/.swarm/config.yaml`) is set. Picked once and stable so the user
  * can bookmark `http://localhost:6767/` across harness restarts. When
  * 6767 is occupied, `startServer` walks up one port at a time (see
  * `portRetries` below) so a stray collision doesn't kill startup. */
@@ -133,7 +133,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // every other coordination surface (`provider_credentials` table).
   const authStorage = AuthStorage.fromStore(store);
   const modelRegistry = ModelRegistry.create(authStorage, store);
-  // Backpressure cap on `status='queued'` runs from `.swarm/config.jsonc`.
+  // Backpressure cap on `status='queued'` runs from `.swarm/config.yaml`.
   // Opt-in (default uncapped); non-positive / unparseable values are
   // silently ignored.
   const cfg = await loadConfig(cwd);
@@ -257,7 +257,7 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
       const start = opts.port ?? DEFAULT_WEB_PORT;
       console.error(chalk.red(`serve: port ${start} is already in use`));
       console.error(
-        chalk.dim("  hint: pick another with `swarm serve --port <n>`, or set web.port in ~/.swarm/config.jsonc"),
+        chalk.dim("  hint: pick another with `swarm serve --port <n>`, or set web.port in ~/.swarm/config.yaml"),
       );
     } else {
       console.error(chalk.red(`serve: failed to start — ${e.message ?? String(err)}`));

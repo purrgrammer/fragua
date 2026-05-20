@@ -151,7 +151,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const getApiKey = (p: string) => authStorage.getApiKey(p);
 
   // Resolve llm_provider/llm_model. Precedence: CLI flags >
-  // .swarm/config.jsonc defaults > env autodetect > stub.
+  // .swarm/config.yaml defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
   let timeouts: ReturnType<typeof resolveTimeouts>;
   try {
@@ -424,7 +424,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // **resolved per run** against the run's project root via
   // `loadProjectConfig(<run.cwd>)` — so one daemon can serve runs
   // from many projects, each picking up its own
-  // `.swarm/config.jsonc` `bootstrap` field. No global / no
+  // `.swarm/config.yaml` `bootstrap` field. No global / no
   // daemon-startup-cwd fallback: a project that doesn't declare a
   // bootstrap gets no bootstrap (the previous behaviour silently
   // leaked the daemon's startup-cwd config to every project, which
@@ -458,13 +458,13 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   });
   const provisionerLabel =
     `worktree per-run when run cwd is a git repo, else LocalEnvironment rooted at run cwd ` +
-    `(bootstrap: per-run from <project>/.swarm/config.jsonc)`;
+    `(bootstrap: per-run from <project>/.swarm/config.yaml)`;
 
   console.log(chalk.green(`swarm daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));
   console.log(chalk.dim(`  concurrency: ${concurrency}`));
   const sourceSuffix =
-    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.jsonc)" : "";
+    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.yaml)" : "";
   const llmLabel = useLlm
     ? `${provider}/${model}${sourceSuffix}`
     : "stub (set a provider API key, or pass --llm-provider + --llm-model)";
@@ -476,7 +476,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // `buildSummariserBackend` rejected the configured model at validation
   // (model not registered / no default for provider), `summariserInfo.backend`
   // is undefined and the label carries the rejection reason — surface it
-  // loudly so the operator updates `.swarm/config.jsonc` rather than
+  // loudly so the operator updates `.swarm/config.yaml` rather than
   // chasing the failure at runtime.
   if (summariserInfo.backend) {
     console.log(chalk.dim(`  summariser: ${summariserInfo.label}`));
@@ -556,7 +556,7 @@ function buildSummariserBackend(args: {
   // first call, which surfaces deep inside whatever path triggered it
   // (autoTitler / per-node `summary=`) and looks like a tool failure
   // rather than a config error. Catching it here gives the operator
-  // one obvious "fix this in config.jsonc" line at startup.
+  // one obvious "fix this in config.yaml" line at startup.
   // `swarm providers` lists valid ids per provider.
   if (!modelRegistry.find(sumProvider, sumModel)) {
     return {

@@ -102,6 +102,6 @@ Compaction runs in the same transaction as the projection write, single-pass, de
 
 ## Open questions
 
-- **Pre-flight thresholds.** 75% / 90% are picked to match the audit's alert threshold (≥80% caught the empirical near-miss). Could be configurable in `config.jsonc` `caps.warnAt` / `caps.compactAt` if real workloads need different curves.
+- **Pre-flight thresholds.** 75% / 90% are picked to match the audit's alert threshold (≥80% caught the empirical near-miss). Could be configurable in `config.yaml` `caps.warnAt` / `caps.compactAt` if real workloads need different curves.
 - **Truncation event volume.** If a workflow legitimately generates oversized observability events (e.g., a chatty backend), the truncation event will fire many times per run. Rate-limit per-(node, type) to avoid event-table churn.
 - **Compaction interaction with replay.** A run replayed from `events` should yield the same projection. Compaction is keyed on observable projection state (gate outcomes, budget-adjusted events) — replay reproduces both, so compaction is replay-stable. Worth a dedicated test (`packages/store/test/routing-compaction-replay.test.ts`) in the implementation PR.

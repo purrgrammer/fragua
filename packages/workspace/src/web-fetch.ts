@@ -124,7 +124,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     if (!isRawMode && !ctx?.summarise) {
       return errorResult(
         "web_fetch with `prompt` requires a configured summariser, but none is wired to this daemon. " +
-          "Either omit `prompt` for raw markdown, or set `defaults.summariser.{llm_provider,llm_model}` in .swarm/config.jsonc.",
+          "Either omit `prompt` for raw markdown, or set `defaults.summariser.{llm_provider,llm_model}` in .swarm/config.yaml.",
       );
     }
 

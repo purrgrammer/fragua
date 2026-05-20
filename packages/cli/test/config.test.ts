@@ -1,8 +1,9 @@
-// Tests for .swarm/config.jsonc loading. Missing file returns `{}`
-// for first-run UX. Malformed JSONC and schema-invalid content throw
+// Tests for .swarm/config.yaml loading. Missing file returns `{}`
+// for first-run UX. Malformed YAML and schema-invalid content throw
 // — silent fallback would hide typos that mis-route runs.
+// Legacy .swarm/config.jsonc is read with a deprecation warning.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,14 +24,14 @@ describe("loadConfig", () => {
     await rm(scratchHome, { recursive: true, force: true });
   });
 
-  async function write(body: string): Promise<void> {
+  async function write(body: string, ext: "yaml" | "jsonc" = "yaml"): Promise<void> {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), body, "utf8");
+    await writeFile(join(scratch, `.swarm/config.${ext}`), body, "utf8");
   }
 
-  async function writeGlobal(body: string): Promise<void> {
+  async function writeGlobal(body: string, ext: "yaml" | "jsonc" = "yaml"): Promise<void> {
     await mkdir(join(scratchHome, ".swarm"), { recursive: true });
-    await writeFile(join(scratchHome, ".swarm/config.jsonc"), body, "utf8");
+    await writeFile(join(scratchHome, `.swarm/config.${ext}`), body, "utf8");
   }
 
   function load(): Promise<ReturnType<typeof loadConfig> extends Promise<infer T> ? T : never> {
@@ -42,54 +43,42 @@ describe("loadConfig", () => {
   });
 
   test("parses defaults.provider and defaults.model", async () => {
-    await write(`{
-      "defaults": {
-        "llm_provider": "openrouter",
-        "llm_model": "anthropic/claude-opus-4.7"
-      }
-    }`);
+    await write(`
+defaults:
+  llm_provider: openrouter
+  llm_model: "anthropic/claude-opus-4.7"
+`);
     const cfg = await load();
     expect(cfg.defaults?.llm_provider).toBe("openrouter");
     expect(cfg.defaults?.llm_model).toBe("anthropic/claude-opus-4.7");
   });
 
-  test("accepts comments and trailing commas (JSONC features)", async () => {
-    await write(`{
-      // pin model so the demo doesn't drift
-      "defaults": {
-        "llm_provider": "ppq",
-        "llm_model": "claude-sonnet-4.6",
-      },
-    }`);
-    expect((await load()).defaults?.llm_provider).toBe("ppq");
-  });
-
-  test("throws on malformed JSONC (no silent fallback)", async () => {
-    await write("{ this is not json }");
+  test("throws on malformed YAML (no silent fallback)", async () => {
+    await write("key: [unclosed");
     await expect(load()).rejects.toThrow(/parse error/);
   });
 
-  test("throws when the root is not an object", async () => {
+  test("throws when the root is not a mapping", async () => {
     await write(`"just-a-string"`);
     await expect(load()).rejects.toThrow(/must be a JSON object/);
   });
 
   test("throws on schema violation (typo'd key)", async () => {
-    await write(`{ "autoTitler": true }`);
+    await write(`autoTitler: true`);
     await expect(load()).rejects.toThrow(/validation failed/);
   });
 
   test("throws on snake_case key from the legacy YAML schema", async () => {
-    await write(`{ "auto_title": true }`);
+    await write(`auto_title: true`);
     await expect(load()).rejects.toThrow(/validation failed/);
   });
 
   test("parses runtime ceilings: maxQueuedRuns, abortLoopCeiling, maxLeakedHandlers", async () => {
-    await write(`{
-      "maxQueuedRuns": 500,
-      "abortLoopCeiling": 8,
-      "maxLeakedHandlers": 2
-    }`);
+    await write(`
+maxQueuedRuns: 500
+abortLoopCeiling: 8
+maxLeakedHandlers: 2
+`);
     const cfg = await load();
     expect(cfg.maxQueuedRuns).toBe(500);
     expect(cfg.abortLoopCeiling).toBe(8);
@@ -97,15 +86,14 @@ describe("loadConfig", () => {
   });
 
   test("parses the timeouts section with leakGrace + shutdownDrain", async () => {
-    await write(`{
-      "timeouts": {
-        "llm": "30m",
-        "tool": "5m",
-        "http": "30s",
-        "leakGrace": "10s",
-        "shutdownDrain": "30s"
-      }
-    }`);
+    await write(`
+timeouts:
+  llm: "30m"
+  tool: "5m"
+  http: "30s"
+  leakGrace: "10s"
+  shutdownDrain: "30s"
+`);
     const cfg = await load();
     expect(cfg.timeouts?.llm).toBe("30m");
     expect(cfg.timeouts?.tool).toBe("5m");
@@ -115,19 +103,22 @@ describe("loadConfig", () => {
   });
 
   test("global → project cascade: project keys win, nested objects merge one level deep", async () => {
-    await writeGlobal(`{
-      "defaults": {
-        "llm_provider": "anthropic",
-        "llm_model": "claude-sonnet-4.7"
-      },
-      "summariser": { "llm_provider": "anthropic", "llm_model": "claude-haiku-4.6" },
-      "autoTitle": true,
-      "blocklist": ["sudo "]
-    }`);
-    await write(`{
-      "bootstrap": "bun install --frozen-lockfile",
-      "defaults": { "llm_model": "claude-opus-4.7" }
-    }`);
+    await writeGlobal(`
+defaults:
+  llm_provider: anthropic
+  llm_model: claude-sonnet-4.7
+summariser:
+  llm_provider: anthropic
+  llm_model: claude-haiku-4.6
+autoTitle: true
+blocklist:
+  - "sudo "
+`);
+    await write(`
+bootstrap: "bun install --frozen-lockfile"
+defaults:
+  llm_model: claude-opus-4.7
+`);
     const cfg = await load();
     expect(cfg.bootstrap).toBe("bun install --frozen-lockfile");
     expect(cfg.defaults?.llm_provider).toBe("anthropic"); // from global
@@ -138,48 +129,205 @@ describe("loadConfig", () => {
   });
 
   test("hoisted summariser key validates at the top level (not under defaults)", async () => {
-    await writeGlobal(`{ "summariser": { "llm_provider": "anthropic", "llm_model": "claude-haiku-4-5" } }`);
+    await writeGlobal(`
+summariser:
+  llm_provider: anthropic
+  llm_model: claude-haiku-4-5
+`);
     const cfg = await load();
     expect(cfg.summariser?.llm_provider).toBe("anthropic");
     expect(cfg.summariser?.llm_model).toBe("claude-haiku-4-5");
   });
 
   test("rejects legacy defaults.summariser nesting", async () => {
-    await writeGlobal(`{ "defaults": { "summariser": { "llm_provider": "anthropic" } } }`);
+    await writeGlobal(`
+defaults:
+  summariser:
+    llm_provider: anthropic
+`);
     await expect(load()).rejects.toThrow(/validation failed/);
   });
 
   test("global only: project file absent, global config flows through", async () => {
-    await writeGlobal(`{ "autoTitle": false, "concurrency": 2 }`);
+    await writeGlobal(`
+autoTitle: false
+concurrency: 2
+`);
     const cfg = await load();
     expect(cfg.autoTitle).toBe(false);
     expect(cfg.concurrency).toBe(2);
   });
 
   test("parses web.port from the global config", async () => {
-    await writeGlobal(`{ "web": { "port": 9999 } }`);
+    await writeGlobal(`
+web:
+  port: 9999
+`);
     const cfg = await load();
     expect(cfg.web?.port).toBe(9999);
   });
 
   test("rejects out-of-range web.port", async () => {
-    await writeGlobal(`{ "web": { "port": 70000 } }`);
+    await writeGlobal(`
+web:
+  port: 70000
+`);
     await expect(load()).rejects.toThrow(/validation failed/);
+  });
+
+  // ─── YAML format tests ──────────────────────────────────────────────
+
+  describe("YAML format", () => {
+    test("reads <cwd>/.swarm/config.yaml", async () => {
+      await write(`
+defaults:
+  llm_provider: openrouter
+  llm_model: "anthropic/claude-opus-4.7"
+`);
+      const cfg = await load();
+      expect(cfg.defaults?.llm_provider).toBe("openrouter");
+    });
+
+    test("YAML wins when both .yaml and .jsonc exist in the same layer", async () => {
+      await mkdir(join(scratch, ".swarm"), { recursive: true });
+      await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
+      await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
+      const cfg = await load();
+      expect(cfg.bootstrap).toBe("yaml-bootstrap");
+    });
+
+    test("emits a deprecation warning when .jsonc shadows present .yaml", async () => {
+      await mkdir(join(scratch, ".swarm"), { recursive: true });
+      await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
+      await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await load();
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("shadowed"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    test("emits a deprecation warning when only .jsonc is present", async () => {
+      await mkdir(join(scratch, ".swarm"), { recursive: true });
+      await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "old-style" }`, "utf8");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await load();
+        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+        expect(calls.some((m) => m.includes("deprecated"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    test("throws on malformed YAML (no silent fallback)", async () => {
+      await write("key: [unclosed bracket");
+      await expect(load()).rejects.toThrow(/parse error/);
+    });
+
+    test("throws on YAML schema violation", async () => {
+      await write(`auto_title: true`);
+      await expect(load()).rejects.toThrow(/validation failed/);
+    });
+
+    test("YAML supports the full cascade", async () => {
+      await writeGlobal(`
+defaults:
+  llm_provider: anthropic
+  llm_model: claude-sonnet-4.7
+summariser:
+  llm_provider: anthropic
+  llm_model: claude-haiku-4.6
+autoTitle: true
+`);
+      await write(`
+bootstrap: "bun install --frozen-lockfile"
+defaults:
+  llm_model: claude-opus-4.7
+`);
+      const cfg = await load();
+      expect(cfg.bootstrap).toBe("bun install --frozen-lockfile");
+      expect(cfg.defaults?.llm_provider).toBe("anthropic");
+      expect(cfg.defaults?.llm_model).toBe("claude-opus-4.7");
+      expect(cfg.summariser?.llm_model).toBe("claude-haiku-4.6");
+      expect(cfg.autoTitle).toBe(true);
+    });
+
+    test("rejects YAML root that is not a mapping", async () => {
+      await write(`- item1\n- item2`);
+      await expect(load()).rejects.toThrow(/must be a JSON object/);
+    });
+  });
+
+  // ─── Legacy JSONC support (deprecation window) ──────────────────────
+
+  describe("legacy JSONC support", () => {
+    test("accepts comments and trailing commas (JSONC features)", async () => {
+      await write(
+        `{
+      // pin model so the demo doesn't drift
+      "defaults": {
+        "llm_provider": "ppq",
+        "llm_model": "claude-sonnet-4.6",
+      },
+    }`,
+        "jsonc",
+      );
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect((await load()).defaults?.llm_provider).toBe("ppq");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    test("throws on malformed JSONC (no silent fallback)", async () => {
+      await write("{ this is not json }", "jsonc");
+      await expect(load()).rejects.toThrow(/parse error/);
+    });
+
+    test("throws when the root is not an object (JSONC)", async () => {
+      await write(`"just-a-string"`, "jsonc");
+      await expect(load()).rejects.toThrow(/must be a JSON object/);
+    });
+
+    test("throws on schema violation in JSONC (typo'd key)", async () => {
+      await write(`{ "autoTitler": true }`, "jsonc");
+      await expect(load()).rejects.toThrow(/validation failed/);
+    });
+
+    test("throws on snake_case key from the legacy YAML schema (in JSONC)", async () => {
+      await write(`{ "auto_title": true }`, "jsonc");
+      await expect(load()).rejects.toThrow(/validation failed/);
+    });
+
+    test("global → project cascade works with JSONC files", async () => {
+      await writeGlobal(`{ "autoTitle": true, "blocklist": ["sudo "] }`, "jsonc");
+      await write(`{ "bootstrap": "pnpm install --frozen-lockfile" }`, "jsonc");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = await load();
+        expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
+        expect(cfg.autoTitle).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
   });
 });
 
 describe("loadProjectConfig", () => {
   let scratch: string;
-  let scratchHome: string;
 
   beforeEach(async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-projectconfig-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-projectconfig-home-"));
   });
 
   afterEach(async () => {
     await rm(scratch, { recursive: true, force: true });
-    await rm(scratchHome, { recursive: true, force: true });
   });
 
   test("returns {} when the project config is absent", async () => {
@@ -187,27 +335,44 @@ describe("loadProjectConfig", () => {
   });
 
   test("ignores the global config — local-only by design", async () => {
-    // bootstrap is per-project tooling: a global default would silently
-    // leak into projects that didn't opt in. loadProjectConfig must not
-    // see the global layer at all.
-    await mkdir(join(scratchHome, ".swarm"), { recursive: true });
-    await writeFile(join(scratchHome, ".swarm/config.jsonc"), `{ "bootstrap": "global-cmd" }`, "utf8");
-    // Note: loadProjectConfig doesn't take a homeDir override because
-    // it never reads the home dir. The presence of the file in the
-    // user's real ~/.swarm/ would be irrelevant either way.
     expect(await loadProjectConfig(scratch)).toEqual({});
   });
 
-  test("reads <cwd>/.swarm/config.jsonc verbatim", async () => {
+  test("reads <cwd>/.swarm/config.yaml verbatim", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "pnpm install --frozen-lockfile" }`, "utf8");
+    await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "pnpm install --frozen-lockfile"`, "utf8");
     const cfg = await loadProjectConfig(scratch);
     expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
   });
 
+  test("reads <cwd>/.swarm/config.jsonc verbatim (legacy)", async () => {
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "pnpm install --frozen-lockfile" }`, "utf8");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await loadProjectConfig(scratch);
+      expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("YAML wins over JSONC in the project layer", async () => {
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
+    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await loadProjectConfig(scratch);
+      expect(cfg.bootstrap).toBe("yaml-bootstrap");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("propagates parse + validation errors (no silent fallback)", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": 123 }`, "utf8");
+    await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: 123`, "utf8");
     await expect(loadProjectConfig(scratch)).rejects.toThrow(/validation failed/);
   });
 });

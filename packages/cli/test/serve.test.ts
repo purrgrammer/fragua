@@ -57,7 +57,7 @@ describe("startServer", () => {
     expect(handle.port).toBe(port);
   });
 
-  test("config.web.port wins when --port is omitted", async () => {
+  test("config.web.port via .swarm/config.yaml wins when --port is omitted", async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
     // Pick a port the test owns by binding ephemeral first to discover a
     // free one, then closing and writing it into the project config.
@@ -67,7 +67,7 @@ describe("startServer", () => {
     await probe.close();
 
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), JSON.stringify({ web: { port: target } }));
+    await writeFile(join(scratch, ".swarm/config.yaml"), `web:\n  port: ${target}\n`);
 
     handle = await startServer({ cwd: scratch });
     expect(handle.port).toBe(target);

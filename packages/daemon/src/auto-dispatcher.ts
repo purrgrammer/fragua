@@ -64,7 +64,7 @@ export function resolveMaxMs(attrs: NodeAttrs, fallbackMs: number | undefined): 
   // Same 0→undefined collapse on the fallback path: config-level
   // `timeouts.llm: 0` is the unbounded sentinel just like the
   // node-attr form. Without this, a `timeouts.llm: 0` in
-  // `.swarm/config.jsonc` resolves to a 0-ms abort timer.
+  // `.swarm/config.yaml` resolves to a 0-ms abort timer.
   return fallbackMs === 0 ? undefined : fallbackMs;
 }
 

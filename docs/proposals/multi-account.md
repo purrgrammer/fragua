@@ -96,9 +96,9 @@ Highest wins:
 
 1. Run intent — `swarm run … --account work` / `POST /runs { account }`.
 2. Schedule's `account` field for runs created by a schedule.
-3. Project config — `<cwd>/.swarm/config.jsonc` →
+3. Project config — `<cwd>/.swarm/config.yaml` →
    `accounts.<provider>: "work"`.
-4. Global config — `~/.swarm/config.jsonc` → `accounts.<provider>`.
+4. Global config — `~/.swarm/config.yaml` → `accounts.<provider>`.
 5. `"default"` literal.
 
 Workflows do **not** carry an `llm_account` attribute. Account is an
@@ -200,7 +200,7 @@ credentials-in-DB second with `(provider, account)` baked in.
    - Recommended: validate at enqueue. If `default` exists, use it;
      if it doesn't and multiple accounts exist, error with a clear
      message ("anthropic has accounts [work, personal]; pick one
-     with --account or set accounts.anthropic in config.jsonc").
+     with --account or set accounts.anthropic in config.yaml").
 
 5. **Account name validation.**
    - Free-form strings are dangerous (path traversal, log injection).
@@ -286,7 +286,7 @@ credentials-in-DB second with `(provider, account)` baked in.
      `getAuth(provider, account?)`, `getApiKey(provider, account?)`.
 
 2. **Config cascade.**
-   - `~/.swarm/config.jsonc` and `<cwd>/.swarm/config.jsonc` gain
+   - `~/.swarm/config.yaml` and `<cwd>/.swarm/config.yaml` gain
      an `accounts: Record<string, string>` block.
    - Resolution helper picks account per provider with the
      precedence chain above.

@@ -14,7 +14,7 @@ export interface DiscoverOptions {
   /** User home directory. Used for `~/.agents/skills/` etc. Pass empty
    * string to skip user-scope discovery. */
   homeDir: string;
-  /** Merged skills config from `.swarm/config.jsonc`. Treated as global
+  /** Merged skills config from `.swarm/config.yaml`. Treated as global
    * across all `projectCwds` — per-project config reading is a separate
    * concern (see proposals/skills-and-agents-ui.md). */
   config?: import("@swarm/types").SkillsConfig;
