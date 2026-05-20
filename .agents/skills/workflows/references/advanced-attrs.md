@@ -34,8 +34,42 @@ defaults:
   thread: dev          # every llm step joins `dev` unless it sets its own thread
 ```
 
-Other graph-level knobs: `budget` / `budget-policy`.
+Other graph-level knobs: `budget` / `budget-policy` / `default-retry-policy`.
 
-> **No retry-policy presets.** Backoff-preset machinery (`retry_policy`) was retired — the executor no longer reads it. Handler-level retry is just `max-retries` (a flat cap, no backoff). The two control-flow loop idioms are in SKILL.md §5: edge-cycle (`on: {fail: <upstream>}` + `max-retries`) and goal-gate (`retry:`).
+---
+
+## Retry backoff presets
+
+By default a node that returns `retry` re-enters immediately (no delay). Set `retry-policy:` to engage a named backoff preset:
+
+| Preset | Max attempts | Initial delay | Factor | Jitter |
+|---|---|---|---|---|
+| `none` (default) | 1 | — | — | no |
+| `standard` | 5 | 200ms | 2.0 | yes |
+| `aggressive` | 5 | 500ms | 2.0 | yes |
+| `linear` | 3 | 500ms | 1.0 | no |
+| `patient` | 3 | 2000ms | 3.0 | yes |
+
+```yaml
+flaky:
+  type: llm
+  prompt: Try this operation.
+  max-retries: 4
+  retry-policy: standard
+  next: exit
+```
+
+Set `default-retry-policy:` at the graph level as a fallback for every step that omits `retry-policy:`.
+
+Per-step field overrides (replace the named preset's value for that field):
+
+| Key | Type | Overrides |
+|---|---|---|
+| `retry-initial-delay-ms` | integer | `initialDelayMs` |
+| `retry-backoff-factor` | number | `backoffFactor` |
+| `retry-max-delay-ms` | integer | `maxDelayMs` |
+| `retry-jitter` | bool | `jitter` |
+
+An unrecognised preset name is warned by W014 and falls back to `none` at runtime.
 
 > **No subgraph composition.** Reusable named sub-pipelines are a deferred proposal (`docs/proposals/subgraphs.md`, gated on cross-workflow demand). Today, keep one flat workflow per deliverable (SKILL.md §1).

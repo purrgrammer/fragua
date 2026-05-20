@@ -20,6 +20,7 @@ import {
   goalGateOutcomeKey,
   goalGateStep,
   type InputDecl,
+  isRetryPresetName,
   type NodeAttrs,
   parseWorkflow,
   RETRY_PRESETS,
@@ -2078,18 +2079,28 @@ function readNumber(v: unknown): number {
 /** Resolve the effective BackoffConfig for a node from
  * (node.retry_policy → graph.default_retry_policy → "none") plus the
  * custom-override attrs (retry_initial_delay_ms / retry_backoff_factor /
- * retry_max_delay_ms / retry_jitter). */
-function resolveBackoff(
-  _nodeAttrs: NodeAttrs,
-  _graphAttrs: GraphAttrs,
+ * retry_max_delay_ms / retry_jitter). Unknown preset names silently fall
+ * back to "none" (validator W014 surfaces the typo at author time). */
+export function resolveBackoff(
+  nodeAttrs: NodeAttrs,
+  graphAttrs: GraphAttrs,
 ): {
   initialDelayMs: number;
   backoffFactor: number;
   maxDelayMs: number;
   jitter: boolean;
 } {
-  // Retry-preset machinery retired; default to "none" — no backoff.
-  return { ...RETRY_PRESETS.none };
+  const nodeName = (nodeAttrs as Record<string, unknown>)["retry_policy"];
+  const graphName = (graphAttrs as Record<string, unknown>)["default_retry_policy"];
+  const presetName = isRetryPresetName(nodeName) ? nodeName : isRetryPresetName(graphName) ? graphName : "none";
+  const base = RETRY_PRESETS[presetName];
+  const n = nodeAttrs as Record<string, unknown>;
+  return {
+    initialDelayMs: typeof n["retry_initial_delay_ms"] === "number" ? n["retry_initial_delay_ms"] : base.initialDelayMs,
+    backoffFactor: typeof n["retry_backoff_factor"] === "number" ? n["retry_backoff_factor"] : base.backoffFactor,
+    maxDelayMs: typeof n["retry_max_delay_ms"] === "number" ? n["retry_max_delay_ms"] : base.maxDelayMs,
+    jitter: typeof n["retry_jitter"] === "boolean" ? n["retry_jitter"] : base.jitter,
+  };
 }
 
 /** Resolve max_retries. Returns `node.max_retries` if set, else 0. */

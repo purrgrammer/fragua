@@ -1,5 +1,6 @@
 // Graph model: Nodes, Edges, and the Graph itself. See docs/SPEC.md §3.1.
 
+import type { RetryPresetName } from "../engine/retry-policy.ts";
 import type { SummaryLevel } from "./summary.ts";
 
 /** Node-type discriminator. `start` and `exit` are synthesised by the
@@ -72,6 +73,17 @@ export interface NodeAttrs {
   routes?: string[];
   /** Free-form text shown to the operator for type:human steps. */
   text?: string;
+  /** Backoff preset for handler retries (authoring: `retry-policy`). Resolution
+   * order: node → graph.default_retry_policy → "none". */
+  retry_policy?: RetryPresetName;
+  /** Per-node override: first retry delay in ms (authoring: `retry-initial-delay-ms`). */
+  retry_initial_delay_ms?: number;
+  /** Per-node override: backoff multiplier (authoring: `retry-backoff-factor`). */
+  retry_backoff_factor?: number;
+  /** Per-node override: delay cap in ms (authoring: `retry-max-delay-ms`). */
+  retry_max_delay_ms?: number;
+  /** Per-node override: enable ±50% jitter (authoring: `retry-jitter`). */
+  retry_jitter?: boolean;
 }
 
 export interface EdgeAttrs {
@@ -108,6 +120,9 @@ export interface GraphAttrs {
   /** Declared run inputs (the `inputs:` block). Substituted as
    * `${{ inputs.name }}`; validated against `--input` bindings at enqueue. */
   inputs?: InputDecl[];
+  /** Graph-level fallback backoff preset when a node omits `retry-policy`
+   * (authoring: `default-retry-policy`). */
+  default_retry_policy?: RetryPresetName;
 }
 
 export interface Location {

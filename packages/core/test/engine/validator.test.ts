@@ -577,3 +577,74 @@ describe("validateOrThrow", () => {
     }
   });
 });
+
+describe("validate — W014 unknown retry preset", () => {
+  test("flags node retry_policy with an unknown preset name", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        flaky: { type: "llm", attrs: { prompt: "x", retry_policy: "superfast" as never } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "flaky"],
+        ["flaky", "done"],
+      ],
+    });
+    const diags = validate(g);
+    const w014 = diags.filter((d) => d.code === "W014");
+    expect(w014.length).toBe(1);
+    expect(w014[0]?.message).toContain("retry-policy=");
+    expect(w014[0]?.message).toContain("superfast");
+    expect(w014[0]?.message).toContain("expected one of");
+    expect(w014[0]?.nodeId).toBe("flaky");
+  });
+
+  test("flags graph default_retry_policy with an unknown preset name", () => {
+    const g = mkGraph({
+      attrs: { default_retry_policy: "blazing" as never },
+      nodes: { s: "start", work: { type: "llm", attrs: { prompt: "x" } }, done: "exit" },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+      ],
+    });
+    const diags = validate(g);
+    const w014 = diags.filter((d) => d.code === "W014");
+    expect(w014.length).toBe(1);
+    expect(w014[0]?.message).toContain("default-retry-policy=");
+    expect(w014[0]?.message).toContain("blazing");
+  });
+
+  test("does not flag a valid preset name", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        flaky: { type: "llm", attrs: { prompt: "x", retry_policy: "standard" } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "flaky"],
+        ["flaky", "done"],
+      ],
+    });
+    const diags = validate(g);
+    expect(diags.filter((d) => d.code === "W014")).toHaveLength(0);
+  });
+
+  test("does not flag when retry_policy is absent", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        work: { type: "llm", attrs: { prompt: "x" } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+      ],
+    });
+    const diags = validate(g);
+    expect(diags.filter((d) => d.code === "W014")).toHaveLength(0);
+  });
+});

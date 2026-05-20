@@ -134,6 +134,11 @@ const STEP_KEY_TO_IR: Readonly<Record<string, string>> = {
   "system-prompt": "system_prompt",
   "skills-disabled": "skills_disabled",
   run: "tool_command",
+  "retry-policy": "retry_policy",
+  "retry-initial-delay-ms": "retry_initial_delay_ms",
+  "retry-backoff-factor": "retry_backoff_factor",
+  "retry-max-delay-ms": "retry_max_delay_ms",
+  "retry-jitter": "retry_jitter",
 };
 
 const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
@@ -142,6 +147,7 @@ const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
   thread: "thread_id",
   budget: "budget_usd",
   "budget-policy": "budget_policy",
+  "default-retry-policy": "default_retry_policy",
 };
 
 // Keys consumed by the parser at the step level (not stored in attrs):
@@ -151,11 +157,17 @@ const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults"]);
 
 // ---- Attribute coercion -----------------------------------------------
 
-const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["goal_gate"]);
+const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["goal_gate", "retry_jitter"]);
 
-const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "max_tokens", "max_ms"]);
+const INT_KEYS: ReadonlySet<string> = new Set([
+  "max_retries",
+  "max_tokens",
+  "max_ms",
+  "retry_initial_delay_ms",
+  "retry_max_delay_ms",
+]);
 
-const NUMBER_KEYS: ReadonlySet<string> = new Set(["max_cost_usd", "budget_usd"]);
+const NUMBER_KEYS: ReadonlySet<string> = new Set(["max_cost_usd", "budget_usd", "retry_backoff_factor"]);
 
 const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "skills", "routes"]);
 

@@ -42,6 +42,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W007 | A goal-gate (`retry:`) with no retarget at any level — failure can only halt. |
 | W009 | An `llm` step with empty `prompt` and empty label — the call has nothing to do. |
 | W013 | Unrecognised attribute on a step / edge / graph. The parser passes unknown keys through silently; this catches typos (`goalgate: true`, `max_seconds:`). Canonical list: `packages/core/src/types/graph.ts`. |
+| W014 | A step's `retry-policy:` or the graph-level `default-retry-policy:` names an unknown preset. Expected one of `none` / `standard` / `aggressive` / `linear` / `patient`. Unknown values silently fall back to `none` at runtime. |
 
 ## Removed codes — these no longer fire
 
@@ -53,7 +54,7 @@ These codes were retired at the YAML cutover; you won't see them, but old workfl
 - **E016** — unknown `type:`. Now a **parse error**, not a validator code.
 - **E025** — `kind=` vs shape mismatch. Shapes are gone.
 - **W003 / W004** — condition-DSL catch-all / legacy `context.hitl.*` rules. Gone with the condition DSL.
-- **W008** — unknown `retry_policy` preset. No longer warned; a typo silently falls back to `none` (verify the preset name yourself — see `advanced-attrs.md`).
+- **W008** — superseded by **W014** (re-introduced under a new code). Preset-name validation is active again.
 - **W012** — `type=` vs shape divergence. Shapes are gone.
 
 `--strict` makes warnings fail the command. The CLI doesn't expose it yet; the API (`validate(graph, {strict:true})`) does.

@@ -320,6 +320,7 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 - **E032** — a step declares no success successor — add `next:` / `on: {success: …}` / `routes:` (`next: exit` to finish). There is no linear fall-through.
 - **W007** — `goal_gate` (`retry:`) with no retarget chain.
 - **W013** — unrecognised attribute (typo).
+- **W014** — `retry-policy:` / `default-retry-policy:` names an unknown preset (typo). Falls back to `none` at runtime. Valid presets: `none` / `standard` / `aggressive` / `linear` / `patient`.
 
 Full table, including removed codes: `references/validator-codes.md`.
 

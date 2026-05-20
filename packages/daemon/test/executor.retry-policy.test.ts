@@ -200,4 +200,50 @@ describe("executor — retry-policy enforcement", () => {
   });
 
   // allow_partial retired with the dead retry-policy preset machinery.
+
+  test("retry-policy=standard (kebab authoring) produces non-zero delayMs on first retry", async () => {
+    const yaml = `name: t\nsteps:\n  flaky: {type: llm, prompt: x, max-retries: 3, retry-policy: standard, next: exit}\n`;
+    const r = rig({ yaml });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "flaky", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "flaky", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        outcomeStatus: "retry",
+        tokens: 0,
+        costUsd: 0,
+      }),
+    });
+    enqueue(r, "rp5", "start");
+    r.store.claimNextRun(1);
+    await runOne("rp5", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    const state = r.store.getState("rp5")!;
+    expect(state.status).toBe("paused_auto");
+
+    const events = r.store.getEvents("rp5");
+    const scheduled = events.find((e) => e.type === "node.retry_scheduled");
+    expect(scheduled).toBeDefined();
+    const payload = scheduled?.payload as { delayMs: number; attempt: number };
+    // standard preset: initialDelayMs=200, jitter adds ±50%, so range is [100, 300]
+    expect(payload.delayMs).toBeGreaterThan(0);
+    expect(payload.attempt).toBe(1);
+    r.store.close();
+  });
 });

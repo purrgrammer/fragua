@@ -181,19 +181,19 @@ Fail recovery is authored explicitly: add an `outcome=fail` edge from the node t
 
 ### 3.7 Retries and goal gates
 
-**Per-node retries.** A handler returning `outcome.status="retry"` re-enters the same node with a backoff. `max_retries` (node attr, default 0) caps the count; exhaustion pauses the run with `fact.run_paused{reason:"max_retries"}` unless the node sets `allow_partial=true` (advance as `success`).
+**Per-node retries.** A handler returning `outcome.status="retry"` re-enters the same node with a backoff. `max_retries` (node attr, default 0) caps the count; exhaustion pauses the run with `fact.run_paused{reason:"max_retries"}`.
 
-`retry_policy` (node attr) names a backoff preset; `default_retry_policy` (graph attr) is the fallback.
+`retry-policy` (node attr, authoring kebab-case; IR: `retry_policy`) names a backoff preset. Resolution order: node `retry-policy` → graph `default-retry-policy` → `"none"`.
 
-| Preset | Max attempts | Initial delay | Factor |
-|---|---|---|---|
-| `none` (default) | 1 | — | — |
-| `standard` | 5 | 200ms | 2.0 |
-| `aggressive` | 5 | 500ms | 2.0 |
-| `linear` | 3 | 500ms | 1.0 |
-| `patient` | 3 | 2000ms | 3.0 |
+| Preset | Max attempts | Initial delay | Factor | Jitter |
+|---|---|---|---|---|
+| `none` (default) | 1 | — | — | no |
+| `standard` | 5 | 200ms | 2.0 | yes |
+| `aggressive` | 5 | 500ms | 2.0 | yes |
+| `linear` | 3 | 500ms | 1.0 | no |
+| `patient` | 3 | 2000ms | 3.0 | yes |
 
-Per-node overrides (`retry_initial_delay_ms`, `retry_backoff_factor`, `retry_max_delay_ms`, `retry_jitter`) replace individual fields of the resolved preset.
+Per-node override attrs (`retry-initial-delay-ms`, `retry-backoff-factor`, `retry-max-delay-ms`, `retry-jitter`) replace individual fields of the resolved preset. An unrecognised preset name is warned at validate-time (W014) and silently falls back to `none` at runtime.
 
 Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcome — the reducer treats the outcome as terminal regardless of status, so retry presets don't accidentally hammer a permanent failure.
 

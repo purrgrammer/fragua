@@ -2,6 +2,7 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import type { Edge, Graph } from "../types/graph.ts";
+import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
 import { inputReferences } from "./substitution.ts";
 
 /** Whitelist of known node attribute names — the IR (snake_case) field set
@@ -36,6 +37,11 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "skills",
   "routes",
   "text",
+  "retry_policy",
+  "retry_initial_delay_ms",
+  "retry_backoff_factor",
+  "retry_max_delay_ms",
+  "retry_jitter",
 ]);
 
 /** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
@@ -49,6 +55,7 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "budget_usd",
   "budget_policy",
   "inputs",
+  "default_retry_policy",
 ]);
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
@@ -347,6 +354,35 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E011",
         message: `graph ${key}="${target}" references undefined node`,
+      });
+    }
+  }
+
+  // W014: unrecognised retry_policy / default_retry_policy preset name.
+  // Unknown values silently fall back to "none" at runtime; surface the
+  // typo at validate-time so the author knows they got no backoff.
+  {
+    const validNames = Object.keys(RETRY_PRESETS)
+      .map((n) => JSON.stringify(n))
+      .join(", ");
+    for (const n of nodes) {
+      const policy = (n.attrs as Record<string, unknown>)["retry_policy"];
+      if (policy !== undefined && !isRetryPresetName(policy)) {
+        diags.push({
+          severity: "warning",
+          code: "W014",
+          message: `node "${n.id}" retry-policy="${policy}" is not a known preset (expected one of ${validNames}) — falls back to "none" at runtime`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      }
+    }
+    const graphPolicy = (graph.attrs as Record<string, unknown>)["default_retry_policy"];
+    if (graphPolicy !== undefined && !isRetryPresetName(graphPolicy)) {
+      diags.push({
+        severity: "warning",
+        code: "W014",
+        message: `graph default-retry-policy="${graphPolicy}" is not a known preset (expected one of ${validNames}) — falls back to "none" at runtime`,
       });
     }
   }
