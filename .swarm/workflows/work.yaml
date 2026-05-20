@@ -48,7 +48,7 @@ steps:
         feature — multi-package OR shared contracts OR proposal-backed
         bugfix  — a reported defect to reproduce, then fix
 
-      Empty / ambiguous / already-shipped → `abort` with the reason instead of routing.
+      Not a workable software task (empty / illegible / off-topic / ambiguous / already-shipped) → `abort` with the reason instead of routing.
       Don't plan, reproduce, or implement.
     routes:
       small:   {to: implement, label: "Small change"}

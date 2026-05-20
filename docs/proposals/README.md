@@ -60,6 +60,12 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Credentials in DB](./credentials.md) | designed | `~/.swarm/auth.json` (already global) is enough for single-user; revisit when extension code can read other projects' state |
 | [Honest token count on system-prompt rows](./system-prompt-token-count.md) | sketch | char count is fine for a label; full per-model accuracy needs server routing + provenance lookup, more infra than the UX warrants today |
 
+## Discarded
+
+| Proposal | Maturity | Rationale |
+|---|---|---|
+| [Reserved `fail` sink](./fail-sink.md) | sketch | a route/edge to a `fail` terminal mirroring `exit`. Existing primitives cover every case — `abort(reason)` (llm), loop edges (redo), `exit` (graceful), `intent.cancel(note)` (operator discard-as-failure, which is the lone human-node residual). Kept the four-mechanism terminal model (now in swarm-author SKILL §1); dropped the primitive. Reopens only if a human rejection must read `halted` not `cancelled` |
+
 ## Shipped
 
 <details>

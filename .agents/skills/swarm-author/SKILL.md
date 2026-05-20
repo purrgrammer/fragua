@@ -66,6 +66,8 @@ classify -> fallback  [route=fallback]
 
 Non-routing nodes use `outcome=success` / `outcome=fail` edges (unannotated edges default to `outcome=success`).
 
+When *why* a route was chosen matters (audit, debugging a misroute), ask for it in the prompt — "state the deciding factor in one line, then call `route`." The route call must be isolated from other tool calls, but text in the same turn is fine, so the rationale lands in the transcript with no extra primitive. The `route` tool takes only `name`; there is no `reason` field — don't reach for one until a workflow needs to *query* rationale programmatically rather than read it.
+
 ### Orchestrator-workers
 
 Single codergen orchestrator with `agent` in `allowed_tools`. The model decides how many sub-agents to spawn and what they do. Use when decomposition is dynamic.
