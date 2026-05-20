@@ -1729,17 +1729,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (opts.provisioner) {
       const finalState = opts.store.getState(runId);
       const terminalStatuses = new Set(["completed", "cancelled", "halted", "quarantined"]);
-      if (finalState != null && terminalStatuses.has(finalState.status) && finalState.workflowSha != null) {
-        // Terminal worktree snapshot — BEFORE dispose, which removes the
-        // worktree. The fact drives the inbox + change_stat projection
-        // (docs/proposals/worktrees.md). Non-fatal: a capture failure logs a
-        // daemon event and falls through to dispose (the existing
-        // branch-preservation still protects the work until step 6's rework).
-        let expectedVersion = finalState.version;
+      if (finalState != null && terminalStatuses.has(finalState.status)) {
+        // Terminal worktree snapshot — captured BEFORE dispose, which removes
+        // the worktree. The fact drives the inbox + change_stat projection,
+        // and the snapshot/heads refs are now the ONLY thing preserving the
+        // run's work (dispose no longer creates a swarm/runs branch). So a
+        // capture failure GATES dispose: keep the worktree rather than lose the
+        // work (docs/proposals/worktrees.md).
+        let snapshotFailed = false;
         try {
           const snap = await opts.provisioner.snapshot(runId, "terminal");
+          // snap === null only for bare-cwd runs (no worktree) — nothing to
+          // preserve or dispose, so that's not a failure.
           if (snap != null) {
-            const appended = await tryAppendFact(opts.store, runId, expectedVersion, [
+            await tryAppendFact(opts.store, runId, finalState.version, [
               {
                 type: "fact.snapshot_recorded",
                 payload: {
@@ -1755,50 +1758,38 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
                 },
               },
             ]);
-            if (appended) expectedVersion = opts.store.getState(runId)?.version ?? expectedVersion;
           }
         } catch (err) {
+          snapshotFailed = true;
           opts.store.appendDaemonEvent(
             {
               type: "daemon.worktree_provisioned",
               payload: {
                 runId,
                 ok: false,
-                errorDetail: `terminal snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+                errorDetail: `terminal snapshot failed, worktree retained for recovery: ${err instanceof Error ? err.message : String(err)}`,
               },
             },
             { runId },
           );
         }
 
-        const workflow = opts.store.getWorkflow(finalState.workflowSha);
-        const ctx = {
-          status: finalState.status,
-          workflowName: workflow?.name ?? "unknown",
-          workflowSha: finalState.workflowSha,
-        };
-        try {
-          const { branch } = await opts.provisioner.dispose(runId, ctx);
-          if (branch != null) {
-            // Best-effort — if the OCC retry races us, the run is
-            // already terminal and the executor is exiting, so a single
-            // append attempt is enough. Don't loop.
-            await tryAppendFact(opts.store, runId, expectedVersion, [
-              { type: "fact.run_branched", payload: { branch } },
-            ]);
-          }
-        } catch (err) {
-          opts.store.appendDaemonEvent(
-            {
-              type: "daemon.worktree_provisioned",
-              payload: {
-                runId,
-                ok: false,
-                errorDetail: `dispose failed: ${err instanceof Error ? err.message : String(err)}`,
+        if (!snapshotFailed) {
+          try {
+            await opts.provisioner.dispose(runId);
+          } catch (err) {
+            opts.store.appendDaemonEvent(
+              {
+                type: "daemon.worktree_provisioned",
+                payload: {
+                  runId,
+                  ok: false,
+                  errorDetail: `dispose failed: ${err instanceof Error ? err.message : String(err)}`,
+                },
               },
-            },
-            { runId },
-          );
+              { runId },
+            );
+          }
         }
       }
     }

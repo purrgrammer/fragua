@@ -18,13 +18,13 @@ see [`docs/proposals/`](docs/proposals/README.md).
 **Agents**
 
 - 12+ inference providers via [`pi-ai`](https://github.com/badlogic/pi-mono): anthropic, openai, google, openrouter, vercel-ai-gateway, bedrock, vertex, groq, cerebras, xai, mistral, …
-- Run isolation via worktrees: per-run git worktree under the run's `cwd` (`<project>/.swarm/worktrees/<run_id>/`) with branch-on-dispose preservation when the working tree has a delta, and `swarm gc --branches` to prune `swarm/runs/*` past a 30-day default retention. Each run's `cwd` is captured on `run_state` so a single harness can drive runs from any project directory — see [`docs/proposals/run-isolation.md`](docs/proposals/run-isolation.md), and [`docs/proposals/worktree-design.md`](docs/proposals/worktree-design.md) for the rough edges still being chewed on
+- Run isolation via worktrees: per-run git worktree under the run's `cwd` (`<project>/.swarm/worktrees/<run_id>/`). At terminal the run's tree (committed + uncommitted) is captured into non-porcelain `refs/swarm/snapshots/<run_id>` + `refs/swarm/heads/<run_id>` before the worktree is disposed, and runs with recoverable agent work are flagged on `run_state.inbox_status` — see [`docs/proposals/worktrees.md`](docs/proposals/worktrees.md). Each run's `cwd` is captured on `run_state` so a single harness can drive runs from any project directory ([`docs/proposals/run-isolation.md`](docs/proposals/run-isolation.md))
 
 **Operator surface**
 
 - Web UI on `:6767` (default; configurable via `web.port` or `--port`) with live SSE feeds (per-run + global). The harness auto-builds the web bundle when sources are newer than `dist/` and prints a clickable OSC 8 hyperlink on the `ready` line
 - Projects are emergent — a project is a distinct `run_state.cwd`. `/projects` lists every directory swarm has ever run from with run rollups; `/projects/:cwdEnc` adds a `.gitignore`-honored file tree + blob viewer; `/analytics` carries a per-project filter
-- Run-scoped file tree + git-aware diff on every run (`/runs/:id/tree`, `/runs/:id/blob`, `/runs/:id/changes`) — survives worktree disposal via the preserved `swarm/runs/<id>` branch
+- Run-scoped file tree + git-aware diff on every run (`/runs/:id/tree`, `/runs/:id/blob`, `/runs/:id/changes`) — survives worktree disposal by reading the run's `refs/swarm/snapshots/<id>` snapshot ref
 - Workflow listing aggregates `~/.swarm/workflows/` (global) with every project cwd's `.swarm/workflows/`; cross-source name collisions disambiguate by `cwd`
 - Steering, pause, cancel, HITL input, resume, unquarantine, priority bump — all via intents
 - Bare-name workflow resolution — global then local: `~/.swarm/workflows/<name>.yaml` first, then `<cwd>/.swarm/workflows/<name>.yaml`; anything path-shaped resolves verbatim

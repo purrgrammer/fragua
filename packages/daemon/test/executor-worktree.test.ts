@@ -93,7 +93,8 @@ describe("executor + worktree provisioner", () => {
     });
 
     expect(provisioner.ensureCalls).toEqual(["run-1"]); // only once, even across multiple turns
-    expect(provisioner.disposeCalls).toEqual([{ runId: "run-1", status: "completed" }]);
+    // dispose no longer receives a ctx (no dispose-time commit) — just the runId.
+    expect(provisioner.disposeCalls).toEqual([{ runId: "run-1" }]);
 
     r.store.close();
   });
@@ -135,42 +136,7 @@ describe("executor + worktree provisioner", () => {
     r.store.close();
   });
 
-  test("dispose returning a branch emits fact.run_branched and updates run_state.branch", async () => {
-    const r = rig();
-    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
-    enqueue(r, "run-br", "start");
-    r.store.claimNextRun(4);
-
-    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), {
-      branchOnDispose: "swarm/runs/run-br",
-    });
-    const ctrl = new AbortController();
-    await runOne("run-br", {
-      store: r.store,
-      dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
-      tools: r.tools,
-      llmCall: r.llmCall,
-      maxConcurrentRuns: 4,
-      shutdownSignal: ctrl.signal,
-      maxTurnsForTesting: 20,
-      provisioner,
-    });
-
-    const events = r.store.getEvents("run-br");
-    const branched = events.find((e) => e.type === "fact.run_branched");
-    expect(branched).toBeDefined();
-    expect((branched!.payload as { branch: string }).branch).toBe("swarm/runs/run-br");
-
-    const state = r.store.getState("run-br");
-    expect(state?.branch).toBe("swarm/runs/run-br");
-    // Status remains terminal — the branch fact is post-terminal metadata.
-    expect(state?.status).toBe("completed");
-
-    r.store.close();
-  });
-
-  test("dispose returning null branch emits no fact.run_branched", async () => {
+  test("dispose emits no fact.run_branched (dispose no longer creates branches)", async () => {
     const r = rig();
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
     enqueue(r, "run-clean", "start");

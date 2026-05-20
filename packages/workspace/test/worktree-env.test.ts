@@ -73,132 +73,24 @@ describe("WorktreeEnvironment", () => {
     expect(branches.stdout).not.toContain("swarm/runs/clean-run");
   });
 
-  test("dispose on a dirty worktree commits to swarm/runs/<id> and preserves the branch", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "dirty-run" });
+  test("dispose removes the worktree and creates NO branch, even with committed + dirty + untracked work", async () => {
+    // Work preservation is the snapshotter's job now (refs/swarm/snapshots +
+    // heads, captured before dispose). Dispose just tears down — it no longer
+    // inspects the tree or creates a porcelain swarm/runs branch.
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "teardown-run" });
     await env.init();
-    await env.writeFile("agent-output.txt", "agent did this");
-    await env.writeFile("README.md", "# rewritten by agent\n");
-
-    const result = await env.dispose({
-      status: "completed",
-      workflowName: "test-flow",
-      workflowSha: "abcdef0123456789",
-    });
-    expect(result.branch).toBe("swarm/runs/dirty-run");
-    expect(existsSync(env.worktreePath)).toBe(false);
-
-    const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).toContain("swarm/runs/dirty-run");
-
-    // Branch points at a commit containing both the new file and the modified README.
-    const log = spawnSync("git", ["-C", repo, "log", "swarm/runs/dirty-run", "--name-only", "--pretty=%s"], {
-      encoding: "utf8",
-    });
-    expect(log.stdout).toContain("swarm: run dirty-run · completed · test-flow@abcdef01");
-    expect(log.stdout).toContain("agent-output.txt");
-    expect(log.stdout).toContain("README.md");
-  });
-
-  test("dispose preserves the branch when HEAD advanced inside the worktree but the working tree is clean (committed-and-clean)", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "committed-clean" });
-    await env.init();
-    const baseSha = env.baseGitSha;
-    expect(baseSha).not.toBeNull();
-
-    // Workflow's `commit` node: write a file then run `git commit`
-    // inside the worktree. The post-commit working tree is clean, so
-    // the porcelain signal alone would drop the branch and leave the
-    // commit dangling.
     await env.writeFile("feature.ts", "export const x = 1;\n");
-    const commitResult = await env.exec(
+    await env.exec(
       "git add -A && git -c user.email=node@swarm -c user.name=node commit --no-gpg-sign -m 'in-worktree commit'",
     );
-    expect(commitResult.exitCode).toBe(0);
+    await env.writeFile("dirty.ts", "export const u = 2;\n"); // uncommitted
+    await env.writeFile("brand-new.log", "untracked output"); // untracked
 
-    // Confirm the precondition the bug depends on: working tree clean,
-    // HEAD ahead of base.
-    const porcelain = spawnSync("git", ["-C", env.worktreePath, "status", "--porcelain"], { encoding: "utf8" });
-    expect(porcelain.stdout.trim()).toBe("");
-    const headBeforeDispose = spawnSync("git", ["-C", env.worktreePath, "rev-parse", "HEAD"], {
-      encoding: "utf8",
-    }).stdout.trim();
-    expect(headBeforeDispose).not.toBe(baseSha);
-
-    const result = await env.dispose({
-      status: "completed",
-      workflowName: "change",
-      workflowSha: "feedfacecafebabe",
-    });
-    expect(result.branch).toBe("swarm/runs/committed-clean");
-
+    const result = await env.dispose();
+    expect(result.branch).toBeNull();
+    expect(existsSync(env.worktreePath)).toBe(false);
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).toContain("swarm/runs/committed-clean");
-
-    // The in-worktree commit must be reachable from the preserved ref.
-    const tipSha = spawnSync("git", ["-C", repo, "rev-parse", "swarm/runs/committed-clean"], {
-      encoding: "utf8",
-    }).stdout.trim();
-    expect(tipSha).toBe(headBeforeDispose);
-
-    const log = spawnSync("git", ["-C", repo, "log", `${baseSha}..swarm/runs/committed-clean`, "--pretty=%s"], {
-      encoding: "utf8",
-    });
-    expect(log.stdout).toContain("in-worktree commit");
-    expect(log.stdout.trim().split("\n")).toHaveLength(1);
-  });
-
-  test("dispose preserves both the in-worktree commit and an additional unstaged delta (committed-and-dirty)", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "committed-dirty" });
-    await env.init();
-    const baseSha = env.baseGitSha;
-    expect(baseSha).not.toBeNull();
-
-    await env.writeFile("committed.ts", "export const c = 1;\n");
-    const commitResult = await env.exec(
-      "git add -A && git -c user.email=node@swarm -c user.name=node commit --no-gpg-sign -m 'in-worktree commit'",
-    );
-    expect(commitResult.exitCode).toBe(0);
-    await env.writeFile("unstaged.ts", "export const u = 2;\n");
-
-    const result = await env.dispose({
-      status: "completed",
-      workflowName: "change",
-      workflowSha: "deadbeefcafef00d",
-    });
-    expect(result.branch).toBe("swarm/runs/committed-dirty");
-
-    // Tip must include both commits: the in-worktree one and the
-    // dispose-time commit carrying the unstaged delta.
-    const log = spawnSync("git", ["-C", repo, "log", `${baseSha}..swarm/runs/committed-dirty`, "--pretty=%s"], {
-      encoding: "utf8",
-    });
-    const subjects = log.stdout.trim().split("\n");
-    expect(subjects.length).toBeGreaterThanOrEqual(2);
-    expect(log.stdout).toContain("in-worktree commit");
-    expect(log.stdout).toContain("swarm: run committed-dirty · completed · change@deadbeef");
-
-    // Both files must be reachable from the tip.
-    const tipFiles = spawnSync("git", ["-C", repo, "ls-tree", "-r", "--name-only", "swarm/runs/committed-dirty"], {
-      encoding: "utf8",
-    });
-    expect(tipFiles.stdout).toContain("committed.ts");
-    expect(tipFiles.stdout).toContain("unstaged.ts");
-  });
-
-  test("dispose preserves untracked files in the branch", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "untracked-only" });
-    await env.init();
-    await env.writeFile("brand-new.log", "untracked output");
-
-    const result = await env.dispose({
-      status: "halted",
-      workflowName: "smoke",
-      workflowSha: "deadbeefdeadbeef",
-    });
-    expect(result.branch).toBe("swarm/runs/untracked-only");
-
-    const tree = spawnSync("git", ["-C", repo, "show", "--stat", "swarm/runs/untracked-only"], { encoding: "utf8" });
-    expect(tree.stdout).toContain("brand-new.log");
+    expect(branches.stdout).not.toContain("swarm/runs/teardown-run");
   });
 
   test("writeFile in worktree does not touch repoRoot files", async () => {

@@ -1,13 +1,9 @@
 // WorktreeEnvironment — ExecutionEnvironment backed by a short-lived
 // `git worktree`. Each session works on a detached HEAD so concurrent
-// runs don't collide on a branch and clean runs (no working-copy delta)
-// leave zero ref-space residue.
+// runs don't collide on a branch and clean runs leave zero porcelain residue.
 //
 // Layout:
-//   <repoRoot>/.swarm/worktrees/<run-id>/   ← the worktree (detached)
-//   branch: swarm/runs/<run-id>               ← created LAZILY at dispose
-//                                               only when there's work to
-//                                               preserve (see dispose()).
+//   <repoRoot>/.swarm/worktrees/<run-id>/   ← the worktree (detached HEAD)
 //
 // Full isolation: untracked/ignored paths (node_modules, .env, etc.) are NOT
 // shared with the main repo. If the project needs dependencies installed,
@@ -16,26 +12,11 @@
 // requirements.txt`). The command runs inside the fresh worktree before the
 // first node executes; a non-zero exit fails the run.
 //
-// Dispose contract (`docs/proposals/run-isolation.md`,
-// `docs/proposals/worktree-design.md` §B9):
-//   1. Two signals — `git status --porcelain` (working-tree delta vs.
-//      HEAD) AND `git rev-list <baseGitSha>..HEAD --count` (HEAD delta
-//      vs. provisioned base).
-//   2. Both empty → `git worktree remove --force`. Branch never existed.
-//      Return `{ branch: null }`.
-//   3. Either non-empty → `git checkout -b swarm/runs/<run-id>` to make
-//      the in-worktree HEAD reachable from a named ref, then if the
-//      working tree is dirty also `git add -A` + a single dispose
-//      commit carrying the run's metadata, then `git worktree remove
-//      --force`. Branch persists. Return `{ branch: "swarm/runs/<run-id>" }`.
-// Replay reconstructs the starting tree from `baseGitSha`; the branch is
-// the audit trail for "what did the run actually change".
-//
-// The rev-list signal exists because workflows whose nodes commit
-// in-worktree (e.g. `change.yaml`, `merge.yaml`) leave HEAD ahead of
-// `baseGitSha` while the working tree is clean. Without rev-list,
-// dispose dropped those branches and the commits became dangling git
-// objects.
+// Dispose just removes the worktree — it no longer creates a porcelain
+// `swarm/runs/<run-id>` branch. Recoverability is structural: the snapshotter
+// captures the run's tree (committed + uncommitted) and HEAD into
+// `refs/swarm/snapshots/<run-id>` + `refs/swarm/heads/<run-id>` at the terminal
+// boundary, before dispose. See `docs/proposals/worktrees.md` and `dispose()`.
 
 import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
@@ -230,78 +211,30 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     }
   }
 
-  /** Tear down the worktree, preserving any working-copy delta or
-   * in-worktree commits on the `swarm/runs/<runId>` branch. Returns
-   * the branch name iff a branch was created.
+  /** Tear down the worktree — just remove the directory + registration.
    *
-   * Algorithm (matches `docs/proposals/run-isolation.md` and
-   * `docs/proposals/worktree-design.md` §B9):
-   *   1. `git status --porcelain` — working-tree delta vs. HEAD.
-   *      Covers tracked AND untracked.
-   *   2. `git rev-list <baseGitSha>..HEAD --count` — HEAD delta vs.
-   *      the provisioned base. A workflow whose nodes ran `git commit`
-   *      inside the worktree leaves a clean tree but a non-zero count.
-   *   3. Both signals empty → drop the worktree, no branch.
-   *      `branch: null`.
-   *   4. Either non-empty → checkout a fresh `swarm/runs/<runId>` so
-   *      the in-worktree HEAD becomes reachable from a named ref. If
-   *      the working tree is dirty, additionally stage everything
-   *      (`git add -A`) and append a metadata-rich dispose commit.
-   *      Then drop the worktree. Branch survives.
+   * Recoverability is structural, not derived here: the snapshotter captures
+   * the run's tree (incl. uncommitted dirt) and HEAD into
+   * `refs/swarm/snapshots/<runId>` + `refs/swarm/heads/<runId>` at the terminal
+   * boundary, BEFORE dispose runs (docs/proposals/worktrees.md). So dispose no
+   * longer inspects the tree or creates a porcelain `swarm/runs/<runId>` branch
+   * — that mechanism leaked synthetic refs into porcelain and mis-preserved
+   * branches a workflow merely checked out. The executor gates dispose on the
+   * terminal snapshot succeeding, so a captured snapshot is the precondition
+   * for removal.
    *
-   * No-op if `keepAfterDispose` is true or `dispose()` already ran. The
-   * branch lookup tolerates a manually-deleted worktree (status check
-   * fails → fall through to remove). */
-  async dispose(ctx?: DisposeContext): Promise<DisposeResult> {
+   * `branch` in the result is always null now (kept for interface compat).
+   * No-op if `keepAfterDispose` is true or `dispose()` already ran. Tolerates
+   * an already-removed worktree. */
+  async dispose(_ctx?: DisposeContext): Promise<DisposeResult> {
     if (this.disposed || this.keepAfterDispose) return { branch: null };
     this.disposed = true;
-
-    let branchCreated: string | null = null;
-    try {
-      const { stdout: porcelainOut } = await runGitCapture(this.worktreePath, ["status", "--porcelain"]);
-      const dirty = porcelainOut.trim().length > 0;
-
-      let committedAhead = false;
-      if (this.baseGitSha != null) {
-        try {
-          const { stdout: countOut } = await runGitCapture(this.worktreePath, [
-            "rev-list",
-            `${this.baseGitSha}..HEAD`,
-            "--count",
-          ]);
-          committedAhead = Number.parseInt(countOut.trim(), 10) > 0;
-        } catch {
-          // base sha unreachable from the worktree (rebased / shallow
-          // clone / corrupted refs). Fall back to porcelain-only;
-          // better to under-preserve than to throw out of dispose.
-        }
-      }
-
-      if (dirty || committedAhead) {
-        await runGit(this.worktreePath, ["checkout", "-b", this.branch]);
-        if (dirty) {
-          await runGit(this.worktreePath, ["add", "-A"]);
-          await runGit(this.worktreePath, ["commit", "--no-gpg-sign", "-m", buildCommitMessage(this.runId, ctx)], {
-            GIT_AUTHOR_NAME: "swarm",
-            GIT_AUTHOR_EMAIL: "noreply@swarm.local",
-            GIT_COMMITTER_NAME: "swarm",
-            GIT_COMMITTER_EMAIL: "noreply@swarm.local",
-          });
-        }
-        branchCreated = this.branch;
-      }
-    } catch {
-      // Worktree directory may have been deleted out of band, or the
-      // repo lost the worktree registration. Don't block tear-down.
-    }
-
     try {
       await runGit(this.repoRoot, ["worktree", "remove", "--force", this.worktreePath]);
     } catch {
-      // worktree may already be gone
+      // worktree may already be gone (removed out of band)
     }
-
-    return { branch: branchCreated };
+    return { branch: null };
   }
 
   cwd(): string {
@@ -356,19 +289,6 @@ function runGit(cwd: string, args: string[], extraEnv?: Record<string, string>):
     });
     child.on("error", rejectPromise);
   });
-}
-
-function buildCommitMessage(runId: string, ctx?: DisposeContext): string {
-  if (ctx == null) return `swarm: run ${runId}`;
-  const shortSha = ctx.workflowSha.slice(0, 8);
-  return [
-    `swarm: run ${runId} · ${ctx.status} · ${ctx.workflowName}@${shortSha}`,
-    "",
-    `run-id: ${runId}`,
-    `status: ${ctx.status}`,
-    `workflow: ${ctx.workflowName}`,
-    `workflow-sha: ${ctx.workflowSha}`,
-  ].join("\n");
 }
 
 function runGitCapture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
