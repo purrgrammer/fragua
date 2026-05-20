@@ -243,7 +243,6 @@ describe("validate — handler lints", () => {
     });
     expect(validate(g).some((d) => d.code === "W009")).toBe(false);
   });
-
 });
 
 describe("validate — retry / goal-gate lints", () => {
