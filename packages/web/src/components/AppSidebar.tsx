@@ -12,6 +12,7 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
+import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
   BookOpen,
@@ -26,6 +27,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
+import { queries } from "../lib/queries.ts";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
 import {
@@ -108,6 +110,25 @@ export function AppSidebar(): JSX.Element {
   );
 }
 
+const INBOX_FILTER = { inbox: "pending" as const, order: "oldest" as const };
+
+/** Count badge for the Inbox nav row. Queries the same cache slot as
+ * WorktreeInbox so there is exactly one fetch for both consumers. */
+function InboxPendingBadge(): JSX.Element | null {
+  const { state } = useSidebar();
+  const { data } = useQuery(queries.runs.list(INBOX_FILTER));
+  const count = data?.length ?? 0;
+  if (count === 0 || state === "collapsed") return null;
+  return (
+    <span
+      data-testid="nav-inbox-pending-count"
+      className="ml-auto shrink-0 rounded-full bg-[color-mix(in_oklch,var(--sw-accent-warn)_15%,transparent)] px-1.5 py-0.5 text-[length:var(--sw-text-xs)] font-medium text-[var(--sw-accent-warn)] tabular-nums"
+    >
+      {count}
+    </span>
+  );
+}
+
 /**
  * One nav row. We compute `isActive` via `useMatch` rather than the
  * `NavLink` render prop because `SidebarMenuButton`'s active-state
@@ -120,6 +141,7 @@ function NavItem({ entry }: { entry: NavEntry }): JSX.Element {
   const { to, label, icon: Icon, end } = entry;
   const match = useMatch({ path: to, end });
   const isActive = match !== null;
+  const isInbox = to === "/inbox";
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild tooltip={label} isActive={isActive}>
@@ -132,6 +154,7 @@ function NavItem({ entry }: { entry: NavEntry }): JSX.Element {
           <span className="flex w-full min-w-0 items-center gap-2">
             <Icon className="size-4 shrink-0" />
             <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">{label}</span>
+            {isInbox && <InboxPendingBadge />}
           </span>
         </NavLink>
       </SidebarMenuButton>

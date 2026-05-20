@@ -346,15 +346,22 @@ export interface StepSnapshot {
 }
 
 /** Thrown for any non-2xx HTTP response. Callers can branch on `.status`
- *  to render status-specific fallbacks (e.g. 404 → empty state). */
+ *  to render status-specific fallbacks (e.g. 404 → empty state).
+ *  For 4xx refusals from the worktree-inbox action endpoints the server
+ *  returns `{ error: string; code: string }` — that body is parsed and
+ *  attached as `.body` so callers can read the machine-readable `code`. */
 export class ApiError extends Error {
   readonly status: number;
   readonly url: string;
-  constructor(message: string, status: number, url: string) {
+  /** Parsed response body, when the server returned JSON. Present on
+   *  4xx refusals from intent endpoints; `undefined` elsewhere. */
+  readonly body?: { error?: string; code?: string };
+  constructor(message: string, status: number, url: string, body?: { error?: string; code?: string }) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.url = url;
+    this.body = body;
   }
 }
 
@@ -413,7 +420,13 @@ async function postJson<T>(
   }
   const res = await fetch(u, init);
   if (!res.ok) {
-    throw new ApiError(`POST ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    let refusalBody: { error?: string; code?: string } | undefined;
+    try {
+      refusalBody = (await res.json()) as { error?: string; code?: string };
+    } catch {
+      // non-JSON error body — leave refusalBody undefined
+    }
+    throw new ApiError(`POST ${u} → ${res.status} ${res.statusText}`, res.status, u, refusalBody);
   }
   const payload = (await res.json()) as unknown;
   if (!validate(payload)) {
@@ -498,6 +511,9 @@ export interface ListRunsFilter {
   limit?: number;
   /** Narrow to a single project root (exact `run_state.cwd` match). */
   cwd?: string;
+  /** Filter by worktree inbox status (docs/proposals/worktrees.md).
+   * `"pending"` surfaces terminal runs awaiting an operator primitive. */
+  inbox?: "pending" | "acted" | "discarded";
 }
 
 export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
@@ -509,6 +525,7 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
   if (filter?.order && filter.order !== "newest") params.set("order", filter.order);
   if (filter?.limit !== undefined) params.set("limit", String(filter.limit));
   if (filter?.cwd !== undefined && filter.cwd.length > 0) params.set("cwd", filter.cwd);
+  if (filter?.inbox !== undefined) params.set("inbox", filter.inbox);
   const qs = params.toString();
   const path = qs ? `/runs?${qs}` : "/runs";
   return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
@@ -891,6 +908,32 @@ export async function resumeRun(id: string): Promise<{ seq: number }> {
 export async function cancelRun(id: string, reason?: string): Promise<{ seq: number }> {
   const body = reason !== undefined ? { reason } : undefined;
   return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedSeq);
+}
+
+export async function branchRun(id: string, args: { branch: string; force?: boolean }): Promise<{ seq: number }> {
+  const body: Record<string, unknown> = { branch: args.branch };
+  if (args.force) body["force"] = true;
+  return postJson(`/runs/${encodeURIComponent(id)}/branch`, body, isAcceptedSeq);
+}
+
+export async function commitRun(id: string, args: { message: string; onto?: string }): Promise<{ seq: number }> {
+  const body: Record<string, unknown> = { message: args.message };
+  if (args.onto !== undefined && args.onto.length > 0) body["onto"] = args.onto;
+  return postJson(`/runs/${encodeURIComponent(id)}/commit`, body, isAcceptedSeq);
+}
+
+export async function mergeRun(
+  id: string,
+  args: { mode?: "ff" | "no-ff" | "squash"; into?: string },
+): Promise<{ seq: number }> {
+  const body: Record<string, unknown> = {};
+  if (args.mode !== undefined) body["mode"] = args.mode;
+  if (args.into !== undefined && args.into.length > 0) body["into"] = args.into;
+  return postJson(`/runs/${encodeURIComponent(id)}/merge`, body, isAcceptedSeq);
+}
+
+export async function discardRun(id: string): Promise<{ seq: number }> {
+  return postJson(`/runs/${encodeURIComponent(id)}/discard`, {}, isAcceptedSeq);
 }
 
 /** Operator raises a budget ceiling on a `paused{reason:"budget"}` run.
