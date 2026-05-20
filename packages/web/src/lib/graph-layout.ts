@@ -15,9 +15,12 @@
 //   3. For each node, compute depth = 1 + max(depth(predecessors)) using
 //      forward edges only (the DAG that remains after stripping back-
 //      edges). Memoised on the acyclic subgraph — no cycles possible.
-//   4. Bucket by depth to produce layers; sort each layer by id so
-//      layout is stable across renders (React-Flow is position-driven
-//      and shifts look like "animations" if we let the order jitter).
+//   4. Bucket by depth to produce layers; order each layer by the edge
+//      through which each node is first reached, so fan-out branches read
+//      left-to-right in the author's declared order (`quick` before `full`)
+//      rather than alphabetically. Edge order is fixed (parsed from source),
+//      so this stays stable across renders — no jitter — while matching the
+//      YAML. Ties (e.g. a node reached only via the same parent) break by id.
 //   5. Project depth onto the primary axis and index-within-layer onto
 //      the secondary axis. `orientation: "TB"` (default) puts the
 //      longest path vertically so workflows read top-to-bottom —
@@ -150,9 +153,18 @@ export function layoutDag(input: LayoutInput, opts: LayoutOptions = {}): Positio
     byDepth.set(d, bucket);
   }
 
+  // Within-layer order follows the edge through which each node is first
+  // reached (declaration order), so sibling branches read left-to-right the
+  // way the source lists them. Deterministic: input.edges is fixed.
+  const firstEdgeIndex = new Map<string, number>();
+  input.edges.forEach((e, i) => {
+    if (!firstEdgeIndex.has(e.to)) firstEdgeIndex.set(e.to, i);
+  });
+  const orderKey = (id: string): number => firstEdgeIndex.get(id) ?? -1;
+
   const out: PositionedNode[] = [];
   for (const [depth, bucket] of [...byDepth.entries()].sort((a, b) => a[0] - b[0])) {
-    const sorted = [...bucket].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const sorted = [...bucket].sort((a, b) => orderKey(a) - orderKey(b) || (a < b ? -1 : a > b ? 1 : 0));
     sorted.forEach((id, i) => {
       const along = depth * layerSize;
       // Centre each layer around the perpendicular axis origin so short
