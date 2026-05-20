@@ -1,5 +1,5 @@
 // Inline run composer: pick a workflow, fill typed inputs (when declared),
-// type optional description, POST /runs.
+// POST /runs.
 //
 // Source of truth for the workflow list is the parent — RunComposer never
 // fetches the list. Names can collide across sources (a project-local
@@ -14,9 +14,7 @@
 // When a workflow is selected the composer fetches its detail via
 // `queries.workflows.detail` to get the parsed `inputs:` block.
 // Typed inputs are rendered via `WorkflowInputsForm`; required inputs
-// that are unbound keep the submit button disabled. The free-form
-// description textarea remains for the run description / auto-title seed
-// (separate from typed inputs per SPEC §3.8).
+// that are unbound keep the submit button disabled.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,7 +24,6 @@ import { createRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { Button } from "./ui/button.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
-import { Textarea } from "./ui/textarea.tsx";
 import { WorkflowInputsForm } from "./WorkflowInputsForm.tsx";
 
 export interface RunComposerProps {
@@ -77,7 +74,6 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
   }, [local, global]);
 
   const [selected, setSelected] = useState<string>("");
-  const [input, setInput] = useState<string>("");
   // Typed input bindings: name → string value.
   const [typedInputs, setTypedInputs] = useState<Record<string, string>>({});
   // Names of required inputs that are currently unbound.
@@ -114,7 +110,6 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
     mutationFn: (vars: CreateRunInput) => createRun(vars),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queries.runs.lists() });
-      setInput("");
       setTypedInputs({});
     },
   });
@@ -133,7 +128,6 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
       cwd,
       workflowName: w.name,
       workflowScope: opt.scope,
-      input,
     };
     if (Object.keys(typedInputs).length > 0) {
       vars.inputs = typedInputs;
@@ -141,16 +135,15 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
     mutation.mutate(vars);
   };
 
-  // Drop a stale enqueue error the moment the operator edits the
-  // input. Resetting the mutation drops the inline error message.
+  // Drop a stale enqueue error when the operator switches workflow.
   // isError + reset are read through a ref so this effect runs only
-  // when `input` changes.
+  // when `selected` changes.
   const mutationRef = useRef({ isError: mutation.isError, reset: mutation.reset });
   mutationRef.current = { isError: mutation.isError, reset: mutation.reset };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `input` is the trigger; isError/reset are intentionally captured via ref so this effect only fires on input change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `selected` is the trigger; isError/reset are intentionally captured via ref so this effect only fires on selection change.
   useEffect(() => {
     if (mutationRef.current.isError) mutationRef.current.reset();
-  }, [input]);
+  }, [selected]);
 
   const hasOptions = local.length + global.length > 0;
 
@@ -207,14 +200,6 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
             onErrors={handleErrors}
           />
         )}
-
-        <Textarea
-          placeholder={hasOptions ? "Describe what the workflow should do (optional)…" : "No workflows available"}
-          value={input}
-          onChange={(e) => setInput(e.currentTarget.value)}
-          data-testid="run-composer-input"
-          disabled={!hasOptions}
-        />
 
         <div className="flex items-center justify-end">
           <Button

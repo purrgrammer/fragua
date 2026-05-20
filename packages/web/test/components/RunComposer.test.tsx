@@ -135,7 +135,7 @@ describe("RunComposer", () => {
     }
   });
 
-  it("submit is enabled with empty textarea and POSTs /runs with cwd, workflowName, workflowScope, and input — no sha or path", async () => {
+  it("submit POSTs /runs with cwd, workflowName, workflowScope — no input, sha, or path", async () => {
     let lastBody: unknown;
     const mock = installFetchMock({
       "/api/runs": async ({ method, init }) => {
@@ -150,7 +150,7 @@ describe("RunComposer", () => {
       ];
       const { getByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
 
-      // Submit is enabled with empty textarea.
+      // Submit is enabled once a workflow is selected.
       const submit = getByTestId("run-composer-submit") as HTMLButtonElement;
       expect(submit.disabled).toBe(false);
 
@@ -171,9 +171,9 @@ describe("RunComposer", () => {
         cwd: PROJECT_CWD,
         workflowName: "local-a",
         workflowScope: "local",
-        input: "",
       });
       const body = lastBody as Record<string, unknown>;
+      expect(body).not.toHaveProperty("input");
       expect(body).not.toHaveProperty("workflowSha");
       expect(body).not.toHaveProperty("workflowPath");
     } finally {
