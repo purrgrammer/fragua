@@ -28,12 +28,10 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "retry_jitter",
   "timeout",
   "max_ms",
-  "idle_timeout",
   "reasoning_effort",
   "allowed_tools",
   "denied_tools",
   "context_files",
-  "class",
   "retry_target",
   "fallback_retry_target",
   "tool_command",
@@ -42,14 +40,13 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "skills",
   "skills_disabled",
   "routes",
-  "kind",
   "text",
   "model",
   "provider",
 ]);
 
 /** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
-const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set(["label", "thread_id", "loop_restart", "outcome", "route"]);
+const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set(["label", "thread_id", "outcome", "route"]);
 
 /** Whitelist of known graph attribute names. See KNOWN_NODE_ATTRS. */
 const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
@@ -60,10 +57,6 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "budget_policy",
   "inputs",
   "max_goal_gate_retries",
-]);
-
-const ATTRACTOR_ONLY_EDGE_ATTRS: ReadonlyMap<string, string> = new Map([
-  ["loop_restart", "swarm's thread model (thread_id + per-node summary=) supersedes the run-restart use case"],
 ]);
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
@@ -678,22 +671,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       code: "W013",
       message: `graph has unrecognised attribute "${key}" — typo? (see GraphAttrs for the canonical list)`,
     });
-  }
-
-  // W014: attractor edge attribute that swarm's architecture makes inert
-  // (`loop_restart`). Documented in attractor but the swarm runtime has
-  // no path that consults it; see SPEC.md §5 for rationale.
-  for (const e of graph.edges) {
-    for (const [key, why] of ATTRACTOR_ONLY_EDGE_ATTRS) {
-      if (e.attrs[key] === undefined) continue;
-      diags.push({
-        severity: "warning",
-        code: "W014",
-        message: `edge "${e.from}" → "${e.to}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §5`,
-        edge: { from: e.from, to: e.to },
-        ...(e.loc !== undefined ? { loc: e.loc } : {}),
-      });
-    }
   }
 
   if (opts.strict) {
