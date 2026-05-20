@@ -43,9 +43,9 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W009 | An `llm` step with empty `prompt` and empty label — the call has nothing to do. |
 | W013 | Unrecognised attribute on a step / edge / graph. The parser passes unknown keys through silently; this catches typos (`goalgate: true`, `max_seconds:`). Canonical list: `packages/core/src/types/graph.ts`. |
 
-## Removed (DOT-era)
+## Removed codes — these no longer fire
 
-These fired in the DOT world and are gone after the YAML cutover; you won't see them, but old workflows / docs may mention them:
+These codes were retired at the YAML cutover; you won't see them, but old workflows / docs may mention them:
 
 - **E010** — duplicate accelerator keys on a human node. The `[K] Label` accelerator vocabulary was replaced by named `routes:` (labels are free-form button text), and `accelerator.ts` was deleted.
 - **E014** — edge `condition=` parse failure. The condition DSL is gone; use `outcome` / `route`.

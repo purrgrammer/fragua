@@ -234,7 +234,7 @@ Roles, in brief:
 - `assistant` — `AssistantMessage`. `content` is `(TextContent | ThinkingContent | ToolCall)[]` in block order. A self-abort is a `ToolCall` block `name:"abort"` with `arguments.reason`.
 - `toolResult` — `ToolResultMessage`. Top-level `toolCallId` pairs back to `assistant.ToolCall.id`; `toolName` + `isError` are siblings.
 
-`thread_id` shares the transcript across nodes that declare the same id (e.g. `change.dot`'s `cluster_dev` puts `implement` + `review` on `thread_id="dev"` so the reviewer sees the implementer's session). Filter by `node_id` to narrow.
+`thread:` on a workflow step shares the transcript across steps that declare the same id (e.g. `implement` + `review` both set `thread: dev` so the reviewer sees the implementer's session). Filter by `node_id` to narrow.
 
 The transcript populates at every `message_end`, so it reflects live state — not just terminal runs.
 

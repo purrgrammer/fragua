@@ -5,7 +5,7 @@ description: Drive a swarm run from enqueue to terminal state. Load this when th
 
 # swarm-run — enqueue, watch, and control a live run
 
-The goal is to go from a workflow (a name resolvable under `~/.swarm/workflows/` or `<cwd>/.swarm/workflows/`, or a literal `.dot` path) to a running, observable run that you can steer safely. Prefer the CLI for interactive runs; reach for the HTTP surface when you need priority / routing / no-follow / scripting.
+The goal is to go from a workflow (a name resolvable under `~/.swarm/workflows/` or `<cwd>/.swarm/workflows/`, or a literal `.yaml` path) to a running, observable run that you can steer safely. Prefer the CLI for interactive runs; reach for the HTTP surface when you need priority / routing / no-follow / scripting.
 
 Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §7 (web server), `AGENTS.md` (commands).
 
@@ -292,7 +292,7 @@ bun run swarm run change --input="…"
 
 # Manual enqueue
 SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
-   -d "$(jq -n --arg n change --rawfile s path/to/workflow.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
+   -d "$(jq -n --arg n change --rawfile s path/to/workflow.yaml '{name:$n, source:$s}')" | jq -r .sha)
 RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
    -d "$(jq -n --arg sha "$SHA" --arg in "…" --arg cwd "$PWD" '{workflowSha:$sha, input:$in, cwd:$cwd}')" | jq -r .runId)
 
