@@ -288,7 +288,7 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     handler: run,
   };
   if (opts.maxMs === "unbounded") {
-    // Explicit opt-out via DOT max_ms=0 — leave HandlerSpec.maxMs absent.
+    // Explicit opt-out via `max-ms: 0` in the workflow YAML — leave HandlerSpec.maxMs absent.
   } else if (typeof opts.maxMs === "number") {
     spec.maxMs = opts.maxMs;
   } else {

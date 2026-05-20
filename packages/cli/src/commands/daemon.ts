@@ -370,8 +370,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // `nextNode` is intentionally NOT forwarded to makeLlmHandler.
     // The factory receives the first outgoing edge as a legacy-compat
     // hint for tool/transition nodes, but for llm that would force
-    // every call to route to whichever edge happens to appear first in
-    // the DOT — bypassing the edge selector. Real llm nodes need
+    // every call to route to whichever edge happens to appear first —
+    // bypassing the edge selector. Real llm nodes need
     // the selector to pick based on outcome status + condition matching
     // (e.g. `implement -> done [condition="outcome=fail"]` vs the
     // unconditional `implement -> verify`).
