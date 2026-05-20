@@ -714,7 +714,7 @@ steps:
         commitSha: "cde",
         treeSha: "fgh",
         committed: null,
-        uncommitted: null,
+        uncommitted: { filesChanged: 3, insertions: 7, deletions: 2 },
       },
     ];
 
@@ -809,9 +809,9 @@ steps:
       }
     });
 
-    it("renders the scrubber with all snapshot rows when the Diff tab is active", async () => {
+    it("renders the stat header and diff for the latest snapshot (vs base) when the Diff tab is active", async () => {
       const detail: RunDetailT = {
-        runId: "run-diff-scrub",
+        runId: "run-diff-latest",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
         lastEventSeq: 30,
@@ -823,18 +823,26 @@ steps:
         cwd: "/home/user/project",
       };
       const diffText = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
-      const { client, mock } = prepareWithDiff("run-diff-scrub", detail, {
-        "/api/runs/run-diff-scrub/snapshots/30/diff": diffText,
-        "/api/runs/run-diff-scrub/snapshots/30/diff?against=base": diffText,
+      const { client, mock } = prepareWithDiff("run-diff-latest", detail, {
+        "/api/runs/run-diff-latest/snapshots/30/diff?against=base": diffText,
       });
       try {
-        const { container } = mount(client, "/runs/run-diff-scrub/diff");
+        const { container } = mount(client, "/runs/run-diff-latest/diff");
+        // The latest snapshot (eventIdx=30) has committed=null, uncommitted={filesChanged:3,insertions:7,deletions:2}
         await waitFor(() => {
-          expect(within(container).getByTestId("snapshot-scrubber")).toBeTruthy();
+          expect(within(container).getByTestId("run-diff-stat")).toBeTruthy();
         });
-        expect(within(container).getByTestId("snapshot-row-10")).toBeTruthy();
-        expect(within(container).getByTestId("snapshot-row-20")).toBeTruthy();
-        expect(within(container).getByTestId("snapshot-row-30")).toBeTruthy();
+        const stat = within(container).getByTestId("run-diff-stat");
+        expect(stat.textContent).toContain("3");
+        expect(within(container).getByTestId("run-diff-insertions").textContent).toContain("+7");
+        expect(within(container).getByTestId("run-diff-deletions").textContent).toContain("−2");
+        // Diff content should render
+        await waitFor(() => {
+          expect(within(container).getByTestId("snapshot-diff-content")).toBeTruthy();
+        });
+        // No scrubber or compare-against control
+        expect(within(container).queryByTestId("snapshot-scrubber")).toBeNull();
+        expect(within(container).queryByTestId("snapshot-diff-against-select")).toBeNull();
       } finally {
         mock.restore();
       }

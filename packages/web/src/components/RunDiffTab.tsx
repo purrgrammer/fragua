@@ -1,9 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { ApiError } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
-import { SnapshotDiffView } from "./SnapshotDiffView.tsx";
-import { SnapshotScrubber } from "./SnapshotScrubber.tsx";
+import { CodeBlock } from "./ai-elements/code-block.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 
 export interface RunDiffTabProps {
@@ -11,55 +9,14 @@ export interface RunDiffTabProps {
 }
 
 export function RunDiffTab({ runId }: RunDiffTabProps): JSX.Element {
-  const [searchParams, setSearchParams] = useSearchParams();
-
   const snapshotsQuery = useQuery(queries.runs.snapshots(runId));
   const snapshots = snapshotsQuery.data ?? [];
+  const latest = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
 
-  /** Derive selected snapshot from URL, defaulting to the latest. */
-  const snapParam = searchParams.get("snap");
-  const selectedEventIdx = (() => {
-    if (snapshots.length === 0) return -1;
-    const last = snapshots[snapshots.length - 1];
-    if (!last) return -1;
-    if (snapParam !== null) {
-      const parsed = parseInt(snapParam, 10);
-      if (!Number.isNaN(parsed) && snapshots.some((s) => s.eventIdx === parsed)) {
-        return parsed;
-      }
-    }
-    return last.eventIdx;
-  })();
-
-  const against = searchParams.get("against") ?? "base";
-
-  const handleSelectSnapshot = useCallback(
-    (eventIdx: number) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set("snap", String(eventIdx));
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  const handleChangeAgainst = useCallback(
-    (value: string) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set("against", value);
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
+  const diffQuery = useQuery({
+    ...queries.runs.snapshotDiff(runId, latest?.eventIdx ?? -1, "base"),
+    enabled: latest !== null,
+  });
 
   if (snapshotsQuery.isPending) {
     return (
@@ -80,23 +37,52 @@ export function RunDiffTab({ runId }: RunDiffTabProps): JSX.Element {
     );
   }
 
+  const stat = latest ? (latest.committed ?? latest.uncommitted) : null;
+
   return (
-    <section
-      className="grid h-full min-h-0 grid-cols-[16rem_1fr] divide-x divide-sw-border"
-      data-testid="run-diff-section"
-    >
-      <SnapshotScrubber snapshots={snapshots} selectedEventIdx={selectedEventIdx} onSelect={handleSelectSnapshot} />
-      {selectedEventIdx >= 0 && (
-        <div className="flex min-h-0 min-w-0 flex-col gap-3 p-3">
-          <SnapshotDiffView
-            runId={runId}
-            eventIdx={selectedEventIdx}
-            against={against}
-            snapshots={snapshots}
-            onChangeAgainst={handleChangeAgainst}
-          />
-        </div>
+    <section className="flex min-h-0 flex-col gap-3 p-3" data-testid="run-diff-section">
+      {stat && (
+        <p className="font-mono text-sw-sm text-sw-muted" data-testid="run-diff-stat">
+          {stat.filesChanged} {stat.filesChanged === 1 ? "file" : "files"} changed,{" "}
+          <span className="text-sw-accent-success" data-testid="run-diff-insertions">
+            +{stat.insertions}
+          </span>{" "}
+          /{" "}
+          <span className="text-sw-accent-error" data-testid="run-diff-deletions">
+            −{stat.deletions}
+          </span>
+        </p>
       )}
+
+      <div
+        className="min-w-0 flex-1 overflow-auto rounded-sw-card border border-sw-border bg-sw-surface"
+        data-testid="snapshot-diff-content"
+      >
+        {diffQuery.isPending ? (
+          <div className="p-3 text-sw-sm text-sw-muted">Loading diff…</div>
+        ) : diffQuery.isError ? (
+          <DiffError error={diffQuery.error} />
+        ) : diffQuery.data === "" ? (
+          <div className="p-3 text-sw-sm text-sw-muted" data-testid="snapshot-diff-empty">
+            No changes vs base.
+          </div>
+        ) : diffQuery.data !== undefined ? (
+          <CodeBlock code={diffQuery.data} language="diff" />
+        ) : null}
+      </div>
     </section>
+  );
+}
+
+function DiffError({ error }: { error: unknown }): JSX.Element {
+  const status = error instanceof ApiError ? error.status : 0;
+  let msg: string;
+  if (status === 410) msg = "Worktree or base ref disposed; diff unavailable.";
+  else if (status === 404) msg = "Snapshot not found.";
+  else msg = "Couldn't load diff.";
+  return (
+    <div className="p-3 text-sw-sm text-sw-muted" data-testid="snapshot-diff-error">
+      {msg}
+    </div>
   );
 }
