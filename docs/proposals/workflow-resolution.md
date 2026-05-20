@@ -27,7 +27,7 @@ swarm run /abs/path/to/foo.dot         # path (anonymous)
 Resolution order for a bare name (no `/`, no `.dot` suffix):
 
 1. `~/.swarm/workflows/<name>.dot` → scope `global`. Generic workflows
-   (plan-implement-review, fix-bug, merge, …) live here so they're
+   (plan-implement-review, merge, …) live here so they're
    reachable from any cwd.
 2. `<cwd>/.swarm/workflows/<name>.dot` → scope `local`. Project-internal
    workflows (this repo's `introspect`, `ci-gate`, …) stay near the

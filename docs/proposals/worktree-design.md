@@ -184,7 +184,7 @@ is non-empty. The committed-and-clean path runs only `git checkout
 workaround is no longer required.
 
 **Pain.** This is the loudest in-tree behaviour gap. Workflows that
-commit (the `change.dot` daily driver, `fix-bug.dot`, `merge.dot`) are
+commit (the `change.dot` daily driver, `merge.dot`) are
 exactly the ones whose work the operator most wants to recover, and
 they're the ones whose branches go missing.
 

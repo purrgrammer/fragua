@@ -16,7 +16,7 @@ last-reviewed: 2026-05-19
 
 Two pain points the existing primitives can't address, surfacing one underlying issue: the workflow model accreted too many ways to express the same routing decision.
 
-1. **No LLM-directed routing.** `change.dot` and `feature.dot` are 90% identical workflows that differ only in scope. The discriminator (small change vs. multi-package feature) is exactly what an LLM is good at deciding, but today the only way to express it is two parallel files. Same shape repeats across `fix-bug.dot` (would route on `localised|need_info|not_a_bug`), `merge.dot` (would route on `clean|conflicts_expected|risky_main_drift`), `review.dot` (would route on `tiny|standard|huge`). Today these all collapse into prose inside the first node.
+1. **No LLM-directed routing.** `change.dot` and `feature.dot` are 90% identical workflows that differ only in scope. The discriminator (small change vs. multi-package feature) is exactly what an LLM is good at deciding, but today the only way to express it is two parallel files. Same shape repeats across `merge.dot` (would route on `clean|conflicts_expected|risky_main_drift`), `review.dot` (would route on `tiny|standard|huge`). Today these all collapse into prose inside the first node.
 
 2. **Human-node authoring is brittle.** `wait.human` uses edge labels of shape `"[K] Display text"` parsed by `parseAcceleratorKey` at `packages/core/src/handler/handlers/wait-human.ts:88`. Duplicate accelerators throw at handler construction; the `[K]` prefix conflates UI vocabulary with routing wiring; the `prompt=` attribute is misleading (no LLM runs); only `doc-sync.dot::signoff` uses it today and the rest of the codebase has scrubbed human-checkpoint nodes out rather than fight the shape.
 
@@ -429,7 +429,7 @@ Additional skill updates that don't trigger from a contract file but are load-be
 4. **Update STATUS.md** "What swarm delivers today" to claim `llm_directed_routing` and `unified_human_node_authoring`.
 5. **Apply the doc + skill updates** per the table above. Drift-lint will catch anything missed.
 6. **Regenerate test fixtures** under `packages/core/test/` and `packages/store/test/` that reference the renamed status / event / intent tokens, or assert on the deleted outcome statuses.
-7. **Opportunistic follow-ups** as workflows hit their pain points: severity-aware escalation on `structural-drift` / `narrative-drift` / `rollup` (separate proposal), routing in `review.dot::scope`, `fix-bug.dot::reproduce`, `merge.dot::preflight`.
+7. **Opportunistic follow-ups** as workflows hit their pain points: severity-aware escalation on `structural-drift` / `narrative-drift` / `rollup` (separate proposal), routing in `review.dot::scope`, `merge.dot::preflight`.
 8. **Out-of-scope follow-up:** DOT → YAML migration ports this routing primitive to the YAML authoring form. Field mapping is 1:1 (no semantic change).
 
 ## Considered alternatives
