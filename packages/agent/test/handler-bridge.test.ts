@@ -77,7 +77,7 @@ async function ctxFor(
   runId: string,
   store: SqliteStore,
   nodeId: string,
-  args: Readonly<{ $ARGUMENTS?: string; inputs?: Record<string, string> }> = {},
+  args: Readonly<{ inputs?: Record<string, string> }> = {},
 ): Promise<handler.HandlerContext> {
   store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId, workflowSha: "sha" });
@@ -241,28 +241,6 @@ describe("makeLlmHandler", () => {
     store.close();
   });
 
-  test("substitutes ctx.args into node.attrs.prompt before backend.run()", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    const ctx = await ctxFor("r-sub", store, "n1", {
-      $ARGUMENTS: "rename foo() to bar()",
-    });
-    let seenPrompt: string | undefined;
-    const capture: LlmBackend = {
-      async run(input) {
-        seenPrompt = input.prompt;
-        return ok({});
-      },
-    };
-    const spec = makeLlmHandler({
-      node: node({ attrs: { type: "llm", prompt: "Task: $ARGUMENTS" } }),
-      nextNode: "__end__",
-      backend: capture,
-    });
-    await spec.handler(ctx);
-    expect(seenPrompt).toBe("Task: rename foo() to bar()");
-    store.close();
-  });
-
   test("substitutes ${{ inputs.x }} from ctx.args.inputs before backend.run()", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-inputs", store, "n1", {
@@ -285,7 +263,7 @@ describe("makeLlmHandler", () => {
     store.close();
   });
 
-  test("empty args collapse $ARGUMENTS to '' rather than leaking the literal", async () => {
+  test("unbound ${{ inputs.x }} collapses to '' rather than leaking the literal", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-empty", store, "n1");
     let seenPrompt: string | undefined;
@@ -296,13 +274,13 @@ describe("makeLlmHandler", () => {
       },
     };
     const spec = makeLlmHandler({
-      node: node({ attrs: { type: "llm", prompt: "[$ARGUMENTS]" } }),
+      node: node({ attrs: { type: "llm", prompt: "[${{ inputs.missing }}]" } }),
       nextNode: "__end__",
       backend: capture,
     });
     await spec.handler(ctx);
     expect(seenPrompt).toBe("[]");
-    expect(seenPrompt?.includes("$ARGUMENTS")).toBe(false);
+    expect(seenPrompt?.includes("${{ inputs.missing }}")).toBe(false);
     store.close();
   });
 

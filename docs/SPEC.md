@@ -71,7 +71,7 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 
 `start` is synthesized by the parser (the entry node pointing at the first declared step) and is never authored; `exit` is the reserved sink. Declaring a step named `start` or `exit` with a mismatched type is rejected (`E029` / `E028`).
 
-Concurrent dispatch is not a graph primitive — it lives inside an llm node via the `agent` tool. An llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn (each with its own LLM context window, tool pool, and observability bracket on the parent's event stream) and synthesises in its own thread. See `review.yaml` / `orchestrate.yaml` for the canonical orchestrator-workers shape.
+Concurrent dispatch is not a graph primitive — it lives inside an llm node via the `agent` tool. An llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn (each with its own LLM context window, tool pool, and observability bracket on the parent's event stream) and synthesises in its own thread. See `review.yaml`'s `dispatch` step for the canonical orchestrator-workers shape.
 
 Loops are **backward edges** bounded by `max-retries` on the target node — there is no `loop` primitive. A step that should re-run on failure routes back to itself or to an upstream step via `on: {fail: <step>}`, and its `max-retries` attribute caps how many times the retry counter can bump before the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise the cap via `intent.max_retries_adjusted`). The `retry: <step>` shorthand collapses the goal-gate-and-retarget idiom into one line.
 
@@ -207,12 +207,13 @@ Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcom
 
 ### 3.8 Substitution
 
-Two token families expand in `prompt:`, `text:`, and `run:` strings before the handler sees them:
+One token family expands in `prompt:`, `text:`, and `run:` strings before the handler sees them:
 
 | Token | Meaning |
 |---|---|
-| `$ARGUMENTS` | The run's free-form input (CLI trailing positional args, or `POST /runs` `input`). |
 | `${{ inputs.<name> }}` | A typed run input declared in the workflow's `inputs:` block, bound per-run via `--input name=value`. Declared `default:` values apply when a binding is omitted; the validator (E030) flags references to undeclared inputs, and enqueue rejects a missing required input or an out-of-range `choice`. |
+
+The run's free-form positional (CLI trailing args, or `POST /runs` `input`) lands on `routing.input` as the run's description and auto-title seed — it is **not** substituted into prompts. Workflows take their substitutable values through declared `inputs:`.
 
 Cross-node data transfer happens through **shared threads** (§3.3), not through prompt substitution. Two llm steps with the same `thread:` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. A receiving node may set `summary=low|medium|high` to see a summariser-compressed view of the prior thread instead of the raw history. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
 
@@ -287,7 +288,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **Interviewer interface** (attractor §6). Replaced by `human` nodes (`type: human`) plus the `intent.human_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Swarm handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
-- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). swarm has no fan-out / fan-in graph primitive. Concurrent dispatch lives in the llm `agent` tool — a single llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.yaml` / `orchestrate.yaml`).
+- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). swarm has no fan-out / fan-in graph primitive. Concurrent dispatch lives in the llm `agent` tool — a single llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.yaml`'s `dispatch` step).
 
 **Surfaced as warnings, not errors:**
 

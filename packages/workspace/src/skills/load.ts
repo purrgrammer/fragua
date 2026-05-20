@@ -82,13 +82,11 @@ export async function loadSkill(
   };
 }
 
-/** Replace every `$ARGUMENTS` boundary occurrence with `value`. Boundary
- *  matching mirrors `replaceBoundary` in
- *  `packages/core/src/engine/substitution.ts` — `$ARGUMENTS` followed by
- *  `[A-Za-z0-9_]` is left intact (so a hypothetical `$ARGUMENTSx` token
- *  survives). We don't reuse `substitute()` here because it would also
- *  expand `${context.x}` / `$<nodeId>.output` etc., which are workflow-
- *  level constructs that have no meaning inside a skill body. */
+/** Replace every `$ARGUMENTS` boundary occurrence with `value`. A
+ *  `$ARGUMENTS` followed by `[A-Za-z0-9_]` is left intact (so a
+ *  hypothetical `$ARGUMENTSx` token survives). This is the skill-body
+ *  argument mechanism, distinct from workflow `${{ inputs.x }}`
+ *  substitution. */
 function substituteArguments(body: string, value: string): { body: string; hadPlaceholder: boolean } {
   const re = /\$ARGUMENTS(?![A-Za-z0-9_])/g;
   let hadPlaceholder = false;

@@ -2,7 +2,7 @@
 // one-shot, no-tools compression call. Streaming so UIs can render
 // titles / narratives as they arrive. Used by:
 //
-//   - execute() to generate the async run title from $ARGUMENTS
+//   - execute() to generate the async run title from `routing.input`
 //   - PiLlmBackend to produce the tail for `summary=low|medium|high`
 //
 // Each call rides as a synthetic node (see @swarm/core/types/summariser.ts).

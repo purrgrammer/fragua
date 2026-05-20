@@ -253,7 +253,7 @@ export function scheduleHelp(): number {
   console.log("\nOptions on add:");
   console.log("  --every <30m|1h|6h|24h|3d|7d>  Interval shorthand (required)");
   console.log("  --cwd <dir>                   Project root (default cwd)");
-  console.log("  --input <text>                $ARGUMENTS for every fire");
+  console.log("  --input <text>                Free-form description for every fire");
   console.log("  --on-overlap <skip|queue|concurrent>  Default skip");
   console.log("  --no-fire-on-create           Wait one full interval before first fire");
   return 0;

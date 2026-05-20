@@ -96,7 +96,7 @@ export function shortenRunId(runId: string): string {
 
 /** Display priority for the row's primary label:
  *   1. `title` — auto-generated summariser title
- *   2. `input` — raw $ARGUMENTS, clamped
+ *   2. `input` — raw `routing.input` (free-form description), clamped
  *   3. `workflowName` / `workflow` — fallback
  *   4. runId — last resort so we never render an empty link */
 export function displayTitle(row: RunSummary): string {

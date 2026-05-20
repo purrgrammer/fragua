@@ -3,7 +3,7 @@
 // A `tool` node runs `node.attrs.tool_command` as a single shell
 // invocation — no LLM, no agent loop. Side-effect only: exit 0 →
 // `outcome=success`; non-zero → `outcome=fail`. The command may
-// substitute `$ARGUMENTS`. Tool nodes do not feed data forward to
+// substitute `${{ inputs.x }}`. Tool nodes do not feed data forward to
 // downstream nodes — that's the llm's job, not a deterministic
 // shell step.
 //
@@ -80,9 +80,9 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
-    // Tool commands are shell strings. `$ARGUMENTS` may contain
-    // whitespace, newlines, quotes, or anything else the run's input
-    // legitimately carries. Without escapeForShell, that trailing
+    // Tool commands are shell strings. A `${{ inputs.x }}` value may
+    // contain whitespace, newlines, quotes, or anything else the run's
+    // input legitimately carries. Without escapeForShell, a trailing
     // newline turns one statement into several when /bin/sh re-tokenises
     // the rendered command — every substitution becomes an injection
     // vector. Llm prompts don't need this: prose tolerates stray

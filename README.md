@@ -65,17 +65,17 @@ bun run swarm harness
 # authored workflows under ~/.swarm/workflows/<name>.yaml (resolved first)
 # or <cwd>/.swarm/workflows/<name>.yaml. The CLI discovers the running
 # harness via the global DB — works from any directory.
-# Trailing args feed the workflow's $ARGUMENTS; typed inputs go through
-# --input name=value (repeatable), validated against the inputs: block.
-bun run swarm run path/to/your-workflow.yaml "free-form $ARGUMENTS text"
-bun run swarm run change --input ticket=BUG-1 --input env=prod
+# Trailing args become the run's free-form description (seeds the title);
+# substitutable inputs go through --input name=value (repeatable),
+# validated against the inputs: block.
+bun run swarm run path/to/your-workflow.yaml "free-form run description"
+bun run swarm run work --input task="add a touch tool to @swarm/workspace"
 ```
 
 This repo ships a small set of workflows under `.swarm/workflows/`
-(`change.yaml`, `analyze.yaml`, `ci-gate.yaml`, `showcase.yaml`, …) — run
-them with `bun run swarm run change --input "…"` from the swarm repo
-cwd, or copy the ones you want into `~/.swarm/workflows/` to use them
-anywhere.
+(`work.yaml`, `review.yaml`, `analyze.yaml`, …) — run them with
+`bun run swarm run work --input "…"` from the swarm repo cwd, or copy
+the ones you want into `~/.swarm/workflows/` to use them anywhere.
 
 The harness prints its URL on the `ready` line as a clickable
 hyperlink — open <http://localhost:6767> to watch the run live, steer

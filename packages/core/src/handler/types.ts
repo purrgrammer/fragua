@@ -166,9 +166,8 @@ export interface HandlerContext {
   readonly externalCall: ExternalCall;
   /**
    * Substitution args for prompt templating. Passed to `substitute()` before
-   * the prompt hits the LLM. `$ARGUMENTS` carries the run's free-form input
-   * (`run_state.routing.input`); `inputs` carries the resolved
-   * `${{ inputs.x }}` bindings (declared defaults ⊕ run-provided `--input`).
+   * the prompt hits the LLM. `inputs` carries the resolved `${{ inputs.x }}`
+   * bindings (declared defaults ⊕ run-provided `--input name=value`).
    */
   readonly args: Readonly<SubstitutionArgs>;
   /**

@@ -210,8 +210,9 @@ export function createRoutes(deps: ServerDeps): Hono {
       priority?: number;
       runId?: string;
       routing?: Record<string, unknown>;
-      /** Free-form input — lands in `routing.input`, where the
-       * executor's buildSubstitutionArgs() picks it up as $ARGUMENTS. */
+      /** Free-form run description — lands in `routing.input` and seeds
+       * the auto-title / UI fallback. Not substituted into prompts; use
+       * `inputs` for `${{ inputs.name }}` substitution. */
       input?: string;
       /** Typed run inputs (`--input name=value`) — validated against the
        * workflow's `inputs:` block, then stored on `routing.inputs` for

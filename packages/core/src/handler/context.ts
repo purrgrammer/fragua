@@ -48,9 +48,8 @@ export interface BuildContextOpts {
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];
   recorder: SideEffectRecorder;
-  /** Prompt-substitution args: `$ARGUMENTS` (from `routing.input`) plus
-   * resolved `${{ inputs.x }}` bindings. Passed through to HandlerContext
-   * unchanged. */
+  /** Prompt-substitution args: resolved `${{ inputs.x }}` bindings.
+   * Passed through to HandlerContext unchanged. */
   args?: Readonly<SubstitutionArgs>;
   /** Observability sink. Every ctx.emit(type, payload) call routes here.
    * The executor wires this to a collector it drains into

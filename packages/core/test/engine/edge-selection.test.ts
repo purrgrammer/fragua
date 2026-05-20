@@ -38,13 +38,13 @@ describe("outgoingEdges", () => {
 describe("selectEdge — boundary", () => {
   test("source with no outgoing edges returns undefined", () => {
     const graph = g(["A"], []);
-    expect(selectEdge({ graph, source: nodeA, outcome: outcome(), context: {} })).toBeUndefined();
+    expect(selectEdge({ graph, source: nodeA, outcome: outcome() })).toBeUndefined();
   });
 
   test("non-routing source with no outgoing edges returns undefined", () => {
     const routingNode: Node = { id: "A", type: "llm", attrs: { routes: ["x", "y"] } };
     const graph = g(["A"], []);
-    expect(selectEdge({ graph, source: routingNode, outcome: outcome({ route: "x" }), context: {} })).toBeUndefined();
+    expect(selectEdge({ graph, source: routingNode, outcome: outcome({ route: "x" }) })).toBeUndefined();
   });
 });
 
@@ -53,14 +53,14 @@ describe("selectEdge — boundary", () => {
 describe("selectEdge — outcome case (non-routing source)", () => {
   test("unannotated edge defaults to outcome=success and fires on success", () => {
     const graph = g(["A", "B"], [edge("A", "B")]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "success" }), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "success" }) });
     expect(res?.edge.to).toBe("B");
     expect(res?.rule).toBe("outcome");
   });
 
   test("outcome=fail edge fires on fail outcome", () => {
     const graph = g(["A", "B", "C"], [edge("A", "B", { outcome: "fail" }), edge("A", "C", { outcome: "success" })]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "fail" }), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "fail" }) });
     expect(res?.edge.to).toBe("B");
     expect(res?.rule).toBe("outcome");
   });
@@ -69,40 +69,40 @@ describe("selectEdge — outcome case (non-routing source)", () => {
     // An unannotated edge defaults to outcome=success, so a fail outcome
     // must NOT silently match it.
     const graph = g(["A", "B"], [edge("A", "B")]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "fail" }), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "fail" }) });
     expect(res).toBeUndefined();
   });
 
   test("explicit outcome=success edge fires on success", () => {
     const graph = g(["A", "B"], [edge("A", "B", { outcome: "success" })]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "success" }), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "success" }) });
     expect(res?.edge.to).toBe("B");
     expect(res?.rule).toBe("outcome");
   });
 
   test("outcome=fail does not match a success outcome", () => {
     const graph = g(["A", "B"], [edge("A", "B", { outcome: "fail" })]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "success" }), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "success" }) });
     expect(res).toBeUndefined();
   });
 
   test("retry status matches outcome=fail edge only when annotated fail", () => {
     // outcome=fail does not fire for status=retry
     const graph = g(["A", "B"], [edge("A", "B", { outcome: "fail" })]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "retry" }), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "retry" }) });
     expect(res).toBeUndefined();
   });
 
   test("matched field is absent for outcome-case selections", () => {
     const graph = g(["A", "B"], [edge("A", "B")]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome(), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome() });
     expect(res?.matched).toBeUndefined();
   });
 
   test("first matching edge wins (graph source order)", () => {
     // Both edges match outcome=success (one explicit, one implicit).
     const graph = g(["A", "X", "Y"], [edge("A", "X", { outcome: "success" }), edge("A", "Y")]);
-    const res = selectEdge({ graph, source: nodeA, outcome: outcome(), context: {} });
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome() });
     expect(res?.edge.to).toBe("X");
   });
 });
@@ -117,7 +117,7 @@ describe("selectEdge — route case (routing source)", () => {
       ["A", "X", "Y", "Z"],
       [edge("A", "X", { route: "small" }), edge("A", "Y", { route: "feature" }), edge("A", "Z", { route: "blocked" })],
     );
-    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "feature" }), context: {} });
+    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "feature" }) });
     expect(res?.edge.to).toBe("Y");
     expect(res?.rule).toBe("route");
     expect(res?.matched).toBe("feature");
@@ -125,25 +125,25 @@ describe("selectEdge — route case (routing source)", () => {
 
   test("route with no matching edge returns undefined", () => {
     const graph = g(["A", "X"], [edge("A", "X", { route: "small" })]);
-    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "missing" }), context: {} });
+    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "missing" }) });
     expect(res).toBeUndefined();
   });
 
   test("routing source with no route in outcome returns undefined", () => {
     const graph = g(["A", "X"], [edge("A", "X", { route: "small" })]);
-    const res = selectEdge({ graph, source: routingNode, outcome: outcome(), context: {} });
+    const res = selectEdge({ graph, source: routingNode, outcome: outcome() });
     expect(res).toBeUndefined();
   });
 
   test("routing source with empty route string returns undefined", () => {
     const graph = g(["A", "X"], [edge("A", "X", { route: "small" })]);
-    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "" }), context: {} });
+    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "" }) });
     expect(res).toBeUndefined();
   });
 
   test("matched carries the chosen route name", () => {
     const graph = g(["A", "X"], [edge("A", "X", { route: "blocked" })]);
-    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "blocked" }), context: {} });
+    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "blocked" }) });
     expect(res?.matched).toBe("blocked");
     expect(res?.rule).toBe("route");
   });
@@ -152,7 +152,7 @@ describe("selectEdge — route case (routing source)", () => {
     // A routing node with an outcome=success edge should NOT match
     // the outcome-case path — it can only match via route=.
     const graph = g(["A", "X"], [edge("A", "X", { outcome: "success" })]);
-    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "small" }), context: {} });
+    const res = selectEdge({ graph, source: routingNode, outcome: outcome({ route: "small" }) });
     expect(res).toBeUndefined();
   });
 });

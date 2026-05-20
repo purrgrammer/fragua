@@ -713,7 +713,7 @@ export interface HandlerContext {
     getFrom(scope: ArtifactScope): Uint8Array;
   };
   readonly externalCall: <T>(params: { toolName: string; args: unknown; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
-  readonly args: Readonly<Record<string, string>>;          // substitution args ($ARGUMENTS)
+  readonly args: Readonly<{ inputs?: Record<string, string> }>;  // substitution args (${{ inputs.x }})
   readonly emit: (type: string, payload: Record<string, unknown>) => void;  // observability events (agent.* / llm.* / tool.* / cost.recorded / summary.*)
   readonly humanInput?: { route: string; note?: string } | string;
   readonly steering?: string;
@@ -941,7 +941,7 @@ app.post("/runs", async (c) => {
     runId?: string;
     priority?: number;
     routing?: Record<string, unknown>;
-    input?: string;          // free-form input → routing.input → $ARGUMENTS
+    input?: string;          // free-form description → routing.input (auto-title seed; not substituted)
     inputs?: Record<string, string>;  // typed inputs → routing.inputs → ${{ inputs.x }}; validated against the inputs: block (400 invalid_inputs)
     cwd?: string;            // absolute project root at enqueue time; surfaced on run_state.cwd
     workflowName?: string;   // resolved name when the caller passed a bare name
@@ -1204,7 +1204,7 @@ packages/
         edge-selection.ts              ← two-case algorithm: route-case | outcome-case (SPEC §3.6)
         retry-policy.ts                ← per-node retry counter (§3.6)
         thread.ts                      ← thread_id resolution
-        substitution.ts                ← $ARGUMENTS only (SPEC §3.8)
+        substitution.ts                ← ${{ inputs.x }} only (SPEC §3.8)
       types/
         execution.ts                   ← ExecutionEnvironment interface
         events.ts                      ← fact + intent + observability

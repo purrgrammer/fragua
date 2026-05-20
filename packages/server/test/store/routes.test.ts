@@ -424,7 +424,7 @@ steps:
     }
   });
 
-  test("body.input lands on routing.input — the $ARGUMENTS bridge", async () => {
+  test("body.input lands on routing.input (run description / title seed)", async () => {
     const res = await req("POST", "/runs", { workflowSha: "wf", input: "rename foo to bar" });
     expect(res.status).toBe(200);
     const { runId } = (await res.json()) as { runId: string };

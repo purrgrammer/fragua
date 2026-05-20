@@ -6,17 +6,6 @@ import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 describe("buildSubstitutionArgs", () => {
-  test("sets $ARGUMENTS from routing.input when it is a string", () => {
-    const args = buildSubstitutionArgs({ input: "rename foo to bar" });
-    expect(args.$ARGUMENTS).toBe("rename foo to bar");
-  });
-
-  test("omits $ARGUMENTS when routing.input is missing or non-string", () => {
-    expect(buildSubstitutionArgs({}).$ARGUMENTS).toBeUndefined();
-    expect(buildSubstitutionArgs({ input: 42 }).$ARGUMENTS).toBeUndefined();
-    expect(buildSubstitutionArgs({ input: null }).$ARGUMENTS).toBeUndefined();
-  });
-
   test("resolves ${{ inputs.x }} bindings: declared defaults overlaid by routing.inputs", () => {
     const decls = [
       { name: "env", type: "string" as const, required: false, default: "dev" },

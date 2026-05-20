@@ -60,8 +60,9 @@ export interface RunCommandOptions {
   priority?: number;
   /** Starting routing entries injected into run_state.routing. */
   routing?: Record<string, unknown>;
-  /** Positional input — piped into the workflow's `$ARGUMENTS` token via
-   * `routing.input` on enqueue. */
+  /** Positional input — the run's free-form description, stored on
+   * `routing.input` to seed the auto-title. Not substituted into the
+   * workflow; use `inputs` for `${{ inputs.name }}` substitution. */
   input?: string;
   /** Typed run inputs (`--input name=value`). Validated against the
    * workflow's `inputs:` block and substituted as `${{ inputs.name }}`. */

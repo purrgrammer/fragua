@@ -201,7 +201,7 @@ export interface RunState {
    * Populated by the daemon's auto-titler after `fact.run_started` via
    * `setRunTitle`. `null` until the summariser produces one; `null` is
    * also the terminal state when summarisation is disabled or failed —
-   * the UI falls back to `routing.input` ($ARGUMENTS) in that case. */
+   * the UI falls back to `routing.input` in that case. */
   title: string | null;
   /** HEAD sha of the worktree at provision time. Set by the executor on
    * `fact.run_started` when a `WorktreeProvisioner` is configured.

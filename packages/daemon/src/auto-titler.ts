@@ -23,7 +23,7 @@
 // Failures are intentionally silent: the summariser is a "nice to have"
 // — missing API keys, network blips, or an OFF config toggle all leave
 // the run with `title = null`, and the UI falls back to the raw
-// `$ARGUMENTS` on `routing.input`.
+// `routing.input` (the run's free-form description).
 
 import { type EventType, type SummariseInput, type SummariserBackend, titleSyntheticNodeId } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
@@ -48,8 +48,8 @@ export interface AutoTitlerOpts {
 export interface TitleRequest {
   runId: string;
   workflowSha: string;
-  /** Raw `$ARGUMENTS` text. When empty, titling is skipped — there's
-   * nothing to summarise. */
+  /** Raw `routing.input` text (the run's free-form description). When
+   * empty, titling is skipped — there's nothing to summarise. */
   input: string;
   /** Workflow-level goal (graph.goal attr). Optional; passed to the
    * summariser to frame the title. */

@@ -195,11 +195,11 @@ describe("makeToolHandler — substitution", () => {
   // `--filter=@swarm/core`), so existing workflows that pre-quoted
   // their substitutions keep the same semantics.
 
-  test("$ARGUMENTS is substituted into tool_command (shell-quoted)", async () => {
-    const ctx = stubCtx({ args: { $ARGUMENTS: "auth.ts" } });
+  test("an input is substituted into tool_command (shell-quoted)", async () => {
+    const ctx = stubCtx({ args: { inputs: { file: "auth.ts" } } });
     let ranWith = "";
     const spec = makeToolHandler({
-      toolCommand: "bun test $ARGUMENTS",
+      toolCommand: "bun test ${{ inputs.file }}",
       spawner: async (cmd) => {
         ranWith = cmd;
         return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
@@ -209,11 +209,11 @@ describe("makeToolHandler — substitution", () => {
     expect(ranWith).toBe("bun test 'auth.ts'");
   });
 
-  test("a $ARGUMENTS value carrying a newline stays one shell token (POSIX single-quoted)", async () => {
-    const ctx = stubCtx({ args: { $ARGUMENTS: "9876\n" } });
+  test("an input value carrying a newline stays one shell token (POSIX single-quoted)", async () => {
+    const ctx = stubCtx({ args: { inputs: { port: "9876\n" } } });
     let ranWith = "";
     const spec = makeToolHandler({
-      toolCommand: "echo $ARGUMENTS",
+      toolCommand: "echo ${{ inputs.port }}",
       spawner: async (cmd) => {
         ranWith = cmd;
         return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
@@ -226,10 +226,10 @@ describe("makeToolHandler — substitution", () => {
   });
 
   test("a value containing single quotes is escaped per POSIX (close-quote, escaped quote, reopen)", async () => {
-    const ctx = stubCtx({ args: { $ARGUMENTS: "it's fine" } });
+    const ctx = stubCtx({ args: { inputs: { note: "it's fine" } } });
     let ranWith = "";
     const spec = makeToolHandler({
-      toolCommand: "echo $ARGUMENTS",
+      toolCommand: "echo ${{ inputs.note }}",
       spawner: async (cmd) => {
         ranWith = cmd;
         return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };

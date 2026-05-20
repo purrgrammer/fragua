@@ -64,9 +64,9 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
   const run: handler.Handler = async (ctx) => {
     const node = opts.node;
     const rawPrompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt : "";
-    // Substitute $ARGUMENTS before the prompt hits the LLM. Without this
-    // the agent sees the literal placeholder and every workflow with an
-    // abort-on-empty guard halts on its first node.
+    // Resolve `${{ inputs.x }}` before the prompt hits the LLM. Without
+    // this the agent sees the literal placeholder and every workflow with
+    // an abort-on-empty guard halts on its first node.
     const prompt = substitute(rawPrompt, { args: ctx.args });
     const graphGoal = typeof ctx.routing["graph.goal"] === "string" ? (ctx.routing["graph.goal"] as string) : undefined;
 

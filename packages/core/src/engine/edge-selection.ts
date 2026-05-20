@@ -27,7 +27,6 @@ export interface EdgeSelectionInput {
   graph: Graph;
   source: Node;
   outcome: Outcome;
-  context: Record<string, unknown>;
 }
 
 /** Outgoing edges of `source` in the order they appear in graph.edges. */

@@ -41,7 +41,7 @@ The context object the executor hands to every handler. The fields below are the
 
 ### `ctx.args: Readonly<SubstitutionArgs>`
 
-Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. `$ARGUMENTS` carries the run's free-form input (`run_state.routing.input` — CLI positional or `POST /runs` `input`); `inputs` is the resolved `${{ inputs.<name> }}` map (declared `default:` values overlaid by run-provided `--input name=value`, stored on `routing.inputs`). Cross-node data transfer happens through shared `thread:` (SPEC §3.3), with optional per-node `summary:` for compression, not through prompt substitution.
+Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. `inputs` is the resolved `${{ inputs.<name> }}` map (declared `default:` values overlaid by run-provided `--input name=value`, stored on `routing.inputs`). The run's free-form `routing.input` (CLI positional or `POST /runs` `input`) is the run description / auto-title seed and is **not** substituted into prompts. Cross-node data transfer happens through shared `thread:` (SPEC §3.3), with optional per-node `summary:` for compression, not through prompt substitution.
 
 ### `ctx.emit(type, payload): void`
 
@@ -350,11 +350,11 @@ scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
 ```yaml
   run_tests:
     type: tool
-    run: bun test $ARGUMENTS
+    run: bun test ${{ inputs.filter }}
     retry: implement   # re-run `implement` until tests pass (goal gate)
 ```
 
-`run:` (stored as `tool_command`) substitutes `$ARGUMENTS` (POSIX-quoted)
+`run:` (stored as `tool_command`) substitutes `${{ inputs.<name> }}` (POSIX-quoted)
 and runs the shell command. Stdout + stderr become artifacts keyed by
 `${nodeId}:stdout` / `${nodeId}:stderr` for debugging / replay; tool
 nodes do not feed data forward to downstream nodes. A workflow that
@@ -366,7 +366,8 @@ A tool node is not an agent tool. Agent-callable tools (read / write /
 edit / bash) are what an LLM invokes *inside* an llm turn; the
 graph-level `tool` node is a distinct primitive for side-effect-only
 shell steps (CI gates, idempotent commands) with no LLM in the loop.
-See `.swarm/workflows/ci-gate.yaml` for a pure-tool example.
+See the `format` / `ci` steps in `.swarm/workflows/work.yaml` for
+`tool` nodes in a mixed pipeline.
 
 ## LLM self-abort (`abort` tool)
 

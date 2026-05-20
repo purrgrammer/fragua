@@ -1114,7 +1114,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             graph,
             source: srcNode,
             outcome: selectorOutcome,
-            context: state.routing,
           });
           if (selection != null) {
             result.nextNode = selection.edge.to;
@@ -1992,8 +1991,6 @@ export function buildSubstitutionArgs(
   inputDecls?: readonly InputDecl[],
 ): SubstitutionArgs {
   const args: SubstitutionArgs = {};
-  const input = routing["input"];
-  if (typeof input === "string") args.$ARGUMENTS = input;
   // `${{ inputs.x }}` bindings: declared defaults overlaid by the run's
   // provided `routing.inputs` map (set at enqueue from `--input k=v`).
   const resolved = resolveInputBindings(inputDecls, readStringMap(routing["inputs"]));

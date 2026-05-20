@@ -21,10 +21,11 @@ export type SummaryPurpose = "title" | "thread";
  * invocation — there's no persistent state on the backend. */
 export interface SummariseInput {
   purpose: SummaryPurpose;
-  /** Raw text to summarise. For `purpose="title"` this is the user's
-   * `$ARGUMENTS`; for `purpose="thread"` this is a pre-digest of the
-   * prior transcript (role census + last N messages). Summariser impls
-   * must accept arbitrary length and clip/chunk internally. */
+  /** Raw text to summarise. For `purpose="title"` this is the run's
+   * free-form description (`routing.input`); for `purpose="thread"` this
+   * is a pre-digest of the prior transcript (role census + last N
+   * messages). Summariser impls must accept arbitrary length and
+   * clip/chunk internally. */
   input: string;
   /** Workflow-level goal. Frames the compression prompt so the
    * summariser keeps whatever part of `input` serves the goal. */

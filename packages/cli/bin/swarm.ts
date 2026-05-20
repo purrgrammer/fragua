@@ -357,8 +357,9 @@ cli
   .command(
     "run <workflow> [...input]",
     "Upload a workflow, enqueue a run, stream events to stdout. " +
-      "Trailing positional args are joined with ' ' and piped into the workflow's " +
-      "\\$ARGUMENTS token. Typed inputs go through --input name=value (repeatable)",
+      "Trailing positional args are joined with ' ' as the run's free-form " +
+      "description (seeds the auto-title). Inputs that substitute into the " +
+      "workflow go through --input name=value (repeatable)",
   )
   .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
   .option(
@@ -416,7 +417,7 @@ cli
   .command("schedule [action] [target]", "Manage recurring workflow runs (run without args for help)")
   .option("--every <interval>", "`add` only: 30m | 1h | 6h | 24h | 3d | 7d (required)")
   .option("--cwd <dir>", "Project root for `add` / filter for `list`")
-  .option("--input <text>", "`add` only: $ARGUMENTS piped to every fire")
+  .option("--input <text>", "`add` only: free-form description for every fire (seeds the title)")
   .option("--on-overlap <policy>", "`add` only: skip | queue | concurrent (default skip)")
   .option("--no-fire-on-create", "`add` only: wait one full interval before the first fire")
   .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
