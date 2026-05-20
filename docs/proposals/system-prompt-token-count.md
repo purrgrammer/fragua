@@ -147,8 +147,8 @@ doesn't carry a model id. To pick the right tokenizer per row:
 - The next assistant message in the same `nodeId` group carries the
   model — call it through `RunDetail.nodes` or query the `llm.*` events
   scoped to that node.
-- The workflow node's `attrs` may pin a model (`llm_provider` /
-  `llm_model`), with the project / global config defaulting otherwise.
+- The workflow node's `attrs` may pin a model (`provider` /
+  `model`), with the project / global config defaulting otherwise.
 
 Either path is doable but means the UI / server lookup is one indirection
 deep, not a constant. This is the load-bearing reason Option 3 is more

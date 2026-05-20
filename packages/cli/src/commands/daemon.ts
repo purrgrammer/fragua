@@ -119,11 +119,10 @@ export interface DaemonCommandOptions {
   dbPath?: string;
   /** Max concurrent runs. Default 4. */
   concurrency?: number;
-  /** LLM provider override. When set with `llmModel`, enables the real
-   * llm path. Mirrors workflow node `llm_provider` (attractor §2.6). */
-  llmProvider?: string;
-  /** LLM model id. Mirrors workflow node `llm_model` (attractor §2.6). */
-  llmModel?: string;
+  /** LLM provider override. When set with `model`, enables the real llm path. */
+  provider?: string;
+  /** LLM model id. */
+  model?: string;
 }
 
 export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<number> {
@@ -150,7 +149,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const modelRegistry = ModelRegistry.create(authStorage, store);
   const getApiKey = (p: string) => authStorage.getApiKey(p);
 
-  // Resolve llm_provider/llm_model. Precedence: CLI flags >
+  // Resolve provider/model. Precedence: CLI flags >
   // .swarm/config.yaml defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
   let timeouts: ReturnType<typeof resolveTimeouts>;
@@ -160,10 +159,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     console.error(chalk.red((err as Error).message));
     return 1;
   }
-  const cfgProvider = config.defaults?.llm_provider;
-  const cfgModel = config.defaults?.llm_model;
-  let provider = opts.llmProvider;
-  let model = opts.llmModel;
+  const cfgProvider = config.defaults?.provider;
+  const cfgModel = config.defaults?.model;
+  let provider = opts.provider;
+  let model = opts.model;
   let llmSource: "flags" | "config" | "env" | "stub" = "stub";
   if (provider != null && model != null) {
     llmSource = "flags";
@@ -407,7 +406,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   );
 
   // Auto-title summariser — cheap cross-run call that labels each run
-  // post-enqueue. Uses `summariser.{llm_provider,llm_model}` when set;
+  // post-enqueue. Uses `summariser.{provider,model}` when set;
   // otherwise defaults to the cheapest known model for the
   // primary provider. `autoTitle: false` disables even when a backend
   // is configured.
@@ -470,7 +469,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     : "stub (set a provider API key, or pass --llm-provider + --llm-model)";
   console.log(chalk.dim(`  llm default: ${llmLabel}`));
   if (useLlm) {
-    console.log(chalk.dim(`  nodes can override via \`llm_provider=\`/\`llm_model=\` attrs`));
+    console.log(chalk.dim(`  nodes can override via \`provider=\`/\`model=\` attrs`));
   }
   // Explicit summariser line so operators see the wired model. When
   // `buildSummariserBackend` rejected the configured model at validation
@@ -548,9 +547,9 @@ function buildSummariserBackend(args: {
   getApiKey: (provider: string) => Promise<string | undefined>;
 }): SummariserInfo {
   const { config, primaryProvider, modelRegistry, getApiKey } = args;
-  const sumProvider = config.summariser?.llm_provider ?? primaryProvider;
+  const sumProvider = config.summariser?.provider ?? primaryProvider;
   if (!sumProvider) return { backend: undefined, label: undefined };
-  const sumModel = config.summariser?.llm_model ?? defaultSummariserModel(sumProvider);
+  const sumModel = config.summariser?.model ?? defaultSummariserModel(sumProvider);
   if (!sumModel) return { backend: undefined, label: `no default model for ${sumProvider}` };
   // Validate at boot — the summariser's resolveModel throws lazily on
   // first call, which surfaces deep inside whatever path triggered it

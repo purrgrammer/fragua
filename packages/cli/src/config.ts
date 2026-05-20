@@ -12,7 +12,7 @@
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
 // (`defaults`, `blobGc`, `skills`, `timeouts`, `summariser`) merge one level
-// deep so a project config can override `defaults.llm_model` without losing
+// deep so a project config can override `defaults.model` without losing
 // the global `summariser` block.
 //
 // Missing files → `{}` (first-run UX). Malformed file or schema-invalid
@@ -31,16 +31,16 @@ const TimeoutValue = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
 
 const Summariser = Type.Object(
   {
-    llm_provider: Type.Optional(Type.String()),
-    llm_model: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
 
 const Defaults = Type.Object(
   {
-    llm_provider: Type.Optional(Type.String()),
-    llm_model: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
     permissions: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

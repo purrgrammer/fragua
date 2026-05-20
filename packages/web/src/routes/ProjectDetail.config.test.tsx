@@ -76,7 +76,7 @@ describe("ProjectDetail · Config tab", () => {
 
   test("renders summary from .swarm/config.yaml", async () => {
     installFetchWithConfig({
-      yamlConfig: `bootstrap: "bun install --frozen-lockfile"\ndefaults:\n  llm_provider: anthropic\n`,
+      yamlConfig: `bootstrap: "bun install --frozen-lockfile"\ndefaults:\n  provider: anthropic\n`,
       jsoncConfig: null,
     });
     const { container } = renderAt(`/projects/${TEST_ENC}`);

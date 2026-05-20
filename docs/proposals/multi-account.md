@@ -40,7 +40,7 @@ accounts are first-class.
 ### A. Custom-provider workaround (rejected)
 
 Register `anthropic-work`, `anthropic-personal` as separate provider
-entries. Workflow declares `llm_provider="anthropic-work"`.
+entries. Workflow declares `provider="anthropic-work"`.
 
 Rejected for three reasons:
 
@@ -58,7 +58,7 @@ Rejected for three reasons:
 ### B. First-class accounts under one provider type (recommended)
 
 Credentials become `(provider, account, credential)`. Workflow refs
-stay `llm_provider="anthropic"` — account is selected at the
+stay `provider="anthropic"` — account is selected at the
 operational layer. A reserved `"default"` account name preserves
 today's single-account ergonomics: existing `auth.json` files import
 as `{ anthropic: { default: <cred> } }` with no behaviour change for

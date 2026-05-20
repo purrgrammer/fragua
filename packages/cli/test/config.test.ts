@@ -45,12 +45,12 @@ describe("loadConfig", () => {
   test("parses defaults.provider and defaults.model", async () => {
     await write(`
 defaults:
-  llm_provider: openrouter
-  llm_model: "anthropic/claude-opus-4.7"
+  provider: openrouter
+  model: "anthropic/claude-opus-4.7"
 `);
     const cfg = await load();
-    expect(cfg.defaults?.llm_provider).toBe("openrouter");
-    expect(cfg.defaults?.llm_model).toBe("anthropic/claude-opus-4.7");
+    expect(cfg.defaults?.provider).toBe("openrouter");
+    expect(cfg.defaults?.model).toBe("anthropic/claude-opus-4.7");
   });
 
   test("throws on malformed YAML (no silent fallback)", async () => {
@@ -105,11 +105,11 @@ timeouts:
   test("global → project cascade: project keys win, nested objects merge one level deep", async () => {
     await writeGlobal(`
 defaults:
-  llm_provider: anthropic
-  llm_model: claude-sonnet-4.7
+  provider: anthropic
+  model: claude-sonnet-4.7
 summariser:
-  llm_provider: anthropic
-  llm_model: claude-haiku-4.6
+  provider: anthropic
+  model: claude-haiku-4.6
 autoTitle: true
 blocklist:
   - "sudo "
@@ -117,13 +117,13 @@ blocklist:
     await write(`
 bootstrap: "bun install --frozen-lockfile"
 defaults:
-  llm_model: claude-opus-4.7
+  model: claude-opus-4.7
 `);
     const cfg = await load();
     expect(cfg.bootstrap).toBe("bun install --frozen-lockfile");
-    expect(cfg.defaults?.llm_provider).toBe("anthropic"); // from global
-    expect(cfg.defaults?.llm_model).toBe("claude-opus-4.7"); // project override
-    expect(cfg.summariser?.llm_model).toBe("claude-haiku-4.6"); // global wins (project didn't set)
+    expect(cfg.defaults?.provider).toBe("anthropic"); // from global
+    expect(cfg.defaults?.model).toBe("claude-opus-4.7"); // project override
+    expect(cfg.summariser?.model).toBe("claude-haiku-4.6"); // global wins (project didn't set)
     expect(cfg.autoTitle).toBe(true); // global only
     expect(cfg.blocklist).toEqual(["sudo "]); // global only
   });
@@ -131,19 +131,19 @@ defaults:
   test("hoisted summariser key validates at the top level (not under defaults)", async () => {
     await writeGlobal(`
 summariser:
-  llm_provider: anthropic
-  llm_model: claude-haiku-4-5
+  provider: anthropic
+  model: claude-haiku-4-5
 `);
     const cfg = await load();
-    expect(cfg.summariser?.llm_provider).toBe("anthropic");
-    expect(cfg.summariser?.llm_model).toBe("claude-haiku-4-5");
+    expect(cfg.summariser?.provider).toBe("anthropic");
+    expect(cfg.summariser?.model).toBe("claude-haiku-4-5");
   });
 
   test("rejects legacy defaults.summariser nesting", async () => {
     await writeGlobal(`
 defaults:
   summariser:
-    llm_provider: anthropic
+    provider: anthropic
 `);
     await expect(load()).rejects.toThrow(/validation failed/);
   });
@@ -181,11 +181,11 @@ web:
     test("reads <cwd>/.swarm/config.yaml", async () => {
       await write(`
 defaults:
-  llm_provider: openrouter
-  llm_model: "anthropic/claude-opus-4.7"
+  provider: openrouter
+  model: "anthropic/claude-opus-4.7"
 `);
       const cfg = await load();
-      expect(cfg.defaults?.llm_provider).toBe("openrouter");
+      expect(cfg.defaults?.provider).toBe("openrouter");
     });
 
     test("YAML wins when both .yaml and .jsonc exist in the same layer", async () => {
@@ -236,23 +236,23 @@ defaults:
     test("YAML supports the full cascade", async () => {
       await writeGlobal(`
 defaults:
-  llm_provider: anthropic
-  llm_model: claude-sonnet-4.7
+  provider: anthropic
+  model: claude-sonnet-4.7
 summariser:
-  llm_provider: anthropic
-  llm_model: claude-haiku-4.6
+  provider: anthropic
+  model: claude-haiku-4.6
 autoTitle: true
 `);
       await write(`
 bootstrap: "bun install --frozen-lockfile"
 defaults:
-  llm_model: claude-opus-4.7
+  model: claude-opus-4.7
 `);
       const cfg = await load();
       expect(cfg.bootstrap).toBe("bun install --frozen-lockfile");
-      expect(cfg.defaults?.llm_provider).toBe("anthropic");
-      expect(cfg.defaults?.llm_model).toBe("claude-opus-4.7");
-      expect(cfg.summariser?.llm_model).toBe("claude-haiku-4.6");
+      expect(cfg.defaults?.provider).toBe("anthropic");
+      expect(cfg.defaults?.model).toBe("claude-opus-4.7");
+      expect(cfg.summariser?.model).toBe("claude-haiku-4.6");
       expect(cfg.autoTitle).toBe(true);
     });
 
@@ -270,15 +270,15 @@ defaults:
         `{
       // pin model so the demo doesn't drift
       "defaults": {
-        "llm_provider": "ppq",
-        "llm_model": "claude-sonnet-4.6",
+        "provider": "ppq",
+        "model": "claude-sonnet-4.6",
       },
     }`,
         "jsonc",
       );
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
       try {
-        expect((await load()).defaults?.llm_provider).toBe("ppq");
+        expect((await load()).defaults?.provider).toBe("ppq");
       } finally {
         warnSpy.mockRestore();
       }

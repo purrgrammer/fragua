@@ -485,8 +485,8 @@ interface ConfigShape {
   concurrency?: number;
   maxLoops?: number;
   defaults?: {
-    llm_provider?: string;
-    llm_model?: string;
+    provider?: string;
+    model?: string;
     permissions?: string;
   };
 }
@@ -499,12 +499,12 @@ function ConfigValues({ parsed }: { parsed: ConfigShape }): JSX.Element {
       value: <span className="text-sw-text">{parsed.name}</span>,
       testid: "project-config-name",
     });
-  if (parsed.defaults?.llm_provider || parsed.defaults?.llm_model) {
+  if (parsed.defaults?.provider || parsed.defaults?.model) {
     rows.push({
       label: "Default LLM",
       value: (
         <code className="font-mono text-sw-text">
-          {[parsed.defaults?.llm_provider, parsed.defaults?.llm_model].filter(Boolean).join(" · ")}
+          {[parsed.defaults?.provider, parsed.defaults?.model].filter(Boolean).join(" · ")}
         </code>
       ),
       testid: "project-config-llm",

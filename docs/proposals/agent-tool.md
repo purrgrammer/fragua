@@ -113,7 +113,7 @@ On each call:
    `spec.allowed_tools` / `spec.disallowed_tools`, then strip
    `agent` so children can't recursively spawn).
 4. Synthesise a node carrying the child's `system_prompt` /
-   `allowed_tools` / `skills` / `llm_provider` / `llm_model` /
+   `allowed_tools` / `skills` / `provider` / `model` /
    `context_files: []` attrs. The nodeId is `__subagent:<id>`,
    used only as a thread namespace and message-table discriminator.
 5. Emit `subagent.start` on the parent's stream.

@@ -29,7 +29,7 @@ last-reviewed: 2026-05-03
 `~/.swarm/config.yaml` is the user-preference layer. Project config
 overlays it; project keys win, nested objects merge one level deep.
 
-- `defaults.{llm_provider, llm_model, permissions, summariser}` — LLM
+- `defaults.{provider, model, permissions, summariser}` — LLM
   + permission preferences.
 - `autoTitle`, `blocklist`, `concurrency`, `maxLoops`,
   `maxQueuedRuns`, `abortLoopCeiling`, `maxLeakedHandlers`.
@@ -37,8 +37,8 @@ overlays it; project keys win, nested objects merge one level deep.
 
 ## What's NOT happening for now
 
-- Per-project LLM defaults (`defaults.llm_provider` /
-  `defaults.llm_model`). Global-only.
+- Per-project LLM defaults (`defaults.provider` /
+  `defaults.model`). Global-only.
 - Per-project summariser config. Global-only.
 - Per-project blocklist. Global-only.
 - Per-project `autoTitle` toggle. Global-only.
