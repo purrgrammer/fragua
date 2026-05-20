@@ -769,9 +769,9 @@ describe("makeSpawnSubagent", () => {
     let observedModel: string | undefined;
     const backend = new StubBackend((input) => {
       observedProvider =
-        typeof input.node.attrs["llm_provider"] === "string" ? (input.node.attrs["llm_provider"] as string) : undefined;
+        typeof input.node.attrs["provider"] === "string" ? (input.node.attrs["provider"] as string) : undefined;
       observedModel =
-        typeof input.node.attrs["llm_model"] === "string" ? (input.node.attrs["llm_model"] as string) : undefined;
+        typeof input.node.attrs["model"] === "string" ? (input.node.attrs["model"] as string) : undefined;
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();

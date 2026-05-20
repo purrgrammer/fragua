@@ -15,7 +15,7 @@ import { PiLlmBackend, type PiLlmBackendOptions } from "./backend.ts";
 export interface MakeLlmHandlerOpts {
   /**
    * The parsed graph node this handler corresponds to. The backend reads
-   * `node.attrs.prompt`, `node.attrs.llm_provider`, `node.attrs.llm_model`, etc.
+   * `node.attrs.prompt`, `node.attrs.provider`, `node.attrs.model`, etc.
    */
   node: Node;
   /**

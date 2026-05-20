@@ -278,8 +278,8 @@ export function makeSpawnSubagent(
     const childModel = spec.model ?? parentCtx.parentModel;
 
     // Synthetic node passed to the llm backend. The backend
-    // reads `system_prompt`, `allowed_tools`, `skills`, `llm_provider`,
-    // `llm_model` off `node.attrs`. The nodeId itself isn't stored
+    // reads `system_prompt`, `allowed_tools`, `skills`, `provider`,
+    // `model` off `node.attrs`. The nodeId itself isn't stored
     // anywhere persistent — it's only used to namespace messages in
     // the parent's transcript table.
     const node: Node = {
@@ -289,8 +289,8 @@ export function makeSpawnSubagent(
         ...(childSystemPrompt.length > 0 ? { system_prompt: childSystemPrompt } : {}),
         allowed_tools: childPool.map((t) => t.name),
         ...(effectiveSkills.length > 0 ? { skills: effectiveSkills.map((s) => s.name) } : {}),
-        llm_provider: childProvider,
-        llm_model: childModel,
+        provider: childProvider,
+        model: childModel,
         // No AGENTS.md auto-load — the parent's system prompt already
         // framed the persona; layering the project primer on top would
         // just inflate context.

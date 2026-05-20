@@ -84,11 +84,11 @@ export interface SubagentSpec {
   agentName?: string;
   /** Optional model override. When set (typically from a profile's
    *  `model:` frontmatter), the synthesised child node carries this
-   *  as `llm_model` instead of inheriting the parent's. */
+   *  as `model` instead of inheriting the parent's. */
   model?: string;
   /** Optional provider override. When set (typically from a profile's
    *  `provider:` frontmatter), the synthesised child node carries this
-   *  as `llm_provider` instead of inheriting the parent's. */
+   *  as `provider` instead of inheriting the parent's. */
   provider?: string;
   /** Pi-agent-core tool-call id of the parent's `agent` invocation
    *  (e.g. `toolu_01ABC…`). Required — feeds the deterministic

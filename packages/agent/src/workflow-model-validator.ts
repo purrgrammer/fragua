@@ -70,8 +70,8 @@ export function validateWorkflowModels(
   for (const node of Object.values(graph.nodes)) {
     if (node.type !== "llm") continue;
 
-    const model = typeof node.attrs.llm_model === "string" ? node.attrs.llm_model : undefined;
-    const provider = typeof node.attrs.llm_provider === "string" ? node.attrs.llm_provider : undefined;
+    const model = typeof node.attrs.model === "string" ? node.attrs.model : undefined;
+    const provider = typeof node.attrs.provider === "string" ? node.attrs.provider : undefined;
     if (!model) continue;
 
     if (provider) {

@@ -55,7 +55,7 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
   // Per-handler relevance gates — see lib/node-metadata.ts. The drawer
   // and the GraphView card share these predicates so a tool node never
   // surfaces an LLM section just because the stylesheet cascade pinned
-  // an `llm_model` attr it'll never call.
+  // a `model` attr it'll never call.
   const llmRelevant = showsLlm(handler, attrs);
   const retryRelevant = canRetry(handler);
   const skills = (attrs.skills as string[] | undefined) ?? [];
@@ -96,17 +96,17 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
       {/* Model & context. Gated on `showsLlm` so the section vanishes
        *  for handlers that never call an LLM (tool / start / exit /
        *  conditional / heuristic parallel.fan_in) even when the
-       *  stylesheet cascade resolved an llm_model. */}
-      {llmRelevant && (attrs.llm_model || attrs.llm_provider || attrs.summary || attrs.reasoning_effort) && (
+       *  stylesheet cascade resolved a model. */}
+      {llmRelevant && (attrs.model || attrs.provider || attrs.summary || attrs.reasoning_effort) && (
         <Section title="model & context">
-          {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
-          {attrs.llm_provider && (
+          {attrs.model && <Field label="model" value={<code className="text-sw-text">{attrs.model}</code>} />}
+          {attrs.provider && (
             <Field
               label="provider"
               value={
                 <span className="inline-flex items-center gap-1.5">
-                  <ModelSelectorLogo provider={attrs.llm_provider} />
-                  <code className="text-sw-text">{attrs.llm_provider}</code>
+                  <ModelSelectorLogo provider={attrs.provider} />
+                  <code className="text-sw-text">{attrs.provider}</code>
                 </span>
               }
             />

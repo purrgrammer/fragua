@@ -571,7 +571,7 @@ interface SwarmNodeData extends Record<string, unknown> {
   goalGate: boolean;
   /** model attribute, when set. */
   model: string | undefined;
-  /** `llm_provider` attribute. Surfaced alongside model so multi-provider
+  /** `provider` attribute. Surfaced alongside model so multi-provider
    *  workflows read at a glance which backend a node will hit. */
   provider: string | undefined;
   /** `reasoning_effort` (low | medium | high). Surfaced on the card so
@@ -763,8 +763,8 @@ export function toFlowGraph(
       customLabel: a?.label,
       handler,
       goalGate: Boolean(a?.goal_gate),
-      model: isLlmHandler ? a?.llm_model : undefined,
-      provider: isLlmHandler ? a?.llm_provider : undefined,
+      model: isLlmHandler ? a?.model : undefined,
+      provider: isLlmHandler ? a?.provider : undefined,
       reasoningEffort: isLlmHandler ? a?.reasoning_effort : undefined,
       threadId: isLlmHandler && typeof a?.thread_id === "string" ? a.thread_id : undefined,
       toolCommand: handler === "tool" && typeof a?.tool_command === "string" ? truncate(a.tool_command, 40) : undefined,

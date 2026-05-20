@@ -6,7 +6,7 @@ import { inputReferences } from "./substitution.ts";
 
 /** Whitelist of known node attribute names — the IR (snake_case) field set
  * the validator runs against, *after* the parser has lowered authoring keys
- * (`thread:` → `thread_id`, `model:` → `llm_model`, `context-files:` →
+ * (`thread:` → `thread_id`, `context-files:` →
  * `context_files`, …). Anything outside this set trips W013, surfacing typos
  * and parser passthrough that would otherwise silently no-op. Keep in sync
  * with `NodeAttrs` declared fields in `types/graph.ts`. */
@@ -17,8 +17,8 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "system_prompt",
   "context_files",
   "skills_disabled",
-  "llm_model",
-  "llm_provider",
+  "model",
+  "provider",
   "summary",
   "thread_id",
   "goal_gate",

@@ -16,13 +16,13 @@
 //   start / exit       |  no      |  no      |  no           |  no
 //
 // *conditional doesn't call an LLM today; the matrix collapses
-//  it into the "no LLM" bucket so the cascade-resolved llm_model
+//  it into the "no LLM" bucket so the cascade-resolved model
 //  doesn't render and mislead.
 
 import type { NodeAttrs } from "@swarm/core";
 
 /** True when the handler will issue an LLM call at runtime, which is the
- *  only case where `llm_model` / `llm_provider` / `reasoning_effort` /
+ *  only case where `model` / `provider` / `reasoning_effort` /
  *  `thread_id` are operationally meaningful. parallel.fan_in is the
  *  borderline case: it's LLM-driven only when the author wrote a
  *  `prompt` (otherwise the heuristic ranker runs and the model attrs

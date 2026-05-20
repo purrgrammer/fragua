@@ -56,9 +56,9 @@ export interface NodeStartedData {
   node_type?: string;
   /** Raw `node.attrs.prompt` before any substitution. */
   prompt_template?: string;
-  /** Model hint from `node.attrs.llm_model` — authoritative binding is on `llm.start`. */
+  /** Model hint from `node.attrs.model` — authoritative binding is on `llm.start`. */
   model?: string;
-  /** Provider hint from `node.attrs.llm_provider`. */
+  /** Provider hint from `node.attrs.provider`. */
   provider?: string;
   /** Resolved thread id (see engine/thread.ts). */
   thread_id?: string;

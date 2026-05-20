@@ -238,8 +238,8 @@ export class PiLlmBackend implements LlmBackend {
   }
 
   async run(input: LlmInput): Promise<Outcome> {
-    const provider = input.node.attrs.llm_provider ?? this.defaultModel.provider;
-    const modelId = input.node.attrs.llm_model ?? this.defaultModel.model;
+    const provider = input.node.attrs.provider ?? this.defaultModel.provider;
+    const modelId = input.node.attrs.model ?? this.defaultModel.model;
     let model: Model<string> | undefined;
     try {
       model = this.resolveModel(provider, modelId);

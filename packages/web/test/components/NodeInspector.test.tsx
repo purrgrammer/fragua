@@ -114,8 +114,8 @@ steps:
       id: "s",
       type: "start",
       attrs: {
-        llm_model: "opus-4",
-        llm_provider: "anthropic",
+        model: "opus-4",
+        provider: "anthropic",
         reasoning_effort: "high",
         thread_id: "shared",
         max_retries: 3,
@@ -186,7 +186,7 @@ steps:
   });
 
   it("hides model/provider/reasoning/thread for a tool node but keeps tool_command", () => {
-    // Tool handlers don't call an LLM — an `llm_model` attr on a tool node
+    // Tool handlers don't call an LLM — a `model` attr on a tool node
     // is dead config. tool_command (authored as `run:`) is load-bearing.
     const src = `name: demo
 steps:

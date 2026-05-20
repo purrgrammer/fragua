@@ -28,9 +28,9 @@ export interface NodeAttrs {
    * (authoring: `skills-disabled`). */
   skills_disabled?: boolean;
   /** Provider-native LLM model id. Examples: `claude-opus-4-7`. */
-  llm_model?: string;
+  model?: string;
   /** Provider key. E.g. `anthropic`, `openai`. */
-  llm_provider?: string;
+  provider?: string;
   /** Summarise the prior thread before this node sees it. Requires
    * `thread_id` to be set (validator E027 enforces). Three levels map to
    * summariser output-token caps (low ~300 / medium ~700 / high ~1500).

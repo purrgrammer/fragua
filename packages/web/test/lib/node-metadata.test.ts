@@ -13,7 +13,7 @@ describe("node metadata predicates", () => {
     expect(showsLlm("llm", empty)).toBe(true);
 
     // Negative cases — non-LLM handlers regardless of cascade-resolved attrs.
-    expect(showsLlm("tool", { llm_model: "opus-4" } as NodeAttrs)).toBe(false);
+    expect(showsLlm("tool", { model: "opus-4" } as NodeAttrs)).toBe(false);
     expect(showsLlm("start", empty)).toBe(false);
     expect(showsLlm("exit", empty)).toBe(false);
     expect(showsLlm("wait.human", empty)).toBe(false);

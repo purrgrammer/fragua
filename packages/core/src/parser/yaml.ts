@@ -114,11 +114,11 @@ const STEP_KEY_TO_IR: Readonly<Record<string, string>> = {
   type: "type",
   summary: "summary",
   skills: "skills",
+  model: "model",
+  provider: "provider",
 
   // kebab → snake
   thread: "thread_id",
-  model: "llm_model",
-  provider: "llm_provider",
   effort: "reasoning_effort",
   "allowed-tools": "allowed_tools",
   "denied-tools": "denied_tools",

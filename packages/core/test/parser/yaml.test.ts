@@ -98,8 +98,8 @@ steps:
     prompt: hi
 `);
     const a = g.nodes["work"]!.attrs;
-    expect(a.llm_model).toBe("claude-sonnet-4-6");
-    expect(a.llm_provider).toBe("anthropic");
+    expect(a.model).toBe("claude-sonnet-4-6");
+    expect(a.provider).toBe("anthropic");
     expect(a.thread_id).toBe("dev");
     expect(a.reasoning_effort).toBe("high");
     expect(a.allowed_tools).toEqual(["read", "bash"]);
@@ -129,11 +129,11 @@ steps:
   a: {type: llm, prompt: x}
   b: {type: llm, prompt: y, model: claude-haiku-4-5}
 `);
-    expect(g.nodes["a"]?.attrs.llm_provider).toBe("anthropic");
-    expect(g.nodes["a"]?.attrs.llm_model).toBe("claude-sonnet-4-6");
+    expect(g.nodes["a"]?.attrs.provider).toBe("anthropic");
+    expect(g.nodes["a"]?.attrs.model).toBe("claude-sonnet-4-6");
     // explicit overrides default
-    expect(g.nodes["b"]?.attrs.llm_provider).toBe("anthropic");
-    expect(g.nodes["b"]?.attrs.llm_model).toBe("claude-haiku-4-5");
+    expect(g.nodes["b"]?.attrs.provider).toBe("anthropic");
+    expect(g.nodes["b"]?.attrs.model).toBe("claude-haiku-4-5");
   });
 });
 
