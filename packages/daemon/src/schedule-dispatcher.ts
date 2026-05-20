@@ -6,8 +6,8 @@
 //   - skip-on-overlap: if `overlap_policy='skip'` and the prior run
 //     hasn't reached a terminal state, advance `next_fire_at` and
 //     emit `fact.schedule_skipped { reason: "overlap" }` \u2014 no fire.
-//   - resolve workflow_ref: try `~/.swarm/workflows/<ref>.dot`, then
-//     `<cwd>/.swarm/workflows/<ref>.dot`, else literal path. On miss
+//   - resolve workflow_ref: try `~/.swarm/workflows/<ref>.yaml`, then
+//     `<cwd>/.swarm/workflows/<ref>.yaml`, else literal path. On miss
 //     or parse failure, emit `fact.schedule_invalid_workflow` and
 //     auto-pause the schedule.
 //   - emit `fact.schedule_late { missedIntervals }` *before* the
@@ -18,7 +18,7 @@
 //     advance `next_fire_at = now + interval_ms` (anchored to actual
 //     fire time, not target).
 //
-// All file I/O (workflow resolution, DOT read) happens inside the
+// All file I/O (workflow resolution, source read) happens inside the
 // dispatcher \u2014 the store stays pure SQL.
 
 import { existsSync, readFileSync } from "node:fs";
@@ -202,7 +202,7 @@ interface ResolvedSchedulingWorkflow {
 
 /** Synchronous workflow-path resolver used by the dispatcher tick.
  *  Mirrors `@swarm/cli`'s async `resolveWorkflow` cascade: bare name \u2192
- *  `~/.swarm/workflows/<name>.dot` \u2192 `<cwd>/.swarm/workflows/<name>.dot`;
+ *  `~/.swarm/workflows/<name>.yaml` \u2192 `<cwd>/.swarm/workflows/<name>.yaml`;
  *  paths resolve directly. We keep a local copy because @swarm/daemon
  *  must not depend on @swarm/cli (the dependency direction is the
  *  other way around). */

@@ -63,25 +63,30 @@
 //
 // Authoring rules:
 //   - Linear by default: a step with no `next:`/`on:`/`routes:` flows to the
-//     next declared step (last step flows to `exit`).
-//   - `next: X` ≡ `on: {success: X}`. Both forms also synthesize an implicit
-//     `fail → exit` edge so unhandled fails terminate the run gracefully.
+//     next declared step on success (last step flows to `exit`).
+//   - `next: X` ≡ `on: {success: X}`. Neither synthesizes a fail edge — a
+//     node that fails with no declared fail route halts the run
+//     (`aborted_exit`). Failure handling is opt-in: write `on: {fail: Y}`.
+//   - An explicit `fail → exit` edge is a sanctioned graceful landing: the
+//     run completes (not halts) when a node routes to `exit` on failure.
 //   - `routes:` is for human nodes and llm nodes that use the `route` tool.
 //     Compact form `{a: X, b: Y}`; expanded form `{a: {to: X, label: "..."}}`.
 //   - `type: exit` is a reserved sink. Authors target it via `next: exit`,
 //     `on: {fail: exit}`, or `routes: {x: exit}` — no explicit step needed.
 //   - First declared step IS the entry point. Parser synthesizes a hidden
-//     `__start__` node that the engine treats as the run's first transition.
+//     `start` node that the engine treats as the run's first transition.
 //   - Template substitution: `${{ inputs.name }}` substitutes in `prompt:`,
-//     `text:`, `run:` strings. Validator E029 catches references to
-//     undeclared inputs.
+//     `text:`, `run:` strings at runtime (engine/substitution.ts). Validator
+//     E030 catches references to undeclared inputs at validate-time.
 //
 // Mapping from authoring kebab-case to IR snake_case lives in
 // AUTHORING_KEY_TO_IR and is centralised so the validator + tests can
 // reuse the same name table.
 
 import * as YAML from "yaml";
-import type { Edge, EdgeAttrs, Graph, GraphAttrs, Node, NodeAttrs, NodeType } from "../types/graph.ts";
+import type { Edge, EdgeAttrs, Graph, GraphAttrs, InputDecl, Node, NodeAttrs, NodeType } from "../types/graph.ts";
+
+export type { InputDecl } from "../types/graph.ts";
 
 export class ParseError extends Error {
   constructor(
@@ -225,15 +230,6 @@ function scalarValue(node: unknown): unknown {
 
 // ---- Input declarations -----------------------------------------------
 
-export interface InputDecl {
-  name: string;
-  type: "string" | "boolean" | "number" | "choice";
-  required: boolean;
-  description?: string;
-  default?: string | number | boolean;
-  options?: string[];
-}
-
 function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] {
   if (node === undefined) return [];
   if (!YAML.isMap(node)) {
@@ -269,10 +265,7 @@ function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] 
     const opts = scalarValue(body.get("options", true));
     if (Array.isArray(opts)) decl.options = opts.filter((v): v is string => typeof v === "string");
     if (decl.type === "choice" && (!decl.options || decl.options.length === 0)) {
-      throw new ParseError(
-        `input "${name}" has type=choice but no options[]`,
-        ...locArr(locOf(body, lineCounter)),
-      );
+      throw new ParseError(`input "${name}" has type=choice but no options[]`, ...locArr(locOf(body, lineCounter)));
     }
     out.push(decl);
   }
@@ -370,9 +363,7 @@ export function parseWorkflow(source: string): Graph {
   };
   edges.push({ from: "start", to: stepIds[0]!, attrs: {} });
 
-  // Track which user-defined step ids exist so `next: exit` is recognised
-  // as the reserved sink and synthesised on demand.
-  const userStepIds = new Set(stepIds);
+  // `next: exit` is recognised as the reserved sink and synthesised on demand.
   let needExit = false;
 
   for (let i = 0; i < stepIds.length; i++) {
@@ -477,19 +468,15 @@ export function parseWorkflow(source: string): Graph {
       if (typeof failTo === "string" && failTo.length > 0) {
         if (failTo === "exit") needExit = true;
         edges.push({ from: stepId, to: failTo, attrs: { outcome: "fail" } });
-      } else {
-        // Implicit fail → exit on outcome-based steps with explicit success route.
-        needExit = true;
-        edges.push({ from: stepId, to: "exit", attrs: { outcome: "fail" } });
       }
+      // No implicit fail edge: a node with no declared fail route halts on
+      // failure (executor → aborted_exit). Failure handling is opt-in.
     } else if (typeStr !== "exit") {
       // No explicit routing → linear default: success to next declared step
-      // (or exit if last), implicit fail to exit.
+      // (or exit if last). No fail edge — unhandled failure halts.
       const successTo = typeof nextNode === "string" && nextNode.length > 0 ? nextNode : (stepIds[i + 1] ?? "exit");
       if (successTo === "exit") needExit = true;
       edges.push({ from: stepId, to: successTo, attrs: { outcome: "success" } });
-      needExit = true;
-      edges.push({ from: stepId, to: "exit", attrs: { outcome: "fail" } });
     }
 
     // ---- materialise the node ----
@@ -517,29 +504,4 @@ export function parseWorkflow(source: string): Graph {
     nodes,
     edges,
   };
-}
-
-// ---- Template substitution -------------------------------------------
-
-/** Replace `${{ inputs.foo }}` references in a string with the input values
- * from `bindings`. References that resolve to `undefined` are left in place
- * — the validator catches undeclared refs (E029) at validate-time. */
-export function substituteInputs(source: string, bindings: Record<string, string | number | boolean>): string {
-  return source.replace(/\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g, (whole, name) => {
-    const v = bindings[name];
-    return v === undefined ? whole : String(v);
-  });
-}
-
-/** Extract every `${{ inputs.X }}` reference name from a string. Used by
- * the validator (E029) to flag undeclared inputs at validate-time. */
-export function inputReferences(source: string): string[] {
-  const out: string[] = [];
-  const re = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g;
-  let m: RegExpExecArray | null = re.exec(source);
-  while (m !== null) {
-    if (m[1] !== undefined) out.push(m[1]);
-    m = re.exec(source);
-  }
-  return out;
 }

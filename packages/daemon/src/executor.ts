@@ -18,16 +18,17 @@ import {
   type GraphAttrs,
   goalGateOutcomeKey,
   goalGateStep,
-  isRetryPresetName,
+  type InputDecl,
   type NodeAttrs,
   parseWorkflow,
   RETRY_PRESETS,
-  type RetryPresetName,
   readGateOutcomes,
   readGoalGateRetries,
   resolveFailRetarget,
+  resolveInputBindings,
   retryCountKey,
   retryStep,
+  type SubstitutionArgs,
   selectEdge,
 } from "@swarm/core";
 import * as core from "@swarm/core/handler";
@@ -644,7 +645,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // (the default). Before this landed, pause-policy breaches waited
     // for the post-handler boundary — which the llm agent loop
     // routinely overshot by 10×+ in one dispatch (73 LLM calls, $3.29
-    // on a $0.30 cap on the original review.dot lens regression). The
+    // on a $0.30 cap on the original review.yaml lens regression). The
     // reactive gate now aborts the handler mid-flight and the abort
     // arm below emits `fact.run_paused{reason:"budget"}` so the
     // operator can raise the cap and resume. Bounds peak overshoot to
@@ -695,7 +696,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       ),
       tools: opts.tools,
       recorder,
-      args: buildSubstitutionArgs(runId, effectiveRouting),
+      args: buildSubstitutionArgs(effectiveRouting, graph?.attrs.inputs),
       emitObservability: (type, payload) => {
         // Stamp nodeId + iteration so the UI can scope without the
         // handler having to thread it through every payload.
@@ -844,7 +845,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           result = raced;
         }
       } else {
-        // Unbounded llm (DOT `max_ms=0`): no AbortSignal.timeout in the
+        // Unbounded llm (`max_ms=0`): no AbortSignal.timeout in the
         // merged signal, so no leak watchdog either — cost/token bounds and
         // operator intents are the operative ceiling. Steer + shutdown still
         // abort cleanly via `ctx.signal`.
@@ -1132,16 +1133,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               detail: `no edge keyed route="${result.route}" from ${currentNode}`,
             };
           } else if (result.outcomeStatus === "fail") {
-            // §3.7 step 2/3 — when no fail-edge claimed the failure,
-            // consult the source node's retry_target / fallback_retry_target
-            // before halting. Step 4 (pipeline termination) is the
-            // `__end__` fallback below when no retarget resolves.
-            const retarget = resolveFailRetarget(graph, currentNode);
-            if (retarget != null) {
-              result.nextNode = retarget;
-            } else {
-              // No fail-edge and no retarget — terminal halt path.
+            // No fail-edge claimed the failure. A goal_gate node routes
+            // through the terminal so the *capped* goalGateStep below
+            // applies the retarget (and bumps the cap counter) rather
+            // than the unbounded resolveFailRetarget path. Non-gate
+            // nodes consult §3.7 retry_target before the `__end__`
+            // terminal halt.
+            if (srcNode.attrs.goal_gate === true) {
               result.nextNode = "__end__";
+            } else {
+              const retarget = resolveFailRetarget(graph, currentNode);
+              result.nextNode = retarget ?? "__end__";
             }
           } else {
             // No outgoing edges or no viable selection — terminal.
@@ -1985,11 +1987,29 @@ export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
   };
 }
 
-export function buildSubstitutionArgs(_runId: string, routing: Record<string, unknown>): Record<string, string> {
-  const args: Record<string, string> = {};
+export function buildSubstitutionArgs(
+  routing: Record<string, unknown>,
+  inputDecls?: readonly InputDecl[],
+): SubstitutionArgs {
+  const args: SubstitutionArgs = {};
   const input = routing["input"];
-  if (typeof input === "string") args["$ARGUMENTS"] = input;
+  if (typeof input === "string") args.$ARGUMENTS = input;
+  // `${{ inputs.x }}` bindings: declared defaults overlaid by the run's
+  // provided `routing.inputs` map (set at enqueue from `--input k=v`).
+  const resolved = resolveInputBindings(inputDecls, readStringMap(routing["inputs"]));
+  if (Object.keys(resolved).length > 0) args.inputs = resolved;
   return args;
+}
+
+/** Coerce an unknown `routing.inputs` value into a string→string map,
+ * dropping non-string entries. */
+function readStringMap(v: unknown): Record<string, string> {
+  if (v === null || typeof v !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === "string") out[k] = val;
+  }
+  return out;
 }
 
 function readNumber(v: unknown): number {
@@ -2000,7 +2020,10 @@ function readNumber(v: unknown): number {
  * (node.retry_policy → graph.default_retry_policy → "none") plus the
  * custom-override attrs (retry_initial_delay_ms / retry_backoff_factor /
  * retry_max_delay_ms / retry_jitter). */
-function resolveBackoff(_nodeAttrs: NodeAttrs, _graphAttrs: GraphAttrs): {
+function resolveBackoff(
+  _nodeAttrs: NodeAttrs,
+  _graphAttrs: GraphAttrs,
+): {
   initialDelayMs: number;
   backoffFactor: number;
   maxDelayMs: number;

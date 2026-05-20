@@ -1,6 +1,6 @@
 ---
 title: Codergen handler maxMs is a runaway backstop, not a typical bound
-summary: "Codergen handler `DEFAULT_MAX_MS` raised from 30 min to 4 h (runaway backstop, not typical bound) and `DEFAULT_LEAK_GRACE_MS` raised from 10s to 30s — wall-clock no longer the binding constraint on legitimate long-running LLM work."
+summary: "LLM handler `DEFAULT_MAX_MS` raised from 30 min to 4 h (runaway backstop, not typical bound) and `DEFAULT_LEAK_GRACE_MS` raised from 10s to 30s — wall-clock no longer the binding constraint on legitimate long-running LLM work."
 status: shipped
 maturity: specified
 last-reviewed: 2026-05-06

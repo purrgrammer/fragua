@@ -125,7 +125,7 @@ const bezierPoint = (
   return [w0 * p0[0] + w1 * p1[0] + w2 * p2[0] + w3 * p3[0], w0 * p0[1] + w1 * p1[1] + w2 * p2[1] + w3 * p3[1]];
 };
 
-// Small inline pill rendered at the edge's midpoint. Shows DOT edge
+// Small inline pill rendered at the edge's midpoint. Shows workflow edge
 // `condition` / `label` attrs ("outcome=success", etc.) so readers can
 // tell branching edges apart without opening the inspector.
 const EdgeLabel = ({ labelX, labelY, label, tone = "muted", dim, parallelIndex, parallelCount }: EdgeLabelProps) => {

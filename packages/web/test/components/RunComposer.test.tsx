@@ -18,7 +18,7 @@ import { useDom } from "../setup.ts";
 function workflow(name: string, opts: Partial<WorkflowSummary> = {}): WorkflowSummary {
   return {
     name,
-    path: opts.path ?? `workflows/${name}.dot`,
+    path: opts.path ?? `workflows/${name}.yaml`,
     sha: opts.sha ?? `sha-${name}`,
     ...(opts.label !== undefined ? { label: opts.label } : {}),
     ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
@@ -147,7 +147,7 @@ describe("RunComposer", () => {
     });
     try {
       const workflows: WorkflowSummary[] = [
-        workflow("local-a", { cwd: PROJECT_CWD, path: "/work/proj-a/.swarm/workflows/local-a.dot", sha: "sha-LA" }),
+        workflow("local-a", { cwd: PROJECT_CWD, path: "/work/proj-a/.swarm/workflows/local-a.yaml", sha: "sha-LA" }),
       ];
       const { getByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
 
@@ -193,7 +193,7 @@ describe("RunComposer", () => {
     });
     try {
       const workflows: WorkflowSummary[] = [
-        workflow("global-a", { path: "/home/u/.swarm/workflows/global-a.dot", sha: "sha-GA" }),
+        workflow("global-a", { path: "/home/u/.swarm/workflows/global-a.yaml", sha: "sha-GA" }),
       ];
       const { getByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
 

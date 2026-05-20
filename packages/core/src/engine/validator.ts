@@ -3,6 +3,7 @@
 
 import { parseAcceleratorKey } from "../accelerator.ts";
 import type { Edge, Graph } from "../types/graph.ts";
+import { inputReferences } from "./substitution.ts";
 
 /** Whitelist of known node attribute names. Anything outside this set
  * triggers W013 — surfaces typos like `goalgate=true` and parser passthrough
@@ -100,7 +101,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 
   // E001: start node required
   if (starts.length === 0) {
-    diags.push({ severity: "error", code: "E001", message: "graph has no start node (Mdiamond)" });
+    diags.push({ severity: "error", code: "E001", message: "graph has no start node (start)" });
   }
   if (starts.length > 1) {
     diags.push({
@@ -112,7 +113,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 
   // E003: exit node required
   if (exits.length === 0) {
-    diags.push({ severity: "error", code: "E003", message: "graph has no exit node (Msquare)" });
+    diags.push({ severity: "error", code: "E003", message: "graph has no exit node (exit)" });
   }
 
   // E004: edge references undefined node
@@ -260,7 +261,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // E029: `start` is reserved for the synthesized entry node. Authors
   // never declare it; the parser injects it pointing at the first step.
   // Surfaces if a hand-built or tool-generated graph names a step `start`
-  // with any non-Mdiamond shape.
+  // with any type other than `start`.
   for (const n of nodes) {
     if (n.id !== "start") continue;
     if (n.type === "start") continue;
@@ -271,6 +272,33 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       nodeId: n.id,
       ...(n.loc !== undefined ? { loc: n.loc } : {}),
     });
+  }
+
+  // E030: `${{ inputs.x }}` references an input not declared in the
+  // workflow's `inputs:` block. Substitution would silently collapse the
+  // placeholder to "" at runtime, so catch the typo / missing declaration
+  // at validate-time. Scans the substituted-string attrs (prompt / text /
+  // tool_command) on every node.
+  {
+    const declared = new Set((graph.attrs.inputs ?? []).map((d) => d.name));
+    for (const n of nodes) {
+      const fields = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
+      const seen = new Set<string>();
+      for (const f of fields) {
+        if (typeof f !== "string") continue;
+        for (const ref of inputReferences(f)) {
+          if (declared.has(ref) || seen.has(ref)) continue;
+          seen.add(ref);
+          diags.push({
+            severity: "error",
+            code: "E030",
+            message: `node "${n.id}" references undeclared input \`${ref}\` — add it to the inputs: block`,
+            nodeId: n.id,
+            ...(n.loc !== undefined ? { loc: n.loc } : {}),
+          });
+        }
+      }
+    }
   }
 
   // E009: human node needs ≥1 outgoing edge — otherwise the operator has
@@ -292,7 +320,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E010: hexagon outgoing edges must produce unique accelerator keys.
+  // E010: human outgoing edges must produce unique accelerator keys.
   // Auto-dispatcher derives keys via parseAcceleratorKey; collisions
   // would shadow each other in the option list (and the handler refuses
   // to construct). Surface at validate-time with the offending labels.
@@ -320,7 +348,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E008: tool node (parallelogram) must carry a non-empty `tool_command`.
+  // E008: tool node (tool node) must carry a non-empty `tool_command`.
   // Without it the executor has nothing to spawn and halts at dispatch.
   for (const n of nodes) {
     if (n.type !== "tool") continue;

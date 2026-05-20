@@ -221,13 +221,13 @@ export interface RunState {
    * for path-based or ephemeral runs. */
   workflowName: string | null;
   /** How the workflow argument resolved. `'global'` → matched
-   * `~/.swarm/workflows/<name>.dot`. `'local'` → matched
-   * `<cwd>/.swarm/workflows/<name>.dot` (fallback when global misses).
+   * `~/.swarm/workflows/<name>.yaml`. `'local'` → matched
+   * `<cwd>/.swarm/workflows/<name>.yaml` (fallback when global misses).
    * `'path'` → caller passed an explicit path. `'ephemeral'` →
    * enqueued via the API without filesystem context. `null` on legacy
    * rows pre-globalization. */
   workflowScope: "global" | "local" | "path" | "ephemeral" | null;
-  /** Filesystem path of the .dot file at resolution time. Diagnostic
+  /** Filesystem path of the .yaml file at resolution time. Diagnostic
    * only — replay keys on `workflowSha`. */
   workflowPath: string | null;
   /** Schedule lineage — the id of the schedule that fired this run, or
@@ -496,12 +496,12 @@ export interface EnqueueRunParams {
    * on `run_state.workflow_name`. Omitted for path-based runs. */
   workflowName?: string;
   /** How the workflow argument resolved. `'global'` matched
-   * `~/.swarm/workflows/<name>.dot`; `'local'` fell back to
-   * `<cwd>/.swarm/workflows/<name>.dot`; `'path'` for explicit paths;
+   * `~/.swarm/workflows/<name>.yaml`; `'local'` fell back to
+   * `<cwd>/.swarm/workflows/<name>.yaml`; `'path'` for explicit paths;
    * `'ephemeral'` for runs enqueued via the API without filesystem
    * context. */
   workflowScope?: "global" | "local" | "path" | "ephemeral";
-  /** Filesystem path of the .dot file at resolution time. Diagnostic
+  /** Filesystem path of the .yaml file at resolution time. Diagnostic
    * only; replay still keys on `workflowSha`. */
   workflowPath?: string;
   /** Schedule lineage — the id of the schedule that fired this run.
@@ -850,7 +850,7 @@ export interface IAnalyticsReader {
   getFirstRunAt(window: AnalyticsWindow): number | null;
   /** Distinct `(scope, name[, cwd])` identities across `run_state` for
    *  the workflow selector on `/analytics`. Sha collapses (every edit
-   *  of `research.dot` shares one row); `path` and `ephemeral` runs
+   *  of `research.yaml` shares one row); `path` and `ephemeral` runs
    *  are excluded. */
   getWorkflowDirectory(opts: { cwd?: string }): WorkflowDirectoryRow[];
   /** Newest-first paginated run-id scan matching the analytics filters

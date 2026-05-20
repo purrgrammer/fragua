@@ -156,7 +156,7 @@ describe("PiLlmBackend abort tool wiring", () => {
         registry: coreRegistry(),
         // allowed_tools deliberately excludes "abort" — force-include must
         // still wire it. This is the empty-allowed-tools case the
-        // abort-test.dot smoke test exercises end-to-end.
+        // abort-test.yaml smoke test exercises end-to-end.
         attrs: { allowed_tools: ["read"] },
         reason: "blocked by missing input",
       });

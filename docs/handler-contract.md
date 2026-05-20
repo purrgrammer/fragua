@@ -39,9 +39,9 @@ dispatcher.register(workflowSha, nodeId, spec);
 
 The context object the executor hands to every handler. The fields below are the ones not already covered by the I/O accessors (`ctx.llm`, `ctx.http`, `ctx.tools`, `ctx.messages`, `ctx.artifacts`, `ctx.externalCall`, `ctx.signal`, `ctx.routing`). Source: `packages/core/src/handler/types.ts` `interface HandlerContext`.
 
-### `ctx.args: Readonly<Record<string, string>>`
+### `ctx.args: Readonly<SubstitutionArgs>`
 
-Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. The only key is `$ARGUMENTS`, sourced from `run_state.routing.input` (the CLI positional or `POST /runs` body). Cross-node data transfer happens through shared `thread_id` (SPEC §3.3), with optional per-node `summary=low|medium|high` for compression, not through prompt substitution.
+Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. `$ARGUMENTS` carries the run's free-form input (`run_state.routing.input` — CLI positional or `POST /runs` `input`); `inputs` is the resolved `${{ inputs.<name> }}` map (declared `default:` values overlaid by run-provided `--input name=value`, stored on `routing.inputs`). Cross-node data transfer happens through shared `thread:` (SPEC §3.3), with optional per-node `summary:` for compression, not through prompt substitution.
 
 ### `ctx.emit(type, payload): void`
 
@@ -66,7 +66,7 @@ interface BudgetSnapshotInput {
 
 ### `ctx.withScope(override): HandlerContext`
 
-Return a new `HandlerContext` with the same run-level resources but rebuilt scope-sensitive surfaces. The codergen `agent` tool uses this to hand each inline sub-agent spawn a context that carries its own `(nodeId, iteration)` instead of leaking the parent's via closure capture.
+Return a new `HandlerContext` with the same run-level resources but rebuilt scope-sensitive surfaces. The llm `agent` tool uses this to hand each inline sub-agent spawn a context that carries its own `(nodeId, iteration)` instead of leaking the parent's via closure capture.
 
 Six surfaces are rebuilt against the new scope:
 
@@ -105,7 +105,7 @@ return {
   kind: "transition",
   nextNode?: "next",                    // omit to let edge selection decide; set to "__end__" to terminate
   outcomeStatus?: "success",            // matched against edge `outcome=` attrs; defaults to "success". Unannotated edges default to outcome=success.
-  route?: "feature",                    // set by the codergen backend when the agent exited via the synthesised `route` tool (docs/proposals/llm-routing.md D2); the engine's route-case edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
+  route?: "feature",                    // set by the llm backend when the agent exited via the synthesised `route` tool (docs/proposals/llm-routing.md D2); the engine's route-case edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
   failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
   tokens: 0,                            // total tokens charged to this node
   costUsd: 0,                           // total dollars charged
@@ -119,7 +119,7 @@ return {
 };
 ```
 
-`failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When the fail outcome routes to a terminal node (`__end__`, the executor's `aborted_exit` path), the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the swarm-debug playbook. A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
+`failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When a fail outcome has no fail-edge to claim it, the executor routes to `__end__` and halts (`aborted_exit`); the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the swarm-debug playbook. (A fail that follows an explicit author-declared edge to the `exit` sink is a graceful landing instead — `fact.run_completed`, no halt, so `failureReason` is not consulted there.) A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
 ### `yield_human`
 Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. Per [docs/proposals/llm-routing.md](./proposals/llm-routing.md) D6, a human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
@@ -164,7 +164,7 @@ return {
 When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/swarm-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
 
 ### `pause_provider`
-Recoverable provider transport failure (HTTP 402/408/429/5xx, network reset). The executor commits `fact.run_paused` with a reason-discriminated payload: `payment_required` (402; manual top-up) → `paused`; `provider_error` (manual class — 400/401/403/404/413/422) → `paused`; `provider_retry` (transient transport class — 408/429/5xx/529/network; carries `attempt`, `resumeAt`) → `paused_auto`. The process is free in every case. An operator `intent.resume` wakes the run — or the wake-pending sweeper does it automatically when status is `paused_auto` and `now >= resumeAt` — and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the codergen agent boundary detects provider transport errors and returns this kind on the handler's behalf.
+Recoverable provider transport failure (HTTP 402/408/429/5xx, network reset). The executor commits `fact.run_paused` with a reason-discriminated payload: `payment_required` (402; manual top-up) → `paused`; `provider_error` (manual class — 400/401/403/404/413/422) → `paused`; `provider_retry` (transient transport class — 408/429/5xx/529/network; carries `attempt`, `resumeAt`) → `paused_auto`. The process is free in every case. An operator `intent.resume` wakes the run — or the wake-pending sweeper does it automatically when status is `paused_auto` and `now >= resumeAt` — and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the llm agent boundary detects provider transport errors and returns this kind on the handler's behalf.
 
 ```typescript
 return {
@@ -245,7 +245,7 @@ Declare your handler's risk level on the spec:
 
 ---
 
-## Agent tools (LLM-callable, inside a codergen turn)
+## Agent tools (LLM-callable, inside an llm turn)
 
 The agent-callable tool surface is deliberately minimal:
 
@@ -284,7 +284,7 @@ into the framework:
    the same error it would get for an unregistered tool. The narrowed
    registry also rejects `register()` so a handler can't smuggle a tool
    back in.
-2. **Agent tool surface** — the codergen backend calls `select(...)` on its
+2. **Agent tool surface** — the llm backend calls `select(...)` on its
    workspace ToolRegistry before passing the resulting array to pi-ai, so
    the LLM literally does not see disallowed tools in its tool menu. If
    `allowed_tools` names zero registered tools, the backend fails the
@@ -299,7 +299,7 @@ enforcement is the narrowing.
 no mutator (`bash` / `write` / `edit`), `ctx.env` is wrapped so
 `writeFile` and `exec` throw `ReadOnlyEnvError`. That way a handler
 that loses its *tools* to the allowed_tools filter also loses the raw
-env path that would otherwise bypass them — relevant when the codergen
+env path that would otherwise bypass them — relevant when the llm
 backend's agent tools sit on top of `ctx.env` (write → `env.writeFile`,
 bash → `env.exec`). Read-only methods (`readFile`, `exists`, `listDir`,
 `glob`) pass through.
@@ -310,7 +310,7 @@ rule and slot in alongside the four builtins.
 
 ## The `agent` tool (LLM-callable subagent spawn)
 
-The `agent` tool lets an LLM running inside a codergen turn spawn a sub-agent **inline against the parent's event stream**. The sub-agent is not a run — it has no `run_state` row, cannot be enqueued, paused, or resumed independently. It is a tool implementation that uses a separate LLM context window. Every observability event the sub-agent emits (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) is forwarded to the parent's stream with a `subagent_id` discriminator and `nodeId` overridden to `__subagent:<id>`, so `getStepAggregates` keeps the sub-agent spend under its own step row rather than folding it into the calling node's totals. Cost still rolls up into the parent's `run_state.metrics` because the handler-bridge accumulates every `cost.recorded` it sees regardless of `subagent_id`.
+The `agent` tool lets an LLM running inside an llm turn spawn a sub-agent **inline against the parent's event stream**. The sub-agent is not a run — it has no `run_state` row, cannot be enqueued, paused, or resumed independently. It is a tool implementation that uses a separate LLM context window. Every observability event the sub-agent emits (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) is forwarded to the parent's stream with a `subagent_id` discriminator and `nodeId` overridden to `__subagent:<id>`, so `getStepAggregates` keeps the sub-agent spend under its own step row rather than folding it into the calling node's totals. Cost still rolls up into the parent's `run_state.metrics` because the handler-bridge accumulates every `cost.recorded` it sees regardless of `subagent_id`.
 
 The `agent` tool is subject to the same `allowed_tools`/`denied_tools` narrowing as every other tool — it must be present in the node's resolved pool for the LLM to see it. (The backend force-includes `skill`, not `agent`; see `packages/agent/src/backend.ts`.) The named-sub-agent catalogue is only rendered into the system prompt when `agent` is in the resolved pool, so a node that omits it also omits the catalogue tokens. Once the LLM calls `agent`, the spawner builds the child's tool pool from the parent's resolved pool, narrowed further by `spec.allowed_tools`/`spec.disallowed_tools` and then stripped of `agent` itself — so an empty post-strip pool surfaces `halt_reason: "empty_tool_pool"` immediately rather than burning LLM tokens on an impossible task.
 
@@ -334,51 +334,50 @@ On respawn the daemon hydrates `priorMessages` from the `messages` table keyed u
 
 The daemon scans agent-definition profiles from two layers at boot: `<project>/.agents/agents/*.md` (project-scope, beats user on collisions) and `~/.agents/agents/*.md` (user-scope, with `~/.claude/agents/` as a cross-client fallback). Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, plus optional `model`, `provider`, `allowed_tools`) and a body that becomes the sub-agent's system prompt verbatim. Discovery and parsing live in `packages/workspace/src/agents/` (`discover.ts`, `parse.ts`, `catalog.ts`); the canonical contract is in `docs/proposals/agent-definitions.md`.
 
-The catalogue lands on every codergen call whose resolved tool pool includes `agent`, so the LLM selects a profile by passing `agent({ agent: "<def-name>", … })`. Frontmatter `model`, `provider`, and `allowed_tools` flow onto `SubagentSpec` as overrides; absent fields inherit from the parent call verbatim. A bare `agent({ prompt: "…" })` spawn with no `agent:` key uses no profile — it gets an empty system prompt unless `system_prompt` is also provided.
+The catalogue lands on every llm call whose resolved tool pool includes `agent`, so the LLM selects a profile by passing `agent({ agent: "<def-name>", … })`. Frontmatter `model`, `provider`, and `allowed_tools` flow onto `SubagentSpec` as overrides; absent fields inherit from the parent call verbatim. A bare `agent({ prompt: "…" })` spawn with no `agent:` key uses no profile — it gets an empty system prompt unless `system_prompt` is also provided.
 
 ### Tool-pool inheritance and recursion guard
 
-The child tool pool defaults to the parent's, narrowed by `spec.allowed_tools` / `spec.disallowed_tools`, then `stripAgentTool` removes `agent` so children **cannot recursively spawn**. Passing an explicit `spec.allowed_tools` opts out of the parent default (useful when a codergen node carries a write-heavy tool pool but the sub-agent should be read-only). A pool that is empty after narrowing and strip surfaces `halt_reason: "empty_tool_pool"` immediately with a diagnostic — no LLM call is made (`packages/daemon/src/spawn-subagent.ts`, `stripAgentTool(deps.registry.select(…))`).
+The child tool pool defaults to the parent's, narrowed by `spec.allowed_tools` / `spec.disallowed_tools`, then `stripAgentTool` removes `agent` so children **cannot recursively spawn**. Passing an explicit `spec.allowed_tools` opts out of the parent default (useful when an llm node carries a write-heavy tool pool but the sub-agent should be read-only). A pool that is empty after narrowing and strip surfaces `halt_reason: "empty_tool_pool"` immediately with a diagnostic — no LLM call is made (`packages/daemon/src/spawn-subagent.ts`, `stripAgentTool(deps.registry.select(…))`).
 
 ## Tool nodes (graph-level shell)
 
-A `parallelogram`-shape node runs `node.attrs.tool_command` as a single
+A `type: tool` node runs its `run:` command as a single
 shell invocation (attractor §4.10) — no LLM, no agent loop. Use it for
 deterministic steps: running tests, linters, git plumbing, small
 scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
 
-```dot
-  run_tests [
-    shape        = parallelogram
-    tool_command = "bun test $ARGUMENTS"
-    goal_gate    = true
-  ]
+```yaml
+  run_tests:
+    type: tool
+    run: bun test $ARGUMENTS
+    retry: implement   # re-run `implement` until tests pass (goal gate)
 ```
 
-`tool_command` substitutes `$ARGUMENTS` (POSIX-quoted) and runs the
-shell command. Stdout + stderr become artifacts keyed by
+`run:` (stored as `tool_command`) substitutes `$ARGUMENTS` (POSIX-quoted)
+and runs the shell command. Stdout + stderr become artifacts keyed by
 `${nodeId}:stdout` / `${nodeId}:stderr` for debugging / replay; tool
 nodes do not feed data forward to downstream nodes. A workflow that
 needs to run a deterministic script and reason about its output should
-call the script from inside a codergen's `bash` tool instead of
-synthesising a tool-node-then-codergen chain.
+call the script from inside an llm step's `bash` tool instead of
+synthesising a tool-node-then-llm chain.
 
 A tool node is not an agent tool. Agent-callable tools (read / write /
-edit / bash) are what an LLM invokes *inside* a codergen turn; the
+edit / bash) are what an LLM invokes *inside* an llm turn; the
 graph-level `tool` node is a distinct primitive for side-effect-only
 shell steps (CI gates, idempotent commands) with no LLM in the loop.
-See `.swarm/workflows/ci-gate.dot` for a pure-tool example.
+See `.swarm/workflows/ci-gate.yaml` for a pure-tool example.
 
-## Codergen self-abort (`abort` tool)
+## LLM self-abort (`abort` tool)
 
-A codergen agent signals "I cannot proceed" by calling the built-in
-`abort` tool with a one-sentence `reason`. The codergen handler's
+An llm agent signals "I cannot proceed" by calling the built-in
+`abort` tool with a one-sentence `reason`. The llm handler's
 `findAbortToolCall` (`packages/agent/src/backend.ts`) scans the
 transcript for the call and translates it into `outcome.status="fail"`
 with the reason as `failure_reason` and `non_retryable: true`;
-workflows route via `condition="outcome=fail"` edges.
+workflows route via `on: {fail: …}` edges.
 
-The `abort` tool is **force-included** on every codergen node — even
+The `abort` tool is **force-included** on every llm node — even
 when the node pins `allowed_tools` or lists `abort` under
 `denied_tools` — exactly like the `skill` tool. The tool's own
 description teaches the contract; workflow node prompts do not restate
@@ -396,22 +395,22 @@ back to a default string.
 
 Stray `<promise>X_READY</promise>` markers in earlier prompt versions
 were prose convention only — never engine signals. They have been
-removed from `.swarm/workflows/*.dot` and should not be reintroduced.
+removed from `.swarm/workflows/*.yaml` and should not be reintroduced.
 
 ## Loops
 
-Graph-level only, via backward conditional edges (attractor §3.6 / §5.2).
-There is no `loop` primitive. To re-run a node on an outcome, add an edge
-back to it (or to an upstream node) guarded by a condition, and set
-`max_retries` on the target:
+Graph-level only, via backward edges (attractor §3.6 / §5.2).
+There is no `loop` primitive. To re-run a node on failure, route back to
+it (or to an upstream node) via `on: {fail: …}`, and set `max-retries`
+on the target:
 
-```dot
-  implement [
-    prompt = "..."
-    max_retries = 2        // caps the retry counter
-  ]
-  implement -> review
-  review    -> implement [condition="outcome=retry"]   // backward edge
+```yaml
+steps:
+  implement:
+    prompt: "..."
+    max-retries: 2          # caps the retry counter
+  review:
+    on: {success: exit, fail: implement}   # backward edge on fail
 ```
 
 `ctx.iteration` tracks the re-entry counter; the executor bumps it each
@@ -466,7 +465,7 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 
 `maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (10s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
 
-`HandlerSpec.maxMs` is typed `number | undefined`. Codergen-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node from DOT via `max_ms=0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor skips `AbortSignal.timeout` AND the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. See `docs/proposals/codergen-unbounded-time.md`.
+`HandlerSpec.maxMs` is typed `number | undefined`. LLM-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node via `max-ms: 0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor skips `AbortSignal.timeout` AND the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. See `docs/proposals/codergen-unbounded-time.md`.
 
 ---
 
@@ -506,7 +505,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
 }
 ```
 
-For a fully-featured LLM backend with skills, context files, and tool-calling, use `makeCodergenHandler` from `@swarm/agent` which wraps `PiCodergenBackend`.
+For a fully-featured LLM backend with skills, context files, and tool-calling, use `makeLlmHandler` from `@swarm/agent` which wraps `PiLlmBackend`.
 
 ---
 
@@ -515,7 +514,7 @@ For a fully-featured LLM backend with skills, context files, and tool-calling, u
 Before merging a new handler:
 
 - [ ] `sideEffect` declared correctly (none / idempotent / external)
-- [ ] `maxMs` set, or intentionally omitted for codergen-style handlers that self-bound via cost/tokens
+- [ ] `maxMs` set, or intentionally omitted for llm-style handlers that self-bound via cost/tokens
 - [ ] Uses `ctx.signal` anywhere it blocks on I/O
 - [ ] No `node:fs` / `node:child_process` / bare `fetch` imports
 - [ ] External tool calls route through `ctx.externalCall`

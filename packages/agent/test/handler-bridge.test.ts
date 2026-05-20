@@ -77,7 +77,7 @@ async function ctxFor(
   runId: string,
   store: SqliteStore,
   nodeId: string,
-  args: Readonly<Record<string, string>> = {},
+  args: Readonly<{ $ARGUMENTS?: string; inputs?: Record<string, string> }> = {},
 ): Promise<handler.HandlerContext> {
   store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId, workflowSha: "sha" });
@@ -263,6 +263,28 @@ describe("makeLlmHandler", () => {
     store.close();
   });
 
+  test("substitutes ${{ inputs.x }} from ctx.args.inputs before backend.run()", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-inputs", store, "n1", {
+      inputs: { ticket: "BUG-42", env: "prod" },
+    });
+    let seenPrompt: string | undefined;
+    const capture: LlmBackend = {
+      async run(input) {
+        seenPrompt = input.prompt;
+        return ok({});
+      },
+    };
+    const spec = makeLlmHandler({
+      node: node({ attrs: { type: "llm", prompt: "Fix ${{ inputs.ticket }} on ${{ inputs.env }}" } }),
+      nextNode: "__end__",
+      backend: capture,
+    });
+    await spec.handler(ctx);
+    expect(seenPrompt).toBe("Fix BUG-42 on prod");
+    store.close();
+  });
+
   test("empty args collapse $ARGUMENTS to '' rather than leaking the literal", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-empty", store, "n1");
@@ -367,7 +389,7 @@ describe("makeLlmHandler", () => {
 // selector, not the handler". Before this was locked in, the daemon's
 // codergenFactory forwarded `first = outbound[0]` to makeLlmHandler,
 // which meant every llm call forced its nextNode to whichever edge
-// happened to appear first in the DOT — bypassing the selector and
+// happened to appear first — bypassing the selector and
 // sending e.g. `outcome=success` runs down an `outcome=fail` branch
 // just because that branch was declared first.
 //
@@ -563,7 +585,7 @@ describe("makeLlmHandler — priorMessages thread loading", () => {
   }
 
   test("excludes __subagent:* messages from the shared-thread fallback (regression)", async () => {
-    // Repro for the bug that crashed review.dot's dispatch retry: when
+    // Repro for the bug that crashed review.yaml's dispatch retry: when
     // `thread_id="review"` doesn't equal any single node_id, the loader
     // used to fall back to ALL persisted messages. That spliced sub-agent
     // tool_use blocks (under node_id `__subagent:<id>`) into the parent's

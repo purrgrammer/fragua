@@ -156,7 +156,7 @@ export function humanizeModel(id: string): string {
  *  fall back to a Title-Cased rendering of the kebab/snake id, and to a
  *  shortened sha (8 chars) when that's all we have. */
 export function humanizeWorkflow(name: string | null | undefined, sha?: string | null): string {
-  if (name && name.length > 0) return titleCaseFromKebab(stripDotExt(name));
+  if (name && name.length > 0) return titleCaseFromKebab(stripWorkflowExt(name));
   if (sha && sha.length > 0) return sha.slice(0, 8);
   return "Unknown";
 }
@@ -254,6 +254,6 @@ function titleCaseFromKebab(s: string): string {
   return titleCaseFromSnake(s);
 }
 
-function stripDotExt(name: string): string {
-  return name.replace(/\.dot$/i, "");
+function stripWorkflowExt(name: string): string {
+  return name.replace(/\.yaml$/i, "");
 }

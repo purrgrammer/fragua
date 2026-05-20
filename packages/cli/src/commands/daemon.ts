@@ -3,7 +3,7 @@
 // Out of the box the daemon uses a stub LLM. Pass `--llm-provider` +
 // `--llm-model` (or omit both for the defaults) and the auto-dispatcher
 // routes every `box` node through a PiLlmBackend so real LLM calls
-// fire. Handlers of other shapes (Mdiamond start, Msquare exit, hexagon
+// fire. Handlers of other shapes (start, exit, human
 // wait.human, etc.) stay on the trivial transitions.
 
 import { mkdirSync } from "node:fs";

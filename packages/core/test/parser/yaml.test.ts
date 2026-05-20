@@ -3,7 +3,7 @@
 // at the engine layer with Graph objects constructed via mkGraph.
 
 import { describe, expect, test } from "bun:test";
-import { ParseError, inputReferences, parseWorkflow, substituteInputs } from "../../src/parser/yaml.ts";
+import { ParseError, parseWorkflow } from "../../src/parser/yaml.ts";
 
 describe("parseWorkflow — basics", () => {
   test("minimal workflow with single llm step", () => {
@@ -146,16 +146,17 @@ steps:
   b: {type: llm, prompt: y}
   c: {type: llm, prompt: z}
 `);
-    // start -> a, a -> b (success), a -> exit (fail), b -> c (success), b -> exit (fail), c -> exit (success), c -> exit (fail)
+    // Success-only chain: start -> a, a -> b, b -> c, c -> exit. No fail
+    // edges are synthesized — an unhandled failure halts the run.
     const edgeKeys = g.edges.map((e) => `${e.from}->${e.to}:${e.attrs.outcome ?? ""}:${e.attrs.route ?? ""}`);
     expect(edgeKeys).toContain("start->a::");
     expect(edgeKeys).toContain("a->b:success:");
-    expect(edgeKeys).toContain("a->exit:fail:");
     expect(edgeKeys).toContain("b->c:success:");
     expect(edgeKeys).toContain("c->exit:success:");
+    expect(edgeKeys.filter((k) => k.includes(":fail:"))).toEqual([]);
   });
 
-  test("`next: X` is shorthand for on.success, with implicit fail→exit", () => {
+  test("`next: X` is shorthand for on.success — no fail edge synthesized", () => {
     const g = parseWorkflow(`
 name: t
 steps:
@@ -167,9 +168,24 @@ steps:
   c: {type: llm, prompt: z}
 `);
     const aOut = g.edges.filter((e) => e.from === "a");
-    expect(aOut.length).toBe(2);
-    expect(aOut.find((e) => e.attrs.outcome === "success")?.to).toBe("c");
+    expect(aOut.length).toBe(1);
+    expect(aOut[0]?.attrs.outcome).toBe("success");
+    expect(aOut[0]?.to).toBe("c");
+  });
+
+  test("explicit `on: {fail: exit}` is the only way to route failure to the sink", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  a:
+    type: tool
+    run: make
+    on: {success: b, fail: exit}
+  b: {type: llm, prompt: y}
+`);
+    const aOut = g.edges.filter((e) => e.from === "a");
     expect(aOut.find((e) => e.attrs.outcome === "fail")?.to).toBe("exit");
+    expect(g.nodes["exit"]?.type).toBe("exit");
   });
 
   test("`on: {success: X, fail: Y}` produces two outcome edges", () => {
@@ -302,19 +318,6 @@ steps:
   work: {type: llm, prompt: hi}
 `),
     ).toThrow(/no options/);
-  });
-
-  test("substituteInputs replaces \${{ inputs.x }} references", () => {
-    const out = substituteInputs("Hello ${{ inputs.name }}, you have ${{ inputs.count }} items.", {
-      name: "World",
-      count: 5,
-    });
-    expect(out).toBe("Hello World, you have 5 items.");
-  });
-
-  test("inputReferences extracts every reference name from a string", () => {
-    const refs = inputReferences("a=${{ inputs.foo }} b=${{ inputs.bar }} c=${{ inputs.foo }}");
-    expect(refs).toEqual(["foo", "bar", "foo"]);
   });
 });
 

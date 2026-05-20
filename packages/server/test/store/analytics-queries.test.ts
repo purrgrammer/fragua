@@ -49,8 +49,8 @@ function seedRun(opts: {
    *  filter tests can pin runs to specific projects. */
   cwd?: string;
   /** Optional resolved workflow identity. `scope='global'` mirrors a
-   *  `~/.swarm/workflows/<name>.dot` resolution; `scope='local'`
-   *  mirrors `<cwd>/.swarm/workflows/<name>.dot`. `path` / `ephemeral`
+   *  `~/.swarm/workflows/<name>.yaml` resolution; `scope='local'`
+   *  mirrors `<cwd>/.swarm/workflows/<name>.yaml`. `path` / `ephemeral`
    *  runs leave both NULL and never appear in the workflow filter. */
   workflowScope?: "global" | "local" | "path" | "ephemeral";
   workflowName?: string;

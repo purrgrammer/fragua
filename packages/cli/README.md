@@ -18,8 +18,8 @@ swarm <cmd> --help           # detailed flags for a command
 | Command | What it does |
 |---|---|
 | `swarm harness` | Foreground harness — daemon + HTTP server under one supervisor against `~/.swarm/swarm.db`. Default port 6767. Web bundle auto-builds when sources are newer than `dist/`. The `ready` line prints a clickable hyperlink. |
-| `swarm run <workflow> [--input "…"]` | Upload a DOT workflow, enqueue a run, stream events to stdout. Bare names resolve under `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot`. Discovers the running harness via `daemon_lock.http_url`. |
-| `swarm validate <workflow.dot>` | Parse + lint a DOT file without executing. |
+| `swarm run <workflow> [...args] [--input name=value]` | Upload a workflow, enqueue a run, stream events to stdout. Trailing args feed `$ARGUMENTS`; `--input name=value` (repeatable) binds typed `inputs:`, validated at enqueue. Bare names resolve under `~/.swarm/workflows/<name>.yaml` first, then `<cwd>/.swarm/workflows/<name>.yaml`. Discovers the running harness via `daemon_lock.http_url`. |
+| `swarm validate <workflow.yaml>` | Parse + lint a workflow file without executing. |
 | `swarm init` | Initialise the current directory as a swarm project (writes `.swarm/config.jsonc`). |
 
 ## Providers

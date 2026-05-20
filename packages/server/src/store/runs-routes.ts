@@ -2,7 +2,7 @@
 //
 // Everything a RunSummary / RunDetail carries is derived from
 // run_state + the event log. Workflow name/source comes from the
-// workflows table (saveWorkflow writes DOT on enqueue).
+// workflows table (saveWorkflow writes the source on enqueue).
 
 import { type IEventStore, isTerminal as isTerminalStatus, type RunStatus } from "@swarm/store";
 import { Hono } from "hono";

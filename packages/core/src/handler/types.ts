@@ -6,6 +6,7 @@
 // helpers, which the executor wires to the event store.
 
 import type { AgentMessage, Message as PiMessage } from "@swarm/types";
+import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
@@ -15,7 +16,7 @@ export interface HandlerSpec {
   sideEffect: SideEffect;
   /** Hard per-call timeout. Applied via AbortSignal.timeout inside the
    * executor. Optional — llm-kind handlers may omit it to disable
-   * wall-clock bounding (per-node opt-in via DOT `max_ms=0` /
+   * wall-clock bounding (per-node opt-in via `max_ms=0` /
    * `timeout="0"`); cost/token attrs remain the operative ceiling. See
    * docs/proposals/llm-unbounded-time.md. */
   maxMs?: number;
@@ -165,12 +166,11 @@ export interface HandlerContext {
   readonly externalCall: ExternalCall;
   /**
    * Substitution args for prompt templating. Passed to `substitute()` before
-   * the prompt hits the LLM. Today the only key is `$ARGUMENTS` (sourced
-   * from `run_state.routing.input` — CLI positional or POST /runs body).
-   * Other tokens (`${context.*}`, `$goal`) read from the substitution
-   * context, not from this map.
+   * the prompt hits the LLM. `$ARGUMENTS` carries the run's free-form input
+   * (`run_state.routing.input`); `inputs` carries the resolved
+   * `${{ inputs.x }}` bindings (declared defaults ⊕ run-provided `--input`).
    */
-  readonly args: Readonly<Record<string, string>>;
+  readonly args: Readonly<SubstitutionArgs>;
   /**
    * Emit an observability event (agent.*, llm.*, tool.*, cost.recorded,
    * summary.*). The executor persists these to the store under their

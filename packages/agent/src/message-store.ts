@@ -10,7 +10,7 @@
 // (one `PiLlmBackend` per (workflow, node) — see
 // `packages/cli/src/commands/daemon.ts`). Two concurrent runs hitting the
 // same backend with the same thread_id (e.g. `thread_id="dev"` in
-// build-feature.dot) would clobber each other's transcripts without the
+// build-feature.yaml) would clobber each other's transcripts without the
 // runId component.
 //
 // Scope:

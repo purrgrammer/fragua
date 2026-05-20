@@ -443,6 +443,8 @@ Common codes:
 - **E026** — `text=` on a non-human node.
 - **E027** — `summary=` set without a `thread_id` (summarising nothing).
 - **E028** — node id `exit` reserved for the graceful-halt sink; declare as `type: exit` or rename.
+- **E029** — node id `start` reserved for the synthesized entry node; rename the step.
+- **E030** — `${{ inputs.x }}` references an input not declared in the `inputs:` block.
 - **W007** — `goal_gate=true` with no retarget chain.
 - **W011** — bare `model=` / `provider=` (use `llm_model=` / `llm_provider=`).
 - **W013** — unrecognised attribute name (typo source).

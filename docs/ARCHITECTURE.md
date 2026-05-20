@@ -69,7 +69,7 @@ ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cros
 - **Daemon supervisor fiber** ticks every 50ms, inside one short transaction:
   - `heartbeat()` — UPDATE `daemon_lock.heartbeat_at`
   - `detectNewIntents()` — for every registered abort controller, check if there are unapplied intents; trip abort if yes
-  - `detectStuckNodes()` — watchdog for handlers that exceeded `maxMs + LEAK_GRACE_MS`. Skipped for nodes whose `HandlerSpec.maxMs` is `undefined` (codergen opt-out via `max_ms=0`).
+  - `detectStuckNodes()` — watchdog for handlers that exceeded `maxMs + LEAK_GRACE_MS`. Skipped for nodes whose `HandlerSpec.maxMs` is `undefined` (llm opt-out via `max_ms=0`).
 - **Web SSE streams** poll `events WHERE seq > ?` every 100ms per subscribed run. At 10 concurrent subscribers, ≈100 qps of indexed reads; <1ms each.
 - **No `.sock` file.** Nothing to clean up on crash. Nothing to reconcile on restart.
 
@@ -127,10 +127,10 @@ Unchanged. `Promise.race` with hard timeout bounds damage; leaked handlers emit 
 Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2). Handlers with `side_effect: "none" | "idempotent"` can replay freely; `external` handlers rely on the provider key.
 
 ### 1.10 LLM provider transport error mid-stream
-**Attack.** The LLM provider returns 402 (insufficient balance), 429 (rate limit), 5xx, or the network drops mid-stream. pi-ai surfaces this as `AssistantMessageEvent { type: "error" }`; without intervention the codergen handler converts it into `outcome.status = "fail"`, indistinguishable from a deliberate `abort` tool call. The run halts and all completed work in the transcript is abandoned even though it survives in the `messages` table.
+**Attack.** The LLM provider returns 402 (insufficient balance), 429 (rate limit), 5xx, or the network drops mid-stream. pi-ai surfaces this as `AssistantMessageEvent { type: "error" }`; without intervention the llm handler converts it into `outcome.status = "fail"`, indistinguishable from a deliberate `abort` tool call. The run halts and all completed work in the transcript is abandoned even though it survives in the `messages` table.
 
 **Resolution.**
-1. **HTTP-status capture.** `PiCodergenBackend` registers `StreamOptions.onResponse` to record the last `ProviderResponse.status` per LLM call. On stream `error`, the captured status (or `null` for pre-response network failures) is paired with the provider's `errorMessage` and bubbled out as a new outcome shape.
+1. **HTTP-status capture.** `PiLlmBackend` registers `StreamOptions.onResponse` to record the last `ProviderResponse.status` per LLM call. On stream `error`, the captured status (or `null` for pre-response network failures) is paired with the provider's `errorMessage` and bubbled out as a new outcome shape.
 2. **Handler-result kind `pause_provider`.** The handler-bridge translates the provider-error outcome to `HandlerResult.kind = "pause_provider"` carrying `{ httpStatus, provider, errorMessage }`. The executor commits `fact.run_paused` with `reason: "payment_required"` for 402 (top-up off-ledger) or `reason: "provider_error"` otherwise, and transitions the run to `paused`.
 3. **Generic resume intent.** Operator writes `intent.resume`. The daemon wakes the run back to `queued` and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript loaded as `priorMessages`. Worktree, branch, and message ordering all survive — same path as `paused_human` rehydration.
 4. **Manual + auto classes.** 408 / 429 / 5xx / 529 / network errors emit `fact.run_paused{reason:"provider_retry"}` (with `attempt`, `resumeAt`) and project to `paused_auto` for timer-driven wake. 400 / 401 / 402 / 403 / 404 / 413 / 422 stay manual (`paused{reason:"provider_error"}`, or `paused{reason:"payment_required"}` for 402); auto-retry against a busted account would burn money.
@@ -201,7 +201,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   cwd TEXT,                                       -- absolute project root the run was enqueued from; NULL for ephemeral
   workflow_name TEXT,                             -- resolved name when caller passed a bare name; NULL for path runs
   workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
-  workflow_path TEXT,                             -- .dot file path at resolution time; diagnostic
+  workflow_path TEXT,                             -- workflow file path at resolution time; diagnostic
   base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
   branch TEXT,                                    -- preserved on dispose when working-copy delta exists; NULL otherwise
   schedule_id TEXT,                               -- schedule that fired this run; informational, not a FK cascade target
@@ -408,7 +408,7 @@ CREATE TABLE provider_config (
 | `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
 | `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_human'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
-| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the codergen agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for codergen handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
+| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the llm agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for llm handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialCacheReadCostUsd?`, `partialCacheWriteCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
 | `fact.intents_folded` | `intentSeq`, `folded` | Operator intents (steer / hitl / priority / pause) merged into routing/messages by the fold |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
@@ -429,7 +429,7 @@ CREATE TABLE provider_config (
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
 | `fact.run_branched` | `branch` | Post-terminal metadata: dispose() preserved a branch (working tree had a non-empty `git status --porcelain`). Lands AFTER the terminal status fact. Branch GC and paused-run drift handling are tracked in [`docs/proposals/worktree-design.md`](./proposals/worktree-design.md). |
 
-**Sub-agents have no dedicated facts and no `run_state` row.** A sub-agent (LLM-spawned via the `agent` tool) is a tool implementation that runs inline as a fresh codergen call against the parent's event stream. Three **observability** event types bracket the slice: `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`, `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`, and `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` (fires on respawn after a daemon crash; see [`docs/proposals/sub-agent-crash-resilience.md`](./proposals/sub-agent-crash-resilience.md)). `name` and `agent_def` are independent: `name` carries the free-form caller-supplied label from `agent({ name: <label>, … })`; `agent_def` carries the resolved profile name from `agent({ agent: <def-name>, … })` against a discovered definition (see [`docs/proposals/agent-definitions.md`](./proposals/agent-definitions.md)). Either, both, or neither can be present. UIs prefer `name` when present (the caller chose it for this spawn) and fall back to `agent_def`. Every event the sub-agent emits in between (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) carries `subagent_id` on its payload as a discriminator. The cost-rollup fields (`costUsd`, `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) sum every `cost.recorded` the sub-agent forwarded onto the parent's stream during its bracket — a per-spawn view UIs and analytics can render without scanning the slice. Required numbers, default 0 when no `cost.recorded` fired (e.g. spawn halted before any LLM call). Field shape mirrors `fact.node_aborted.partial*`. The fields are a per-spawn view of the same stream, not a duplicate accounting path: cost still rolls into the parent's `metrics` through the existing accumulation path — the reducer doesn't filter on `subagent_id`. The tool result (`{ subagent_id, status, total_tool_calls, halt_reason? }`) is the bidirectional handle the parent LLM gets back. Parallel `agent` toolcalls in one parent message run concurrently and demux by `subagent_id`. The `subagent_id` is picked at spawn time via two paths. **Content-addressed pending-resume (FIFO queue, default when `spec.args_hash` is set — the agent tool computes it from the spec's canonical args: prompt, system_prompt, allowed_tools, disallowed_tools, skills, max_iterations, agent_def, model, provider):** spawn-subagent queries prior `subagent.start` / `subagent.end` / `subagent.resumed` events for brackets in the same `(parentRunId, parentNodeId, parentIteration, args_hash)` scope whose latest terminal is `subagent.end{status:"cancelled"}` and that haven't been consumed by a `subagent.resumed`. The oldest such bracket's id is reused — same id ⇒ the hydration path below replays its transcript ⇒ the LLM's retry with byte-identical args automatically picks up where the cancelled bracket left off, without a `resume_subagent_id` parameter, without LLM cooperation. Six parallel siblings with same args each pop a distinct cancelled bracket because the eagerly-emitted `subagent.resumed` consumes its id before the next sibling's findPendingResumeCandidate runs (bun:sqlite writes are sync; the first sibling's resumed-write lands before the second's read). Stays scoped to `(parent_node_id, iteration)` so a goal-gate retarget into the same node doesn't accidentally bleed stale brackets into a fresh dispatch. **Fresh deterministic id (fallback):** `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars — so a sub-agent respawned after a daemon crash hashes to the same id and rehydrates its prior transcript under the existing `__subagent:<id>` namespace in the messages table. The respawn path emits `subagent.resumed` (no fresh `subagent.start` — the original is still in the event log) and either skips the LLM call (when the persisted transcript ended in `stopReason:"stop"` with no pending toolCalls) or hands `priorMessages` to the backend so the child picks up where it left off. On a resumed bracket, `subagent.end.costUsd` and the token fields are **cumulative** across every spawn of the same `subagent_id` — the daemon seeds the per-spawn rollup from prior `subagent.end` events for that id (via `IEventReader.getEventsByType`). **Consumers summing cost across `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket; naive summation across every bracket over-counts.** The parent's `total_cost_usd` projection is unaffected — it folds each `fact.node_completed.costUsd` once. Typed payload schemas: `SubagentStartData` / `SubagentEndData` / `SubagentResumedData` in `packages/core/src/types/events.ts`.
+**Sub-agents have no dedicated facts and no `run_state` row.** A sub-agent (LLM-spawned via the `agent` tool) is a tool implementation that runs inline as a fresh llm call against the parent's event stream. Three **observability** event types bracket the slice: `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`, `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`, and `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` (fires on respawn after a daemon crash; see [`docs/proposals/sub-agent-crash-resilience.md`](./proposals/sub-agent-crash-resilience.md)). `name` and `agent_def` are independent: `name` carries the free-form caller-supplied label from `agent({ name: <label>, … })`; `agent_def` carries the resolved profile name from `agent({ agent: <def-name>, … })` against a discovered definition (see [`docs/proposals/agent-definitions.md`](./proposals/agent-definitions.md)). Either, both, or neither can be present. UIs prefer `name` when present (the caller chose it for this spawn) and fall back to `agent_def`. Every event the sub-agent emits in between (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) carries `subagent_id` on its payload as a discriminator. The cost-rollup fields (`costUsd`, `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) sum every `cost.recorded` the sub-agent forwarded onto the parent's stream during its bracket — a per-spawn view UIs and analytics can render without scanning the slice. Required numbers, default 0 when no `cost.recorded` fired (e.g. spawn halted before any LLM call). Field shape mirrors `fact.node_aborted.partial*`. The fields are a per-spawn view of the same stream, not a duplicate accounting path: cost still rolls into the parent's `metrics` through the existing accumulation path — the reducer doesn't filter on `subagent_id`. The tool result (`{ subagent_id, status, total_tool_calls, halt_reason? }`) is the bidirectional handle the parent LLM gets back. Parallel `agent` toolcalls in one parent message run concurrently and demux by `subagent_id`. The `subagent_id` is picked at spawn time via two paths. **Content-addressed pending-resume (FIFO queue, default when `spec.args_hash` is set — the agent tool computes it from the spec's canonical args: prompt, system_prompt, allowed_tools, disallowed_tools, skills, max_iterations, agent_def, model, provider):** spawn-subagent queries prior `subagent.start` / `subagent.end` / `subagent.resumed` events for brackets in the same `(parentRunId, parentNodeId, parentIteration, args_hash)` scope whose latest terminal is `subagent.end{status:"cancelled"}` and that haven't been consumed by a `subagent.resumed`. The oldest such bracket's id is reused — same id ⇒ the hydration path below replays its transcript ⇒ the LLM's retry with byte-identical args automatically picks up where the cancelled bracket left off, without a `resume_subagent_id` parameter, without LLM cooperation. Six parallel siblings with same args each pop a distinct cancelled bracket because the eagerly-emitted `subagent.resumed` consumes its id before the next sibling's findPendingResumeCandidate runs (bun:sqlite writes are sync; the first sibling's resumed-write lands before the second's read). Stays scoped to `(parent_node_id, iteration)` so a goal-gate retarget into the same node doesn't accidentally bleed stale brackets into a fresh dispatch. **Fresh deterministic id (fallback):** `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars — so a sub-agent respawned after a daemon crash hashes to the same id and rehydrates its prior transcript under the existing `__subagent:<id>` namespace in the messages table. The respawn path emits `subagent.resumed` (no fresh `subagent.start` — the original is still in the event log) and either skips the LLM call (when the persisted transcript ended in `stopReason:"stop"` with no pending toolCalls) or hands `priorMessages` to the backend so the child picks up where it left off. On a resumed bracket, `subagent.end.costUsd` and the token fields are **cumulative** across every spawn of the same `subagent_id` — the daemon seeds the per-spawn rollup from prior `subagent.end` events for that id (via `IEventReader.getEventsByType`). **Consumers summing cost across `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket; naive summation across every bracket over-counts.** The parent's `total_cost_usd` projection is unaffected — it folds each `fact.node_completed.costUsd` once. Typed payload schemas: `SubagentStartData` / `SubagentEndData` / `SubagentResumedData` in `packages/core/src/types/events.ts`.
 
 All payloads ≤ 4KB. Content references are `artifactKey`.
 
@@ -439,7 +439,7 @@ Anything emitted via `ctx.emit` from a handler — `agent.message_start/end`, `l
 
 The executor flushes the in-handler buffer to the store on a soft 50ms timer or when 64 events accumulate, whichever first, so the conversation view streams mid-LLM-call. The handler's tail (`edge.selected`, post-handler budget warnings) is drained synchronously before the terminal `fact.node_*` so consumers see the trail in causal order.
 
-`llm.start.skills[]` carries one `SkillCatalogRecord` (see `packages/types/src/skills.ts`) per skill the model saw on this call. Each record includes `name`, `location`, `sha256`, `bytes`, `scope`, `source_dir`, optional `compatibility`, and — for `scope === "project"` — `project_cwd` so replay can correlate which project's skills were active for this run after per-run filtering at codergen dispatch (see [`docs/proposals/skills-and-agents-ui.md`](./proposals/skills-and-agents-ui.md)).
+`llm.start.skills[]` carries one `SkillCatalogRecord` (see `packages/types/src/skills.ts`) per skill the model saw on this call. Each record includes `name`, `location`, `sha256`, `bytes`, `scope`, `source_dir`, optional `compatibility`, and — for `scope === "project"` — `project_cwd` so replay can correlate which project's skills were active for this run after per-run filtering at llm dispatch (see [`docs/proposals/skills-and-agents-ui.md`](./proposals/skills-and-agents-ui.md)).
 
 ### Daemon events (writer: `daemon`, separate `daemon_events` table)
 
@@ -452,7 +452,7 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 | `daemon.reaper_took_over` | `priorPid`, `priorHostname`, `priorHeartbeatAt`, `staleForMs` | Lock TTL exceeded; this daemon force-acquired |
 | `daemon.sweep_completed` | `requeued: number`, `quarantined: number`, `durationMs` | Startup sweep finished |
 | `daemon.blob_gc_completed` | `deleted: number`, `durationMs` | Orphan-blob GC sweep finished |
-| `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced. Only fires for nodes with a numeric `HandlerSpec.maxMs` — unbounded codergen (`max_ms=0`) skips the watchdog. |
+| `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced. Only fires for nodes with a numeric `HandlerSpec.maxMs` — unbounded llm (`max_ms=0`) skips the watchdog. |
 | `daemon.worktree_provisioned` | `runId`, `ok: boolean`, `errorDetail?` | Provisioner result; `ok: false` records why a run halted at provision time |
 | `intent.schedule_create` | `scheduleId`, `workflowRef`, `cwd`, `intervalMs`, `intervalText`, `input?`, `overlapPolicy`, `fireOnCreate` | Operator created a schedule (writer: web/CLI). Audit only — the row in `schedules` is the canonical state |
 | `intent.schedule_pause` | `scheduleId` | Operator paused a schedule |
@@ -688,7 +688,7 @@ export type SideEffect = "none" | "idempotent" | "external";
 export type HandlerSpec = {
   kind: string;
   sideEffect: SideEffect;
-  maxMs?: number;       // optional; codergen may opt out via DOT max_ms=0 / timeout="0"
+  maxMs?: number;       // optional; llm may opt out via max-ms: 0
   handler: Handler;
 };
 
@@ -741,7 +741,7 @@ export type HandlerResult =
       kind: "transition";
       nextNode?: string;                                // omit to let edge selection decide
       outcomeStatus?: "success" | "fail" | "retry";
-      route?: string;                                   // set by codergen on routing nodes
+      route?: string;                                   // set by llm on routing nodes
       tokens: number;
       costUsd: number;
       inputCostUsd?: number;
@@ -800,7 +800,7 @@ Handlers never compute `argsHash` themselves. The framework owns canonicalisatio
 ### Enforced at review
 - `no-restricted-imports`: `fetch`, `undici`, `fs`, `child_process` banned inside `handlers/`.
 - AST rule: no `await`/`JSON.stringify` inside `.transaction(() => ...)` bodies.
-- Handler PRs must: declare `sideEffect`, set `maxMs` (or document why omission is correct for codergen-style handlers that self-bound via cost/tokens), include replay property test for external tools.
+- Handler PRs must: declare `sideEffect`, set `maxMs` (or document why omission is correct for llm-style handlers that self-bound via cost/tokens), include replay property test for external tools.
 
 ---
 
@@ -882,7 +882,7 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
           timeoutRejects(spec.maxMs + LEAK_GRACE_MS),
         ]);
       } else {
-        // Unbounded codergen — cost/token bounds and operator intents govern.
+        // Unbounded llm — cost/token bounds and operator intents govern.
         result = await dispatch(state.current_node, ctx);
       }
     } catch (err) {
@@ -941,11 +941,12 @@ app.post("/runs", async (c) => {
     runId?: string;
     priority?: number;
     routing?: Record<string, unknown>;
-    input?: string;          // positional input → routing.input → $ARGUMENTS
+    input?: string;          // free-form input → routing.input → $ARGUMENTS
+    inputs?: Record<string, string>;  // typed inputs → routing.inputs → ${{ inputs.x }}; validated against the inputs: block (400 invalid_inputs)
     cwd?: string;            // absolute project root at enqueue time; surfaced on run_state.cwd
     workflowName?: string;   // resolved name when the caller passed a bare name
     workflowScope?: "global" | "local" | "path" | "ephemeral";
-    workflowPath?: string;   // filesystem path of the .dot file at resolution time
+    workflowPath?: string;   // filesystem path of the workflow file at resolution time
   };
 
   // Preflight 1: at least one provider credential must be reachable.
@@ -960,10 +961,15 @@ app.post("/runs", async (c) => {
     return c.json({ error: "queue full", code: "queue_full" }, 429);
   }
 
+  // Validate body.inputs against the workflow's inputs: block (400 on a
+  // missing required input or out-of-range choice) before enqueue.
   const runId = body.runId ?? newRunId();
   const initialRouting = { ...(body.routing ?? {}) };
   if (typeof body.input === "string" && initialRouting.input === undefined) {
     initialRouting.input = body.input;
+  }
+  if (body.inputs != null && initialRouting.inputs === undefined) {
+    initialRouting.inputs = body.inputs;
   }
   store.enqueueRun({ runId, workflowSha: body.workflowSha, priority: body.priority,
                      initialRouting, cwd: body.cwd,
@@ -1189,7 +1195,7 @@ packages/
     test/                              ← property + unit
   core/
     src/
-      parser/                          ← DOT parser
+      parser/                          ← YAML parser
       handler/                         ← HandlerContext, HandlerSpec, Handler
         handlers/                      ← wait-human, tool, ...
         context.ts                     ← buildHandlerContext (per-call env)
@@ -1205,7 +1211,7 @@ packages/
         summariser.ts                  ← SummariserBackend port
         ...
       executor/
-        types.ts                       ← CodergenBackend, CodergenInput
+        types.ts                       ← LlmBackend, LlmInput
   daemon/
     src/
       executor.ts                      ← executor fiber
@@ -1220,8 +1226,8 @@ packages/
       entrypoint.ts                    ← startDaemon
   agent/
     src/
-      backend.ts                       ← PiCodergenBackend (pi-agent-core)
-      handler-bridge.ts                ← makeCodergenHandler (CodergenBackend → HandlerSpec)
+      backend.ts                       ← PiLlmBackend (pi-agent-core)
+      handler-bridge.ts                ← makeLlmHandler (LlmBackend → HandlerSpec)
       summariser.ts                    ← PiSummariserBackend
       thread.ts                        ← buildSummarySeed (summariser-backed)
       event-bridge.ts                  ← pi-agent AgentEvent → swarm EventType
@@ -1262,13 +1268,13 @@ packages/
 ### 12.1 Handler coverage
 
 Five handler kinds dispatch end-to-end through `auto-dispatcher.ts`:
-`start`, `exit`, `codergen`, `human`, `tool`. The pure reducers
+`start`, `exit`, `llm`, `human`, `tool`. The pure reducers
 behind them (`retry-policy.ts`, `edge-selection.ts`,
 `external-call.ts`) are property-tested.
 
 Read-only enforcement on review/observer nodes is structural at three
 layers: (a) `ctx.tools` is narrowed via `ToolRegistry.select` before
-the `HandlerContext` is built; (b) the codergen backend re-applies
+the `HandlerContext` is built; (b) the llm backend re-applies
 `select(...)` on its workspace registry before handing tools to pi-ai;
 (c) `ctx.env` is wrapped in a read-only proxy when no mutating tool
 (`bash` / `write` / `edit`) is visible, so `env.writeFile` /

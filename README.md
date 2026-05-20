@@ -1,11 +1,10 @@
 # swarm
 
-A universal AI agent orchestrator. You write workflows in plain
-[DOT](https://graphviz.org/doc/info/lang.html) — nodes are LLM calls,
-shell commands, conditionals, parallel branches, human-in-the-loop
-gates — and swarm runs them through a deterministic state machine
-against any LLM provider, with every step recorded to a SQLite event
-log you can replay, steer, pause, or resume.
+A universal AI agent orchestrator. You write workflows in plain YAML
+(GitHub-Actions-style `steps:`) — steps are LLM calls, shell commands,
+or human-in-the-loop gates — and swarm runs them through a
+deterministic state machine against any LLM provider, with every step
+recorded to a SQLite event log you can replay, steer, pause, or resume.
 
 It's local-first (one process, one SQLite file under `~/.swarm/`),
 provider-agnostic (15+ inference backends via [`pi-ai`](https://github.com/badlogic/pi-mono)),
@@ -33,7 +32,7 @@ deterministic even when the LLM bodies are not.
   concurrent overlap policy, late-fire catch-up, and a per-schedule
   run-history stripe.
 - **Workflows are text.** Diff them, version them, code-review them.
-  No DSL to learn beyond DOT.
+  No DSL to learn beyond YAML.
 
 ## Quick tour
 
@@ -62,15 +61,18 @@ bun install
 # Default DB ~/.swarm/swarm.db, default port 6767, web bundle auto-built.
 bun run swarm harness
 
-# Terminal 2 — point at a .dot file by path, or by bare name once you've
-# authored workflows under ~/.swarm/workflows/<name>.dot (resolved first)
-# or <cwd>/.swarm/workflows/<name>.dot. The CLI discovers the running
+# Terminal 2 — point at a .yaml file by path, or by bare name once you've
+# authored workflows under ~/.swarm/workflows/<name>.yaml (resolved first)
+# or <cwd>/.swarm/workflows/<name>.yaml. The CLI discovers the running
 # harness via the global DB — works from any directory.
-bun run swarm run path/to/your-workflow.dot --input "…"
+# Trailing args feed the workflow's $ARGUMENTS; typed inputs go through
+# --input name=value (repeatable), validated against the inputs: block.
+bun run swarm run path/to/your-workflow.yaml "free-form $ARGUMENTS text"
+bun run swarm run change --input ticket=BUG-1 --input env=prod
 ```
 
 This repo ships a small set of workflows under `.swarm/workflows/`
-(`change.dot`, `analyze.dot`, `ci-gate.dot`, `showcase.dot`, …) — run
+(`change.yaml`, `analyze.yaml`, `ci-gate.yaml`, `showcase.yaml`, …) — run
 them with `bun run swarm run change --input "…"` from the swarm repo
 cwd, or copy the ones you want into `~/.swarm/workflows/` to use them
 anywhere.
@@ -84,7 +86,7 @@ it, pause it, or feed it a HITL response.
 ```sh
 bun run swarm daemon --db <path>         # executor only, against an explicit DB
 bun run swarm serve  --db <path>         # standalone HTTP + SSE
-bun run swarm validate workflow.dot      # parse + lint a DOT file, no execution
+bun run swarm validate workflow.yaml      # parse + lint a workflow file, no execution
 bun run swarm schedule add <workflow> --every 1h --input "…"   # fire on an interval
 bun run swarm schedule list              # show schedules + recent-run stripes
 bun run swarm db vacuum                  # reclaim free pages

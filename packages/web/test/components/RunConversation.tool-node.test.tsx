@@ -1,6 +1,6 @@
 // RunConversation — tool_node row rendering.
 //
-// A graph-level tool node (parallelogram shape) is persisted as a
+// A graph-level tool node (tool type) is persisted as a
 // `role:"tool_node"` row carrying the command, cwd, exit code, and
 // tail-truncated stdout/stderr. RunConversation renders it as a
 // CodeBlock (shell) + Terminal card inside the tool node's NodeSection.

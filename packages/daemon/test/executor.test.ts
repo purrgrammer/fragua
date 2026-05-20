@@ -5,19 +5,35 @@ import { buildSubstitutionArgs, runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
-// TODO(yaml-cutover commit 2): inline DOT fixtures need migration to YAML.
-// Wholesale .skip until that lands.
-
 describe("buildSubstitutionArgs", () => {
   test("sets $ARGUMENTS from routing.input when it is a string", () => {
-    const args = buildSubstitutionArgs("r", { input: "rename foo to bar" });
-    expect(args["$ARGUMENTS"]).toBe("rename foo to bar");
+    const args = buildSubstitutionArgs({ input: "rename foo to bar" });
+    expect(args.$ARGUMENTS).toBe("rename foo to bar");
   });
 
   test("omits $ARGUMENTS when routing.input is missing or non-string", () => {
-    expect(buildSubstitutionArgs("r", {})["$ARGUMENTS"]).toBeUndefined();
-    expect(buildSubstitutionArgs("r", { input: 42 })["$ARGUMENTS"]).toBeUndefined();
-    expect(buildSubstitutionArgs("r", { input: null })["$ARGUMENTS"]).toBeUndefined();
+    expect(buildSubstitutionArgs({}).$ARGUMENTS).toBeUndefined();
+    expect(buildSubstitutionArgs({ input: 42 }).$ARGUMENTS).toBeUndefined();
+    expect(buildSubstitutionArgs({ input: null }).$ARGUMENTS).toBeUndefined();
+  });
+
+  test("resolves ${{ inputs.x }} bindings: declared defaults overlaid by routing.inputs", () => {
+    const decls = [
+      { name: "env", type: "string" as const, required: false, default: "dev" },
+      { name: "ticket", type: "string" as const, required: true },
+    ];
+    const args = buildSubstitutionArgs({ inputs: { ticket: "BUG-1" } }, decls);
+    expect(args.inputs).toEqual({ env: "dev", ticket: "BUG-1" });
+  });
+
+  test("provided input overrides the declared default", () => {
+    const decls = [{ name: "env", type: "string" as const, required: false, default: "dev" }];
+    const args = buildSubstitutionArgs({ inputs: { env: "prod" } }, decls);
+    expect(args.inputs).toEqual({ env: "prod" });
+  });
+
+  test("no inputs declared and none provided → inputs omitted", () => {
+    expect(buildSubstitutionArgs({ input: "x" }).inputs).toBeUndefined();
   });
 });
 
@@ -144,18 +160,17 @@ steps:
     r.store.close();
   });
 
-  test("terminal reached via outcome=fail edge ends the run in 'halted' state, not 'completed'", async () => {
-    // Repro of the "run claims success but nothing got done" bug the
-    // quick-change workflow exhibited: implement aborts, router picks
-    // the fail-conditioned edge to done (Msquare terminal). The run
-    // must NOT report status=completed — the graph exited via a failure
-    // branch. Mapped to UI status="fail" via mapStatus(halted).
+  test("node that fails with no declared fail route halts the run (aborted_exit)", async () => {
+    // Failure handling is opt-in: with no fail edge declared, an
+    // unhandled failure halts (aborted_exit) rather than silently
+    // falling through to a synthesized exit. Mapped to UI status="fail"
+    // via mapStatus(halted).
     const yaml = `name: t
 steps:
   implement:
     type: llm
     prompt: i
-    on: {success: verify, fail: exit}
+    on: {success: verify}
   verify: {type: llm, prompt: v}
 `;
     const r = rig({ yaml });
@@ -175,12 +190,6 @@ steps:
         tokens: 1,
         costUsd: 0,
       }),
-    });
-    r.dispatcher.register(r.workflowSha, "done", {
-      kind: "exit",
-      sideEffect: "none",
-      maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
     });
     enqueue(r, "halt-1", "start");
     r.store.claimNextRun(1);
@@ -202,9 +211,54 @@ steps:
     const payload = halted!.payload as { reason: string; detail?: string };
     expect(payload.reason).toBe("aborted_exit");
     // Handler returned no failureReason — falls back to the generic detail.
-    expect(payload.detail).toBe("reached exit via outcome=fail");
+    expect(payload.detail).toBe("node implement failed with no fail route");
     // No run_completed event should have fired — the run didn't succeed.
     expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
+    r.store.close();
+  });
+
+  test("explicit `fail → exit` is a sanctioned graceful landing — run completes", async () => {
+    // An author-declared fail edge to the exit sink opts into graceful
+    // completion: the node failed, but reaching `exit` via that edge is
+    // a deliberate landing, so the run reports completed (not halted).
+    const yaml = `name: t
+steps:
+  build:
+    type: tool
+    run: make
+    on: {success: ship, fail: exit}
+  ship: {type: llm, prompt: s}
+`;
+    const r = rig({ yaml });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "build", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "build", {
+      kind: "tool",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", outcomeStatus: "fail", tokens: 1, costUsd: 0 }),
+    });
+    enqueue(r, "graceful-1", "start");
+    r.store.claimNextRun(1);
+    await runOne("graceful-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    const state = r.store.getState("graceful-1")!;
+    expect(state.status).toBe("completed");
+    const events = r.store.getEvents("graceful-1");
+    expect(events.some((e) => e.type === "fact.run_completed")).toBe(true);
+    expect(events.some((e) => e.type === "fact.run_halted")).toBe(false);
     r.store.close();
   });
 
@@ -219,7 +273,7 @@ steps:
   check:
     type: llm
     prompt: c
-    on: {success: exit, fail: exit}
+  done: {type: llm, prompt: d}
 `;
     const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
@@ -239,12 +293,6 @@ steps:
         tokens: 1,
         costUsd: 0,
       }),
-    });
-    r.dispatcher.register(r.workflowSha, "done", {
-      kind: "exit",
-      sideEffect: "none",
-      maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
     });
     enqueue(r, "halt-with-reason", "start");
     r.store.claimNextRun(1);
@@ -270,7 +318,7 @@ steps:
   test("llm fail routes through condition=outcome=fail to a recovery node (build-feature: review→fix)", async () => {
     // Regression for the handler-bridge bug that collapsed every llm
     // fail outcome to a terminal halt — blocking review → fix recovery in
-    // build-feature.dot. With the fix, fail flows through as a transition
+    // build-feature.yaml. With the fix, fail flows through as a transition
     // and the edge selector picks the explicit fail-edge.
     const yaml = `name: t
 steps:
@@ -348,7 +396,7 @@ steps:
   });
 
   test("llm fail with no condition=outcome=fail edge halts (no silent fallthrough)", async () => {
-    // Mirrors quick-change.dot's commit/merge nodes — no fail-edge means
+    // Mirrors quick-change.yaml's commit/merge nodes — no fail-edge means
     // a fail outcome should halt rather than route into the unconditional
     // success edge.
     const yaml = `name: t

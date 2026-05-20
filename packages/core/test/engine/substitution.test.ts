@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { collectReferences, substitute } from "../../src/engine/substitution.ts";
+import { collectReferences, inputReferences, substitute } from "../../src/engine/substitution.ts";
 
 describe("substitute", () => {
   test("no tokens → template unchanged", () => {
@@ -28,15 +28,63 @@ describe("substitute", () => {
   });
 });
 
+describe("substitute — ${{ inputs.x }}", () => {
+  test("named inputs substitute from the inputs map", () => {
+    const out = substitute("Hello ${{ inputs.name }}, you have ${{ inputs.count }} items.", {
+      args: { inputs: { name: "World", count: "5" } },
+    });
+    expect(out).toBe("Hello World, you have 5 items.");
+  });
+
+  test("tolerates whitespace inside the braces", () => {
+    expect(substitute("${{inputs.x}} ${{   inputs.x   }}", { args: { inputs: { x: "v" } } })).toBe("v v");
+  });
+
+  test("unbound reference collapses to empty string", () => {
+    expect(substitute("a=${{ inputs.missing }}b", { args: { inputs: {} } })).toBe("a=b");
+    expect(substitute("a=${{ inputs.missing }}b")).toBe("a=b");
+  });
+
+  test("$ARGUMENTS and inputs substitute in the same pass", () => {
+    const out = substitute("$ARGUMENTS / ${{ inputs.env }}", {
+      args: { $ARGUMENTS: "go", inputs: { env: "prod" } },
+    });
+    expect(out).toBe("go / prod");
+  });
+
+  test("shell-safe escaping single-quotes input values", () => {
+    const out = substitute("deploy ${{ inputs.target }}", {
+      args: { inputs: { target: "a'b" } },
+      escapeForShell: true,
+    });
+    expect(out).toBe(`deploy 'a'\\''b'`);
+  });
+});
+
+describe("inputReferences", () => {
+  test("extracts every reference name, deduped", () => {
+    expect(inputReferences("a=${{ inputs.foo }} b=${{ inputs.bar }} c=${{ inputs.foo }}")).toEqual(["foo", "bar"]);
+  });
+
+  test("empty for templates with no input refs", () => {
+    expect(inputReferences("plain $ARGUMENTS text")).toEqual([]);
+  });
+});
+
 describe("collectReferences", () => {
   test("finds builtin tokens", () => {
     const refs = collectReferences("hello $ARGUMENTS world");
     expect(refs.builtins).toEqual(["$ARGUMENTS"]);
   });
 
+  test("finds input refs", () => {
+    expect(collectReferences("x ${{ inputs.a }}").inputs).toEqual(["a"]);
+  });
+
   test("empty for plain text", () => {
     const refs = collectReferences("nothing to see here");
     expect(refs.builtins).toEqual([]);
+    expect(refs.inputs).toEqual([]);
   });
 });
 

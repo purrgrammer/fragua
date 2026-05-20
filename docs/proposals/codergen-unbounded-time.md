@@ -1,6 +1,6 @@
 ---
 title: Codergen nodes — unbounded wall-clock time
-summary: "Codergen nodes can opt out of wall-clock bounding via DOT `max_ms=0` (or the duration-string equivalent `timeout=0s`); the auto-dispatcher resolves zero to `HandlerSpec.maxMs: undefined`, the executor skips `AbortSignal.timeout` and the leak watchdog, the supervisor skips the stuck-node trip. Cost / tokens / operator intents remain the operative ceiling. Default `DEFAULT_MAX_MS` stays at 4 h when nothing is set — unbounded is opt-in per node."
+summary: "LLM nodes can opt out of wall-clock bounding via `max-ms: 0`; the auto-dispatcher resolves zero to `HandlerSpec.maxMs: undefined`, the executor skips `AbortSignal.timeout` and the leak watchdog, the supervisor skips the stuck-node trip. Cost / tokens / operator intents remain the operative ceiling. Default `DEFAULT_MAX_MS` stays at 4 h when nothing is set — unbounded is opt-in per node."
 status: shipped
 maturity: sketch
 last-reviewed: 2026-05-16

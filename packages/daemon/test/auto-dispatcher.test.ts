@@ -102,11 +102,7 @@ steps:
 
   test("per-kind default maxMs flows to tool nodes without override", () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `name: t\nsteps:\n  build: {type: tool, run: "echo hi"}\n`,
-    );
+    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  build: {type: tool, run: "echo hi"}\n`);
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store, defaultMaxMs: { tool: 12_345 } }));
     expect(dispatcher.get("sha", "build").maxMs).toBe(12_345);

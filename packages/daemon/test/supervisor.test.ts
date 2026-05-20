@@ -103,7 +103,7 @@ describe("supervisor — pause-aware leak detection", () => {
   });
 
   test("does not trip a controller for a node whose handlerMaxMsFor returns undefined", async () => {
-    // Unbounded llm (DOT max_ms=0) — the supervisor must skip the
+    // Unbounded llm (max_ms=0) — the supervisor must skip the
     // leak-trip entirely, even after arbitrarily long elapsed time. See
     // docs/proposals/llm-unbounded-time.md.
     const clk = fakeClock(1_000_000_000_000);

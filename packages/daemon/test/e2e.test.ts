@@ -115,7 +115,11 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
 
     // Phase 1 ─────────────────────────────────────────────────
     const s1 = new SqliteStore({ path: dbPath });
-    s1.saveWorkflow("wf-sha", "hitl-wf", "name: hitl-wf\nsteps:\n  ask:\n    type: human\n    text: ok?\n    routes: {A: exit}\n");
+    s1.saveWorkflow(
+      "wf-sha",
+      "hitl-wf",
+      "name: hitl-wf\nsteps:\n  ask:\n    type: human\n    text: ok?\n    routes: {A: exit}\n",
+    );
     const dispatcher = new Dispatcher();
     dispatcher.register(
       "wf-sha",

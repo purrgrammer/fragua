@@ -32,7 +32,7 @@
 // the audit trail for "what did the run actually change".
 //
 // The rev-list signal exists because workflows whose nodes commit
-// in-worktree (e.g. `change.dot`, `merge.dot`) leave HEAD ahead of
+// in-worktree (e.g. `change.yaml`, `merge.yaml`) leave HEAD ahead of
 // `baseGitSha` while the working tree is clean. Without rev-list,
 // dispose dropped those branches and the commits became dangling git
 // objects.

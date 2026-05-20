@@ -325,7 +325,7 @@ describe("eventsToSteps", () => {
     expect(sub2?.parentStartSeq).toBe(20);
   });
 
-  // Tool nodes (parallelogram in DOT) never open an `llm.start`. Without
+  // Tool nodes (tool type) never open an `llm.start`. Without
   // synthesis they're invisible in the Cost breakdown — for parallel
   // sections that mix llm + tool branches the tool branches just
   // disappear from the panel.

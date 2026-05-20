@@ -163,7 +163,6 @@ describe("resolveFailRetarget — §3.7", () => {
     expect(resolveFailRetarget(g, "a")).toBe("fix");
   });
 
-
   test("graph-level retarget NOT consulted (§3.7 is node-only)", () => {
     const g = graph({
       nodes: [node("a"), node("z")],

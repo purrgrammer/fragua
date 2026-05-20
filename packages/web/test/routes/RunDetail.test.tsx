@@ -110,7 +110,7 @@ function prepare(id: string, detail: RunDetailT) {
   return { client, mock };
 }
 
-describe.skip("RunDetail", () => {
+describe("RunDetail", () => {
   useDom();
   afterEach(() => cleanup());
 
@@ -518,12 +518,13 @@ describe.skip("RunDetail", () => {
       lastEventSeq: 1,
       nodes: [{ nodeId: "implement", iteration: 0, state: "running", lastEventSeq: 1 }],
       selectedEdges: [{ from: "start", to: "implement", iteration: 0 }],
-      workflowSource: `digraph demo {
-        start [shape=Mdiamond]
-        implement [shape=box, label="Implement", model="claude-sonnet-4-5"]
-        done [shape=Msquare]
-        start -> implement -> done
-      }`,
+      workflowSource: `name: demo
+steps:
+  implement:
+    type: llm
+    label: Implement
+    model: claude-sonnet-4-5
+`,
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,

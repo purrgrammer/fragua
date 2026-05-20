@@ -1,6 +1,6 @@
 // Goal-gate policy reducer — attractor-spec §3.4.
 //
-// When traversal reaches a terminal (Msquare), every node visited with
+// When traversal reaches a terminal (exit), every node visited with
 // `goal_gate=true` must have settled in SUCCESS or PARTIAL_SUCCESS for the
 // run to exit cleanly. If any gate is unsatisfied, route to its retarget:
 //

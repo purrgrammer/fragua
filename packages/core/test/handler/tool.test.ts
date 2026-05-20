@@ -1,4 +1,4 @@
-// Tests for the graph-level `tool` handler (parallelogram shape).
+// Tests for the graph-level `tool` handler (tool type).
 //
 // Uses an injected spawner so the suite runs hermetically — no real
 // subprocesses. A separate smoke test at the bottom exercises the

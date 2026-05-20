@@ -1,11 +1,11 @@
-// Auto-dispatcher: lazily builds HandlerSpecs from a workflow's DOT source.
+// Auto-dispatcher: lazily builds HandlerSpecs from a workflow source.
 //
 // Used as a DispatcherResolver fallback so new workflows added via HTTP
 // after daemon start get their nodes registered on first dispatch. Each
 // node's spec is derived from its shape / `type` attribute.
 
 import type { Node, NodeAttrs } from "@swarm/core";
-import { InvalidDurationError, parseWorkflow, parseDurationMs } from "@swarm/core";
+import { InvalidDurationError, parseDurationMs, parseWorkflow } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
@@ -25,14 +25,14 @@ export interface AutoDispatcherOpts {
    * factories forward it into the HandlerSpec.
    */
   codergenFactory?: (node: Node, nextNode: string, maxMs: number | "unbounded" | undefined) => HandlerSpec;
-  /** Per-kind fallback `maxMs` when the DOT node declares neither
+  /** Per-kind fallback `maxMs` when the workflow node declares neither
    * `timeout` nor `max_ms`. Keyed by handler kind (`llm`, `tool`).
    * Absent kind → handler's own built-in default applies. */
   defaultMaxMs?: { llm?: number; tool?: number };
 }
 
 /**
- * Resolve a handler's `maxMs` from a DOT node's attrs, falling back to
+ * Resolve a handler's `maxMs` from a workflow node's attrs, falling back to
  * `fallbackMs` (per-kind config) and finally the handler's own default.
  * Precedence:
  *   1. `attrs.max_ms` — numeric literal in ms
@@ -46,7 +46,7 @@ export interface AutoDispatcherOpts {
  * `specsForGraph` re-inspects the raw attrs to distinguish them for the
  * llm factory.
  *
- * Malformed values reach this function only when the DOT was parsed
+ * Malformed values reach this function only when the workflow was parsed
  * without enqueue-time validation (tests, direct-store inserts). We
  * surface the parse error as a thrown `InvalidDurationError` — callers
  * use `malformed*Spec` to return a clean halt fact instead of crashing
@@ -254,4 +254,3 @@ function transitionSpec(kind: string, nextNode: string): HandlerSpec {
     }),
   };
 }
-

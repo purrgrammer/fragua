@@ -11,7 +11,7 @@
 -- gains `workflow_name` / `_scope` / `_path` so resolution metadata
 -- survives the daemon contract.
 -- v3 → v4: `workflow_scope` enum widens to include 'local' so bare-name
--- resolution can fall back to <cwd>/.swarm/workflows/<name>.dot when
+-- resolution can fall back to <cwd>/.swarm/workflows/<name>.yaml when
 -- the global directory misses.
 -- v4 → v5: conversation runs as a kind (since abandoned, see v7).
 -- v5 → v6: scheduled runs (docs/proposals/scheduled-runs.md). New
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- when the caller passed a path.
   workflow_name TEXT,
   workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
-  -- Filesystem path of the .dot file at resolution time. Diagnostic
+  -- Filesystem path of the .yaml file at resolution time. Diagnostic
   -- only; the daemon contract still keys on `workflow_sha`.
   workflow_path TEXT,
   -- Git SHA of the worktree's HEAD at provision time. Replay reconstructs

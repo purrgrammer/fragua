@@ -80,7 +80,7 @@ export interface RunConversationProps {
    * snapshots still render correctly off the persisted toolResult. */
   subagentByToolCallId?: ReadonlyMap<string, string>;
   /** Per-nodeId in-flight stdout/stderr from running tool
-   * (parallelogram) nodes. Populated by `useRunLive` from
+   * (tool node) nodes. Populated by `useRunLive` from
    * `tool.output_chunk` events. Cleared by `useRunLive` when the
    * persisted `tool_node` row lands. RunConversation renders a
    * streaming Terminal for any nodeId in this map that doesn't
@@ -209,7 +209,7 @@ export function RunConversation({
   const appendStreamingToTail = streaming != null && streamingNodeId != null && tailSectionNodeId === streamingNodeId;
   const orphanStreaming = streaming != null && !appendStreamingToTail && streamingSubagentId == null;
 
-  // In-flight tool nodes (parallelogram). For each entry in
+  // In-flight tool nodes (tool node). For each entry in
   // `toolStreams` whose nodeId doesn't already have a persisted
   // `tool_node` row in `messages`, render a synthesized tail section
   // with a streaming Terminal. Sections appear in the order the

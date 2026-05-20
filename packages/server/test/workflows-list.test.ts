@@ -63,11 +63,7 @@ describe("createFsWorkflowReader", () => {
       'name: alpha\nlabel: "Alpha workflow"\nnodes:\n  start: {type: start}\nedges: []\n',
       "utf8",
     );
-    await writeFile(
-      join(dir, "beta.yaml"),
-      "name: beta\nnodes:\n  start: {type: start}\nedges: []\n",
-      "utf8",
-    );
+    await writeFile(join(dir, "beta.yaml"), "name: beta\nnodes:\n  start: {type: start}\nedges: []\n", "utf8");
     // Non-yaml files must be ignored.
     await writeFile(join(dir, "README.md"), "not a workflow\n", "utf8");
   });

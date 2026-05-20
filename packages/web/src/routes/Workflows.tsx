@@ -1,4 +1,4 @@
-// /workflows — list of `.dot` workflow definitions exposed by the
+// /workflows — list of `.yaml` workflow definitions exposed by the
 // server's `GET /workflows`. Read-only for now; launching a workflow
 // is owned by P5.14.
 //
@@ -50,7 +50,7 @@ export function Workflows(): JSX.Element {
           title="No workflows configured"
           description={
             <span>
-              Add a <code className="font-mono">.dot</code> file under{" "}
+              Add a <code className="font-mono">.yaml</code> file under{" "}
               <code className="font-mono">.swarm/workflows/</code>, or run <code className="font-mono">swarm init</code>{" "}
               if this project hasn't been initialized.
             </span>

@@ -6,7 +6,7 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import { type LlmBackend, type EventType, type Node, type Outcome, substitute } from "@swarm/core";
+import { type EventType, type LlmBackend, type Node, type Outcome, substitute } from "@swarm/core";
 import type * as handler from "@swarm/core/handler";
 import { MessageTooLargeError } from "@swarm/store";
 import type { AgentMessage } from "@swarm/types";
@@ -32,7 +32,7 @@ export interface MakeLlmHandlerOpts {
   /** Hard per-call timeout; forwarded into HandlerSpec.maxMs.
    *
    *   - `number` — explicit ms ceiling; HandlerSpec.maxMs is set verbatim.
-   *   - `"unbounded"` — per-node opt-out (sourced from DOT `max_ms=0` /
+   *   - `"unbounded"` — per-node opt-out (sourced from `max_ms=0` /
    *     `timeout="0"` via the auto-dispatcher); HandlerSpec.maxMs is left
    *     absent so the executor skips AbortSignal.timeout and the leak
    *     watchdog. See docs/proposals/llm-unbounded-time.md.

@@ -67,7 +67,7 @@ export interface StepSnapshot {
    *  honest. `attachStepAggregates` folds cost rows for every entry
    *  here onto the surviving step. */
   extraStartSeqs?: number[];
-  /** Real DOT node id (or a synthetic id for summariser steps). */
+  /** Real workflow node id (or a synthetic id for summariser steps). */
   nodeId: string;
   /** Iteration metadata when the caller is a loop. */
   iteration?: { n: number; max: number };
@@ -188,12 +188,12 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // figure exactly matches what the parent observed.
   const subagentStepIdxById = new Map<string, number>();
   // nodeId → metadata captured on `fact.node_started` for a node
-  // that may turn out to be a tool node (parallelogram). If an
+  // that may turn out to be a tool node (tool node). If an
   // `llm.start` arrives for the nodeId before its `fact.node_completed`,
   // the entry is cleared (it's a llm, the existing path handles
   // it). If `fact.node_completed` arrives with the entry still
   // present, we emit a synthetic tool step so tool nodes appear in
-  // the Cost breakdown alongside LLM steps — the parallelogram
+  // the Cost breakdown alongside LLM steps — the tool
   // branches in a fan-out are otherwise invisible there. Real
   // duration is `completed.ts − started.ts`; cost stays absent.
   const pendingToolNode = new Map<string, { startTs: number; startSeq: number }>();

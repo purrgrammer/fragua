@@ -469,7 +469,7 @@ export type FactEvent =
         /** Operator-facing prompt rendered above the route buttons.
          * Sourced from the human node's `text=` attribute. */
         text: string;
-        /** Declared route names, in DOT order. Each becomes one button;
+        /** Declared route names, in declared order. Each becomes one button;
          * button label resolves via the matching outgoing edge's
          * `label=` override, falling back to `humanize(route)`. */
         routes: string[];

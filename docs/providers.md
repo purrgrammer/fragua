@@ -7,20 +7,30 @@ swarm separates two concepts that are often conflated:
 
 ## Setting provider + model
 
-Provider and model are workflow attributes — they live next to the node that runs the LLM call:
+Provider and model are step attributes — they live next to the step that runs the LLM call (authored as `provider:` / `model:`, or shared across steps via a `defaults:` block):
 
-```dot
-// Direct Anthropic API — bare model id
-plan [shape=codergen, llm_provider="anthropic", llm_model="claude-opus-4-7"]
+```yaml
+steps:
+  # Direct Anthropic API — bare model id
+  plan:
+    type: llm
+    provider: anthropic
+    model: claude-opus-4-7
 
-// OpenRouter serving Anthropic — namespaced id
-plan [shape=codergen, llm_provider="openrouter", llm_model="anthropic/claude-opus-4.7"]
+  # OpenRouter serving Anthropic — namespaced id
+  plan2:
+    type: llm
+    provider: openrouter
+    model: anthropic/claude-opus-4.7
 
-// OpenRouter serving Google
-plan [shape=codergen, llm_provider="openrouter", llm_model="google/gemini-2.5-pro"]
+  # OpenRouter serving Google
+  plan3:
+    type: llm
+    provider: openrouter
+    model: google/gemini-2.5-pro
 ```
 
-Omit `llm_model` and swarm uses that provider's default (see
+Omit `model:` and swarm uses that provider's default (see
 `swarm providers ls`). The daemon runs a pre-flight check against
 pi-ai's registry before starting — bad combos fail immediately with a
 list of valid ids, not after 30 retries.

@@ -10,14 +10,14 @@
 //   2. Workflow-detail:  <GraphView graph=… source=… />
 //      Topology from an already-parsed `Graph`. No lifecycle state:
 //      every node renders neutral. The workflow detail route uses this
-//      to inspect a `.dot` file without needing a run.
+//      to inspect a `.yaml` file without needing a run.
 //
 // Data path notes:
-//   - Topology is ALWAYS parsed from DOT via `@swarm/core`'s
+//   - Topology is ALWAYS parsed from the workflow source via `@swarm/core`'s
 //     `parseWorkflow` — the same parser the runtime uses. One source
 //     of truth, zero risk of drift.
 //   - There is NO `detail.edges` field on the server — topology lives
-//     in the DOT source and is parsed client-side. Reject any PR that
+//     in the workflow source and is parsed client-side. Reject any PR that
 //     tries to add one.
 //   - Flow is top-to-bottom by default (`orientation="TB"`). Callers
 //     can ask for `"LR"` when they need the horizontal strip.
@@ -31,6 +31,7 @@ import {
   type Node as GraphNode,
   handlerOf,
   maxGoalGateRetries,
+  parseWorkflow,
   resolveRetargetChain,
 } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
@@ -42,7 +43,6 @@ import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
 import { humanizeRouteName } from "../lib/humanize.ts";
 import { canRetry as canRetryHandler, showsLlm } from "../lib/node-metadata.ts";
-import { parseWorkflow } from "@swarm/core";
 import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
 import { Controls } from "./ai-elements/controls.tsx";
@@ -106,7 +106,6 @@ const MARKER_DEFAULT = arrow("var(--sw-muted)");
 // goal-gate retargets all share it.
 const MARKER_RETRY = arrow("var(--sw-accent-idle)");
 const MARKER_ANIMATED = arrow("var(--sw-accent-thinking)");
-const MARKER_SUCCESS = arrow("var(--sw-accent-success)");
 const MARKER_FAIL = arrow("var(--sw-accent-error)");
 
 // Handle IDs for back-edge / skip-edge routing. These edges enter/exit
@@ -156,7 +155,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
       return parseWorkflow(readyDetail.workflowSource);
     } catch (err) {
       console.warn(
-        "[GraphView] failed to parse workflow DOT for",
+        "[GraphView] failed to parse workflow source for",
         readyDetail.runId,
         "—",
         err instanceof Error ? err.message : String(err),
@@ -255,7 +254,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 // branching / HITL / tool / validation structure without reading labels:
 //
 //   goal_gate     → success (green)       — "did we land it?"  (wins over handler)
-//   human         → human   (steel blue)  — HITL / paused_human (hexagon, kind=human)
+//   human         → human   (steel blue)  — HITL / paused_human (human, kind=human)
 //   tool          → loop    (teal)        — deterministic shell step (no LLM)
 //   start / exit  → idle    (gray)        — lifecycle markers, dimmer presence
 //   llm      → (no strip — neutral baseline; the LLM majority)
@@ -297,7 +296,7 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
   // Synthetic goal-gate retarget arcs ride on the opposite side from
   // regular loops — left in TB, top in LR.
   const retargetPos = d.orientation === "TB" ? Position.Left : Position.Top;
-  // Surface the DOT `label` in the header only when it carries meaning
+  // Surface the the `label` attr in the header only when it carries meaning
   // beyond the id — otherwise the id (shown in the body) would appear
   // twice. Empty title ⇒ header reduces to handler + state dot.
   // For terminals, the id (`start` / `done`) IS the name — render it
@@ -476,7 +475,7 @@ function SwarmEdge(props: FlowEdgeRenderProps): JSX.Element {
     const arcSide = d?.isRetargetEdge ? "left" : "right";
     return <AiEdge.Loop {...props} outcome={outcome} arcSide={arcSide} />;
   }
-  if (d?.isSkipEdge) return <AiEdge.Temporary {...props} arcOut outcome={outcome} />;
+  if (d?.isSkipEdge || d?.isParallelArc) return <AiEdge.Temporary {...props} arcOut outcome={outcome} />;
   if (d?.animated) return <AiEdge.Animated {...props} outcome={outcome} />;
   return <AiEdge.Temporary {...props} outcome={outcome} />;
 }
@@ -486,6 +485,11 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
     animated?: boolean;
     isBackEdge?: boolean;
     isSkipEdge?: boolean;
+    /** Non-primary member of a same-target group (`parallelIndex > 0`).
+     *  Routed through the right-side handles + a wide arc so it doesn't
+     *  draw on top of the straight primary edge — e.g. a `fail` edge and
+     *  a `success` edge both landing on `exit`. */
+    isParallelArc?: boolean;
     label?: string;
     outcome?: "success" | "fail";
     dim?: boolean;
@@ -544,11 +548,11 @@ const edgeTypes = { [EDGE_TYPE]: SwarmEdge };
 
 interface SwarmNodeData extends Record<string, unknown> {
   nodeId: string;
-  /** DOT `label` attr, with id fallback — used for the primary label
+  /** the `label` attr attr, with id fallback — used for the primary label
    *  in the header only when it differs from the id. Preserved for
    *  tests / inspector callers that want the display name. */
   label: string;
-  /** DOT `label` attr as authored (or undefined when unset). Distinct
+  /** the `label` attr attr as authored (or undefined when unset). Distinct
    *  from `label`: this one stays undefined when the user didn't set a
    *  label, so the header can suppress a title that'd just duplicate
    *  the id. */
@@ -559,7 +563,7 @@ interface SwarmNodeData extends Record<string, unknown> {
    *  left-edge strip so operators can spot validation gates even when
    *  the handler is plain `llm`. */
   goalGate: boolean;
-  /** DOT model attribute, when set. */
+  /** model attribute, when set. */
   model: string | undefined;
   /** `llm_provider` attribute. Surfaced alongside model so multi-provider
    *  workflows read at a glance which backend a node will hit. */
@@ -567,17 +571,17 @@ interface SwarmNodeData extends Record<string, unknown> {
   /** `reasoning_effort` (low | medium | high). Surfaced on the card so
    *  high-effort nodes are visible at a glance. */
   reasoningEffort: "low" | "medium" | "high" | undefined;
-  /** Shared LLM session key (DOT `thread_id`). Surfaced in the body so
+  /** Shared LLM session key (`thread_id`). Surfaced in the body so
    *  cluster_dev-style shared-session designs are visible at a glance. */
   threadId: string | undefined;
-  /** Tool-node shell command (parallelogram). Truncated for display;
+  /** Tool-node shell command (tool node). Truncated for display;
    *  full text lives in the `title` tooltip and the inspector. */
   toolCommand: string | undefined;
   /** §3.4 retarget for `goal_gate=true` nodes. Names where REJECT
    *  loops back to (or undefined when retargeting falls back to the
    *  graph-level chain). */
   retryTarget: string | undefined;
-  /** Handler-level retry ceiling (DOT `max_retries`). Surfaced in the
+  /** Handler-level retry ceiling (`max_retries`). Surfaced in the
    *  body so loop-prone nodes are visible without opening the inspector. */
   maxRetries: number | undefined;
   /** Number of declared routes (`attrs.routes.length`). Non-zero only on
@@ -671,7 +675,7 @@ export function toFlowGraph(
     gateOutgoingCounts.set(e.from, (gateOutgoingCounts.get(e.from) ?? 0) + 1);
   }
   // A node is "reached" if it received a `fact.node_*` event OR if some
-  // selected edge points at it. Terminal nodes (Msquare) never emit their
+  // selected edge points at it. Terminal nodes (exit) never emit their
   // own node_started/node_completed — the executor goes straight to
   // run_halted/run_completed — so without the edge fallback they'd render
   // as never-reached even when the run actually terminated on them.
@@ -684,8 +688,8 @@ export function toFlowGraph(
   // the whole thing is a static topology inspection.
   const hasRun = detail != null;
 
-  // Union DOT topology with detail.nodes so runs whose event stream
-  // knows about a node not in the (stale) DOT still render it.
+  // Union workflow topology with detail.nodes so runs whose event stream
+  // knows about a node not in the (stale) topology still render it.
   const ids = new Set<string>();
   for (const id of Object.keys(graph.nodes)) ids.add(id);
   for (const n of detail?.nodes ?? []) ids.add(n.nodeId);
@@ -756,9 +760,7 @@ export function toFlowGraph(
       // goal_gate (and therefore the §3.4 retarget chain) is only meaningful
       // on llm nodes today — `typeStripTone` documents the precedence.
       retryTarget:
-        handler === "llm" && typeof a?.retry_target === "string" && a.retry_target !== ""
-          ? a.retry_target
-          : undefined,
+        handler === "llm" && typeof a?.retry_target === "string" && a.retry_target !== "" ? a.retry_target : undefined,
       maxRetries: canRetry && typeof a?.max_retries === "number" ? a.max_retries : undefined,
       routeCount: Array.isArray(a?.routes) && a.routes.length > 0 ? a.routes.length : undefined,
       state: resolvedState,
@@ -844,6 +846,13 @@ export function toFlowGraph(
     // marker so direction reads as "cycle" not "data flow"; the label
     // surfaces the attribute name plainly.
     const loopRestart = e.attrs["loop_restart"] === true;
+    // Non-primary member of a same-target group: arc it out to the side
+    // so it doesn't overlap the straight primary edge (e.g. `fail` and
+    // `success` both landing on `exit`, or a route fan into one node).
+    // Skip / back / self / loop_restart edges already arc, so this only
+    // catches plain forward parallels.
+    const parallelSlot = parallelSlotByEdge.get(i);
+    const parallelArc = parallelSlot !== undefined && parallelSlot.index > 0 && !useSideHandles && !loopRestart;
     // Conditional retry/loop edges (back-edges or self-loops) get a
     // ` · cap N` suffix when the target has a handler-level `max_retries`.
     // Forward edges with `outcome=fail` aren't loops, so a cap doesn't
@@ -883,12 +892,14 @@ export function toFlowGraph(
     // Right-side arc index — assigned above by the depth-aware ranking
     // pass, not a sequential counter. Topmost source → largest arcIndex
     // (widest bulge). Skip-edges share the lane with loop-channel edges.
-    const arcIndex = rightArcIndexByEdge.get(i);
+    // Parallel arcs aren't in the skip/loop ranking map; stagger them by
+    // their slot so 3+ edges into one target fan out instead of stacking.
+    const arcIndex = parallelArc && parallelSlot ? parallelSlot.index - 1 : rightArcIndexByEdge.get(i);
     // Arc extent floor — measured against the nodes sitting between
     // source-depth and target-depth. The edge renderer uses this to
     // push the arc bulge past a wide fanned-out layer (otherwise the
     // curve cuts through the rightmost / leftmost branch column).
-    const arcExtent = useSideHandles || loopRestart ? arcExtentBetween(sd, td) : 0;
+    const arcExtent = useSideHandles || loopRestart || parallelArc ? arcExtentBetween(sd, td) : 0;
     // Human-node edges (adjacent to a `kind=human` node) carry operator
     // route choices. Promote them to the neutral idle-gray tone — same
     // channel as retry edges — so they stand out without claiming an
@@ -900,15 +911,13 @@ export function toFlowGraph(
       (targetNode !== undefined && targetNode.type === "human");
     const marker = isLoopChannel
       ? MARKER_RETRY
-      : outcome === "success"
-        ? MARKER_SUCCESS
-        : outcome === "fail"
-          ? MARKER_FAIL
-          : taken && !isSkipEdge
-            ? MARKER_ANIMATED
-            : isHumanEdge
-              ? MARKER_RETRY
-              : MARKER_DEFAULT;
+      : outcome === "fail"
+        ? MARKER_FAIL
+        : taken && !isSkipEdge
+          ? MARKER_ANIMATED
+          : isHumanEdge
+            ? MARKER_RETRY
+            : MARKER_DEFAULT;
     return {
       id: `${e.from}->${e.to}#${i}`,
       source: e.from,
@@ -917,9 +926,10 @@ export function toFlowGraph(
       // `animated` drives the SwarmEdge variant: Animated (solid, accent)
       // for any taken forward edge — whether or not the run is still live.
       data: {
-        animated: !isBackEdge && !isSelfLoop && !isSkipEdge && !loopRestart && taken,
+        animated: !isBackEdge && !isSelfLoop && !isSkipEdge && !loopRestart && !parallelArc && taken,
         isBackEdge: isBackEdge || isSelfLoop || loopRestart,
         isSkipEdge,
+        isParallelArc: parallelArc,
         label,
         outcome,
         dim,
@@ -935,8 +945,8 @@ export function toFlowGraph(
             }
           : {}),
       },
-      sourceHandle: useSideHandles || loopRestart ? LOOP_HANDLE_SOURCE : undefined,
-      targetHandle: useSideHandles || loopRestart ? LOOP_HANDLE_TARGET : undefined,
+      sourceHandle: useSideHandles || loopRestart || parallelArc ? LOOP_HANDLE_SOURCE : undefined,
+      targetHandle: useSideHandles || loopRestart || parallelArc ? LOOP_HANDLE_TARGET : undefined,
       markerEnd: marker,
     };
   });
@@ -1003,24 +1013,25 @@ export function toFlowGraph(
   return { flowNodes, flowEdges: [...flowEdges, ...synthEdges] };
 }
 
-/** Surface DOT edge attrs as the edge's pill text.
- *  Precedence: `attrs.label` first (authored display string);
- *  then `attrs.outcome` (typed "success" / "fail"); then `attrs.route`
- *  (humanized via titleCaseFromSnake). `attrs.condition` is no longer
- *  read — the condition DSL is removed per the LLM-routing proposal. */
+/** Surface workflow edge attrs as the edge's pill text.
+ *  Precedence: `attrs.label` first (authored display string); then
+ *  `attrs.outcome` — but only `fail`, since success is the implicit
+ *  default flow and earns no label; then `attrs.route` (humanized).
+ *  `attrs.condition` is no longer read — the condition DSL is removed. */
 function edgeLabelOf(edge: GraphEdge): string | undefined {
   const label = edge.attrs.label;
   if (typeof label === "string" && label.trim().length > 0) return label;
-  const outcome = edge.attrs.outcome;
-  if (typeof outcome === "string" && outcome.trim().length > 0) return outcome;
+  if (edge.attrs.outcome === "fail") return "fail";
   const route = edge.attrs.route;
   if (typeof route === "string" && route.trim().length > 0) return humanizeRouteName(route);
   return undefined;
 }
 
-/** Derive a success/fail outcome tone from typed `attrs.outcome`. */
-function outcomeOf(edge: GraphEdge): "success" | "fail" | undefined {
-  return edge.attrs.outcome;
+/** Derive the accented outcome. `success` is the implicit default and
+ *  renders as a plain edge (route-color, no label); only `fail` earns
+ *  the error accent so the eye is drawn to failure branches alone. */
+function outcomeOf(edge: GraphEdge): "fail" | undefined {
+  return edge.attrs.outcome === "fail" ? "fail" : undefined;
 }
 
 /** Compact-display helper for long values (tool commands, prompts, …).

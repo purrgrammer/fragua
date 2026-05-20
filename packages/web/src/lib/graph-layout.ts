@@ -4,7 +4,7 @@
 //
 // Algorithm:
 //   1. Start with the node set from `nodes` plus any node ids appearing
-//      in `edges` that weren't in `nodes` (defensive — the DOT source
+//      in `edges` that weren't in `nodes` (defensive — the workflow source
 //      and the event stream can disagree for aborted runs).
 //   2. DFS-classify edges into "tree/forward" vs "back" (target is an
 //      ancestor in the DFS stack). Back-edges are structural cycle
@@ -21,7 +21,7 @@
 //   5. Project depth onto the primary axis and index-within-layer onto
 //      the secondary axis. `orientation: "TB"` (default) puts the
 //      longest path vertically so workflows read top-to-bottom —
-//      matches how humans read a DAG and how DOT is usually drawn.
+//      matches how humans read a DAG and how a DAG is usually drawn.
 //
 // Output matches `@xyflow/react`'s `Node`/`Edge` shape closely enough
 // to hand straight to `<Canvas nodes={...} edges={...} />`.
@@ -45,7 +45,7 @@ export interface LayoutOptions {
   crossSize?: number;
   /**
    * Flow direction. `"TB"` (top → bottom, the default) mirrors the way
-   * swarm DOT workflows read on paper; `"LR"` is kept for the few
+   * swarm workflows read on paper; `"LR"` is kept for the few
    * places a horizontal strip is more useful. Left-to-right is the
    * legacy default — new views should stay on `"TB"`.
    */
@@ -85,7 +85,7 @@ export function classifyGraph(input: LayoutInput): ClassifiedGraph {
   }
 
   // Insertion-order iteration makes classification deterministic —
-  // DOT source order reflects the author's intended flow direction.
+  // workflow source order reflects the author's intended flow direction.
   const adj = new Map<string, string[]>();
   for (const id of ids) adj.set(id, []);
   for (const e of input.edges) {

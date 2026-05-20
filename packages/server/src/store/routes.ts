@@ -4,7 +4,7 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import { InvalidDurationError, parseWorkflow, parseDurationMs } from "@swarm/core";
+import { InvalidDurationError, parseDurationMs, parseWorkflow, validateInputBindings } from "@swarm/core";
 import {
   FEED_EVENT_KINDS,
   type IEventStore,
@@ -81,11 +81,11 @@ const DEFAULT_SSE_POLL_MS = 100;
 const DEFAULT_SSE_BATCH_SIZE = 500;
 
 /**
- * Scan a DOT source for nodes with malformed `timeout=` or `max_ms=`
+ * Scan a workflow source for nodes with malformed `timeout=` or `max_ms=`
  * attrs. Returns the first offender so the API can reject before a
  * workflow is saved (and therefore before any run is enqueued against
  * a broken sha). Returns `null` when every timeout attr parses, the
- * DOT is unparseable (graph-validation errors surface elsewhere), or
+ * source is unparseable (graph-validation errors surface elsewhere), or
  * nothing is set.
  */
 function findInvalidTimeoutAttr(
@@ -203,16 +203,20 @@ export function createRoutes(deps: ServerDeps): Hono {
   app.post("/runs", async (c) => {
     const body = await readJson<{
       /** Optional sha for the upload-then-enqueue path: caller has
-       *  already POSTed the DOT to /workflows and is referencing the
+       *  already POSTed the workflow source to /workflows and is referencing the
        *  returned sha. The web UI omits this — the server resolves the
        *  workflow off disk via `workflowReader`. */
       workflowSha?: string;
       priority?: number;
       runId?: string;
       routing?: Record<string, unknown>;
-      /** Positional input — lands in `routing.input`, where the
+      /** Free-form input — lands in `routing.input`, where the
        * executor's buildSubstitutionArgs() picks it up as $ARGUMENTS. */
       input?: string;
+      /** Typed run inputs (`--input name=value`) — validated against the
+       * workflow's `inputs:` block, then stored on `routing.inputs` for
+       * `${{ inputs.name }}` substitution at dispatch. */
+      inputs?: Record<string, string>;
       /** Absolute project root the run was enqueued from. Surfaced on
        * `run_state.cwd`; the only project identifier in the
        * harness-by-default model. Required when `workflowSha` is
@@ -226,7 +230,7 @@ export function createRoutes(deps: ServerDeps): Hono {
        *  "local" pins to `<cwd>/.swarm/workflows/`, anything else
        *  falls back to the global → projects search order. */
       workflowScope?: "global" | "local" | "path" | "ephemeral";
-      /** Optional provenance: filesystem path of the .dot file the
+      /** Optional provenance: filesystem path of the .yaml file the
        *  caller resolved this run from. Stored on `run_state` for
        *  display; not used for resolution. The CLI sets it when
        *  invoking from disk; the web UI omits it (the server resolves
@@ -239,7 +243,7 @@ export function createRoutes(deps: ServerDeps): Hono {
 
     // ── Workflow resolution ────────────────────────────────────────
     // Two paths into POST /runs:
-    //   1. CLI: caller already uploaded the DOT via POST /workflows
+    //   1. CLI: caller already uploaded the workflow source via POST /workflows
     //      and passes the returned sha. Existence checked by
     //      enqueueRun() below — no disk I/O here.
     //   2. Web UI / simple clients: caller passes only
@@ -251,9 +255,11 @@ export function createRoutes(deps: ServerDeps): Hono {
     //      or pin a sha.
     let workflowSha: string;
     let resolvedWorkflowName: string | undefined;
+    let resolvedSource: string | undefined;
     if (typeof body.workflowSha === "string" && body.workflowSha.length > 0) {
       workflowSha = body.workflowSha;
       if (typeof body.workflowName === "string") resolvedWorkflowName = body.workflowName;
+      resolvedSource = deps.store.getWorkflow(workflowSha)?.dotSource;
     } else {
       if (typeof body.workflowName !== "string" || body.workflowName.length === 0) {
         return c.json({ error: "workflowName required when workflowSha is omitted" }, 400);
@@ -287,8 +293,33 @@ export function createRoutes(deps: ServerDeps): Hono {
       }
       workflowSha = sha256Hex(detail.source);
       resolvedWorkflowName = body.workflowName;
+      resolvedSource = detail.source;
       if (deps.store.getWorkflow(workflowSha) == null) {
         deps.store.saveWorkflow(workflowSha, body.workflowName, detail.source);
+      }
+    }
+
+    // Validate `--input name=value` bindings against the workflow's
+    // `inputs:` block before enqueue, so a missing required input or a
+    // bad choice value fails fast with operator-actionable feedback
+    // instead of collapsing to "" silently at dispatch.
+    if (resolvedSource !== undefined) {
+      let inputDecls: ReturnType<typeof parseWorkflow>["attrs"]["inputs"];
+      try {
+        inputDecls = parseWorkflow(resolvedSource).attrs.inputs;
+      } catch {
+        inputDecls = undefined; // unparseable source surfaces elsewhere
+      }
+      const inputErrors = validateInputBindings(inputDecls, body.inputs ?? {});
+      if (inputErrors.length > 0) {
+        return c.json(
+          {
+            error: inputErrors.map((e) => e.message).join("; "),
+            code: "invalid_inputs",
+            inputErrors,
+          },
+          400,
+        );
       }
     }
 
@@ -315,6 +346,9 @@ export function createRoutes(deps: ServerDeps): Hono {
     const initialRouting: Record<string, unknown> = { ...(body.routing ?? {}) };
     if (typeof body.input === "string" && initialRouting["input"] === undefined) {
       initialRouting["input"] = body.input;
+    }
+    if (body.inputs != null && initialRouting["inputs"] === undefined) {
+      initialRouting["inputs"] = body.inputs;
     }
     try {
       deps.store.enqueueRun({

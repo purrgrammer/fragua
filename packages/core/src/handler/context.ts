@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@swarm/types";
+import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
@@ -47,10 +48,10 @@ export interface BuildContextOpts {
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];
   recorder: SideEffectRecorder;
-  /** Prompt-substitution args. Today carries only `$ARGUMENTS` (sourced
-   * from `routing.input`); empty when the run has no input string.
-   * Passed through to HandlerContext unchanged. */
-  args?: Readonly<Record<string, string>>;
+  /** Prompt-substitution args: `$ARGUMENTS` (from `routing.input`) plus
+   * resolved `${{ inputs.x }}` bindings. Passed through to HandlerContext
+   * unchanged. */
+  args?: Readonly<SubstitutionArgs>;
   /** Observability sink. Every ctx.emit(type, payload) call routes here.
    * The executor wires this to a collector it drains into
    * store.appendObservabilityEvents after the node's terminal fact lands.
@@ -82,7 +83,7 @@ interface CtxUpstream {
    * are applied via `tools.select(...)` inside `buildScopedContext`. */
   tools: ToolRegistry;
   recorder: SideEffectRecorder;
-  args: Readonly<Record<string, string>>;
+  args: Readonly<SubstitutionArgs>;
   emitObservability: (type: string, payload: Record<string, unknown>) => void;
   /** Un-wrapped env. The read-only proxy is reapplied per scope based
    * on the scope's tool narrowing. */

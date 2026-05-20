@@ -40,7 +40,7 @@ export type StreamingBlock =
   | { type: "thinking"; index: number; text: string }
   | { type: "toolCall"; index: number; argsText: string };
 
-/** Live stdout/stderr from a tool (parallelogram) node, accumulated
+/** Live stdout/stderr from a tool (tool node) node, accumulated
  * from `tool.output_chunk` events. Cleared when the persisted
  * `tool_node` message lands for the same node — the message row is
  * the source of truth once it arrives. Keyed by nodeId so concurrent
@@ -328,7 +328,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         setStreaming((prev) => applyDelta(prev, nodeId, kind, index, delta));
       }
 
-      // Tool node (parallelogram) output streaming. Each
+      // Tool node (tool node) output streaming. Each
       // `tool.output_chunk` event carries a slice of stdout or
       // stderr; we accumulate into a per-node buffer so the UI can
       // render a live Terminal until the persisted `tool_node`

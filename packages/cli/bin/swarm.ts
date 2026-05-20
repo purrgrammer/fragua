@@ -356,12 +356,15 @@ cli
 cli
   .command(
     "run <workflow> [...input]",
-    "Upload a DOT workflow, enqueue a run, stream events to stdout. " +
+    "Upload a workflow, enqueue a run, stream events to stdout. " +
       "Trailing positional args are joined with ' ' and piped into the workflow's " +
-      "\\$ARGUMENTS token (overridden by --input when both are given)",
+      "\\$ARGUMENTS token. Typed inputs go through --input name=value (repeatable)",
   )
   .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
-  .option("--input <text>", "Explicit \\$ARGUMENTS value — wins over trailing positional args")
+  .option(
+    "--input <name=value>",
+    "Typed run input, gh-style; repeat for multiple (e.g. --input env=prod --input ticket=BUG-1)",
+  )
   .option("--priority <n>", "Priority tie-breaker (default 0)")
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
@@ -378,16 +381,31 @@ cli
         : typeof priorityRaw === "string"
           ? Number.parseInt(priorityRaw, 10)
           : undefined;
-    const explicit = pick("input");
+    // --input name=value (repeatable). cac yields a string for one flag,
+    // an array for several. Each must contain '='; the key is everything
+    // before the first '=', the value everything after (values may
+    // themselves contain '=').
+    const rawInputs = options["input"];
+    const inputList = rawInputs === undefined ? [] : Array.isArray(rawInputs) ? rawInputs : [rawInputs];
+    const inputs: Record<string, string> = {};
+    for (const entry of inputList) {
+      const s = String(entry);
+      const eq = s.indexOf("=");
+      if (eq <= 0) {
+        console.error(`--input must be name=value (got ${JSON.stringify(s)})`);
+        process.exit(2);
+      }
+      inputs[s.slice(0, eq)] = s.slice(eq + 1);
+    }
     const joined = Array.isArray(positional) && positional.length > 0 ? positional.join(" ") : undefined;
-    const input = explicit ?? joined;
     const code = await runCommand({
       workflow,
       ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
       ...(priority !== undefined && Number.isFinite(priority) ? { priority } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-      ...(input !== undefined ? { input } : {}),
+      ...(joined !== undefined ? { input: joined } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
       ...(options["follow"] === false ? { follow: false } : {}),
     });

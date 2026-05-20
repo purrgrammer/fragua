@@ -278,7 +278,7 @@ export function ProjectDetail(): JSX.Element {
                 title="No workflows in this project yet"
                 description={
                   <span>
-                    Add a <code className="font-mono">.dot</code> file under{" "}
+                    Add a <code className="font-mono">.yaml</code> file under{" "}
                     <code className="font-mono">.swarm/workflows/</code> to launch workflows from this project.
                   </span>
                 }

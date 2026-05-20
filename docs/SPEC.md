@@ -60,29 +60,28 @@ Single machine, one harness process, one SQLite database. The harness supervises
 
 ### 3.1 Workflows
 
-A workflow is a YAML document with `name`, `nodes`, `edges` at the root. Each node declares a `type:` discriminator (`start | exit | llm | human | tool`) that maps to a handler kind:
+A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHub-Actions-style). Each step declares a `type:` discriminator that selects its handler kind:
 
-| Shape | Handler kind |
+| `type:` | Handler kind |
 |---|---|
-| `Mdiamond` | `start` |
-| `Msquare` | `exit` |
-| `box` | `codergen` (LLM call) |
-| `hexagon` | `human` |
-| `parallelogram` | `tool` (graph-level shell step) |
+| `llm` | LLM call (the implicit default when `type:` is omitted) |
+| `human` | operator-gated routing |
+| `tool` | graph-level shell step (`run:`) |
+| `exit` | reserved graceful-halt sink |
 
-An explicit `type=` node attribute overrides the shape→handler mapping. The value must name one of the five handler kinds (`E016`); a shape/`type=` divergence is legal but flagged with `W012`.
+`start` is synthesized by the parser (the entry node pointing at the first declared step) and is never authored; `exit` is the reserved sink. Declaring a step named `start` or `exit` with a mismatched type is rejected (`E029` / `E028`).
 
-Concurrent dispatch is not a graph primitive — it lives inside a codergen node via the `agent` tool. A codergen with `agent` in `allowed_tools` spawns N sub-agents in one turn (each with its own LLM context window, tool pool, and observability bracket on the parent's event stream) and synthesises in its own thread. See `review.dot` / `orchestrate.dot` for the canonical orchestrator-workers shape.
+Concurrent dispatch is not a graph primitive — it lives inside an llm node via the `agent` tool. An llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn (each with its own LLM context window, tool pool, and observability bracket on the parent's event stream) and synthesises in its own thread. See `review.yaml` / `orchestrate.yaml` for the canonical orchestrator-workers shape.
 
-Loops are **backward conditional edges** bounded by `max_retries` on the target node — there is no `loop` primitive. A node that should re-run on `outcome=retry` takes an edge back to itself or to an upstream node with `[condition="outcome=retry"]`, and its `max_retries` attribute caps how many times the retry counter can bump before the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise the cap via `intent.max_retries_adjusted`).
+Loops are **backward edges** bounded by `max-retries` on the target node — there is no `loop` primitive. A step that should re-run on failure routes back to itself or to an upstream step via `on: {fail: <step>}`, and its `max-retries` attribute caps how many times the retry counter can bump before the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise the cap via `intent.max_retries_adjusted`). The `retry: <step>` shorthand collapses the goal-gate-and-retarget idiom into one line.
 
-Workflows are uploaded via `POST /workflows { name, dotSource }` which returns a `sha` (sha256 of the source). Runs reference workflows by sha; `workflow_sha` is pinned at enqueue time.
+Workflows are uploaded via `POST /workflows { name, source }` which returns a `sha` (sha256 of the source). Runs reference workflows by sha; `workflow_sha` is pinned at enqueue time.
 
 ### 3.2 Handlers
 
 A handler is a pure async function `(ctx: HandlerContext) => Promise<HandlerResult>`. Its I/O routes through `ctx`: `ctx.llm`, `ctx.http`, `ctx.tools`, `ctx.messages`, `ctx.artifacts`, `ctx.externalCall`. Handlers may not import `node:fs`, `node:child_process`, or call bare `fetch` — enforced by lint.
 
-The codergen handler force-includes an **`abort` tool** on every call. Agents that cannot proceed call `abort({ reason })`; the handler translates the call to `outcome.status="fail"` with `non_retryable=true`, so workflows route via `condition="outcome=fail"` edges and the boundary skips retries on intentional failures.
+The llm handler force-includes an **`abort` tool** on every call. Agents that cannot proceed call `abort({ reason })`; the handler translates the call to `outcome.status="fail"` with `non_retryable=true`, so workflows route via `on: {fail: …}` edges and the boundary skips retries on intentional failures.
 
 See [`handler-contract.md`](./handler-contract.md) for the full API.
 
@@ -119,7 +118,7 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
   | `max_retries` | Node exhausted `max_retries` on `outcome=retry` | `intent.max_retries_adjusted { nodeId, newLimit }` → `intent.resume` |
   | `goal_gate` | `max_goal_gate_retries` retarget cap reached | `intent.goal_gate_adjusted { newLimit }` → `intent.resume` |
   | `max_loops` | Per-run dispatch ceiling reached | `intent.max_loops_adjusted { newLimit }` → `intent.resume` |
-  | `abort_loop` | Codergen agent called `abort` repeatedly within the same node | `intent.resume` (operator decision) |
+  | `abort_loop` | LLM agent called `abort` repeatedly within the same node | `intent.resume` (operator decision) |
   | `provider_exhausted` | All configured providers in the model's fallback chain refused | `intent.resume` after fixing provider config |
 
 - **`paused_auto`** — daemon owes a clock tick. `fact.run_paused.payload.reason` discriminates the source:
@@ -162,11 +161,11 @@ The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_l
 
 After a node completes, the executor picks the next edge using a two-case algorithm (`packages/core/src/engine/edge-selection.ts`). See also `docs/proposals/llm-routing.md` §D10.
 
-**Route case** — when the source node declares `routes="a,b,c"`, it is a *routing node*. The codergen backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
+**Route case** — when the source node declares `routes:`, it is a *routing node*. The llm backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
 
 **Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 
-Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal. Per-node `retry_target` / `fallback_retry_target` serve goal-gate retargeting (§3.7), not per-node failure.
+Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal — a node that fails with no fail route halts the run with `aborted_exit`. A fail-edge whose target is the `exit` sink is the one graceful exception: it is a sanctioned failure landing the author opted into, so the run reaches the terminal and emits `fact.run_completed` rather than halting. Per-node `retry_target` / `fallback_retry_target` serve goal-gate retargeting (§3.7), not per-node failure.
 
 **Outcome shape.** Every handler returns an `Outcome` (defined in `packages/core/src/types/outcome.ts`):
 
@@ -176,9 +175,9 @@ Fail recovery is authored explicitly: add an `outcome=fail` edge from the node t
 | `notes` | string | Free-form diagnostic. |
 | `failure_reason` | string? | Human-readable failure detail, surfaced as `fact.run_halted.detail`. |
 | `non_retryable` | boolean? | When true, suppresses goal-gate retry even on fail. |
-| `provider_error` | object? | Set by the codergen boundary on transport errors. |
+| `provider_error` | object? | Set by the llm boundary on transport errors. |
 | `route` | string? | Chosen route name (routing nodes only). |
-| `halt_reason` | HaltReason? | Set by the codergen boundary for structural halts. |
+| `halt_reason` | HaltReason? | Set by the llm boundary for structural halts. |
 
 ### 3.7 Retries and goal gates
 
@@ -198,7 +197,7 @@ Per-node overrides (`retry_initial_delay_ms`, `retry_backoff_factor`, `retry_max
 
 Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcome — the reducer treats the outcome as terminal regardless of status, so retry presets don't accidentally hammer a permanent failure.
 
-**Goal gates.** A node with `goal_gate=true` must reach `success` before the run can exit. When a terminal `Msquare` node would emit `fact.run_completed`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to:
+**Goal gates.** A node with `goal_gate=true` must reach `success` before the run can exit. When the run reaches the `exit` node and would emit `fact.run_completed`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to:
 
 1. The failing gate's `retry_target` (then `fallback_retry_target`).
 2. The graph-level `retry_target` (then `fallback_retry_target`).
@@ -208,15 +207,16 @@ Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcom
 
 ### 3.8 Substitution
 
-One token expands in node `prompt` and `tool_command` strings before the handler sees them:
+Two token families expand in `prompt:`, `text:`, and `run:` strings before the handler sees them:
 
 | Token | Meaning |
 |---|---|
-| `$ARGUMENTS` | The run's `--input` text (CLI positional or `POST /runs` body). |
+| `$ARGUMENTS` | The run's free-form input (CLI trailing positional args, or `POST /runs` `input`). |
+| `${{ inputs.<name> }}` | A typed run input declared in the workflow's `inputs:` block, bound per-run via `--input name=value`. Declared `default:` values apply when a binding is omitted; the validator (E030) flags references to undeclared inputs, and enqueue rejects a missing required input or an out-of-range `choice`. |
 
-Cross-node data transfer happens through **shared threads** (§3.3), not through prompt substitution. Two codergens with the same `thread_id="…"` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. A receiving node may set `summary=low|medium|high` to see a summariser-compressed view of the prior thread instead of the raw history. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
+Cross-node data transfer happens through **shared threads** (§3.3), not through prompt substitution. Two llm steps with the same `thread:` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. A receiving node may set `summary=low|medium|high` to see a summariser-compressed view of the prior thread instead of the raw history. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
 
-Tool nodes (parallelogram, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. They do not feed data forward. Workflows that need to run a deterministic script and reason about its output should call the script from inside a codergen's `bash` tool instead of synthesising a tool-node-then-codergen chain.
+Tool nodes (`type: tool`, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. They do not feed data forward. Workflows that need to run a deterministic script and reason about its output should call the script from inside an llm step's `bash` tool instead of synthesising a tool-node-then-llm chain.
 
 ### 3.9 Budgets
 
@@ -284,10 +284,10 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 
 - **`stack.manager_loop` / `house` shape** (attractor §4.11). Composition lives at the workflow level via separate runs sharing artifacts.
 - **`tool_hooks.pre` / `tool_hooks.post`** (attractor §9.7). The agent backend handles tool interception.
-- **Interviewer interface** (attractor §6). Replaced by `human` nodes (DOT alias: `shape=hexagon`) plus the `intent.human_input` event.
+- **Interviewer interface** (attractor §6). Replaced by `human` nodes (`type: human`) plus the `intent.human_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Swarm handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
-- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). The `component` (parallel) and `tripleoctagon` (parallel.fan_in) shapes are not honored; the executor has no fan-out / fan-in primitive. Concurrent dispatch lives in the codergen `agent` tool — a single codergen with `agent` in `allowed_tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.dot` / `orchestrate.dot`).
+- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). swarm has no fan-out / fan-in graph primitive. Concurrent dispatch lives in the llm `agent` tool — a single llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.yaml` / `orchestrate.yaml`).
 
 **Surfaced as warnings, not errors:**
 

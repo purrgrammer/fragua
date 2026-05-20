@@ -37,13 +37,13 @@ function parseRun(argv: string[]): Record<string, unknown> {
 
 describe("swarm run — CLI argv → options mapping (cac camelCase contract)", () => {
   test("--run-id lands on options.runId (NOT options['run-id'])", () => {
-    const opts = parseRun(["run", "w.dot", "--run-id", "abc"]);
+    const opts = parseRun(["run", "w.yaml", "--run-id", "abc"]);
     expect(opts["runId"]).toBe("abc");
     expect(opts["run-id"]).toBeUndefined();
   });
 
   test("every kebab-case flag camelCases consistently", () => {
-    const opts = parseRun(["run", "w.dot", "--run-id", "r1", "--runs-dir", ".runs", "--allow-env-keys"]);
+    const opts = parseRun(["run", "w.yaml", "--run-id", "r1", "--runs-dir", ".runs", "--allow-env-keys"]);
     expect(opts["runId"]).toBe("r1");
     expect(opts["runsDir"]).toBe(".runs");
     expect(opts["allowEnvKeys"]).toBe(true);
@@ -59,14 +59,14 @@ describe("swarm run — CLI argv → options mapping (cac camelCase contract)", 
     // cac fills in `true`; passing it explicitly flips to `false`.
     // Our action handler reads `options.worktree !== false` so either
     // default resolves to worktree: true.
-    const withFlag = parseRun(["run", "w.dot", "--no-worktree"]);
+    const withFlag = parseRun(["run", "w.yaml", "--no-worktree"]);
     expect(withFlag["worktree"]).toBe(false);
-    const withoutFlag = parseRun(["run", "w.dot"]);
+    const withoutFlag = parseRun(["run", "w.yaml"]);
     expect(withoutFlag["worktree"]).toBe(true);
   });
 
   test("single-word flags remain bare (no camelCasing surprise)", () => {
-    const opts = parseRun(["run", "w.dot", "--mock", "--input", "hi"]);
+    const opts = parseRun(["run", "w.yaml", "--mock", "--input", "hi"]);
     expect(opts["mock"]).toBe(true);
     expect(opts["input"]).toBe("hi");
   });

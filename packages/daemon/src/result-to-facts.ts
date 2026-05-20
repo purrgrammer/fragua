@@ -86,20 +86,22 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       facts.push({ type: "fact.node_completed", payload });
 
       if (isTerminalNode(nextNode)) {
-        // A terminal reached via an explicit fail outcome (either the
-        // handler returned outcomeStatus="fail" or the edge selector
-        // picked a `condition="outcome=fail"` edge that led here) ends
-        // the run in a failure state, not success. Reducer maps
-        // "halted" to the UI's "fail" status. The handler's
-        // `failureReason` (e.g. the agent's `<abort>reason</abort>`)
-        // surfaces verbatim as the halt detail so post-mortem readers
-        // see *why* the run failed, not just that it routed via a
-        // fail edge.
-        if (result.outcomeStatus === "fail") {
+        // A failure reaches a terminal in two ways, and they mean
+        // opposite things:
+        //   - `__end__` is the executor's no-fail-route sentinel — the
+        //     node failed and the author declared no fail edge. That
+        //     halts the run (`aborted_exit`); the reducer maps "halted"
+        //     to the UI's "fail" status. The handler's `failureReason`
+        //     (e.g. the agent's `<abort>reason</abort>`) surfaces
+        //     verbatim as the halt detail.
+        //   - An explicit sink (`exit`) reached via a fail edge is a
+        //     sanctioned graceful landing the author opted into — the
+        //     run completes, not halts.
+        if (nextNode === "__end__" && result.outcomeStatus === "fail") {
           const detail =
             typeof result.failureReason === "string" && result.failureReason.length > 0
               ? result.failureReason
-              : `reached ${nextNode} via outcome=fail`;
+              : `node ${ctx.state.currentNode ?? "?"} failed with no fail route`;
           facts.push({
             type: "fact.run_halted",
             payload: { reason: "aborted_exit", detail },

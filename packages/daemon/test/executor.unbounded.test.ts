@@ -1,7 +1,7 @@
 // Unbounded llm wall-clock tests — docs/proposals/llm-unbounded-time.md.
 //
 // When a llm handler spec has `maxMs: undefined` (the user wrote
-// `max_ms=0` / `timeout="0"` in DOT), the executor must:
+// `max_ms=0` / `timeout="0"`), the executor must:
 //   - NOT compose `AbortSignal.timeout(...)` into the merged ctx.signal
 //   - NOT race the handler against a leak-watchdog setTimeout
 //   - still abort cleanly when the steer or shutdown controller fires

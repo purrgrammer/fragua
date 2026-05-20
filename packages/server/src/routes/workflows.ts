@@ -1,9 +1,9 @@
-// GET /workflows — list workflow sources (typically `*.dot` under the
+// GET /workflows — list workflow sources (typically `*.yaml` under the
 // configured `workflowsDir`). Delegates all I/O to an injected
 // `WorkflowReader` port so tests can drive the handler with an in-memory
 // fake.
 //
-// GET /workflows/:name — single workflow with its raw DOT source for the
+// GET /workflows/:name — single workflow with its raw workflow source for the
 // web detail page. Accepts either a workflow name (e.g. `my-workflow`) or
 // a full 64-char hex workflowSha (e.g. the sha stored in the DB by the
 // executor on run.started). Name-based lookup delegates to `WorkflowReader`;

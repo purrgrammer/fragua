@@ -93,7 +93,6 @@ describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () =
           id: "n_parent",
           type: "llm",
           attrs: { allowed_tools: ["agent", "read"], thread_id: "t1" },
-
         },
         prompt: "what comes next?",
         thread_id: "t1",

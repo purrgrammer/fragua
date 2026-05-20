@@ -138,6 +138,55 @@ describe("validate — structural", () => {
     expect(codesOf(g)).not.toContain("E028");
   });
 
+  test("E030 flags ${{ inputs.x }} referencing an undeclared input", () => {
+    const g = mkGraph({
+      attrs: { inputs: [{ name: "ticket", type: "string", required: true }] },
+      nodes: {
+        s: "start",
+        work: { type: "llm", attrs: { prompt: "fix ${{ inputs.ticket }} in ${{ inputs.repo }}" } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+      ],
+    });
+    const e030 = validate(g).filter((d) => d.code === "E030");
+    expect(e030).toHaveLength(1);
+    expect(e030[0]?.message).toContain("repo");
+  });
+
+  test("E030 not raised when every input reference is declared", () => {
+    const g = mkGraph({
+      attrs: { inputs: [{ name: "ticket", type: "string", required: true }] },
+      nodes: {
+        s: "start",
+        work: { type: "llm", attrs: { prompt: "fix ${{ inputs.ticket }}" } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E030");
+  });
+
+  test("E030 scans tool_command and text fields too", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        run: { type: "tool", attrs: { tool_command: "deploy ${{ inputs.env }}" } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    expect(codesOf(g)).toContain("E030");
+  });
+
   test("strict mode promotes warnings to errors", () => {
     const g = mkGraph({
       nodes: { s: "start", work: "llm", orphan: "llm", done: "exit" },

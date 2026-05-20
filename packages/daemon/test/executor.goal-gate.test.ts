@@ -146,7 +146,7 @@ steps:
     );
     expect(gateToDoneSelections).toHaveLength(1);
     // The surviving selection is the success branch — no matched_condition
-    // because the success edge in the DOT is unconditional.
+    // because the success edge is unconditional.
     expect((gateToDoneSelections[0]?.payload as { matched_condition?: string }).matched_condition).toBeUndefined();
     r.store.close();
   });

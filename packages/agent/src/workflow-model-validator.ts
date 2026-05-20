@@ -1,6 +1,6 @@
 // Workflow-load model validator.
 //
-// Walks every node in a parsed DOT workflow and rejects those whose
+// Walks every node in a parsed workflow and rejects those whose
 // declared `(provider, model)` pair does not resolve in the ModelRegistry
 // (pi-ai built-ins + any custom providers in the `provider_config`
 // table on the global swarm store). Catches the
@@ -51,7 +51,7 @@ function getDefaultRegistry(): ModelRegistry {
   return cachedRegistry;
 }
 
-/** Validate a DOT workflow's llm-node model declarations. */
+/** Validate a workflow's llm-node model declarations. */
 export function validateWorkflowModels(
   dotSource: string,
   registry: ModelRegistry = getDefaultRegistry(),
@@ -60,7 +60,7 @@ export function validateWorkflowModels(
   try {
     graph = parseWorkflow(dotSource);
   } catch {
-    // If the DOT itself can't be parsed, let the downstream parse-time
+    // If the workflow itself can't be parsed, let the downstream parse-time
     // error surface elsewhere — don't fake model offenders for it.
     return { ok: true };
   }

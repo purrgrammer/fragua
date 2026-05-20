@@ -44,7 +44,7 @@ export interface NodeCompletedData {
 /**
  * Static inputs to a node — everything knowable before any substitution or
  * LLM call. Captured on `node.started` so a debugger can see the node's
- * configuration without re-parsing the DOT source. The *resolved* prompt
+ * configuration without re-parsing the workflow source. The *resolved* prompt
  * (post-substitution) is intentionally NOT here — it lives on `llm.start`
  * because loop/retry nodes resolve a different prompt per iteration.
  *

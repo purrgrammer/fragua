@@ -47,7 +47,7 @@ describe("budget-pause sub-agent leak — overshoot measurement", () => {
       // an `agent` tool call; child's first stream returns the long
       // text; parent's would-be second stream returns a stop (unused
       // if the abort lands first, which it should).
-      // Six parallel sub-agents matches the live shape (review.dot
+      // Six parallel sub-agents matches the live shape (review.yaml
       // fans out to 6 lens reviewers). The parent's turn ends with
       // six toolCalls in one assistant message; pi-agent runs them
       // in parallel via Promise.all.

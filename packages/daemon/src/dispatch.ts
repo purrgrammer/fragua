@@ -11,7 +11,7 @@ type HandlerSpec = handler.HandlerSpec;
 /**
  * Optional fallback: when the dispatcher has no registered spec for a
  * (workflowSha, nodeId) pair, this resolver builds one on demand. The
- * auto-dispatcher uses it to lazily parse a DOT workflow the first
+ * auto-dispatcher uses it to lazily parse a workflow the first
  * time the daemon sees it.
  */
 export type DispatcherResolver = (workflowSha: string, nodeId: string) => HandlerSpec | null;

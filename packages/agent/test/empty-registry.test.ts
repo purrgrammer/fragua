@@ -38,7 +38,6 @@ describe("PiLlmBackend — empty registry guard", () => {
             id: "implement",
             type: "llm",
             attrs: { allowed_tools: ["read", "write", "edit", "bash"] },
-
           },
           prompt: "do work",
           thread_id: undefined,
@@ -84,7 +83,6 @@ describe("PiLlmBackend — empty registry guard", () => {
             id: "implement",
             type: "llm",
             attrs: { allowed_tools: ["read", "bash"] },
-
           },
           prompt: "do work",
           thread_id: undefined,

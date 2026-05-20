@@ -1,4 +1,4 @@
-// tool handler — graph-level shell step (SPEC §3.1 `parallelogram`).
+// tool handler — graph-level shell step (SPEC §3.1 `tool`).
 //
 // A `tool` node runs `node.attrs.tool_command` as a single shell
 // invocation — no LLM, no agent loop. Side-effect only: exit 0 →

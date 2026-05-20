@@ -45,7 +45,7 @@ function createTestWorkflowReader(): TestWorkflowReader {
     },
     set(name, source, opts) {
       const cwd = opts?.cwd ?? "";
-      const detail: WorkflowDetail = { name, path: `${cwd}/${name}.dot`, sha: "x", source };
+      const detail: WorkflowDetail = { name, path: `${cwd}/${name}.yaml`, sha: "x", source };
       if (cwd !== "") detail.cwd = cwd;
       entries.set(keyOf(cwd, name), detail);
     },
@@ -278,7 +278,7 @@ describe("POST /runs — enqueue", () => {
   test("simple flow: { cwd, workflowName, workflowScope:'local' } resolves via workflowReader", async () => {
     // The web composer ships only the four fields the user types into
     // the form: cwd, workflowName, workflowScope, input. The server
-    // reads the latest DOT off disk, hashes it, registers it, and
+    // reads the latest source off disk, hashes it, registers it, and
     // enqueues — no sha or path travels over the wire. Replaces the
     // earlier sha-pinned flow that mismatched the listing's short sha
     // against the route's full sha and always 400'd.
@@ -306,7 +306,9 @@ describe("POST /runs — enqueue", () => {
 
   test("simple flow: workflowScope:'global' pins lookup to the global source", async () => {
     const yamlSource = "name: change-global\nsteps:\n  work: {type: llm, prompt: g}\n";
-    workflowReader.set("change", "name: change-local\nsteps:\n  work: {type: llm, prompt: l}\n", { cwd: "/projects/alpha" });
+    workflowReader.set("change", "name: change-local\nsteps:\n  work: {type: llm, prompt: l}\n", {
+      cwd: "/projects/alpha",
+    });
     workflowReader.set("change", yamlSource); // global
 
     const res = await req("POST", "/runs", {
@@ -319,6 +321,73 @@ describe("POST /runs — enqueue", () => {
     const state = store.getState(body.runId);
     expect(state!.workflowSha).toBe(sha256Hex(yamlSource));
     expect(state!.workflowScope).toBe("global");
+  });
+
+  test("input validation: missing required input → 400 invalid_inputs", async () => {
+    const src = `name: deploy
+inputs:
+  ticket:
+    type: string
+    required: true
+steps:
+  work: {type: llm, prompt: "fix \${{ inputs.ticket }}"}
+`;
+    workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "deploy",
+      workflowScope: "local",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("invalid_inputs");
+    expect(body.error).toMatch(/ticket/);
+  });
+
+  test("input validation: bad choice value → 400", async () => {
+    const src = `name: deploy
+inputs:
+  env:
+    type: choice
+    options: [dev, prod]
+steps:
+  work: {type: llm, prompt: "deploy \${{ inputs.env }}"}
+`;
+    workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "deploy",
+      workflowScope: "local",
+      inputs: { env: "staging" },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("invalid_inputs");
+  });
+
+  test("input validation: valid inputs → 200 and routing.inputs persisted", async () => {
+    const src = `name: deploy
+inputs:
+  ticket:
+    type: string
+    required: true
+  env:
+    type: choice
+    options: [dev, prod]
+    default: dev
+steps:
+  work: {type: llm, prompt: "fix \${{ inputs.ticket }} on \${{ inputs.env }}"}
+`;
+    workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "deploy",
+      workflowScope: "local",
+      inputs: { ticket: "BUG-1", env: "prod" },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { runId: string };
+    const state = store.getState(body.runId);
+    expect(state!.routing["inputs"]).toEqual({ ticket: "BUG-1", env: "prod" });
   });
 
   test("simple flow: workflow_not_found when the named workflow isn't on disk", async () => {

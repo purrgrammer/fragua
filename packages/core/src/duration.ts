@@ -1,5 +1,5 @@
 // Duration string parser — shared between config (.swarm/config.yaml
-// `timeouts:`) and DOT node attrs (`timeout="…"`). Output is milliseconds
+// `timeouts:`) and workflow node attrs (`timeout="…"`). Output is milliseconds
 // so callers can plug straight into setTimeout / AbortSignal.timeout.
 //
 // Grammar: /^(\d+)(ms|s|m|h)?$/ — digits followed by an optional unit.

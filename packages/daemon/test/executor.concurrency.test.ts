@@ -16,7 +16,7 @@ import { enqueue, rig, type TestRig } from "./helpers.ts";
 
 // Register a single handler-node graph "start -> work -> done" on the
 // rig, where the `work` node sleeps for `sleepMs` then transitions to
-// `__end__`. The `start` node is a shape=Mdiamond router.
+// `__end__`. The `start` node is a start node.
 function setupRun(r: TestRig, nodeName: string, sleepMs: number): void {
   r.dispatcher.register(r.workflowSha, "start", {
     kind: "start",

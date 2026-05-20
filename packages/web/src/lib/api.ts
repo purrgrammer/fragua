@@ -92,9 +92,9 @@ export interface NodeState {
 }
 
 /**
- * `workflowSource` is the raw DOT captured on `run.started`; absent
+ * `workflowSource` is the raw workflow captured on `run.started`; absent
  * when the run predates source capture. There is intentionally NO
- * `edges` field — topology lives in the DOT source and is parsed
+ * `edges` field — topology lives in the workflow source and is parsed
  * client-side by `@swarm/core`'s `parseWorkflow` so the server isn't a
  * second parser.
  */
@@ -178,10 +178,10 @@ export interface WorkflowSummary {
   cwd?: string;
 }
 
-/** Full workflow, including the raw DOT source. Fetched on demand by
- *  the workflow detail page — the list endpoint stays cheap. The DOT is
+/** Full workflow, including the raw workflow source. Fetched on demand by
+ *  the workflow detail page — the list endpoint stays cheap. The source is
  *  parsed client-side by `@swarm/core`'s `parseWorkflow`; the server
- *  never parses DOT itself. */
+ *  never parses the source itself. */
 export interface WorkflowDetail extends WorkflowSummary {
   source: string;
 }
@@ -741,7 +741,7 @@ export async function enqueueJob(input: {
 
 /** Direct POST /runs — bypasses /jobs. The workflow must already be
  * registered (its sha is what GET /workflows returns), so the composer
- * doesn't re-upload DOT source. `cwd` lands on `run_state.cwd` and is
+ * doesn't re-upload workflow source. `cwd` lands on `run_state.cwd` and is
  * how the project filter on /projects/:id resolves the run later. */
 /**
  * Web-side enqueue input. The web UI never computes or pins a workflow

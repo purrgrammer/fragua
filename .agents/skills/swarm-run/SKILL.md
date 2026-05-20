@@ -20,8 +20,10 @@ sqlite3 -readonly ~/.swarm/swarm.db \
      FROM daemon_lock;"      # row present + http_url non-null + age < 30s
 bun run swarm providers ls   # at least one provider shows ✓
 
-# Run. Trailing args become $ARGUMENTS; --input wins.
-bun run swarm run change --input="rename foo() to bar() in packages/core"
+# Run. Trailing args become $ARGUMENTS; --input name=value (repeatable)
+# binds typed inputs declared in the workflow's `inputs:` block.
+bun run swarm run change "rename foo() to bar() in packages/core"
+bun run swarm run deploy --input ticket=BUG-1 --input env=prod
 ```
 
 The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
@@ -72,16 +74,16 @@ Two equivalent surfaces. Use the CLI unless the task requires scripting.
 
 ```sh
 bun run swarm run <workflow> [trailing positional args]  \
-  [--input "…"]          # explicit $ARGUMENTS; wins over trailing args
+  [--input name=value]   # typed input; repeat for several (gh-style)
   [--priority 10]        # higher runs first (queue tie-breaker)
   [--no-follow]          # enqueue and exit; print only the run id
   [--url http://…]       # override DB-based discovery
   [--db path/to/db]      # pairs with `swarm serve --db` for parallel swarms
 ```
 
-`<workflow>` resolves: bare name → `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot`. Anything containing `/` or ending `.dot` resolves as a literal path.
+`<workflow>` resolves: bare name → `~/.swarm/workflows/<name>.yaml` first, then `<cwd>/.swarm/workflows/<name>.yaml`. Anything containing `/` or ending `.yaml` resolves as a literal path.
 
-Trailing positional args are joined with spaces into `$ARGUMENTS`. `--input` always wins. The run id prints immediately; terminal facts print colorised as they stream.
+Trailing positional args are joined with spaces into `$ARGUMENTS`. `--input name=value` (repeatable) binds the typed inputs declared in the workflow's `inputs:` block, substituted as `${{ inputs.name }}`; a missing required input or an out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts print colorised as they stream.
 
 ### HTTP (`POST /workflows`, then `POST /runs`)
 
@@ -93,20 +95,21 @@ URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
 # 1. Upload (idempotent; sha is content-addressed).
 SHA=$(curl -fsS -X POST "$URL/workflows" \
   -H 'content-type: application/json' \
-  -d "$(jq -n --arg n change --rawfile s path/to/workflow.dot \
-        '{name:$n, dotSource:$s}')" | jq -r .sha)
+  -d "$(jq -n --arg n change --rawfile s path/to/workflow.yaml \
+        '{name:$n, source:$s}')" | jq -r .sha)
 
-# 2. Enqueue. `input` lands in routing.input → substituted as $ARGUMENTS.
+# 2. Enqueue. `input` lands in routing.input → $ARGUMENTS; `inputs` lands
+#    in routing.inputs → ${{ inputs.x }} (validated against the inputs: block).
 RUN=$(curl -fsS -X POST "$URL/runs" \
   -H 'content-type: application/json' \
   -d "$(jq -n --arg sha "$SHA" --arg in "rename foo() to bar()" --arg cwd "$PWD" \
-        '{workflowSha:$sha, priority:5, input:$in, cwd:$cwd}')" | jq -r .runId)
+        '{workflowSha:$sha, priority:5, input:$in, inputs:{ticket:"BUG-1"}, cwd:$cwd}')" | jq -r .runId)
 
 # 3. Tail. Last-Event-ID resumes on reconnect.
 curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
 ```
 
-`workflowSha` is sha256 of the DOT source — same source twice → same sha → cheap re-enqueue. `runId` is a ULID when omitted. `cwd` becomes the run's project root (worktree base, project listing key); omit for ephemeral CI runs.
+`workflowSha` is sha256 of the workflow source — same source twice → same sha → cheap re-enqueue. `runId` is a ULID when omitted. `cwd` becomes the run's project root (worktree base, project listing key); omit for ephemeral CI runs.
 
 ---
 

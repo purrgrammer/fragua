@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { LlmInput, EventType, ExecutionEnvironment, Outcome } from "@swarm/core";
+import type { EventType, ExecutionEnvironment, LlmInput, Outcome } from "@swarm/core";
 import { ok } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
 import type { Skill } from "@swarm/workspace";

@@ -85,14 +85,14 @@ steps:
     r.store.close();
   });
 
-  test("breach on terminal turn → completed (not paused, prevents resume-of-Msquare crash)", async () => {
+  test("breach on terminal turn → completed (not paused, prevents resume-of-exit crash)", async () => {
     // Regression test: when a turn breaches budget AND its transition
-    // is to a terminal sentinel (Msquare / done / __end__),
+    // is to a terminal sentinel (exit / __end__),
     // result-to-facts emits `fact.run_completed`. Adding a redundant
     // `fact.run_paused` afterwards used to clobber the terminal status
     // in the reducer (paused wins because it's last) and leave
     // `currentNode = "done"`. On resume the executor would dispatch
-    // `done`, fail to find a handler (Msquare terminals have no
+    // `done`, fail to find a handler (exit terminal have no
     // handlers in real workflows), and crash with "no handler
     // registered for <sha>::done" (or `__end__` if `done` itself had
     // a handler chain). Fix: skip the pause-fact swap when the
@@ -115,7 +115,7 @@ steps:
       maxMs: 100,
       handler: async () => ({ kind: "transition", nextNode: "done", tokens: 100, costUsd: 1.5 }),
     });
-    // Deliberately do NOT register a handler for `done` — Msquare
+    // Deliberately do NOT register a handler for `done` — exit
     // terminals have no handlers in real workflows. If the fix
     // regresses, the executor will try to dispatch `done` on resume
     // and crash; this test catches that by asserting `completed`.

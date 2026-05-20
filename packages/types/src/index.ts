@@ -63,7 +63,7 @@ export interface SystemPromptMessage {
 }
 
 /** Swarm-specific custom message type: a graph-level `tool` node
- * (parallelogram shape) execution. Captures the shell command, the
+ * (tool node) execution. Captures the shell command, the
  * cwd it ran in, the exit code, and a tail-truncated slice of
  * stdout/stderr — enough for the UI to render a terminal card from
  * the `messages` table alone, without round-tripping to artifacts.

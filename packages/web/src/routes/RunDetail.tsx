@@ -13,6 +13,7 @@
 // design language as Home's dashboard. The mix of stats is picked for
 // a run's essentials: status, duration, cost, tokens, current node.
 
+import { parseWorkflow } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
@@ -51,7 +52,6 @@ import { ApiError } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
-import { parseWorkflow } from "@swarm/core";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";

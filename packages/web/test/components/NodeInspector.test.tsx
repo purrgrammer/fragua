@@ -3,24 +3,35 @@
 // the router.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { parseWorkflow } from "@swarm/core";
+import { type Node as GraphNode, parseWorkflow } from "@swarm/core";
 import { cleanup, render, within } from "@testing-library/react";
 import { NodeInspector } from "../../src/components/NodeInspector.tsx";
 import { useDom } from "../setup.ts";
 
-const DOT_SOURCE = `digraph demo {
-  a [shape=box, label="Planner", llm_model="opus-4", prompt="plan the work"]
-  b [shape=hexagon, label="Review", prompt="human approval"]
-  c [shape=box, label="Coder", allowed_tools="shell,ast_search", system_prompt="strict"]
-  a -> b
-  b -> c
-}`;
+const SOURCE = `name: demo
+steps:
+  a:
+    type: llm
+    label: Planner
+    model: opus-4
+    prompt: plan the work
+    next: b
+  b:
+    type: human
+    label: Review
+    text: human approval
+    routes: {ok: c}
+  c:
+    type: llm
+    label: Coder
+    allowed-tools: [shell, ast_search]
+`;
 
-function nodesFromDot(): ReturnType<typeof parseWorkflow>["nodes"] {
-  return parseWorkflow(DOT_SOURCE).nodes;
+function nodes(): ReturnType<typeof parseWorkflow>["nodes"] {
+  return parseWorkflow(SOURCE).nodes;
 }
 
-describe.skip("NodeInspector", () => {
+describe("NodeInspector", () => {
   useDom();
   afterEach(() => cleanup());
 
@@ -30,8 +41,7 @@ describe.skip("NodeInspector", () => {
   });
 
   it("surfaces identity, model, and prompt for a llm node", () => {
-    const nodes = nodesFromDot();
-    const a = nodes["a"];
+    const a = nodes()["a"];
     expect(a).toBeTruthy();
     if (!a) return;
     const { container } = render(<NodeInspector node={a} />);
@@ -44,8 +54,7 @@ describe.skip("NodeInspector", () => {
   });
 
   it("renders a human node header without a llm prompt block", () => {
-    const nodes = nodesFromDot();
-    const b = nodes["b"];
+    const b = nodes()["b"];
     expect(b).toBeTruthy();
     if (!b) return;
     const { container } = render(<NodeInspector node={b} />);
@@ -53,22 +62,18 @@ describe.skip("NodeInspector", () => {
     expect(panel.getAttribute("data-handler")).toBe("human");
   });
 
-  it("lists allowed tools and system prompt override", () => {
-    const nodes = nodesFromDot();
-    const c = nodes["c"];
+  it("lists allowed tools for a llm node", () => {
+    const c = nodes()["c"];
     expect(c).toBeTruthy();
     if (!c) return;
     const { container } = render(<NodeInspector node={c} />);
-    const q = within(container);
     const text = container.textContent ?? "";
     expect(text).toContain("shell");
     expect(text).toContain("ast_search");
-    expect(q.getByTestId("node-inspector-system-prompt").textContent).toBe("strict");
   });
 
   it("shows live state when a NodeState entry is supplied", () => {
-    const nodes = nodesFromDot();
-    const a = nodes["a"];
+    const a = nodes()["a"];
     if (!a) return;
     const { container } = render(
       <NodeInspector node={a} state={{ nodeId: "a", iteration: 0, state: "running", lastEventSeq: 42 }} />,
@@ -78,21 +83,17 @@ describe.skip("NodeInspector", () => {
     expect(text).toContain("42");
   });
 
-  it("surfaces thread_id, class (subgraph-derived), and the goal-gate retarget chain", () => {
-    const src = `digraph demo {
-      subgraph cluster_dev {
-        node [thread_id = "dev"]
-        implement [shape=box]
-        review [
-          shape = box
-          goal_gate = true
-          retry_target = "implement"
-          fallback_retry_target = "plan"
-          allow_partial = true
-          retry_policy = "standard"
-        ]
-      }
-    }`;
+  it("surfaces thread, goal-gate, and the retry target", () => {
+    const src = `name: demo
+steps:
+  implement:
+    type: llm
+    thread: dev
+  review:
+    type: llm
+    thread: dev
+    retry: implement
+`;
     const review = parseWorkflow(src).nodes["review"];
     expect(review).toBeTruthy();
     if (!review) return;
@@ -100,31 +101,27 @@ describe.skip("NodeInspector", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("dev"); // thread_id
     expect(text).toContain("implement"); // retry_target
-    expect(text).toContain("plan"); // fallback_retry_target
-    expect(text).toContain("standard"); // retry_policy preset
-    expect(text).toContain("allow partial"); // label rendered
     expect(text).toContain("goal gate"); // label rendered
-    expect(text).toContain("dev");
   });
 
-  // Per-handler relevance gating — stylesheet cascade can pin
-  // `llm_model` / `thread_id` / `max_retries` on nodes that never act
-  // on those attrs (terminals, tools, heuristic fan_ins). The drawer
-  // must hide the rows that don't apply so operators don't read
-  // misleading config.
+  // Per-handler relevance gating — a node's `type` decides whether the
+  // LLM / retry rows render. Terminals and tools never call an LLM, so
+  // even when those attrs are present on the IR node they must be hidden
+  // so operators don't read misleading config.
 
   it("hides model/provider/reasoning/thread/retry rows for a start terminal", () => {
-    // Stylesheet cascade pins LLM + retry attrs on every node, but the
-    // start terminal is a lifecycle marker that never calls them.
-    const src = `digraph demo {
-      node [llm_model="opus-4", llm_provider="anthropic", reasoning_effort="high", thread_id="shared", max_retries=3, retry_target="a"]
-      s [shape=Mdiamond, label="start"]
-      a [shape=box]
-      s -> a
-    }`;
-    const s = parseWorkflow(src).nodes["s"];
-    expect(s).toBeTruthy();
-    if (!s) return;
+    const s: GraphNode = {
+      id: "s",
+      type: "start",
+      attrs: {
+        llm_model: "opus-4",
+        llm_provider: "anthropic",
+        reasoning_effort: "high",
+        thread_id: "shared",
+        max_retries: 3,
+        retry_target: "a",
+      },
+    };
     const { container } = render(<NodeInspector node={s} />);
     const text = container.textContent ?? "";
     // Identity + handler still surface.
@@ -140,9 +137,12 @@ describe.skip("NodeInspector", () => {
   });
 
   it("renders attrs.routes as chips in a dedicated section", () => {
-    const src = `digraph g {
-      router [shape=box, routes="small,large,refactor"]
-    }`;
+    const src = `name: demo
+steps:
+  router:
+    type: llm
+    routes: {small: exit, large: exit, refactor: exit}
+`;
     const router = parseWorkflow(src).nodes["router"];
     expect(router).toBeTruthy();
     if (!router) return;
@@ -155,10 +155,14 @@ describe.skip("NodeInspector", () => {
     expect(text).toContain("refactor");
   });
 
-  it("surfaces attrs.text for kind=human nodes", () => {
-    const src = `digraph g {
-      review [kind=human, text="Please approve or reject the change."]
-    }`;
+  it("surfaces attrs.text for a human node", () => {
+    const src = `name: demo
+steps:
+  review:
+    type: human
+    text: Please approve or reject the change.
+    routes: {ok: exit}
+`;
     const review = parseWorkflow(src).nodes["review"];
     expect(review).toBeTruthy();
     if (!review) return;
@@ -167,22 +171,13 @@ describe.skip("NodeInspector", () => {
     expect(textBlock.textContent?.trim()).toBe("Please approve or reject the change.");
   });
 
-  it("surfaces attrs.text for legacy wait.human (shape=hexagon) nodes", () => {
-    const src = `digraph g {
-      gate [shape=hexagon, text="Approve the PR?"]
-    }`;
-    const gate = parseWorkflow(src).nodes["gate"];
-    expect(gate).toBeTruthy();
-    if (!gate) return;
-    const { container } = render(<NodeInspector node={gate} />);
-    const textBlock = within(container).getByTestId("node-inspector-text");
-    expect(textBlock.textContent?.trim()).toBe("Approve the PR?");
-  });
-
   it("does not render routes section when attrs.routes is absent", () => {
-    const src = `digraph g {
-      plan [shape=box]
-    }`;
+    const src = `name: demo
+steps:
+  plan:
+    type: llm
+    prompt: plan
+`;
     const plan = parseWorkflow(src).nodes["plan"];
     if (!plan) return;
     const { container } = render(<NodeInspector node={plan} />);
@@ -191,12 +186,18 @@ describe.skip("NodeInspector", () => {
   });
 
   it("hides model/provider/reasoning/thread for a tool node but keeps tool_command", () => {
-    // Tool handlers don't call an LLM — the cascade-resolved llm_model
-    // is dead config. tool_command is the load-bearing attr.
-    const src = `digraph demo {
-      node [llm_model="opus-4", llm_provider="anthropic", reasoning_effort="high", thread_id="shared"]
-      run_tests [shape=parallelogram, tool_command="bun test"]
-    }`;
+    // Tool handlers don't call an LLM — an `llm_model` attr on a tool node
+    // is dead config. tool_command (authored as `run:`) is load-bearing.
+    const src = `name: demo
+steps:
+  run_tests:
+    type: tool
+    run: bun test
+    model: opus-4
+    provider: anthropic
+    effort: high
+    thread: shared
+`;
     const t = parseWorkflow(src).nodes["run_tests"];
     expect(t).toBeTruthy();
     if (!t) return;

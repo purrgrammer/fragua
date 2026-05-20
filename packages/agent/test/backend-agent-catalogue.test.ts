@@ -56,7 +56,6 @@ describe("PiLlmBackend — agent catalogue injection", () => {
             id: "implement",
             type: "llm",
             attrs: { allowed_tools: ["read", "agent"] },
-
           },
           prompt: "do work",
           thread_id: undefined,
@@ -108,7 +107,6 @@ describe("PiLlmBackend — agent catalogue injection", () => {
             id: "implement",
             type: "llm",
             attrs: { allowed_tools: ["read"] }, // no `agent` in the pool
-
           },
           prompt: "do work",
           thread_id: undefined,

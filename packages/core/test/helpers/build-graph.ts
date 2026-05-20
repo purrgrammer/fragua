@@ -9,10 +9,7 @@
 import type { Edge, EdgeAttrs, Graph, GraphAttrs, Node, NodeAttrs, NodeType } from "../../src/types/graph.ts";
 
 export type NodeSpec = NodeType | { type: NodeType; attrs?: NodeAttrs };
-export type EdgeSpec =
-  | [string, string]
-  | [string, string, EdgeAttrs]
-  | { from: string; to: string; attrs?: EdgeAttrs };
+export type EdgeSpec = [string, string] | [string, string, EdgeAttrs] | { from: string; to: string; attrs?: EdgeAttrs };
 
 /** Build a Graph from a terse object spec.
  *

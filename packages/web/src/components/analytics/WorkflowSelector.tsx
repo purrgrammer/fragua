@@ -1,6 +1,6 @@
 // Workflow dropdown for /analytics. Sibling to ProjectSelector +
 // WindowSelector. Identity = `(scope, name[, cwd])`, sha-collapsed —
-// every edit of `research.dot` aggregates into one row. `null` is the
+// every edit of `research.yaml` aggregates into one row. `null` is the
 // "All workflows" sentinel (translated to `__all__` at the Radix
 // boundary so the parent contract stays a typed union).
 //
@@ -44,7 +44,7 @@ export interface WorkflowSelection {
   cwd: string | null;
 }
 
-/** `scope:name[:cwd]` — colons are illegal in workflow_name (DOT grammar
+/** `scope:name[:cwd]` — colons are illegal in workflow_name (identifier grammar
  *  disallows them in identifiers), but a cwd can absolutely contain
  *  colons (Windows drive letters, etc.), so we URL-encode it. The
  *  encoding is parsable from the left: first colon ends scope, second

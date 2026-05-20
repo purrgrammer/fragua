@@ -121,8 +121,8 @@ describe("api — /runs", () => {
 describe("api — /workflows", () => {
   it("listWorkflows GETs /api/workflows and parses name/path/sha rows", async () => {
     const rows = [
-      { name: "alpha", path: "workflows/alpha.dot", sha: "abc1234", label: "Alpha" },
-      { name: "beta", path: "workflows/beta.dot", sha: "def5678" },
+      { name: "alpha", path: "workflows/alpha.yaml", sha: "abc1234", label: "Alpha" },
+      { name: "beta", path: "workflows/beta.yaml", sha: "def5678" },
     ];
     mock = installFetchMock({ "/api/workflows": () => json(rows) });
     const out = await api.listWorkflows();
@@ -133,7 +133,7 @@ describe("api — /workflows", () => {
   });
 
   it("rejects malformed workflow rows", async () => {
-    mock = installFetchMock({ "/api/workflows": () => json([{ name: "x", path: "x.dot" }]) });
+    mock = installFetchMock({ "/api/workflows": () => json([{ name: "x", path: "x.yaml" }]) });
     await expect(api.listWorkflows()).rejects.toThrow(/malformed/);
   });
 });

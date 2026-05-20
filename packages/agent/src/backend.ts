@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import type { LlmBackend, LlmInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
+import type { EventType, LlmBackend, LlmInput, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, failHalt, failProvider, ok } from "@swarm/core";
 import { makeHttpClient } from "@swarm/core/handler";
 import type {
@@ -283,7 +283,7 @@ export class PiLlmBackend implements LlmBackend {
     // Force-include the built-in `skill` and `abort` tools. Even when the
     // node pins `allowed_tools` (excluding them) or lists them under
     // `denied_tools`, they must remain available — both are universal
-    // affordances ("always available, zero .dot migration"). The system
+    // affordances ("always available, zero .yaml migration"). The system
     // prompt and tool descriptions advertise them; if they weren't
     // actually wired the model would call them and get a hard-to-diagnose
     // unknown-tool error. Skipped only when the registry doesn't carry

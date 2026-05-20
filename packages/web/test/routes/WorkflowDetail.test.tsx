@@ -1,10 +1,10 @@
 // Route-level tests for `/workflows/:name`.
 //
 // The happy path mounts the page via the real router + memory history,
-// seeds the `workflows.detail(name)` query cache with a small DOT
+// seeds the `workflows.detail(name)` query cache with a small YAML
 // source, and asserts:
 //   - header renders label / name / short sha
-//   - the graph region renders with one node per `node` in the DOT
+//   - the graph region renders with one node per parsed step
 //   - clicking a node (`data-node-id`) opens the inspector drawer
 //
 // Error paths install a URL-routing fake fetch to exercise 404 and 500.
@@ -18,14 +18,18 @@ import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-const DOT_SOURCE = `digraph demo {
-  graph [ label = "demo" ]
-  start [shape=Mdiamond, label="start"]
-  middle [shape=box, label="middle", model="opus-4"]
-  done [shape=Msquare, label="done"]
-  start -> middle
-  middle -> done
-}`;
+const WORKFLOW_SOURCE = `name: demo
+description: demo
+steps:
+  middle:
+    type: llm
+    label: middle
+    model: opus-4
+    next: done
+  done:
+    type: llm
+    label: done
+`;
 
 function mount(client = createTestQueryClient(), path = "/workflows/demo") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
@@ -36,7 +40,7 @@ function seedDetail(client: ReturnType<typeof createTestQueryClient>, name: stri
   client.setQueryData(queries.workflows.detail(name).queryKey, detail);
 }
 
-describe.skip("WorkflowDetail route", () => {
+describe("WorkflowDetail route", () => {
   useDom();
   afterEach(() => cleanup());
 
@@ -44,9 +48,9 @@ describe.skip("WorkflowDetail route", () => {
     const detail: WorkflowDetailT = {
       name: "demo",
       label: "Demo workflow",
-      path: "workflows/demo.dot",
+      path: "workflows/demo.yaml",
       sha: "abcdef1234567890",
-      source: DOT_SOURCE,
+      source: WORKFLOW_SOURCE,
     };
     const client = createTestQueryClient();
     seedDetail(client, "demo", detail);
@@ -60,15 +64,15 @@ describe.skip("WorkflowDetail route", () => {
 
     expect(q.getByTestId("workflow-detail-title").textContent).toBe("Demo workflow");
     expect(q.getByTestId("workflow-detail-sha").textContent).toBe("abcdef1");
-    expect(container.textContent ?? "").toContain("workflows/demo.dot");
+    expect(container.textContent ?? "").toContain("workflows/demo.yaml");
   });
 
   it("renders the graph with one data-node-id per parsed node", async () => {
     const detail: WorkflowDetailT = {
       name: "demo",
-      path: "workflows/demo.dot",
+      path: "workflows/demo.yaml",
       sha: "abcdef1",
-      source: DOT_SOURCE,
+      source: WORKFLOW_SOURCE,
     };
     const client = createTestQueryClient();
     seedDetail(client, "demo", detail);
@@ -94,9 +98,9 @@ describe.skip("WorkflowDetail route", () => {
     // clicked node carries the "selected" ring afterwards.
     const detail: WorkflowDetailT = {
       name: "demo",
-      path: "workflows/demo.dot",
+      path: "workflows/demo.yaml",
       sha: "abcdef1",
-      source: DOT_SOURCE,
+      source: WORKFLOW_SOURCE,
     };
     const client = createTestQueryClient();
     seedDetail(client, "demo", detail);

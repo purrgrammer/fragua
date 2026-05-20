@@ -1,7 +1,7 @@
 "use client";
 
 // Terminal — ANSI-aware console-output renderer for tool nodes
-// (parallelogram shape) and any other captured shell output.
+// (tool node) and any other captured shell output.
 //
 // Adapted from the ai-elements Terminal component to match the Swarm
 // design language: hairline border, no shadow, monospace voice, sw-*

@@ -473,7 +473,7 @@ import { webFetchTool } from "./web-fetch.ts";
 // `skill` and `abort` are built-in: included here so they land in every
 // node's tool pool by default, AND force-included by the llm
 // backend even when a node's `allowed_tools` / `denied_tools` would
-// exclude them — always available, zero .dot migration.
+// exclude them — always available, zero .yaml migration.
 export const CORE_TOOLS: AnyTool[] = [
   readFileTool,
   writeFileTool,

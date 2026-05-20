@@ -1,7 +1,7 @@
 // Public entry point for @swarm/server.
 //
 // DB-first: `store` is required; reads and intent writes both go through
-// @swarm/store. `workflowReader` (disk-backed DOT listing) stays optional
+// @swarm/store. `workflowReader` (disk-backed workflow listing) stays optional
 // for the Workflows page.
 
 import { existsSync, readFileSync, statSync } from "node:fs";

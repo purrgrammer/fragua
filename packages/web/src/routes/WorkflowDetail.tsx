@@ -16,6 +16,7 @@
 //   - `selectedNodeId` is local state; the graph shows it as a neutral
 //     ring, and the drawer reads the matching `Graph.nodes[id]`.
 
+import { parseWorkflow } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -25,7 +26,6 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { ApiError } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
-import { parseWorkflow } from "@swarm/core";
 import { queries } from "../lib/queries.ts";
 
 // Side drawer crossing ~28rem reads as rushed at the system's default
@@ -198,7 +198,7 @@ export function WorkflowDetail(): JSX.Element {
         <EmptyState
           data-testid="workflow-detail-parse-error"
           title="Couldn't parse workflow"
-          description="The server returned the DOT source but it didn't parse. The raw source is below so you can inspect it."
+          description="The server returned the workflow source but it didn't parse. The raw source is below so you can inspect it."
         />
       )}
 

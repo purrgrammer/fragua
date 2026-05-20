@@ -86,7 +86,7 @@ export interface SummariserBackend {
 }
 
 /** Convention: synthetic nodes always start with `__` so they can never
- * collide with a real DOT node id (DOT identifiers can't start with
+ * collide with a real workflow node id (identifiers can't start with
  * underscore followed by two more characters without quoting, and even
  * then, `__summary.*` is reserved by this module). */
 export const SYNTHETIC_NODE_PREFIX = "__summary";

@@ -75,6 +75,18 @@ export interface EdgeAttrs {
   [extra: string]: AttrScalar | undefined;
 }
 
+/** A typed run-input declaration from the workflow's `inputs:` block.
+ * Provided per-run via `--input name=value` and substituted into
+ * `prompt:` / `text:` / `run:` strings as `${{ inputs.name }}`. */
+export interface InputDecl {
+  name: string;
+  type: "string" | "boolean" | "number" | "choice";
+  required: boolean;
+  description?: string;
+  default?: string | number | boolean;
+  options?: string[];
+}
+
 export interface GraphAttrs {
   goal?: string;
   label?: string;
@@ -86,7 +98,10 @@ export interface GraphAttrs {
   budget_usd?: number;
   /** Policy when a budget threshold is crossed. */
   budget_policy?: "warn" | "stop" | "pause";
-  [extra: string]: AttrScalar | undefined;
+  /** Declared run inputs (the `inputs:` block). Substituted as
+   * `${{ inputs.name }}`; validated against `--input` bindings at enqueue. */
+  inputs?: InputDecl[];
+  [extra: string]: AttrScalar | InputDecl[] | undefined;
 }
 
 export interface Location {

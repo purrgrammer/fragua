@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { materialiseForChild } from "@swarm/agent";
-import type { LlmBackend, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
+import type { EventType, ExecutionEnvironment, LlmBackend, Node, Outcome } from "@swarm/core";
 import { fail } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import type { AnyTool, Skill, SubagentResult, SubagentSpec, ToolRegistry } from "@swarm/workspace";

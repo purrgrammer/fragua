@@ -8,7 +8,7 @@
 // other frontmatter keys are dropped along with the rest of the YAML
 // block (they would confuse the model with metadata it can't act on).
 //
-// Substitution mirrors the DOT-prompt convention: every $ARGUMENTS
+// Substitution mirrors the workflow-prompt convention: every $ARGUMENTS
 // boundary is replaced with the input string (empty when absent). When
 // the body has no placeholder but args were passed, they're appended
 // as a trailing <invocation> block so they're never silently dropped.

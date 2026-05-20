@@ -1,5 +1,5 @@
 // Server ports. Under the store-backed architecture the only port we keep
-// is WorkflowReader — listing DOT files on disk for the Workflows page.
+// is WorkflowReader — listing workflow files on disk for the Workflows page.
 // Everything else reads directly from @swarm/store.
 
 import type { HealthDaemonInfo } from "./routes/health.ts";

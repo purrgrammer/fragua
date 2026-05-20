@@ -63,6 +63,9 @@ export interface RunCommandOptions {
   /** Positional input — piped into the workflow's `$ARGUMENTS` token via
    * `routing.input` on enqueue. */
   input?: string;
+  /** Typed run inputs (`--input name=value`). Validated against the
+   * workflow's `inputs:` block and substituted as `${{ inputs.name }}`. */
+  inputs?: Record<string, string>;
   /** Exit after the run enters a terminal state. Default true. */
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
@@ -147,6 +150,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   if (opts.priority !== undefined) enqueueBody["priority"] = opts.priority;
   if (opts.routing !== undefined) enqueueBody["routing"] = opts.routing;
   if (opts.input !== undefined) enqueueBody["input"] = opts.input;
+  if (opts.inputs !== undefined && Object.keys(opts.inputs).length > 0) enqueueBody["inputs"] = opts.inputs;
   const enqueueRes = await postJson(`${baseUrl}/runs`, enqueueBody);
   if (!enqueueRes.ok) {
     return fail(`enqueue failed (${enqueueRes.status})`, enqueueRes);

@@ -1,11 +1,11 @@
-// Multi-source WorkflowReader: aggregates `*.dot` files from the global
+// Multi-source WorkflowReader: aggregates `*.yaml` files from the global
 // workflows directory (`~/.swarm/workflows/`) plus every project root the
 // store has ever seen (`store.listCwds()` → `<cwd>/.swarm/workflows/`).
 //
 // The CLI's `swarm run` already resolves names against the same two
 // sources (global first, then project-local). The web UI used to scan
 // only one directory bound at server-startup time, so per-project
-// workflows like `<project>/.swarm/workflows/crowdin-review.dot` were
+// workflows like `<project>/.swarm/workflows/crowdin-review.yaml` were
 // invisible. This adapter closes that gap.
 //
 // Each entry on the wire carries a `cwd` field — `undefined` for the

@@ -25,7 +25,11 @@ describe("resolveWorkflow", () => {
   });
 
   test("bare name in global wins", async () => {
-    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
+    await writeFile(
+      join(home, ".swarm/workflows/foo.yaml"),
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      "utf8",
+    );
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
       dotPath: resolve(home, ".swarm/workflows/foo.yaml"),
@@ -35,7 +39,11 @@ describe("resolveWorkflow", () => {
   });
 
   test("bare name falls back to project when global misses", async () => {
-    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
+    await writeFile(
+      join(cwd, ".swarm/workflows/foo.yaml"),
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      "utf8",
+    );
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
       dotPath: resolve(cwd, ".swarm/workflows/foo.yaml"),
@@ -45,8 +53,16 @@ describe("resolveWorkflow", () => {
   });
 
   test("global wins over local when both exist", async () => {
-    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
-    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
+    await writeFile(
+      join(home, ".swarm/workflows/foo.yaml"),
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, ".swarm/workflows/foo.yaml"),
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      "utf8",
+    );
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r?.scope).toBe("global");
     expect(r?.dotPath).toBe(resolve(home, ".swarm/workflows/foo.yaml"));

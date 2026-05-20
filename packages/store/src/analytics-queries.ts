@@ -443,7 +443,7 @@ export interface WorkflowDirectoryRow {
 /** Distinct `(scope, name[, cwd])` identities across `run_state`,
  *  ordered by recent activity. Powers the `WorkflowSelector` on
  *  `/analytics`. Identity rule: shas collapse — every edit of
- *  `research.dot` shares one row. `path` and `ephemeral` runs are
+ *  `research.yaml` shares one row. `path` and `ephemeral` runs are
  *  excluded (no canonical user-iterable identity). When `cwd` is
  *  supplied, only that project's local workflows show; globals are
  *  always returned. */
@@ -496,7 +496,7 @@ export function getWorkflowDirectory(db: Database, opts: { cwd?: string }): Work
 export interface DrilldownFilters extends AnalyticsWindow {
   /** Filter to one workflow_sha. Distinct from
    *  `workflowScope`/`workflowName` (inherited from AnalyticsWindow):
-   *  sha is one specific .dot version, scope+name is every version of
+   *  sha is one specific .yaml version, scope+name is every version of
    *  that identity. The two compose — set sha to drill into a single
    *  edit; set scope+name to scope to a workflow lineage. */
   workflowSha?: string;

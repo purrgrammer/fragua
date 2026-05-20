@@ -32,7 +32,6 @@ function nodeOn(threadId: string): Node {
       prompt: `turn on ${threadId}`,
       thread_id: threadId,
     },
-
   } as unknown as Node;
 }
 

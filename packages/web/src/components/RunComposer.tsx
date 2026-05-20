@@ -12,7 +12,7 @@
 //
 // The run's `cwd` is always the project we're viewing, even when the source
 // workflow is global — the run lands in this project, executed against the
-// global DOT.
+// global workflow.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";

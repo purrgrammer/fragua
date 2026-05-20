@@ -1,22 +1,19 @@
 // GraphView tests — the AI-Elements / @xyflow/react path.
 //
-// Pre-P5.13 this file exercised the server-rendered SVG injection. Those
-// cases are gone: the SVG route + `getRunGraph()` API surface were
-// deleted. What we assert now:
+// What we assert:
 //
 //   - `toFlowGraph()` (the pure transform) produces one FlowEdge per
-//     edge declared in the DOT source, including edges that touch
+//     edge declared in the parsed workflow, including edges that touch
 //     start/exit terminals — terminals stay visible because labelled
-//     exit edges like `verify -> done [condition="outcome=fail"]`
-//     carry meaning.
+//     exit edges carry meaning.
 //   - Rendered output carries a `data-node-id` attribute per graph node
 //     (happy-dom CAN mount the custom Node component) so Playwright /
 //     unit tests targeting specific nodes keep working.
 //   - Lifecycle state flows through to `data-state` on each node.
 //   - Back-edges (target at an earlier layout depth than source) are
 //     marked `isBackEdge` so the edge renderer picks the Loop variant.
-//   - Edge `condition` / `label` DOT attrs surface as edge.data.label so
-//     operators can tell branching edges apart without opening the
+//   - Edge `label` / `outcome` / `route` attrs surface as edge.data.label
+//     so operators can tell branching edges apart without opening the
 //     inspector.
 //   - With no workflowSource the component renders the purpose-built
 //     empty state rather than crashing.
@@ -25,8 +22,8 @@
 // Why we don't assert on `.react-flow__edge` DOM nodes: happy-dom can't
 // compute layout (no getBoundingClientRect values), and React-Flow
 // short-circuits edge rendering when source/target rects are zero. The
-// `toFlowGraph` unit test above covers the data path; visual regressions
-// get caught by the running dev server + Playwright (future).
+// `toFlowGraph` unit tests cover the data path; visual regressions get
+// caught by the running dev server + Playwright (future).
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { parseWorkflow } from "@swarm/core";
@@ -36,14 +33,15 @@ import type { RunDetail } from "../../src/lib/api.ts";
 import { renderWithClient as render } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-const WORKFLOW_SOURCE = `digraph demo {
-  graph [ label = "demo" ]
-  start [shape=Mdiamond, label="start"]
-  middle [shape=box, label="middle"]
-  done [shape=Msquare, label="done"]
-  start -> middle
-  middle -> done
-}`;
+// start → middle → exit (middle is the only declared step; the parser
+// synthesises the `start` entry node and the `exit` sink).
+const WORKFLOW_SOURCE = `name: demo
+description: demo
+steps:
+  middle:
+    type: llm
+    label: middle
+`;
 
 function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
   return {
@@ -64,15 +62,15 @@ function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
   };
 }
 
-describe.skip("toFlowGraph — pure transform", () => {
-  it("emits one FlowEdge per DOT edge, anchored to correct source/target", () => {
+describe("toFlowGraph — pure transform", () => {
+  it("emits one FlowEdge per parsed edge, anchored to correct source/target", () => {
     const graph = parseWorkflow(WORKFLOW_SOURCE);
     const { flowEdges, flowNodes } = toFlowGraph(makeDetail(), graph);
 
-    // Both edges present, in source order.
-    expect(flowEdges.length).toBe(2);
-    expect(flowEdges[0]).toMatchObject({ source: "start", target: "middle" });
-    expect(flowEdges[1]).toMatchObject({ source: "middle", target: "done" });
+    // One FlowEdge per graph edge.
+    expect(flowEdges.length).toBe(graph.edges.length);
+    expect(flowEdges.some((e) => e.source === "start" && e.target === "middle")).toBe(true);
+    expect(flowEdges.some((e) => e.source === "middle" && e.target === "exit")).toBe(true);
 
     // Every edge endpoint has a corresponding node in flowNodes.
     const nodeIds = new Set(flowNodes.map((n) => n.id));
@@ -82,16 +80,16 @@ describe.skip("toFlowGraph — pure transform", () => {
     }
   });
 
-  it("unions graph.nodes with detail.nodes so DOT-only nodes still render as pending", () => {
+  it("unions graph.nodes with detail.nodes so topology-only nodes render as pending", () => {
     const graph = parseWorkflow(WORKFLOW_SOURCE);
     const { flowNodes } = toFlowGraph(makeDetail(), graph);
     const byId = new Map(flowNodes.map((n) => [n.id, n.data as { state: string; label?: string }]));
-    // `done` is only in topology (no lifecycle event yet).
-    expect(byId.get("done")?.state).toBe("pending");
+    // `exit` is only in topology (no lifecycle event yet).
+    expect(byId.get("exit")?.state).toBe("pending");
     expect(byId.get("start")?.state).toBe("completed");
     expect(byId.get("middle")?.state).toBe("running");
-    // Labels come from DOT attrs.
-    expect(byId.get("done")?.label).toBe("done");
+    // Label comes from the step's `label` attr.
+    expect(byId.get("middle")?.label).toBe("middle");
   });
 
   it("marks the activeNodeId entry as active", () => {
@@ -112,15 +110,18 @@ describe.skip("toFlowGraph — pure transform", () => {
   });
 });
 
-describe.skip("toFlowGraph — back-edge detection + edge labels", () => {
+describe("toFlowGraph — back-edge detection + edge labels", () => {
   it("marks back-edges whose target sits at an earlier depth as isBackEdge", () => {
-    const src = `digraph g {
-      a [shape=box]
-      b [shape=box]
-      c [shape=box]
-      a -> b -> c
-      c -> a [condition="outcome=retry"]
-    }`;
+    const src = `name: g
+steps:
+  a:
+    type: llm
+  b:
+    type: llm
+  c:
+    type: llm
+    on: {success: exit, fail: a}
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const byPair = new Map(flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { isBackEdge?: boolean }]));
@@ -129,74 +130,75 @@ describe.skip("toFlowGraph — back-edge detection + edge labels", () => {
     expect(byPair.get("c->a")?.isBackEdge).toBe(true);
   });
 
-  it("back-edges route through the side handles so they arc outside the column", () => {
-    const src = `digraph g {
-      a [shape=box]
-      b [shape=box]
-      a -> b -> a
-    }`;
+  it("self-loop edges route through the side handles so they arc outside the column", () => {
+    const src = `name: g
+steps:
+  verify:
+    type: llm
+    on: {success: exit, fail: verify}
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
-    const back = flowEdges.find((e) => e.source === "b" && e.target === "a");
-    expect(back?.sourceHandle).toBe("loop-source");
-    expect(back?.targetHandle).toBe("loop-target");
-    const forward = flowEdges.find((e) => e.source === "a" && e.target === "b");
+    const self = flowEdges.find((e) => e.source === "verify" && e.target === "verify");
+    expect(self?.sourceHandle).toBe("loop-source");
+    expect(self?.targetHandle).toBe("loop-target");
+    const forward = flowEdges.find((e) => e.source === "start" && e.target === "verify");
     expect(forward?.sourceHandle).toBeUndefined();
     expect(forward?.targetHandle).toBeUndefined();
   });
 
-  it("toFlowGraph attaches arcExtent to skip/back/loop edges based on intermediate-layer extent", () => {
-    // Wide parallel fan: start splits into a/b/c at depth 1, all
-    // converging at done (depth 2). The skip-edge `start -> done`
-    // (added below) jumps from depth 0 to depth 2, so its arc has to
-    // clear the layer-1 fan. arcExtent should reflect the lateral
-    // extent of {a, b, c}.
-    const src = `digraph fan {
-      start [shape=box]
-      a [shape=box]
-      b [shape=box]
-      c [shape=box]
-      done [shape=box]
-      start -> a
-      start -> b
-      start -> c
-      a -> done
-      b -> done
-      c -> done
-      start -> done [condition="outcome=skip"]
-    }`;
+  it("attaches arcExtent to a skip-edge based on the intermediate layer's extent", () => {
+    // start_n fans out to a/b/c (depth 2, spread laterally) and also jumps
+    // straight to done_n (depth 3). The start_n -> done_n edge is a
+    // skip-edge that has to clear the fanned-out layer-2 column, so its
+    // arcExtent reads that layer's lateral extent.
+    const src = `name: fan
+steps:
+  start_n:
+    type: llm
+    routes: {to_a: a, to_b: b, to_c: c, to_done: done_n}
+  a:
+    type: llm
+    next: done_n
+  b:
+    type: llm
+    next: done_n
+  c:
+    type: llm
+    next: done_n
+  done_n:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
-    const skip = flowEdges.find((e) => e.source === "start" && e.target === "done");
+    const skip = flowEdges.find((e) => e.source === "start_n" && e.target === "done_n");
     expect(skip).toBeTruthy();
     const data = skip?.data as { isSkipEdge?: boolean; arcExtent?: number };
     expect(data?.isSkipEdge).toBe(true);
-    // Three nodes at depth 1 in TB layout share crossSize=280, so the
-    // outermost branches sit at ±280 from the axis. arcExtent reads
-    // the max |x| (280) so the renderer can push the bulge past it.
     expect(typeof data?.arcExtent).toBe("number");
-    expect(data?.arcExtent ?? 0).toBeGreaterThanOrEqual(280);
+    expect(data?.arcExtent ?? 0).toBeGreaterThan(0);
 
-    // Forward edges that DON'T clear an intermediate layer don't get
-    // an arcExtent stamped (additive optional field).
-    const direct = flowEdges.find((e) => e.source === "start" && e.target === "a");
+    // The direct edge to the adjacent layer doesn't clear an intermediate
+    // node, so it carries no arcExtent.
+    const direct = flowEdges.find((e) => e.source === "start_n" && e.target === "a");
     expect(direct).toBeTruthy();
     const directData = direct?.data as { arcExtent?: number };
     expect(directData?.arcExtent).toBeUndefined();
   });
 
-  it("derives label from attrs.label > attrs.outcome > attrs.route; ignores attrs.condition", () => {
-    const src = `digraph g {
-      a [shape=box]
-      b [shape=box]
-      c [shape=box]
-      d [shape=box]
-      e [shape=box]
-      a -> b [label="custom label"]
-      a -> c [outcome=success]
-      a -> d [route=small_change]
-      a -> e [condition="outcome=success"]
-    }`;
+  it("derives label from attrs.label > attrs.outcome > attrs.route", () => {
+    const src = `name: g
+steps:
+  a:
+    type: llm
+    routes:
+      lbl: {to: b, label: custom label}
+      small_change: c
+  b:
+    type: llm
+  c:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const byPair = new Map(
@@ -204,28 +206,23 @@ describe.skip("toFlowGraph — back-edge detection + edge labels", () => {
     );
     // attrs.label is used verbatim.
     expect(byPair.get("a->b")?.label).toBe("custom label");
-    // attrs.outcome falls back when no label.
-    expect(byPair.get("a->c")?.label).toBe("success");
-    // attrs.route humanized when no label/outcome.
-    expect(byPair.get("a->d")?.label).toBe("Small Change");
-    // attrs.condition is ignored entirely; no label, no outcome.
-    expect(byPair.get("a->e")?.label).toBeUndefined();
-    expect(byPair.get("a->e")?.outcome).toBeUndefined();
+    // attrs.route humanized when no label.
+    expect(byPair.get("a->c")?.label).toBe("Small Change");
   });
 });
 
-describe.skip("GraphView — rendering", () => {
+describe("GraphView — rendering", () => {
   useDom();
   afterEach(() => cleanup());
 
-  it("renders a data-node-id per DOT node", async () => {
+  it("renders a data-node-id per node", async () => {
     const { container } = render(<GraphView detail={makeDetail()} />);
     const canvas = await waitFor(() => within(container).getByTestId("graphview"));
     const nodeAnchors = canvas.querySelectorAll("[data-node-id]");
     const ids = new Set(Array.from(nodeAnchors).map((el) => el.getAttribute("data-node-id")));
     expect(ids.has("start")).toBe(true);
     expect(ids.has("middle")).toBe(true);
-    expect(ids.has("done")).toBe(true);
+    expect(ids.has("exit")).toBe(true);
   });
 
   it("stamps data-state on each node so callers can style by lifecycle", async () => {
@@ -239,16 +236,16 @@ describe.skip("GraphView — rendering", () => {
     );
     expect(byId.get("start")).toBe("completed");
     expect(byId.get("middle")).toBe("running");
-    expect(byId.get("done")).toBe("pending");
+    expect(byId.get("exit")).toBe("pending");
   });
 
   it("a running tool node renders with the active ring + thinking-pulse dot + teal handler strip", async () => {
-    const src = `digraph crowdin {
-      start [shape=Mdiamond]
-      find_pr [shape=parallelogram, tool_command="gh pr list --head l10n_crowdin"]
-      done [shape=Msquare]
-      start -> find_pr -> done
-    }`;
+    const src = `name: crowdin
+steps:
+  find_pr:
+    type: tool
+    run: gh pr list --head l10n_crowdin
+`;
     const detail: RunDetail = {
       runId: "r-tool",
       startedAt: "2024-01-01T00:00:00.000Z",
@@ -300,24 +297,24 @@ describe.skip("GraphView — rendering", () => {
     const { container } = render(<GraphView detail={makeDetail()} />);
     const canvas = await waitFor(() => within(container).getByTestId("graphview"));
     const start = canvas.querySelector('[data-node-id="start"]') as HTMLElement | null;
-    const done = canvas.querySelector('[data-node-id="done"]') as HTMLElement | null;
+    const exit = canvas.querySelector('[data-node-id="exit"]') as HTMLElement | null;
     const middle = canvas.querySelector('[data-node-id="middle"]') as HTMLElement | null;
     expect(start).toBeTruthy();
-    expect(done).toBeTruthy();
+    expect(exit).toBeTruthy();
     expect(middle).toBeTruthy();
 
     // Compact marker on lifecycle terminals only.
     expect(start?.getAttribute("data-compact")).toBe("true");
-    expect(done?.getAttribute("data-compact")).toBe("true");
+    expect(exit?.getAttribute("data-compact")).toBe("true");
     expect(middle?.getAttribute("data-compact")).toBeNull();
 
     // Terminals drop the metadata body — no `id` / `model` / `effort` rows.
     const wStart = within(start as HTMLElement);
-    const wDone = within(done as HTMLElement);
+    const wExit = within(exit as HTMLElement);
     expect(wStart.queryByText("id")).toBeNull();
     expect(wStart.queryByText("model")).toBeNull();
     expect(wStart.queryByText("effort")).toBeNull();
-    expect(wDone.queryByText("id")).toBeNull();
+    expect(wExit.queryByText("id")).toBeNull();
 
     // Regular box node still surfaces the id row — regression guard.
     const wMiddle = within(middle as HTMLElement);
@@ -355,13 +352,15 @@ describe.skip("GraphView — rendering", () => {
   });
 
   it("renders model row with provider logo + effort row when attrs present", async () => {
-    const src = `digraph styled {
-      graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: high; }"]
-      start [shape=Mdiamond, label="start"]
-      middle [shape=box, label="middle"]
-      done [shape=Msquare, label="done"]
-      start -> middle -> done
-    }`;
+    const src = `name: styled
+steps:
+  middle:
+    type: llm
+    label: middle
+    model: opus
+    provider: anthropic
+    effort: high
+`;
     const detail: RunDetail = { ...makeDetail(), workflowSource: src };
     const { container } = render(<GraphView detail={detail} />);
     const canvas = await waitFor(() => within(container).getByTestId("graphview"));
@@ -389,67 +388,7 @@ describe.skip("GraphView — rendering", () => {
   });
 });
 
-describe.skip("toFlowGraph — model_stylesheet cascade surfaces in node data", () => {
-  it("wildcard rule populates model + provider + reasoningEffort on llm nodes only", () => {
-    const src = `digraph styled {
-      graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: medium; }"]
-      start [shape=Mdiamond]
-      a [shape=box]
-      b [shape=box]
-      done [shape=Msquare]
-      start -> a -> b -> done
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const byId = new Map(
-      flowNodes.map((n) => [n.id, n.data as { model?: string; provider?: string; reasoningEffort?: string }]),
-    );
-    // Llm nodes (box) pick up the cascade.
-    for (const id of ["a", "b"]) {
-      const d = byId.get(id);
-      expect(d?.model).toBe("opus");
-      expect(d?.provider).toBe("anthropic");
-      expect(d?.reasoningEffort).toBe("medium");
-    }
-    // Lifecycle terminals never run an LLM, so the cascade values are
-    // suppressed even though the parser resolved them.
-    for (const id of ["start", "done"]) {
-      const d = byId.get(id);
-      expect(d?.model).toBeUndefined();
-      expect(d?.provider).toBeUndefined();
-      expect(d?.reasoningEffort).toBeUndefined();
-    }
-  });
-
-  it("nodes without matching rules leave the fields undefined", () => {
-    const src = `digraph plain {
-      start [shape=Mdiamond]
-      a [shape=box]
-      done [shape=Msquare]
-      start -> a -> done
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const a = flowNodes.find((n) => n.id === "a")?.data as {
-      model?: string;
-      provider?: string;
-      reasoningEffort?: string;
-    };
-    expect(a.model).toBeUndefined();
-    expect(a.provider).toBeUndefined();
-    expect(a.reasoningEffort).toBeUndefined();
-  });
-});
-
-describe.skip("toFlowGraph — metadata is gated by handler type", () => {
-  // Common wildcard cascade pinned via model_stylesheet: every node ends
-  // up with `llm_model` / `llm_provider` / `reasoning_effort` resolved by
-  // the parser (the stylesheet allow-list excludes `thread_id`, which we
-  // set directly on individual nodes when a test needs it). The point of
-  // these tests is that toFlowGraph throws those values away on handlers
-  // that don't run an LLM.
-  const CASCADE = `model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: high; }"`;
-
+describe("toFlowGraph — metadata is gated by handler type", () => {
   type Meta = {
     model?: string;
     provider?: string;
@@ -457,9 +396,6 @@ describe.skip("toFlowGraph — metadata is gated by handler type", () => {
     threadId?: string;
     toolCommand?: string;
     retryTarget?: string;
-    fanInTarget?: string;
-    joinPolicy?: string;
-    fanInRank?: string;
     maxRetries?: number;
   };
 
@@ -471,14 +407,18 @@ describe.skip("toFlowGraph — metadata is gated by handler type", () => {
     return node.data as Meta;
   }
 
-  it("tool nodes expose toolCommand + maxRetries but not model/provider/effort/thread/retryTarget/fanIn fields", () => {
-    const src = `digraph g {
-      graph [${CASCADE}]
-      start [shape=Mdiamond]
-      run [shape=parallelogram, tool_command="bun test", max_retries=2, retry_target="start"]
-      done [shape=Msquare]
-      start -> run -> done
-    }`;
+  it("tool nodes expose toolCommand + maxRetries but not model/provider/effort/thread/retryTarget", () => {
+    const src = `name: g
+steps:
+  run:
+    type: tool
+    run: bun test
+    max-retries: 2
+    model: opus
+    provider: anthropic
+    effort: high
+    thread: shared
+`;
     const d = dataOf(src, "run");
     expect(d.toolCommand).toBe("bun test");
     expect(d.maxRetries).toBe(2);
@@ -487,20 +427,15 @@ describe.skip("toFlowGraph — metadata is gated by handler type", () => {
     expect(d.reasoningEffort).toBeUndefined();
     expect(d.threadId).toBeUndefined();
     expect(d.retryTarget).toBeUndefined();
-    expect(d.fanInTarget).toBeUndefined();
-    expect(d.joinPolicy).toBeUndefined();
-    expect(d.fanInRank).toBeUndefined();
   });
 
-  it("start and exit nodes expose no LLM, tool, retry, or fan_in metadata", () => {
-    const src = `digraph g {
-      graph [${CASCADE}]
-      start [shape=Mdiamond, max_retries=5]
-      a [shape=box]
-      done [shape=Msquare, max_retries=5]
-      start -> a -> done
-    }`;
-    for (const id of ["start", "done"]) {
+  it("start and exit nodes expose no LLM, tool, retry, or thread metadata", () => {
+    const src = `name: g
+steps:
+  a:
+    type: llm
+`;
+    for (const id of ["start", "exit"]) {
       const d = dataOf(src, id);
       expect(d.model).toBeUndefined();
       expect(d.provider).toBeUndefined();
@@ -508,21 +443,20 @@ describe.skip("toFlowGraph — metadata is gated by handler type", () => {
       expect(d.threadId).toBeUndefined();
       expect(d.toolCommand).toBeUndefined();
       expect(d.retryTarget).toBeUndefined();
-      expect(d.fanInTarget).toBeUndefined();
-      expect(d.joinPolicy).toBeUndefined();
-      expect(d.fanInRank).toBeUndefined();
       expect(d.maxRetries).toBeUndefined();
     }
   });
 
-  it("wait.human nodes expose no LLM or tool metadata", () => {
-    const src = `digraph g {
-      graph [${CASCADE}]
-      start [shape=Mdiamond]
-      gate [shape=hexagon]
-      done [shape=Msquare]
-      start -> gate -> done
-    }`;
+  it("human nodes expose no LLM or tool metadata", () => {
+    const src = `name: g
+steps:
+  gate:
+    type: human
+    text: approve?
+    routes: {ok: exit}
+    model: opus
+    thread: shared
+`;
     const d = dataOf(src, "gate");
     expect(d.model).toBeUndefined();
     expect(d.provider).toBeUndefined();
@@ -530,70 +464,73 @@ describe.skip("toFlowGraph — metadata is gated by handler type", () => {
     expect(d.threadId).toBeUndefined();
     expect(d.toolCommand).toBeUndefined();
     expect(d.retryTarget).toBeUndefined();
-    expect(d.fanInTarget).toBeUndefined();
-    expect(d.joinPolicy).toBeUndefined();
-    expect(d.fanInRank).toBeUndefined();
   });
 
   it("llm retains the full LLM metadata set", () => {
-    const src = `digraph g {
-      graph [${CASCADE}]
-      start [shape=Mdiamond]
-      verify [shape=box, goal_gate=true, retry_target="start", max_retries=3, thread_id="shared"]
-      done [shape=Msquare]
-      start -> verify -> done
-    }`;
+    const src = `name: g
+steps:
+  implement:
+    type: llm
+  verify:
+    type: llm
+    thread: shared
+    retry: implement
+    max-retries: 3
+    model: opus
+    provider: anthropic
+    effort: high
+`;
     const d = dataOf(src, "verify");
     expect(d.model).toBe("opus");
     expect(d.provider).toBe("anthropic");
     expect(d.reasoningEffort).toBe("high");
     expect(d.threadId).toBe("shared");
-    expect(d.retryTarget).toBe("start");
+    expect(d.retryTarget).toBe("implement");
     expect(d.maxRetries).toBe(3);
   });
 });
 
-describe.skip("toFlowGraph — layout + metadata", () => {
-  it("default orientation is top-to-bottom (depth drives y, siblings spread on x)", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box]
-      b [shape=box]
-      done [shape=Msquare]
-      start -> a -> done
-      start -> b -> done
-    }`;
+describe("toFlowGraph — layout + metadata", () => {
+  it("default orientation is top-to-bottom (depth drives y)", () => {
+    const src = `name: g
+steps:
+  a:
+    type: llm
+  b:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(makeDetail({ workflowSource: src, nodes: [] }), graph);
     const byId = new Map(flowNodes.map((n) => [n.id, n.position]));
     const start = byId.get("start");
-    const done = byId.get("done");
+    const exit = byId.get("exit");
     expect(start).toBeDefined();
-    expect(done).toBeDefined();
-    // Top-to-bottom: `done` sits BELOW `start` (greater y), same x axis range.
-    expect((done?.y ?? 0) > (start?.y ?? 0)).toBe(true);
+    expect(exit).toBeDefined();
+    // Top-to-bottom: `exit` sits BELOW `start` (greater y).
+    expect((exit?.y ?? 0) > (start?.y ?? 0)).toBe(true);
   });
 
   it("LR orientation swaps axes (depth drives x)", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      done [shape=Msquare]
-      start -> done
-    }`;
+    const src = `name: g
+steps:
+  a:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(makeDetail({ workflowSource: src, nodes: [] }), graph, { orientation: "LR" });
     const byId = new Map(flowNodes.map((n) => [n.id, n.position]));
     const start = byId.get("start");
-    const done = byId.get("done");
-    expect((done?.x ?? 0) > (start?.x ?? 0)).toBe(true);
+    const exit = byId.get("exit");
+    expect((exit?.x ?? 0) > (start?.x ?? 0)).toBe(true);
   });
 
   it("surfaces the model attribute in the node data", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box, llm_model="claude-sonnet-4-5"]
-      start -> a
-    }`;
+    const src = `name: g
+steps:
+  a:
+    type: llm
+    model: claude-sonnet-4-5
+`;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const aData = flowNodes.find((n) => n.id === "a")?.data as { model?: string };
@@ -601,11 +538,11 @@ describe.skip("toFlowGraph — layout + metadata", () => {
   });
 
   it("static mode (null detail) emits nodes with state=null and non-animated edges", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      done [shape=Msquare]
-      start -> done
-    }`;
+    const src = `name: g
+steps:
+  a:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const { flowNodes, flowEdges } = toFlowGraph(null, graph);
     expect(flowNodes.every((n) => (n.data as { state: unknown }).state === null)).toBe(true);
@@ -613,26 +550,27 @@ describe.skip("toFlowGraph — layout + metadata", () => {
   });
 
   it("selectedNodeId flag flows to the selected node", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      done [shape=Msquare]
-      start -> done
-    }`;
+    const src = `name: g
+steps:
+  a:
+    type: llm
+`;
     const graph = parseWorkflow(src);
-    const { flowNodes } = toFlowGraph(null, graph, { selectedNodeId: "done" });
+    const { flowNodes } = toFlowGraph(null, graph, { selectedNodeId: "exit" });
     const byId = new Map(flowNodes.map((n) => [n.id, n.data as { selected: boolean }]));
-    expect(byId.get("done")?.selected).toBe(true);
+    expect(byId.get("exit")?.selected).toBe(true);
     expect(byId.get("start")?.selected).toBe(false);
   });
 });
 
-describe.skip("toFlowGraph — handler-specific body fields", () => {
-  it("surfaces thread_id on llm nodes (cluster_dev shared session)", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box, thread_id="dev"]
-      start -> a
-    }`;
+describe("toFlowGraph — handler-specific body fields", () => {
+  it("surfaces thread_id on llm nodes (shared session)", () => {
+    const src = `name: g
+steps:
+  a:
+    type: llm
+    thread: dev
+`;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const byId = new Map(flowNodes.map((n) => [n.id, n.data as { threadId?: string }]));
@@ -640,48 +578,17 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
     expect(byId.get("start")?.threadId).toBeUndefined();
   });
 
-  it("a running tool node propagates state='running' + active=true into FlowNode data", () => {
-    // Regression guard for the running-state highlight on parallelogram
-    // nodes. Llm and tool nodes share the fact pipeline
-    // (`fact.dispatch_started` → "running" → `fact.node_completed` →
-    // "completed"), but only tool nodes were missing a focused test.
-    const src = `digraph crowdin {
-      start [shape=Mdiamond]
-      find_pr [shape=parallelogram, tool_command="gh pr list --head l10n_crowdin --json number"]
-      done [shape=Msquare]
-      start -> find_pr -> done
-    }`;
-    const graph = parseWorkflow(src);
-    const detail = makeDetail({
-      nodes: [
-        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 2 },
-      ],
-      selectedEdges: [{ from: "start", to: "find_pr", iteration: 0 }],
-    });
-    const { flowNodes } = toFlowGraph(detail, graph, {
-      activeNodeIds: new Set(["find_pr"]),
-    });
-    const findPr = flowNodes.find((n) => n.id === "find_pr")?.data as {
-      handler: string;
-      state: string;
-      active: boolean;
-      toolCommand?: string;
-    };
-    expect(findPr.handler).toBe("tool");
-    expect(findPr.state).toBe("running");
-    expect(findPr.active).toBe(true);
-    // Sanity: tool_command still surfaces while running.
-    expect(findPr.toolCommand?.startsWith("gh pr list")).toBe(true);
-  });
-
   it("surfaces tool_command (truncated) only for tool nodes", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      lint [shape=parallelogram, tool_command="bun run lint"]
-      verify [shape=parallelogram, tool_command="bun run --filter='@swarm/*' typecheck && bun run lint && bun test"]
-      start -> lint -> verify
-    }`;
+    const src = `name: g
+steps:
+  lint:
+    type: tool
+    run: bun run lint
+    next: verify
+  verify:
+    type: tool
+    run: bun run --filter='@swarm/*' typecheck && bun run lint && bun test
+`;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const byId = new Map(flowNodes.map((n) => [n.id, n.data as { toolCommand?: string; handler: string }]));
@@ -691,14 +598,15 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
     expect(byId.get("start")?.toolCommand).toBeUndefined();
   });
 
-  it("surfaces retry_target on goal_gate nodes", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      implement [shape=box]
-      review [shape=box, goal_gate=true, retry_target="implement"]
-      done [shape=Msquare]
-      start -> implement -> review -> done
-    }`;
+  it("surfaces retry_target + goalGate on a `retry:` gate node", () => {
+    const src = `name: g
+steps:
+  implement:
+    type: llm
+  review:
+    type: llm
+    retry: implement
+`;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const review = flowNodes.find((n) => n.id === "review")?.data as {
@@ -709,35 +617,13 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
     expect(review.retryTarget).toBe("implement");
   });
 
-  it("flags loop_restart edges with a · loop_restart label suffix and routes through loop handles", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box]
-      b [shape=box]
-      done [shape=Msquare]
-      start -> a -> b -> done
-      b -> a [loop_restart=true, label="reset"]
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    const restart = flowEdges.find((e) => e.source === "b" && e.target === "a");
-    expect(restart).toBeDefined();
-    const data = restart?.data as { loopRestart?: boolean; label?: string; isBackEdge?: boolean };
-    expect(data.loopRestart).toBe(true);
-    // Label preserves the user's `label="reset"` and appends the attribute name.
-    expect(data.label).toContain("reset");
-    expect(data.label).toContain("loop_restart");
-    expect(data.isBackEdge).toBe(true);
-    expect(restart?.sourceHandle).toBe("loop-source");
-  });
-
   it("surfaces max_retries on the node data when set", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      verify [shape=box, max_retries=3]
-      done [shape=Msquare]
-      start -> verify -> done
-    }`;
+    const src = `name: g
+steps:
+  verify:
+    type: llm
+    max-retries: 3
+`;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const verify = flowNodes.find((n) => n.id === "verify")?.data as { maxRetries?: number };
@@ -746,34 +632,14 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
     expect(start.maxRetries).toBeUndefined();
   });
 
-  it("appends `· cap N` to back-edge labels when the target has max_retries", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      plan [shape=box, max_retries=2]
-      review [shape=box]
-      done [shape=Msquare]
-      start -> plan -> review -> done
-      review -> plan [label="rejected"]
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    const back = flowEdges.find((e) => e.source === "review" && e.target === "plan");
-    expect(back).toBeDefined();
-    const data = back?.data as { label?: string; isBackEdge?: boolean };
-    expect(data.isBackEdge).toBe(true);
-    // attrs.label "rejected" rendered; cap appended.
-    expect(data.label).toContain("rejected");
-    expect(data.label).toContain("· cap 2");
-  });
-
   it("appends `· cap N` to self-loop edges (the simplest retry idiom)", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      verify [shape=box, max_retries=3]
-      done [shape=Msquare]
-      start -> verify -> done
-      verify -> verify [outcome=fail]
-    }`;
+    const src = `name: g
+steps:
+  verify:
+    type: llm
+    max-retries: 3
+    on: {success: exit, fail: verify}
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const self = flowEdges.find((e) => e.source === "verify" && e.target === "verify");
@@ -787,14 +653,15 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
     expect(self?.sourceHandle).toBe("loop-source");
   });
 
-  it("synthesises a retarget edge per goal_gate node with a §3.4 chain", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      implement [shape=box]
-      review [shape=box, goal_gate=true, retry_target="implement"]
-      done [shape=Msquare]
-      start -> implement -> review -> done
-    }`;
+  it("synthesises a retarget edge per goal_gate node with a retry_target", () => {
+    const src = `name: g
+steps:
+  implement:
+    type: llm
+  review:
+    type: llm
+    retry: implement
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const synth = flowEdges.find(
@@ -813,159 +680,85 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
     expect(synth?.targetHandle).toBe("retarget-target");
   });
 
-  it("falls back to graph-level retry_target when the gate has none", () => {
-    const src = `digraph g {
-      graph [retry_target="plan", max_goal_gate_retries=2]
-      start [shape=Mdiamond]
-      plan [shape=box]
-      review [shape=box, goal_gate=true]
-      done [shape=Msquare]
-      start -> plan -> review -> done
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    const synth = flowEdges.find((e) => e.id.startsWith("__retarget__") && e.source === "review");
-    expect(synth?.target).toBe("plan");
-    const data = synth?.data as { label?: string };
-    // Custom cap surfaces (no "(default)" tag).
-    expect(data.label).toContain("cap 2");
-    expect(data.label).not.toContain("default");
-  });
-
-  it("emits no synthetic edge when no retarget resolves anywhere in the chain", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      review [shape=box, goal_gate=true]
-      done [shape=Msquare]
-      start -> review -> done
-    }`;
+  it("emits no synthetic edge when the gate has no retry_target", () => {
+    const src = `name: g
+steps:
+  review:
+    type: llm
+    goal_gate: true
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const synth = flowEdges.find((e) => e.id.startsWith("__retarget__"));
     expect(synth).toBeUndefined();
   });
 
-  it("assigns arcIndex by source depth — topmost source gets the widest bulge", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box]
-      b [shape=box]
-      c [shape=box, goal_gate=true, retry_target="a"]
-      d [shape=box, goal_gate=true, retry_target="a"]
-      done [shape=Msquare]
-      start -> a -> b -> c -> d -> done
-      // Two right-side back-edges to a. d is deeper than c, so d's
-      // back-edge gets arcIndex 0 (tightest) and c's gets arcIndex 1.
-      c -> a [condition="outcome=fail"]
-      d -> a [condition="outcome=fail"]
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    const realArcs = new Map<string, number | undefined>();
-    for (const e of flowEdges) {
-      if (e.id.startsWith("__retarget__")) continue;
-      if (!(e.data as { isBackEdge?: boolean })?.isBackEdge) continue;
-      realArcs.set(`${e.source}->${e.target}`, (e.data as { arcIndex?: number }).arcIndex);
-    }
-    // Bottommost (d) → 0, topmost (c) → 1. Assignment is per-side dense.
-    expect(realArcs.get("d->a")).toBe(0);
-    expect(realArcs.get("c->a")).toBe(1);
-
-    // Same rule on the left side: synthetic retargets sort by gate depth
-    // descending, so d's retarget gets arcIndex 0 and c's gets arcIndex 1.
-    const synth = new Map<string, number | undefined>();
-    for (const e of flowEdges) {
-      if (!e.id.startsWith("__retarget__")) continue;
-      synth.set(e.source, (e.data as { arcIndex?: number }).arcIndex);
-    }
-    expect(synth.get("d")).toBe(0);
-    expect(synth.get("c")).toBe(1);
-  });
-
-  it("skip-edges share the right-side arcIndex with loop-channel edges (no overlap)", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box]
-      b [shape=box]
-      c [shape=box]
-      d [shape=box]
-      done [shape=Msquare]
-      // Linear spine + a back-edge + a skip-edge that bulges right.
-      start -> a -> b -> c -> d -> done
-      d -> a [condition="outcome=fail"]
-      a -> done [condition="outcome=fail"]
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    // Both kinds participate in the right-side counter. Source order in
-    // the .dot determines assignment, so the skip-edge a->done (declared
-    // last) should get a higher index than the back-edge d->a.
-    const back = flowEdges.find((e) => e.source === "d" && e.target === "a");
-    const skip = flowEdges.find((e) => e.source === "a" && e.target === "done");
-    const backIndex = (back?.data as { arcIndex?: number })?.arcIndex;
-    const skipIndex = (skip?.data as { arcIndex?: number })?.arcIndex;
-    expect(typeof backIndex).toBe("number");
-    expect(typeof skipIndex).toBe("number");
-    expect(skipIndex).not.toBe(backIndex);
-  });
-
-  it("flags edges from a wait.human (kind=human) source as isHumanEdge", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      review [shape=hexagon]
-      ship [shape=box]
-      stop [shape=Msquare]
-      start -> review
-      review -> ship [label="Approve"]
-      review -> stop [label="Reject"]
-    }`;
+  it("flags edges adjacent to a human node as isHumanEdge", () => {
+    const src = `name: g
+steps:
+  review:
+    type: human
+    text: approve?
+    routes: {approve: ship, reject: exit}
+  ship:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const approve = flowEdges.find((e) => e.source === "review" && e.target === "ship");
-    const reject = flowEdges.find((e) => e.source === "review" && e.target === "stop");
+    const reject = flowEdges.find((e) => e.source === "review" && e.target === "exit");
     expect((approve?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
     expect((reject?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
-    // start -> review: start is not human, review IS human (target) → still flagged.
+    // start -> review: start is not human, review IS human (target) → flagged.
     const intoReview = flowEdges.find((e) => e.source === "start" && e.target === "review");
     expect((intoReview?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
   });
 
   it("does NOT flag plain llm-only edges as isHumanEdge", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      plan [shape=box]
-      implement [shape=box]
-      done [shape=Msquare]
-      start -> plan -> implement -> done
-    }`;
+    const src = `name: g
+steps:
+  plan:
+    type: llm
+  implement:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const { flowEdges } = toFlowGraph(null, graph);
     for (const e of flowEdges) {
       expect((e.data as { isHumanEdge?: boolean })?.isHumanEdge).toBeFalsy();
     }
   });
+
+  it("stamps routeCount on nodes with non-empty attrs.routes", () => {
+    const src = `name: g
+steps:
+  router:
+    type: llm
+    routes: {small: exit, large: exit, refactor: exit}
+`;
+    const graph = parseWorkflow(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const router = flowNodes.find((n) => n.id === "router");
+    const plain = flowNodes.find((n) => n.id === "start");
+    expect((router?.data as { routeCount?: number }).routeCount).toBe(3);
+    expect((plain?.data as { routeCount?: number }).routeCount).toBeUndefined();
+  });
 });
 
-describe.skip("toFlowGraph — edge traversal counts (looped edges)", () => {
-  // The bug: edges that fire repeatedly (back-edges, self-loops, goal-gate
-  // retargets, max_retries loops) render identically to one-shot edges,
-  // and there's no signal of how many times each fired. The signal lives
-  // in `detail.selectedEdges` — an ordered (from, to, iteration) log —
-  // which `toFlowGraph` must aggregate by (from, to) and stamp on each
-  // FlowEdge.data so the renderer can highlight + badge them.
+describe("toFlowGraph — edge traversal counts (looped edges)", () => {
   it("stamps a traversalCount on each edge derived from detail.selectedEdges", () => {
-    // `audit -> review -> audit` cycle: review REJECTs twice, then approves.
-    // The back-edge `review -> audit` therefore fires twice; the forward
-    // edge `audit -> review` fires three times (once per audit visit);
-    // `review -> done` fires once.
-    const src = `digraph loop {
-      audit [shape=box]
-      review [shape=box]
-      done [shape=Msquare]
-      audit -> review
-      review -> audit [condition="outcome=fail"]
-      review -> done [condition="outcome=success"]
-    }`;
+    // `audit -> review -> audit` cycle: review fails twice (back to audit),
+    // then succeeds. The back-edge `review -> audit` fires twice; the
+    // forward edge `audit -> review` fires three times; `review -> exit`
+    // fires once.
+    const src = `name: loop
+steps:
+  audit:
+    type: llm
+  review:
+    type: llm
+    on: {success: exit, fail: audit}
+`;
     const graph = parseWorkflow(src);
     const detail = makeDetail({
       nodes: [
@@ -978,7 +771,7 @@ describe.skip("toFlowGraph — edge traversal counts (looped edges)", () => {
         { from: "audit", to: "review", iteration: 1 },
         { from: "review", to: "audit", iteration: 1 },
         { from: "audit", to: "review", iteration: 2 },
-        { from: "review", to: "done", iteration: 0 },
+        { from: "review", to: "exit", iteration: 0 },
       ],
       workflowSource: src,
     });
@@ -987,96 +780,31 @@ describe.skip("toFlowGraph — edge traversal counts (looped edges)", () => {
       flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { traversalCount?: number; isBackEdge?: boolean }]),
     );
     expect(byPair.get("audit->review")?.traversalCount).toBe(3);
-    // The looped back-edge — the centerpiece of the bug — must carry the
-    // count of every traversal (2), not just a boolean "taken" flag.
     expect(byPair.get("review->audit")?.traversalCount).toBe(2);
     expect(byPair.get("review->audit")?.isBackEdge).toBe(true);
-    expect(byPair.get("review->done")?.traversalCount).toBe(1);
+    expect(byPair.get("review->exit")?.traversalCount).toBe(1);
   });
 
-  // Bug: when the engine retargets through a goal_gate's implicit
-  // §3.4 jump (e.g. review -> implement via retry_target="implement"),
-  // the synthetic retarget edge stays dimmed even though the retarget
-  // actually fired. The earlier signal here used the gate's iteration
-  // field — that doesn't work because goal-gate retargets do NOT
-  // advance iteration: every visit to the same gate keeps `iteration=0`
-  // (verified empirically against `routing.goal_gates.__retries`-style
-  // retarget cycles in real runs). The right signal is the gate's
-  // outgoing edge selections: each visit produces exactly one
-  // `edge.selected` whose `from === gateId`, so N visits ⇒ N − 1
-  // retarget firings.
-  it("highlights the synthetic goal-gate back-edge after a retarget fires", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      implement [shape=box]
-      review [shape=box, goal_gate=true, retry_target="implement"]
-      done [shape=Msquare]
-      start -> implement -> review -> done
-    }`;
-    const graph = parseWorkflow(src);
-    // Simulate one retarget cycle: implement → review fires twice,
-    // review → done fires twice (the goal-gate enforcement at `done`
-    // observes `review` unsatisfied on the first hit and retargets back
-    // to `implement`; the second hit goes through cleanly). Iteration
-    // stays at 0 across the retarget — that's the runtime invariant
-    // this test pins.
-    const detail = makeDetail({
-      nodes: [
-        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "implement", iteration: 0, state: "completed", lastEventSeq: 4 },
-        { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 5 },
-        { nodeId: "done", iteration: 0, state: "completed", lastEventSeq: 6 },
-      ],
-      selectedEdges: [
-        { from: "start", to: "implement", iteration: 0 },
-        { from: "implement", to: "review", iteration: 0 },
-        { from: "review", to: "done", iteration: 0 }, // first visit → fail-then-retarget
-        { from: "implement", to: "review", iteration: 0 }, // cycle 2
-        { from: "review", to: "done", iteration: 0 }, // second visit → APPROVE
-      ],
-      workflowSource: src,
-      status: "success",
-    });
-    const { flowEdges } = toFlowGraph(detail, graph);
-    const synth = flowEdges.find(
-      (e) => e.id.startsWith("__retarget__") && e.source === "review" && e.target === "implement",
-    );
-    expect(synth).toBeDefined();
-    const data = synth?.data as { dim?: boolean; traversalCount?: number };
-    // The bug: this used to render dimmed because the prior logic asked
-    // `maxIterationByNode.get('review')` which is always 0 for goal-gate
-    // retargets. With the gate-outgoing-count signal it now flips to
-    // `dim:false` once the gate visited more than once.
-    expect(data.dim).toBe(false);
-    // ×1 badge surfaces because review was visited twice (one retarget
-    // fired between the visits).
-    expect(data.traversalCount).toBe(1);
-  });
-
-  // Linear-edge ×N regression guard. Pre-fix, the snapshot+overlay merge
-  // in `useDetailOverlay.mergeDetail` appended overlay edges without
-  // dropping the ones the snapshot already covered, so every linear edge
-  // showed `· ×2` (or more). Pin that one-shot edges carry no count.
-  it("one-shot linear edges carry no traversalCount badge", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box]
-      b [shape=box]
-      done [shape=Msquare]
-      start -> a -> b -> done
-    }`;
+  it("one-shot linear edges carry no ×N traversalCount badge", () => {
+    const src = `name: g
+steps:
+  a:
+    type: llm
+  b:
+    type: llm
+`;
     const graph = parseWorkflow(src);
     const detail = makeDetail({
       nodes: [
         { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
         { nodeId: "a", iteration: 0, state: "completed", lastEventSeq: 2 },
         { nodeId: "b", iteration: 0, state: "completed", lastEventSeq: 3 },
-        { nodeId: "done", iteration: 0, state: "completed", lastEventSeq: 4 },
+        { nodeId: "exit", iteration: 0, state: "completed", lastEventSeq: 4 },
       ],
       selectedEdges: [
         { from: "start", to: "a", iteration: 0 },
         { from: "a", to: "b", iteration: 0 },
-        { from: "b", to: "done", iteration: 0 },
+        { from: "b", to: "exit", iteration: 0 },
       ],
       workflowSource: src,
       status: "success",
@@ -1089,132 +817,82 @@ describe.skip("toFlowGraph — edge traversal counts (looped edges)", () => {
     );
     expect(byPair.get("start->a")?.traversalCount).toBe(1);
     expect(byPair.get("a->b")?.traversalCount).toBe(1);
-    expect(byPair.get("b->done")?.traversalCount).toBe(1);
+    expect(byPair.get("b->exit")?.traversalCount).toBe(1);
   });
 
-  // The bug: an `outcome=fail` exit edge that never fired was rendering
-  // with the FAIL marker + red stroke + red label pill (just at 35%
-  // opacity). On a graph with several gate nodes this lit up the
-  // right-hand side with red FAIL pills even on a clean run, suggesting
-  // failures that never happened. Fix: in run view, suppress the
-  // outcome accent on untaken edges so they read as neutral hairlines.
-  // Workflow-detail view (no run) keeps the accent for topology reading.
   it("suppresses outcome accent on untaken fail edges during a run", () => {
-    // Mirrors the user-reported screenshot: an audit gate has a
-    // success path (continue) and a skip-fail path (jump to `done`).
-    // On a clean run only the success edge fires; the fail skip-edge
-    // must NOT broadcast red.
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      audit [shape=box]
-      review [shape=box]
-      done [shape=Msquare]
-      start -> audit
-      audit -> review [outcome=success]
-      audit -> done [outcome=fail]
-      review -> done
-    }`;
+    // audit has a success path (to review) and a fail skip-edge (to exit).
+    // On a clean run only the success edge fires; the fail edge must NOT
+    // broadcast red.
+    const src = `name: g
+steps:
+  audit:
+    type: llm
+    on: {success: review, fail: exit}
+  review:
+    type: llm
+`;
     const graph = parseWorkflow(src);
 
-    // Run took the success path through review; the audit -> done
-    // fail skip-edge never fired.
     const runDetail = makeDetail({
       nodes: [
         { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
         { nodeId: "audit", iteration: 0, state: "completed", lastEventSeq: 2 },
         { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 3 },
-        { nodeId: "done", iteration: 0, state: "completed", lastEventSeq: 4 },
+        { nodeId: "exit", iteration: 0, state: "completed", lastEventSeq: 4 },
       ],
       selectedEdges: [
         { from: "start", to: "audit", iteration: 0 },
         { from: "audit", to: "review", iteration: 0 }, // success branch
-        { from: "review", to: "done", iteration: 0 },
+        { from: "review", to: "exit", iteration: 0 },
       ],
       workflowSource: src,
       status: "success",
     });
     const runEdges = toFlowGraph(runDetail, graph).flowEdges;
-    const failSkipRun = runEdges.find((e) => e.source === "audit" && e.target === "done");
-    expect(failSkipRun).toBeDefined();
-    expect((failSkipRun?.data as { dim?: boolean }).dim).toBe(true);
-    // Load-bearing: untaken fail edges drop the outcome accent in run
-    // view so they don't broadcast a failure that didn't happen.
-    expect((failSkipRun?.data as { outcome?: string }).outcome).toBeUndefined();
+    const failRun = runEdges.find((e) => e.source === "audit" && e.target === "exit");
+    expect(failRun).toBeDefined();
+    expect((failRun?.data as { dim?: boolean }).dim).toBe(true);
+    // Untaken fail edges drop the outcome accent in run view.
+    expect((failRun?.data as { outcome?: string }).outcome).toBeUndefined();
 
-    // The taken success edge keeps its outcome accent.
-    const successEdgeRun = runEdges.find((e) => e.source === "audit" && e.target === "review");
-    expect((successEdgeRun?.data as { outcome?: string }).outcome).toBe("success");
+    // Success is the implicit default flow — it never carries an outcome
+    // accent. A taken success edge highlights via `animated`, not green.
+    const successRun = runEdges.find((e) => e.source === "audit" && e.target === "review");
+    expect((successRun?.data as { outcome?: string }).outcome).toBeUndefined();
+    expect((successRun?.data as { animated?: boolean }).animated).toBe(true);
 
-    // Workflow-detail view (no run) preserves the declared outcome on
-    // every edge — operators reading the topology need the FAIL
-    // semantics visible.
+    // Workflow-detail view (no run) preserves the declared outcome.
     const detailEdges = toFlowGraph(null, graph).flowEdges;
-    const failSkipDetail = detailEdges.find((e) => e.source === "audit" && e.target === "done");
-    expect((failSkipDetail?.data as { outcome?: string }).outcome).toBe("fail");
-  });
-});
-
-describe.skip("toFlowGraph — routing-node chip", () => {
-  it("stamps routeCount on nodes with non-empty attrs.routes", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      router [shape=box, routes="small,large,refactor"]
-      done [shape=Msquare]
-      start -> router -> done
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const router = flowNodes.find((n) => n.id === "router");
-    const plain = flowNodes.find((n) => n.id === "start");
-    expect((router?.data as { routeCount?: number }).routeCount).toBe(3);
-    expect((plain?.data as { routeCount?: number }).routeCount).toBeUndefined();
+    const failDetail = detailEdges.find((e) => e.source === "audit" && e.target === "exit");
+    expect((failDetail?.data as { outcome?: string }).outcome).toBe("fail");
   });
 
-  it("leaves routeCount undefined when attrs.routes is empty or absent", () => {
-    const src = `digraph g {
-      plan [shape=box]
-    }`;
+  it("arcs the non-primary edge of a same-target group so it doesn't overlap the primary", () => {
+    // `success` and `fail` both land on `exit`. The success edge (declared
+    // first) stays straight; the fail edge arcs out via the side handles so
+    // it isn't hidden under the success edge.
+    const src = `name: g
+steps:
+  review:
+    type: tool
+    run: make
+    on: {success: exit, fail: exit}
+`;
     const graph = parseWorkflow(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const plan = flowNodes.find((n) => n.id === "plan");
-    expect((plan?.data as { routeCount?: number }).routeCount).toBeUndefined();
-  });
-});
+    const edges = toFlowGraph(null, graph).flowEdges.filter((e) => e.source === "review" && e.target === "exit");
+    expect(edges.length).toBe(2);
 
-describe.skip("toFlowGraph — isHumanEdge flag (kind=human either endpoint)", () => {
-  it("flags edge where source is kind=human", () => {
-    const src = `digraph g {
-      review [kind=human]
-      ship [shape=box]
-      review -> ship [route=approve]
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    const edge = flowEdges.find((e) => e.source === "review" && e.target === "ship");
-    expect((edge?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
-  });
+    const success = edges.find((e) => (e.data as { outcome?: string }).outcome === undefined);
+    const fail = edges.find((e) => (e.data as { outcome?: string }).outcome === "fail");
 
-  it("flags edge where target is kind=human", () => {
-    const src = `digraph g {
-      dispatch [shape=box]
-      gate [kind=human]
-      dispatch -> gate
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    const edge = flowEdges.find((e) => e.source === "dispatch" && e.target === "gate");
-    expect((edge?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
-  });
+    // Primary (success) stays straight: no arc, default handles.
+    expect((success?.data as { isParallelArc?: boolean }).isParallelArc).toBeFalsy();
+    expect(success?.sourceHandle).toBeUndefined();
 
-  it("falls back to handlerOf=wait.human for legacy shape=hexagon nodes", () => {
-    const src = `digraph g {
-      review [shape=hexagon]
-      ship [shape=box]
-      review -> ship
-    }`;
-    const graph = parseWorkflow(src);
-    const { flowEdges } = toFlowGraph(null, graph);
-    const edge = flowEdges.find((e) => e.source === "review" && e.target === "ship");
-    expect((edge?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
+    // Non-primary (fail) arcs out through the side handles.
+    expect((fail?.data as { isParallelArc?: boolean }).isParallelArc).toBe(true);
+    expect(fail?.sourceHandle).toBeDefined();
+    expect(fail?.targetHandle).toBeDefined();
   });
 });

@@ -22,8 +22,8 @@ describe("Workflows route", () => {
 
   it("renders one row per workflow with name / path / short sha", async () => {
     const rows: WorkflowSummary[] = [
-      { name: "alpha", path: "workflows/alpha.dot", sha: "abcdef1234567890", label: "Alpha" },
-      { name: "beta", path: "workflows/beta.dot", sha: "fedcba0987654321" },
+      { name: "alpha", path: "workflows/alpha.yaml", sha: "abcdef1234567890", label: "Alpha" },
+      { name: "beta", path: "workflows/beta.yaml", sha: "fedcba0987654321" },
     ];
     const client = createTestQueryClient();
     client.setQueryData(queries.workflows.list().queryKey, rows);
@@ -72,7 +72,7 @@ describe("Workflows route", () => {
   });
   it("links each row's name to /workflows/:name", async () => {
     const rows: WorkflowSummary[] = [
-      { name: "alpha", path: "workflows/alpha.dot", sha: "abcdef1234567890", label: "Alpha" },
+      { name: "alpha", path: "workflows/alpha.yaml", sha: "abcdef1234567890", label: "Alpha" },
     ];
     const client = createTestQueryClient();
     client.setQueryData(queries.workflows.list().queryKey, rows);

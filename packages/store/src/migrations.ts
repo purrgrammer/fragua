@@ -449,7 +449,7 @@ function MIGRATION_004_LOCAL_WORKFLOW_SCOPE(): string {
  * - `run_state` gains a `kind` discriminator
  *   ('workflow' | 'conversation'); existing rows default to 'workflow'.
  * - `workflow_sha` becomes nullable so conversation runs can carry
- *   `NULL` (they have no DOT document). Workflow runs continue to
+ *   `NULL` (they have no workflow document). Workflow runs continue to
  *   require a non-NULL workflow_sha; the invariant is enforced at the
  *   writer (enqueueRun), not by CHECK — SQLite can't express
  *   conditional NOT NULL.

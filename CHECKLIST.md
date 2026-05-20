@@ -2,16 +2,9 @@
 
 Pre-publish punch list. Drop or update items as you decide.
 
-- [ ] YAML authoring format + cleanup
-  - llm_model ~> model
-  - llm_provider ~> provider
-  - remove model_stylesheet
-  - remove transforms
-  - per-run defaults + overrides
-  - max_ms ~> max_seconds (0 unbounded)
-  - YAML for config (symetry)
+- [ ] YAML authoring format 
+- [ ] YAML cleanup
 - [ ] JSON IR, versioned workflows by sha
-- [ ] Summarization (checkpoint, cache, cost attribution, facts)
 - [ ] Sample workflows
 - [ ] Worktrees
 - [ ] Collapse migrations

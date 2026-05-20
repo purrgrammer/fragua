@@ -1,4 +1,4 @@
-// swarm run: full round-trip — CLI uploads DOT, enqueues a run, streams
+// swarm run: full round-trip — CLI uploads the workflow, enqueues a run, streams
 // events until terminal. Spins up a real server + a foreground daemon
 // fiber so the SSE stream actually progresses.
 
@@ -98,7 +98,7 @@ describe("swarm run", () => {
 
   test("cannot read workflow file → exit 1", async () => {
     const code = await runCommand({
-      workflow: "/nonexistent/workflow.dot",
+      workflow: "/nonexistent/workflow.yaml",
       url: "http://127.0.0.1:1",
     });
     expect(code).toBe(1);
@@ -110,10 +110,7 @@ describe("swarm run", () => {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
       const yamlPath = join(workflowDir, "echo.yaml");
-      writeFileSync(
-        yamlPath,
-        `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`,
-      );
+      writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
 
       const code = await runCommand({
         workflow: yamlPath,
@@ -132,10 +129,7 @@ describe("swarm run", () => {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
       const yamlPath = join(workflowDir, "echo.yaml");
-      writeFileSync(
-        yamlPath,
-        `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`,
-      );
+      writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
 
       const code = await runCommand({
         workflow: yamlPath,
