@@ -80,7 +80,45 @@ export function createRunSnapshotReader(): RunSnapshotReader {
         return "";
       }
     },
+
+    async mergeability(cwd: string, intoRef: string, headsRef: string) {
+      const into = await revParse(cwd, intoRef);
+      const heads = await revParse(cwd, headsRef);
+      if (into == null || heads == null) return { resolved: false };
+      // ff ⟺ the target tip is an ancestor of the run's heads commit
+      // (mirrors the daemon's `applyMerge` predicate exactly so server
+      // validation and the sweep never disagree).
+      const ff = (await gitExit(cwd, ["merge-base", "--is-ancestor", into, heads])) === 0;
+      // A non-zero `merge-tree --write-tree` exit signals a conflict.
+      const conflict = ff ? false : (await gitExit(cwd, ["merge-tree", "--write-tree", into, heads])) !== 0;
+      return { resolved: true, ff, conflict };
+    },
   };
+}
+
+/** Resolve a ref to its sha via `rev-parse --verify --quiet`, or null. */
+async function revParse(cwd: string, ref: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--verify", "--quiet", ref], {
+      cwd,
+      timeout: GIT_TIMEOUT_MS,
+    });
+    const sha = stdout.trim();
+    return sha === "" ? null : sha;
+  } catch {
+    return null;
+  }
+}
+
+/** Run a git command, returning its exit code (0 on success). */
+async function gitExit(cwd: string, args: string[]): Promise<number> {
+  try {
+    await execFileAsync("git", args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: MAX_RESPONSE_BYTES });
+    return 0;
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    return typeof code === "number" ? code : 1;
+  }
 }
 
 /** Parse `git ls-tree -l -z --full-tree <sha>` output.

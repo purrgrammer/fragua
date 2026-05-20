@@ -169,6 +169,19 @@ All endpoints return `{ seq }` — quote it in any follow-up so the user can fin
 | `/runs/:id/priority` | `{newPriority, note?}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. |
 | `/runs/:id/budget` | `{scope, metric, newLimit, note?}` | `intent.budget_adjusted` | Override stored at `routing.budget_override.<scope>.<metric>`; next turn-boundary check uses the new ceiling. Doesn't wake on its own — pair with `/resume`. |
 
+### Post-run primitives (worktree inbox)
+
+A terminal run that left recoverable agent work sits in the inbox (`run_state.inbox_status='pending'`). Promote or drop it with one of four **post-terminal** actions; the daemon sweep folds each into worktree-free git plumbing on the run's `refs/swarm/{snapshots,heads}/<id>` and the matching `fact.run_*`. The endpoint validates synchronously and returns a 4xx on refusal.
+
+| POST | Body | Written intent | Post-condition |
+|---|---|---|---|
+| `/runs/:id/branch` | `{branch, force?}` | `intent.branch_run` | `update-ref refs/heads/<branch>` at the run's heads sha (committed history). 409 `nothing_to_branch` when the run made no commits. Inbox `pending → acted`. |
+| `/runs/:id/commit` | `{message, onto?}` | `intent.commit_run` | `commit-tree` the full snapshot tree (incl. uncommitted dirt) onto `onto` (default `base_git_ref`) and advance it. 400 `onto_required` when detached/relocated and no `onto`. `pending → acted`. |
+| `/runs/:id/merge` | `{mode?, into?}` | `intent.merge_run` | Merge heads into `into` (default `base_git_ref`); `mode` ∈ `ff`(default)`\|no-ff\|squash`. 409 `not_fast_forward` (ff impossible) / `merge_conflict` (non-ff conflicts). `pending → acted`. |
+| `/runs/:id/discard` | `{}` | `intent.discard_run` | Delete the run's `refs/swarm/{snapshots,heads}/<id>`. `pending → discarded` (terminal-terminal — later actions 409 `discarded`). |
+
+Shared gate for all four: 404 unknown run · 409 `not_terminal` / `not_in_inbox` (clean run) / `discarded` / `no_worktree` (bare-cwd). `branch`/`commit`/`merge` compose freely (branch then later merge); `discard` is final.
+
 ### Steering
 
 Steering injects text into the next LLM call's prior-messages thread. The current handler aborts (lossless — pi-agent-core keeps what it had) and re-dispatches. Use small, specific nudges. Long essays are usually the wrong tool; prefer `cancel` + a fresh run with better `$ARGUMENTS`.
@@ -311,6 +324,12 @@ curl -fsS -X POST "$URL/runs/$RUN/human"        -d '{"route":"A"}'              
 curl -fsS -X POST "$URL/runs/$RUN/resume"       -d '{}'                                            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/unquarantine" -d '{"resolution":"cancel","note":"…"}'            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/priority"     -d '{"newPriority":10}'                            -H 'content-type: application/json'
+
+# Post-run primitives (worktree inbox; terminal runs only)
+curl -fsS -X POST "$URL/runs/$RUN/branch"       -d '{"branch":"feat/x"}'                           -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/commit"       -d '{"message":"…","onto":"main"}'                 -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/merge"        -d '{"mode":"no-ff","into":"main"}'                -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/discard"      -d '{}'                                            -H 'content-type: application/json'
 
 # Schedules (proposal: docs/proposals/scheduled-runs.md)
 bun run swarm schedule add <workflow> --every 1h          # create + fire immediately

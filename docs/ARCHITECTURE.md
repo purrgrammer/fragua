@@ -1018,6 +1018,18 @@ app.post("/runs/:id/max_retries",  async (c) => writeIntent(c, "intent.max_retri
 app.post("/runs/:id/goal_gate",    async (c) => writeIntent(c, "intent.goal_gate_adjusted"));    // {newLimit>0, note?}
 app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops_adjusted"));    // {newLimit>0, note?}
 
+// Post-run operator primitives (docs/proposals/worktrees.md §7). Each
+// appends a post-terminal operator-action intent the daemon sweep folds
+// into a git mutation + fact. User-facing refusals are returned 4xx here
+// (404 not_found · 409 not_terminal/not_in_inbox/discarded/no_worktree ·
+// branch 409 nothing_to_branch · commit/merge 400 onto_required/into_required
+// for detached/relocated · merge 409 not_fast_forward/merge_conflict via the
+// snapshot reader's mergeability check). All return {seq} on success.
+app.post("/runs/:id/branch",       async (c) => writeIntent(c, "intent.branch_run"));   // {branch, force?}
+app.post("/runs/:id/commit",       async (c) => writeIntent(c, "intent.commit_run"));   // {message, onto?}
+app.post("/runs/:id/merge",        async (c) => writeIntent(c, "intent.merge_run"));     // {mode?: ff|no-ff|squash, into?}
+app.post("/runs/:id/discard",      async (c) => writeIntent(c, "intent.discard_run"));
+
 // Schedules surface (proposal: docs/proposals/scheduled-runs.md).
 // CRUD over the `schedules` table plus pause/resume verbs. Each
 // mutation lands a matching `intent.schedule_*` audit row on

@@ -92,6 +92,16 @@ export interface RunSnapshotReader {
   /** `git diff <fromSha> <toSha> [-- <path>]` from `cwd`. Returns empty
    *  string when there are no changes or git fails. */
   diff(cwd: string, fromSha: string, toSha: string, path?: string): Promise<string>;
+  /** Whether merging `headsRef` into `intoRef` is a fast-forward and/or
+   *  conflicts — used by `POST /runs/:id/merge` to refuse a non-ff or
+   *  conflicting merge synchronously. `resolved: false` when either ref is
+   *  missing (no committed work / target branch gone). Pure object-DB reads
+   *  (`merge-base --is-ancestor`, `merge-tree --write-tree`). */
+  mergeability(
+    cwd: string,
+    intoRef: string,
+    headsRef: string,
+  ): Promise<{ resolved: false } | { resolved: true; ff: boolean; conflict: boolean }>;
 }
 
 export interface ServerPorts {

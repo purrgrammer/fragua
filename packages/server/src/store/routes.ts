@@ -11,12 +11,13 @@ import {
   type IntentEvent,
   isTerminal as isTerminalStatus,
   PayloadTooLargeError,
+  type RunState,
   sha256Hex,
 } from "@swarm/store";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { WorkflowReader } from "../ports.ts";
+import type { RunSnapshotReader, WorkflowReader } from "../ports.ts";
 import { newRunId } from "./run-id.ts";
 import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
 
@@ -31,6 +32,10 @@ export type WorkflowModelValidator = (
 
 export interface ServerDeps {
   store: IEventStore;
+  /** Snapshot/ref git reader — used by `POST /runs/:id/merge` to refuse a
+   *  non-ff or conflicting merge synchronously. Omit to skip git-level
+   *  merge validation (the daemon sweep is the defense-in-depth backstop). */
+  runSnapshotReader?: RunSnapshotReader;
   /** Poll interval for SSE streams in ms. */
   ssePollMs?: number;
   /** Per-iteration batch size for SSE replay. Defaults to 500. */
@@ -606,6 +611,126 @@ export function createRoutes(deps: ServerDeps): Hono {
       type: "intent.max_loops_adjusted",
       payload,
     });
+  });
+
+  // ─── Operator post-run primitives (docs/proposals/worktrees.md §7) ───
+  //
+  // Each appends a post-terminal operator-action intent; the daemon's
+  // `processOperatorActions` sweep folds it into the git mutation + fact.
+  // User-facing refusals are validated here so the operator gets a 4xx
+  // synchronously rather than a silent daemon no-op. branch/commit gate on
+  // run_state columns; merge additionally consults the snapshot reader for
+  // ff-ability / conflict. A branch-name collision without `--force` and a
+  // rare target-moved race fall through to the sweep's defense-in-depth.
+
+  type ActionGate = { ok: true; state: RunState } | { ok: false; res: Response };
+
+  function operatorActionGate(c: Context, runId: string): ActionGate {
+    const state = deps.store.getState(runId);
+    if (state == null) return { ok: false, res: c.json({ error: "run not found", code: "not_found" }, 404) };
+    if (!isTerminalStatus(state.status)) {
+      return {
+        ok: false,
+        res: c.json({ error: `run not terminal (status=${state.status})`, code: "not_terminal" }, 409),
+      };
+    }
+    if (state.inboxStatus == null) {
+      return { ok: false, res: c.json({ error: "run has no recoverable work", code: "not_in_inbox" }, 409) };
+    }
+    if (state.inboxStatus === "discarded") {
+      return { ok: false, res: c.json({ error: "run discarded", code: "discarded" }, 409) };
+    }
+    if (state.cwd == null) {
+      return { ok: false, res: c.json({ error: "run has no worktree (bare-cwd)", code: "no_worktree" }, 409) };
+    }
+    return { ok: true, state };
+  }
+
+  /** Resolve a commit/merge target: explicit arg wins; else `base_git_ref`
+   *  unless the run was provisioned detached or relocated HEAD. */
+  function resolveTarget(state: RunState, explicit: string | undefined): { target: string } | { error: string } {
+    if (explicit != null && explicit.length > 0) return { target: explicit };
+    if (state.baseGitRef == null || state.baseGitRef === "") {
+      return { error: "run was provisioned from a detached HEAD" };
+    }
+    if (state.diffBaseSha != null && state.baseGitSha != null && state.diffBaseSha !== state.baseGitSha) {
+      return { error: "run relocated HEAD (ended on a different branch)" };
+    }
+    return { target: state.baseGitRef };
+  }
+
+  /** True when the run committed history (its `refs/swarm/heads` ref exists). */
+  function hasCommittedHistory(state: RunState): boolean {
+    return state.finalGitSha != null && state.finalGitSha !== "" && state.finalGitSha !== state.baseGitSha;
+  }
+
+  app.post("/runs/:id/branch", async (c) => {
+    const runId = c.req.param("id");
+    const gate = operatorActionGate(c, runId);
+    if (!gate.ok) return gate.res;
+    const body = await readJson<{ branch?: string; force?: boolean }>(c);
+    if (!body || typeof body.branch !== "string" || body.branch.length === 0) {
+      return c.json({ error: "branch required" }, 400);
+    }
+    if (!hasCommittedHistory(gate.state)) {
+      return c.json({ error: "nothing to branch: run made no commits; use commit", code: "nothing_to_branch" }, 409);
+    }
+    const payload: { branch: string; force?: boolean } = { branch: body.branch };
+    if (body.force === true) payload.force = true;
+    return appendIntentOr413(c, runId, { type: "intent.branch_run", payload });
+  });
+
+  app.post("/runs/:id/commit", async (c) => {
+    const runId = c.req.param("id");
+    const gate = operatorActionGate(c, runId);
+    if (!gate.ok) return gate.res;
+    const body = await readJson<{ message?: string; onto?: string }>(c);
+    if (!body || typeof body.message !== "string" || body.message.length === 0) {
+      return c.json({ error: "message required" }, 400);
+    }
+    const tgt = resolveTarget(gate.state, body.onto);
+    if ("error" in tgt) return c.json({ error: `onto required: ${tgt.error}`, code: "onto_required" }, 400);
+    const payload: { message: string; onto?: string } = { message: body.message };
+    if (typeof body.onto === "string" && body.onto.length > 0) payload.onto = body.onto;
+    return appendIntentOr413(c, runId, { type: "intent.commit_run", payload });
+  });
+
+  app.post("/runs/:id/merge", async (c) => {
+    const runId = c.req.param("id");
+    const gate = operatorActionGate(c, runId);
+    if (!gate.ok) return gate.res;
+    const body = (await readJson<{ mode?: "ff" | "no-ff" | "squash"; into?: string }>(c)) ?? {};
+    const mode = body.mode ?? "ff";
+    if (mode !== "ff" && mode !== "no-ff" && mode !== "squash") {
+      return c.json({ error: "mode must be ff | no-ff | squash" }, 400);
+    }
+    if (!hasCommittedHistory(gate.state)) {
+      return c.json({ error: "nothing to merge: run made no commits; use commit", code: "nothing_to_merge" }, 409);
+    }
+    const tgt = resolveTarget(gate.state, body.into);
+    if ("error" in tgt) return c.json({ error: `into required: ${tgt.error}`, code: "into_required" }, 400);
+    if (deps.runSnapshotReader != null && gate.state.cwd != null) {
+      const m = await deps.runSnapshotReader.mergeability(gate.state.cwd, tgt.target, `refs/swarm/heads/${runId}`);
+      if (m.resolved) {
+        if (mode === "ff" && !m.ff) {
+          return c.json({ error: "not fast-forwardable; use --no-ff or --squash", code: "not_fast_forward" }, 409);
+        }
+        if (mode !== "ff" && m.conflict) {
+          return c.json({ error: "merge conflict; revive the run to resolve", code: "merge_conflict" }, 409);
+        }
+      }
+    }
+    const payload: { mode?: "ff" | "no-ff" | "squash"; into?: string } = {};
+    if (body.mode != null) payload.mode = body.mode;
+    if (typeof body.into === "string" && body.into.length > 0) payload.into = body.into;
+    return appendIntentOr413(c, runId, { type: "intent.merge_run", payload });
+  });
+
+  app.post("/runs/:id/discard", (c) => {
+    const runId = c.req.param("id");
+    const gate = operatorActionGate(c, runId);
+    if (!gate.ok) return gate.res;
+    return appendIntentOr413(c, runId, { type: "intent.discard_run", payload: {} });
   });
 
   // ─── Reads ──────────────────────────────────────────────────

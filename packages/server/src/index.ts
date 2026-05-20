@@ -102,6 +102,7 @@ function buildApiApp(opts: ServerOptions): Hono {
     createStoreRoutes({
       store: opts.store,
       workflowReader,
+      runSnapshotReader: snapshotReader,
       ...(opts.preflightProviders !== undefined ? { preflightProviders: opts.preflightProviders } : {}),
       ...(opts.validateWorkflowModels !== undefined ? { validateWorkflowModels: opts.validateWorkflowModels } : {}),
       ...(opts.maxQueuedRuns !== undefined ? { maxQueuedRuns: opts.maxQueuedRuns } : {}),
