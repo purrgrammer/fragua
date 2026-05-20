@@ -808,7 +808,7 @@ export function toFlowGraph(
     const sd = depthOf.get(e.from);
     const td = depthOf.get(e.to);
     const isSkip = !isBack && !isSelfLoop && sd !== undefined && td !== undefined && td - sd > 1;
-    const loopRestart = e.attrs["loop_restart"] === true;
+    const loopRestart = (e.attrs as Record<string, unknown>)["loop_restart"] === true;
     if (isBack || isSelfLoop || loopRestart || isSkip) {
       rightArcEdgeIdxs.push({ idx, depth: sd ?? 0 });
     }
@@ -855,7 +855,7 @@ export function toFlowGraph(
     // with a fresh log directory. Routed via the loop handles + loop
     // marker so direction reads as "cycle" not "data flow"; the label
     // surfaces the attribute name plainly.
-    const loopRestart = e.attrs["loop_restart"] === true;
+    const loopRestart = (e.attrs as Record<string, unknown>)["loop_restart"] === true;
     // Non-primary member of a same-target group: arc it out to the side
     // so it doesn't overlap the straight primary edge (e.g. `fail` and
     // `success` both landing on `exit`, or a route fan into one node).

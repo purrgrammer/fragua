@@ -392,8 +392,7 @@ export class PiLlmBackend implements LlmBackend {
     if (input.emit) {
       for (const msg of warnings) await input.emit("agent.warning", { message: msg });
     }
-    const perNodeSystemPrompt =
-      typeof input.node.attrs["system_prompt"] === "string" ? (input.node.attrs["system_prompt"] as string) : undefined;
+    const perNodeSystemPrompt = input.node.attrs.system_prompt;
     // Derive the per-call RunEnvironment from the resolved env.
     // `deriveRunEnv` always returns a value (every env has `cwd()`),
     // so every llm call sees an `<environment>` block in its
@@ -620,7 +619,7 @@ export class PiLlmBackend implements LlmBackend {
       if (input.iteration) llmStart["iteration"] = input.iteration;
       const priorMessageCount = agent.state.messages.length;
       if (priorMessageCount > 0) llmStart["prior_message_count"] = priorMessageCount;
-      const settings = captureSettings(input.node.attrs);
+      const settings = captureSettings(input.node.attrs as Record<string, unknown>);
       if (settings) llmStart["settings"] = settings;
       if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
       if (effectiveSkills.length > 0) llmStart["skills"] = effectiveSkills.map(toCatalogRecord);
@@ -629,7 +628,7 @@ export class PiLlmBackend implements LlmBackend {
       // node attrs alone for callers that haven't been threaded yet (legacy
       // tests). Zero-snapshot is harmless — the UI just renders 0/N until
       // the first node_completed lands.
-      const budget = input.budgetSnapshot ?? captureBudget(input.node.attrs);
+      const budget = input.budgetSnapshot ?? captureBudget(input.node.attrs as Record<string, unknown>);
       if (budget) llmStart["budget"] = budget;
       await input.emit("llm.start", llmStart);
     }

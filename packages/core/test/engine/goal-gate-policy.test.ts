@@ -164,7 +164,7 @@ describe("resolveFailRetarget — §3.7", () => {
   test("graph-level retarget NOT consulted (§3.7 is node-only)", () => {
     const g = graph({
       nodes: [node("a"), node("z")],
-      attrs: { retry_target: "z" },
+      attrs: { retry_target: "z" } as Graph["attrs"],
     });
     expect(resolveFailRetarget(g, "a")).toBeNull();
   });

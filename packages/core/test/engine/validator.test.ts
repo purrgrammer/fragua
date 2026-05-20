@@ -3,6 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { ValidationError, validate, validateOrThrow } from "../../src/engine/validator.ts";
+import type { NodeAttrs } from "../../src/types/graph.ts";
 import { mkGraph } from "../helpers/build-graph.ts";
 
 function codesOf(g: Parameters<typeof validate>[0], opts?: Parameters<typeof validate>[1]): string[] {
@@ -308,7 +309,7 @@ describe("validate — E032 step without a success successor", () => {
 describe("validate — handler lints", () => {
   test("E008 tool node missing tool_command", () => {
     const g = mkGraph({
-      nodes: { s: "start", run: { type: "tool", attrs: { kind: "tool" } }, done: "exit" },
+      nodes: { s: "start", run: { type: "tool", attrs: { kind: "tool" } as NodeAttrs }, done: "exit" },
       edges: [
         ["s", "run"],
         ["run", "done"],
@@ -319,7 +320,7 @@ describe("validate — handler lints", () => {
 
   test("E009 human node with no outgoing edges", () => {
     const g = mkGraph({
-      nodes: { s: "start", gate: { type: "human", attrs: { kind: "human" } }, done: "exit" },
+      nodes: { s: "start", gate: { type: "human", attrs: { kind: "human" } as NodeAttrs }, done: "exit" },
       edges: [["s", "gate"]],
     });
     const e009 = validate(g).find((d) => d.code === "E009");
@@ -498,7 +499,7 @@ describe("validate — routing lints (E017–E024)", () => {
     const g = mkGraph({
       nodes: {
         s: "start",
-        gate: { type: "human", attrs: { kind: "human" } },
+        gate: { type: "human", attrs: { kind: "human" } as NodeAttrs },
         a: "llm",
         done: "exit",
       },

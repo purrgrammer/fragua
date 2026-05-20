@@ -254,7 +254,7 @@ describe("makeLlmHandler", () => {
       },
     };
     const spec = makeLlmHandler({
-      node: node({ attrs: { type: "llm", prompt: "Fix ${{ inputs.ticket }} on ${{ inputs.env }}" } }),
+      node: node({ attrs: { prompt: "Fix ${{ inputs.ticket }} on ${{ inputs.env }}" } }),
       nextNode: "__end__",
       backend: capture,
     });
@@ -274,7 +274,7 @@ describe("makeLlmHandler", () => {
       },
     };
     const spec = makeLlmHandler({
-      node: node({ attrs: { type: "llm", prompt: "[${{ inputs.missing }}]" } }),
+      node: node({ attrs: { prompt: "[${{ inputs.missing }}]" } }),
       nextNode: "__end__",
       backend: capture,
     });
@@ -614,7 +614,7 @@ describe("makeLlmHandler — priorMessages thread loading", () => {
     });
 
     const spec = makeLlmHandler({
-      node: node({ id: "dispatch", attrs: { type: "llm", prompt: "…", thread_id: "review" } }),
+      node: node({ id: "dispatch", attrs: { prompt: "…", thread_id: "review" } }),
       backend,
     });
 
@@ -653,7 +653,7 @@ describe("makeLlmHandler — priorMessages thread loading", () => {
     });
 
     const spec = makeLlmHandler({
-      node: node({ id: "implement", attrs: { type: "llm", prompt: "…", thread_id: "implement" } }),
+      node: node({ id: "implement", attrs: { prompt: "…", thread_id: "implement" } }),
       backend,
     });
 

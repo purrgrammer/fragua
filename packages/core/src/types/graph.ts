@@ -13,7 +13,7 @@ export type NodeType = "start" | "exit" | "llm" | "human" | "tool";
 export type HandlerType = NodeType;
 
 /** Attribute values that survive YAML parsing + coercion. */
-type AttrScalar = string | number | boolean | string[];
+export type AttrScalar = string | number | boolean | string[];
 
 export interface NodeAttrs {
   label?: string;
@@ -72,7 +72,6 @@ export interface NodeAttrs {
   routes?: string[];
   /** Free-form text shown to the operator for type:human steps. */
   text?: string;
-  [extra: string]: AttrScalar | undefined;
 }
 
 export interface EdgeAttrs {
@@ -84,7 +83,6 @@ export interface EdgeAttrs {
   /** Route-keyed edge — selected when the source node's llm call exits
    * via `route({name: …})`. */
   route?: string;
-  [extra: string]: AttrScalar | undefined;
 }
 
 /** A typed run-input declaration from the workflow's `inputs:` block.
@@ -110,7 +108,6 @@ export interface GraphAttrs {
   /** Declared run inputs (the `inputs:` block). Substituted as
    * `${{ inputs.name }}`; validated against `--input` bindings at enqueue. */
   inputs?: InputDecl[];
-  [extra: string]: AttrScalar | InputDecl[] | undefined;
 }
 
 export interface Location {

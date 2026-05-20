@@ -142,7 +142,7 @@ describe("makeSpawnSubagent", () => {
     const registry = freshRegistry();
     let observedChildPool: string[] | undefined;
     const backend = new StubBackend((input) => {
-      observedChildPool = (input.node.attrs["allowed_tools"] as string[] | undefined)?.slice();
+      observedChildPool = input.node.attrs.allowed_tools?.slice();
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();
@@ -426,7 +426,7 @@ describe("makeSpawnSubagent", () => {
     const registry = freshRegistry();
     let observedSkills: string[] | undefined;
     const backend = new StubBackend((input) => {
-      observedSkills = (input.node.attrs["skills"] as string[] | undefined)?.slice();
+      observedSkills = input.node.attrs.skills?.slice();
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();
@@ -485,10 +485,7 @@ describe("makeSpawnSubagent", () => {
     const registry = freshRegistry();
     let observedSystemPrompt: string | undefined;
     const backend = new StubBackend((input) => {
-      observedSystemPrompt =
-        typeof input.node.attrs["system_prompt"] === "string"
-          ? (input.node.attrs["system_prompt"] as string)
-          : undefined;
+      observedSystemPrompt = input.node.attrs.system_prompt;
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();
@@ -524,10 +521,7 @@ describe("makeSpawnSubagent", () => {
     const registry = freshRegistry();
     let observedSystemPrompt: string | undefined;
     const backend = new StubBackend((input) => {
-      observedSystemPrompt =
-        typeof input.node.attrs["system_prompt"] === "string"
-          ? (input.node.attrs["system_prompt"] as string)
-          : undefined;
+      observedSystemPrompt = input.node.attrs.system_prompt;
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();
@@ -768,9 +762,8 @@ describe("makeSpawnSubagent", () => {
     let observedProvider: string | undefined;
     let observedModel: string | undefined;
     const backend = new StubBackend((input) => {
-      observedProvider =
-        typeof input.node.attrs["provider"] === "string" ? (input.node.attrs["provider"] as string) : undefined;
-      observedModel = typeof input.node.attrs["model"] === "string" ? (input.node.attrs["model"] as string) : undefined;
+      observedProvider = input.node.attrs.provider;
+      observedModel = input.node.attrs.model;
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();

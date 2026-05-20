@@ -340,7 +340,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
   for (const key of ["retry_target", "fallback_retry_target"] as const) {
-    const target = graph.attrs[key];
+    const target = (graph.attrs as Record<string, unknown>)[key];
     if (typeof target !== "string" || target === "") continue;
     if (!nodeIds.has(target)) {
       diags.push({
@@ -644,12 +644,11 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     });
   }
 
-  // W013: unrecognised attribute name. Parser passthrough (NodeAttrs /
-  // EdgeAttrs / GraphAttrs index signatures) accepts anything; this lint
-  // catches typos at validate-time. Authors who genuinely need a custom
-  // attribute can either extend the whitelist or accept the warning.
+  // W013: unrecognised attribute name. Cast to Record<string, unknown> at
+  // the read site so the typed attrs objects remain indexable here without
+  // an index signature.
   for (const n of nodes) {
-    for (const key of Object.keys(n.attrs)) {
+    for (const key of Object.keys(n.attrs as Record<string, unknown>)) {
       if (KNOWN_NODE_ATTRS.has(key)) continue;
       diags.push({
         severity: "warning",
@@ -661,7 +660,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
   for (const e of graph.edges) {
-    for (const key of Object.keys(e.attrs)) {
+    for (const key of Object.keys(e.attrs as Record<string, unknown>)) {
       if (KNOWN_EDGE_ATTRS.has(key)) continue;
       diags.push({
         severity: "warning",
@@ -672,7 +671,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       });
     }
   }
-  for (const key of Object.keys(graph.attrs)) {
+  for (const key of Object.keys(graph.attrs as Record<string, unknown>)) {
     if (KNOWN_GRAPH_ATTRS.has(key)) continue;
     diags.push({
       severity: "warning",
