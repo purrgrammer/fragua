@@ -2,7 +2,10 @@
 // is WorkflowReader — listing workflow files on disk for the Workflows page.
 // Everything else reads directly from @swarm/store.
 
+import type { InputDecl } from "@swarm/core";
 import type { HealthDaemonInfo } from "./routes/health.ts";
+
+export type { InputDecl };
 
 export interface WorkflowSummary {
   name: string;
@@ -19,6 +22,9 @@ export interface WorkflowSummary {
 
 export interface WorkflowDetail extends WorkflowSummary {
   source: string;
+  /** Parsed `inputs:` block from the workflow source. Absent when the
+   *  workflow declares no inputs or the source failed to parse. */
+  inputs?: InputDecl[];
 }
 
 export interface WorkflowReadOptions {

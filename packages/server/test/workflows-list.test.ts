@@ -121,6 +121,44 @@ describe("GET /workflows/:name", () => {
     expect(body).toEqual(detail);
   });
 
+  test("includes parsed inputs[] when the workflow declares an inputs: block", async () => {
+    const source = [
+      "name: typed",
+      "inputs:",
+      "  ticket:",
+      "    type: string",
+      "    required: true",
+      "    description: Ticket to process",
+      "steps:",
+      "  work:",
+      "    type: llm",
+      "    prompt: Work on ${{ inputs.ticket }}",
+    ].join("\n");
+    const app = createServer({
+      store: freshStore(),
+      ports: {
+        workflowReader: {
+          async list() {
+            return [{ name: "typed", path: "workflows/typed.yaml", sha: "abc1234" }];
+          },
+          async read(name: string) {
+            if (name !== "typed") return undefined;
+            return { name: "typed", path: "workflows/typed.yaml", sha: "abc1234", source };
+          },
+        },
+      },
+    });
+    const res = await app.request("/workflows/typed");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { inputs?: unknown };
+    expect(Array.isArray(body.inputs)).toBe(true);
+    const inputs = body.inputs as Array<{ name: string; type: string; required: boolean }>;
+    expect(inputs.length).toBe(1);
+    expect(inputs[0]?.name).toBe("ticket");
+    expect(inputs[0]?.type).toBe("string");
+    expect(inputs[0]?.required).toBe(true);
+  });
+
   test("returns 404 when the workflow is unknown", async () => {
     const app = createServer({
       store: freshStore(),
@@ -150,6 +188,29 @@ describe("createFsWorkflowReader.read", () => {
       'name: alpha\nlabel: "Alpha workflow"\nnodes:\n  start: {type: start}\nedges: []\n',
       "utf8",
     );
+    await writeFile(
+      join(dir, "typed.yaml"),
+      [
+        "name: typed",
+        "inputs:",
+        "  ticket:",
+        "    type: string",
+        "    required: true",
+        "    description: Ticket to process",
+        "  mode:",
+        "    type: choice",
+        "    required: false",
+        "    default: fast",
+        "    options: [fast, thorough]",
+        "steps:",
+        "  work:",
+        "    type: llm",
+        "    prompt: Work on ${{ inputs.ticket }}",
+      ].join("\n"),
+      "utf8",
+    );
+    // Deliberately broken YAML to test the parse-error tolerance path.
+    await writeFile(join(dir, "broken.yaml"), "name: broken\ninputs: not-a-map\nsteps:\n", "utf8");
   });
 
   afterAll(async () => {
@@ -165,6 +226,32 @@ describe("createFsWorkflowReader.read", () => {
     expect(detail?.sha).toMatch(/^[0-9a-f]{7}$/);
     expect(detail?.source).toContain("name: alpha");
     expect(detail?.source).toContain("type: start");
+  });
+
+  test("returns inputs[] parsed from the YAML source", async () => {
+    const reader = createFsWorkflowReader({ workflowsDir: dir });
+    const detail = await reader.read("typed");
+    expect(detail).toBeDefined();
+    expect(Array.isArray(detail?.inputs)).toBe(true);
+    expect(detail?.inputs?.length).toBe(2);
+    const ticket = detail?.inputs?.[0];
+    expect(ticket?.name).toBe("ticket");
+    expect(ticket?.type).toBe("string");
+    expect(ticket?.required).toBe(true);
+    expect(ticket?.description).toBe("Ticket to process");
+    const mode = detail?.inputs?.[1];
+    expect(mode?.name).toBe("mode");
+    expect(mode?.type).toBe("choice");
+    expect(mode?.required).toBe(false);
+    expect(mode?.default).toBe("fast");
+    expect(mode?.options).toEqual(["fast", "thorough"]);
+  });
+
+  test("returns inputs undefined when the YAML source is unparseable", async () => {
+    const reader = createFsWorkflowReader({ workflowsDir: dir });
+    const detail = await reader.read("broken");
+    expect(detail).toBeDefined();
+    expect(detail?.inputs).toBeUndefined();
   });
 
   test("returns undefined for an unknown workflow (no throw)", async () => {

@@ -11,6 +11,7 @@
 // POST /workflows), then falls back to the file reader for forward
 // compatibility. 404 when neither source resolves the identifier.
 
+import { parseWorkflow } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
 import type { WorkflowDetail, WorkflowReader } from "../ports.ts";
@@ -57,6 +58,14 @@ export function workflowsRoutes(opts: WorkflowsRouteOptions): Hono {
             sha: name,
             source: row.dotSource,
           };
+          try {
+            const parsed = parseWorkflow(row.dotSource);
+            if (parsed.attrs.inputs && parsed.attrs.inputs.length > 0) {
+              detail.inputs = parsed.attrs.inputs;
+            }
+          } catch {
+            // Unparseable source — inputs remain absent.
+          }
           return c.json(detail);
         }
       }
@@ -67,6 +76,18 @@ export function workflowsRoutes(opts: WorkflowsRouteOptions): Hono {
     // ── name-based lookup (existing behaviour) ────────────────────────
     const detail = await opts.workflowReader.read(name, cwdParam !== undefined ? { cwd: cwdParam } : undefined);
     if (!detail) return c.json({ error: "not_found", name }, 404);
+    // Attach parsed inputs when the reader didn't already (in-memory
+    // fakes in tests return a plain detail without inputs).
+    if (detail.inputs === undefined) {
+      try {
+        const parsed = parseWorkflow(detail.source);
+        if (parsed.attrs.inputs && parsed.attrs.inputs.length > 0) {
+          detail.inputs = parsed.attrs.inputs;
+        }
+      } catch {
+        // Unparseable source — inputs remain absent.
+      }
+    }
     return c.json(detail);
   });
 

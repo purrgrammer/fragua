@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseWorkflow } from "@swarm/core";
 import type { WorkflowDetail, WorkflowReader, WorkflowSummary } from "../ports.ts";
 
 export interface FsWorkflowReaderOptions {
@@ -72,6 +73,15 @@ export function createFsWorkflowReader(opts: FsWorkflowReaderOptions): WorkflowR
       const label = extractLabel(source);
       const detail: WorkflowDetail = { name, path, sha, source };
       if (label !== undefined) detail.label = label;
+      try {
+        const parsed = parseWorkflow(source);
+        if (parsed.attrs.inputs && parsed.attrs.inputs.length > 0) {
+          detail.inputs = parsed.attrs.inputs;
+        }
+      } catch {
+        // Unparseable source — inputs remain absent; the error surfaces
+        // elsewhere (e.g. at enqueue validation).
+      }
       return detail;
     },
   };
