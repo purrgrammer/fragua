@@ -146,7 +146,7 @@ All operator actions are intent writes. Every endpoint validates its body and re
 | `POST /runs/:id/steer` | `{ text: string }` (length > 0) | Injects steering text; aborts the current handler so the next dispatch sees it. |
 | `POST /runs/:id/pause` | `{}` | Abort + transition to `paused{reason:"operator"}`. |
 | `POST /runs/:id/cancel` | `{ reason?: string }` | Abort + transition to `cancelled`. |
-| `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be an accelerator key from `fact.run_paused_human.options` (Phase 7 will repurpose against `routes=` declarations). |
+| `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be one of the node's declared `routes=` names (surfaced on `fact.run_paused_human`). |
 | `POST /runs/:id/resume` | `{ note?: string }` | Generic wake for any `paused_*` run. |
 | `POST /runs/:id/unquarantine` | `{ resolution: "treat_as_done" \| "retry" \| "cancel", note?: string }` | Operator decision on a quarantined run. |
 | `POST /runs/:id/priority` | `{ newPriority: number, note?: string }` | Appends `intent.priority_adjusted`; bumps queue priority. |

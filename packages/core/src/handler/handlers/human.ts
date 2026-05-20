@@ -1,7 +1,6 @@
 // Human handler — operator-gate pauses with route-discriminated resume.
-// Phase 7 of docs/proposals/llm-routing.md. Replaces the legacy
-// wait-human handler's `[K] Label` accelerator vocabulary with the
-// unified `routes=` primitive shared with LLM-directed routing (D6).
+// The operator picks one of the node's declared `routes=` names; the
+// route vocabulary is shared with LLM-directed routing (D6).
 //
 // First call (no `ctx.humanInput`): the executor's first dispatch of a
 // `kind=human` node returns `yield_human { text, routes }`. The

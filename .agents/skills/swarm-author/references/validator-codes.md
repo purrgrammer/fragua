@@ -13,7 +13,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E006 | Cycle with no reachable exit — the run can't terminate. |
 | E008 | `parallelogram` node without `tool_command=`. |
 | E009 | Human node (`kind=human` / `shape=hexagon`) has no outgoing edges and no `routes=` — operator would have no choices. |
-| E010 | `hexagon` outgoing edges produce duplicate accelerator keys (e.g. two `[A] …`). |
+| E010 | *(removed)* Was: human node outgoing edges produced duplicate accelerator keys. The `[K] Label` accelerator vocabulary was replaced by named `routes=`; route labels are free-form button text with no keyboard-accelerator semantics, so the rule (and `accelerator.ts`) is gone. |
 | E011 | `retry_target` / `fallback_retry_target` references an undefined node. |
 | E012 | Start node has incoming edges (attractor §11.2). |
 | E013 | Exit node has outgoing edges (attractor §11.2). |

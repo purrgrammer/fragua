@@ -393,7 +393,7 @@ CREATE TABLE provider_config (
 | `intent.steering_requested` | `text: string` | Abort current node; inject steering before re-entry |
 | `intent.pause_requested` | — | Abort current node; transition to `paused` |
 | `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
-| `intent.human_input` | `route: string`, `note?: string` | Wake a `paused_human` run; `route` is the accelerator key chosen by the operator (Phase 7 will repurpose this against `routes=` declarations) |
+| `intent.human_input` | `route: string`, `note?: string` | Wake a `paused_human` run; `route` is one of the node's declared `routes=` names chosen by the operator |
 | `intent.resume` | `note?: string` | Generic wake for any `paused_*` run; re-dispatches the same `(nodeId, iteration)` |
 | `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note?: string` | Operator acknowledgement for a quarantined run |
 | `intent.priority_adjusted` | `newPriority: number`, `note?: string` | Operator bump |

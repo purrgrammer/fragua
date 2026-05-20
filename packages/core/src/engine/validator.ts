@@ -1,7 +1,6 @@
 // Graph linter. Catches structural and semantic issues before execution.
 // See docs/SPEC.md §4.1 (validation phase).
 
-import { parseAcceleratorKey } from "../accelerator.ts";
 import type { Edge, Graph } from "../types/graph.ts";
 import { inputReferences } from "./substitution.ts";
 
@@ -314,34 +313,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E009",
         message: `human node "${n.id}" has no outgoing edges and no routes= (operator would have no choices)`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
-  }
-
-  // E010: human outgoing edges must produce unique accelerator keys.
-  // Auto-dispatcher derives keys via parseAcceleratorKey; collisions
-  // would shadow each other in the option list (and the handler refuses
-  // to construct). Surface at validate-time with the offending labels.
-  for (const n of nodes) {
-    if (n.type !== "human") continue;
-    const out = graph.edges.filter((e) => e.from === n.id);
-    if (out.length < 2) continue;
-    const byKey = new Map<string, string[]>();
-    for (const e of out) {
-      const lbl = typeof e.attrs.label === "string" ? e.attrs.label : e.to;
-      const key = parseAcceleratorKey(lbl);
-      const list = byKey.get(key) ?? [];
-      list.push(lbl);
-      byKey.set(key, list);
-    }
-    for (const [key, labels] of byKey) {
-      if (labels.length < 2) continue;
-      diags.push({
-        severity: "error",
-        code: "E010",
-        message: `wait.human node "${n.id}" has ${labels.length} edges sharing accelerator key "${key}" (${labels.map((l) => `"${l}"`).join(", ")}) — disambiguate via [A]/[B] prefixes`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
