@@ -765,6 +765,15 @@ export interface IEventReader {
    */
   getWakeCandidates(opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number }): WakeCandidateRow[];
   /**
+   * Terminal runs in the inbox (`inbox_status` ∈ `pending`/`acted`) that
+   * carry an unapplied operator-action intent (`intent.branch_run` /
+   * `commit_run` / `merge_run` / `discard_run`). Scoped by the inbox
+   * partial index + an EXISTS over events so the daemon's operator-action
+   * sweep never walks every terminal run. Same OCC-ready row shape as
+   * `getWakeCandidates`.
+   */
+  getInboxActionCandidates(): WakeCandidateRow[];
+  /**
    * The next unapplied intent of the given `type` strictly after
    * `sinceSeq`, or `null`. Payload is parsed JSON. Used by the daemon's
    * wake-pending sweep (cancel / human_input / resume / unquarantine).

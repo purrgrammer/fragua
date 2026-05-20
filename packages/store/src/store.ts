@@ -116,6 +116,7 @@ import {
   selectCwds,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
+  selectInboxActionCandidates,
   selectNextQueuedRun,
   selectRunIds,
   selectRunStateRow,
@@ -635,6 +636,10 @@ export class SqliteStore implements IEventStore {
 
   getWakeCandidates(opts: { statuses: readonly RunState["status"][]; autoResumeBefore?: number }): WakeCandidateRow[] {
     return selectWakeCandidates(this.db, opts);
+  }
+
+  getInboxActionCandidates(): WakeCandidateRow[] {
+    return selectInboxActionCandidates(this.db);
   }
 
   getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null {

@@ -302,6 +302,33 @@ export function selectWakeCandidates(
   return db.query<WakeCandidateRow, RunStatus[]>(where).all(...opts.statuses);
 }
 
+const SELECT_INBOX_ACTION_CANDIDATES_SQL = `
+  SELECT rs.run_id           AS runId,
+         rs.version          AS version,
+         rs.last_applied_seq AS lastAppliedSeq,
+         rs.status           AS status
+    FROM run_state rs
+   WHERE rs.inbox_status IN ('pending', 'acted')
+     AND EXISTS (
+       SELECT 1 FROM events e
+        WHERE e.run_id = rs.run_id
+          AND e.seq > rs.last_applied_seq
+          AND e.type IN (
+            'intent.branch_run', 'intent.commit_run',
+            'intent.merge_run', 'intent.discard_run'
+          )
+     )
+`;
+
+/** Terminal runs in the inbox (`pending`/`acted`) carrying an unapplied
+ *  operator-action intent (branch / commit / merge / discard). Scoped by
+ *  the `inbox_status` partial index + an EXISTS over the run's events so the
+ *  daemon sweep never walks every terminal run — only those an operator
+ *  acted on. Mirrors `selectWakeCandidates`' OCC-ready row shape. */
+export function selectInboxActionCandidates(db: Database): WakeCandidateRow[] {
+  return db.query<WakeCandidateRow, []>(SELECT_INBOX_ACTION_CANDIDATES_SQL).all();
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Writes — run lifecycle
 // ─────────────────────────────────────────────────────────────────────

@@ -43,6 +43,7 @@ import {
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
+import { processOperatorActions } from "./operator-actions.ts";
 import {
   decideProviderRetry,
   PROVIDER_RETRY_ATTEMPT_KEY,
@@ -174,6 +175,7 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
 
   while (!opts.shutdownSignal.aborted) {
     wakePending(opts.store);
+    await processOperatorActions(opts.store);
     const claimed = opts.store.claimNextRun(opts.maxConcurrentRuns);
     if (claimed == null) {
       await sleep(pollMs, opts.shutdownSignal);

@@ -311,6 +311,36 @@ export type IntentEvent =
        * dispatch tick. */
       type: "intent.max_loops_adjusted";
       payload: { newLimit: number; note?: string };
+    }
+  | {
+      /** Operator promotes a terminal run's workflow-authored commit
+       * history to a porcelain branch (worktrees.md). Post-terminal,
+       * worktree-free: the daemon `update-ref refs/heads/<branch>` at the
+       * run's `refs/swarm/heads/<runId>` sha. Inbox `pending → acted`. */
+      type: "intent.branch_run";
+      payload: { branch: string; force?: boolean };
+    }
+  | {
+      /** Operator promotes a terminal run's full snapshot tree (including
+       * uncommitted agent dirt) as a single commit onto `onto` (default
+       * `base_git_ref`). Daemon `commit-tree` + `update-ref` the target.
+       * Inbox `pending → acted`. */
+      type: "intent.commit_run";
+      payload: { message: string; onto?: string };
+    }
+  | {
+      /** Operator merges a terminal run's heads-ref into `into` (default
+       * `base_git_ref`). `ff` is the implicit default; `no-ff` / `squash`
+       * are explicit. Inbox `pending → acted`. */
+      type: "intent.merge_run";
+      payload: { mode?: "ff" | "no-ff" | "squash"; into?: string };
+    }
+  | {
+      /** Operator discards a terminal run's recoverable work: the daemon
+       * deletes `refs/swarm/{snapshots,heads}/<runId>`. Inbox
+       * `pending → discarded` (terminal-terminal). */
+      type: "intent.discard_run";
+      payload: Record<string, never>;
     };
 
 export type IntentType = IntentEvent["type"];

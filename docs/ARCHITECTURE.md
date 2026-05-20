@@ -414,6 +414,12 @@ CREATE TABLE provider_config (
 | `intent.max_retries_adjusted` | `nodeId: string`, `newLimit: number` (>0), `note?: string` | Operator raises a node's `max_retries` cap on a `paused{reason:'max_retries'}` run; folded into `routing.max_retries_override.<nodeId>`. Stage 3 of recoverable-budget-pause.md |
 | `intent.goal_gate_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the failing gate's retarget cap on a `paused{reason:'goal_gate'}` run; folded into `routing.max_goal_gate_retries_override` (takes precedence over the gate's `max_retries`) |
 | `intent.max_loops_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the per-run dispatch ceiling on a `paused{reason:'max_loops'}` run; folded into `routing.max_loops_override` |
+| `intent.branch_run` | `branch: string`, `force?: boolean` | Post-terminal: promote the run's committed history to porcelain `refs/heads/<branch>` at the `refs/swarm/heads/<runId>` sha. Daemon `update-ref`; inbox `pending → acted`. Worktree-free (docs/proposals/worktrees.md) |
+| `intent.commit_run` | `message: string`, `onto?: string` | Post-terminal: `commit-tree` the run's full snapshot tree (incl. uncommitted dirt) onto `onto` (default `base_git_ref`) and advance that branch. Inbox `pending → acted` |
+| `intent.merge_run` | `mode?: 'ff'\|'no-ff'\|'squash'`, `into?: string` | Post-terminal: merge the run's `refs/swarm/heads/<runId>` into `into` (default `base_git_ref`); `ff` is the implicit default. Inbox `pending → acted` |
+| `intent.discard_run` | — | Post-terminal: delete the run's `refs/swarm/{snapshots,heads}/<runId>`. Inbox `pending → discarded` (terminal-terminal — subsequent actions are skipped) |
+
+Post-terminal operator-action intents (`branch`/`commit`/`merge`/`discard`) are folded by the daemon's `processOperatorActions` sweep (executor loop), which translates each into a worktree-free git mutation and the matching `fact.run_*`. User-facing refusals (detached/relocated target, nothing-to-branch, non-ff without `--no-ff`/`--squash`, merge conflict) are validated synchronously by the HTTP endpoints; the sweep is defense-in-depth and leaves an unsatisfiable intent unapplied.
 
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
@@ -571,6 +577,7 @@ export interface IEventReader {
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
   getWakeCandidates(opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number }): WakeCandidateRow[];
+  getInboxActionCandidates(): WakeCandidateRow[];
   getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null;
   findOrphanSideEffects(runId: string): OrphanSideEffectRow[];
 
