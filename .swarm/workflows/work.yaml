@@ -75,6 +75,8 @@ steps:
     prompt: |
       Bug: ${{ inputs.task }}.
 
+      SANDBOX (hard rule): never open the global store `~/.swarm/swarm.db` — no `swarm harness`/`daemon`/`serve`/`run`. Reproduce against throwaway temp DBs only; pass `--db "$(mktemp -u).db"` to any swarm command.
+
       Localise the scope, write a FAILING test in the repo's existing framework and conventional location, and confirm it fails for the stated reason (not a setup error).
       Output: source + test paths, the test identifier, the failing assertion in one sentence.
       Cannot localise after a reasonable read → `abort` with `cannot reproduce: <why>`.
@@ -87,6 +89,8 @@ steps:
     allowed-tools: [read, write, edit, grep, bash]
     prompt: |
       Implement ${{ inputs.task }}.
+
+      SANDBOX (hard rule): NEVER run `swarm harness` / `swarm daemon` / `swarm serve` / `swarm run` or any command that opens the global store `~/.swarm/swarm.db`. It is the live coordination DB; a schema migration or stray write corrupts it and wedges the operator's running harness. Verify schema/migration/store changes ONLY via unit tests against throwaway DBs (`bun test`, temp paths); if you must invoke a swarm command at runtime, pass `--db "$(mktemp -u).db"`. Never boot a daemon to "check" your change.
 
       Plan in this thread → realise it exactly, only the package(s) it names.
       Failing test in this thread → make it pass without weakening it.
@@ -151,6 +155,7 @@ steps:
     max-tokens: 800000
     prompt: |
       CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
+      SANDBOX (hard rule): never open the global store `~/.swarm/swarm.db` (no `swarm harness`/`daemon`/`serve`/`run`); use `--db "$(mktemp -u).db"` for any swarm command.
     next: ci
 
   commit:
