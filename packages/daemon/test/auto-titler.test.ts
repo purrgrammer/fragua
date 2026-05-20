@@ -163,6 +163,40 @@ describe("AutoTitler — unit", () => {
     r.store.close();
   });
 
+  test("structured inputs compose seed from workflow=name + key=value lines", async () => {
+    const r = rig();
+    r.store.enqueueRun({
+      runId: "r1",
+      workflowSha: r.workflowSha,
+      initialRouting: { inputs: { env: "production", branch: "main" } },
+    });
+    const backend = new StubBackend((input) => okOut(`seed=${input.input}`));
+    const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: abortCtrl.signal });
+    titler.titleRun({
+      runId: "r1",
+      workflowSha: r.workflowSha,
+      input: "workflow=t\nenv=production\nbranch=main",
+      workflowName: "t",
+    });
+    await titler.drain();
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls[0]!.input).toBe("workflow=t\nenv=production\nbranch=main");
+    expect(r.store.getState("r1")?.title).toMatch(/seed=/);
+    r.store.close();
+  });
+
+  test("empty input (no routing.input and no routing.inputs) → skip", async () => {
+    const r = rig();
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: {} });
+    const backend = new StubBackend(() => okOut("never"));
+    const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: abortCtrl.signal });
+    titler.titleRun({ runId: "r1", workflowSha: r.workflowSha, input: "" });
+    await titler.drain();
+    expect(backend.calls).toHaveLength(0);
+    expect(r.store.getState("r1")?.title).toBeNull();
+    r.store.close();
+  });
+
   test("drain awaits every in-flight title call", async () => {
     const r = rig();
     r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
@@ -281,6 +315,91 @@ describe("AutoTitler — executor integration", () => {
     expect(r.store.getState("r-titled")?.title).toBe("Pre-set title");
     // Backend must never have been called.
     expect(backend.calls).toHaveLength(0);
+
+    ctrl.abort();
+    r.store.close();
+  });
+
+  test("structured inputs only: seed composed from workflow name + key=value lines", async () => {
+    const yaml = `name: deploy\ngoal: "deploy the app"\nsteps:\n  work: {type: llm, prompt: hi}\n`;
+    const r = rig({ yaml, name: "deploy" });
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+
+    const backend = new StubBackend((input) => okOut(`titled:${input.input}`));
+    const ctrl = new AbortController();
+    const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: ctrl.signal });
+    const registry = new AbortRegistry();
+
+    // enqueued with only structured inputs, no free-form routing.input
+    r.store.enqueueRun({
+      runId: "r1",
+      workflowSha: r.workflowSha,
+      initialRouting: { start_node: "start", inputs: { env: "production", region: "us-east" } },
+    });
+
+    const executorOpts: Parameters<typeof runOne>[1] = {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry,
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 10,
+      autoTitler: titler,
+    };
+    r.store.claimNextRun(4);
+    await runOne("r1", executorOpts);
+    await titler.drain();
+
+    // backend was called with composed seed containing workflow name and inputs
+    expect(backend.calls).toHaveLength(1);
+    const seed = backend.calls[0]!.input;
+    expect(seed).toContain("workflow=deploy");
+    expect(seed).toContain("env=production");
+    expect(seed).toContain("region=us-east");
+    expect(backend.calls[0]!.goal).toBe("deploy the app");
+    // title was set
+    expect(r.store.getState("r1")?.title).toMatch(/titled:/);
+
+    ctrl.abort();
+    r.store.close();
+  });
+
+  test("no routing.input and no routing.inputs (scheduled run): skip titling", async () => {
+    const yaml = `name: health-check\nsteps:\n  work: {type: llm, prompt: hi}\n`;
+    const r = rig({ yaml, name: "health-check" });
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+
+    const backend = new StubBackend(() => okOut("never"));
+    const ctrl = new AbortController();
+    const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: ctrl.signal });
+    const registry = new AbortRegistry();
+
+    // scheduled run: no routing.input, no routing.inputs
+    r.store.enqueueRun({
+      runId: "r1",
+      workflowSha: r.workflowSha,
+      initialRouting: { start_node: "start" },
+    });
+
+    const executorOpts: Parameters<typeof runOne>[1] = {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry,
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 10,
+      autoTitler: titler,
+    };
+    r.store.claimNextRun(4);
+    await runOne("r1", executorOpts);
+    await titler.drain();
+
+    expect(backend.calls).toHaveLength(0);
+    expect(r.store.getState("r1")?.title).toBeNull();
 
     ctrl.abort();
     r.store.close();

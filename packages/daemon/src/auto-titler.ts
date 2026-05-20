@@ -48,12 +48,16 @@ export interface AutoTitlerOpts {
 export interface TitleRequest {
   runId: string;
   workflowSha: string;
-  /** Raw `routing.input` text (the run's free-form description). When
-   * empty, titling is skipped — there's nothing to summarise. */
+  /** Seed text for the summariser. May be the free-form `routing.input`,
+   * or a composed string of `name=value` lines from `routing.inputs` plus
+   * the workflow name. When empty, titling is skipped. */
   input: string;
   /** Workflow-level goal (graph.goal attr). Optional; passed to the
    * summariser to frame the title. */
   goal?: string;
+  /** Workflow name, included in the seed when composing from structured
+   * inputs so the summariser has a meaningful context anchor. */
+  workflowName?: string;
 }
 
 const DEFAULT_MAX_TITLE_CHARS = 80;
