@@ -121,6 +121,10 @@ curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
 | `GET /runs/:id/events.json` | Point-in-time snapshot; scripting; diffing. |
 | `GET /runs/:id/steps` | Per-LLM-call snapshots (prompt, model, tokens, cost; rows for parallel branches carry `parentNodeId` + `parallelIndex`). |
 | `GET /runs/:id` | Projection summary (runStatus, status, current node, totals). Cheap status poll. |
+| `GET /runs/:id/snapshots` | Ordered Diff-scrubber feed: `Array<{eventIdx,nodeId,label,commitSha,treeSha,committed,uncommitted}>`. One entry per `snapshot.captured` (per-step/HITL) and the terminal `fact.snapshot_recorded`. Empty for non-worktree runs. |
+| `GET /runs/:id/snapshots/:eventIdx/tree` | `git ls-tree` against the resolved commit → `{entries:[{path,mode,size,type}]}`. |
+| `GET /runs/:id/snapshots/:eventIdx/file?path=<rel>` | `git show <sha>:<path>` → text/plain or application/octet-stream. |
+| `GET /runs/:id/snapshots/:eventIdx/diff?against=base\|previous\|<eventIdx>&path=<opt>` | `git diff` between two snapshot commits → text/x-diff. `base` = `diff_base_sha`; `previous` = prior snapshot (or base for the first); `<int>` = that snapshot's commit. |
 
 **Two status fields, don't conflate them.** `GET /runs/:id` returns BOTH `runStatus` (lifecycle: `queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) AND `status` (the run's final *outcome*: `success | fail`, or `null` while not yet terminal). For "is the run still going?" checks use `runStatus`; for "did it succeed?" once terminal use `status`. The cheat sheet and the lifecycle table below use `runStatus` consistently.
 

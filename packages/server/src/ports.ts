@@ -66,8 +66,37 @@ export interface ProjectTreeReader {
   readBlob(cwd: string, relPath: string): Promise<ReadBlobResult>;
 }
 
+/** One row in `GET /runs/:id/snapshots/:eventIdx/tree`. `size` is 0
+ *  for tree and commit entries (git ls-tree -l only emits sizes for
+ *  blobs). `mode` is the six-digit octal string git prints. */
+export interface SnapshotTreeEntry {
+  path: string;
+  mode: string;
+  size: number;
+  type: "blob" | "tree" | "commit";
+}
+
+/** Adapter for snapshot-specific git reads against the run's project
+ *  git dir. All operations are pure object-database queries (ls-tree,
+ *  show, diff) — no checkout, no worktree mutation. */
+export interface RunSnapshotReader {
+  /** `git ls-tree -l -z <commitSha>` from `cwd`. Returns null when git
+   *  is unavailable or the sha doesn't resolve. */
+  lsTree(cwd: string, commitSha: string): Promise<{ entries: SnapshotTreeEntry[] } | null>;
+  /** `git show <commitSha>:<path>` from `cwd`. */
+  showFile(
+    cwd: string,
+    commitSha: string,
+    path: string,
+  ): Promise<{ kind: "ok"; bytes: Buffer } | { kind: "not_found" } | { kind: "too_large" }>;
+  /** `git diff <fromSha> <toSha> [-- <path>]` from `cwd`. Returns empty
+   *  string when there are no changes or git fails. */
+  diff(cwd: string, fromSha: string, toSha: string, path?: string): Promise<string>;
+}
+
 export interface ServerPorts {
   workflowReader?: WorkflowReader;
   projectTreeReader?: ProjectTreeReader;
+  runSnapshotReader?: RunSnapshotReader;
   daemonInfo?: () => HealthDaemonInfo | Promise<HealthDaemonInfo>;
 }

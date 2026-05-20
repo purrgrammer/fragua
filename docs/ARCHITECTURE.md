@@ -561,6 +561,7 @@ export interface IEventReader {
   // Event log
   getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
   getEventsByType(runId: string, type: string): StoredEvent[];
+  getSnapshotEvents(runId: string): StoredEvent[];  // snapshot.captured + fact.snapshot_recorded in seq order (scrubber feed)
   getLatestEvents(runId: string, limit: number): StoredEvent[];
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
   getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
@@ -1035,6 +1036,16 @@ app.get("/skills/:locId/tree",        (c) => skillTree(c));        // recursive 
 app.get("/skills/:locId/file",        (c) => skillFile(c));        // ?path=<rel>; sandboxed to skill_dir
 app.get("/agents",                    (c) => listAgents(c));
 app.get("/agents/:locId",             (c) => agentDetail(c));      // metadata + body (the prompt)
+
+// Worktree snapshot read endpoints (docs/proposals/worktrees.md §Server endpoints,
+// step 5). Pure git object-database queries — no checkouts, no worktree
+// mutation. Snapshot commits are reachable via refs/swarm/snapshots/<runId>;
+// eventIdx in the URL is the event seq, resolved to a commitSha by walking
+// the run's snapshot events. All endpoints 404 on unknown run or eventIdx.
+app.get("/runs/:id/snapshots",                    (c) => { /* ordered scrubber feed: Array<{eventIdx,nodeId,label,commitSha,treeSha,committed,uncommitted}> */ });
+app.get("/runs/:id/snapshots/:eventIdx/tree",     (c) => { /* git ls-tree → {entries:[{path,mode,size,type}]} */ });
+app.get("/runs/:id/snapshots/:eventIdx/file",     (c) => { /* git show <sha>:<path> → text/plain or application/octet-stream; ?path= required */ });
+app.get("/runs/:id/snapshots/:eventIdx/diff",     (c) => { /* git diff → text/x-diff; ?against=base|previous|<eventIdx>; optional &path= */ });
 
 // JSON-batch read of a run's events; pagination via ?since / ?limit.
 app.get("/runs/:id/events", (c) => {
