@@ -289,4 +289,19 @@ describe("fact.snapshot_recorded projection (worktrees.md)", () => {
     expect(s.changeStat).toBeNull();
     expect(s.inboxStatus).toBeNull();
   });
+
+  test("checked-out branch descending from base (headRef set) → committed delta NOT in inbox", () => {
+    // Regression: a review run that `git checkout`s a branch which descends
+    // from the provision base has diffBaseSha == baseGitSha (looks "not
+    // relocated") and a large committed delta — but it's the branch's content,
+    // not agent work. headRef being a named branch (not detached) excludes it.
+    const s = applyFact(
+      base(),
+      snap({ headRef: "swarm/runs/xyz", committed: { filesChanged: 3, insertions: 32, deletions: 31 } }),
+      1,
+    );
+    expect(s.finalHeadRef).toBe("swarm/runs/xyz");
+    expect(s.changeStat?.committed).toEqual({ filesChanged: 3, insertions: 32, deletions: 31 });
+    expect(s.inboxStatus).toBeNull(); // checked out, not authored → out of inbox
+  });
 });

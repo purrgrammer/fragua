@@ -218,11 +218,17 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.diffBaseSha = fact.payload.diffBaseSha;
       const hasStat = fact.payload.committed !== null || fact.payload.uncommitted !== null;
       next.changeStat = hasStat ? { committed: fact.payload.committed, uncommitted: fact.payload.uncommitted } : null;
-      // Inbox gate is recoverable agent work, not "diff vs base != 0": a pure
-      // review that checked out another line (relocated) with no dirt has a
-      // large committed delta that isn't the agent's work — it stays out.
+      // Inbox gate is recoverable AGENT work, not "diff vs base != 0".
+      // Committed work counts as the run's own only when the worktree ended on
+      // the provisioned, detached line: `headRef === null`. A named branch
+      // means the workflow CHECKED OUT existing commits (e.g. a review run that
+      // `git checkout`s the branch under review) — base..HEAD is then that
+      // branch's content, not agent-authored work, even when it descends from
+      // base (so `diffBaseSha == baseGitSha` and the relocation check alone
+      // misses it). Uncommitted dirt is always the agent's, branch or not.
       const relocated = fact.payload.diffBaseSha !== next.baseGitSha;
-      const recoverable = fact.payload.uncommitted !== null || (fact.payload.committed !== null && !relocated);
+      const committedIsAgentWork = fact.payload.committed !== null && !relocated && fact.payload.headRef === null;
+      const recoverable = fact.payload.uncommitted !== null || committedIsAgentWork;
       next.inboxStatus = recoverable ? "pending" : null;
       return next;
     }

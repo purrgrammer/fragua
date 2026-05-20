@@ -316,12 +316,23 @@ delta, and must stay out of the inbox:
 
 ```
 recoverable := uncommitted IS NOT NULL
-            OR (committed IS NOT NULL AND diff_base_sha == base_git_sha)
+            OR (committed IS NOT NULL
+                AND diff_base_sha == base_git_sha
+                AND final_head_ref IS NULL)
 ```
 
-i.e. the agent left dirt, OR it committed on the line it was provisioned
-from. A relocated HEAD with no dirt is the agent standing on someone
-else's branch — informational, not promotable.
+i.e. the agent left dirt, OR it committed **on the provisioned, detached
+line**. The `final_head_ref IS NULL` clause is load-bearing and was added
+after a live review run exposed the gap: a review that `git checkout`s a
+branch which *descends* from the provision base has `diff_base_sha ==
+base_git_sha` (the relocation check alone says "not relocated") and a
+large `committed` delta — but that delta is the checked-out branch's
+content, not agent-authored work. Agent work in a swarm worktree happens
+on the detached HEAD (`final_head_ref` null); a **named branch means a
+checkout**, so its committed delta is excluded. A relocated HEAD
+(`diff_base_sha != base_git_sha`) is likewise the agent standing on
+someone else's line — informational, not promotable. Uncommitted dirt is
+always the agent's, branch or not.
 
 | From | Trigger | To |
 |---|---|---|
