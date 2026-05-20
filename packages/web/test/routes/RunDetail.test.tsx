@@ -695,7 +695,7 @@ steps:
         label: "step" as const,
         commitSha: "abc",
         treeSha: "def",
-        committed: { files: 2, additions: 10, deletions: 3 },
+        committed: { filesChanged: 2, insertions: 10, deletions: 3 },
         uncommitted: null,
       },
       {
@@ -704,7 +704,7 @@ steps:
         label: "step" as const,
         commitSha: "bcd",
         treeSha: "efg",
-        committed: { files: 1, additions: 5, deletions: 0 },
+        committed: { filesChanged: 1, insertions: 5, deletions: 0 },
         uncommitted: null,
       },
       {

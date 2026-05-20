@@ -18,10 +18,10 @@ function LabelPill({ label }: { label: RunSnapshot["label"] }): JSX.Element {
 }
 
 /** Compact +N / -N change-stat badges. */
-function ChangeStat({ stat, label }: { stat: { additions: number; deletions: number }; label: string }): JSX.Element {
+function ChangeStat({ stat, label }: { stat: { insertions: number; deletions: number }; label: string }): JSX.Element {
   return (
     <span role="img" className="flex shrink-0 items-center gap-1 font-mono text-[10px]" aria-label={label}>
-      {stat.additions > 0 && <span className="text-sw-accent-success">+{stat.additions}</span>}
+      {stat.insertions > 0 && <span className="text-sw-accent-success">+{stat.insertions}</span>}
       {stat.deletions > 0 && <span className="text-sw-accent-error">-{stat.deletions}</span>}
     </span>
   );
@@ -61,7 +61,7 @@ export function SnapshotScrubber({ snapshots, selectedEventIdx, onSelect }: Snap
             <span className="min-w-0 flex-1 truncate font-mono text-sw-sm text-sw-text" title={label}>
               {label}
             </span>
-            {stat && <ChangeStat stat={stat} label={`${stat.additions} additions, ${stat.deletions} deletions`} />}
+            {stat && <ChangeStat stat={stat} label={`${stat.insertions} insertions, ${stat.deletions} deletions`} />}
             <LabelPill label={snap.label} />
           </button>
         );

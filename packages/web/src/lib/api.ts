@@ -20,7 +20,7 @@
 // boundary (`mock.module`) — both standard bun patterns, no in-module
 // injection seam required.
 
-import type { AgentMessage, FeedEvent } from "@swarm/types";
+import type { AgentMessage, FeedEvent, SnapshotStat } from "@swarm/types";
 import type { AnalyticsPayload, AnalyticsRunsPage, BucketKind } from "../types/analytics.ts";
 
 export type { FeedEvent };
@@ -565,12 +565,10 @@ export async function getRunBlob(runId: string, path: string): Promise<string> {
   return res.text();
 }
 
-/** Change-stat shape for a snapshot's committed or uncommitted deltas. */
-export interface SnapshotChangeStat {
-  files: number;
-  additions: number;
-  deletions: number;
-}
+/** Change-stat shape for a snapshot's committed or uncommitted deltas —
+ *  the canonical server shape (`@swarm/types` SnapshotStat), not a web-local
+ *  re-spelling. The `/runs/:id/snapshots` payload uses these exact keys. */
+export type SnapshotChangeStat = SnapshotStat;
 
 /** One entry from `GET /runs/:id/snapshots`. */
 export interface RunSnapshot {
@@ -586,7 +584,9 @@ export interface RunSnapshot {
 function isSnapshotChangeStat(v: unknown): v is SnapshotChangeStat {
   if (typeof v !== "object" || v === null) return false;
   const s = v as Record<string, unknown>;
-  return typeof s["files"] === "number" && typeof s["additions"] === "number" && typeof s["deletions"] === "number";
+  return (
+    typeof s["filesChanged"] === "number" && typeof s["insertions"] === "number" && typeof s["deletions"] === "number"
+  );
 }
 
 function isRunSnapshot(v: unknown): v is RunSnapshot {
