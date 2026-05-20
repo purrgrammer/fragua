@@ -1,189 +1,174 @@
 ---
-title: Workflow JSON-IR storage + version tracking
+title: Workflow JSON-IR storage + content addressing
 status: proposed
 maturity: designed
 last-reviewed: 2026-05-20
 ---
 
-# Workflow JSON-IR storage + version tracking
+# Workflow JSON-IR storage + content addressing
 
-> Today a workflow is stored as **YAML source text** in `workflows.dot_source`
-> and re-parsed on every dispatch. The content address is
-> `sha = sha256(source)`. This proposal covers: (1) persisting the parsed,
-> canonical **JSON IR** alongside the source so the wire/store carries the
-> typed graph rather than re-deriving it everywhere; (2) tracking an **IR
-> schema version** so a stored workflow can be gated against the running
-> engine; and (3) the `dot_source` → `source` column rename deferred from the
-> DOT→YAML cutover (it was left because its meaning was expected to change
-> here — task #26).
+> Today a workflow is stored as **YAML source text** in `workflows.dot_source`,
+> re-parsed on every dispatch, and content-addressed by `sha = sha256(source)`.
+> That makes a comment or whitespace edit mint a "new" workflow. This proposal
+> moves the stored + hashed artifact to the **canonical JSON IR**: the content
+> address tracks *what the workflow means*, the IR is hydrated straight from
+> the DB to run, and the YAML is regenerated from the IR for display. Pairs
+> with [event-versioning](./event-versioning.md) (the run-replay half of "version
+> tracking"). Closes #26 + absorbs the deferred `dot_source` rename.
 
-## Why now: the IR finally canonicalises
+## Settled decisions
 
-Three recent cleanups make a *canonical* IR actually well-defined — it
-wasn't before:
+1. **Content-address the IR, not the source.** `sha = hash(canonical IR)`.
+   Cosmetic edits (comments, whitespace, key order, kebab spelling) parse to
+   an identical IR → same sha → no new version. (Pre-release: re-keying
+   `workflows` + the `run_state.workflow_sha` FK is a one-shot reset, not a
+   migration to preserve.)
+2. **Store the IR, hydrate it to run.** The daemon reads the parsed IR from
+   the DB instead of calling `parseWorkflow` per dispatch. Parse-once at
+   upload.
+3. **Drop the YAML at rest; regenerate it.** No `source` column. A small
+   IR→YAML emitter renders "view source" / export on demand. Comments don't
+   round-trip — consistent with decision 1 (comment edits aren't changes) and
+   acceptable: structure round-trips, prose doesn't.
+4. **A new version means the *workflow* changed, not the *IR representation*.**
+   The hash is over a representation-version-independent normal form;
+   `irVersion` is excluded from it (see §Canonical form). An engine that bumps
+   the IR shape must not re-mint shas for unchanged workflows.
+5. **`loc` is source metadata, not IR.** Decomplect it at parse time (see
+   §Parse output). It never reaches the stored IR or the hash.
 
-- **Closed, fully-typed attrs** (`#5`, commit `1603ec6c`): `NodeAttrs` /
-  `EdgeAttrs` / `GraphAttrs` no longer carry `[extra: string]` index
-  signatures. The IR field set is now finite and known, so a canonical
-  serialisation has no "what about unexpected keys?" hole.
-- **Fully explicit edges** (`#2`, commit `2d1d5ad2`): linear fall-through is
-  gone (E032). The edge set is exactly `start→first` + authored
-  `next`/`on`/`routes` + goal-gate retargets — no synthesis that depends on
-  declaration order. The graph is a pure function of the source.
-- **kebab → snake lowering + single substitution token**: authoring is
-  kebab-case but the IR is snake_case (`thread_id`, `max_retries`, …), and
-  `${{ inputs.x }}` is the only substitution token (`$ARGUMENTS` removed).
-  So the IR is independent of authoring cosmetics.
+## IR cleanup (do this first — a clean IR is a hashable IR)
 
-`canonicalStringify` (`packages/core/src/handler/canonical-stringify.ts`)
-already exists — sorts object keys, NFC-normalises strings, rejects
-`undefined`/`BigInt`/`Date`/cycles/non-finite, detects post-NFC duplicate
-keys. It's the serialiser used for side-effect `argsHash` and is the natural
-basis for an IR hash.
+The current `Graph` (`packages/core/src/types/graph.ts`) carries cruft that
+either pollutes the hash or is plain dead. Removing it is a prerequisite, not
+a nicety — every stray field is a place for two semantically-equal workflows
+to hash apart, or for a representation detail to leak into identity.
 
-## The shape on the wire / in the store
+| Field | Action | Evidence |
+|---|---|---|
+| `Graph.directed: true` | remove | zero readers; constant. |
+| `AttrScalar` (exported type) | remove | only the definition exists post-#5; no references. |
+| `NodeAttrs.timeout` (duration string) | remove; keep `max_ms` | parser only maps `timeout-minutes`→`max_ms`; nothing writes `timeout`. The `auto-dispatcher` branch reading it is dead. |
+| `EdgeAttrs.thread_id` | remove | parser never sets it; the `engine/thread.ts` edge-fallback rung is unreachable. |
+| `NodeAttrs.fallback_retry_target` + graph-level fallback rung | remove; collapse the §3.4 retarget chain to `gate.retry_target → graph.retry_target` | no authoring path sets either fallback; they're aspirational rungs in `goal-gate-policy.ts` / `executor.ts` with no producer. |
+| `Node.id` | drop from the canonical/stored form (re-attach `id = key` on hydrate) | redundant with the `nodes` map key; a place for key/value disagreement. |
+| `HandlerType` alias + `handlerOf()` | inline to `node.type` at the 2 web call sites, drop the seam | `handlerOf(n) === n.type` since the codergen→llm unification. |
+| `goal_gate` | **keep** | not redundant — marks gate-ness independently of the retarget destination (the W007 "gate with no retarget" case is a real, expressible state). |
 
-The in-memory `Graph` (`packages/core/src/types/graph.ts`) is already JSON:
-`{ id, directed:true, attrs, nodes: Record<id,Node>, edges: Edge[] }`. The
-JSON IR is that, plus an explicit version tag and minus the non-semantic
-bits (see adversarial §, below):
+Each removal is its own small PR with a test delta; none changes runtime
+behaviour (they're dead reads or constants).
 
-```jsonc
-{
-  "irVersion": 1,            // workflow-IR shape version (NOT the DB schema_version)
-  "id": "work",
-  "directed": true,
-  "attrs": { /* GraphAttrs */ },
-  "nodes": { "<id>": { "type": "...", "attrs": { /* NodeAttrs */ } } },
-  "edges": [ { "from": "...", "to": "...", "attrs": { /* EdgeAttrs */ } } ]
-}
+## Parse output: decomplect IR from source metadata
+
+`parseWorkflow` currently returns a `Graph` with `loc` embedded on every node
+and edge. Split the two concerns:
+
+```ts
+parseWorkflow(source: string): { ir: WorkflowIR; sourceMap: SourceMap }
 ```
 
-`POST /workflows` and `POST /runs`'s disk-resolution path already parse the
-source for validation; they'd attach the IR to the registration. The daemon
-stops calling `parseWorkflow(wf.dotSource)` at dispatch and reads the stored
-IR (parse-once, not parse-per-dispatch).
+- **`WorkflowIR`** — the pure semantic graph. No `loc`, no `Node.id`, no
+  `directed`. This is what gets hashed, stored, hydrated, and run.
+- **`SourceMap`** — `Map<nodeId | edgeKey, Location>`, the line/col index. Used
+  *only* by the validator to anchor diagnostics at the offending source line
+  (the sole consumer of `loc` today). Lives for the duration of validation;
+  never persisted.
 
-## Adversarial pass
+`validate(ir, sourceMap)` takes both. So a diagnostic still points at
+`work.yaml:42`, but the artifact we hash and store has no source coupling.
 
-The naive form — *"replace `dot_source` with the JSON IR and set
-`sha = sha256(canonicalIR)`"* — breaks in several ways. Each is a real
-hazard, not a nit:
+## Canonical form + hashing (the core)
 
-1. **Re-hashing orphans every historical run.** `run_state.workflow_sha` is
-   `NOT NULL REFERENCES workflows(sha)`. If the content address changes from
-   `hash(source)` to `hash(IR)`, every existing run's FK dangles and the
-   `idx_run_state_workflow` join breaks. A migration cannot re-key
-   `workflows` without rewriting `run_state` too, and even then the *old*
-   shas are baked into terminal `fact.run_started { workflowSha }` events
-   (immutable log). **Conclusion: the primary content address must stay
-   `hash(source)`.** Re-hashing is not a migration; it's a data loss.
+`canonicalStringify` (`packages/core/src/handler/canonical-stringify.ts`)
+already gives byte-identical output for structurally-equal values: sorts
+object keys, NFC-normalises strings, rejects `undefined`/`NaN`/`Date`/cycles,
+detects post-NFC duplicate keys. It does **not** reorder arrays. So the
+canonical IR is `canonicalStringify(normalize(ir))` where `normalize` pins
+every degree of freedom `canonicalStringify` leaves open:
 
-2. **`hash(IR)` is not stable across engine versions.** The whole value of
-   content-addressing is "same input → same sha → dedup + cache". But the IR
-   shape evolves (every `irVersion` bump). Adding a field, baking a new
-   default into `attrs`, or normalising differently changes `hash(IR)` for a
-   *byte-identical source*. So `hash(IR)` is only stable *within* one
-   `irVersion` — it cannot be the durable identity. `hash(source)` is the
-   only thing stable across engine upgrades.
+1. **Strip non-semantic fields** — `loc` (already gone post-decomplect),
+   `Node.id` (key is authoritative), `directed`.
+2. **Omit absent/empty** — drop `undefined`, `[]`, `""` so "key absent" and
+   "key present but empty" hash identically. (Also dodges the
+   `canonicalStringify`-throws-on-`undefined` landmine.)
+3. **Sort set-semantic arrays** — `allowed_tools`, `denied_tools`, `skills`,
+   `routes`, and `inputs[]` (by `name`) are sets; `[read, bash]` and
+   `[bash, read]` mean the same thing, so sort them. (Order is not meaningful
+   for any IR array — there is no ordered list in the IR.)
+4. **Sort edges** by `(from, to, outcome ?? "", route ?? "")` — `edges` is a
+   JS array but edge *selection* keys on `outcome`/`route` (E024 forbids
+   collisions), so order is non-semantic and must be normalised away.
+5. **Exclude `irVersion`** from the hashed bytes — it's representation
+   metadata, not workflow content (decision 4).
 
-3. **`loc` is in the IR and is non-semantic.** `Node`/`Edge` carry
-   `loc: {line,col}` for error reporting. Two sources differing only in
-   comments/whitespace produce identical semantics but different `loc` →
-   different `hash(IR)`. Any IR hash MUST strip `loc` (and any future
-   source-position metadata) first.
+### Why this gives "version iff the workflow changed"
 
-4. **Edge order is array order; `canonicalStringify` preserves it.** `edges`
-   is `Edge[]`. Sorted-key canonicalisation does *not* reorder arrays, so
-   reordering two sibling edges in the source changes `hash(IR)` even though
-   edge selection keys on `outcome`/`route` (validator E024 forbids
-   collisions, so order is not a tiebreak). A semantic IR hash must sort
-   edges by a stable key (`from,to,outcome,route`). *But* if we keep
-   `hash(source)` as identity (per §1), this only matters for an *optional*
-   semantic hash — don't pay the complexity unless that hash earns its keep.
+The hash domain is *only* the load-bearing semantic fields, in a form that
+doesn't depend on the IR's representation version:
 
-5. **Storing only the IR loses the source.** The UI "view workflow", audit,
-   and any re-export need the human YAML (comments, structure). Replacing
-   `dot_source` with IR-JSON throws that away. Keep the source; *add* the IR.
+- **Cosmetic source edit** (comment, whitespace, reorder tools/edges, kebab
+  spelling) → same normal form → same sha. ✓ (decision 1)
+- **Additive `irVersion` bump** (engine adds an optional field a workflow
+  doesn't set) → the field is omitted by rule 2 → same sha. ✓ (decision 4)
+- **Representation rename** (engine renames a field, or moves where a value
+  lives) → handled by an **upcast** `(irVersion n → n+1)` that runs on
+  hydrate; the hash is always computed over the *current* normal form, so a
+  pure rename normalises to the same bytes → same sha. ✓
+- **Real semantic change** (author changes a prompt, model, edge, retarget)
+  → different normal form → new sha. ✓ (this is the only thing that should
+  mint a version)
 
-6. **Three things called "version" now collide.** (a) DB `schema_version`
-   (`CURRENT_SCHEMA_VERSION=14`, migrations); (b) run-pinned `schema_version`
-   (drift-halt across pauses); (c) this new workflow **`irVersion`**. They
-   are independent axes. Name the new one unambiguously (`irVersion`, never
-   bare `version`/`schema_version`) or on-call debugging conflates them.
+Upcasters are the price: every breaking IR-shape change ships an
+`(n → n+1)` function, kept forever, with a golden-IR test proving an
+unchanged workflow's sha is stable across the bump. That maintenance is the
+mechanism that keeps identity stable across representation churn.
 
-7. **`Node.id` duplicates the map key.** `nodes` is `Record<id,Node>` and
-   each `Node` repeats `.id`. In a canonical form that's a redundant field
-   that can disagree with its key. Drop `.id` from the canonical value (the
-   key is authoritative) or assert equality on parse.
+### One open question for you
 
-8. **`undefined` vs absent.** `canonicalStringify` *throws* on `undefined`.
-   The parser already omits unset attrs (`if (coerced !== undefined)`), so
-   today it's safe — but it's a latent landmine: any future code path that
-   sets `attrs.foo = undefined` turns a hash call into a throw. A
-   normalisation pass (drop `undefined`/empty before hashing) makes this
-   robust instead of incidentally-correct.
+**Is the workflow `id` (the `name:`) part of the content hash?** Two readings:
 
-9. **Defaults are baked in.** The parser folds the `defaults:` block into
-   each llm node. So two sources — one explicit `model:`, one relying on the
-   same default — produce the *same* IR. Generally desirable (the resolved
-   graph is what runs), but it means the IR is not a faithful round-trip of
-   the source: you cannot reconstruct "was this explicit or defaulted?" from
-   the IR. Fine if source is retained (§5); surprising if not.
+- **Exclude it** (recommended): `id` is a *handle*, the `(scope, name) → sha`
+  alias carries it, and renaming a workflow doesn't mint a new version. Two
+  identically-structured workflows with different names collapse to one sha —
+  which is correct for a content-addressed store (they *are* the same
+  content). Closest to "content addressing".
+- **Include it**: a rename counts as a new version; identical-but-differently-
+  named workflows stay distinct. Simpler mental model ("the file is the
+  unit") but couples identity to a label.
 
-## Recommendation
+I lean exclude. Flagging because it's a genuine judgment call, not derivable.
 
-Survive the adversarial pass by **adding, not replacing**:
+## Storage
 
-| Column (`workflows`) | Meaning |
+`workflows` table after the change:
+
+| Column | Meaning |
 |---|---|
-| `sha` (PK, unchanged) | `sha256(source)` — durable identity; preserves run FKs + log. |
-| `source` (rename of `dot_source`) | YAML text — display / audit / re-parse fallback. |
-| `ir` (new, TEXT) | `canonicalStringify` of the parsed IR (loc-stripped, `Node.id` dropped). Execution + wire payload. |
-| `ir_version` (new, INTEGER) | Workflow-IR shape version. Gates a stored IR against the running engine, exactly like run `schema_version`. |
+| `sha` (PK) | `sha256(canonical IR)` — semantic content address. |
+| `ir` (TEXT) | `canonicalStringify(normalize(ir))` — the hydration + wire payload. |
+| `ir_version` (INTEGER) | representation version of the stored `ir`; gates the upcast-on-read. |
+| `created_at` | unchanged. |
 
-- **Identity stays `hash(source)`** — no re-hash, no FK rewrite, no orphaned
-  runs (kills §1, §2).
-- **The IR is a derived cache**, not the identity. On read, if
-  `ir_version < CURRENT_IR_VERSION` (or `ir` is NULL — migrated rows), re-parse
-  `source` and refresh `ir`/`ir_version` in place. The source is always the
-  ground truth; the IR is a parse-once optimisation + the canonical wire
-  shape.
-- **`irVersion`** is bumped only on a breaking IR-shape change (field added
-  the engine *requires*, semantics of an existing field changed). Additive,
-  optional fields don't bump it. Compatibility window mirrors the run
-  `schema_version` pattern: `[MIN_COMPATIBLE_IR_VERSION, CURRENT_IR_VERSION]`.
-- **A semantic `hash(IR)`** (loc-stripped, edges-sorted) is *deferred* — it
-  only buys dedup across cosmetic source edits, and per the "need demand
-  first" rule we add it when a concrete consumer wants it, not speculatively.
-  When added it's a separate non-PK column, never the identity.
-- **`(scope, name)` aliasing** (the lineage table from the original #26
-  sketch) is orthogonal to all of the above and can land independently — it
-  maps a human handle to the latest `sha`, which is useful whether or not the
-  IR is stored.
+`dot_source` is **gone** (not renamed — there's no source at rest). On read:
+if `ir_version < CURRENT_IR_VERSION`, run the upcast chain to current and (optionally) rewrite the row. The daemon hydrates `ir` directly — no
+`parseWorkflow` at dispatch. `name` moves to the `(scope, name) → sha` alias
+table (orthogonal; can land with or before this).
 
-Net: the user-visible win (typed IR on the wire, parse-once dispatch, version
-gating) lands without destabilising the content address or losing source.
+## Migration (pre-release — clean reset)
 
-## Migration
-
-1. `ALTER TABLE workflows RENAME COLUMN dot_source TO source` (+ rename
-   `WorkflowRow.dotSource` → `source`, `saveWorkflow(…, source)`,
-   `insertWorkflowIfAbsent`, the daemon/agent/server readers — the
-   identifier sweep deferred in [[dot-retirement-deferrals]]).
-2. `ALTER TABLE workflows ADD COLUMN ir TEXT` (nullable) `+ ADD COLUMN
-   ir_version INTEGER` (nullable). Existing rows: `ir = NULL` → lazily
-   backfilled by the re-parse-on-read path. No re-hash; `sha` untouched.
-3. Daemon dispatch: read `ir` when present + `ir_version` in range; else
-   `parseWorkflow(source)`, write back. ARCH §2 schema table + the
-   `dot_source` references in ARCH/handler-contract updated in the same PR
-   (AGENTS.md §1 obligation).
+No backward-compat obligation. The pragmatic path: bump the DB schema
+version, drop + recreate `workflows` with the new columns, and let the next
+upload of each workflow re-register it under its IR-sha. Existing `run_state`
+rows reference old source-shas; pre-release we accept they're abandoned (or
+truncate dev runs). The `dot_source` identifier sweep deferred in
+[[dot-retirement-deferrals]] is subsumed — the column ceases to exist.
 
 ## Deferred / open
 
-- Semantic `hash(IR)` for cosmetic-edit dedup (above) — needs a demand.
-- Typebox-first IR schema authority in `@swarm/types` (generate the validator
-  + JSON Schema for editor IntelliSense from one source) — larger; pairs with
-  the JSON-Schema-for-config idea cut from project-config.
-- Whether `POST /workflows` should accept a pre-built IR (API clients that
-  don't want to ship YAML) — only if a non-CLI client appears.
+- The `id`-in-hash question above.
+- `(scope, name)` alias table — orthogonal lineage; spec separately if not
+  folded in here.
+- Typebox-first IR schema in `@swarm/types` (one source generates the
+  validator + the JSON Schema for editor IntelliSense + the upcast targets).
+- `POST /workflows` accepting a pre-built IR (non-YAML clients) — only on
+  demand.
