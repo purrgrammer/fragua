@@ -31,6 +31,20 @@ const RawRunStatus = Type.Union([
   Type.Literal("quarantined"),
 ]);
 
+/** Per-side diff stat — mirrors `@swarm/types` SnapshotStat. */
+const SnapshotStat = Type.Object({
+  filesChanged: Type.Integer({ minimum: 0 }),
+  insertions: Type.Integer({ minimum: 0 }),
+  deletions: Type.Integer({ minimum: 0 }),
+});
+
+/** Terminal diff projection (`run_state.change_stat`): workflow-authored
+ * commits vs. agent dirt; either side null when absent. */
+const ChangeStat = Type.Object({
+  committed: Type.Union([SnapshotStat, Type.Null()]),
+  uncommitted: Type.Union([SnapshotStat, Type.Null()]),
+});
+
 /** Summary row returned by `GET /runs`. */
 export const RunSummary = Type.Object({
   runId: Type.String(),
@@ -52,6 +66,11 @@ export const RunSummary = Type.Object({
    * the only project identifier in the harness-by-default model. Absent
    * for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
+  /** Worktree inbox status (docs/proposals/worktrees.md). Present only on
+   * terminal worktree runs; `pending` = awaiting an operator primitive. */
+  inboxStatus: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("acted"), Type.Literal("discarded")])),
+  /** Terminal diff stat — drives the inbox row's `+X / −Y, N files` badge. */
+  changeStat: Type.Optional(ChangeStat),
 });
 export type RunSummary = Static<typeof RunSummary>;
 

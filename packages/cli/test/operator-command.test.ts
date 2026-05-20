@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createServer } from "@swarm/server";
 import { type IEventStore, SqliteStore } from "@swarm/store";
-import { branchCommand, commitCommand, discardCommand, mergeCommand } from "../src/commands/operator.ts";
+import { branchCommand, commitCommand, discardCommand, inboxCommand, mergeCommand } from "../src/commands/operator.ts";
 
 const BASE = "a".repeat(40);
 const COMMIT = "b".repeat(40);
@@ -138,5 +138,19 @@ describe("swarm operator verbs", () => {
   test("branch: unknown run → exit 1 (404 surfaced)", async () => {
     const code = await branchCommand({ runId: "nope", branch: "x", url: r.url });
     expect(code).toBe(1);
+  });
+
+  test("inbox: lists pending runs by id, filters cwd, exit 0", async () => {
+    seedCommitted(r.store, "in-1"); // committed-history → inbox_status=pending, cwd=/tmp/repo
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await inboxCommand({ url: r.url, cwd: "/tmp/repo" });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("in-1");
+    expect(out).toContain("+5"); // committed stat round-trips server → adapter → CLI
   });
 });

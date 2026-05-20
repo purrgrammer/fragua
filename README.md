@@ -1,15 +1,22 @@
 # swarm
 
-A universal AI agent orchestrator. You write workflows in plain YAML
-(GitHub-Actions-style `steps:`) — steps are LLM calls, shell commands,
-or human-in-the-loop gates — and swarm runs them through a
-deterministic state machine against any LLM provider, with every step
-recorded to a SQLite event log you can replay, steer, pause, or resume.
+A team's git-native library of agentic workflows that compounds as
+people contribute. You write workflows in plain YAML
+(GitHub-Actions-style `steps:`) — LLM calls, shell commands, or
+human-in-the-loop gates — commit them to your repo, and run them two
+ways: **locally** while you develop them, and in **CI** fired by
+triggers (a PR opening, a schedule, a failed build) for jobs like PR
+review, dependency / vulnerability fixes, security audits, automatic
+CI fixes, and docs/repo-drift checks. Every run is recorded to a
+SQLite event log you can replay, steer, pause, or resume — and in CI
+ships as a downloadable, secret-free audit artifact.
 
-It's local-first (one process, one SQLite file under `~/.swarm/`),
-provider-agnostic (15+ inference backends via [`pi-ai`](https://github.com/badlogic/pi-mono)),
-and built on the assumption that the **control plane** is worth being
-deterministic even when the LLM bodies are not.
+Provider-agnostic (15+ inference backends via [`pi-ai`](https://github.com/badlogic/pi-mono)),
+models à la carte per step, cost-controlled, and built on the
+assumption that the **control plane** is worth being deterministic
+even when the LLM bodies are not. **Local and CI are the targets** — it
+is deliberately *not* a multi-tenant server (see
+[`docs/deployment.md`](docs/deployment.md)).
 
 ## Why you might care
 
@@ -106,6 +113,7 @@ or drop its work from the terminal — no checkout, nothing in your `git
 branch` until you ask for it:
 
 ```sh
+bun run swarm inbox                                           # list runs awaiting a decision
 bun run swarm diff   <runId> [--against base|previous|<idx>]  # review what it changed
 bun run swarm branch <runId> <branch> [--force]               # committed history → a branch
 bun run swarm commit <runId> -m "msg" [--onto <branch>]       # full tree (incl. dirt) → one commit

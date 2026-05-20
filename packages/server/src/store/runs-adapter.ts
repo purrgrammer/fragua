@@ -102,6 +102,18 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
   const input = pickInput(routing);
   if (input !== undefined) summary.input = input;
   if (row.cwd != null) summary.cwd = row.cwd;
+
+  if (row.inboxStatus === "pending" || row.inboxStatus === "acted" || row.inboxStatus === "discarded") {
+    summary.inboxStatus = row.inboxStatus;
+  }
+  if (row.changeStat != null) {
+    try {
+      const parsed = JSON.parse(row.changeStat) as RunSummary["changeStat"];
+      if (parsed != null) summary.changeStat = parsed;
+    } catch {
+      // malformed JSON — omit rather than fail the list
+    }
+  }
   return summary;
 }
 

@@ -78,6 +78,16 @@ export interface RunSummary {
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;
+  /** Worktree inbox status (docs/proposals/worktrees.md). `pending` =
+   * a terminal run with recoverable work awaiting an operator primitive.
+   * Absent on non-worktree runs. */
+  inboxStatus?: "pending" | "acted" | "discarded";
+  /** Terminal diff stat — committed (workflow commits) vs uncommitted
+   * (agent dirt); either side null. Drives the inbox row's change badge. */
+  changeStat?: {
+    committed: SnapshotChangeStat | null;
+    uncommitted: SnapshotChangeStat | null;
+  };
 }
 
 export interface NodeState {

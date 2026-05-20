@@ -147,6 +147,44 @@ interface SnapshotRow {
   label: string;
 }
 
+interface InboxRunRow {
+  runId: string;
+  title?: string;
+  runStatus?: string;
+  changeStat?: {
+    committed: { filesChanged: number; insertions: number; deletions: number } | null;
+    uncommitted: { filesChanged: number; insertions: number; deletions: number } | null;
+  };
+}
+
+export interface InboxOptions extends DiscoveryOpts {
+  limit?: number;
+}
+
+export async function inboxCommand(opts: InboxOptions): Promise<number> {
+  const baseUrl = await resolveBaseUrl(opts);
+  const cwd = resolve(opts.cwd ?? process.cwd());
+  const params = new URLSearchParams({ inbox: "pending", order: "oldest", cwd });
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const res = await fetch(`${baseUrl}/runs?${params.toString()}`);
+  if (!res.ok) return failResponse("inbox", res);
+  const rows = (await res.json()) as InboxRunRow[];
+  if (rows.length === 0) {
+    console.log(chalk.dim("inbox: no runs awaiting an operator decision"));
+    return 0;
+  }
+  for (const r of rows) {
+    const stat = r.changeStat?.committed ?? r.changeStat?.uncommitted ?? null;
+    const counts = stat
+      ? ` ${chalk.dim(`(${stat.filesChanged} files, `)}${chalk.green(`+${stat.insertions}`)}${chalk.dim(" / ")}${chalk.red(`−${stat.deletions}`)}${chalk.dim(")")}`
+      : "";
+    const title = r.title != null && r.title.length > 0 ? r.title : chalk.dim("(untitled)");
+    console.log(`${chalk.cyan(r.runId)}  ${title}${counts}`);
+  }
+  console.log(chalk.dim(`\n${rows.length} run(s) — act with: swarm branch|commit|merge|discard <runId>`));
+  return 0;
+}
+
 export interface DiffOptions extends DiscoveryOpts {
   runId: string;
   against?: string;

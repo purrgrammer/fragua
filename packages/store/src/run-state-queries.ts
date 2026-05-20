@@ -16,7 +16,7 @@
 // where they care about recency.
 
 import type { Database } from "bun:sqlite";
-import type { RunStatus } from "@swarm/types";
+import type { InboxStatus, RunStatus } from "@swarm/types";
 
 // ─────────────────────────────────────────────────────────────────────
 // Row types
@@ -125,7 +125,11 @@ export interface ListRunIdsOpts {
   limit?: number;
 }
 
-export type ListRunSummaryRowsOpts = ListRunIdsOpts;
+export interface ListRunSummaryRowsOpts extends ListRunIdsOpts {
+  /** Narrow to a single inbox status (`pending` powers the worktree inbox
+   *  view + `swarm inbox`). `undefined` = no inbox filter. */
+  inbox?: InboxStatus;
+}
 
 export interface RunSummaryRow {
   runId: string;
@@ -145,6 +149,8 @@ export interface RunSummaryRow {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
+  inboxStatus: string | null;
+  changeStat: string | null;
 }
 
 /** Enumerate run ids with filtering, ordering, and limit pushed into SQL.
@@ -176,7 +182,7 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
 /** SQL-backed projection for `GET /runs`. Avoids hydrating full event
  *  logs just to derive count, duration, and title fallback. */
 export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts = {}): RunSummaryRow[] {
-  const { statuses, cwd, order = "newest", limit } = opts;
+  const { statuses, cwd, order = "newest", limit, inbox } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
 
   const clauses: string[] = [];
@@ -189,6 +195,10 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
     clauses.push("r.cwd = ?");
     args.push(cwd);
   }
+  if (inbox !== undefined) {
+    clauses.push("r.inbox_status = ?");
+    args.push(inbox);
+  }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const orderBy = order === "oldest" ? "r.enqueued_at ASC" : "r.updated_at DESC";
@@ -198,7 +208,7 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
   const sql = `
     WITH selected AS (
       SELECT r.run_id, r.workflow_sha, r.workflow_name, r.status, r.routing, r.metrics,
-             r.title, r.cwd, r.enqueued_at, r.updated_at
+             r.title, r.cwd, r.enqueued_at, r.updated_at, r.inbox_status, r.change_stat
         FROM run_state r
         ${where}
        ORDER BY ${orderBy}, r.run_id ASC
@@ -236,7 +246,9 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
            CAST(COALESCE(json_extract(s.metrics, '$.totalInputTokens'), 0) AS INTEGER) AS totalInputTokens,
            CAST(COALESCE(json_extract(s.metrics, '$.totalOutputTokens'), 0) AS INTEGER) AS totalOutputTokens,
            CAST(COALESCE(json_extract(s.metrics, '$.totalCacheReadTokens'), 0) AS INTEGER) AS totalCacheReadTokens,
-           CAST(COALESCE(json_extract(s.metrics, '$.totalCacheWriteTokens'), 0) AS INTEGER) AS totalCacheWriteTokens
+           CAST(COALESCE(json_extract(s.metrics, '$.totalCacheWriteTokens'), 0) AS INTEGER) AS totalCacheWriteTokens,
+           s.inbox_status AS inboxStatus,
+           s.change_stat AS changeStat
       FROM selected s
       LEFT JOIN workflows w ON w.sha = s.workflow_sha
       LEFT JOIN event_bounds eb ON eb.run_id = s.run_id

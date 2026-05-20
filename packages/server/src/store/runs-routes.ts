@@ -24,6 +24,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // Query params (all optional, all enforced server-side):
     //   ?status=a,b,c                 — narrow to specific lifecycle statuses.
     //   ?cwd=<path>                   — narrow to a single project root.
+    //   ?inbox=pending|acted|discarded — narrow to a worktree inbox status.
     //   ?order=oldest                 — surface longest-waiting first (Inbox).
     //   ?limit=N                      — cap the result, clamped to [1, 200].
     // Unknown statuses are dropped silently — a typo shouldn't 400 a
@@ -33,10 +34,14 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const cwdParam = c.req.query("cwd");
     const order: "newest" | "oldest" = c.req.query("order") === "oldest" ? "oldest" : "newest";
     const limit = parseLimit(c.req.query("limit"));
+    const inboxParam = c.req.query("inbox");
     const queryOpts: Parameters<typeof store.listRunSummaryRows>[0] = { order };
     if (statuses !== undefined) queryOpts.statuses = statuses;
     if (cwdParam !== undefined && cwdParam.length > 0) queryOpts.cwd = cwdParam;
     if (limit !== undefined) queryOpts.limit = limit;
+    if (inboxParam === "pending" || inboxParam === "acted" || inboxParam === "discarded") {
+      queryOpts.inbox = inboxParam;
+    }
     return c.json(store.listRunSummaryRows(queryOpts).map(runSummaryRowToSummary));
   });
 

@@ -13,7 +13,14 @@ import { dbCommand } from "../src/commands/db.ts";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
-import { branchCommand, commitCommand, diffCommand, discardCommand, mergeCommand } from "../src/commands/operator.ts";
+import {
+  branchCommand,
+  commitCommand,
+  diffCommand,
+  discardCommand,
+  inboxCommand,
+  mergeCommand,
+} from "../src/commands/operator.ts";
 import {
   providersAddCommand,
   providersAddCustomCommand,
@@ -480,6 +487,28 @@ cli
   .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
   .action(async (runId: string, options: Record<string, unknown>) => {
     process.exit(await discardCommand({ runId, ...discovery(options) }));
+  });
+
+cli
+  .command("inbox", "List terminal runs with recoverable work awaiting an operator primitive")
+  .option("--limit <n>", "Cap the number of runs shown")
+  .option("--cwd <dir>", "Project root (default process.cwd)")
+  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .action(async (options: Record<string, unknown>) => {
+    const limitRaw = options["limit"];
+    const limit =
+      typeof limitRaw === "number"
+        ? limitRaw
+        : typeof limitRaw === "string"
+          ? Number.parseInt(limitRaw, 10)
+          : undefined;
+    process.exit(
+      await inboxCommand({
+        ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
+        ...discovery(options),
+      }),
+    );
   });
 
 cli
