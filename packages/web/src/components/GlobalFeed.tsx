@@ -23,6 +23,9 @@ import {
   AlertTriangle,
   Check,
   Clock,
+  GitBranch,
+  GitCommitHorizontal,
+  GitMerge,
   Inbox,
   Pause,
   Play,
@@ -30,6 +33,7 @@ import {
   Server,
   ShieldAlert,
   TimerOff,
+  Trash2,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -39,6 +43,7 @@ import type { RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { rowEnterFromTop } from "../lib/feedMotion.ts";
 import { feedAtom, feedEventKey, feedLoadingAtom } from "../lib/globalFeed.ts";
+import { humanizeOperatorActionVerb } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatRelative } from "../lib/time.ts";
@@ -141,6 +146,12 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_requeued_after_crash": { Icon: RotateCcw, verb: "requeued" },
   "fact.daemon_takeover": { Icon: Server, verb: "takeover", attention: true },
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
+  // Post-terminal operator actions — informational, no attention strip.
+  // Verb is payload-aware: see metaForEvent below.
+  "fact.run_branched": { Icon: GitBranch, verb: "branched", iconClass: "text-sw-muted" },
+  "fact.run_committed": { Icon: GitCommitHorizontal, verb: "committed", iconClass: "text-sw-muted" },
+  "fact.run_merged": { Icon: GitMerge, verb: "merged", iconClass: "text-sw-muted" },
+  "fact.run_discarded": { Icon: Trash2, verb: "discarded", iconClass: "text-sw-muted" },
 };
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
@@ -184,6 +195,9 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
     if (fromStatus === "paused") return { ...base, verb: "retrying" };
     if (fromStatus === "paused_auto") return { ...base, verb: "retrying" };
   }
+  // Operator-action facts: build a payload-aware verb from the humanize helper.
+  const opVerb = humanizeOperatorActionVerb(event.type, (event.payload ?? {}) as Record<string, unknown>);
+  if (opVerb !== null) return { ...base, verb: opVerb };
   return base;
 }
 
@@ -193,8 +207,7 @@ export function GlobalFeed(): JSX.Element {
   const reduce = useReducedMotion() ?? false;
 
   // Render newest-first — operators glance at the top of the list.
-  // Mechanical types (e.g. `fact.run_branched`) are kept in the atom but
-  // suppressed here so the operator-facing list stays signal-only.
+  // Types in HIDDEN_FEED_TYPES are kept in the atom but suppressed here.
   const rows = useMemo(() => events.filter((e) => !isFeedRowHidden(e)).reverse(), [events]);
 
   return (

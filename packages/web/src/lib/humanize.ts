@@ -48,6 +48,35 @@ export function humanizeNodeCompletedSuffix(payload: { route?: string; outcomeSt
   return "";
 }
 
+/** Build a short feed verb for the four post-terminal operator-action facts.
+ *  Returns `null` for any other event type.
+ *
+ *  - fact.run_branched  → "branched → <branch>"
+ *  - fact.run_committed → "committed onto <targetBranch>"
+ *  - fact.run_merged    → "merged into <targetBranch>"
+ *  - fact.run_discarded → "discarded"
+ */
+export function humanizeOperatorActionVerb(type: string, payload: Record<string, unknown>): string | null {
+  switch (type) {
+    case "fact.run_branched": {
+      const branch = typeof payload["branch"] === "string" ? payload["branch"] : "";
+      return branch.length > 0 ? `branched → ${branch}` : "branched";
+    }
+    case "fact.run_committed": {
+      const target = typeof payload["targetBranch"] === "string" ? payload["targetBranch"] : "";
+      return target.length > 0 ? `committed onto ${target}` : "committed";
+    }
+    case "fact.run_merged": {
+      const into = typeof payload["targetBranch"] === "string" ? payload["targetBranch"] : "";
+      return into.length > 0 ? `merged into ${into}` : "merged";
+    }
+    case "fact.run_discarded":
+      return "discarded";
+    default:
+      return null;
+  }
+}
+
 // ── Status → category collapse (4 buckets) ─────────────────────────────
 
 /** Coarse outcome buckets the Runs / Outcomes charts render as a single

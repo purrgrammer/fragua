@@ -80,6 +80,38 @@ describe("metaForEvent", () => {
   });
 });
 
+describe("metaForEvent — operator-action facts", () => {
+  test("fact.run_branched builds payload-aware verb with branch name", () => {
+    const m = metaForEvent(evt("fact.run_branched", { branch: "feature/my-fix", sha: "abc" }));
+    expect(m.verb).toBe("branched → feature/my-fix");
+    expect(m.attention).toBeFalsy();
+  });
+
+  test("fact.run_committed includes targetBranch in verb", () => {
+    const m = metaForEvent(
+      evt("fact.run_committed", { targetBranch: "main", sha: "d0", message: "m", parentSha: "p" }),
+    );
+    expect(m.verb).toBe("committed onto main");
+  });
+
+  test("fact.run_merged includes targetBranch in verb", () => {
+    const m = metaForEvent(evt("fact.run_merged", { targetBranch: "main", mode: "ff", sha: "e0", parentShas: [] }));
+    expect(m.verb).toBe("merged into main");
+  });
+
+  test("fact.run_discarded renders static verb", () => {
+    const m = metaForEvent(evt("fact.run_discarded", { refs: [] }));
+    expect(m.verb).toBe("discarded");
+    expect(m.attention).toBeFalsy();
+  });
+
+  test("operator-action facts fall back gracefully when payload fields are absent", () => {
+    expect(metaForEvent(evt("fact.run_branched", {})).verb).toBe("branched");
+    expect(metaForEvent(evt("fact.run_committed", {})).verb).toBe("committed");
+    expect(metaForEvent(evt("fact.run_merged", {})).verb).toBe("merged");
+  });
+});
+
 describe("isFeedRowHidden", () => {
   test("hides fact.subrun_completed as defense in depth", () => {
     expect(isFeedRowHidden(evt("fact.subrun_completed", { runId: "child-1" }))).toBe(true);
@@ -89,7 +121,8 @@ describe("isFeedRowHidden", () => {
     expect(isFeedRowHidden(evt("fact.message_appended", { ordinal: 0, role: "assistant" }))).toBe(false);
   });
 
-  test("does not hide fact.run_branched / fanout_started / fanout_completed (server no longer ships them)", () => {
+  test("does not hide fact.run_branched / fanout_started / fanout_completed", () => {
+    // fact.run_branched is now in FEED_EVENT_KINDS and ships through the feed.
     expect(isFeedRowHidden(evt("fact.run_branched", { branch: "swarm/runs/abc" }))).toBe(false);
     expect(isFeedRowHidden(evt("fact.fanout_started", { fanoutId: "f1", count: 2 }))).toBe(false);
     expect(isFeedRowHidden(evt("fact.fanout_completed", { fanoutId: "f1" }))).toBe(false);

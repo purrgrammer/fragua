@@ -35,6 +35,14 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
   "fact.run_halted",
   "fact.run_quarantined",
   "fact.run_requeued_after_crash",
+  // Post-terminal operator actions: inbox_status transitions (pending → acted/discarded)
+  // must clear the WorktreeInbox row in any open tab, not just the tab that fired the action.
+  "fact.run_branched",
+  "fact.run_committed",
+  "fact.run_merged",
+  "fact.run_discarded",
+  // Auto-titler: run card title stays stale after enqueue until the title lands.
+  "run.title_generated",
 ]);
 
 export interface UseGlobalEventStreamOptions {

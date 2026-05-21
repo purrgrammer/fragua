@@ -12,7 +12,6 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
-import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
   BookOpen,
@@ -27,7 +26,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
-import { queries } from "../lib/queries.ts";
+import { useInboxCounts } from "../lib/useInboxCounts.ts";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
 import {
@@ -110,21 +109,20 @@ export function AppSidebar(): JSX.Element {
   );
 }
 
-const INBOX_FILTER = { inbox: "pending" as const, order: "oldest" as const };
-
-/** Count badge for the Inbox nav row. Queries the same cache slot as
- * WorktreeInbox so there is exactly one fetch for both consumers. */
+/** Count badge for the Inbox nav row.
+ * Shows blocked runs (paused/quarantined) + worktree-pending combined.
+ * Reuses the same query cache slots as Inbox and WorktreeInbox so there
+ * are no extra fetches. */
 function InboxPendingBadge(): JSX.Element | null {
   const { state } = useSidebar();
-  const { data } = useQuery(queries.runs.list(INBOX_FILTER));
-  const count = data?.length ?? 0;
-  if (count === 0 || state === "collapsed") return null;
+  const { total } = useInboxCounts();
+  if (total === 0 || state === "collapsed") return null;
   return (
     <span
       data-testid="nav-inbox-pending-count"
       className="ml-auto shrink-0 rounded-full bg-[color-mix(in_oklch,var(--sw-accent-warn)_15%,transparent)] px-1.5 py-0.5 text-[length:var(--sw-text-xs)] font-medium text-[var(--sw-accent-warn)] tabular-nums"
     >
-      {count}
+      {total}
     </span>
   );
 }

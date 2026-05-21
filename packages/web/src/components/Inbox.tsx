@@ -31,9 +31,10 @@ import { EmptyState } from "./ui/empty-state.tsx";
 import { SectionTitle } from "./ui/section-title.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
 
-/** Raw lifecycle statuses an operator can act on. Module-scope so the
- * queryKey reference stays stable across renders. */
-const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus"]>> = [
+/** Raw lifecycle statuses an operator can act on. Exported so
+ * `useInboxCounts` and tests can reference the canonical list without
+ * duplicating it. Module-scope keeps the queryKey reference stable. */
+export const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus"]>> = [
   "paused_human",
   "paused",
   "quarantined",
@@ -91,9 +92,13 @@ export interface InboxProps {
   limit?: number;
   /** When set, render a "View all →" link at the section header. */
   viewAllHref?: string;
+  /** Override the section heading. Defaults to "Inbox". */
+  title?: string;
+  /** Override the section's data-testid. Defaults to "inbox". */
+  testId?: string;
 }
 
-export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
+export function Inbox({ limit, viewAllHref, title, testId }: InboxProps): JSX.Element {
   // Ask for `limit + 1` so the extra row signals overflow without a
   // separate count query. Server enforces filter/order/limit.
   const { data, isPending } = useQuery(
@@ -110,7 +115,7 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
   const reduce = useReducedMotion() ?? false;
 
   return (
-    <section data-testid="inbox" className="flex flex-col gap-4">
+    <section data-testid={testId ?? "inbox"} className="flex flex-col gap-4">
       <SectionTitle
         action={
           showViewAll && viewAllHref ? (
@@ -120,7 +125,7 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
           ) : null
         }
       >
-        Inbox
+        {title ?? "Inbox"}
       </SectionTitle>
 
       {isPending ? (

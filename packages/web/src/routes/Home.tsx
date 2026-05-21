@@ -23,6 +23,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { SectionTitle } from "../components/ui/section-title.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
+import { WorktreeInbox } from "../components/WorktreeInbox.tsx";
 import type { RunSummary } from "../lib/api.ts";
 import { rowEnterFromTop } from "../lib/feedMotion.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
@@ -45,6 +46,7 @@ export function Home(): JSX.Element {
     <div className="flex flex-col gap-8">
       <StatsTiles stats={stats} loading={statsLoading} />
       <Inbox limit={INBOX_HOME_LIMIT} viewAllHref="/inbox" />
+      <WorktreeInbox title="Ready to land" limit={INBOX_HOME_LIMIT} viewAllHref="/inbox" />
       <RunningSection running={running} loading={runningPending} />
       <GlobalFeed />
     </div>
