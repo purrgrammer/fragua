@@ -1,11 +1,8 @@
 #!/usr/bin/env bun
-// narrative-drift/collect.ts — deterministic inventory for narrative-drift.dot's
-// `collect`, `audit`, and `review` nodes. Covers the surfaces where drift is
-// reasoning-heavy rather than literal: project status claims, proposal hygiene,
-// and per-skill rot. Output is a single JSON document on stdout; the `collect`
-// codergen runs this script via its bash tool and the resulting tool-result
-// message becomes the snapshot that downstream nodes read off the shared
-// `audit` thread.
+// drift/narrative.ts — deterministic inventory for the drift workflow's
+// narrative surface, where drift is reasoning-heavy rather than literal:
+// project status claims, proposal hygiene, and per-skill rot. Emits a single
+// JSON document on stdout for `analyze` to read off the shared `drift` thread.
 //
 // Sections:
 //   1. status              — verbatim 'delivers today' / 'does not deliver' sections from STATUS.md and README.md (whichever has them)
@@ -16,7 +13,7 @@
 //                            skills (frontend / design / backend) are repo-specific to swarm itself — their drift is not in scope.
 //
 // Structural surfaces (schema, event taxonomy, handler contract, intent fold,
-// doc code blocks, recent commits) live in structural-drift/collect.ts.
+// doc code blocks, recent commits) live in drift/structural.ts.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";

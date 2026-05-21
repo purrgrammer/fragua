@@ -1,0 +1,193 @@
+# doc-sync.yaml — keep a project's canonical agent doc (AGENTS.md / CLAUDE.md)
+# in sync with the codebase, and APPLY the fixes behind an operator gate.
+#
+# Generic by design: discovers the canonical doc at the project root, audits
+# whatever the repo actually contains, and edits in place via the built-in
+# `edit` tool — no project-specific collector or apply script. Drop it into
+# any repo's ~/.swarm/workflows or <project>/.swarm/workflows and run.
+#
+# This is the apply-tail sibling of the findings-only drift workflows
+# (structural-drift / narrative-drift → rollup). Those report; this one
+# closes the loop on a single doc with an HITL signoff.
+#
+# Shape: audit (fan out N parallel `agent` reads → ground truth) → diff
+# (doc claims vs ground truth → drift table) → review (goal gate) →
+# propose (edit blocks) → signoff (HITL) → apply (edit tool) → verify.
+#
+# `audit`, `diff`, `review`, `propose`, `apply`, `verify` share `thread: sync`
+# so the canonical-doc path, ground-truth report, drift table, and proposed
+# edits carry forward without copy-paste. The expensive fan-out lives in
+# `audit`; the review gate retargets `diff` (cheap re-compare), so a REJECT
+# never re-runs the fan-out.
+#
+#   bun run swarm run doc-sync
+#   bun run swarm run doc-sync --input scope="packages/ and docs/"
+
+name: doc-sync
+goal: Audit a project's codebase against its canonical AGENTS.md/CLAUDE.md, surface drift, and apply the fixes with operator signoff.
+budget: 5.00
+budget-policy: pause
+
+inputs:
+  scope:
+    type: string
+    default: ""
+    description: Optional scope hint (e.g. "packages/ and docs/")
+
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+
+steps:
+  audit:
+    type: llm
+    thread: sync
+    next: diff
+    allowed-tools: [agent, read, bash, grep, find, ls]
+    max-cost: 1.50
+    prompt: |
+      Build a ground-truth summary of this codebase for the next step to diff against the canonical agent doc.
+
+      Identify the canonical doc — check in order: AGENTS.md, then CLAUDE.md, at the project root. Follow symlinks; if both resolve to the same inode, name the AGENTS.md path. If neither exists, call `abort` with reason `no AGENTS.md or CLAUDE.md at project root`.
+
+      Snapshot the layout: `git ls-files` (fall back to `find . -maxdepth 4 -type f` excluding node_modules/.git/dist/build/.cache/.swarm), top-level `ls -la`, and manifest files. Pick AT MOST 8 areas worth inspecting. Honour `${{ inputs.scope }}` if set.
+
+      Fan out — issue all `agent` toolcalls in ONE turn, one per area, each with the template below (substitute <AREA>) and `allowed_tools: ["read", "grep", "find", "ls"]`:
+
+        Inspect `<AREA>` of this project. Read-only. Emit this exact shape, no preamble:
+
+        ## <AREA>
+        **purpose**: one sentence — what this area does.
+        **key_files**: 3–7 most load-bearing files, one line each.
+        **public_api**: what other code depends on; 'none' if internal-only.
+        **conventions**: patterns evidenced by the files; no speculation.
+        **surprises**: anything a docs reader would NOT expect; 'none' otherwise.
+
+        ≤350 words. Cite file:line for non-obvious claims.
+
+      Assemble the ground-truth report as your final message:
+
+        # Ground truth — <repo name from cwd>
+        **Doc under audit:** <canonical doc path>
+        ## Layout overview
+        One paragraph on the top-level shape.
+        ## Areas
+        <each subagent's structured summary, verbatim>
+        ## Cross-cutting observations
+        Things spanning areas; omit if nothing crosses.
+
+      Do NOT compare against the doc — that's the next step. If you find no auditable areas, call `abort` with reason `no auditable areas found`.
+
+  diff:
+    type: llm
+    thread: sync
+    next: review
+    allowed-tools: [read, grep]
+    max-cost: 1.00
+    prompt: |
+      Cross-reference the canonical doc (path in the ground-truth report's `**Doc under audit:**` header) against the ground truth. Read the doc, then classify every claim it makes about codebase shape (stack, dependency direction, codebase map, commands, file layout, conventions):
+
+        - OK — matches ground truth.
+        - STALE — concrete claim contradicted by ground truth; cite doc:line + contradicting evidence.
+        - MISSING — ground truth shows something significant the doc omits.
+
+      Ignore claims that aren't filesystem-derivable. Every non-OK row MUST cite BOTH the doc location and the audit evidence. Do not fabricate.
+
+      Emit a markdown table as your FINAL message, no preamble:
+
+        | Severity | Kind | Doc location | Claim / gap | Evidence |
+        |---|---|---|---|---|
+        | CRITICAL | STALE | AGENTS.md:42 | 'web → server → store' | packages/web/src/lib/foo.ts imports @swarm/daemon |
+
+      Severity: CRITICAL = misleading; HIGH = significant gap a reader would miss; MEDIUM = minor inconsistency; LOW = OK rows for traceability.
+
+  review:
+    type: llm
+    thread: sync
+    retry: diff
+    max-retries: 2
+    next: propose
+    allowed-tools: [read, grep]
+    max-cost: 0.80
+    prompt: |
+      Judge the drift table for completeness and evidence quality. You are the goal-gate.
+
+      Checklist:
+        1. Every non-OK row cites BOTH a doc location AND audit evidence.
+        2. No fabrication — spot-check 2–3 non-OK rows by re-reading the cited doc.
+        3. Coverage is reasonable — at least one OK/STALE/MISSING row per top-level area.
+        4. Severity calibration is sane.
+
+      Pass → reply `APPROVE` on the first line, a blank line, then the drift table VERBATIM.
+      Fail → call `abort` with reason `REJECT: <one-line reason>`.
+
+  propose:
+    type: llm
+    thread: sync
+    next: signoff
+    allowed-tools: [read]
+    max-cost: 1.00
+    prompt: |
+      Translate the approved drift table (the rows after `APPROVE`) into a list of edit blocks for the canonical doc. The `Doc location` column names the file.
+
+      For each STALE row: an edit replacing the verbatim current text with corrected text in the doc's tone.
+      For each MISSING row: an edit whose anchor is the existing line/section header the new content follows, replaced by that anchor + newline + the new content.
+
+      Rules:
+        - The OLD text MUST be unique in the doc — expand with surrounding context until it is.
+        - Preserve the doc's tone, casing, list style, markdown conventions.
+        - PRESERVE unrelated content — touch only what a row flagged.
+        - One block per drift row. Skip OK rows.
+        - Too ambiguous to edit safely → emit a SKIP block with a one-line why instead.
+
+      Do NOT modify the file yet. Emit each block as your FINAL message, no preamble:
+
+        ### Edit <n> — <doc path> — <STALE|MISSING|SKIP>
+        OLD:
+        ~~~
+        <verbatim text to replace>
+        ~~~
+        NEW:
+        ~~~
+        <replacement text>
+        ~~~
+
+      For a SKIP block, give `### Edit <n> — SKIP — <why>` and omit OLD/NEW. If no edits apply, reply EXACTLY `no edits`.
+
+  signoff:
+    type: human
+    text: "Drift report and proposed edits are ready above. Choose how to proceed."
+    routes:
+      apply:       {to: apply, label: "Apply edits"}
+      output_only: {to: exit,  label: "Output only — keep report, edit nothing"}
+      reject:      {to: exit,  label: "Discard"}
+
+  apply:
+    type: llm
+    thread: sync
+    next: verify
+    allowed-tools: [read, edit]
+    max-cost: 0.40
+    prompt: |
+      Apply the proposed edit blocks to the canonical doc using the `edit` tool — one `edit` call per non-SKIP block, passing OLD as `old_string` and NEW as `new_string` verbatim. Skip SKIP blocks.
+
+      If an `edit` fails because OLD is not found or not unique, call `abort` with reason `apply failed: edit <n> old_string not uniquely matched`. On success, emit a one-line summary: `applied <N>, skipped <M>`.
+
+  verify:
+    type: llm
+    thread: sync
+    next: exit
+    allowed-tools: [read]
+    max-cost: 0.50
+    prompt: |
+      Re-read the canonical doc and confirm every applied edit landed.
+
+      For each non-SKIP block: STALE → corrected text present, original gone; MISSING → new content present at the anchor. SKIP blocks are expected-unresolved.
+
+      Emit a markdown table as your FINAL message:
+
+        | Edit | Status | Note |
+        |---|---|---|
+        | 1 (STALE AGENTS.md:42) | resolved | dependency arrow now reads `web → server → store ← daemon` |
+
+      If any non-SKIP block is not present in the doc, call `abort` with reason `verify failed: <count> edits applied but not present`.

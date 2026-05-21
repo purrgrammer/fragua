@@ -1,10 +1,9 @@
 #!/usr/bin/env bun
-// structural-drift/collect.ts — deterministic inventory for structural-drift.dot's
-// `drift` and `propose_patch` nodes. Narrower than the original introspect
-// collector: only the surfaces where literal code↔doc cross-reference makes
-// sense (schema, event taxonomy, handler contract, intent fold + the docs
-// that mirror them). Output is a single JSON document on stdout, consumed
-// downstream via `$collect.output`.
+// drift/structural.ts — deterministic inventory for the drift workflow's
+// structural surface: only where literal code↔doc cross-reference makes sense
+// (schema, event taxonomy, handler contract, intent fold + the docs that
+// mirror them). Emits a single JSON document on stdout for `analyze` to read
+// off the shared `drift` thread.
 //
 // Sections:
 //   1. contract_files       — line count + sha256(first 12) per surface
@@ -12,10 +11,10 @@
 //   3. schema_sql           — verbatim contents of schema.sql
 //   4. recent_commits       — last 30 across the repo
 //   5. contract_file_history — last 50 per contract file (for AGENTS.md rule #1)
-//   6. doc_code_blocks      — fenced typescript / dot blocks in the structural docs
+//   6. doc_code_blocks      — fenced typescript blocks in the structural docs
 //
-// Narrative surfaces (README "delivers today", proposals, swarm-* skills) live
-// in narrative-drift/collect.ts.
+// Narrative surfaces (STATUS "delivers today", proposals, swarm-* skills) live
+// in drift/narrative.ts.
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";

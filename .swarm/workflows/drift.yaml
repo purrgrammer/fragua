@@ -1,0 +1,170 @@
+# drift.yaml — find rot between the docs and the code they describe, then FIX
+# it behind an operator gate. Two surfaces:
+#
+#   structural — literal code↔doc cross-reference where drift is mechanical:
+#                schema columns, event-taxonomy enums, handler-contract shapes,
+#                intent-fold cells, doc code-block freshness, AGENTS.md rule #1
+#                same-PR commit hygiene.
+#   narrative  — reasoning-heavy rot: per-skill SKILL.md vs the code each skill
+#                documents, STATUS.md "delivers today" claims vs reality,
+#                proposal hygiene.
+#
+# `surface` (structural | narrative | both) selects which collector(s) run.
+#
+# Shape: collect (deterministic inventory) → analyze (over-inclusive findings,
+# fanning out one read-only sub-agent per skill) → filter (drop weak rows) →
+# propose (edit blocks for the doc-fixable findings; the rest go to a Manual
+# list) → signoff (HITL) → apply (edit tool) → verify. The first four steps
+# share `thread: drift` so the snapshot, findings, and edits carry forward.
+#
+# Not every finding is doc-fixable — an UNBACKED status claim needs code, a
+# commit-hygiene gap is historical. Those land in `## Manual`, never edited.
+# At signoff the operator can also keep the report only (cadence runs) or
+# discard.
+#
+#   bun run swarm run drift
+#   bun run swarm run drift --input surface=structural
+#   bun run swarm run drift --input surface=narrative --input focus="only workflows"
+
+name: drift
+goal: Cross-reference the docs against the code they describe, surface evidence-cited drift, and apply the doc-fixable corrections with operator signoff.
+budget: 7.00
+budget-policy: pause
+
+inputs:
+  surface:
+    type: choice
+    options: [structural, narrative, both]
+    default: both
+    description: Which drift surface to audit
+  focus:
+    type: string
+    default: ""
+    description: Optional focus hint (e.g. "event taxonomy", "only workflows")
+
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+
+steps:
+  collect:
+    type: llm
+    model: claude-haiku-4-5
+    thread: drift
+    next: analyze
+    allowed-tools: [bash]
+    max-cost: 0.15
+    prompt: |
+      Run the drift collector(s) for surface `${{ inputs.surface }}` via the bash tool — once each, in this order:
+        - structural or both → `bun .swarm/scripts/drift/structural.ts ${{ inputs.focus }}`
+        - narrative  or both → `bun .swarm/scripts/drift/narrative.ts ${{ inputs.focus }}`
+
+      Do not interpret, summarise, or reformat the JSON. If a script exits non-zero or emits malformed JSON, call `abort` with reason `collector failed: <exit code or parse error>`. Otherwise reply with EXACTLY: `collected`.
+
+  analyze:
+    type: llm
+    effort: high
+    thread: drift
+    next: filter
+    allowed-tools: [agent, read, grep, find]
+    max-cost: 3.50
+    prompt: |
+      Build a drift findings table from the collector snapshot(s) in this thread. Be over-inclusive — surface every plausible discrepancy with evidence; the next step filters. Read-only (you may re-read files to confirm). Honour the `focus` hint if the snapshot carries one.
+
+      If a STRUCTURAL snapshot is present (`contract_files`, `taxonomy`, `schema_sql`, `doc_code_blocks`, `recent_commits`, `contract_file_history`), cross-reference code↔docs surface by surface. Trust the snapshot values verbatim; re-read source only for surrounding context:
+        1. Schema — every column / index / table / generated column / CHECK in `schema_sql` vs ARCHITECTURE.md §2.
+        2. Taxonomy — every member of `taxonomy.*` (run statuses, pause/halt/quarantine reasons, intent/fact/daemon types) vs ARCHITECTURE.md §3 and SPEC §3.4.
+        3. Handler contract — return-kind enum / halt reasons / HandlerContext / messages / artifacts shapes (handler/types.ts) vs handler-contract.md.
+        4. Intent fold — precedence R1–R7 + the per-intent table (intent-fold.ts vs docs/intent-fold.md).
+        5. Doc code blocks — every block in `doc_code_blocks` must call APIs that still exist.
+        6. Commit hygiene — for each contract file in `contract_file_history`, flag any listed commit that touched the file but NOT its doc per AGENTS.md rule #1.
+
+      If a NARRATIVE snapshot is present (`status`, `readme`, `proposals`, `skills[]`), fan out in ONE turn: one read-only `agent` per entry in `skills[]` to cross-reference that SKILL.md against the code it documents (pass its `path` + `target_hint`), PLUS one agent for STATUS/README 'delivers today' claims + proposal hygiene. Consolidate their structured summaries into the table.
+
+      Every row MUST cite BOTH a doc location AND a code surface (or an explicit absence — grep the doc first and quote context to prove it omits something). Do not fabricate.
+
+      Emit a single table as your FINAL message, no preamble:
+
+        # Drift — <ISO date from snapshot.collected_at>
+
+        | Severity | Surface | Doc location | Code surface | Drift |
+        |---|---|---|---|---|
+        | CRITICAL | structural | ARCHITECTURE.md §3 | swarm-events.ts:88 | `paused_budget` status missing from §3 table |
+        | MEDIUM | narrative | STATUS.md:14 | (no evidence found) | 'workflow_resolution' claim UNBACKED |
+
+      Severity: CRITICAL = misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish. If genuinely nothing, reply EXACTLY: `no drift detected`.
+
+  filter:
+    thread: drift
+    next: propose
+    allowed-tools: [read, grep]
+    max-cost: 0.80
+    prompt: |
+      Filter the drift findings table for evidence quality. You DROP weak rows rather than failing the run.
+
+      Keep a row only if it cites BOTH a verifiable doc location AND a code surface (or a substantiated 'no evidence found' for an UNBACKED claim). Spot-check 2–3 rows by re-reading the citation; drop any you can't confirm. Re-calibrate severity (no LOW for genuinely misleading claims, no CRITICAL for nitpicks).
+
+      Emit the filtered table verbatim in the same shape as your FINAL message, followed by a one-line footer: `## Dropped: <n> — <terse reasons>`. If every row was dropped, or the input was `no drift detected`, reply EXACTLY: `no drift detected`.
+
+  propose:
+    thread: drift
+    next: signoff
+    allowed-tools: [read, grep]
+    max-cost: 1.50
+    prompt: |
+      Turn the filtered findings into doc edits. A finding is AUTO-FIXABLE only if editing a doc fully resolves it — wrong doc text (correct it) or missing doc text (add it). A finding needing a CODE change or human judgment (UNBACKED 'delivers today' claims, historical commit-hygiene gaps, anything where the *code* is what's wrong) is NOT auto-fixable.
+
+      For each auto-fixable finding, read the cited doc and emit an edit block. OLD = verbatim current text, unique in that file (expand context until unique). NEW = corrected text in the doc's tone. For a missing-text finding, OLD = the existing anchor line/header the new content should follow, NEW = that anchor + newline + the new content. Preserve unrelated content; one block per finding.
+
+      Emit as your FINAL message, no preamble:
+
+        ### Edit <n> — <doc path>
+        OLD:
+        ~~~
+        <verbatim text to replace>
+        ~~~
+        NEW:
+        ~~~
+        <replacement text>
+        ~~~
+
+      Then, always:
+
+        ## Manual (not auto-fixed)
+        - <severity> <doc / code location> — <finding> — <why code/judgment is needed>
+
+      If there are no auto-fixable findings, emit `### (no auto-fixable edits)` then the Manual section.
+
+  signoff:
+    type: human
+    text: "Drift findings + proposed doc edits are ready above. Apply the edits, keep the report only, or discard?"
+    routes:
+      apply:       {to: apply, label: "Apply edits"}
+      report_only: {to: exit,  label: "Report only — keep findings, edit nothing"}
+      discard:     {to: exit,  label: "Discard"}
+
+  apply:
+    thread: drift
+    next: verify
+    allowed-tools: [read, edit]
+    max-cost: 0.60
+    prompt: |
+      Apply each `### Edit` block to its doc using the `edit` tool — one call per block, OLD as `old_string`, NEW as `new_string`, verbatim.
+
+      If an `edit` fails because OLD is not found or not unique, call `abort` with reason `apply failed: edit <n> old_string not uniquely matched`. On success, emit `applied <N>`, then echo the `## Manual (not auto-fixed)` section verbatim so it survives in the run's report.
+
+  verify:
+    thread: drift
+    next: exit
+    allowed-tools: [read]
+    max-cost: 0.50
+    prompt: |
+      Re-read each edited doc and confirm every `### Edit` landed: corrected text present and original gone, or new content present at its anchor.
+
+      Emit a markdown table as your FINAL message:
+
+        | Edit | Status | Note |
+        |---|---|---|
+        | 1 (ARCHITECTURE.md §3) | resolved | `paused_budget` row now present in the status table |
+
+      If any edit is not present in its doc, call `abort` with reason `verify failed: <count> edits applied but not present`.
