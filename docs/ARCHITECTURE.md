@@ -1029,6 +1029,7 @@ app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops
 // branch 409 nothing_to_branch · commit/merge 400 onto_required/into_required
 // for detached/relocated · merge 409 not_fast_forward/merge_conflict via the
 // snapshot reader's mergeability check). All return {seq} on success.
+app.post("/runs/:id/accept",       async (c) => writeIntent(c, "intent.accept_run"));    // {} — replay onto HEAD + stage tail
 app.post("/runs/:id/branch",       async (c) => writeIntent(c, "intent.branch_run"));   // {branch, force?}
 app.post("/runs/:id/commit",       async (c) => writeIntent(c, "intent.commit_run"));   // {message, onto?}
 app.post("/runs/:id/merge",        async (c) => writeIntent(c, "intent.merge_run"));     // {mode?: ff|no-ff|squash, into?}

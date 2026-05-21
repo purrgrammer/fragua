@@ -332,7 +332,7 @@ const SELECT_INBOX_ACTION_CANDIDATES_SQL = `
         WHERE e.run_id = rs.run_id
           AND e.seq > rs.last_applied_seq
           AND e.type IN (
-            'intent.branch_run', 'intent.commit_run',
+            'intent.accept_run', 'intent.branch_run', 'intent.commit_run',
             'intent.merge_run', 'intent.discard_run'
           )
      )

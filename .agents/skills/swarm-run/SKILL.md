@@ -175,6 +175,7 @@ A terminal run that left recoverable agent work sits in the inbox (`run_state.in
 
 | POST | Body | Written intent | Post-condition |
 |---|---|---|---|
+| `/runs/:id/accept` | `{}` | `intent.accept_run` | Daemon replays the run's commits onto the operator's current branch (HEAD in the run's cwd) and stages the uncommitted tail for the operator to commit. A conflict / dirty tree leaves the run `pending` (resolve via revive). Inbox `pending → acted`. |
 | `/runs/:id/branch` | `{branch, force?}` | `intent.branch_run` | `update-ref refs/heads/<branch>` at the run's heads sha (committed history). 409 `nothing_to_branch` when the run made no commits. Inbox `pending → acted`. |
 | `/runs/:id/commit` | `{message, onto?}` | `intent.commit_run` | `commit-tree` the full snapshot tree (incl. uncommitted dirt) onto `onto` (default `base_git_ref`) and advance it. 400 `onto_required` when detached/relocated and no `onto`. `pending → acted`. |
 | `/runs/:id/merge` | `{mode?, into?}` | `intent.merge_run` | Merge heads into `into` (default `base_git_ref`); `mode` ∈ `ff`(default)`\|no-ff\|squash`. 409 `not_fast_forward` (ff impossible) / `merge_conflict` (non-ff conflicts). `pending → acted`. |

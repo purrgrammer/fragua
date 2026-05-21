@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@swarm/core": "workspace:*",
-    "@swarm/store": "workspace:*"
+    "@swarm/store": "workspace:*",
+    "@swarm/workspace": "workspace:*"
   },
   "devDependencies": {
     "@swarm/server": "workspace:*",

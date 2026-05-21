@@ -141,6 +141,14 @@ export function discardCommand(opts: DiscardOptions): Promise<number> {
   return postAction("discard", opts.runId, {}, opts);
 }
 
+export interface AcceptOptions extends DiscoveryOpts {
+  runId: string;
+}
+
+export function acceptCommand(opts: AcceptOptions): Promise<number> {
+  return postAction("accept", opts.runId, {}, opts);
+}
+
 interface SnapshotRow {
   eventIdx: number;
   nodeId: string | null;

@@ -14,6 +14,7 @@ import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
+  acceptCommand,
   branchCommand,
   cancelCommand,
   commitCommand,
@@ -546,6 +547,9 @@ cli
               ...discovery(options),
             }),
           );
+          break;
+        case "accept":
+          process.exit(await acceptCommand({ runId: needId(), ...discovery(options) }));
           break;
         case "discard":
           process.exit(await discardCommand({ runId: needId(), ...discovery(options) }));

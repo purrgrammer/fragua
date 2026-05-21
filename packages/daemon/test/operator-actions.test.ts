@@ -101,6 +101,34 @@ describe("processOperatorActions", () => {
     expect(appended[0]?.advanceAppliedTo).toBe(5);
   });
 
+  test("accept: replays the run's commits onto HEAD and emits fact.run_accepted", async () => {
+    await writeFile(join(repo, "work.txt"), "work\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "agent work");
+    const head = g(repo, "rev-parse", "HEAD");
+    g(repo, "reset", "-q", "--hard", base); // main back to base; the run's work survives via the refs
+    g(repo, "update-ref", "refs/swarm/heads/run-a", head);
+    g(repo, "update-ref", "refs/swarm/snapshots/run-a", head); // snapshot commit; tree == head's tree → no tail
+
+    const { store, appended } = fakeStore({
+      runId: "run-a",
+      state: { cwd: repo, baseGitSha: base },
+      intents: [{ type: "intent.accept_run", seq: 7, payload: {} }],
+    });
+    const applied = await processOperatorActions(store);
+
+    expect(applied).toEqual(["run-a"]);
+    expect(g(repo, "show", "HEAD:work.txt")).toBe("work"); // replayed onto the current branch
+    expect(appended).toHaveLength(1);
+    const fact = appended[0]?.fact;
+    expect(fact?.type).toBe("fact.run_accepted");
+    if (fact?.type === "fact.run_accepted") {
+      expect(fact.payload.replayed).toBe(1);
+      expect(fact.payload.tailStaged).toBe(false);
+    }
+    expect(appended[0]?.advanceAppliedTo).toBe(7);
+  });
+
   test("branch: refuses (no fact) when no heads ref exists", async () => {
     g(repo, "update-ref", "refs/swarm/snapshots/run-nh", base); // snapshot only, no heads
     const { store, appended } = fakeStore({

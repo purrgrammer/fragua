@@ -755,6 +755,17 @@ export function createRoutes(deps: ServerDeps): Hono {
     return appendIntentOr413(c, runId, { type: "intent.merge_run", payload });
   });
 
+  app.post("/runs/:id/accept", (c) => {
+    const runId = c.req.param("id");
+    const gate = operatorActionGate(c, runId);
+    if (!gate.ok) return gate.res;
+    // Lands the run's work on the operator's current branch. The daemon sweep
+    // folds this into fact.run_accepted (replay + stage); a conflict / dirty
+    // tree leaves the run pending (resolve via revive) — the sweep refuses and
+    // emits no fact, so the inbox entry stays until the operator retries.
+    return appendIntentOr413(c, runId, { type: "intent.accept_run", payload: {} });
+  });
+
   app.post("/runs/:id/discard", (c) => {
     const runId = c.req.param("id");
     const gate = operatorActionGate(c, runId);

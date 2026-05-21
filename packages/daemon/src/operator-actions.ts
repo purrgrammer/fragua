@@ -27,33 +27,14 @@
 // compare-and-swap `update-ref <new> <old>` so a moved target either
 // self-heals on the next tick (commit recomputes its parent) or no-ops.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { ConcurrencyError, type FactEvent, type IEventStore, type RunState } from "@swarm/store";
 import type { IntentType } from "@swarm/types";
+import { applyAccept, defaultGitExec, type GitExec } from "@swarm/workspace";
 
-const execFileP = promisify(execFile);
-
-/** Runs `git <args>` in `cwd`, capturing output and exit code without
- * throwing — operator-action plumbing branches on exit code. Injectable for
- * tests against a fixture repo. */
-export type GitExec = (cwd: string, args: string[]) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
-
-const defaultGitExec: GitExec = async (cwd, args) => {
-  try {
-    const { stdout, stderr } = await execFileP("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 });
-    return { stdout: stdout.toString(), stderr: stderr.toString(), exitCode: 0 };
-  } catch (err) {
-    const e = err as { stdout?: unknown; stderr?: unknown; code?: unknown };
-    return {
-      stdout: typeof e.stdout === "string" ? e.stdout : String(e.stdout ?? ""),
-      stderr: typeof e.stderr === "string" ? e.stderr : String(e.stderr ?? ""),
-      exitCode: typeof e.code === "number" ? e.code : 1,
-    };
-  }
-};
+export type { GitExec };
 
 const OPERATOR_INTENT_TYPES = [
+  "intent.accept_run",
   "intent.branch_run",
   "intent.commit_run",
   "intent.merge_run",
@@ -214,6 +195,18 @@ async function applyAction(
   intent: PendingOperatorIntent,
 ): Promise<FactEvent | null> {
   switch (intent.type) {
+    case "intent.accept_run": {
+      // Replay the run's commits onto the operator's HEAD + stage the tail.
+      // A conflict / dirty tree / missing snapshot is a refusal (null) — the
+      // operator revives or re-issues; the server preflight rejects the common
+      // cases synchronously.
+      const res = await applyAccept(git, { cwd, runId, baseGitSha: state.baseGitSha ?? "" });
+      if (!res.ok) return null;
+      return {
+        type: "fact.run_accepted",
+        payload: { sha: res.sha, replayed: res.replayed, tailStaged: res.tailStaged },
+      };
+    }
     case "intent.branch_run":
       return applyBranch(git, cwd, runId, intent.payload as { branch: string; force?: boolean });
     case "intent.commit_run":
