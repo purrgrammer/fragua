@@ -20,6 +20,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
+import { HitlChoice } from "../components/HitlChoice.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { ProjectLink } from "../components/ProjectLink.tsx";
 import { RunControls } from "../components/RunControls.tsx";
@@ -166,6 +167,10 @@ export function RunDetail(): JSX.Element {
       <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
 
       {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && <RunPausedNotice runId={id} />}
+      {detail?.runStatus === "paused_human" && (
+        <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
+      )}
+
       {isError && !detail ? (
         <EmptyState
           data-testid="detail-error"

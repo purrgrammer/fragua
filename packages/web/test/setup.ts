@@ -16,7 +16,16 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
  */
 export function useDom(): void {
   let installed = false;
+  // Many DOM suites mock `globalThis.fetch` (a shared global) and only
+  // `cleanup()` in afterEach — so a suite's mock LEAKS to whatever suite runs
+  // next in the same `bun test` process. Under the wrong file order the next
+  // suite's component fetches the previous suite's mock and fails — an
+  // order-dependent flake (skills / selectors / file-viewer all failing
+  // together is the signature). Snapshot fetch at suite start and restore it
+  // at suite end so no suite can poison the next, without editing every file.
+  let savedFetch: typeof globalThis.fetch | undefined;
   beforeAll(() => {
+    savedFetch = globalThis.fetch;
     const g = globalThis as unknown as { __swarmWebDomInstalled?: boolean };
     if (!g.__swarmWebDomInstalled) {
       GlobalRegistrator.register();
@@ -44,6 +53,7 @@ export function useDom(): void {
     }
   });
   afterAll(async () => {
+    if (savedFetch !== undefined) globalThis.fetch = savedFetch;
     const g = globalThis as unknown as { __swarmWebDomInstalled?: boolean };
     if (installed && g.__swarmWebDomInstalled) {
       await GlobalRegistrator.unregister();

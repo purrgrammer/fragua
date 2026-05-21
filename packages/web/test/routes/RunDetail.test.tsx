@@ -599,7 +599,7 @@ steps:
       }
     });
 
-    it("hides Resume when status is paused_human (HitlStepCard in RunConversation owns it)", async () => {
+    it("hides Resume when status is paused_human (HitlChoice owns it)", async () => {
       const detail: RunDetailT = {
         runId: "run-hitl",
         startedAt: "2024-01-01T00:00:00Z",

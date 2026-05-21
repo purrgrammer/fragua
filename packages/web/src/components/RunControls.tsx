@@ -2,7 +2,7 @@
 //
 // Specialized banners own the action for their substatus:
 //   - paused                → RunPausedNotice (Resume + Cancel; budget reason has Raise & Resume)
-//   - paused_human           → HitlStepCard inlined in RunConversation (option buttons)
+//   - paused_human           → HitlChoice (option buttons)
 // RunControls handles the "everything else" surface: generic operator
 // pause, resume of an operator-paused run, and cancel-from-anywhere on
 // non-terminal runs. Returns null when no action applies (terminal
@@ -23,8 +23,8 @@ export interface RunControlsProps {
   runId: string;
   status: RunDetail["status"];
   runStatus: RunDetail["runStatus"];
-  /** When the run is `paused_human` with non-empty options, the inline
-   * HitlStepCard in RunConversation owns the action surface.
+  /** When the run is `paused_human` with non-empty options, HitlChoice
+   * owns the action surface (operator picks one of the option buttons).
    * When options are empty, the pause was operator-driven (`POST /pause`)
    * and Resume becomes the right affordance. RunDetail passes the count;
    * 0 / undefined → operator-pause; > 0 → workflow HITL. */
@@ -99,7 +99,7 @@ export function RunControls({
   // Resume is the generic operator-pause path. The specialized
   // substatuses handle their own surface:
   //   - paused                  → RunPausedNotice (Resume + Cancel)
-  //   - paused_human with options → HitlStepCard inlined in RunConversation
+  //   - paused_human with options → HitlChoice (option buttons)
   // paused_human with NO options is the workflow-authored human-node
   // resume case (operator pauses route to `paused` now).
   // paused_auto auto-resumes on a timer; manual Resume short-circuits
