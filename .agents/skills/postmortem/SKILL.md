@@ -1,9 +1,9 @@
 ---
-name: swarm-debug
+name: postmortem
 description: Post-mortem a swarm run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches swarm-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), schedule and sub-agent post-mortems, and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
 ---
 
-# swarm-debug — run post-mortem procedure
+# postmortem — run post-mortem procedure
 
 The goal is to go from a run id to a one-paragraph cause with evidence (event seq + payload), in the fewest reads. Follow the fast path first; only zoom into messages / artifacts / steps when the event log is inconclusive.
 

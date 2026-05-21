@@ -434,4 +434,4 @@ bun run swarm validate path/to/my-thing.yaml
 bun run swarm run      my-thing --input task="…"
 ```
 
-When a workflow misbehaves at runtime, switch to `swarm-debug` (post-mortem) or `swarm-run` (steer / pause / resume a live run).
+When a workflow misbehaves at runtime, switch to `postmortem` (post-mortem) or `operate` (steer / pause / resume a live run).

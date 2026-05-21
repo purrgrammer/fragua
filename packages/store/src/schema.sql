@@ -52,7 +52,7 @@
 -- (docs/proposals/provider-credentials-storage.md). New
 -- `provider_credentials` table holds built-in pi-ai provider keys +
 -- OAuth tokens, replacing `~/.swarm/auth.json`. `kind` is
--- denormalised from `payload.type` so swarm-debug can SELECT the
+-- denormalised from `payload.type` so postmortem can SELECT the
 -- shape without JSON-parsing. Pure additive; no row migrations.
 -- v11 → v12: custom-provider config in the store
 -- (docs/proposals/provider-config-storage.md). New `provider_config`

@@ -60,7 +60,7 @@ Runtime state: `~/.swarm/swarm.db` (the global store the harness binds to by def
 
 Config cascade: `~/.swarm/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.swarm/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. Legacy `config.jsonc` is read with a deprecation warning for one release; rename to `config.yaml` to silence it.
 
-Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `swarm-debug`, `swarm-run`). The daemon scans both at boot. Load before touching any file in a skill's domain.
+Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `postmortem`, `operate`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 
 Named sub-agent profiles live alongside skills under `.agents/agents/` (project) and `~/.agents/agents/` (user); `.claude/agents/` is scanned as a cross-client fallback. Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, optional `model` / `provider` / `allowed_tools`); the body becomes the sub-agent's system prompt. Project beats user on collisions. The daemon scans them at boot and the catalogue lands on every llm call whose tool pool includes `agent` — see [`docs/proposals/agent-definitions.md`](docs/proposals/agent-definitions.md).
 

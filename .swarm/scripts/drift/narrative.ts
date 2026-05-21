@@ -8,15 +8,15 @@
 //   1. status              — verbatim 'delivers today' / 'does not deliver' sections from STATUS.md and README.md (whichever has them)
 //   2. proposals           — front-matter (title/status/maturity/last_reviewed) per proposal
 //   3. proposals_index     — verbatim docs/proposals/README.md (the index doc)
-//   4. skills              — per `swarm-*` skill (plus `workflows`): path, name, frontmatter description, lines + sha256_12, target_hint.
-//                            `workflows` is audited too — it documents swarm's own workflow-authoring surface. The other
-//                            skills (frontend / design / backend) are repo-specific to swarm itself — their drift is not in scope.
+//   4. skills              — per generic skill (operate / postmortem / workflows): path, name, frontmatter description, lines + sha256_12, target_hint.
+//                            These document swarm's own universal surface. The other skills
+//                            (frontend / design / backend) are repo-specific to swarm itself — their drift is not in scope.
 //
 // Structural surfaces (schema, event taxonomy, handler contract, intent fold,
 // doc code blocks, recent commits) live in drift/structural.ts.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const SKILL_ROOTS = [".agents/skills"] as const;
@@ -27,9 +27,9 @@ const SKILL_ROOTS = [".agents/skills"] as const;
 const SKILL_TARGET_HINTS: Record<string, string> = {
   workflows:
     "YAML workflow authoring — steps / next / on / routes / inputs / defaults, the four terminal mechanisms, goal-gate vs edge-cycle loops, validator codes. Cross-reference packages/core/src/parser/yaml.ts, packages/core/src/engine/{validator,substitution}.ts, packages/core/src/types/graph.ts.",
-  "swarm-run":
+  operate:
     "Operator HTTP routes (POST /runs/:id/{steer,pause,cancel,hitl,resume,unquarantine,priority,budget}) — cross-reference packages/server/src/store/routes.ts and runs-routes.ts; flag examples whose body shape would 4xx.",
-  "swarm-debug":
+  postmortem:
     "Event taxonomy / halt reasons / quarantine reasons / payload field names — cross-reference packages/types/src/swarm-events.ts. Verify §4.1 fact-type table, §8 halt + paused statuses, §8.1 schedule daemon-events, §8.2 subagent observability events match current literals.",
 };
 
@@ -139,11 +139,11 @@ function collectSkills(): Skill[] {
     }
     entries.sort();
     for (const name of entries) {
-      // Repo-specific skills (frontend / design / backend) live alongside the
-      // generic swarm-* skills but their drift is bound to swarm's own code
-      // surface, not to the universal swarm narrative. Audit swarm-* plus the
-      // `workflows` skill, which documents swarm's own authoring surface.
-      if (!name.startsWith("swarm-") && name !== "workflows") continue;
+      // The generic operate / postmortem / workflows skills document swarm's
+      // own universal surface; audit those. The repo-specific skills
+      // (frontend / design / backend) are bound to swarm's own code surface,
+      // not the universal narrative, so they're out of scope.
+      if (name !== "operate" && name !== "postmortem" && name !== "workflows") continue;
       const skillDir = resolve(dir, name);
       let isDir = false;
       try {
