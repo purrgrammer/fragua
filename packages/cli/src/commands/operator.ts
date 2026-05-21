@@ -218,7 +218,7 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
   const routes = detail.hitlOptions ?? [];
   let route = opts.route;
   if (route == null) {
-    console.log(detail.hitlLabel ?? "(awaiting input)");
+    console.log(detail.hitlLabel ?? "(needs input)");
     for (let i = 0; i < routes.length; i++) console.log(`  [${i + 1}] ${routes[i]}`);
     const ans = (globalThis.prompt?.(`Choose [1-${routes.length}]:`) ?? "").trim();
     const idx = Number.parseInt(ans, 10) - 1;

@@ -18,7 +18,7 @@ describe("metaForEvent", () => {
   test("static verbs pass through unchanged", () => {
     expect(metaForEvent(evt("fact.run_started")).verb).toBe("started");
     expect(metaForEvent(evt("fact.run_completed")).verb).toBe("completed");
-    expect(metaForEvent(evt("fact.run_paused_human")).verb).toBe("awaiting input");
+    expect(metaForEvent(evt("fact.run_paused_human")).verb).toBe("needs input");
   });
 
   test("unknown event types fall back to empty verb", () => {

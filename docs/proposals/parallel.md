@@ -294,7 +294,7 @@ bun run swarm run parallel-hitl-smoke
 ```
 
 **Inbox** — open http://localhost:6767/inbox. The parent surfaces
-with reason "branch: awaiting input" / "branch: needs operator"
+with reason "branch: needs input" / "branch: needs operator"
 even though the parent itself is in `running_children`. The
 `?includeChildAttention=true` server flag widens the filter; the
 parent is the operator-facing row, the branch is the cited reason.

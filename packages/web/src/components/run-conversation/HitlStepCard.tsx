@@ -52,7 +52,7 @@ export function HitlStepCard({ runId, label, options }: HitlStepCardProps): JSX.
           className="font-medium uppercase tracking-[0.06em] text-[length:var(--sw-text-xs)]"
           style={{ color: "var(--sw-accent-pause-hitl)" }}
         >
-          Awaiting input
+          Needs input
         </span>
       </div>
 

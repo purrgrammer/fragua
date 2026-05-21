@@ -1,6 +1,6 @@
 // Inbox — runs that need operator attention.
 //
-// "Attention" is anything in `paused_human` (awaiting input on a
+// "Attention" is anything in `paused_human` (needs input on a
 // human gate), `paused` (operator-resumable: provider error,
 // payment required, budget hit, or operator pause), or `quarantined`
 // (sweep marked the run unreachable). `halted` is terminal,
@@ -57,7 +57,7 @@ interface ReasonMeta {
 const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | undefined> = {
   paused_human: {
     Icon: Pause,
-    label: "awaiting input",
+    label: "needs input",
     iconClass: "text-sw-accent-pause-hitl",
     borderVar: "var(--sw-accent-pause-hitl)",
   },

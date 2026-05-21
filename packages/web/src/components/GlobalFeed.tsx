@@ -79,7 +79,7 @@ interface FeedKindMeta {
 }
 
 // Verbs are kept short on purpose — the icon already conveys mood,
-// and the attention border distinguishes "paused (awaiting input)"
+// and the attention border distinguishes "paused (needs input)"
 // from "paused (provider error)" without spelling that out in the
 // gutter. Hover tooltip on the row link carries the longer context.
 //
@@ -97,7 +97,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
   "fact.run_paused_human": {
     Icon: Pause,
-    verb: "awaiting input",
+    verb: "needs input",
     iconClass: "text-sw-accent-pause-hitl",
     borderVar: "var(--sw-accent-pause-hitl)",
     attention: true,

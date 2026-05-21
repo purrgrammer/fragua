@@ -136,7 +136,7 @@ leaf via `useNowSeconds`) but filtered to **system-only** event types:
   worktree_provisioned / blob_gc_completed / db_size_sampled)
 
 Watchtower keeps the operator-action lifecycle (started / completed /
-paused / awaiting input). The two surfaces stay distinct — Daemon
+paused / needs input). The two surfaces stay distinct — Daemon
 answers "is the executor healthy", Watchtower answers "what needs my
 attention".
 
