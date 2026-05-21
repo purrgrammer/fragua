@@ -3,6 +3,7 @@
 // (intent / done / failed) are NOT included — they're already durable via
 // the pre-commit recorder before this function runs.
 
+import { retryCountKey } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 
@@ -52,7 +53,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       const nextNode = result.nextNode ?? "__end__";
       const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
         nodeId: ctx.state.currentNode ?? "",
-        iteration: nodeRetryCount(ctx.state.routing),
+        iteration: nodeRetryCount(ctx.state.routing, ctx.state.currentNode ?? ""),
         tokens: result.tokens,
         costUsd: result.costUsd,
         nextNode,
@@ -115,7 +116,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       } else {
         facts.push({
           type: "fact.node_started",
-          payload: { nodeId: nextNode, iteration: 0 },
+          payload: { nodeId: nextNode, iteration: nodeRetryCount(ctx.state.routing, nextNode) },
         });
       }
       return facts;
@@ -259,11 +260,12 @@ export function cancelToFacts(intentSeq: number): FactEvent[] {
 }
 
 /** Per-node retry counter (attractor §3.6) — bumped each time a
- * backward edge re-enters a node after a non-success outcome. Shares
- * the `retry_count` routing key with `executor.ts` so the two reads
- * stay in sync. */
-function nodeRetryCount(routing: Record<string, unknown>): number {
-  const v = routing["retry_count"];
+ * backward edge re-enters a node after a non-success outcome. Stored
+ * per node at `internal.retry_count.<nodeId>` (retryCountKey); the
+ * executor writes it and reads it for the dispatch iteration, so the
+ * two stay in sync. */
+function nodeRetryCount(routing: Record<string, unknown>, nodeId: string): number {
+  const v = routing[retryCountKey(nodeId)];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 

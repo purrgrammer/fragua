@@ -193,10 +193,17 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
   // leaked handlers will land `fact.run_halted` via their own catch
   // blocks, or the next startup sweep will requeue stuck runs.
   if (inflight.size > 0) {
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      Promise.allSettled([...inflight]),
-      new Promise<void>((resolve) => setTimeout(resolve, drainMs)),
+      Promise.allSettled([...inflight]).then(() => {}),
+      new Promise<void>((resolve) => {
+        drainTimer = setTimeout(resolve, drainMs);
+      }),
     ]);
+    // Clear the drain timer when the in-flight runs settled first, so a
+    // long drainMs doesn't keep a timer (and the process) alive after the
+    // executor has nothing left to wait for.
+    if (drainTimer !== undefined) clearTimeout(drainTimer);
   }
 }
 
@@ -281,9 +288,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   ): Promise<{ halted: boolean }> => {
     occCount++;
     if (occCount >= OCC_CEILING) {
-      const fresh = opts.store.getState(runId);
-      if (fresh != null && fresh.status === "running") {
-        await tryAppendFact(opts.store, runId, fresh.version, [
+      // The occ_exhausted halt is itself a fact append and can itself
+      // conflict (the same wedged-supervisor that produced the upstream
+      // conflicts may still be committing). Retry it against fresh state
+      // a bounded number of times so the run actually terminates instead
+      // of returning `halted: true` while the halt fact never landed —
+      // which left the run stranded `running`.
+      const HALT_APPEND_MAX_ATTEMPTS = OCC_CEILING + 2;
+      for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
+        const fresh = opts.store.getState(runId);
+        // Already terminal (a concurrent writer halted/cancelled/completed
+        // it) — nothing left to do.
+        if (fresh == null || fresh.status !== "running") return { halted: true };
+        const ok = await tryAppendFact(opts.store, runId, fresh.version, [
           {
             type: "fact.run_halted",
             payload: {
@@ -293,6 +310,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             },
           },
         ]);
+        if (ok) break;
+        await sleep(Math.min(2 ** attempt, OCC_BACKOFF_CAP_MS), opts.shutdownSignal);
       }
       return { halted: true };
     }
@@ -328,6 +347,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   let runEnv: ExecutionEnvironment | undefined;
   // Lazy per-run graph cache. Parsed once on first edge-selection need.
   let cachedGraph: Graph | null = null;
+  // Distinguishes "no graph available" (workflow row missing — bare test
+  // fixtures) from "the workflow row exists but won't parse". Only the
+  // latter halts the run; graphFor returns null for both.
+  let workflowUnparseable = false;
   const graphFor = (workflowSha: string | null): Graph | null => {
     if (workflowSha == null) return null;
     if (cachedGraph != null) return cachedGraph;
@@ -337,6 +360,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       cachedGraph = parseWorkflow(wf.dotSource);
       return cachedGraph;
     } catch {
+      workflowUnparseable = true;
       return null;
     }
   };
@@ -373,6 +397,25 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
+    // Unparseable workflow refusal. A workflow whose source won't parse
+    // can't have its edges resolved, so the executor's "graph unavailable
+    // → route to __end__" fallback would otherwise let the run complete
+    // as a success — masking a broken workflow. Halt instead. (The
+    // validator catches this at `fragua validate` / enqueue; this is the
+    // last-resort runtime guard for a row that slipped through.)
+    if (workflowSha != null) {
+      graphFor(workflowSha);
+      if (workflowUnparseable) {
+        await tryAppendFact(opts.store, runId, state.version, [
+          {
+            type: "fact.run_halted",
+            payload: { reason: "error", detail: "workflow_parse_failed" },
+          },
+        ]);
+        return { kind: "terminal" };
+      }
+    }
+
     // Fold unapplied intents into a single decision.
     const unapplied = opts.store.getUnappliedIntents(runId);
     const decision = core.foldIntents(unapplied, state.status);
@@ -388,7 +431,22 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
 
     if (decision.kind === "cancel") {
-      await tryAppendFact(opts.store, runId, state.version, cancelToFacts(decision.intentSeq));
+      const ok = await tryAppendFact(opts.store, runId, state.version, cancelToFacts(decision.intentSeq));
+      // An OCC conflict here doesn't mean the run is done — a concurrent
+      // writer advanced the version. Route through the same retry/ceiling
+      // controller as every other append so the cancel is re-attempted
+      // against fresh state instead of being silently swallowed (which
+      // stranded the run as `running`).
+      if (!ok) {
+        const { halted } = await onOccConflict(
+          "fact.run_cancelled",
+          state.currentNode ?? "",
+          nodeRetryCount(state.routing, state.currentNode ?? ""),
+          state.version,
+        );
+        if (halted) return { kind: "terminal" };
+        return { kind: "continue" };
+      }
       return { kind: "terminal" };
     }
 
@@ -550,6 +608,36 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (currentNode == null) return { kind: "terminal" };
 
+    // Stamp dispatchStartedAt before handing control to the handler
+    // so activeMs accounting captures this dispatch interval.
+    // fact.run_started covers the very first dispatch (it stamps
+    // dispatchStartedAt directly via its own reducer case), so we
+    // only emit here when the projection's dispatchStartedAt was
+    // reset by a prior terminal/pause fact. This bookkeeping marker
+    // turn precedes — and is deliberately NOT counted by — the
+    // max_loops ceiling below: only turns that actually call a handler
+    // consume the dispatch budget.
+    if (state.dispatchStartedAt == null) {
+      const dispatchIteration = nodeRetryCount(state.routing, currentNode);
+      const ok = await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.dispatch_started",
+          payload: {
+            nodeId: currentNode,
+            iteration: dispatchIteration,
+            resumeOf: deriveResumeOf(opts.store, runId),
+          },
+        },
+      ]);
+      if (!ok) {
+        const { halted } = await onOccConflict("fact.dispatch_started", currentNode, dispatchIteration, state.version);
+        if (halted) return { kind: "terminal" };
+        return { kind: "continue" };
+      }
+      onOccResolved(currentNode, dispatchIteration);
+      return { kind: "continue" };
+    }
+
     // Production ceiling on handler dispatches. A workflow that loops
     // without ever aborting (so ABORT_LOOP_CEILING never fires) would
     // otherwise run until budget or wall-clock killed it. This is the
@@ -577,34 +665,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
     dispatches++;
 
-    // Stamp dispatchStartedAt before handing control to the handler
-    // so activeMs accounting captures this dispatch interval.
-    // fact.run_started covers the very first dispatch (it stamps
-    // dispatchStartedAt directly via its own reducer case), so we
-    // only emit here when the projection's dispatchStartedAt was
-    // reset by a prior terminal/pause fact.
-    if (state.dispatchStartedAt == null) {
-      const dispatchIteration = nodeRetryCount(state.routing);
-      const ok = await tryAppendFact(opts.store, runId, state.version, [
-        {
-          type: "fact.dispatch_started",
-          payload: {
-            nodeId: currentNode,
-            iteration: dispatchIteration,
-            resumeOf: deriveResumeOf(opts.store, runId),
-          },
-        },
-      ]);
-      if (!ok) {
-        dispatches--;
-        const { halted } = await onOccConflict("fact.dispatch_started", currentNode, dispatchIteration, state.version);
-        if (halted) return { kind: "terminal" };
-        return { kind: "continue" };
-      }
-      onOccResolved(currentNode, dispatchIteration);
-      return { kind: "continue" };
-    }
-
     // Dispatch.
     const spec = opts.dispatcher.get(workflowSha, currentNode);
     const steerCtrl = new AbortController();
@@ -612,7 +672,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (spec.maxMs !== undefined) signals.push(AbortSignal.timeout(spec.maxMs));
     const signal = AbortSignal.any(signals);
 
-    const iteration = nodeRetryCount(state.routing);
+    const iteration = nodeRetryCount(state.routing, currentNode);
     // Pre-commit recorder: each recordIntent/recordDone/recordFailed
     // commits its own short transaction so a hard crash mid-`fn` leaves
     // the intent durable in the event log. ARCHITECTURE.md §1.1.
@@ -824,9 +884,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Budget snapshot at dispatch time. The backend embeds this verbatim
     // into `llm.start.budget` so the UI can render "X of Y used" without
     // cross-referencing the graph attrs. Only populated when at least one
-    // ceiling (run-level or node-level cost) is configured.
-    const runMaxCostUsd = graph?.attrs.budget_usd;
-    const nodeMaxCostUsd = nodeAttrs?.max_cost_usd;
+    // ceiling (run-level or node-level cost) is configured. Operator
+    // cap raises (`intent.budget_adjusted` → budget_override.*) win over
+    // the static graph/node attrs so the snapshot agrees with what the
+    // reactive gate actually enforces this turn — read from
+    // effectiveRouting so a same-turn Raise & Resume is reflected.
+    const budgetSnapshotOverrides = readBudgetOverrides(effectiveRouting);
+    const runMaxCostUsd = budgetSnapshotOverrides?.run?.cost ?? graph?.attrs.budget_usd;
+    const nodeMaxCostUsd = budgetSnapshotOverrides?.node?.cost ?? nodeAttrs?.max_cost_usd;
     if (typeof runMaxCostUsd === "number" || typeof nodeMaxCostUsd === "number") {
       const snap: core.BudgetSnapshotInput = {
         cumulative_cost_usd: state.metrics.totalCostUsd,
@@ -842,6 +907,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     let wasAborted = false;
     let abortCause: "timeout" | "aborted" = "aborted";
     let leakedTimeout = false;
+    // Leak-detection watchdog timer. Tracked so it can be cleared once
+    // the handler wins the race (normal completion / throw) — an
+    // un-cleared `setTimeout(maxMs + leakGrace)` would otherwise survive
+    // every bounded dispatch and keep the event loop (and tests' fake
+    // timers) populated long after the turn settled.
+    let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
     // Register only here, not at steerCtrl creation: the build steps
     // above (graph load, node-output fold, context build) can throw, and
     // the `finally` below is the sole unregister — an earlier register
@@ -859,7 +930,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const watchdogMs = spec.maxMs + leakGrace;
         const raced = await Promise.race<HandlerResult | typeof TIMEOUT_SENTINEL>([
           spec.handler(ctx),
-          new Promise<typeof TIMEOUT_SENTINEL>((res) => setTimeout(() => res(TIMEOUT_SENTINEL), watchdogMs)),
+          new Promise<typeof TIMEOUT_SENTINEL>((res) => {
+            watchdogTimer = setTimeout(() => res(TIMEOUT_SENTINEL), watchdogMs);
+          }),
         ]);
         if (raced === TIMEOUT_SENTINEL) {
           leakedTimeout = true;
@@ -876,6 +949,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
     } catch (err) {
       wasAborted = isAbortError(err);
+      // The reactive budget gate aborts via steerCtrl with a plain
+      // `Error("budget")` / `Error("budget_pause")`. A handler that
+      // surfaces that by rethrowing `ctx.signal.reason` (rather than
+      // letting an in-flight LLM call throw an AbortError) wouldn't look
+      // like an abort by name — but it IS our abort, and must flow
+      // through the abort arm so the budget halt/pause fact lands instead
+      // of a generic `reason:"error"` halt.
+      if (
+        !wasAborted &&
+        signal.aborted &&
+        (reactiveBudgetHaltDetail !== undefined || reactiveBudgetPauseBreach !== undefined)
+      ) {
+        wasAborted = true;
+      }
       if (wasAborted) abortCause = classifyAbortCause(signal, err);
       result = {
         kind: "halt",
@@ -883,6 +970,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         detail: errorMessage(err),
       };
     } finally {
+      if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
       opts.registry.unregister(runId);
     }
 
@@ -1698,13 +1786,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = advanceAppliedTo;
     const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, appendOpts);
     if (!ok) {
-      const turnIteration = nodeRetryCount(state.routing);
+      const turnIteration = nodeRetryCount(state.routing, currentNode);
       const turnFactType = facts[0]?.type ?? "fact.unknown";
       const { halted } = await onOccConflict(turnFactType, currentNode, turnIteration, recorder.version());
       if (halted) return { kind: "terminal" };
       return { kind: "continue" }; // OCC retry — rebuild from fresh state
     }
-    onOccResolved(currentNode, nodeRetryCount(state.routing));
+    onOccResolved(currentNode, nodeRetryCount(state.routing, currentNode));
     await captureBoundarySnapshot(opts, runId, facts, currentNode);
     return { kind: "continue" };
   };
@@ -1741,7 +1829,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           // snap === null only for bare-cwd runs (no worktree) — nothing to
           // preserve or dispose, so that's not a failure.
           if (snap != null) {
-            await tryAppendFact(opts.store, runId, finalState.version, [
+            const recorded = await tryAppendFact(opts.store, runId, finalState.version, [
               {
                 type: "fact.snapshot_recorded",
                 payload: {
@@ -1757,6 +1845,24 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
                 },
               },
             ]);
+            // An OCC conflict means fact.snapshot_recorded did NOT land, so
+            // the inbox/diff projection has no record of this snapshot.
+            // Treat that exactly like a capture failure: retain the worktree
+            // rather than dispose work the projection can't point at.
+            if (!recorded) {
+              snapshotFailed = true;
+              opts.store.appendDaemonEvent(
+                {
+                  type: "daemon.worktree_provisioned",
+                  payload: {
+                    runId,
+                    ok: false,
+                    errorDetail: "terminal snapshot_recorded conflicted (OCC), worktree retained for recovery",
+                  },
+                },
+                { runId },
+              );
+            }
           }
         } catch (err) {
           snapshotFailed = true;
@@ -1948,9 +2054,12 @@ function routingString(routing: Record<string, unknown>, key: string): string | 
 
 /** Read the per-node retry counter from routing. Attractor §3.6:
  * bumped each time a backward edge re-enters a node after a
- * non-success outcome. */
-function nodeRetryCount(routing: Record<string, unknown>): number {
-  const v = routing["retry_count"];
+ * non-success outcome. Stored at `internal.retry_count.<nodeId>`
+ * (retryCountKey) — the same key the retry-policy block writes; the
+ * dispatch iteration reads it so a re-entered node carries the right
+ * iteration through node_started / dispatch_started / node_completed. */
+function nodeRetryCount(routing: Record<string, unknown>, nodeId: string): number {
+  const v = routing[retryCountKey(nodeId)];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
