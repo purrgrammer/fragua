@@ -929,6 +929,34 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 }
 ```
 
+### 6.1 Executor module decomposition
+
+`packages/daemon/src/executor.ts` is the orchestration entry point
+(`runExecutor`, `runOne`, the `dispatchOne` turn loop) and the public
+facade — call sites and tests import `runExecutor`, `runOne`,
+`ExecutorOpts`, `makeLeakBudget`, and the re-exported `classifyAbortCause`
+/ `buildSubstitutionArgs` / `resolveBackoff` from it. The behaviour-bearing
+leaf logic lives in focused sibling modules, each owning one concern and
+reaching only into the store API:
+
+- `executor-helpers.ts` — pure, dependency-light helpers: abort
+  classification, the leak-watchdog sentinel, routing/number/string
+  coercers, the per-node retry-count reader (`internal.retry_count.<nodeId>`),
+  resume-of derivation, budget routing readers + override keys, edge-selected
+  observability, substitution-arg building, backoff / max-retries resolution,
+  the routing-patch merge, and `sleep`. Unit-tested in isolation.
+- `occ-append.ts` — `tryAppendFact` (the OCC append primitive, conflict →
+  `false`) and `makeOccController` (the per-`runOne` conflict controller:
+  warn at 2, halt with `occ_exhausted` at 3, with the halt append itself
+  retried against fresh state).
+- `snapshot-service.ts` — `captureBoundarySnapshot` (per-step / HITL Diff
+  snapshots) and `disposeTerminalWorktree` (terminal snapshot then dispose,
+  gated on the `fact.snapshot_recorded` append landing).
+
+Event-store invariants are unchanged across the split: facts stay
+OCC-checked, observability stays best-effort and reducer-free, and handler
+I/O still routes through `ctx`.
+
 ---
 
 ### Credential storage
