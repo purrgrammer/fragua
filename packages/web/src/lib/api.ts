@@ -88,6 +88,10 @@ export interface RunSummary {
     committed: SnapshotChangeStat | null;
     uncommitted: SnapshotChangeStat | null;
   };
+  /** Source repo branch + HEAD sha at provision — operator-action target
+   * default + git-centric row/feed label. Absent when provisioned detached. */
+  baseGitRef?: string;
+  baseGitSha?: string;
 }
 
 export interface NodeState {
@@ -162,6 +166,10 @@ export interface RunDetail {
    * `<cwd>/.swarm/worktrees/<runId>`. Absent once the worktree was
    * disposed or for runs that never had one. */
   worktreePath?: string;
+  /** Source repo branch + HEAD sha at provision — shown in run-detail git
+   * metadata and used as the operator-action target default. */
+  baseGitRef?: string;
+  baseGitSha?: string;
 }
 
 /** One row in `GET /runs/:runId/changes`. Server projects

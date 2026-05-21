@@ -114,6 +114,8 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
       // malformed JSON — omit rather than fail the list
     }
   }
+  if (row.baseGitRef != null && row.baseGitRef.length > 0) summary.baseGitRef = row.baseGitRef;
+  if (row.baseGitSha != null && row.baseGitSha.length > 0) summary.baseGitSha = row.baseGitSha;
   return summary;
 }
 
@@ -165,6 +167,9 @@ export function runStateToDetail(
     const candidate = join(state.cwd, ".swarm", "worktrees", state.runId);
     if (existsSync(candidate)) detail.worktreePath = candidate;
   }
+
+  if (state.baseGitRef != null && state.baseGitRef.length > 0) detail.baseGitRef = state.baseGitRef;
+  if (state.baseGitSha != null && state.baseGitSha.length > 0) detail.baseGitSha = state.baseGitSha;
 
   if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {

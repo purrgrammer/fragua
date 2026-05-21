@@ -151,6 +151,8 @@ export interface RunSummaryRow {
   totalCacheWriteTokens: number;
   inboxStatus: string | null;
   changeStat: string | null;
+  baseGitRef: string | null;
+  baseGitSha: string | null;
 }
 
 /** Enumerate run ids with filtering, ordering, and limit pushed into SQL.
@@ -208,7 +210,8 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
   const sql = `
     WITH selected AS (
       SELECT r.run_id, r.workflow_sha, r.workflow_name, r.status, r.routing, r.metrics,
-             r.title, r.cwd, r.enqueued_at, r.updated_at, r.inbox_status, r.change_stat
+             r.title, r.cwd, r.enqueued_at, r.updated_at, r.inbox_status, r.change_stat,
+             r.base_git_ref, r.base_git_sha
         FROM run_state r
         ${where}
        ORDER BY ${orderBy}, r.run_id ASC
@@ -248,7 +251,9 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
            CAST(COALESCE(json_extract(s.metrics, '$.totalCacheReadTokens'), 0) AS INTEGER) AS totalCacheReadTokens,
            CAST(COALESCE(json_extract(s.metrics, '$.totalCacheWriteTokens'), 0) AS INTEGER) AS totalCacheWriteTokens,
            s.inbox_status AS inboxStatus,
-           s.change_stat AS changeStat
+           s.change_stat AS changeStat,
+           s.base_git_ref AS baseGitRef,
+           s.base_git_sha AS baseGitSha
       FROM selected s
       LEFT JOIN workflows w ON w.sha = s.workflow_sha
       LEFT JOIN event_bounds eb ON eb.run_id = s.run_id

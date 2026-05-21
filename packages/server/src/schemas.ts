@@ -71,6 +71,11 @@ export const RunSummary = Type.Object({
   inboxStatus: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("acted"), Type.Literal("discarded")])),
   /** Terminal diff stat — drives the inbox row's `+X / −Y, N files` badge. */
   changeStat: Type.Optional(ChangeStat),
+  /** Source repo branch at provision — the operator-action target default
+   * and the git-centric row label. Absent when provisioned detached. */
+  baseGitRef: Type.Optional(Type.String()),
+  /** Source repo HEAD sha at provision (for a short-sha label). */
+  baseGitSha: Type.Optional(Type.String()),
 });
 export type RunSummary = Static<typeof RunSummary>;
 
@@ -138,6 +143,10 @@ export const RunDetail = Type.Object({
    * been disposed (run terminal + provisioner cleanup) or for runs
    * whose cwd wasn't a git repo (per-run LocalEnvironment fallback). */
   worktreePath: Type.Optional(Type.String()),
+  /** Source repo branch + HEAD sha at provision — shown in run-detail
+   * git metadata and the operator-action target default. */
+  baseGitRef: Type.Optional(Type.String()),
+  baseGitSha: Type.Optional(Type.String()),
 });
 export type RunDetail = Static<typeof RunDetail>;
 

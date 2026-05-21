@@ -61,6 +61,24 @@ export interface TitleRequest {
 }
 
 const DEFAULT_MAX_TITLE_CHARS = 80;
+/** Best-effort retry for the summariser call (transient provider blips). */
+const TITLE_MAX_ATTEMPTS = 3;
+const TITLE_RETRY_BASE_MS = 500;
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const t = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(t);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 export class AutoTitler {
   private readonly backend: SummariserBackend | undefined;
@@ -133,7 +151,18 @@ export class AutoTitler {
     };
     if (req.goal !== undefined) input.goal = req.goal;
 
-    const out = await backend.summarise(input);
+    // Bounded best-effort retry: the summariser is a single cheap-model call
+    // and a transient provider blip (one happened in practice) otherwise
+    // leaves the run permanently untitled — there's no later trigger. This is
+    // a self-contained loop, NOT the run-level retry machinery (the titler is
+    // a decoupled side-fiber with no run node / OCC). Backoff between tries;
+    // bail on shutdown. `out.ok` is the only signal, so retry on any failure.
+    let out = await backend.summarise(input);
+    for (let attempt = 1; !out.ok && attempt < TITLE_MAX_ATTEMPTS && !this.shutdownSignal.aborted; attempt++) {
+      await sleep(TITLE_RETRY_BASE_MS * attempt, this.shutdownSignal);
+      if (this.shutdownSignal.aborted) return;
+      out = await backend.summarise(input);
+    }
     if (!out.ok) return;
     const title = sanitizeTitle(out.text, this.maxTitleChars);
     if (title.length === 0) return;

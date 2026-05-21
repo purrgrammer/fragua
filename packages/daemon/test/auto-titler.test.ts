@@ -130,6 +130,20 @@ describe("AutoTitler — unit", () => {
     r.store.close();
   });
 
+  test("transient backend failure retries, then succeeds", async () => {
+    const r = rig();
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
+    // Fail the first call, succeed the second — exercises the bounded retry.
+    const backend: StubBackend = new StubBackend(() => (backend.calls.length < 2 ? failOut : okOut("Recovered title")));
+    const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: abortCtrl.signal });
+    titler.titleRun({ runId: "r1", workflowSha: r.workflowSha, input: "x" });
+    await titler.drain();
+
+    expect(backend.calls.length).toBe(2); // 1 failure + 1 success
+    expect(r.store.getState("r1")?.title).toBe("Recovered title");
+    r.store.close();
+  });
+
   test("disabled → fire-and-forget is a no-op", async () => {
     const r = rig();
     r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
