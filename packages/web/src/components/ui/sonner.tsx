@@ -18,7 +18,7 @@ export function Toaster(): JSX.Element {
   return (
     <SonnerToaster
       theme={resolved}
-      position="bottom-right"
+      position="top-right"
       closeButton
       richColors={false}
       toastOptions={{
