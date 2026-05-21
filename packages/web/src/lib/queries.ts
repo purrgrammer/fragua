@@ -162,25 +162,6 @@ export const queries = {
       }),
   },
 
-  agents: {
-    all: () => ["agents"] as const,
-    list: (projectCwd?: string, projectOnly?: boolean) =>
-      queryOptions({
-        queryKey: [...queries.agents.all(), "list", projectCwd ?? "__all__", projectOnly ? "strict" : "all"] as const,
-        queryFn: () =>
-          api.listAgents(
-            projectCwd !== undefined ? { projectCwd, ...(projectOnly ? { projectOnly: true } : {}) } : undefined,
-          ),
-        staleTime: 60_000,
-      }),
-    detail: (locId: string) =>
-      queryOptions({
-        queryKey: [...queries.agents.all(), "detail", locId] as const,
-        queryFn: () => api.getAgent(locId),
-        staleTime: 60_000,
-      }),
-  },
-
   workflows: {
     all: () => ["workflows"] as const,
     list: () =>

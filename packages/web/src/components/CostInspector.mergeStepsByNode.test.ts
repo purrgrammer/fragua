@@ -60,13 +60,6 @@ describe("mergeStepsByNode", () => {
     expect(out[1]?.originRunId).toBe("child_b");
   });
 
-  test("sub-agent invocations of the same parent node keep their own rows (different parentStartSeq)", () => {
-    const a = withCost(step({ startSeq: 10, nodeId: "n", subagentId: "s", parentStartSeq: 5 }), 0.01, 10);
-    const b = withCost(step({ startSeq: 11, nodeId: "n", subagentId: "s", parentStartSeq: 50 }), 0.02, 20);
-    const out = mergeStepsByNode([a, b]);
-    expect(out).toHaveLength(2);
-  });
-
   test("durationMs spans from earliest start to latest end across merged turns", () => {
     const t0 = 1_700_000_000_000;
     const a: StepSnapshot = {
@@ -92,25 +85,15 @@ describe("mergeStepsByNode", () => {
   });
 
   test("non-consecutive same-node steps stay separate (goal-gate retarget creates a new invocation)", () => {
-    // Sub-agent rows fire between two invocations of the same parent
-    // node — exactly the goal-gate retry shape. Each parent
-    // invocation must stay its own row, otherwise the per-invocation
-    // sub-agent grouping breaks.
+    // A goal-gate retarget runs the same `audit` node a second time
+    // after an intervening step. Each invocation must stay its own
+    // row — merging them would collapse a retry loop's spend.
     const auditA = withCost(step({ startSeq: 10, nodeId: "audit", originRunId: "r" }), 0.01, 10);
-    const subA = withCost(
-      step({ startSeq: 11, nodeId: "__subagent:a", subagentId: "a", parentNodeId: "audit", parentStartSeq: 10 }),
-      0.02,
-      20,
-    );
+    const other = withCost(step({ startSeq: 11, nodeId: "fix", originRunId: "r" }), 0.02, 20);
     const auditB = withCost(step({ startSeq: 20, nodeId: "audit", originRunId: "r" }), 0.04, 40);
-    const subB = withCost(
-      step({ startSeq: 21, nodeId: "__subagent:b", subagentId: "b", parentNodeId: "audit", parentStartSeq: 20 }),
-      0.05,
-      50,
-    );
-    const out = mergeStepsByNode([auditA, subA, auditB, subB]);
-    // 4 distinct rows: two `audit` invocations + two sub-agents.
-    expect(out).toHaveLength(4);
+    const out = mergeStepsByNode([auditA, other, auditB]);
+    // 3 distinct rows: two `audit` invocations + the intervening `fix`.
+    expect(out).toHaveLength(3);
     const auditRows = out.filter((s) => s.nodeId === "audit");
     expect(auditRows).toHaveLength(2);
     expect(auditRows.every((r) => r.turns === undefined)).toBe(true);

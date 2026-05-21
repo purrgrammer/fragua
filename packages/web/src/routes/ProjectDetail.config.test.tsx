@@ -35,12 +35,6 @@ function installFetchWithConfig(opts: { yamlConfig?: string | null }): void {
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (url.includes("/agents")) {
-      return new Response(JSON.stringify({ agents: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
     if (url.includes("/workflows")) {
       return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
     }

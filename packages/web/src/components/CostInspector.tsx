@@ -106,80 +106,11 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // becomes its own StepSnapshot, so a llm handler that takes
   // multiple turns produces N rows for one nodeId; raise+resume
   // produces another N. Collapse them into ONE row per
-  // (originRunId, nodeId, parentNodeId, parallelIndex, parentStartSeq,
-  // subagentId) — summed cost/tokens, earliest startedAt, latest
-  // durationMs end, with `turns` carrying the count. The underlying
-  // per-call detail is still available via /steps for any future
-  // drill-in surface.
-  //
-  // Sub-runs in particular skip `fact.node_started` on dispatch
-  // (the parent's fanout opens the branch's "node" implicitly), so
-  // the server-side pause/resume fold in eventsToSteps doesn't
-  // trigger. Doing the merge here makes the UI robust regardless of
-  // whether the server folds.
+  // (originRunId, nodeId) — summed cost/tokens, earliest startedAt,
+  // latest durationMs end, with `turns` carrying the count. The
+  // underlying per-call detail is still available via /steps for any
+  // future drill-in surface.
   const mergedSteps = mergeStepsByNode(steps);
-
-  // Partition into top-level vs branch rows. Branch rows are indented
-  // under their parent and the parent renders as a non-leaf summary
-  // (cost / tokens aggregated across itself + every child).
-  //
-  // Grouping key: `(parentNodeId, parentStartSeq)`. Sub-agent rows
-  // carry `parentStartSeq` = the parent step's `startSeq` at spawn
-  // time, so a goal-gate retarget that re-invokes the same parent
-  // node_id keeps each invocation's children scoped to its own row.
-  // Parallel branches don't carry `parentStartSeq` (a parallel parent
-  // runs once per node window, so there's no per-invocation collision
-  // to disambiguate); they fall back to a `parentNodeId|*` slot that
-  // every same-node parent row reads from.
-  //
-  // Synthetic parents for parallel sections: a `parallel` handler opens
-  // no LLM call of its own, so no top-level step carries the parent's
-  // nodeId — but its children come back tagged with `parentNodeId` set
-  // to the parallel node. Without a stand-in, the panel either renders
-  // blank (children file into childrenByParent and never match a
-  // top-level row) or — if we hoist children flat — loses the nesting
-  // operators rely on to read the fan-out structure. Synthesise a
-  // parent row keyed on the parent's nodeId so the indented children
-  // attach correctly and the aggregate cost/tokens summary fires.
-  const PARENT_NODE_WILDCARD = "*";
-  const groupKey = (parentNodeId: string, parentStartSeq: number | undefined): string =>
-    `${parentNodeId}|${parentStartSeq ?? PARENT_NODE_WILDCARD}`;
-  const topLevelParentNodeIds = new Set<string>();
-  for (const s of mergedSteps) {
-    const isBranch = typeof s.parentNodeId === "string" && s.parentNodeId.length > 0;
-    if (!isBranch) topLevelParentNodeIds.add(s.nodeId);
-  }
-  const childrenByParent = new Map<string, StepSnapshot[]>();
-  const topLevel: StepSnapshot[] = [];
-  const synthesisedParents = new Map<string, StepSnapshot>();
-  let synthCount = 0;
-  for (const s of mergedSteps) {
-    const isBranch = typeof s.parentNodeId === "string" && s.parentNodeId.length > 0;
-    if (isBranch) {
-      const parentNodeId = s.parentNodeId as string;
-      const key = groupKey(parentNodeId, s.parentStartSeq);
-      const arr = childrenByParent.get(key) ?? [];
-      arr.push(s);
-      childrenByParent.set(key, arr);
-      if (!topLevelParentNodeIds.has(parentNodeId) && !synthesisedParents.has(parentNodeId)) {
-        synthCount += 1;
-        const synthParent: StepSnapshot = {
-          // Negative ids — guaranteed not to collide with real (>=0)
-          // step indices or stream sequences. Stable across renders
-          // because `synthCount` increments deterministically as we
-          // walk `steps`.
-          stepIdx: -synthCount,
-          startSeq: -synthCount,
-          nodeId: parentNodeId,
-          startedAt: s.startedAt,
-        };
-        synthesisedParents.set(parentNodeId, synthParent);
-        topLevel.push(synthParent);
-      }
-    } else {
-      topLevel.push(s);
-    }
-  }
 
   // Outer grid defines the column tracks once; each row uses
   // `grid-cols-subgrid` to inherit them. Result: every row's cells
@@ -188,55 +119,35 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // grid-template-columns: [step | duration | cost | context]
   return (
     <div data-testid="cost-inspector" className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3">
-      {topLevel.map((step, i) => {
-        // A parent matches its own invocation's children first via
-        // `(nodeId, startSeq)`; parallel parents fall back to the
-        // wildcard slot populated by branches without `parentStartSeq`.
-        const branchChildren =
-          childrenByParent.get(groupKey(step.nodeId, step.startSeq)) ??
-          childrenByParent.get(groupKey(step.nodeId, undefined));
-        const next = topLevel[i + 1] ?? branchChildren?.[0];
-        return (
-          <StepCostRowGroup
-            key={stepIdentityKey(step, runId)}
-            step={step}
-            branchChildren={branchChildren}
-            nextStartedAt={next?.startedAt}
-            isLive={isLive}
-          />
-        );
-      })}
+      {mergedSteps.map((step, i) => (
+        <StepCostRow
+          key={stepIdentityKey(step, runId)}
+          step={step}
+          nextStartedAt={mergedSteps[i + 1]?.startedAt}
+          isLive={isLive}
+        />
+      ))}
     </div>
   );
 }
 
 /** Merge CONSECUTIVE steps that share the same logical "node window":
- *  same originRunId, same nodeId, same parent linkage. Each `llm.start`
- *  in the server's stream produces one StepSnapshot; llm
- *  multi-turn and pause-resume both yield several within the same
- *  node window. Operators care about the node's TOTAL spend, not the
- *  per-turn rows, so we sum here. `turns` carries the merge count for
- *  the UI to surface as "lens · 7 turns".
+ *  same originRunId, same nodeId. Each `llm.start` in the server's
+ *  stream produces one StepSnapshot; llm multi-turn and pause-resume
+ *  both yield several within the same node window. Operators care
+ *  about the node's TOTAL spend, not the per-turn rows, so we sum
+ *  here. `turns` carries the merge count for the UI to surface as
+ *  "lens · 7 turns".
  *
- *  Why consecutive-only: goal-gate retarget runs the SAME node a
- *  second time after sub-agents fire (or other intervening steps
- *  push between). Those legitimately distinct invocations are
- *  non-consecutive in the timeline; merging them would collapse a
- *  retry loop's spend into one misleading row and would break the
- *  per-invocation sub-agent grouping the CostInspector relies on.
+ *  Why consecutive-only: a goal-gate retarget runs the SAME node a
+ *  second time after other steps push between. Those legitimately
+ *  distinct invocations are non-consecutive in the timeline; merging
+ *  them would collapse a retry loop's spend into one misleading row.
  *  Pause/resume + multi-turn produce contiguous llm.starts in the
  *  same node window, so the consecutive bound captures them while
  *  keeping goal-gate retargets distinct. */
 export function mergeStepsByNode(steps: readonly StepSnapshot[]): StepSnapshot[] {
-  const groupKey = (s: StepSnapshot): string =>
-    [
-      s.originRunId ?? "",
-      s.nodeId,
-      s.parentNodeId ?? "",
-      s.parallelIndex ?? -1,
-      s.parentStartSeq ?? -1,
-      s.subagentId ?? "",
-    ].join("|");
+  const groupKey = (s: StepSnapshot): string => [s.originRunId ?? "", s.nodeId].join("|");
   const out: StepSnapshot[] = [];
   let runStart = 0;
   while (runStart < steps.length) {
@@ -300,46 +211,6 @@ function stepIdentityKey(step: StepSnapshot, fallbackRunId: string): string {
   return `${step.originRunId ?? fallbackRunId}:${step.startSeq}`;
 }
 
-/** A top-level step plus any indented branch rows that ride underneath it. */
-function StepCostRowGroup({
-  step,
-  branchChildren,
-  nextStartedAt,
-  isLive,
-}: {
-  step: StepSnapshot;
-  branchChildren: StepSnapshot[] | undefined;
-  nextStartedAt: string | undefined;
-  isLive: boolean;
-}): JSX.Element {
-  const hasBranchChildren = branchChildren !== undefined && branchChildren.length > 0;
-  // Every row — parent or branch child — shows its own LLM call's
-  // cost + context. A parent that fans out to sub-agents or parallel
-  // branches displays only what its own orchestrator turn spent;
-  // children carry their own spend on their own rows. Rolling parent
-  // + children into one summary on the parent row hides the
-  // distinction operators need ("did dispatch's prompt blow up?" vs
-  // "is one of the children doing the heavy lifting?") and inflates
-  // the parent row's context-utilisation chip with tokens that never
-  // touched its window.
-  return (
-    <>
-      <StepCostRow step={step} nextStartedAt={nextStartedAt} isLive={isLive} hasChildren={hasBranchChildren} />
-      {hasBranchChildren
-        ? branchChildren.map((child, j) => (
-            <StepCostRow
-              key={stepIdentityKey(child, step.originRunId ?? "")}
-              step={child}
-              nextStartedAt={branchChildren[j + 1]?.startedAt ?? nextStartedAt}
-              isLive={isLive}
-              isBranchChild
-            />
-          ))
-        : null}
-    </>
-  );
-}
-
 /**
  * Look up the full `ProviderModel` for a step's provider+model pair.
  * Returns `undefined` while loading, when the provider isn't
@@ -360,19 +231,10 @@ function StepCostRow({
   step,
   nextStartedAt,
   isLive,
-  hasChildren = false,
-  isBranchChild = false,
 }: {
   step: StepSnapshot;
   nextStartedAt: string | undefined;
   isLive: boolean;
-  /** Parent has indented branch rows underneath. Marks the row with
-   *  `data-summary="true"` for testability and applies a slightly
-   *  emphasised background; the row's own cost/tokens are still its
-   *  own. */
-  hasChildren?: boolean;
-  /** This row is a branch child — indent and tone down the chrome. */
-  isBranchChild?: boolean;
 }): JSX.Element {
   const model = useStepModel(step.provider, step.model);
 
@@ -400,8 +262,6 @@ function StepCostRow({
     resolvedDurationMs ?? (stepIsTicking ? Math.max(0, now - Date.parse(step.startedAt)) : undefined);
   const elapsedIsLive = stepIsTicking;
 
-  // Every row reflects only its own LLM call. Children appear on
-  // their own rows; nothing aggregates upward.
   const inputTokens = step.cost?.input_tokens ?? 0;
   const outputTokens = step.cost?.output_tokens ?? 0;
   const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
@@ -451,22 +311,13 @@ function StepCostRow({
   // space so neighbouring rows' chips don't shift.
   const rowGridClass = cn(
     "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md",
-    isBranchChild ? "bg-sw-surface/50 px-3 py-1 ml-6" : "bg-sw-surface px-3 py-2",
+    "bg-sw-surface px-3 py-2",
   );
 
   return (
-    <div
-      data-testid={`step-${step.stepIdx}`}
-      data-summary={hasChildren ? "true" : undefined}
-      data-parent-step={step.parentNodeId}
-      data-branch-child={isBranchChild ? "true" : undefined}
-      data-origin-run-id={step.originRunId}
-      className={rowGridClass}
-    >
+    <div data-testid={`step-${step.stepIdx}`} data-origin-run-id={step.originRunId} className={rowGridClass}>
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
-        <span className="truncate" title={step.subagentId ? `subagent_id: ${step.subagentId}` : undefined}>
-          {step.subagentId ? `agent · ${step.subagentName ?? step.subagentId.slice(0, 8)}` : step.nodeId}
-        </span>
+        <span className="truncate">{step.nodeId}</span>
         {step.iteration && (
           <span className={`font-mono ${metricChipClass}`}>
             iter {step.iteration.n}/{step.iteration.max}

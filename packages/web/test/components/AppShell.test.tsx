@@ -78,7 +78,7 @@ describe("AppShell + AppSidebar", () => {
     expect(ids).toEqual(["nav-watchtower", "nav-inbox", "nav-runs", "nav-schedules", "nav-analytics"]);
   });
 
-  it("groups Build items: Projects, Workflows, Skills, Agents, Providers in order", () => {
+  it("groups Build items: Projects, Workflows, Skills, Providers in order", () => {
     const { container } = mount("/");
     const groups = Array.from(container.querySelectorAll('[data-slot="sidebar-group"]'));
     const build = groups.find(
@@ -88,7 +88,7 @@ describe("AppShell + AppSidebar", () => {
     const ids = Array.from(build!.querySelectorAll('[data-testid^="nav-"]')).map((el) =>
       el.getAttribute("data-testid"),
     );
-    expect(ids).toEqual(["nav-projects", "nav-workflows", "nav-skills", "nav-agents", "nav-providers"]);
+    expect(ids).toEqual(["nav-projects", "nav-workflows", "nav-skills", "nav-providers"]);
   });
 
   it("marks the link matching the current route with aria-current=page", () => {

@@ -229,60 +229,6 @@ describe("useRunLive — bootstrap fetch is gated on a settled snapshot", () => 
     }
   });
 
-  it("subagent.resumed frames do not crash the fold and leave subagentByToolCallId stable", async () => {
-    const mock = installFetchMock({
-      "/api/runs/r1/messages": () =>
-        new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
-    });
-    try {
-      FakeEventSource.instances = [];
-      const { result } = renderHook(() =>
-        useRunLive("r1", {
-          terminal: false,
-          sinceSeq: 0,
-          eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
-        }),
-      );
-
-      await waitFor(() => {
-        expect(FakeEventSource.instances.length).toBe(1);
-      });
-      const es = FakeEventSource.instances[0]!;
-      act(() => es._open());
-
-      // Original subagent.start populates the tool_call_id → subagent_id
-      // mapping. The resumed frame that follows must NOT clobber or drop it.
-      act(() => {
-        es._emit(
-          JSON.stringify({
-            type: "subagent.start",
-            payload: { tool_call_id: "toolu_x", subagent_id: "sid_1" },
-          }),
-          "10",
-        );
-      });
-      await waitFor(() => {
-        expect(result.current.subagentByToolCallId.get("toolu_x")).toBe("sid_1");
-      });
-
-      act(() => {
-        es._emit(
-          JSON.stringify({
-            type: "subagent.resumed",
-            payload: { subagent_id: "sid_1", reason: "already_completed" },
-          }),
-          "11",
-        );
-      });
-
-      // After the resumed frame the mapping is unchanged — no clobber,
-      // no drop, no exception.
-      expect(result.current.subagentByToolCallId.get("toolu_x")).toBe("sid_1");
-    } finally {
-      mock.restore();
-    }
-  });
-
   it("fact.message_appended for an assistant row clears the streaming buffer immediately (no duplicate toolCall card)", async () => {
     // The duplicate-render bug: between `fact.message_appended` (role=
     // assistant, persisted row lands) and `agent.message_end` (streaming
@@ -354,9 +300,9 @@ describe("useRunLive — bootstrap fetch is gated on a settled snapshot", () => 
   });
 
   it("fact.message_appended for an UNRELATED nodeId leaves the streaming buffer alone", async () => {
-    // Defensive: in workflows with nested subagents, an assistant row may
-    // be appended for a different nodeId mid-stream. The clear must be
-    // scoped — clobbering the active buffer would drop in-flight deltas.
+    // Defensive: an assistant row may be appended for a different nodeId
+    // mid-stream. The clear must be scoped — clobbering the active buffer
+    // would drop in-flight deltas.
     const mock = installFetchMock({
       "/api/runs/r1/messages": () =>
         new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),

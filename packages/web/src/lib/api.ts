@@ -262,30 +262,6 @@ export interface SkillTreeResponse {
   truncated: boolean;
 }
 
-export interface AgentSummary {
-  /** base64url(location) — opaque URL-safe handle. */
-  locId: string;
-  name: string;
-  description: string;
-  model?: string;
-  provider?: string;
-  allowed_tools?: string[];
-  location: string;
-  sha256: string;
-  bytes: number;
-  scope: "project" | "user";
-  source_dir: string;
-  project_cwd?: string;
-  disabled_reason?: string;
-}
-
-export interface AgentDetail {
-  agent: AgentSummary;
-  /** The body verbatim — what the sub-agent receives as its system
-   * prompt on spawn (when no inline override is passed). */
-  body: string;
-}
-
 /**
  * Per-LLM-call snapshot, shaped for `CostInspector`.
  *
@@ -315,28 +291,6 @@ export interface StepSnapshot {
   provider?: string;
   model?: string;
   summary?: string;
-  /** Set when this step ran as a branch of a parallel/component fan-out:
-   * the parent component's nodeId. Drives the indented child rows under
-   * the parent in CostInspector. */
-  parentNodeId?: string;
-  /** Branch index within the parallel parent's `children` list. */
-  parallelIndex?: number;
-  /** Per-invocation discriminator for sub-agent steps. Equal to the
-   * parent's `startSeq` at the moment the sub-agent was spawned, so
-   * sub-agents from a goal-gate-retargeted re-invocation of the same
-   * `parentNodeId` don't pool with the prior invocation's children.
-   * `CostInspector` groups by `(parentNodeId, parentStartSeq)` rather
-   * than `parentNodeId` alone. Optional for back-compat with parallel
-   * branches (no per-invocation collision risk — a parallel parent
-   * runs once per node window). */
-  parentStartSeq?: number;
-  /** Per-spawn discriminator for sub-agent steps. Set when nodeId
-   * starts with `__subagent:`. */
-  subagentId?: string;
-  /** Short name the calling LLM passed via `agent({ name })`.
-   * Surface this instead of the raw `__subagent:<uuid>` nodeId
-   * when present. */
-  subagentName?: string;
   cost?: {
     input_tokens: number;
     output_tokens: number;
@@ -738,23 +692,6 @@ export async function getSkillFile(locId: string, path: string): Promise<{ bytes
     bytes: new Uint8Array(buf),
     contentType: res.headers.get("content-type") ?? "application/octet-stream",
   };
-}
-
-export async function listAgents(opts?: { projectCwd?: string; projectOnly?: boolean }): Promise<AgentSummary[]> {
-  const qs = buildScopedListQs(opts);
-  const body = await getJson(
-    `/agents${qs}`,
-    (v): v is { agents: AgentSummary[] } =>
-      typeof v === "object" &&
-      v !== null &&
-      Array.isArray((v as { agents?: unknown }).agents) &&
-      (v as { agents: unknown[] }).agents.every(isAgentSummary),
-  );
-  return body.agents;
-}
-
-export async function getAgent(locId: string): Promise<AgentDetail> {
-  return getJson(`/agents/${encodeURIComponent(locId)}`, isAgentDetail);
 }
 
 export async function getRunEvents(id: string): Promise<RunEventsPayload> {
@@ -1451,36 +1388,6 @@ function isSkillTreeResponse(v: unknown): v is SkillTreeResponse {
   if (typeof v !== "object" || v === null) return false;
   const o = v as { tree?: unknown; truncated?: unknown };
   return Array.isArray(o.tree) && o.tree.every(isSkillTreeEntry) && typeof o.truncated === "boolean";
-}
-
-function isAgentSummary(v: unknown): v is AgentSummary {
-  if (typeof v !== "object" || v === null) return false;
-  const o = v as {
-    locId?: unknown;
-    name?: unknown;
-    description?: unknown;
-    location?: unknown;
-    sha256?: unknown;
-    bytes?: unknown;
-    scope?: unknown;
-    source_dir?: unknown;
-  };
-  return (
-    typeof o.locId === "string" &&
-    typeof o.name === "string" &&
-    typeof o.description === "string" &&
-    typeof o.location === "string" &&
-    typeof o.sha256 === "string" &&
-    typeof o.bytes === "number" &&
-    (o.scope === "project" || o.scope === "user") &&
-    typeof o.source_dir === "string"
-  );
-}
-
-function isAgentDetail(v: unknown): v is AgentDetail {
-  if (typeof v !== "object" || v === null) return false;
-  const o = v as { agent?: unknown; body?: unknown };
-  return isAgentSummary(o.agent) && typeof o.body === "string";
 }
 
 function isSchedule(v: unknown): v is Schedule {

@@ -22,7 +22,6 @@ interface UrlCapture {
   /** Last URL hit per endpoint family. Useful for tab tests that need
    *  to assert on query string shape without intercepting every fetch. */
   skills?: string;
-  agents?: string;
 }
 
 function installFetch(opts: InstallOpts = {}, capture?: UrlCapture): void {
@@ -39,13 +38,6 @@ function installFetch(opts: InstallOpts = {}, capture?: UrlCapture): void {
     if (url.includes("/skills")) {
       if (capture) capture.skills = url;
       return new Response(JSON.stringify({ skills: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    if (url.includes("/agents")) {
-      if (capture) capture.agents = url;
-      return new Response(JSON.stringify({ agents: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -96,12 +88,12 @@ describe("ProjectDetail · tabs", () => {
   useDom();
   afterEach(() => cleanup());
 
-  test("renders Runs, Workflows, Files, Skills, Agents triggers in order", async () => {
+  test("renders Runs, Workflows, Files, Skills triggers in order", async () => {
     installFetch();
     const { container } = renderAt(`/projects/${TEST_ENC}`);
     const tabs = await waitFor(() => within(container).getByTestId("project-tabs"));
     const triggers = within(tabs).getAllByRole("tab");
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(["Runs", "Workflows", "Files", "Skills", "Agents"]);
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual(["Runs", "Workflows", "Files", "Skills"]);
   });
 
   test("workflows tab is the active panel when ?tab=workflows", async () => {
@@ -167,19 +159,6 @@ describe("ProjectDetail · tabs", () => {
       expect(capture.skills).toBeDefined();
     });
     const url = capture.skills ?? "";
-    expect(url).toContain(`project_cwd=${encodeURIComponent(TEST_CWD)}`);
-    expect(url).toContain("scope=project_only");
-  });
-
-  test("Agents tab requests project-only scope", async () => {
-    const capture: UrlCapture = {};
-    installFetch({}, capture);
-    const { container } = renderAt(`/projects/${TEST_ENC}?tab=agents`, undefined);
-    await waitFor(() => within(container).getByTestId("project-agents-section"));
-    await waitFor(() => {
-      expect(capture.agents).toBeDefined();
-    });
-    const url = capture.agents ?? "";
     expect(url).toContain(`project_cwd=${encodeURIComponent(TEST_CWD)}`);
     expect(url).toContain("scope=project_only");
   });

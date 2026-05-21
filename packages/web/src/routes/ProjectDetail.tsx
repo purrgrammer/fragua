@@ -14,7 +14,6 @@ import { Coins, Database, DollarSign, Play } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import YAML from "yaml";
-import { AgentsList } from "../components/agents/agents-list.tsx";
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { FileTree } from "../components/ai-elements/file-tree.tsx";
 import { RunComposer } from "../components/RunComposer.tsx";
@@ -41,8 +40,8 @@ export function ProjectDetail(): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedPath = searchParams.get("path") ?? "";
   const rawTab = searchParams.get("tab");
-  const tab: "runs" | "workflows" | "files" | "skills" | "agents" =
-    rawTab === "workflows" || rawTab === "files" || rawTab === "skills" || rawTab === "agents" ? rawTab : "runs";
+  const tab: "runs" | "workflows" | "files" | "skills" =
+    rawTab === "workflows" || rawTab === "files" || rawTab === "skills" ? rawTab : "runs";
 
   const filter = useMemo(() => (cwd ? { cwd } : undefined), [cwd]);
   const { data: rows, isPending, isError, error } = useQuery({ ...queries.runs.list(filter), enabled: cwd !== null });
@@ -123,7 +122,6 @@ export function ProjectDetail(): JSX.Element {
       workflows: "workflows",
       files: "files",
       skills: "skills",
-      agents: "agents",
     };
     next.set("tab", known[v] ?? "runs");
     setSearchParams(next, { replace: true });
@@ -219,9 +217,6 @@ export function ProjectDetail(): JSX.Element {
           </TabsTrigger>
           <TabsTrigger value="skills" data-testid="project-tab-skills">
             Skills
-          </TabsTrigger>
-          <TabsTrigger value="agents" data-testid="project-tab-agents">
-            Agents
           </TabsTrigger>
         </TabsList>
 
@@ -341,14 +336,6 @@ export function ProjectDetail(): JSX.Element {
             data-testid="project-skills-section"
           >
             <SkillsList projectCwd={cwd} projectOnly testIdPrefix="project-skills" />
-          </TabsContent>
-
-          <TabsContent
-            value="agents"
-            className="flex w-full min-w-0 flex-col gap-2 p-3"
-            data-testid="project-agents-section"
-          >
-            <AgentsList projectCwd={cwd} projectOnly testIdPrefix="project-agents" />
           </TabsContent>
 
           <TabsContent value="files" className="flex w-full min-w-0 flex-col gap-2 p-3">

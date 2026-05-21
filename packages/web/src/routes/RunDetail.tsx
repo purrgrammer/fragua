@@ -93,7 +93,6 @@ export function RunDetail(): JSX.Element {
     totalEvents,
     liveCost,
     detailOverlay,
-    subagentByToolCallId,
   } = useRunLive(id || null, {
     sinceSeq: snapshot?.lastEventSeq,
     terminal: isTerminal,
@@ -214,7 +213,6 @@ export function RunDetail(): JSX.Element {
                 isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
-                subagentByToolCallId={subagentByToolCallId}
                 hitl={
                   detail?.runStatus === "paused_human" && detail.hitlNodeId
                     ? {

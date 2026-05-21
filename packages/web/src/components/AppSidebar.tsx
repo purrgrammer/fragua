@@ -16,7 +16,6 @@ import {
   Anvil,
   BarChart3,
   BookOpen,
-  Bot,
   CalendarClock,
   Cpu,
   FolderGit2,
@@ -56,7 +55,6 @@ const BUILD_NAV = [
   { to: "/projects", label: "Projects", icon: FolderGit2, end: false },
   { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
   { to: "/skills", label: "Skills", icon: BookOpen, end: false },
-  { to: "/agents", label: "Agents", icon: Bot, end: false },
   { to: "/providers", label: "Providers", icon: Cpu, end: false },
 ] as const;
 

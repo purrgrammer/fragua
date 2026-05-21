@@ -5,8 +5,6 @@
 
 import { createBrowserRouter, type RouteObject } from "react-router-dom";
 import { AppShell } from "../components/AppShell.tsx";
-import { AgentDetail } from "../routes/AgentDetail.tsx";
-import { Agents } from "../routes/Agents.tsx";
 import { Analytics } from "../routes/Analytics.tsx";
 import { Home } from "../routes/Home.tsx";
 import { InboxPage } from "../routes/Inbox.tsx";
@@ -39,8 +37,6 @@ export function createRoutes(): RouteObject[] {
         { path: "providers/:name", element: <ProviderDetail /> },
         { path: "skills", element: <Skills /> },
         { path: "skills/:locId", element: <SkillDetail /> },
-        { path: "agents", element: <Agents /> },
-        { path: "agents/:locId", element: <AgentDetail /> },
         { path: "schedules", element: <Schedules /> },
         { path: "runs", element: <RunsList /> },
         // Run detail is one component regardless of which tab is

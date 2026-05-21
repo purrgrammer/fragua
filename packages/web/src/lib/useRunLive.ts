@@ -77,12 +77,6 @@ export interface UseRunLiveResult {
    * without refetching `/runs/:id` on every SSE frame. Reset on
    * `runId` change. */
   detailOverlay: DetailOverlay;
-  /** Live `tool_call_id → subagent_id` map folded from `subagent.start`
-   * frames. Lets the conversation renderer link a parent toolCall card
-   * to its in-flight sub-agent before the toolResult — which carries
-   * the canonical mapping in `details.data.subagent_id` — has landed.
-   * Reset on `runId` change. */
-  subagentByToolCallId: ReadonlyMap<string, string>;
 }
 
 export interface UseRunLiveOptions {
@@ -119,7 +113,6 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   const [totalEvents, setTotalEvents] = useState(0);
   const [liveCostFrames, setLiveCostFrames] = useState<LiveCostFrame[]>([]);
   const [detailOverlay, setDetailOverlay] = useState<DetailOverlay>(EMPTY_DETAIL_OVERLAY);
-  const [subagentByToolCallId, setSubagentByToolCallId] = useState<ReadonlyMap<string, string>>(() => new Map());
 
   // Latest ordinal persisted so incremental fetches don't re-load the world.
   const lastOrdinalRef = useRef(0);
@@ -136,7 +129,6 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     setTotalEvents(0);
     setLiveCostFrames([]);
     setDetailOverlay(EMPTY_DETAIL_OVERLAY);
-    setSubagentByToolCallId(new Map());
     lastOrdinalRef.current = 0;
 
     if (!runId || opts.terminal === undefined) return;
@@ -231,36 +223,6 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       // the hot text-delta path out of this code entirely.
       if (isDetailEvent(type) && Number.isFinite(idNum)) {
         setDetailOverlay((prev) => foldDetailFrame(prev, type, payload, idNum));
-      }
-
-      // Fold `subagent.start { tool_call_id, subagent_id }` so the
-      // conversation renderer can link the parent toolCall card to its
-      // running sub-agent before the toolResult lands. The canonical
-      // link is on the toolResult's `details.data.subagent_id` (set
-      // when the `agent` tool returns); this map is the early-arriving
-      // mirror that keeps the embedded transcript visible mid-flight.
-      if (type === "subagent.start" && payload != null) {
-        const tcid = typeof payload["tool_call_id"] === "string" ? (payload["tool_call_id"] as string) : null;
-        const sid = typeof payload["subagent_id"] === "string" ? (payload["subagent_id"] as string) : null;
-        if (tcid && sid) {
-          setSubagentByToolCallId((prev) => {
-            if (prev.get(tcid) === sid) return prev;
-            const next = new Map(prev);
-            next.set(tcid, sid);
-            return next;
-          });
-        }
-      }
-
-      // `subagent.resumed` fires on respawn after a daemon crash. The
-      // tool_call_id→subagent_id mapping was already captured by the
-      // original (pre-crash) subagent.start in the event log; the
-      // resumed event closes the bracket on its own without needing
-      // a fresh fold. Acknowledge the type so the SSE frame doesn't
-      // accidentally fall through into MESSAGE_SIGNAL_TYPES or the
-      // streaming-delta path below.
-      if (type === "subagent.resumed") {
-        return;
       }
 
       if (MESSAGE_SIGNAL_TYPES.has(type)) {
@@ -388,7 +350,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
             ? "loading"
             : sseStatus;
 
-  return { messages, streaming, toolStreams, status, totalEvents, liveCost, detailOverlay, subagentByToolCallId };
+  return { messages, streaming, toolStreams, status, totalEvents, liveCost, detailOverlay };
 }
 
 /** Append a `tool.output_chunk` slice into the per-node stdout/stderr
