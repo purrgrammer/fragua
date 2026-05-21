@@ -1406,9 +1406,10 @@ describe("global event feed (cross-run)", () => {
     // terminal — exactly the contract we want.
   });
 
-  test("GET /events strips bookkeeping kinds even when present in the store", async () => {
-    // Seed run "c" with a mix: one allowlisted anchor (run_started) and
-    // bookkeeping kinds that were removed from FEED_EVENT_KINDS.
+  test("GET /events surfaces operator-action facts and strips remaining bookkeeping kinds", async () => {
+    // Seed run "c" with: one lifecycle anchor (run_started), all four
+    // operator-action facts now in FEED_EVENT_KINDS, and fact.message_appended
+    // which must still be stripped (never in the allowlist).
     store.enqueueRun({ runId: "c", workflowSha: "wf" });
     const c0 = store.getState("c")!;
     const c1 = store.appendFact(
@@ -1416,17 +1417,32 @@ describe("global event feed (cross-run)", () => {
       [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: c0.schemaVersion, startNode: "n" } }],
       c0.version,
     );
-    // Append bookkeeping facts that must not reach the feed. The reducer
-    // is permissive about logical transitions, so we can chain them.
+    // Operator-action facts — now in FEED_EVENT_KINDS, must appear in the feed.
     const c2 = store.appendFact(
       "c",
-      [{ type: "fact.run_branched", payload: { branch: "swarm/runs/c", sha: "abc123" } }],
+      [{ type: "fact.run_branched", payload: { branch: "feature/x", sha: "abc123" } }],
       c1.newVersion,
     );
+    const c3 = store.appendFact(
+      "c",
+      [{ type: "fact.run_committed", payload: { targetBranch: "main", sha: "d0d0", message: "m", parentSha: "p" } }],
+      c2.newVersion,
+    );
+    const c4 = store.appendFact(
+      "c",
+      [{ type: "fact.run_merged", payload: { targetBranch: "main", mode: "ff", sha: "e0e0", parentShas: ["p"] } }],
+      c3.newVersion,
+    );
+    const c5 = store.appendFact(
+      "c",
+      [{ type: "fact.run_discarded", payload: { refs: ["refs/swarm/snapshots/c"] } }],
+      c4.newVersion,
+    );
+    // fact.message_appended is still a bookkeeping kind — must stay stripped.
     store.appendFact(
       "c",
       [{ type: "fact.message_appended", payload: { ordinal: 0, role: "assistant", nodeId: null, iteration: 1 } }],
-      c2.newVersion,
+      c5.newVersion,
     );
 
     const routes = createRoutes({ store });
@@ -1435,12 +1451,16 @@ describe("global event feed (cross-run)", () => {
     const events = (await res.json()) as Array<{ type: string }>;
     const types = events.map((e) => e.type);
 
-    // The anchor must be present (proves run "c" was seen).
+    // Lifecycle anchor present.
     expect(types).toContain("fact.run_started");
-    // The removed kinds must not appear.
-    expect(types).not.toContain("fact.run_branched");
+    // All four operator-action facts must now appear in the feed.
+    expect(types).toContain("fact.run_branched");
+    expect(types).toContain("fact.run_committed");
+    expect(types).toContain("fact.run_merged");
+    expect(types).toContain("fact.run_discarded");
+    // message_appended still stripped.
     expect(types).not.toContain("fact.message_appended");
-    // Every returned type must be in the trimmed FEED_EVENT_KINDS allowlist.
+    // Every returned type must be in the FEED_EVENT_KINDS allowlist.
     const allowed = new Set<string>(FEED_EVENT_KINDS);
     for (const t of types) {
       expect(allowed.has(t)).toBe(true);
