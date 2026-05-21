@@ -1,10 +1,23 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { useDom } from "../../test/setup.ts";
 import { encodeProjectId } from "../lib/projectId.ts";
 import { Schedules } from "./Schedules.tsx";
+
+const successSpy = mock(() => "t1");
+const errorSpy = mock(() => "t2");
+
+mock.module("sonner", () => ({
+  toast: Object.assign(
+    mock(() => "t0"),
+    {
+      success: successSpy,
+      error: errorSpy,
+    },
+  ),
+}));
 
 interface FetchCall {
   url: string;
@@ -82,6 +95,10 @@ function renderWithClient(ui: JSX.Element) {
 
 describe("Schedules", () => {
   useDom();
+  beforeEach(() => {
+    successSpy.mockReset();
+    errorSpy.mockReset();
+  });
   afterEach(() => cleanup());
 
   // ── empty state ──
@@ -179,5 +196,34 @@ describe("Schedules", () => {
     const projHref = hrefs.find((h) => h.startsWith("/projects/"));
     expect(projHref).toBeTruthy();
     expect(projHref).toBe(`/projects/${encodeProjectId("/Users/dev/repo")}`);
+  });
+
+  // ── Toast feedback ────────────────────────────────────────────────
+
+  test("pause success toasts 'Schedule paused' and re-fetches the list", async () => {
+    const sched = makeSchedule({ id: "sch_toast_pause", pausedAt: null });
+    const { calls } = installFetch({ schedules: [sched] });
+
+    const { container } = renderWithClient(<Schedules />);
+    const pauseBtn = await waitFor(
+      () => within(container).getByTestId("schedule-pause-sch_toast_pause") as HTMLButtonElement,
+    );
+
+    await act(async () => {
+      fireEvent.click(pauseBtn);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    await waitFor(() => {
+      if (!successSpy.mock.calls.some((c) => (c as unknown[])[0] === "Schedule paused")) {
+        throw new Error(
+          `toast.success not called with "Schedule paused"; calls: ${JSON.stringify(successSpy.mock.calls)}`,
+        );
+      }
+    });
+
+    // list query should have been re-fetched
+    const listFetches = calls.filter((c) => c.method === "GET" && c.url.endsWith("/api/schedules"));
+    expect(listFetches.length).toBeGreaterThanOrEqual(2);
   });
 });

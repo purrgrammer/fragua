@@ -26,6 +26,7 @@ import { Input } from "../components/ui/input.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
+import { toast, toastError } from "../lib/toast.ts";
 
 export function ProviderDetail(): JSX.Element {
   const { name = "" } = useParams();
@@ -142,24 +143,38 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
   const saveMutation = useMutation({
     mutationFn: () => api.setProviderCredentials(name, value),
     onSuccess: () => {
+      toast.success("Credentials saved");
       setValue("");
       setTestResult(null);
       onChange();
     },
+    onError: (err) => toastError(err),
   });
 
   const testMutation = useMutation({
     mutationFn: () => api.testProvider(name),
-    onSuccess: (result) => setTestResult(result),
-    onError: (err) => setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) }),
+    onSuccess: (result) => {
+      setTestResult(result);
+      if (result.ok) {
+        toast.success(`${name} ok — ${result.total_ms}ms`);
+      } else {
+        toast.error(`Test failed: ${result.error}`);
+      }
+    },
+    onError: (err) => {
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      toastError(err);
+    },
   });
 
   const rmMutation = useMutation({
     mutationFn: () => api.removeProviderCredentials(name),
     onSuccess: () => {
+      toast.success(`Credentials removed for ${name}`);
       setTestResult(null);
       onChange();
     },
+    onError: (err) => toastError(err),
   });
 
   return (

@@ -24,6 +24,7 @@ import {
   resumeRun,
 } from "@/lib/api";
 import { queries } from "@/lib/queries";
+import { toast, toastError } from "@/lib/toast";
 
 export interface RunPausedNoticeProps {
   runId: string;
@@ -563,26 +564,45 @@ export function RunPausedNotice({ runId }: RunPausedNoticeProps): JSX.Element | 
 
   const resumeMutation = useMutation({
     mutationFn: () => resumeRun(runId),
-    onSuccess: () => refreshAfterControl(qc, runId),
+    onSuccess: () => {
+      toast.success("Run resumed");
+      return refreshAfterControl(qc, runId);
+    },
+    onError: (err) => toastError(err),
   });
 
   const cancelMutation = useMutation({
     mutationFn: () => cancelRun(runId),
-    onSuccess: () => refreshAfterControl(qc, runId),
+    onSuccess: () => {
+      toast.success("Run cancelled");
+      return refreshAfterControl(qc, runId);
+    },
+    onError: (err) => toastError(err),
   });
 
   const adjustBudgetMutation = useMutation({
     mutationFn: (input: { scope: "node" | "run"; metric: "cost" | "tokens"; newLimit: number }) =>
       adjustBudget(runId, input.scope, input.metric, input.newLimit),
+    onSuccess: (_, input) => {
+      const label = input.metric === "cost" ? `$${input.newLimit}` : `${input.newLimit} tokens`;
+      toast.success(`Budget raised to ${label}`);
+    },
+    onError: (err) => toastError(err),
   });
   const adjustMaxRetriesMutation = useMutation({
     mutationFn: (input: { nodeId: string; newLimit: number }) => adjustMaxRetries(runId, input.nodeId, input.newLimit),
+    onSuccess: (_, input) => toast.success(`Max retries set to ${input.newLimit}`),
+    onError: (err) => toastError(err),
   });
   const adjustGoalGateMutation = useMutation({
     mutationFn: (input: { newLimit: number }) => adjustGoalGate(runId, input.newLimit),
+    onSuccess: (_, input) => toast.success(`Goal gate set to ${input.newLimit}`),
+    onError: (err) => toastError(err),
   });
   const adjustMaxLoopsMutation = useMutation({
     mutationFn: (input: { newLimit: number }) => adjustMaxLoops(runId, input.newLimit),
+    onSuccess: (_, input) => toast.success(`Max loops set to ${input.newLimit}`),
+    onError: (err) => toastError(err),
   });
 
   const payload = eventsQuery.data ? findActivePause(eventsQuery.data.events) : null;

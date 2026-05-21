@@ -17,6 +17,7 @@ import { Pause, Play, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cancelRun, pauseRun, type RunDetail, resumeRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
+import { toast, toastError } from "../lib/toast.ts";
 import { Button } from "./ui/button.tsx";
 
 export interface RunControlsProps {
@@ -54,15 +55,27 @@ export function RunControls({
 
   const pauseM = useMutation({
     mutationFn: () => pauseRun(runId),
-    onSuccess: () => refreshAfterControl(qc, runId),
+    onSuccess: () => {
+      toast.success("Run paused");
+      return refreshAfterControl(qc, runId);
+    },
+    onError: (err) => toastError(err),
   });
   const resumeM = useMutation({
     mutationFn: () => resumeRun(runId),
-    onSuccess: () => refreshAfterControl(qc, runId),
+    onSuccess: () => {
+      toast.success("Run resumed");
+      return refreshAfterControl(qc, runId);
+    },
+    onError: (err) => toastError(err),
   });
   const cancelM = useMutation({
     mutationFn: (reason?: string) => cancelRun(runId, reason),
-    onSuccess: () => refreshAfterControl(qc, runId),
+    onSuccess: () => {
+      toast.success("Run cancelled");
+      return refreshAfterControl(qc, runId);
+    },
+    onError: (err) => toastError(err),
   });
 
   const [confirmingCancel, setConfirmingCancel] = useState(false);

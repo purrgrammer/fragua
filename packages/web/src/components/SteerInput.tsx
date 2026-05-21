@@ -20,6 +20,7 @@ import { useMutation } from "@tanstack/react-query";
 import { nanoid } from "nanoid";
 import { type FormEvent, useId } from "react";
 import { type RunMessageRow, steerRun } from "../lib/api.ts";
+import { toastError } from "../lib/toast.ts";
 import { type PendingSteer, usePendingSteers } from "../lib/usePendingSteers.ts";
 import {
   PromptInput,
@@ -47,6 +48,7 @@ export default function SteerInput({ runId, messages }: SteerInputProps): JSX.El
     onError: (err, vars) => {
       const message = err instanceof Error ? err.message : String(err);
       markFailed(vars.localId, message);
+      toastError(err);
     },
   });
 

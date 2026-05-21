@@ -15,8 +15,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { GitBranch, GitCommitHorizontal, GitMerge, MoreHorizontal, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import type { RunSummary } from "../lib/api.ts";
-import { ApiError, branchRun, commitRun, discardRun, mergeRun } from "../lib/api.ts";
+import { branchRun, commitRun, discardRun, mergeRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
+import { extractErrorMessage, toast } from "../lib/toast.ts";
 import { Button } from "./ui/button.tsx";
 import {
   DropdownMenu,
@@ -37,9 +38,7 @@ export type RunActionsRun = Pick<RunSummary, "runId" | "inboxStatus" | "changeSt
 export type RunActionsTestOpenAction = ActionKind | null;
 
 function errorMsg(err: unknown): string {
-  if (err instanceof ApiError) return err.body?.error ?? err.message;
-  if (err instanceof Error) return err.message;
-  return "Unknown error";
+  return extractErrorMessage(err, "Unknown error");
 }
 
 /** Public entry point. Returns null when `inboxStatus !== "pending"` so
@@ -77,11 +76,13 @@ function RunActionsInner({
   const branchM = useMutation({
     mutationFn: () => branchRun(row.runId, { branch: branchName, force: branchForce }),
     onSuccess: () => {
+      toast.success("Branch created");
       setOpenAction(null);
       setBranchName("");
       setBranchForce(false);
       return invalidateInbox();
     },
+    onError: (err) => toast.error(errorMsg(err)),
   });
 
   // ── Commit ────────────────────────────────────────────────────────
@@ -90,11 +91,13 @@ function RunActionsInner({
   const commitM = useMutation({
     mutationFn: () => commitRun(row.runId, { message: commitMsg, onto: commitOnto || undefined }),
     onSuccess: () => {
+      toast.success("Changes committed");
       setOpenAction(null);
       setCommitMsg("");
       setCommitOnto(row.baseGitRef ?? "");
       return invalidateInbox();
     },
+    onError: (err) => toast.error(errorMsg(err)),
   });
 
   // ── Merge ─────────────────────────────────────────────────────────
@@ -103,19 +106,24 @@ function RunActionsInner({
   const mergeM = useMutation({
     mutationFn: () => mergeRun(row.runId, { mode: mergeMode, into: mergeInto || undefined }),
     onSuccess: () => {
+      const ref = mergeInto || row.baseGitRef || "target";
+      toast.success(`Merged into ${ref}`);
       setOpenAction(null);
       setMergeInto(row.baseGitRef ?? "");
       return invalidateInbox();
     },
+    onError: (err) => toast.error(errorMsg(err)),
   });
 
   // ── Discard ───────────────────────────────────────────────────────
   const discardM = useMutation({
     mutationFn: () => discardRun(row.runId),
     onSuccess: () => {
+      toast.success("Changes discarded");
       setOpenAction(null);
       return invalidateInbox();
     },
+    onError: (err) => toast.error(errorMsg(err)),
   });
 
   const busy = branchM.isPending || commitM.isPending || mergeM.isPending || discardM.isPending;

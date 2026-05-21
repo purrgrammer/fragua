@@ -153,14 +153,6 @@ steps:
     allowed-tools: [read, write, edit, bash]
     max-cost: 0.30
     max-tokens: 800000
-    # Bound the ci↔fix loop by construction: the ci→fix backward edge
-    # re-enters `fix`, so its iteration is capped by `fix`'s max-retries
-    # (retry-policy.ts: "loops are backward edges, bounded by max_retries on
-    # the target node"). After 3 attempts that don't make ci pass — e.g. a
-    # flaky or genuinely-unfixable failure — the run halts instead of looping
-    # forever (which previously only stopped at the budget pause, resumable,
-    # so it never truly ended).
-    max-retries: 3
     prompt: |
       CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
       SANDBOX (hard rule): never open the global store `~/.swarm/swarm.db` (no `swarm harness`/`daemon`/`serve`/`run`); use `--db "$(mktemp -u).db"` for any swarm command.

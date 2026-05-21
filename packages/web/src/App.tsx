@@ -1,6 +1,7 @@
 import { type QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useMemo } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { Toaster } from "./components/ui/sonner.tsx";
 import { queries } from "./lib/queries.ts";
 import { createQueryClient } from "./lib/query-client.ts";
 import { createRoutes } from "./lib/router.tsx";
@@ -25,6 +26,7 @@ export function App({ router, queryClient }: AppProps = {}): JSX.Element {
 
   return (
     <QueryClientProvider client={qc}>
+      <Toaster />
       <GlobalFeedHost />
       <HealthProvider>
         <RouterProvider router={activeRouter} />

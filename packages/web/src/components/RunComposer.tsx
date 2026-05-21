@@ -22,6 +22,7 @@ import { SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { CreateRunInput, WorkflowSummary } from "../lib/api.ts";
 import { createRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
+import { toast, toastError } from "../lib/toast.ts";
 import { Button } from "./ui/button.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { WorkflowInputsForm } from "./WorkflowInputsForm.tsx";
@@ -109,9 +110,11 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
   const mutation = useMutation({
     mutationFn: (vars: CreateRunInput) => createRun(vars),
     onSuccess: () => {
+      toast.success("Run enqueued");
       void qc.invalidateQueries({ queryKey: queries.runs.lists() });
       setTypedInputs({});
     },
+    onError: (err) => toastError(err),
   });
 
   const canSubmit = selected.length > 0 && !mutation.isPending && missingRequired.length === 0;

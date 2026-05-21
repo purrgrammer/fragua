@@ -12,6 +12,7 @@ import { useState } from "react";
 import { submitHitlChoice } from "../lib/api.ts";
 import { humanizeRouteName } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
+import { toastError } from "../lib/toast.ts";
 import { Button } from "./ui/button.tsx";
 
 export interface HitlChoiceProps {
@@ -36,6 +37,7 @@ export function HitlChoice({ runId, label, options, routeLabels }: HitlChoicePro
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queries.runs.all() });
     },
+    onError: (err) => toastError(err),
   });
 
   if (options.length === 0) return null;

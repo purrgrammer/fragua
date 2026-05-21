@@ -31,6 +31,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
+import { toast, toastError } from "../lib/toast.ts";
 
 export function Providers(): JSX.Element {
   const qc = useQueryClient();
@@ -50,20 +51,28 @@ export function Providers(): JSX.Element {
     },
     onSuccess: (result, { name }) => {
       setTestFeedback((prev) => ({ ...prev, [name]: result }));
+      if (result.ok) {
+        toast.success(`${name} ok — ${result.total_ms}ms`);
+      } else {
+        toast.error(`${name} test failed: ${result.error}`);
+      }
     },
     onError: (err, { name }) => {
       setTestFeedback((prev) => ({
         ...prev,
         [name]: { ok: false, error: err instanceof Error ? err.message : String(err) },
       }));
+      toastError(err);
     },
   });
 
   const rmMutation = useMutation({
     mutationFn: ({ name }: { name: string }) => api.removeProviderCredentials(name),
-    onSuccess: () => {
+    onSuccess: (_, { name }) => {
+      toast.success(`Credentials removed for ${name}`);
       qc.invalidateQueries({ queryKey: queries.providers.all() });
     },
+    onError: (err) => toastError(err),
   });
 
   return (

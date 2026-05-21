@@ -11,13 +11,26 @@
 // _testOpenAction prop (which bypasses the portal) while the trigger
 // presence/absence confirms top-level render behaviour.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { RunActionsRun } from "../../src/components/RunActions.tsx";
 import { RunActions } from "../../src/components/RunActions.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
+
+const successSpy = mock(() => "t1");
+const errorSpy = mock(() => "t2");
+
+mock.module("sonner", () => ({
+  toast: Object.assign(
+    mock(() => "t0"),
+    {
+      success: successSpy,
+      error: errorSpy,
+    },
+  ),
+}));
 
 // ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -65,6 +78,10 @@ function renderActions(
 
 describe("RunActions", () => {
   useDom();
+  beforeEach(() => {
+    successSpy.mockReset();
+    errorSpy.mockReset();
+  });
   afterEach(() => cleanup());
 
   // ── Contextual visibility ─────────────────────────────────────────
@@ -243,6 +260,46 @@ describe("RunActions", () => {
 
         // Dialog must still be open
         expect(container.querySelector(`[data-testid="merge-dialog"]`)).not.toBeNull();
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  // ── Toast feedback ────────────────────────────────────────────────
+
+  describe("toast feedback", () => {
+    test("discardM success fires a discard-confirmation toast and closes the dialog", async () => {
+      const DISCARD_URL = "/api/runs/run-committed/discard";
+      const { container, restore } = renderActions(
+        RUN_WITH_COMMITTED,
+        { [DISCARD_URL]: () => json({ seq: 1 }) },
+        "discard",
+      );
+      try {
+        const confirmBtn = await waitFor(() => {
+          const el = container.querySelector(
+            `[data-testid="discard-confirm-btn-run-committed"]`,
+          ) as HTMLButtonElement | null;
+          if (!el) throw new Error("discard confirm button not found");
+          return el;
+        });
+        fireEvent.click(confirmBtn);
+
+        await waitFor(() => {
+          if (!successSpy.mock.calls.some((c) => (c as unknown[])[0] === "Changes discarded")) {
+            throw new Error(
+              `toast.success not called with "Changes discarded"; calls: ${JSON.stringify(successSpy.mock.calls as unknown[])}`,
+            );
+          }
+        });
+
+        // Dialog closes on success
+        await waitFor(() => {
+          if (container.querySelector(`[data-testid="discard-confirm"]`)) {
+            throw new Error("discard confirm dialog still open after success");
+          }
+        });
       } finally {
         restore();
       }

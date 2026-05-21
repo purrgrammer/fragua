@@ -27,6 +27,7 @@ import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import type { ScheduleRunRow, ScheduleWithStripe } from "../lib/api.ts";
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
+import { toast, toastError } from "../lib/toast.ts";
 
 const STRIPE_LEN = 10;
 
@@ -94,9 +95,30 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
   const qc = useQueryClient();
   const invalidate = (): Promise<unknown> => qc.invalidateQueries({ queryKey: queries.schedules.all() });
 
-  const pauseM = useMutation({ mutationFn: () => api.pauseSchedule(row.id), onSuccess: invalidate });
-  const resumeM = useMutation({ mutationFn: () => api.resumeSchedule(row.id), onSuccess: invalidate });
-  const deleteM = useMutation({ mutationFn: () => api.deleteSchedule(row.id), onSuccess: invalidate });
+  const pauseM = useMutation({
+    mutationFn: () => api.pauseSchedule(row.id),
+    onSuccess: () => {
+      toast.success("Schedule paused");
+      return invalidate();
+    },
+    onError: (err) => toastError(err),
+  });
+  const resumeM = useMutation({
+    mutationFn: () => api.resumeSchedule(row.id),
+    onSuccess: () => {
+      toast.success("Schedule resumed");
+      return invalidate();
+    },
+    onError: (err) => toastError(err),
+  });
+  const deleteM = useMutation({
+    mutationFn: () => api.deleteSchedule(row.id),
+    onSuccess: () => {
+      toast.success("Schedule deleted");
+      return invalidate();
+    },
+    onError: (err) => toastError(err),
+  });
 
   const isPaused = row.pausedAt != null;
   const status: "active" | "paused" = isPaused ? "paused" : "active";
