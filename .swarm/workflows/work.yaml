@@ -1,4 +1,7 @@
-# work.yaml — triage → (scope preamble) → implement → review → ship.
+# work.yaml — triage → (scope preamble) → implement → review → ci.
+#
+# Green CI ends the run; the change stays uncommitted in the worktree for the
+# operator to accept (apply + commit) from the inbox.
 #
 # A pure classifier (`triage`) dispatches to a preamble that frames the work;
 # a shared spine then implements, reviews, gates, and lands it:
@@ -145,7 +148,7 @@ steps:
     run: bun run ci
     max-retries: 5
     on:
-      success: commit
+      success: exit
       fail: fix
 
   fix:
@@ -157,12 +160,3 @@ steps:
       CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
       SANDBOX (hard rule): never open the global store `~/.swarm/swarm.db` (no `swarm harness`/`daemon`/`serve`/`run`); use `--db "$(mktemp -u).db"` for any swarm command.
     next: ci
-
-  commit:
-    type: llm
-    next: exit
-    allowed-tools: [read, write, edit, bash]
-    prompt: |
-      Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.
-      Empty `git status --short` → `COMMITTED: no changes`.
-      Else `git add` explicit paths (one commit per logical chunk), HEREDOC message `[<subsystem>] imperative subject ≤72 chars` + standalone body. No --amend / --no-verify / Co-Authored-By. Emit `COMMITTED: <sha(s)>`. Don't push.
