@@ -13,7 +13,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import type { SnapshotResult } from "../src/snapshotter.ts";
 import type { Provisioner } from "../src/worktree-provisioner.ts";
-import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
+import { enqueue, registerTerminalEcho, rig, type TestRig } from "./helpers.ts";
 
 function stubEnv(cwd: string, extras: Record<string, unknown> = {}): ExecutionEnvironment {
   const base: ExecutionEnvironment = {
@@ -299,6 +299,131 @@ describe("executor + worktree provisioner", () => {
 
     // Env cached — a resume would reuse it.
     expect(provisioner.envFor("run-paused")?.cwd()).toBe("/fake/run-paused");
+
+    r.store.close();
+  });
+
+  // Register a two-node graph "start -> work" where `work` is terminal, so
+  // `start` produces exactly one NON-terminal node_completed (a per-step
+  // boundary) and `work` settles the run (the terminal boundary).
+  function registerTwoStep(r: TestRig): void {
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "work", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+  }
+
+  test("per-step boundary emits snapshot.captured tagged with the completed node", async () => {
+    const r = rig();
+    registerTwoStep(r);
+    enqueue(r, "run-step", "start");
+    r.store.claimNextRun(4);
+
+    const snap: SnapshotResult = {
+      treeSha: "tree-s",
+      commitSha: "commit-s",
+      parentSnap: "base0",
+      headSha: "head-s",
+    };
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), { snapshotResult: snap });
+    const ctrl = new AbortController();
+    await runOne("run-step", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 20,
+      provisioner,
+    });
+
+    // start completed non-terminally → "step"; work settled the run → "terminal".
+    expect(provisioner.snapshotCalls).toContain("step");
+    expect(provisioner.snapshotCalls).toContain("terminal");
+    const captured = r.store.getEvents("run-step").filter((e) => e.type === "snapshot.captured");
+    expect(captured.length).toBe(1);
+    expect((captured[0]!.payload as { nodeId: string | null }).nodeId).toBe("start");
+    // The terminal boundary stays a fact, not an observability snapshot.
+    expect(r.store.getEvents("run-step").some((e) => e.type === "fact.snapshot_recorded")).toBe(true);
+
+    r.store.close();
+  });
+
+  test("a suppressed per-step snapshot (provisioner returns null) emits no snapshot.captured", async () => {
+    const r = rig();
+    registerTwoStep(r);
+    enqueue(r, "run-step-suppressed", "start");
+    r.store.claimNextRun(4);
+
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), { snapshotResult: null });
+    const ctrl = new AbortController();
+    await runOne("run-step-suppressed", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 20,
+      provisioner,
+    });
+
+    expect(provisioner.snapshotCalls).toContain("step"); // still probed
+    expect(r.store.getEvents("run-step-suppressed").filter((e) => e.type === "snapshot.captured").length).toBe(0);
+
+    r.store.close();
+  });
+
+  test("a HITL pause emits snapshot.captured with nodeId null", async () => {
+    const r = rig();
+    r.dispatcher.register(
+      r.workflowSha,
+      "start",
+      handler.makeHumanHandler({ nodeId: "ask", text: "wait", routes: ["O"], edges: [{ route: "O", to: "__end__" }] }),
+    );
+    enqueue(r, "run-hitl", "start");
+    r.store.claimNextRun(4);
+
+    const snap: SnapshotResult = {
+      treeSha: "tree-h",
+      commitSha: "commit-h",
+      parentSnap: "base0",
+      headSha: "head-h",
+      headRef: null,
+      diffBaseSha: "base0",
+      committed: null,
+      uncommitted: { filesChanged: 1, insertions: 2, deletions: 0 },
+    };
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), { snapshotResult: snap });
+    const ctrl = new AbortController();
+    await runOne("run-hitl", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 10,
+      provisioner,
+    });
+
+    expect(r.store.getState("run-hitl")?.status).toBe("paused_human");
+    expect(provisioner.snapshotCalls).toContain("hitl");
+    const captured = r.store.getEvents("run-hitl").filter((e) => e.type === "snapshot.captured");
+    expect(captured.length).toBe(1);
+    expect((captured[0]!.payload as { nodeId: string | null }).nodeId).toBeNull();
 
     r.store.close();
   });

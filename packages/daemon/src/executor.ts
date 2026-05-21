@@ -1711,6 +1711,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "continue" }; // OCC retry — rebuild from fresh state
     }
     onOccResolved(currentNode, nodeRetryCount(state.routing));
+    await captureBoundarySnapshot(opts, runId, facts, currentNode);
     return { kind: "continue" };
   };
 
@@ -1733,8 +1734,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // capture failure GATES dispose so work is never lost.
     if (opts.provisioner) {
       const finalState = opts.store.getState(runId);
-      const terminalStatuses = new Set(["completed", "cancelled", "halted", "quarantined"]);
-      if (finalState != null && terminalStatuses.has(finalState.status)) {
+      if (finalState != null && TERMINAL_STATUSES.has(finalState.status)) {
         // Terminal worktree snapshot — captured BEFORE dispose, which removes
         // the worktree. The fact drives the inbox + change_stat projection,
         // and the snapshot/heads refs are now the ONLY thing preserving the
@@ -1818,6 +1818,74 @@ async function tryAppendFact(
   } catch (err) {
     if (err instanceof ConcurrencyError) return false;
     throw err;
+  }
+}
+
+const TERMINAL_STATUSES = new Set(["completed", "cancelled", "halted", "quarantined"]);
+
+/**
+ * Per-step / HITL worktree snapshot — the Diff scrubber's feed. Called after a
+ * boundary fact lands and before the next dispatch can tear the tree. Emits a
+ * `snapshot.captured` observability event (delta-suppressed: nothing when the
+ * tree is unchanged, or for bare-cwd runs). The terminal boundary is captured
+ * in the dispose path; this skips a batch that settled the run so the same
+ * tree isn't snapshotted twice. Failure is non-fatal — observability must
+ * never fail a run.
+ */
+async function captureBoundarySnapshot(
+  opts: ExecutorOpts,
+  runId: string,
+  facts: FactEvent[],
+  nodeId: string,
+): Promise<void> {
+  if (opts.provisioner == null) return;
+  const isHitl = facts.some((f) => f.type === "fact.run_paused_human");
+  const isStep = facts.some((f) => f.type === "fact.node_completed");
+  if (!isHitl && !isStep) return;
+  const post = opts.store.getState(runId);
+  if (post == null || TERMINAL_STATUSES.has(post.status)) return;
+  const boundary = isHitl ? "hitl" : "step";
+  try {
+    const snap = await opts.provisioner.snapshot(runId, boundary);
+    if (snap == null) return;
+    const eventIdx = post.nextSeq - 1;
+    const payload =
+      boundary === "hitl"
+        ? {
+            runId,
+            eventIdx,
+            nodeId: null,
+            treeSha: snap.treeSha,
+            commitSha: snap.commitSha,
+            parentSnap: snap.parentSnap,
+            headSha: snap.headSha,
+            headRef: snap.headRef ?? null,
+            committed: snap.committed ?? null,
+            uncommitted: snap.uncommitted ?? null,
+            ...(snap.diffBaseSha !== undefined ? { diffBaseSha: snap.diffBaseSha } : {}),
+          }
+        : {
+            runId,
+            eventIdx,
+            nodeId,
+            treeSha: snap.treeSha,
+            commitSha: snap.commitSha,
+            parentSnap: snap.parentSnap,
+            headSha: snap.headSha,
+          };
+    opts.store.appendObservabilityEvents(runId, [{ type: "snapshot.captured", payload }]);
+  } catch (err) {
+    opts.store.appendDaemonEvent(
+      {
+        type: "daemon.worktree_provisioned",
+        payload: {
+          runId,
+          ok: false,
+          errorDetail: `${boundary} snapshot failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        },
+      },
+      { runId },
+    );
   }
 }
 
