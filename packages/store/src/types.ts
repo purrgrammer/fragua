@@ -212,15 +212,15 @@ export interface RunState {
    * `null` for runs without a worktree (LocalEnvironment / no provisioner). */
   baseGitSha: string | null;
   /** Branch short name of the source repo HEAD at provision — the post-run
-   * merge/commit target default (docs/proposals/worktrees.md). Set by the
-   * executor on `fact.run_started`. `null` when the source checkout is
-   * detached / on a tag / unborn, or for runs without a provisioner. */
+   * merge/commit target default. Set by the executor on `fact.run_started`.
+   * `null` when the source checkout is detached / on a tag / unborn, or for
+   * runs without a provisioner. */
   baseGitRef: string | null;
-  /** Worktree snapshot + inbox projection (docs/proposals/worktrees.md),
-   * written by the terminal `fact.snapshot_recorded`. All `null` while the
-   * run is live and for bare-cwd runs. `finalGitSha` / `finalHeadRef` =
-   * worktree HEAD + its branch at terminal; `diffBaseSha` = the honest diff
-   * base (== `baseGitSha` unless HEAD relocated); `changeStat` = committed +
+  /** Worktree snapshot + inbox projection, written by the terminal
+   * `fact.snapshot_recorded`. All `null` while the run is live and for
+   * bare-cwd runs. `finalGitSha` / `finalHeadRef` = worktree HEAD + its
+   * branch at terminal; `diffBaseSha` = the honest diff base (==
+   * `baseGitSha` unless HEAD relocated); `changeStat` = committed +
    * uncommitted deltas; `inboxStatus` drives the inbox. */
   finalGitSha: string | null;
   finalHeadRef: string | null;
@@ -710,15 +710,13 @@ export interface IEventReader {
    * caller would otherwise have to scan `getEvents` and re-filter in
    * JS. Currently used by `spawn-subagent.ts` to seed the cumulative
    * cost rollup on a resumed `subagent.end` bracket from prior
-   * brackets sharing the same `subagent_id` (see
-   * `docs/proposals/sub-agent-crash-resilience.md`).
+   * brackets sharing the same `subagent_id`.
    */
   getEventsByType(runId: string, type: string): StoredEvent[];
   /**
    * All worktree-snapshot events for `runId` in seq order: both the
    * per-step / HITL `snapshot.captured` observability events and the
-   * terminal `fact.snapshot_recorded` fact. The Diff scrubber feed
-   * (docs/proposals/worktrees.md §Server endpoints).
+   * terminal `fact.snapshot_recorded` fact. The Diff scrubber feed.
    */
   getSnapshotEvents(runId: string): StoredEvent[];
   /**
@@ -773,7 +771,7 @@ export interface IEventReader {
    * Terminal runs in `cwd` whose worktree snapshot refs are eligible for
    * GC: settled status, older than `cutoff` (ms epoch), and not awaiting an
    * operator decision (`inbox_status` not `pending`). Drives
-   * `swarm gc --snapshots`. See docs/proposals/worktrees.md §GC.
+   * `swarm gc --snapshots`.
    */
   getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[];
   /**
@@ -905,12 +903,11 @@ export interface IAnalyticsReader {
 }
 
 /**
- * Recurring-run primitive (docs/proposals/scheduled-runs.md). A row in
- * `schedules` carries the (workflow_ref, cwd, interval_ms, optional
- * input) triple plus a `nextFireAt` cursor; the daemon's
- * schedule-dispatcher fiber selects rows where `next_fire_at <= now
- * AND paused_at IS NULL` once per minute and fires runs by calling
- * `enqueueRun` with `scheduleId` set.
+ * Recurring-run primitive. A row in `schedules` carries the
+ * (workflow_ref, cwd, interval_ms, optional input) triple plus a
+ * `nextFireAt` cursor; the daemon's schedule-dispatcher fiber selects
+ * rows where `next_fire_at <= now AND paused_at IS NULL` once per
+ * minute and fires runs by calling `enqueueRun` with `scheduleId` set.
  *
  * `workflowRef` is the workflow name or path as a string — NOT a sha.
  * Resolution happens at fire time so schedules survive workflow edits;
@@ -972,7 +969,7 @@ export interface IDaemonCoordinator {
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
 
-  // ─── Schedules (proposal: docs/proposals/scheduled-runs.md)
+  // ─── Schedules
   /**
    * Insert a new schedule row. Caller mints `id` (e.g. `sch_<rand>`).
    * `nextFireAt` is set from `fireOnCreate`: true → now, false →
@@ -1016,7 +1013,7 @@ export interface IDaemonCoordinator {
 }
 
 /**
- * Built-in provider credentials (docs/proposals/provider-credentials-storage.md).
+ * Built-in provider credentials.
  *
  * One row per `provider` id; the JSON `payload` carries the full
  * AuthCredential object (api_key form or OAuthCredentials). The
@@ -1051,7 +1048,7 @@ export interface IProviderCredentialStore {
 }
 
 /**
- * Custom-provider config blobs (docs/proposals/provider-config-storage.md).
+ * Custom-provider config blobs.
  *
  * One row per `provider` id; the JSON `config` body carries the
  * per-provider definition (baseUrl, headers, compat, models,

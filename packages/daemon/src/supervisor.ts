@@ -25,8 +25,7 @@ export interface SupervisorOpts {
   nodeLeakGraceMs?: number;
   /** Per-handler maxMs lookup. Supervisor uses this to compute leak threshold.
    * Returns `undefined` for nodes that opted out of wall-clock bounding
-   * (llm `max_ms=0`); the supervisor skips the leak-trip for those
-   * nodes — see docs/proposals/llm-unbounded-time.md. */
+   * (llm `max_ms=0`); the supervisor skips the leak-trip for those nodes. */
   handlerMaxMsFor?: (workflowSha: string, nodeId: string) => number | undefined;
   /** Forward steer text into the llm backend's queue. pi-agent-core's
    * `Agent.steer()` enqueues into a `steeringQueue` that drains at end of
@@ -41,7 +40,7 @@ export interface SupervisorOpts {
 
 const DEFAULT_TICK_MS = 50;
 const DEFAULT_HEARTBEAT_MS = 5_000;
-// Matches the executor's grace; see docs/proposals/llm-maxms-backstop.md.
+// Matches the executor's grace.
 const DEFAULT_LEAK_GRACE_MS = 30_000;
 
 export function startSupervisor(opts: SupervisorOpts): {

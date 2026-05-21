@@ -1,5 +1,4 @@
 // Tests for the rehydrate sanitiser — see
-// `docs/proposals/sub-agent-crash-resilience.md`.
 //
 // The sanitiser pairs unpaired toolCall blocks at the tail of a
 // rehydrated transcript before pi-ai sees it. Anthropic's API rejects

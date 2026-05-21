@@ -4,7 +4,6 @@
 // AuthStorage.fromStore + auth.set` pipeline the command uses,
 // against a `$SWARM_HOME` pointed at a tmp dir.
 //
-// See docs/proposals/provider-credentials-storage.md.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

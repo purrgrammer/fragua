@@ -457,10 +457,9 @@ export interface SubagentEndData {
 /** `subagent.resumed.data` — fires on the parent's stream when the
  * daemon respawns a sub-agent under a deterministic `subagent_id`
  * (sha256 of parentRunId, parentNodeId, parentIteration, tool_call_id
- * — see `docs/proposals/sub-agent-crash-resilience.md`). The original
- * `subagent.start` is still in the event log from the pre-crash
- * bracket; this event records the resume decision so consumers can
- * collapse the bracket cleanly.
+ * The original `subagent.start` is still in the event log from the
+ * pre-crash bracket; this event records the resume decision so consumers
+ * can collapse the bracket cleanly.
  *
  * - `already_completed` — the persisted transcript ended in an
  *   assistant message with `stopReason:"stop"` and no pending

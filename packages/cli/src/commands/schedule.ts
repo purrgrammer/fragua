@@ -1,5 +1,5 @@
 // `swarm schedule {add,list,rm,pause,resume}` \u2014 thin shells over the
-// HTTP /schedules surface (proposal: docs/proposals/scheduled-runs.md).
+// HTTP /schedules surface.
 //
 // Discovers the harness URL the same way `swarm run` does:
 //   1. --url override

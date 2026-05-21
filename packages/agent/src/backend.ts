@@ -364,8 +364,8 @@ export class PiLlmBackend implements LlmBackend {
     };
     const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
 
-    // Route-tool synthesis (docs/proposals/llm-routing.md D2). When the
-    // node declares `routes=`, append an ephemeral, per-call `route`
+    // Route-tool synthesis. When the node declares `routes=`, append an
+    // ephemeral, per-call `route`
     // tool whose `name` parameter is enum-constrained to the declared
     // routes. Provider rejects off-list values at the tool-call layer,
     // so an unknown route never reaches the handler. The tool sets
@@ -510,8 +510,7 @@ export class PiLlmBackend implements LlmBackend {
     // anthropic API rejects an unpaired tool_use, so we either re-run
     // the tool (agent / idempotentOnReplay reads) or synthesise an
     // error toolResult. No-op when the trailing assistant has no
-    // toolCalls or the transcript is empty. See
-    // `docs/proposals/sub-agent-crash-resilience.md`.
+    // toolCalls or the transcript is empty.
     if (hydrateMessages.length > 0) {
       hydrateMessages = await sanitiseUnpairedToolCalls(hydrateMessages, {
         toolRegistry: this.registry,
@@ -848,9 +847,9 @@ export class PiLlmBackend implements LlmBackend {
     const aborted = findAbortToolCall(agent.state.messages);
     if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
-    // Route-tool resolution (docs/proposals/llm-routing.md D3). Only
-    // considered when the node opted into routing via `routes=`. Abort
-    // wins above — a self-abort cancels the route concern entirely.
+    // Route-tool resolution. Only considered when the node opted into
+    // routing via `routes=`. Abort wins above — a self-abort cancels
+    // the route concern entirely.
     if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
       const routeCall = findRouteToolCall(agent.state.messages);
       if (routeCall == null) {
@@ -1052,11 +1051,11 @@ export function findAbortToolCall(
 }
 
 /**
- * Scan the transcript for a call to the synthesised `route` tool
- * (docs/proposals/llm-routing.md D2/D3). The tool only exists for the
- * lifetime of one llm call — see `buildRouteTool` — and its sole
- * effect is to terminate the agent loop. The chosen route is recovered
- * here from the assistant's tool-call block.
+ * Scan the transcript for a call to the synthesised `route` tool.
+ * The tool only exists for the lifetime of one llm call — see
+ * `buildRouteTool` — and its sole effect is to terminate the agent
+ * loop. The chosen route is recovered here from the assistant's
+ * tool-call block.
  *
  * Returns `{ route, isolated }`:
  *  - `route`: the `name` argument from the first `route` tool-call block.

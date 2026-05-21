@@ -328,7 +328,7 @@ curl -fsS -X POST "$URL/runs/$RUN/priority"     -d '{"newPriority":10}'         
 curl -fsS -X POST "$URL/runs/$RUN/accept"       -d '{}'                                            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/discard"      -d '{}'                                            -H 'content-type: application/json'
 
-# Schedules (proposal: docs/proposals/scheduled-runs.md)
+# Schedules
 bun run swarm schedule add <workflow> --every 1h          # create + fire immediately
 bun run swarm schedule list [--cwd <dir>]                  # tabular health view
 bun run swarm schedule pause | resume | rm <sch_id>

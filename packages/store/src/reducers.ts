@@ -176,8 +176,8 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.nodeStartedAt = null;
       return next;
     }
-    // Operator post-run primitives (docs/proposals/worktrees.md). branch /
-    // commit / merge are composable and leave the inbox `acted`; discard is
+    // Operator post-run primitives. branch / commit / merge are composable
+    // and leave the inbox `acted`; discard is
     // terminal-terminal (`discarded`). The handler enforces the state machine
     // (refusing actions after discard); the reducer just projects.
     case "fact.run_accepted": {
@@ -220,8 +220,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.provider_retry_attempted":
       return next;
     case "fact.snapshot_recorded": {
-      // Terminal worktree snapshot → inbox + diff projection
-      // (docs/proposals/worktrees.md).
+      // Terminal worktree snapshot → inbox + diff projection.
       next.finalGitSha = fact.payload.headSha;
       next.finalHeadRef = fact.payload.headRef;
       next.diffBaseSha = fact.payload.diffBaseSha;

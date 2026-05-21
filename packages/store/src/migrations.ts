@@ -545,7 +545,7 @@ function MIGRATION_005_CONVERSATION_KIND(): string {
 }
 
 /**
- * v5 → v6: scheduled runs (docs/proposals/scheduled-runs.md).
+ * v5 → v6: scheduled runs.
  *
  * - `run_state` gains nullable `schedule_id TEXT` (no FK by design —
  *   schedule deletion is hard DELETE while run lineage persists).
@@ -681,8 +681,7 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
 /**
  * v7 → v8: pause unification — auto-wake family.
  *
- * Stage 2 of `docs/proposals/recoverable-budget-pause.md`. Three
- * coupled changes:
+ * Stage 2 of recoverable-budget-pause.md. Three coupled changes:
  *
  *   1. CHECK rebuild: drop `paused_provider_retry` / `paused_retry`,
  *      add `paused_auto`.
@@ -703,7 +702,7 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
  * (2) above.
  */
 /**
- * v8 → v9: parallel sub-runs (P1.1 of `docs/proposals/parallel.md`).
+ * v8 → v9: parallel sub-runs (P1.1).
  *
  * Adds the additive sub-run linkage columns on `run_state`:
  *
@@ -736,8 +735,7 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
  * because every existing `parent_run_id` is NULL.
  */
 /**
- * v10 → v11: provider credentials in the store (proposal:
- * `docs/proposals/provider-credentials-storage.md`).
+ * v10 → v11: provider credentials in the store.
  *
  * Pure additive: `provider_credentials` is one row per provider, holds
  * api_key + oauth credentials, backs the new `SqliteAuthStorageBackend`,
@@ -762,8 +760,7 @@ function MIGRATION_011_PROVIDER_CREDENTIALS(): string {
 }
 
 /**
- * v11 → v12: custom-provider config in the store (proposal:
- * `docs/proposals/provider-config-storage.md`).
+ * v11 → v12: custom-provider config in the store.
  *
  * Pure additive: `provider_config` is one row per provider, holds the
  * per-provider definition blob (baseUrl, headers, compat, models,
@@ -920,7 +917,7 @@ function MIGRATION_009_SUBRUN_COLUMNS(): string {
 }
 
 /**
- * v9 → v10: parallel sub-runs (P1.2 of `docs/proposals/parallel.md`).
+ * v9 → v10: parallel sub-runs (P1.2).
  *
  * Adds `running_children` to `run_state.status` CHECK. A parent run in
  * this status has fanned out into N sub-runs and is waiting for them to
@@ -1131,8 +1128,7 @@ function MIGRATION_008_AUTO_WAKE_UNIFICATION(): string {
 }
 
 /**
- * v13 → v14: hitl → human wire-level rename (Phase 6 of
- * `docs/proposals/llm-routing.md`).
+ * v13 → v14: hitl → human wire-level rename.
  *
  * Pre-release rename of the workflow-question pause surface. Rewrites
  * status / fact-type / intent-type literals across existing rows and
@@ -1251,7 +1247,7 @@ function MIGRATION_014_PAUSED_HUMAN_RENAME(): string {
 }
 
 /**
- * v15 — worktree snapshot + inbox foundation (docs/proposals/worktrees.md).
+ * v15 — worktree snapshot + inbox foundation.
  *
  * Purely additive: eight dormant `run_state` columns for the snapshot /
  * inbox projection, populated by later steps (snapshotter wiring, dispose

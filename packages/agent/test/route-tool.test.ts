@@ -1,10 +1,9 @@
 // The `route` tool — backend route-tool synthesis + post-loop scan.
 //
-// docs/proposals/llm-routing.md Phase 4. A routing node (declares
-// `routes=`) gets an ephemeral, per-call tool whose `name` parameter is
-// enum-constrained to the declared routes. The tool sets
-// `terminate: true` so pi-agent-core stops the loop after the batch;
-// the chosen route is recovered post-loop by `findRouteToolCall`.
+// A routing node (declares `routes=`) gets an ephemeral, per-call tool
+// whose `name` parameter is enum-constrained to the declared routes.
+// The tool sets `terminate: true` so pi-agent-core stops the loop after
+// the batch; the chosen route is recovered post-loop by `findRouteToolCall`.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";

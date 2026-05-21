@@ -1,5 +1,4 @@
-// HTTP route coverage for the agents (sub-agent profiles) surface
-// (proposal: docs/proposals/skills-and-agents-ui.md).
+// HTTP route coverage for the agents (sub-agent profiles) surface.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";

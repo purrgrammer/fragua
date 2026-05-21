@@ -1,5 +1,5 @@
-// Stage 3 (docs/proposals/paused-max-retries.md) — operator-recovery
-// path tests. The executor's `retriesExhaustedPause` sentinel emits
+// Stage 3 — operator-recovery path tests. The executor's
+// `retriesExhaustedPause` sentinel emits
 // `fact.run_paused{reason:"max_retries"}` instead of halting. Operator
 // either raises the cap via `intent.max_retries_adjusted` + `intent.resume`
 // (Test 1) or sends naked `intent.resume` which re-pauses on the next

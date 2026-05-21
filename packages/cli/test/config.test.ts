@@ -610,8 +610,8 @@ describe("resolveTimeouts", () => {
 
   test("property — any invalid value surfaces a config-prefixed error", () => {
     // "0" / "0s" / integer 0 are no longer invalid — parseDurationMs accepts
-    // them as the unbounded sentinel (docs/proposals/llm-unbounded-time.md).
-    // Negative numbers and malformed strings still throw.
+    // them as the unbounded sentinel. Negative numbers and malformed strings
+    // still throw.
     const badValue = fc.oneof(
       fc.constantFrom("garbage", "", "   ", "-1", "5x", "1.5m"),
       fc.integer({ min: -1_000, max: -1 }),

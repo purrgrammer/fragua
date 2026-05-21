@@ -1,7 +1,6 @@
-// POST /runs/:id/{accept,discard} — operator post-run primitives
-// (docs/proposals/worktrees.md). The intent write is asserted via the run's
-// event log; the daemon sweep (operator-actions.test.ts) folds it into the
-// git mutation + fact.
+// POST /runs/:id/{accept,discard} — operator post-run primitives.
+// The intent write is asserted via the run's event log; the daemon sweep
+// (operator-actions.test.ts) folds it into the git mutation + fact.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 import { type IEventStore, SqliteStore } from "@swarm/store";

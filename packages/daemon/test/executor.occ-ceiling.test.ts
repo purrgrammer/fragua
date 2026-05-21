@@ -1,4 +1,4 @@
-// OCC ceiling — see docs/proposals/occ-retry-ceiling.md.
+// OCC ceiling.
 //
 // Wraps the store's `appendFact` to inject `ConcurrencyError` for the
 // first N fact-append attempts, then succeed. Asserts the executor's

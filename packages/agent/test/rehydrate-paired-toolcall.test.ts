@@ -1,5 +1,4 @@
-// Probe for graceful-resume Option A precondition
-// (docs/proposals/subagent-resume-on-pause.md, open question 2):
+// Probe for graceful-resume Option A precondition:
 // when sanitiseUnpairedToolCalls re-executes the `agent` tool on
 // rehydrate, the resulting hydrate transcript ends with
 // [user, assistant{toolCall}, toolResult]. The proposed silent-

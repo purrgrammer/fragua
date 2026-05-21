@@ -1,5 +1,4 @@
 // AuthStorage backed by the SQLite `provider_credentials` table.
-// See docs/proposals/provider-credentials-storage.md.
 
 import { describe, expect, test } from "bun:test";
 import { SqliteStore } from "@swarm/store";

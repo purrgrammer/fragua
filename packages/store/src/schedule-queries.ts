@@ -1,5 +1,4 @@
 // SQL + typed helpers for the `schedules` table.
-// See docs/proposals/scheduled-runs.md.
 //
 // Per AGENTS.md: every literal SQL string touching `schedules` lives
 // here. `store.ts` owns the transaction boundary and converts

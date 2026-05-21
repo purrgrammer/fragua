@@ -1,7 +1,5 @@
 // Credential storage for API keys and OAuth tokens. Persists into the
-// global swarm store (`provider_credentials` table) — see
-// docs/proposals/provider-credentials-storage.md and the follow-up
-// docs/proposals/provider-config-storage.md.
+// global swarm store (`provider_credentials` table).
 //
 // Resolution order:
 //   1. provider_credentials row, kind=api_key → return the stored key verbatim.

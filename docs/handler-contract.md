@@ -105,7 +105,7 @@ return {
   kind: "transition",
   nextNode?: "next",                    // omit to let edge selection decide; set to "__end__" to terminate
   outcomeStatus?: "success",            // matched against edge `outcome=` attrs; defaults to "success". Unannotated edges default to outcome=success.
-  route?: "feature",                    // set by the llm backend when the agent exited via the synthesised `route` tool (docs/proposals/llm-routing.md D2); the engine's route-case edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
+  route?: "feature",                    // set by the llm backend when the agent exited via the synthesised `route` tool; the engine's route-case edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
   failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
   tokens: 0,                            // total tokens charged to this node
   costUsd: 0,                           // total dollars charged
@@ -122,7 +122,7 @@ return {
 `failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When a fail outcome has no fail-edge to claim it, the executor routes to `__end__` and halts (`aborted_exit`); the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the postmortem playbook. (A fail that follows an explicit author-declared edge to the `exit` sink is a graceful landing instead — `fact.run_completed`, no halt, so `failureReason` is not consulted there.) A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
 ### `yield_human`
-Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. Per [docs/proposals/llm-routing.md](./proposals/llm-routing.md) D6, a human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
+Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. A human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
 
 When an operator writes `intent.human_input { route, note? }` the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
 
@@ -332,7 +332,7 @@ On respawn the daemon hydrates `priorMessages` from the `messages` table keyed u
 
 ### Named profiles from `.agents/agents/`
 
-The daemon scans agent-definition profiles from two layers at boot: `<project>/.agents/agents/*.md` (project-scope, beats user on collisions) and `~/.agents/agents/*.md` (user-scope, with `~/.claude/agents/` as a cross-client fallback). Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, plus optional `model`, `provider`, `allowed_tools`) and a body that becomes the sub-agent's system prompt verbatim. Discovery and parsing live in `packages/workspace/src/agents/` (`discover.ts`, `parse.ts`, `catalog.ts`); the canonical contract is in `docs/proposals/agent-definitions.md`.
+The daemon scans agent-definition profiles from two layers at boot: `<project>/.agents/agents/*.md` (project-scope, beats user on collisions) and `~/.agents/agents/*.md` (user-scope, with `~/.claude/agents/` as a cross-client fallback). Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, plus optional `model`, `provider`, `allowed_tools`) and a body that becomes the sub-agent's system prompt verbatim. Discovery and parsing live in `packages/workspace/src/agents/` (`discover.ts`, `parse.ts`, `catalog.ts`).
 
 The catalogue lands on every llm call whose resolved tool pool includes `agent`, so the LLM selects a profile by passing `agent({ agent: "<def-name>", … })`. Frontmatter `model`, `provider`, and `allowed_tools` flow onto `SubagentSpec` as overrides; absent fields inherit from the parent call verbatim. A bare `agent({ prompt: "…" })` spawn with no `agent:` key uses no profile — it gets an empty system prompt unless `system_prompt` is also provided.
 
@@ -466,7 +466,7 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 
 `maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (10s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
 
-`HandlerSpec.maxMs` is typed `number | undefined`. LLM-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node via `max-ms: 0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor skips `AbortSignal.timeout` AND the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. See `docs/proposals/codergen-unbounded-time.md`.
+`HandlerSpec.maxMs` is typed `number | undefined`. LLM-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node via `max-ms: 0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor skips `AbortSignal.timeout` AND the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. 
 
 ---
 

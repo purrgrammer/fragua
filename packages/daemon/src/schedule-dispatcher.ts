@@ -1,4 +1,4 @@
-// Schedule dispatcher fiber \u2014 docs/proposals/scheduled-runs.md.
+// Schedule dispatcher fiber.
 //
 // Wakes once a minute (configurable), selects rows where
 // `next_fire_at <= now AND paused_at IS NULL`, and decides per row:

@@ -138,7 +138,7 @@ const DEFAULT_POLL_MS = 50;
 // 30s gives a llm handler mid-bash-tool room to honour `signal`
 // cleanly: SIGTERM → SIGKILL escalation, file-handle close, fdsync,
 // pi-ai abort latency, in-flight blob writes. 10s was too tight on
-// real long-running children; see docs/proposals/llm-maxms-backstop.md.
+// real long-running children.
 const DEFAULT_LEAK_GRACE_MS = 30_000;
 const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
 const DEFAULT_ABORT_LOOP_CEILING = 5;
@@ -986,7 +986,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // consecutiveAborts is intentionally NOT bumped — watchdog
       // timeouts are system-initiated, not workflow-initiated, so the
       // abort-loop ceiling shouldn't compound with them.
-      // See docs/proposals/watchdog-timeout-pause-retry.md.
       if (abortCause === "timeout") {
         const TIMEOUT_RETRY_COUNTER_KEY = `internal.timeout_retries.${currentNode}`;
         const TIMEOUT_RETRY_BACKOFF_MS_BASE = 5_000;
@@ -1143,9 +1142,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             pendingEdgeSelection = selection;
           } else if (result.route !== undefined && result.route.length > 0) {
             // Routing node carried a chosen route but no outgoing edge
-            // matched (docs/proposals/llm-routing.md D8 — runtime
-            // backstop for `edge_no_match`). Convert into a halt so
-            // the existing `case "halt"` arm in result-to-facts emits
+            // matched (runtime backstop for `edge_no_match`). Convert
+            // into a halt so the existing `case "halt"` arm in
+            // result-to-facts emits
             // `fact.run_halted{reason:"edge_no_match"}` with a
             // diagnostic detail; validator should make this
             // unreachable for a pinned graph.
@@ -1334,9 +1333,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           maxRetries: number;
         }
       | undefined;
-    // Stage 3 (docs/proposals/paused-max-retries.md): retry-counter
-    // exhaustion becomes an operator-resumable pause instead of a
-    // terminal halt. Sentinel mirrors `budgetPause` / `retryPause` —
+    // Stage 3: retry-counter exhaustion becomes an operator-resumable
+    // pause instead of a terminal halt. Sentinel mirrors `budgetPause`
+    // / `retryPause` —
     // populated in the action.kind === "halt" branch below, consumed
     // in the post-resultToFacts pass that swaps fact.node_started for
     // fact.run_paused{reason:"max_retries"}.
@@ -1400,12 +1399,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             type: "node.retry_exhausted",
             payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
           });
-          // Stage 3 (docs/proposals/paused-max-retries.md §3.1): emit a
-          // pause instead of a halt. Leave `result` as the transition
-          // shape with `outcomeStatus: "retry"` and `nextNode = currentNode`
-          // so resultToFacts emits fact.node_completed (preserving real
-          // spend) + fact.node_started; the post-resultToFacts pass
-          // strips fact.node_started and emits fact.run_paused. Counter
+          // Stage 3 (§3.1): emit a pause instead of a halt. Leave
+          // `result` as the transition shape with `outcomeStatus: "retry"`
+          // and `nextNode = currentNode` so resultToFacts emits
+          // fact.node_completed (preserving real spend) + fact.node_started;
+          // the post-resultToFacts pass strips fact.node_started and emits
+          // fact.run_paused. Counter
           // semantics per §4: the per-node retry counter is NOT reset
           // here — naked intent.resume re-dispatches with priorRetries
           // unchanged and immediately re-exhausts; a Raise & Resume
@@ -1513,12 +1512,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       });
     }
 
-    // Stage 3 (docs/proposals/paused-max-retries.md §3.1): retry
-    // exhaustion swap. Strip fact.node_started (the run pauses instead
-    // of advancing) and emit fact.run_paused{reason:"max_retries"}.
-    // fact.node_completed is preserved so the metrics + the
-    // nextNode=currentNode routing fact are recorded; an operator who
-    // clicks Resume re-dispatches the same (nodeId, iteration) with
+    // Stage 3 (§3.1): retry exhaustion swap. Strip fact.node_started
+    // (the run pauses instead of advancing) and emit
+    // fact.run_paused{reason:"max_retries"}. fact.node_completed is
+    // preserved so the metrics + the nextNode=currentNode routing fact
+    // are recorded; an operator who clicks Resume re-dispatches the
+    // same (nodeId, iteration) with
     // the retry counter intact (§4). The reason is not in
     // AUTO_WAKE_PAUSE_REASONS so the reducer projects status="paused"
     // (operator must act).
@@ -1735,7 +1734,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // and the snapshot/heads refs are now the ONLY thing preserving the
         // run's work (dispose no longer creates a swarm/runs branch). So a
         // capture failure GATES dispose: keep the worktree rather than lose the
-        // work (docs/proposals/worktrees.md).
+        // work.
         let snapshotFailed = false;
         try {
           const snap = await opts.provisioner.snapshot(runId, "terminal");

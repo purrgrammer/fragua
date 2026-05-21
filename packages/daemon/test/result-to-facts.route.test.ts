@@ -1,8 +1,8 @@
 // resultToFacts — route propagation onto fact.node_completed,
 // and the new routing-node halt reasons flowing through verbatim.
 //
-// docs/proposals/llm-routing.md Phase 4 (E). Additive: existing payload
-// fields are untouched; `route` only lands when the handler set it.
+// Additive: existing payload fields are untouched; `route` only lands
+// when the handler set it.
 
 import { describe, expect, test } from "bun:test";
 import type * as handler from "@swarm/core/handler";

@@ -1,5 +1,4 @@
 // Tests for the `provider_credentials` store API
-// (docs/proposals/provider-credentials-storage.md).
 
 import { describe, expect, test } from "bun:test";
 import { SqliteStore } from "../src/store.ts";

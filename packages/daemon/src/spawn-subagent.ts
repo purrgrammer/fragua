@@ -142,7 +142,7 @@ export function makeSpawnSubagent(
     // cost of the logical sub-agent's work without scanning siblings.
     // Consumers summing across `subagent.end` rows MUST dedupe by
     // `subagent_id` and take the terminal (non-cancelled) bracket;
-    // see ARCH §3 and `docs/proposals/sub-agent-crash-resilience.md`.
+    // see ARCH §3.
     const priorEnds = deps.store
       .getEventsByType(parentCtx.parentRunId, "subagent.end")
       .filter((e) => (e.payload as { subagent_id?: string }).subagent_id === subagentId);

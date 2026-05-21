@@ -35,7 +35,7 @@ export interface MakeLlmHandlerOpts {
    *   - `"unbounded"` — per-node opt-out (sourced from `max_ms=0` /
    *     `timeout="0"` via the auto-dispatcher); HandlerSpec.maxMs is left
    *     absent so the executor skips AbortSignal.timeout and the leak
-   *     watchdog. See docs/proposals/llm-unbounded-time.md.
+   *     watchdog.
    *   - `undefined` — author didn't specify; HandlerSpec.maxMs gets the
    *     4h DEFAULT_MAX_MS runaway backstop. */
   maxMs?: number | "unbounded";
@@ -49,7 +49,6 @@ type HandlerResult = handler.HandlerResult;
 // bound. Day-to-day capping is the job of cost / tokens / iterations /
 // operator intents. Set this high enough that no legitimate workflow
 // trips it; any handler that runs longer is pathologically stuck.
-// See docs/proposals/llm-maxms-backstop.md for the framing.
 const DEFAULT_MAX_MS = 4 * 60 * 60 * 1000;
 
 export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
@@ -223,8 +222,8 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     }
 
     // Hard-halt outcomes from the llm agent boundary
-    // (docs/proposals/llm-routing.md D3 — `route_not_picked` /
-    // `route_call_not_isolated`). The backend never constructs a
+    // (`route_not_picked` / `route_call_not_isolated`). The backend
+    // never constructs a
     // `HandlerResult.halt` itself; it signals via `outcome.halt_reason`
     // and we translate here so the executor's `case "halt"` path emits
     // `fact.run_halted` with the right reason. `failureReason` becomes

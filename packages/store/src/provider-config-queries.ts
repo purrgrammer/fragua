@@ -1,5 +1,4 @@
 // SQL + typed helpers for the `provider_config` table.
-// See docs/proposals/provider-config-storage.md.
 //
 // Per AGENTS.md backend skill: every literal SQL string touching
 // `provider_config` lives here. `store.ts` owns the transaction

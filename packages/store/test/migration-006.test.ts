@@ -1,4 +1,4 @@
-// v5 → v6 migration: scheduled-runs (proposal: docs/proposals/scheduled-runs.md).
+// v5 → v6 migration: scheduled-runs.
 //
 // Verifies the migration adds the `schedules` table, adds
 // `run_state.schedule_id`, and creates the documented partial indexes

@@ -78,9 +78,8 @@ export interface RunSummary {
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;
-  /** Worktree inbox status (docs/proposals/worktrees.md). `pending` =
-   * a terminal run with recoverable work awaiting an operator primitive.
-   * Absent on non-worktree runs. */
+  /** Worktree inbox status. `pending` = a terminal run with recoverable
+   * work awaiting an operator primitive. Absent on non-worktree runs. */
   inboxStatus?: "pending" | "acted" | "discarded";
   /** Terminal diff stat — committed (workflow commits) vs uncommitted
    * (agent dirt); either side null. Drives the inbox row's change badge. */
@@ -493,8 +492,7 @@ export function getRunEventsUrl(id: string, sinceSeq?: number): string {
 /** SSE URL for the per-parent descendant event feed: parent + every
  * sub-run in its tree (recursive via `run_state.parent_run_id`). The
  * server route is unfiltered — RunDetail consumes the full firehose
- * for its own tree as a token-bump signal. See
- * `docs/proposals/descendant-event-stream.md`. */
+ * for its own tree as a token-bump signal. */
 export function getRunDescendantEventsUrl(id: string): string {
   return url(`/runs/${encodeURIComponent(id)}/events/stream?include=descendants`);
 }
@@ -519,7 +517,7 @@ export interface ListRunsFilter {
   limit?: number;
   /** Narrow to a single project root (exact `run_state.cwd` match). */
   cwd?: string;
-  /** Filter by worktree inbox status (docs/proposals/worktrees.md).
+  /** Filter by worktree inbox status.
    * `"pending"` surfaces terminal runs awaiting an operator primitive. */
   inbox?: "pending" | "acted" | "discarded";
 }

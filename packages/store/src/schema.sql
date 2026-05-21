@@ -14,18 +14,16 @@
 -- resolution can fall back to <cwd>/.swarm/workflows/<name>.yaml when
 -- the global directory misses.
 -- v4 → v5: conversation runs as a kind (since abandoned, see v7).
--- v5 → v6: scheduled runs (docs/proposals/scheduled-runs.md). New
--- `schedules` table holds the recurring (workflow_ref, cwd, interval)
--- triples; `run_state.schedule_id` carries lineage from each fired run
--- back to the schedule that produced it. Schedule deletion is hard
--- DELETE while runs persist — `run_state.schedule_id` is informational,
--- not a foreign-key cascade target.
+-- v5 → v6: scheduled runs. New `schedules` table holds the recurring
+-- (workflow_ref, cwd, interval) triples; `run_state.schedule_id` carries
+-- lineage from each fired run back to the schedule that produced it.
+-- Schedule deletion is hard DELETE while runs persist —
+-- `run_state.schedule_id` is informational, not a FK cascade target.
 -- v6 → v7: drop the v5 conversation scaffolding. Sub-agents are a tool
 -- implementation that runs inline against the parent's stream, not a
 -- separate run kind, so `kind` and the parent-linkage columns
 -- (`parent_run_id` / `parent_node_id` / `parent_iteration`) are
 -- removed and `workflow_sha` returns to `NOT NULL`. See
--- docs/proposals/agent-tool.md for the in-tool design.
 -- v7 → v8: pause unification — auto-wake family.
 -- `paused_provider_retry` and `paused_retry` collapse into one
 -- `paused_auto` status. `fact.run_paused_retry` retires; handler
@@ -34,8 +32,7 @@
 -- (was: `provider_error` + `policy:"auto-retry"`). Migration deletes
 -- in-flight runs in the legacy auto-wake states (pre-release, no
 -- prior-state compat — AGENTS.md ground rule #11). See
--- docs/proposals/recoverable-budget-pause.md Stage 2.
--- v8 → v9: parallel sub-runs (P1.1 of docs/proposals/parallel.md).
+-- v8 → v9: parallel sub-runs (P1.1).
 -- `run_state` gains the additive linkage columns `parent_run_id`,
 -- `parent_node_id`, `parallel_index`, `subgraph_root_node_id`,
 -- `subgraph_terminal_node_id`. All NULLable; top-level runs keep them
@@ -43,19 +40,17 @@
 -- propagation, cost rollup, sweep). `parent_run_id` is FK to
 -- `run_state(run_id)` with ON DELETE SET NULL so a parent GC leaves the
 -- sub-run as a free-standing row whose own GC is independent.
--- v9 → v10: `running_children` status (P1.2 of docs/proposals/parallel.md).
+-- v9 → v10: `running_children` status (P1.2).
 -- Adds `running_children` to `run_state.status` CHECK. Parent runs that
 -- fanned out into sub-runs sit in this status until every sub-run
 -- reaches a terminal status; the wake-pending sweep
 -- transitions the parent back to `queued` (collect phase).
--- v10 → v11: provider credentials in the store
--- (docs/proposals/provider-credentials-storage.md). New
+-- v10 → v11: provider credentials in the store. New
 -- `provider_credentials` table holds built-in pi-ai provider keys +
--- OAuth tokens, replacing `~/.swarm/auth.json`. `kind` is
--- denormalised from `payload.type` so postmortem can SELECT the
--- shape without JSON-parsing. Pure additive; no row migrations.
--- v11 → v12: custom-provider config in the store
--- (docs/proposals/provider-config-storage.md). New `provider_config`
+-- OAuth tokens, replacing `~/.swarm/auth.json`. `kind` is denormalised
+-- from `payload.type` so postmortem can SELECT the shape without
+-- JSON-parsing. Pure additive; no row migrations.
+-- v11 → v12: custom-provider config in the store. New `provider_config`
 -- table holds the per-provider definition blob (baseUrl, headers,
 -- compat, models, modelOverrides) that previously lived in
 -- `~/.swarm/models.json`. Per-row Ajv validation lives in the agent
@@ -134,13 +129,13 @@ CREATE TABLE IF NOT EXISTS run_state (
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED,
-  -- Worktree snapshot + inbox projection (docs/proposals/worktrees.md).
-  -- Added dormant in the foundation migration (v15); populated by later
-  -- steps (snapshotter wiring, dispose rework, operator primitives).
-  -- `base_git_ref` is the merge/commit target default captured at provision;
-  -- `diff_base_sha` is the honest diff base at terminal (== base_git_sha
-  -- unless the workflow relocated HEAD); `change_stat` is JSON
-  -- {committed, uncommitted}; `inbox_status` drives the inbox.
+  -- Worktree snapshot + inbox projection. Added dormant in the foundation
+  -- migration (v15); populated by later steps (snapshotter wiring, dispose
+  -- rework, operator primitives). `base_git_ref` is the merge/commit target
+  -- default captured at provision; `diff_base_sha` is the honest diff base
+  -- at terminal (== base_git_sha unless the workflow relocated HEAD);
+  -- `change_stat` is JSON {committed, uncommitted}; `inbox_status` drives
+  -- the inbox.
   base_git_ref TEXT,
   final_git_sha TEXT,
   final_head_ref TEXT,
@@ -272,7 +267,7 @@ CREATE INDEX IF NOT EXISTS idx_daemon_events_ts ON daemon_events(ts, seq);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_type ON daemon_events(type, ts);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_run ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
 
--- Recurring-run primitive (docs/proposals/scheduled-runs.md).
+-- Recurring-run primitive.
 -- `(workflow_ref, cwd, interval_ms, optional input)` triple plus a
 -- `next_fire_at` cursor; the daemon's `schedule-dispatcher` fiber
 -- selects rows where `next_fire_at <= now AND paused_at IS NULL` once
@@ -306,7 +301,7 @@ CREATE INDEX IF NOT EXISTS idx_schedules_due
   WHERE paused_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_schedules_cwd ON schedules(cwd);
 
--- Built-in provider credentials (docs/proposals/provider-credentials-storage.md).
+-- Built-in provider credentials.
 -- One row per provider id; `payload` carries the full AuthCredential JSON
 -- (api_key form or OAuthCredentials). `kind` is denormalised from
 -- `payload.type` for cheap SELECTs in post-mortems. No indexes — the PK
@@ -320,7 +315,7 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
--- Custom-provider definitions (docs/proposals/provider-config-storage.md).
+-- Custom-provider definitions.
 -- One row per provider id; `config` carries the per-provider definition
 -- blob (baseUrl, headers, compat, models, modelOverrides) — the
 -- `ProviderConfigSchema` body minus `apiKey`. Credentials always come

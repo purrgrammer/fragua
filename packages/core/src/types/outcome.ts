@@ -41,8 +41,7 @@ export const OutcomeSchema = Type.Object(
       }),
     ),
     /** Set by the llm agent boundary when the LLM exited the node
-     * via the synthesised `route` tool (see
-     * docs/proposals/llm-routing.md D2). The handler-bridge forwards
+     * via the synthesised `route` tool. The handler-bridge forwards
      * this onto `HandlerResult.transition.route`, which the daemon
      * persists into `fact.node_completed.payload.route`. Absent on
      * non-routing nodes. */

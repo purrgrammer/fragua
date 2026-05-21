@@ -15,8 +15,8 @@
 // `provider_credentials` table. Keyless providers (Ollama) need no
 // credential row at all.
 //
-// Per-model ops (docs/proposals/provider-model-ops.md) target a row
-// that already exists. Each verb loads the parsed `ProviderEntry`,
+// Per-model ops target a row that already exists. Each verb loads the
+// parsed `ProviderEntry`,
 // mutates `models[]`, validates the whole blob, and upserts.
 
 import { Value } from "@sinclair/typebox/value";

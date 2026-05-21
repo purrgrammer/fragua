@@ -1,5 +1,4 @@
 // Tests for the `provider_config` store API
-// (docs/proposals/provider-config-storage.md).
 
 import { describe, expect, test } from "bun:test";
 import { SqliteStore } from "../src/store.ts";

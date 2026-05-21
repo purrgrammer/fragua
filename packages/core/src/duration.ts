@@ -6,7 +6,7 @@
 // Missing unit means milliseconds (so bare ints round-trip). Negative
 // values, non-finite numbers, and anything that doesn't match the
 // grammar throw with a caller-friendly message. Zero is accepted (the
-// llm-unbounded sentinel — see docs/proposals/llm-unbounded-time.md);
+// llm-unbounded sentinel);
 // callers that need to reject it bake their own positivity check on the
 // returned value.
 

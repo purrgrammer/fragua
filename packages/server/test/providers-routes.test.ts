@@ -3,7 +3,6 @@
 // `{ kind, value }` to `{ key }` and the localhost-only literal check
 // is gone (keys are stored verbatim either way now).
 //
-// See docs/proposals/provider-credentials-storage.md.
 
 import { describe, expect, test } from "bun:test";
 import { AuthStorage, ModelRegistry } from "@swarm/agent";

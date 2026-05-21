@@ -1,4 +1,4 @@
-// Provider auto-retry policy — see docs/proposals/provider-auto-retry.md.
+// Provider auto-retry policy.
 //
 // Classifies LLM-provider transport errors into auto-retry vs manual,
 // computes the next-attempt timestamp under a full-jitter exponential

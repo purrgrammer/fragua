@@ -1,5 +1,5 @@
 // `swarm runs {accept,discard,diff}` — operator post-run primitives over the
-// HTTP surface (docs/proposals/worktrees.md).
+// HTTP surface.
 //
 // accept/discard POST the post-terminal operator-action intents the daemon
 // sweep folds into git mutations (accept replays the run's commits onto the

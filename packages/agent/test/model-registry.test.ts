@@ -1,6 +1,5 @@
 // Store-backed `ModelRegistry.loadCustomModels` — exercises the
 // per-row Ajv validation contract from
-// docs/proposals/provider-config-storage.md.
 
 import { describe, expect, test } from "bun:test";
 import { SqliteStore } from "@swarm/store";

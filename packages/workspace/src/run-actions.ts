@@ -4,7 +4,7 @@
 // `discard` drops it — both pure git plumbing over `refs/swarm/{snapshots,
 // heads}/<runId>`, callable inline from the server route and the CLI (no daemon
 // sweep). `accept` is the validated replay+stage algorithm
-// (docs/proposals/worktrees-accept-spike.sh): probe the whole run merge in
+// probe the whole run merge in
 // memory first, then replay the workflow's commits onto HEAD and stage the
 // uncommitted tail for the operator to commit. Nothing swarm-authored enters
 // history — replayed commits keep their own message/author; the tail is the

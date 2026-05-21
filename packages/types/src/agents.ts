@@ -8,8 +8,7 @@ export type AgentDefinitionScope = "project" | "user";
 
 /** One discovered named sub-agent profile. The body is held in memory
  *  (small markdown bodies, ~kilobytes) and becomes the sub-agent's
- *  system prompt verbatim when no inline `system_prompt` overrides it.
- *  See `docs/proposals/agent-definitions.md`. */
+ *  system prompt verbatim when no inline `system_prompt` overrides it. */
 export interface AgentDefinition {
   /** From frontmatter `name`. Lowercase a-z, 0-9, hyphens; max 64 chars;
    *  must match the filename stem. Enforced as warnings, not skips —

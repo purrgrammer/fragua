@@ -1,7 +1,6 @@
-// applyAccept / applyDiscard against real temp git repos. Ports the matrix
-// validated in docs/proposals/worktrees-accept-spike.sh: dirt-only /
-// commits-only / both × target-at-base / moved / conflict, plus author +
-// message preservation and "untouched on conflict".
+// applyAccept / applyDiscard against real temp git repos.
+// Matrix: dirt-only / commits-only / both × target-at-base / moved /
+// conflict, plus author + message preservation and "untouched on conflict".
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

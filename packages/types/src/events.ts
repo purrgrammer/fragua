@@ -73,9 +73,9 @@ export type EventType =
   | "budget.stop"
   // Cost
   | "cost.recorded"
-  // Worktree tree snapshot at a step / HITL boundary (observability;
-  // docs/proposals/worktrees.md). The Diff scrubber's feed. Terminal
-  // snapshots are the `fact.snapshot_recorded` fact, not this.
+  // Worktree tree snapshot at a step / HITL boundary (observability).
+  // The Diff scrubber's feed. Terminal snapshots are the
+  // `fact.snapshot_recorded` fact, not this.
   | "snapshot.captured"
   // Sub-agent boundaries (observability-only). Bracket the slice of
   // events produced by an inline `agent`-tool spawn on the parent's
@@ -240,7 +240,7 @@ export type HaltReason =
   | "occ_exhausted"
   | "timeout_exhausted"
   /** Routing node's llm turn ended without an isolated call to the
-   * synthesised `route` tool. See docs/proposals/llm-routing.md D3. */
+   * synthesised `route` tool. */
   | "route_not_picked"
   /** Routing node's `route` tool call shared an assistant response with
    * other tool calls — side-effect isolation violation. */
@@ -348,8 +348,7 @@ export type IntentType = IntentEvent["type"];
  * server translates `PayloadTooLargeError` to a 413 so callers see a
  * typed `code: "payload_too_large"` instead of a 500.
  */
-/** Diff stat shared by snapshot payloads and the `run_state` projection
- * (docs/proposals/worktrees.md). */
+/** Diff stat shared by snapshot payloads and the `run_state` projection. */
 export type SnapshotStat = {
   filesChanged: number;
   insertions: number;
@@ -399,7 +398,7 @@ export type FactEvent =
          * and `swarm/runs/<runId>` branch are gone. */
         baseGitSha?: string;
         /** Branch short name of the source repo HEAD at provision — the
-         * post-run merge/commit target default (docs/proposals/worktrees.md).
+         * post-run merge/commit target default.
          * Absent when detached / tag / unborn or no provisioner. */
         baseGitRef?: string;
       };
@@ -538,7 +537,7 @@ export type FactEvent =
          * `label=` override, falling back to `humanize(route)`. */
         routes: string[];
         /** Worktree snapshot at this pause, embedded for the operator's first
-         * paint without a server roundtrip (docs/proposals/worktrees.md).
+         * paint without a server roundtrip.
          * Absent for bare-cwd runs (no provisioner). */
         snapshot?: {
           treeSha: string;
@@ -621,8 +620,7 @@ export type FactEvent =
              * resume re-dispatches with it intact. Bounded by
              * `routing.internal.timeout_retries.<nodeId>` — past the
              * cap (default 3) the run halts with
-             * `fact.run_halted{reason:"timeout_exhausted"}`. See
-             * docs/proposals/watchdog-timeout-pause-retry.md. */
+             * `fact.run_halted{reason:"timeout_exhausted"}`. */
             reason: "timeout_retry";
             nodeId: string;
             attempt: number;
@@ -731,10 +729,10 @@ export type FactEvent =
     }
   | { type: "fact.run_cancelled"; payload: { intentSeq: number } }
   | {
-      /** Terminal worktree snapshot (docs/proposals/worktrees.md). Fires once
-       * per run, after the terminal status fact, only for worktree-backed
-       * runs. The reducer projects `change_stat` / `inbox_status` / `final_*`
-       * from this payload in the same transaction. Per-step + HITL snapshots
+      /** Terminal worktree snapshot. Fires once per run, after the terminal
+       * status fact, only for worktree-backed runs. The reducer projects
+       * `change_stat` / `inbox_status` / `final_*` from this payload in the
+       * same transaction. Per-step + HITL snapshots
        * are the `snapshot.captured` observability event, not facts. */
       type: "fact.snapshot_recorded";
       payload: {
@@ -839,7 +837,7 @@ export type DaemonEvent =
       payload: { runId: string; nodeId: string; count: number; ceiling: number };
     }
   | { type: "daemon.worktree_provisioned"; payload: { runId: string; ok: boolean; errorDetail?: string } }
-  // ─── Schedules (proposal: docs/proposals/scheduled-runs.md) ───
+  // ─── Schedules ───
   // Schedules are global primitives — they fire workflows on a fixed
   // interval regardless of any one run's lifecycle. Their audit log
   // rides `daemon_events` (not the per-run `events` table) because at

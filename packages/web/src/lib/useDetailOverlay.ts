@@ -126,8 +126,8 @@ export function foldDetailFrame(
     case "fact.run_quarantined":
       return { ...prev, status: "fail", haltSeq: prev.haltSeq ?? seq };
     case "fact.run_paused_human": {
-      // Payload shape per docs/proposals/llm-routing.md D6: human nodes
-      // yield `{ text, routes }` (operator question + declared routes).
+      // Payload shape: human nodes yield `{ text, routes }` (operator
+      // question + declared routes).
       // The route names drive the per-button enum that the operator
       // POSTs back via /runs/:id/human { route, note? }.
       const nodeId = stringField(payload, "nodeId");

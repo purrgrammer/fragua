@@ -525,7 +525,6 @@ export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
 //                            — retry, reverify, abandon. Never
 //                            silently re-run a destructive tool.
 //
-// See `docs/proposals/sub-agent-crash-resilience.md`.
 
 /** Per-call dependencies the sanitiser hands to re-executed tools.
  *  Mirrors the shape `PiLlmBackend.run` already builds for the

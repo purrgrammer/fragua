@@ -1,5 +1,5 @@
 // Edge selection: two cases.
-// See docs/SPEC.md §3.6 and docs/proposals/llm-routing.md §D10.
+// See docs/SPEC.md §3.6.
 //
 //   Route case  — source node declares `routes=`: pick the edge whose
 //                 `attrs.route` equals `outcome.route`.

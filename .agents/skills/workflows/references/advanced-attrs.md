@@ -72,4 +72,4 @@ Per-step field overrides (replace the named preset's value for that field):
 
 An unrecognised preset name is warned by W014 and falls back to `none` at runtime.
 
-> **No subgraph composition.** Reusable named sub-pipelines are a deferred proposal (`docs/proposals/subgraphs.md`, gated on cross-workflow demand). Today, keep one flat workflow per deliverable (SKILL.md §1).
+> **No subgraph composition.** Reusable named sub-pipelines are deferred (gated on cross-workflow demand). Today, keep one flat workflow per deliverable (SKILL.md §1).

@@ -111,8 +111,7 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
 
     try {
       // Resolve the named profile (if any) before building the spec.
-      // Resolution rules per docs/proposals/agent-definitions.md
-      // "Tool surface change" table: inline > def > inherit-parent.
+      // Resolution rules: inline > def > inherit-parent.
       const catalog = ctx.agentCatalog ?? [];
       let def: ReturnType<typeof lookupAgentDef> | undefined;
       if (args.agent !== undefined) {

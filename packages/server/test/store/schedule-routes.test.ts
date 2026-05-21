@@ -1,5 +1,4 @@
 // HTTP route coverage for the schedules surface
-// (proposal: docs/proposals/scheduled-runs.md).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SqliteStore } from "@swarm/store";

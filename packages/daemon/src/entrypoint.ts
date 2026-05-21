@@ -88,8 +88,7 @@ const DEFAULT_LOCK_TTL_MS = 30_000;
 const DEFAULT_CONCURRENCY = 16;
 // Matches @swarm/agent's llm default — the supervisor must never
 // trip a legitimate long-running llm node just because the spec
-// wasn't resolvable at the moment of the leak check. See
-// docs/proposals/llm-maxms-backstop.md for the framing.
+// wasn't resolvable at the moment of the leak check.
 const DEFAULT_UNKNOWN_SPEC_FALLBACK_MS = 4 * 60 * 60 * 1000;
 
 export interface DaemonHandle {
@@ -185,7 +184,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         blobGc = startBlobGc(gcOpts);
       }
 
-      // Schedule dispatcher fiber (proposal: docs/proposals/scheduled-runs.md).
+      // Schedule dispatcher fiber.
       // Peer to supervisor + executor + blob-gc; ticks once a minute and
       // fires runs for every due schedule. Disable by setting
       // `scheduleTickMs: 0` (CI primitives without recurring workloads).

@@ -1,4 +1,4 @@
-// Schedule routes \u2014 docs/proposals/scheduled-runs.md.
+// Schedule routes.
 //
 // CRUD over the `schedules` table plus pause/resume verbs. Each
 // mutation writes a matching `intent.schedule_*` audit row to

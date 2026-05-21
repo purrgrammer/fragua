@@ -1,5 +1,4 @@
 // HTTP route coverage for the skills surface
-// (proposal: docs/proposals/skills-and-agents-ui.md).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";

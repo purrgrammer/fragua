@@ -1,5 +1,4 @@
 // SQL + typed helpers for the `provider_credentials` table.
-// See docs/proposals/provider-credentials-storage.md.
 //
 // Per AGENTS.md backend skill: every literal SQL string touching
 // `provider_credentials` lives here. `store.ts` owns the transaction

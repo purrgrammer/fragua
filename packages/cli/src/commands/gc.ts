@@ -1,11 +1,11 @@
-// `swarm gc --snapshots` — reclaim worktree snapshot refs (docs/proposals/
-// worktrees.md §GC). Per-run snapshots live under two non-porcelain refs,
+// `swarm gc --snapshots` — reclaim worktree snapshot refs. Per-run snapshots
+// live under two non-porcelain refs,
 // `refs/swarm/snapshots/<runId>` (the parented tip) and
 // `refs/swarm/heads/<runId>`; deleting the tip drops the whole chain so the
 // next `git gc --auto` reclaims its commits + trees + blobs.
 //
 // Retention (operator-invoked, not an automatic sweep — pairs with the
-// `swarm db prune` model in docs/proposals/db-retention.md):
+// `swarm db prune` model):
 //   - `inbox_status = 'pending'`  → kept (operator hasn't decided).
 //   - everything else, once the run is settled and older than the window
 //     (default 30d) → eligible. `acted` runs are kept inside the window so

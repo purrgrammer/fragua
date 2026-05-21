@@ -1,4 +1,4 @@
-// Post-terminal operator primitives (docs/proposals/worktrees.md).
+// Post-terminal operator primitives.
 //
 // A run that ended with recoverable work sits in the inbox
 // (`run_state.inbox_status = 'pending'`). The operator lands or drops it with

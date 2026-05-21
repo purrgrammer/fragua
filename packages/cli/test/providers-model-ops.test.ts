@@ -1,4 +1,4 @@
-// Per-model CLI ops (docs/proposals/provider-model-ops.md) \u2014 covers
+// Per-model CLI ops \u2014 covers
 // ls-models / add-model / rm-model / edit-model end-to-end against a
 // real SqliteStore opened under a temp `$SWARM_HOME`. The wizard
 // `prompts` UI is not under test; commands are driven with `--yes`

@@ -41,8 +41,7 @@ export interface AutoDispatcherOpts {
  *
  * Returns `undefined` (a) when neither attr is set and `fallbackMs` is
  * undefined, OR (b) when an explicit `max_ms=0` / `timeout="0"` is set
- * (the unbounded sentinel for llm — see
- * docs/proposals/llm-unbounded-time.md). The two cases collapse here;
+ * (the unbounded sentinel for llm). The two cases collapse here;
  * `specsForGraph` re-inspects the raw attrs to distinguish them for the
  * llm factory.
  *

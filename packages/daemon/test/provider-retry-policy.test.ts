@@ -1,5 +1,4 @@
-// Provider auto-retry policy unit tests — see
-// docs/proposals/provider-auto-retry.md.
+// Provider auto-retry policy unit tests.
 
 import { describe, expect, test } from "bun:test";
 import {

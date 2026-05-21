@@ -98,8 +98,7 @@ export interface SubagentSpec {
    *  transcript. Pi-ai's anthropic provider preserves `block.id`
    *  byte-identically on the wire, so this hash is stable across
    *  restarts. Also stamped onto `subagent.start.tool_call_id` for the
-   *  web UI's parent-toolCall → in-flight-sub-agent link. See
-   *  `docs/proposals/sub-agent-crash-resilience.md`. */
+   *  web UI's parent-toolCall → in-flight-sub-agent link. */
   tool_call_id: string;
   /** Content-addressed hash of the spec's canonical args (prompt +
    *  system_prompt + allowed_tools + disallowed_tools + skills +
@@ -193,7 +192,7 @@ export interface Tool<TArgs = unknown, TResult = ContextValue> {
    *  read / grep / find / ls). The safe default surfaces an error
    *  toolResult to the LLM instead of silently re-running a
    *  potentially destructive operation — the LLM decides whether to
-   *  retry. See `docs/proposals/sub-agent-crash-resilience.md`. */
+   *  retry. */
   idempotentOnReplay?: boolean;
   /** Truncation applied to the stringified result before it reaches the LLM. */
   truncation: TruncationPolicy;

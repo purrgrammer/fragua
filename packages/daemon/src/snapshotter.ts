@@ -1,4 +1,4 @@
-// Worktree tree snapshots (docs/proposals/worktrees.md). Pure git-plumbing
+// Worktree tree snapshots. Pure git-plumbing
 // utility: captures the worktree's working-tree state (including uncommitted
 // dirt and untracked files) as a commit under a non-porcelain ref namespace,
 // without disturbing the workflow's real index or HEAD.

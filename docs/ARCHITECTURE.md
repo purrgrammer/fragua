@@ -209,9 +209,8 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED,
-  -- Worktree snapshot + inbox projection (docs/proposals/worktrees.md); added
-  -- dormant in v15, populated by later steps. branch -> final_branch rename
-  -- lands with the dispose rework.
+  -- Worktree snapshot + inbox projection; added dormant in v15, populated
+  -- by later steps. branch -> final_branch rename lands with the dispose rework.
   base_git_ref TEXT,                              -- symbolic-ref --short HEAD of user-cwd at provision; merge/commit target default
   final_git_sha TEXT,                             -- worktree HEAD at last snapshot boundary; NULL pre-terminal
   final_head_ref TEXT,                            -- worktree's HEAD branch at terminal; NULL when detached
@@ -319,7 +318,7 @@ CREATE INDEX idx_daemon_events_ts   ON daemon_events(ts, seq);
 CREATE INDEX idx_daemon_events_type ON daemon_events(type, ts);
 CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
 
--- Recurring-run primitive (proposal: docs/proposals/scheduled-runs.md).
+-- Recurring-run primitive.
 -- `(workflow_ref, cwd, interval_ms, optional input)` triple plus a
 -- `next_fire_at` cursor. The daemon's `schedule-dispatcher` fiber
 -- selects rows where `next_fire_at <= now AND paused_at IS NULL` once
@@ -361,7 +360,6 @@ CREATE INDEX idx_schedules_cwd ON schedules(cwd);
 -- `SqliteAuthStorageBackend` rebuilds the in-memory AuthStorageData
 -- blob from these rows on read and applies a returned `next` blob by
 -- full-replace (upsert + delete-missing). See proposal:
--- `docs/proposals/provider-credentials-storage.md`.
 CREATE TABLE provider_credentials (
   provider   TEXT PRIMARY KEY,
   kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
@@ -381,7 +379,6 @@ CREATE TABLE provider_credentials (
 -- table scan for `list`, both <20 rows in practice). No SQL CHECK on
 -- `api` / `provider` shape: pi-ai's `Api` and `Provider` types are
 -- extensible. See proposal:
--- `docs/proposals/provider-config-storage.md`.
 CREATE TABLE provider_config (
   provider   TEXT PRIMARY KEY,
   config     TEXT NOT NULL,
@@ -415,7 +412,7 @@ CREATE TABLE provider_config (
 | `intent.max_retries_adjusted` | `nodeId: string`, `newLimit: number` (>0), `note?: string` | Operator raises a node's `max_retries` cap on a `paused{reason:'max_retries'}` run; folded into `routing.max_retries_override.<nodeId>`. Stage 3 of recoverable-budget-pause.md |
 | `intent.goal_gate_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the failing gate's retarget cap on a `paused{reason:'goal_gate'}` run; folded into `routing.max_goal_gate_retries_override` (takes precedence over the gate's `max_retries`) |
 | `intent.max_loops_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the per-run dispatch ceiling on a `paused{reason:'max_loops'}` run; folded into `routing.max_loops_override` |
-| `intent.branch_run` | `branch: string`, `force?: boolean` | Post-terminal: promote the run's committed history to porcelain `refs/heads/<branch>` at the `refs/swarm/heads/<runId>` sha. Daemon `update-ref`; inbox `pending → acted`. Worktree-free (docs/proposals/worktrees.md) |
+| `intent.branch_run` | `branch: string`, `force?: boolean` | Post-terminal: promote the run's committed history to porcelain `refs/heads/<branch>` at the `refs/swarm/heads/<runId>` sha. Daemon `update-ref`; inbox `pending → acted`. Worktree-free |
 | `intent.commit_run` | `message: string`, `onto?: string` | Post-terminal: `commit-tree` the run's full snapshot tree (incl. uncommitted dirt) onto `onto` (default `base_git_ref`) and advance that branch. Inbox `pending → acted` |
 | `intent.merge_run` | `mode?: 'ff'\|'no-ff'\|'squash'`, `into?: string` | Post-terminal: merge the run's `refs/swarm/heads/<runId>` into `into` (default `base_git_ref`); `ff` is the implicit default. Inbox `pending → acted` |
 | `intent.accept_run` | `sha`, `replayed: number`, `tailStaged: boolean` | Records a completed accept: the request path (server route / CLI) already replayed the run's commits onto the operator's HEAD + staged the tail **synchronously**; this intent carries the result and is folded into `fact.run_accepted`. Inbox `pending → acted` |
@@ -426,10 +423,10 @@ Post-terminal operator actions run **synchronously in the request path** (the `P
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
 |---|---|---|
-| `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?`, `baseGitRef?` | Run enters `running`. `baseGitRef` is the source repo's branch at provision — the post-run merge/commit target default (docs/proposals/worktrees.md) |
+| `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?`, `baseGitRef?` | Run enters `running`. `baseGitRef` is the source repo's branch at provision — the post-run merge/commit target default |
 | `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_human'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
-| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the llm agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for llm handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
+| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the llm agent exited via the synthesised `route` tool) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for llm handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialCacheReadCostUsd?`, `partialCacheWriteCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
 | `fact.intents_folded` | `intentSeq`, `folded` | Operator intents (steer / hitl / priority / pause) merged into routing/messages by the fold |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
@@ -437,25 +434,25 @@ Post-terminal operator actions run **synchronously in the request path** (the `P
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId: string\|null`, `iteration` | Message metadata. `nodeId` is null for messages appended outside a node turn (e.g. seed messages) |
-| `fact.run_paused_human` | `nodeId`, `text`, `routes: string[]`, `snapshot?` | Yielded for human input on a workflow `kind=human` node; `routes` is the closed enum of route names declared on the source node (one button per route in the web UI; button label comes from the matching outgoing edge's `label=` or `humanize(route)`). `snapshot` embeds the worktree diff for the operator's first paint (docs/proposals/worktrees.md); absent for bare-cwd runs. |
+| `fact.run_paused_human` | `nodeId`, `text`, `routes: string[]`, `snapshot?` | Yielded for human input on a workflow `kind=human` node; `routes` is the closed enum of route names declared on the source node (one button per route in the web UI; button label comes from the matching outgoing edge's `label=` or `humanize(route)`). `snapshot` embeds the worktree diff for the operator's first paint; absent for bare-cwd runs. |
 | `fact.run_paused` | `reason: 'operator'\|'provider_error'\|'payment_required'\|'budget'\|'provider_retry'\|'handler_retry'\|'timeout_retry'\|'max_retries'\|'goal_gate'\|'max_loops'\|'abort_loop'\|'provider_exhausted'`, plus reason-specific fields. Operator-resumable arms: `operator` (no extras), `provider_error` (`nodeId`, `httpStatus`, `provider`, `errorMessage`), `payment_required` (`nodeId`, `provider`, `errorMessage`), `budget` (`nodeId`, `scope`, `metric`, `limit`, `actual`), `max_retries` (`nodeId`, `currentLimit`, `attempts`), `goal_gate` (`gateNodeId`, `currentLimit`), `max_loops` (`currentLimit`, `dispatches`), `abort_loop` (`nodeId`, `consecutiveAborts`), `provider_exhausted` (`nodeId`, `attempts`, `cumulativeMs`). Auto-wake arms (status `paused_auto`): `provider_retry` (`nodeId`, `httpStatus`, `provider`, `errorMessage`, `attempt`, `resumeAt`), `handler_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries`), `timeout_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs`). | Unified pause fact. Status follows reason 1:1: reasons in `AUTO_WAKE_PAUSE_REASONS` (`provider_retry`, `handler_retry`, `timeout_retry`) project to `paused_auto` (wake-pending sweep auto-resumes at `resumeAt`); everything else → `paused` (operator must `intent.resume`, optionally preceded by a cap-adjustment intent: `intent.budget_adjusted`, `intent.max_retries_adjusted`, `intent.goal_gate_adjusted`, `intent.max_loops_adjusted`). `timeout_retry` re-categorises a watchdog `maxMs` overrun as system-initiated pause-retry — partial-spend metrics still accrue via a paired `fact.node_aborted{cause:"timeout"}` |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
-| `fact.run_halted` | `reason: 'budget'\|'schema_drift'\|'error'\|'aborted_exit'\|'occ_exhausted'\|'timeout_exhausted'\|'route_not_picked'\|'route_call_not_isolated'\|'edge_no_match'`, `detail?`, `occContext?` (set when reason="occ_exhausted") | Terminal failure. After Stage 3 of recoverable-budget-pause.md the previously-recoverable-class reasons (`max_loops`, `abort_loop`, `goal_gate_unsatisfied`, `max_retries_exceeded`, `provider_exhausted`) moved to `fact.run_paused`. `timeout_exhausted` lands when the per-`(nodeId)` watchdog-retry counter saturates (default 3 attempts) — see `paused_auto{reason:"timeout_retry"}` for the recoverable side. The three `route_*` reasons (docs/proposals/llm-routing.md D3/D8) land when a routing node fails to commit a route via the synthesised `route` tool or chose a route the graph doesn't handle |
+| `fact.run_halted` | `reason: 'budget'\|'schema_drift'\|'error'\|'aborted_exit'\|'occ_exhausted'\|'timeout_exhausted'\|'route_not_picked'\|'route_call_not_isolated'\|'edge_no_match'`, `detail?`, `occContext?` (set when reason="occ_exhausted") | Terminal failure. After Stage 3 of recoverable-budget-pause.md the previously-recoverable-class reasons (`max_loops`, `abort_loop`, `goal_gate_unsatisfied`, `max_retries_exceeded`, `provider_exhausted`) moved to `fact.run_paused`. `timeout_exhausted` lands when the per-`(nodeId)` watchdog-retry counter saturates (default 3 attempts) — see `paused_auto{reason:"timeout_retry"}` for the recoverable side. The three `route_*` reasons land when a routing node fails to commit a route via the synthesised `route` tool or chose a route the graph doesn't handle |
 | `fact.run_cancelled` | `intentSeq` | Terminal cancel |
-| `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (docs/proposals/worktrees.md). Once per worktree-backed run, after the terminal status fact. Reducer projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event, not facts. |
+| `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot. Once per worktree-backed run, after the terminal status fact. Reducer projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event, not facts. |
 | `fact.run_quarantined` | `reason: 'orphan_side_effect'\|'other'`, `orphanedIntents?: seq[]` | Awaiting operator |
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep requeued. `lastAliveAt` is the dying daemon's last heartbeat — reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs` |
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Accounting truth |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
-| `fact.run_branched` | `branch`, `sha` | Operator post-run primitive (`intent.branch_run`, docs/proposals/worktrees.md): created `refs/heads/<branch>` at the run's heads-ref sha. Sets `run_state.branch`; inbox `pending → acted`. No longer dispose-emitted (step 6 removed branch-preservation). |
+| `fact.run_branched` | `branch`, `sha` | Operator post-run primitive (`intent.branch_run`): created `refs/heads/<branch>` at the run's heads-ref sha. Sets `run_state.branch`; inbox `pending → acted`. No longer dispose-emitted (step 6 removed branch-preservation). |
 | `fact.run_committed` | `targetBranch`, `sha`, `message`, `parentSha` | Operator (`intent.commit_run`): committed the run's snapshot tree onto `targetBranch`. Sets `run_state.final_commit`; inbox `pending → acted`. |
 | `fact.run_merged` | `targetBranch`, `mode: 'ff'\|'merge'\|'squash'`, `sha`, `parentShas: string[]` | Operator (`intent.merge_run`): merged the run's heads-ref into `targetBranch`. Sets `run_state.merged_into`; inbox `pending → acted`. |
-| `fact.run_accepted` | `sha`, `replayed: number`, `tailStaged: boolean` | Daemon-folded from `intent.accept_run` (docs/proposals/worktrees.md): replayed the run's commits onto the operator's current branch and staged the uncommitted tail. Sets `run_state.accepted_sha`; inbox `pending → acted`. |
+| `fact.run_accepted` | `sha`, `replayed: number`, `tailStaged: boolean` | Daemon-folded from `intent.accept_run`: replayed the run's commits onto the operator's current branch and staged the uncommitted tail. Sets `run_state.accepted_sha`; inbox `pending → acted`. |
 | `fact.run_discarded` | `refs: string[]` | Operator (`intent.discard_run`): deleted the run's `refs/swarm/{snapshots,heads}/<id>`. Inbox `pending → discarded` (terminal-terminal). |
 
-**Sub-agents have no dedicated facts and no `run_state` row.** A sub-agent (LLM-spawned via the `agent` tool) is a tool implementation that runs inline as a fresh llm call against the parent's event stream. Three **observability** event types bracket the slice: `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`, `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`, and `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` (fires on respawn after a daemon crash; see [`docs/proposals/sub-agent-crash-resilience.md`](./proposals/sub-agent-crash-resilience.md)). `name` and `agent_def` are independent: `name` carries the free-form caller-supplied label from `agent({ name: <label>, … })`; `agent_def` carries the resolved profile name from `agent({ agent: <def-name>, … })` against a discovered definition (see [`docs/proposals/agent-definitions.md`](./proposals/agent-definitions.md)). Either, both, or neither can be present. UIs prefer `name` when present (the caller chose it for this spawn) and fall back to `agent_def`. Every event the sub-agent emits in between (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) carries `subagent_id` on its payload as a discriminator. The cost-rollup fields (`costUsd`, `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) sum every `cost.recorded` the sub-agent forwarded onto the parent's stream during its bracket — a per-spawn view UIs and analytics can render without scanning the slice. Required numbers, default 0 when no `cost.recorded` fired (e.g. spawn halted before any LLM call). Field shape mirrors `fact.node_aborted.partial*`. The fields are a per-spawn view of the same stream, not a duplicate accounting path: cost still rolls into the parent's `metrics` through the existing accumulation path — the reducer doesn't filter on `subagent_id`. The tool result (`{ subagent_id, status, total_tool_calls, halt_reason? }`) is the bidirectional handle the parent LLM gets back. Parallel `agent` toolcalls in one parent message run concurrently and demux by `subagent_id`. The `subagent_id` is picked at spawn time via two paths. **Content-addressed pending-resume (FIFO queue, default when `spec.args_hash` is set — the agent tool computes it from the spec's canonical args: prompt, system_prompt, allowed_tools, disallowed_tools, skills, max_iterations, agent_def, model, provider):** spawn-subagent queries prior `subagent.start` / `subagent.end` / `subagent.resumed` events for brackets in the same `(parentRunId, parentNodeId, parentIteration, args_hash)` scope whose latest terminal is `subagent.end{status:"cancelled"}` and that haven't been consumed by a `subagent.resumed`. The oldest such bracket's id is reused — same id ⇒ the hydration path below replays its transcript ⇒ the LLM's retry with byte-identical args automatically picks up where the cancelled bracket left off, without a `resume_subagent_id` parameter, without LLM cooperation. Six parallel siblings with same args each pop a distinct cancelled bracket because the eagerly-emitted `subagent.resumed` consumes its id before the next sibling's findPendingResumeCandidate runs (bun:sqlite writes are sync; the first sibling's resumed-write lands before the second's read). Stays scoped to `(parent_node_id, iteration)` so a goal-gate retarget into the same node doesn't accidentally bleed stale brackets into a fresh dispatch. **Fresh deterministic id (fallback):** `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars — so a sub-agent respawned after a daemon crash hashes to the same id and rehydrates its prior transcript under the existing `__subagent:<id>` namespace in the messages table. The respawn path emits `subagent.resumed` (no fresh `subagent.start` — the original is still in the event log) and either skips the LLM call (when the persisted transcript ended in `stopReason:"stop"` with no pending toolCalls) or hands `priorMessages` to the backend so the child picks up where it left off. On a resumed bracket, `subagent.end.costUsd` and the token fields are **cumulative** across every spawn of the same `subagent_id` — the daemon seeds the per-spawn rollup from prior `subagent.end` events for that id (via `IEventReader.getEventsByType`). **Consumers summing cost across `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket; naive summation across every bracket over-counts.** The parent's `total_cost_usd` projection is unaffected — it folds each `fact.node_completed.costUsd` once. Typed payload schemas: `SubagentStartData` / `SubagentEndData` / `SubagentResumedData` in `packages/core/src/types/events.ts`.
+**Sub-agents have no dedicated facts and no `run_state` row.** A sub-agent (LLM-spawned via the `agent` tool) is a tool implementation that runs inline as a fresh llm call against the parent's event stream. Three **observability** event types bracket the slice: `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`, `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`, and `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` (fires on respawn after a daemon crash). `name` and `agent_def` are independent: `name` carries the free-form caller-supplied label from `agent({ name: <label>, … })`; `agent_def` carries the resolved profile name from `agent({ agent: <def-name>, … })` against a discovered definition. Either, both, or neither can be present. UIs prefer `name` when present (the caller chose it for this spawn) and fall back to `agent_def`. Every event the sub-agent emits in between (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) carries `subagent_id` on its payload as a discriminator. The cost-rollup fields (`costUsd`, `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) sum every `cost.recorded` the sub-agent forwarded onto the parent's stream during its bracket — a per-spawn view UIs and analytics can render without scanning the slice. Required numbers, default 0 when no `cost.recorded` fired (e.g. spawn halted before any LLM call). Field shape mirrors `fact.node_aborted.partial*`. The fields are a per-spawn view of the same stream, not a duplicate accounting path: cost still rolls into the parent's `metrics` through the existing accumulation path — the reducer doesn't filter on `subagent_id`. The tool result (`{ subagent_id, status, total_tool_calls, halt_reason? }`) is the bidirectional handle the parent LLM gets back. Parallel `agent` toolcalls in one parent message run concurrently and demux by `subagent_id`. The `subagent_id` is picked at spawn time via two paths. **Content-addressed pending-resume (FIFO queue, default when `spec.args_hash` is set — the agent tool computes it from the spec's canonical args: prompt, system_prompt, allowed_tools, disallowed_tools, skills, max_iterations, agent_def, model, provider):** spawn-subagent queries prior `subagent.start` / `subagent.end` / `subagent.resumed` events for brackets in the same `(parentRunId, parentNodeId, parentIteration, args_hash)` scope whose latest terminal is `subagent.end{status:"cancelled"}` and that haven't been consumed by a `subagent.resumed`. The oldest such bracket's id is reused — same id ⇒ the hydration path below replays its transcript ⇒ the LLM's retry with byte-identical args automatically picks up where the cancelled bracket left off, without a `resume_subagent_id` parameter, without LLM cooperation. Six parallel siblings with same args each pop a distinct cancelled bracket because the eagerly-emitted `subagent.resumed` consumes its id before the next sibling's findPendingResumeCandidate runs (bun:sqlite writes are sync; the first sibling's resumed-write lands before the second's read). Stays scoped to `(parent_node_id, iteration)` so a goal-gate retarget into the same node doesn't accidentally bleed stale brackets into a fresh dispatch. **Fresh deterministic id (fallback):** `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars — so a sub-agent respawned after a daemon crash hashes to the same id and rehydrates its prior transcript under the existing `__subagent:<id>` namespace in the messages table. The respawn path emits `subagent.resumed` (no fresh `subagent.start` — the original is still in the event log) and either skips the LLM call (when the persisted transcript ended in `stopReason:"stop"` with no pending toolCalls) or hands `priorMessages` to the backend so the child picks up where it left off. On a resumed bracket, `subagent.end.costUsd` and the token fields are **cumulative** across every spawn of the same `subagent_id` — the daemon seeds the per-spawn rollup from prior `subagent.end` events for that id (via `IEventReader.getEventsByType`). **Consumers summing cost across `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket; naive summation across every bracket over-counts.** The parent's `total_cost_usd` projection is unaffected — it folds each `fact.node_completed.costUsd` once. Typed payload schemas: `SubagentStartData` / `SubagentEndData` / `SubagentResumedData` in `packages/core/src/types/events.ts`.
 
 All payloads ≤ 4KB. Content references are `artifactKey`.
 
@@ -465,9 +462,9 @@ Anything emitted via `ctx.emit` from a handler — `agent.message_start/end`, `l
 
 The executor flushes the in-handler buffer to the store on a soft 50ms timer or when 64 events accumulate, whichever first, so the conversation view streams mid-LLM-call. The handler's tail (`edge.selected`, post-handler budget warnings) is drained synchronously before the terminal `fact.node_*` so consumers see the trail in causal order.
 
-`snapshot.captured` (payload: `SnapshotCapturedData` — `runId`, `eventIdx`, `nodeId`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, optional `headRef` / `diffBaseSha` / `committed` / `uncommitted`) is the executor-emitted per-step + HITL worktree snapshot (docs/proposals/worktrees.md), feeding the Diff scrubber. Delta-suppressed (no event when the tree is unchanged on a step boundary). The terminal snapshot is the OCC-checked `fact.snapshot_recorded`, not this.
+`snapshot.captured` (payload: `SnapshotCapturedData` — `runId`, `eventIdx`, `nodeId`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, optional `headRef` / `diffBaseSha` / `committed` / `uncommitted`) is the executor-emitted per-step + HITL worktree snapshot, feeding the Diff scrubber. Delta-suppressed (no event when the tree is unchanged on a step boundary). The terminal snapshot is the OCC-checked `fact.snapshot_recorded`, not this.
 
-`llm.start.skills[]` carries one `SkillCatalogRecord` (see `packages/types/src/skills.ts`) per skill the model saw on this call. Each record includes `name`, `location`, `sha256`, `bytes`, `scope`, `source_dir`, optional `compatibility`, and — for `scope === "project"` — `project_cwd` so replay can correlate which project's skills were active for this run after per-run filtering at llm dispatch (see [`docs/proposals/skills-and-agents-ui.md`](./proposals/skills-and-agents-ui.md)).
+`llm.start.skills[]` carries one `SkillCatalogRecord` (see `packages/types/src/skills.ts`) per skill the model saw on this call. Each record includes `name`, `location`, `sha256`, `bytes`, `scope`, `source_dir`, optional `compatibility`, and — for `scope === "project"` — `project_cwd` so replay can correlate which project's skills were active for this run after per-run filtering at llm dispatch.
 
 ### Daemon events (writer: `daemon`, separate `daemon_events` table)
 
@@ -654,7 +651,7 @@ export interface IDaemonCoordinator {
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
 
-  // schedules (proposal: docs/proposals/scheduled-runs.md)
+  // schedules
   createSchedule(params: CreateScheduleParams, now: number): Schedule;
   getSchedule(id: string): Schedule | null;
   listSchedules(opts?: { cwd?: string }): Schedule[];
@@ -793,8 +790,7 @@ export type HandlerResult =
       reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
       detail?: string;
       // Stage 3 of recoverable-budget-pause.md converts the
-      // operator-recoverable halts in this union to pauses. As of
-      // docs/proposals/paused-max-retries.md the executor emits
+      // operator-recoverable halts in this union to pauses. The executor emits
       // `fact.run_paused{reason:"max_retries"}` directly via the
       // `retriesExhaustedPause` sentinel (no longer constructs
       // `kind:"halt", reason:"max_retries_exceeded"` from the retry
@@ -960,8 +956,7 @@ each row on read; one corrupt row is skipped (surfaced via
 `!cmd` / env-var resolver that previously backed the `apiKey` field
 and header values (`packages/agent/src/credentials/resolve-config-value.ts`)
 is deleted entirely; secrets that previously rode through that shim
-live in `provider_credentials` plus `authHeader: true` instead. See
-proposal: `docs/proposals/provider-config-storage.md`.
+live in `provider_credentials` plus `authHeader: true` instead. 
 
 ## 7. Web server
 
@@ -1022,7 +1017,7 @@ app.post("/runs/:id/max_retries",  async (c) => writeIntent(c, "intent.max_retri
 app.post("/runs/:id/goal_gate",    async (c) => writeIntent(c, "intent.goal_gate_adjusted"));    // {newLimit>0, note?}
 app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops_adjusted"));    // {newLimit>0, note?}
 
-// Post-run operator primitives (docs/proposals/worktrees.md §7). Each
+// Post-run operator primitives. Each
 // appends a post-terminal operator-action intent the daemon sweep folds
 // into a git mutation + fact. User-facing refusals are returned 4xx here
 // (404 not_found · 409 not_terminal/not_in_inbox/discarded/no_worktree ·
@@ -1032,7 +1027,7 @@ app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops
 app.post("/runs/:id/accept",       async (c) => writeIntent(c, "intent.accept_run"));    // {} — replay onto HEAD + stage tail
 app.post("/runs/:id/discard",      async (c) => writeIntent(c, "intent.discard_run"));
 
-// Schedules surface (proposal: docs/proposals/scheduled-runs.md).
+// Schedules surface.
 // CRUD over the `schedules` table plus pause/resume verbs. Each
 // mutation lands a matching `intent.schedule_*` audit row on
 // `daemon_events`. Body of POST /schedules:
@@ -1046,7 +1041,7 @@ app.delete("/schedules/:id",          (c) => deleteSchedule(c));
 app.post("/schedules/:id/pause",      (c) => pauseSchedule(c));
 app.post("/schedules/:id/resume",     (c) => resumeSchedule(c));
 
-// Skills + agents discovery surface (proposal: docs/proposals/skills-and-agents-ui.md).
+// Skills + agents discovery surface.
 // Read-only views over the live filesystem; each request re-walks
 // `cwd ∪ store.listCwds()` (frontmatter-only, ms-scale). Identity in
 // detail / tree / file URLs is `:locId = base64url(skill_dir)` for
@@ -1061,8 +1056,7 @@ app.get("/skills/:locId/file",        (c) => skillFile(c));        // ?path=<rel
 app.get("/agents",                    (c) => listAgents(c));
 app.get("/agents/:locId",             (c) => agentDetail(c));      // metadata + body (the prompt)
 
-// Worktree snapshot read endpoints (docs/proposals/worktrees.md §Server endpoints,
-// step 5). Pure git object-database queries — no checkouts, no worktree
+// Worktree snapshot read endpoints. Pure git object-database queries — no checkouts, no worktree
 // mutation. Snapshot commits are reachable via refs/swarm/snapshots/<runId>;
 // eventIdx in the URL is the event seq, resolved to a commitSha by walking
 // the run's snapshot events. All endpoints 404 on unknown run or eventIdx.

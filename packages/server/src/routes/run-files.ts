@@ -21,7 +21,7 @@
 //      commit, committed + dirty tree) against the honest base
 //      `run_state.diff_base_sha` (== `baseGitSha` unless the workflow
 //      relocated HEAD). The snapshotter writes the ref before dispose, so
-//      this survives worktree disposal by design (docs/proposals/worktrees.md).
+//      this survives worktree disposal by design.
 //
 // All filesystem reads inside the worktree go through the same
 // `ProjectTreeReader` the projects routes use — only the root path
@@ -189,9 +189,8 @@ function pickBaseGitSha(projected: string | null, events: StoredEvent[]): string
  *  worktree disposed with content) or git itself is unavailable. */
 /** Resolve the run's snapshot tip — `refs/swarm/snapshots/<runId>`, the
  *  terminal snapshot commit whose tree carries the run's committed + dirty
- *  state (docs/proposals/worktrees.md). Replaces the old dispose-preserved
- *  `swarm/runs/<runId>` branch. `null` for runs without a snapshot yet
- *  (live, or pre-terminal / bare-cwd). */
+ *  state. Replaces the old dispose-preserved `swarm/runs/<runId>` branch.
+ *  `null` for runs without a snapshot yet (live, or pre-terminal / bare-cwd). */
 async function resolveSnapshotTip(cwd: string, runId: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("git", ["rev-parse", `refs/swarm/snapshots/${runId}`], {

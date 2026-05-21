@@ -1,4 +1,4 @@
-// Unbounded llm wall-clock tests — docs/proposals/llm-unbounded-time.md.
+// Unbounded llm wall-clock tests.
 //
 // When a llm handler spec has `maxMs: undefined` (the user wrote
 // `max_ms=0` / `timeout="0"`), the executor must:

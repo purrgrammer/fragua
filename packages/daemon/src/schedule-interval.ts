@@ -1,5 +1,4 @@
-// Whitelist parser for the supported schedule intervals
-// (proposal: docs/proposals/scheduled-runs.md).
+// Whitelist parser for the supported schedule intervals.
 //
 // Shorthand whitelist: `30m`, `1h`, `6h`, `24h`, `3d`, `7d`. Cron
 // expressions are explicitly out of scope; the `interval_ms` column on

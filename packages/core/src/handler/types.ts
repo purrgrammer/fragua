@@ -17,8 +17,7 @@ export interface HandlerSpec {
   /** Hard per-call timeout. Applied via AbortSignal.timeout inside the
    * executor. Optional — llm-kind handlers may omit it to disable
    * wall-clock bounding (per-node opt-in via `max_ms=0` /
-   * `timeout="0"`); cost/token attrs remain the operative ceiling. See
-   * docs/proposals/llm-unbounded-time.md. */
+   * `timeout="0"`); cost/token attrs remain the operative ceiling. */
   maxMs?: number;
   handler: Handler;
 }
@@ -255,8 +254,7 @@ export type HandlerResult =
        * edges default to `outcome=success`. */
       outcomeStatus?: "success" | "fail" | "retry";
       /** Set by the llm backend when the agent exited the node via
-       * the synthesised `route` tool (see
-       * docs/proposals/llm-routing.md D2). The engine's route-case edge
+       * the synthesised `route` tool. The engine's route-case edge
        * selector keys on this; the daemon persists it onto
        * `fact.node_completed.payload.route`. */
       route?: string;
@@ -321,8 +319,7 @@ export type HandlerResult =
       // are emitted by the executor directly as `fact.run_paused`,
       // never as halts.
       // Routing-node halts emitted by the llm agent boundary
-      // (docs/proposals/llm-routing.md D3) flow through verbatim —
-      // result-to-facts does not translate them, they land as
+      // flow through verbatim — result-to-facts does not translate them, they land as
       // `fact.run_halted` with the matching `HaltReason`.
       // `edge_no_match` is set by the executor's edge-selection path
       // when a routing-node outcome carries a route the graph doesn't

@@ -324,7 +324,7 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.run_halted` | `"occ_exhausted"` | OCC retry budget exhausted on one `(nodeId, iteration)`. Payload: `occContext: { count, nodeId, iteration, lastVersion, attemptedFactType }`. |
 | `fact.run_halted` | `"provider_exhausted"` (Stage 3 — converted) | Auto-retry chain capped (5 attempts or 5 cumulative minutes). **Now emits `fact.run_paused{reason:"provider_exhausted"}`** instead of halting. Operator decides via `intent.resume` (start a fresh chain), `intent.cancel`, or steer to a different provider. Walk the chain via `fact.provider_retry_attempted` events. |
 | `fact.run_halted` | `"timeout_exhausted"` | Watchdog `maxMs` overrun fired 3 times on the same `(nodeId)` (per-`(nodeId)` counter at `routing.internal.timeout_retries.<nodeId>`). Detail names the node. Each prior watchdog fired a paired `fact.node_aborted{cause:"timeout"}` + `fact.run_paused{reason:"timeout_retry"}` so the chain is reconstructable; the third one halts directly without another pause. Operator action: bump the node's `max_ms` (workflow-level fix) or split the work into smaller nodes. |
-| `fact.run_halted` | `"route_not_picked"` | Routing node's codergen turn ended without an isolated `route` tool call (docs/proposals/llm-routing.md D3). Pull the last assistant turn (§6) — the agent likely produced text-only without a tool call, or hit a natural stop before deciding. Tighten the prompt so the model commits to a route, or widen `routes=` if the available branches don't cover what the model wants to express. |
+| `fact.run_halted` | `"route_not_picked"` | Routing node's codergen turn ended without an isolated `route` tool call. Pull the last assistant turn (§6) — the agent likely produced text-only without a tool call, or hit a natural stop before deciding. Tighten the prompt so the model commits to a route, or widen `routes=` if the available branches don't cover what the model wants to express. |
 | `fact.run_halted` | `"route_call_not_isolated"` | The `route` tool call shared an assistant response with other tool calls. Re-inspect the offending assistant message (§6); either tighten the prompt so the model commits to the route on its own response, or sequence the side-effect tool calls before the deciding turn. |
 | `fact.run_halted` | `"edge_no_match"` | Handler returned a route/outcome and no outgoing edge matched. Validator should make this unreachable for a pinned graph; runtime backstop. Cross-reference the graph (`SELECT pinned_graph FROM run_state WHERE run_id=…`) against the source node's outgoing edges. |
 | `fact.run_quarantined` | `"orphan_side_effect"` | Crash left `fact.side_effect_intent` without a matching `_done`/`_failed`. Payload: `orphanedIntents: seq[]`. Resolve via `intent.unquarantine`. |
@@ -350,7 +350,7 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 
 ## 8.1 Schedule events (daemon_events table)
 
-Schedules are global primitives (proposal: `docs/proposals/scheduled-runs.md`) that fire workflows on a fixed interval. Their audit trail lives in `daemon_events`, not `events` — at the moment of `intent.schedule_create` no run yet exists, and `fact.schedule_skipped` may fire without a corresponding run id. Same 4 KB payload cap, separate AUTOINCREMENT seq space.
+Schedules are global primitives that fire workflows on a fixed interval. Their audit trail lives in `daemon_events`, not `events` — at the moment of `intent.schedule_create` no run yet exists, and `fact.schedule_skipped` may fire without a corresponding run id. Same 4 KB payload cap, separate AUTOINCREMENT seq space.
 
 ```sh
 # All schedule activity in the last 24h.
@@ -395,7 +395,7 @@ Sub-agents (the `agent` tool) have no `run_state` row and no separate event stre
 
 - `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def?, tool_call_id?, args_hash? }`
 - `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`
-- `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` — fires on either a daemon-crash respawn (proposal: `docs/proposals/sub-agent-crash-resilience.md`) OR a content-addressed FIFO pop (see below).
+- `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` — fires on either a daemon-crash respawn OR a content-addressed FIFO pop (see below).
 
 `subagent_id` is picked at spawn time via two paths:
 

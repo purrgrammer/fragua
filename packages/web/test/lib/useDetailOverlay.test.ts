@@ -135,9 +135,9 @@ describe("foldDetailFrame", () => {
   });
 
   describe("HITL — fact.run_paused_human / fact.run_resumed", () => {
-    // Human-node payload per docs/proposals/llm-routing.md §D6:
-    // `{ nodeId, text, routes }`. Route names are plain strings; per-edge
-    // `label=` overrides are applied UI-side from the graph descriptor.
+    // Human-node payload: `{ nodeId, text, routes }`. Route names are
+    // plain strings; per-edge `label=` overrides are applied UI-side
+    // from the graph descriptor.
     const routes = ["approve", "revise"];
 
     test("fact.run_paused_human populates structured fields and flips status", () => {

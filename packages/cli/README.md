@@ -51,8 +51,7 @@ swarm schedule rm <id>
 ```
 
 Skip-on-overlap by default. One coalesced catch-up after daemon
-downtime; auto-pauses if the workflow file goes missing. See
-[`docs/proposals/scheduled-runs.md`](../../docs/proposals/scheduled-runs.md).
+downtime; auto-pauses if the workflow file goes missing.
 
 ## Store maintenance
 

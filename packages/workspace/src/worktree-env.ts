@@ -15,7 +15,7 @@
 // Dispose removes the worktree, nothing more. Recoverability is structural:
 // the snapshotter captures the run's tree (committed + uncommitted) and HEAD
 // into `refs/swarm/snapshots/<run-id>` + `refs/swarm/heads/<run-id>` at the
-// terminal boundary, before dispose. See `docs/proposals/worktrees.md`.
+// terminal boundary, before dispose.
 
 import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
@@ -59,7 +59,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   baseGitSha: string | null = null;
   /** Symbolic ref (branch short name) of the *source repo* HEAD at
    * provision — the merge/commit target default for post-run primitives
-   * (docs/proposals/worktrees.md). `null` when the source checkout is
+   * `null` when the source checkout is
    * detached, on a tag, or an unborn branch. Distinct from the worktree
    * itself, which is always detached. */
   baseGitRef: string | null = null;
@@ -184,9 +184,9 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    * Recoverability is structural, not derived here: the snapshotter captures
    * the run's tree (incl. uncommitted dirt) and HEAD into
    * `refs/swarm/snapshots/<runId>` + `refs/swarm/heads/<runId>` at the terminal
-   * boundary, BEFORE dispose runs (docs/proposals/worktrees.md). The executor
-   * gates dispose on that terminal snapshot succeeding, so a captured snapshot
-   * is the precondition for removal.
+   * boundary, BEFORE dispose runs. The executor gates dispose on that
+   * terminal snapshot succeeding, so a captured snapshot is the
+   * precondition for removal.
    *
    * No-op if `keepAfterDispose` is true or `dispose()` already ran. Tolerates
    * an already-removed worktree. */

@@ -8,7 +8,7 @@
 // reported in the decision so the executor can emit `intent.dropped`
 // observability events for audit.
 //
-// **Purity contract (P0.1 of docs/proposals/parallel.md):** `foldIntents`
+// **Purity contract:** `foldIntents`
 // is total over `RunStatus`, deterministic (same inputs → byte-identical
 // output), and free of side effects (no I/O, no clocks, no mutation of
 // the input array, no reads of ambient state). The function exists as
@@ -193,7 +193,7 @@ export function foldIntents(intents: IntentFoldEvent[], runStatus: RunStatus): I
       case "intent.max_retries_adjusted": {
         // Operator raises a node's `max_retries` cap on a
         // `paused{reason:"max_retries"}` run. Stage 3 of
-        // docs/proposals/recoverable-budget-pause.md. Lands in
+        // Stage 3 of recoverable-budget-pause.md. Lands in
         // `routing.max_retries_override.<nodeId>`; the executor reads
         // it before consulting the static node attr.
         const p = ev.payload as { nodeId: string; newLimit: number };

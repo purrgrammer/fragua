@@ -160,7 +160,7 @@ The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_l
 
 ### 3.6 Edge selection
 
-After a node completes, the executor picks the next edge using a two-case algorithm (`packages/core/src/engine/edge-selection.ts`). See also `docs/proposals/llm-routing.md` §D10.
+After a node completes, the executor picks the next edge using a two-case algorithm (`packages/core/src/engine/edge-selection.ts`).
 
 **Route case** — when the source node declares `routes:`, it is a *routing node*. The llm backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
 

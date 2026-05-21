@@ -66,8 +66,8 @@ export const RunSummary = Type.Object({
    * the only project identifier in the harness-by-default model. Absent
    * for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
-  /** Worktree inbox status (docs/proposals/worktrees.md). Present only on
-   * terminal worktree runs; `pending` = awaiting an operator primitive. */
+  /** Worktree inbox status. Present only on terminal worktree runs;
+   * `pending` = awaiting an operator primitive. */
   inboxStatus: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("acted"), Type.Literal("discarded")])),
   /** Terminal diff stat — drives the inbox row's `+X / −Y, N files` badge. */
   changeStat: Type.Optional(ChangeStat),

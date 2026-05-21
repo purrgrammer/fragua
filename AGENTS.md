@@ -13,7 +13,6 @@ Authoritative docs:
 - `docs/SPEC.md` — what swarm is, invariants
 - `docs/ARCHITECTURE.md` — schema, design, property matrix
 - `docs/handler-contract.md` — handler API
-- `docs/proposals/` — known gaps and deferred work, organised by status × maturity
 
 ## Stack
 
@@ -62,7 +61,7 @@ Config cascade: `~/.swarm/config.yaml` (global — defaults, auto-title, blockli
 
 Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `postmortem`, `operate`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 
-Named sub-agent profiles live alongside skills under `.agents/agents/` (project) and `~/.agents/agents/` (user); `.claude/agents/` is scanned as a cross-client fallback. Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, optional `model` / `provider` / `allowed_tools`); the body becomes the sub-agent's system prompt. Project beats user on collisions. The daemon scans them at boot and the catalogue lands on every llm call whose tool pool includes `agent` — see [`docs/proposals/agent-definitions.md`](docs/proposals/agent-definitions.md).
+Named sub-agent profiles live alongside skills under `.agents/agents/` (project) and `~/.agents/agents/` (user); `.claude/agents/` is scanned as a cross-client fallback. Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, optional `model` / `provider` / `allowed_tools`); the body becomes the sub-agent's system prompt. Project beats user on collisions. The daemon scans them at boot and the catalogue lands on every llm call whose tool pool includes `agent`.
 
 ## Commit conventions
 

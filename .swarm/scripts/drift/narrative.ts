@@ -7,8 +7,7 @@
 // Sections:
 //   1. status              — verbatim 'delivers today' / 'does not deliver' sections from STATUS.md and README.md (whichever has them)
 //   2. proposals           — front-matter (title/status/maturity/last_reviewed) per proposal
-//   3. proposals_index     — verbatim docs/proposals/README.md (the index doc)
-//   4. skills              — per generic skill (operate / postmortem / workflows): path, name, frontmatter description, lines + sha256_12, target_hint.
+//   3. skills              — per generic skill (operate / postmortem / workflows): path, name, frontmatter description, lines + sha256_12, target_hint.
 //                            These document swarm's own universal surface. The other skills
 //                            (frontend / design / backend) are repo-specific to swarm itself — their drift is not in scope.
 //
@@ -187,7 +186,6 @@ const snapshot = {
     does_not_deliver: extractMarkdownSection(readmeSrc, "## What swarm does not deliver today"),
   },
   proposals: collectProposals(),
-  proposals_index: readOrEmpty("docs/proposals/README.md"),
   skills: collectSkills(),
 };
 

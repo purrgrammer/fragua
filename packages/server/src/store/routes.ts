@@ -462,7 +462,6 @@ export function createRoutes(deps: ServerDeps): Hono {
     // hand-crafted intent could bypass this check), but the operator-
     // facing path should fail loudly here so the UI surfaces the
     // error instead of letting the daemon halt the run on resume.
-    // Per docs/proposals/llm-routing.md Phase 7 task F.
     const state = deps.store.getState(runId);
     if (state == null) return c.json({ error: "run not found" }, 404);
     if (state.status !== "paused_human") {
@@ -622,7 +621,7 @@ export function createRoutes(deps: ServerDeps): Hono {
     });
   });
 
-  // ─── Operator post-run primitives (docs/proposals/worktrees.md §7) ───
+  // ─── Operator post-run primitives ───────────────────────────────────────────────
   //
   // Each appends a post-terminal operator-action intent; the daemon's
   // `processOperatorActions` sweep folds it into the git mutation + fact.

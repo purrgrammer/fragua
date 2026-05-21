@@ -158,8 +158,7 @@ export function selectEventsByType(db: Database, runId: string, type: string): E
 /** All worktree-snapshot events for `runId` in seq order: both the
  *  per-step / HITL `snapshot.captured` observability events and the
  *  terminal `fact.snapshot_recorded` fact. These are the two event
- *  types that make up the Diff scrubber feed
- *  (docs/proposals/worktrees.md §Server endpoints). */
+ *  types that make up the Diff scrubber feed. */
 export function selectSnapshotEvents(db: Database, runId: string): EventRow[] {
   return db.query<EventRow, [string]>(SELECT_SNAPSHOT_EVENTS_SQL).all(runId);
 }

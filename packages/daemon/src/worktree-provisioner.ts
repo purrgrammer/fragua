@@ -102,10 +102,10 @@ export interface Provisioner {
    * envs (LocalEnvironment). */
   baseGitSha(runId: string): string | null;
   /** Branch short name of the source repo HEAD at provision — the
-   * post-run merge/commit target default (docs/proposals/worktrees.md).
+   * post-run merge/commit target default.
    * `null` for non-worktree envs or a detached/tag/unborn source HEAD. */
   baseGitRef(runId: string): string | null;
-  /** Capture a worktree snapshot at a boundary (docs/proposals/worktrees.md).
+  /** Capture a worktree snapshot at a boundary.
    * Returns the result, or `null` when delta-suppressed (unchanged tree on a
    * `step` boundary) or when the run isn't worktree-backed (bare cwd). Moves
    * the run's tip ref forward and advances the in-memory lineage cursor. */
