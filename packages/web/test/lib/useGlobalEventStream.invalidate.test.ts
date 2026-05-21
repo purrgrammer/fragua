@@ -23,10 +23,8 @@ describe("useGlobalEventStream — RUN_INVALIDATE_KINDS membership", () => {
   });
 
   // Operator-action facts — the bug fix: inbox rows must clear in all tabs
-  test("includes all four post-terminal operator-action facts (bug fix: inbox rows clear)", () => {
-    expect(__invalidateKinds.has("fact.run_branched")).toBe(true);
-    expect(__invalidateKinds.has("fact.run_committed")).toBe(true);
-    expect(__invalidateKinds.has("fact.run_merged")).toBe(true);
+  test("includes the post-terminal operator-action facts (bug fix: inbox rows clear)", () => {
+    expect(__invalidateKinds.has("fact.run_accepted")).toBe(true);
     expect(__invalidateKinds.has("fact.run_discarded")).toBe(true);
   });
 

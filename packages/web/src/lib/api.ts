@@ -918,26 +918,8 @@ export async function cancelRun(id: string, reason?: string): Promise<{ seq: num
   return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedSeq);
 }
 
-export async function branchRun(id: string, args: { branch: string; force?: boolean }): Promise<{ seq: number }> {
-  const body: Record<string, unknown> = { branch: args.branch };
-  if (args.force) body["force"] = true;
-  return postJson(`/runs/${encodeURIComponent(id)}/branch`, body, isAcceptedSeq);
-}
-
-export async function commitRun(id: string, args: { message: string; onto?: string }): Promise<{ seq: number }> {
-  const body: Record<string, unknown> = { message: args.message };
-  if (args.onto !== undefined && args.onto.length > 0) body["onto"] = args.onto;
-  return postJson(`/runs/${encodeURIComponent(id)}/commit`, body, isAcceptedSeq);
-}
-
-export async function mergeRun(
-  id: string,
-  args: { mode?: "ff" | "no-ff" | "squash"; into?: string },
-): Promise<{ seq: number }> {
-  const body: Record<string, unknown> = {};
-  if (args.mode !== undefined) body["mode"] = args.mode;
-  if (args.into !== undefined && args.into.length > 0) body["into"] = args.into;
-  return postJson(`/runs/${encodeURIComponent(id)}/merge`, body, isAcceptedSeq);
+export async function acceptRun(id: string): Promise<{ seq: number }> {
+  return postJson(`/runs/${encodeURIComponent(id)}/accept`, {}, isAcceptedSeq);
 }
 
 export async function discardRun(id: string): Promise<{ seq: number }> {

@@ -9,12 +9,10 @@ import type { RunSnapshotReader } from "@swarm/server";
 import { createServer } from "@swarm/server";
 import { type IEventStore, SqliteStore } from "@swarm/store";
 import {
-  branchCommand,
+  acceptCommand,
   cancelCommand,
-  commitCommand,
   discardCommand,
   inboxCommand,
-  mergeCommand,
   respondCommand,
   resumeCommand,
   unquarantineCommand,
@@ -121,35 +119,11 @@ describe("swarm operator verbs", () => {
     await r.close();
   });
 
-  test("branch: exit 0, appends intent.branch_run", async () => {
+  test("accept: exit 0, appends intent.accept_run", async () => {
     seedCommitted(r.store, "r1");
-    const code = await branchCommand({ runId: "r1", branch: "promoted", url: r.url });
+    const code = await acceptCommand({ runId: "r1", url: r.url });
     expect(code).toBe(0);
-    expect(lastIntent(r.store, "r1")).toBe("intent.branch_run");
-  });
-
-  test("commit: -m required → exit 1, no network", async () => {
-    const code = await commitCommand({ runId: "r-none", url: "http://127.0.0.1:1" });
-    expect(code).toBe(1);
-  });
-
-  test("commit: exit 0, appends intent.commit_run", async () => {
-    seedCommitted(r.store, "r2");
-    const code = await commitCommand({ runId: "r2", message: "promote", url: r.url });
-    expect(code).toBe(0);
-    expect(lastIntent(r.store, "r2")).toBe("intent.commit_run");
-  });
-
-  test("merge: --no-ff + --squash together → exit 1", async () => {
-    const code = await mergeCommand({ runId: "r3", noFf: true, squash: true, url: r.url });
-    expect(code).toBe(1);
-  });
-
-  test("merge: exit 0, appends intent.merge_run", async () => {
-    seedCommitted(r.store, "r4");
-    const code = await mergeCommand({ runId: "r4", url: r.url });
-    expect(code).toBe(0);
-    expect(lastIntent(r.store, "r4")).toBe("intent.merge_run");
+    expect(lastIntent(r.store, "r1")).toBe("intent.accept_run");
   });
 
   test("discard: exit 0, appends intent.discard_run", async () => {
@@ -159,8 +133,8 @@ describe("swarm operator verbs", () => {
     expect(lastIntent(r.store, "r5")).toBe("intent.discard_run");
   });
 
-  test("branch: unknown run → exit 1 (404 surfaced)", async () => {
-    const code = await branchCommand({ runId: "nope", branch: "x", url: r.url });
+  test("accept: unknown run → exit 1 (404 surfaced)", async () => {
+    const code = await acceptCommand({ runId: "nope", url: r.url });
     expect(code).toBe(1);
   });
 

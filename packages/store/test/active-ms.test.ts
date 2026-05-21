@@ -31,10 +31,7 @@ function blankState(): RunState {
     diffBaseSha: null,
     changeStat: null,
     inboxStatus: null,
-    finalCommit: null,
-    mergedInto: null,
     acceptedSha: null,
-    branch: null,
     cwd: null,
     workflowName: null,
     workflowScope: null,
@@ -312,29 +309,13 @@ describe("operator post-run primitives projection (worktrees.md)", () => {
     return { ...blankState(), inboxStatus: "pending" };
   }
 
-  test("fact.run_branched → branch set, inbox acted", () => {
-    const s = applyFact(pending(), { type: "fact.run_branched", payload: { branch: "feature/x", sha: "abc" } }, 1);
-    expect(s.branch).toBe("feature/x");
-    expect(s.inboxStatus).toBe("acted");
-  });
-
-  test("fact.run_committed → final_commit set, inbox acted", () => {
+  test("fact.run_accepted → accepted_sha set, inbox acted", () => {
     const s = applyFact(
       pending(),
-      { type: "fact.run_committed", payload: { targetBranch: "main", sha: "c0ffee", message: "m", parentSha: "p" } },
+      { type: "fact.run_accepted", payload: { sha: "tip1", replayed: 2, tailStaged: true } },
       1,
     );
-    expect(s.finalCommit).toBe("c0ffee");
-    expect(s.inboxStatus).toBe("acted");
-  });
-
-  test("fact.run_merged → merged_into set, inbox acted", () => {
-    const s = applyFact(
-      pending(),
-      { type: "fact.run_merged", payload: { targetBranch: "main", mode: "ff", sha: "m1", parentShas: ["p"] } },
-      1,
-    );
-    expect(s.mergedInto).toBe("main");
+    expect(s.acceptedSha).toBe("tip1");
     expect(s.inboxStatus).toBe("acted");
   });
 

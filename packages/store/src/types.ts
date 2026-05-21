@@ -216,26 +216,17 @@ export interface RunState {
    * executor on `fact.run_started`. `null` when the source checkout is
    * detached / on a tag / unborn, or for runs without a provisioner. */
   baseGitRef: string | null;
-  /** Branch preserved at dispose time when the worktree had a non-empty
-   * `git status --porcelain`. Set by `fact.run_branched`, emitted from
-   * the executor's terminal-cleanup path. `null` while the run is live,
-   * for clean-tree runs (nothing to commit), and for runs without a
-   * worktree. Convention: `swarm/runs/<run_id>`. */
-  branch: string | null;
   /** Worktree snapshot + inbox projection (docs/proposals/worktrees.md),
    * written by the terminal `fact.snapshot_recorded`. All `null` while the
    * run is live and for bare-cwd runs. `finalGitSha` / `finalHeadRef` =
    * worktree HEAD + its branch at terminal; `diffBaseSha` = the honest diff
    * base (== `baseGitSha` unless HEAD relocated); `changeStat` = committed +
-   * uncommitted deltas; `inboxStatus` drives the inbox. `finalCommit` /
-   * `mergedInto` are set later by operator-action facts (branch/commit/merge). */
+   * uncommitted deltas; `inboxStatus` drives the inbox. */
   finalGitSha: string | null;
   finalHeadRef: string | null;
   diffBaseSha: string | null;
   changeStat: ChangeStat | null;
   inboxStatus: InboxStatus | null;
-  finalCommit: string | null;
-  mergedInto: string | null;
   /** Tip of the operator's branch after the last `accept` (run → commit
    * traceability). Set by `fact.run_accepted`. */
   acceptedSha: string | null;

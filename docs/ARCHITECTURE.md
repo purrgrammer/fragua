@@ -140,7 +140,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 16`. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 17`. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -1030,9 +1030,6 @@ app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops
 // for detached/relocated · merge 409 not_fast_forward/merge_conflict via the
 // snapshot reader's mergeability check). All return {seq} on success.
 app.post("/runs/:id/accept",       async (c) => writeIntent(c, "intent.accept_run"));    // {} — replay onto HEAD + stage tail
-app.post("/runs/:id/branch",       async (c) => writeIntent(c, "intent.branch_run"));   // {branch, force?}
-app.post("/runs/:id/commit",       async (c) => writeIntent(c, "intent.commit_run"));   // {message, onto?}
-app.post("/runs/:id/merge",        async (c) => writeIntent(c, "intent.merge_run"));     // {mode?: ff|no-ff|squash, into?}
 app.post("/runs/:id/discard",      async (c) => writeIntent(c, "intent.discard_run"));
 
 // Schedules surface (proposal: docs/proposals/scheduled-runs.md).

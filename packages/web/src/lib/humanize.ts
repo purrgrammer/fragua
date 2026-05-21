@@ -51,16 +51,10 @@ export function humanizeNodeCompletedSuffix(payload: { route?: string; outcomeSt
 /** Single-word verb for the four post-terminal operator-action facts.
  *  Used by the git-centric feed rows that render just the verb.
  *  Returns `null` for any other event type. */
-export function humanizeOperatorActionShortVerb(
-  type: string,
-): "branched" | "committed" | "merged" | "discarded" | null {
+export function humanizeOperatorActionShortVerb(type: string): "accepted" | "discarded" | null {
   switch (type) {
-    case "fact.run_branched":
-      return "branched";
-    case "fact.run_committed":
-      return "committed";
-    case "fact.run_merged":
-      return "merged";
+    case "fact.run_accepted":
+      return "accepted";
     case "fact.run_discarded":
       return "discarded";
     default:
@@ -68,27 +62,17 @@ export function humanizeOperatorActionShortVerb(
   }
 }
 
-/** Build a short feed verb for the four post-terminal operator-action facts.
+/** Build a short feed verb for the post-terminal operator-action facts.
  *  Returns `null` for any other event type.
  *
- *  - fact.run_branched  → "branched → <branch>"
- *  - fact.run_committed → "committed onto <targetBranch>"
- *  - fact.run_merged    → "merged into <targetBranch>"
+ *  - fact.run_accepted  → "accepted (replayed N)"
  *  - fact.run_discarded → "discarded"
  */
 export function humanizeOperatorActionVerb(type: string, payload: Record<string, unknown>): string | null {
   switch (type) {
-    case "fact.run_branched": {
-      const branch = typeof payload["branch"] === "string" ? payload["branch"] : "";
-      return branch.length > 0 ? `branched → ${branch}` : "branched";
-    }
-    case "fact.run_committed": {
-      const target = typeof payload["targetBranch"] === "string" ? payload["targetBranch"] : "";
-      return target.length > 0 ? `committed onto ${target}` : "committed";
-    }
-    case "fact.run_merged": {
-      const into = typeof payload["targetBranch"] === "string" ? payload["targetBranch"] : "";
-      return into.length > 0 ? `merged into ${into}` : "merged";
+    case "fact.run_accepted": {
+      const replayed = typeof payload["replayed"] === "number" ? payload["replayed"] : 0;
+      return replayed > 0 ? `accepted (replayed ${replayed})` : "accepted";
     }
     case "fact.run_discarded":
       return "discarded";

@@ -180,21 +180,6 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     // commit / merge are composable and leave the inbox `acted`; discard is
     // terminal-terminal (`discarded`). The handler enforces the state machine
     // (refusing actions after discard); the reducer just projects.
-    case "fact.run_branched": {
-      next.branch = fact.payload.branch;
-      next.inboxStatus = "acted";
-      return next;
-    }
-    case "fact.run_committed": {
-      next.finalCommit = fact.payload.sha;
-      next.inboxStatus = "acted";
-      return next;
-    }
-    case "fact.run_merged": {
-      next.mergedInto = fact.payload.targetBranch;
-      next.inboxStatus = "acted";
-      return next;
-    }
     case "fact.run_accepted": {
       next.acceptedSha = fact.payload.sha;
       next.inboxStatus = "acted";

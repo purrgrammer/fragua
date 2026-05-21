@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 16
+-- swarm event store schema — Revision 17
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -125,11 +125,6 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- independent of the worktree directory or `branch` survival. NULL for
   -- runs without a provisioner (LocalEnvironment, ephemeral stubs).
   base_git_sha TEXT,
-  -- Branch name preserved by `dispose()` when the worktree had any working-
-  -- copy delta (tracked + untracked) at terminal time. Convention:
-  -- `swarm/runs/<run_id>`. NULL for clean runs (no work to commit) and for
-  -- runs without a worktree.
-  branch TEXT,
   -- Schedule lineage: when set, the run was fired by the named schedule
   -- (see `schedules.id`). Informational only — schedule deletion does
   -- NOT cascade here, so a run keeps its lineage even after the schedule
@@ -152,8 +147,6 @@ CREATE TABLE IF NOT EXISTS run_state (
   diff_base_sha TEXT,
   change_stat TEXT CHECK (change_stat IS NULL OR length(change_stat) < 1024),
   inbox_status TEXT CHECK (inbox_status IS NULL OR inbox_status IN ('pending','acted','discarded')),
-  final_commit TEXT,
-  merged_into TEXT,
   -- Tip of the operator's branch after the last `accept` (run → commit
   -- traceability). Set by `fact.run_accepted`, folded from `intent.accept_run`.
   accepted_sha TEXT

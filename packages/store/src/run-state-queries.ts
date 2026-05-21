@@ -46,14 +46,11 @@ export interface RunStateRow {
   workflow_path: string | null;
   base_git_sha: string | null;
   base_git_ref: string | null;
-  branch: string | null;
   final_git_sha: string | null;
   final_head_ref: string | null;
   diff_base_sha: string | null;
   change_stat: string | null;
   inbox_status: string | null;
-  final_commit: string | null;
-  merged_into: string | null;
   accepted_sha: string | null;
   schedule_id: string | null;
 }
@@ -78,9 +75,9 @@ const SELECT_RUN_STATE_FULL_SQL = `
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
          cwd, workflow_name, workflow_scope, workflow_path,
-         base_git_sha, base_git_ref, branch,
+         base_git_sha, base_git_ref,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
-         inbox_status, final_commit, merged_into, accepted_sha, schedule_id
+         inbox_status, accepted_sha, schedule_id
     FROM run_state
    WHERE run_id = ?
 `;
@@ -332,8 +329,7 @@ const SELECT_INBOX_ACTION_CANDIDATES_SQL = `
         WHERE e.run_id = rs.run_id
           AND e.seq > rs.last_applied_seq
           AND e.type IN (
-            'intent.accept_run', 'intent.branch_run', 'intent.commit_run',
-            'intent.merge_run', 'intent.discard_run'
+            'intent.accept_run', 'intent.discard_run'
           )
      )
 `;
@@ -492,14 +488,11 @@ const WRITE_PROJECTION_SQL = `
     updated_at          = ?,
     base_git_sha        = ?,
     base_git_ref        = ?,
-    branch              = ?,
     final_git_sha       = ?,
     final_head_ref      = ?,
     diff_base_sha       = ?,
     change_stat         = ?,
     inbox_status        = ?,
-    final_commit        = ?,
-    merged_into         = ?,
     accepted_sha        = ?
   WHERE run_id = ?
 `;
@@ -524,14 +517,11 @@ export function writeRunStateProjection(
     updatedAt: number;
     baseGitSha: string | null;
     baseGitRef: string | null;
-    branch: string | null;
     finalGitSha: string | null;
     finalHeadRef: string | null;
     diffBaseSha: string | null;
     changeStatJson: string | null;
     inboxStatus: string | null;
-    finalCommit: string | null;
-    mergedInto: string | null;
     acceptedSha: string | null;
   },
 ): void {
@@ -549,14 +539,11 @@ export function writeRunStateProjection(
     args.updatedAt,
     args.baseGitSha,
     args.baseGitRef,
-    args.branch,
     args.finalGitSha,
     args.finalHeadRef,
     args.diffBaseSha,
     args.changeStatJson,
     args.inboxStatus,
-    args.finalCommit,
-    args.mergedInto,
     args.acceptedSha,
     args.runId,
   );

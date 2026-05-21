@@ -23,9 +23,6 @@ import {
   AlertTriangle,
   Check,
   Clock,
-  GitBranch,
-  GitCommitHorizontal,
-  GitMerge,
   Inbox,
   Pause,
   Play,
@@ -148,9 +145,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
   // Post-terminal operator actions — informational, no attention strip.
   // Verb is payload-aware: see metaForEvent below.
-  "fact.run_branched": { Icon: GitBranch, verb: "branched", iconClass: "text-sw-muted" },
-  "fact.run_committed": { Icon: GitCommitHorizontal, verb: "committed", iconClass: "text-sw-muted" },
-  "fact.run_merged": { Icon: GitMerge, verb: "merged", iconClass: "text-sw-muted" },
+  "fact.run_accepted": { Icon: Check, verb: "accepted", iconClass: "text-sw-muted" },
   "fact.run_discarded": { Icon: Trash2, verb: "discarded", iconClass: "text-sw-muted" },
 };
 
@@ -257,13 +252,8 @@ export function GlobalFeed(): JSX.Element {
   );
 }
 
-/** The four operator-action fact kinds that get git-centric row chrome. */
-const OPERATOR_ACTION_KINDS: ReadonlySet<string> = new Set([
-  "fact.run_branched",
-  "fact.run_committed",
-  "fact.run_merged",
-  "fact.run_discarded",
-]);
+/** The operator-action fact kinds that get git-centric row chrome. */
+const OPERATOR_ACTION_KINDS: ReadonlySet<string> = new Set(["fact.run_accepted", "fact.run_discarded"]);
 
 interface FeedRowProps {
   event: FeedEvent;

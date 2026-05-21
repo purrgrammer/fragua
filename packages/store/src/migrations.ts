@@ -44,6 +44,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [14, MIGRATION_014_PAUSED_HUMAN_RENAME()],
   [15, MIGRATION_015_WORKTREE_SNAPSHOTS()],
   [16, MIGRATION_016_ACCEPTED_SHA()],
+  [17, MIGRATION_017_DROP_LEGACY_OPERATOR_COLUMNS()],
 ]);
 
 /**
@@ -1277,4 +1278,13 @@ function MIGRATION_015_WORKTREE_SNAPSHOTS(): string {
 function MIGRATION_016_ACCEPTED_SHA(): string {
   // `accept` projection: the operator's branch tip after the last accept.
   return `ALTER TABLE run_state ADD COLUMN accepted_sha TEXT;`;
+}
+
+function MIGRATION_017_DROP_LEGACY_OPERATOR_COLUMNS(): string {
+  // accept/discard replace branch/commit/merge — drop their projection columns.
+  return `
+    ALTER TABLE run_state DROP COLUMN branch;
+    ALTER TABLE run_state DROP COLUMN final_commit;
+    ALTER TABLE run_state DROP COLUMN merged_into;
+  `;
 }

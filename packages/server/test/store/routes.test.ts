@@ -1420,23 +1420,13 @@ describe("global event feed (cross-run)", () => {
     // Operator-action facts — now in FEED_EVENT_KINDS, must appear in the feed.
     const c2 = store.appendFact(
       "c",
-      [{ type: "fact.run_branched", payload: { branch: "feature/x", sha: "abc123" } }],
+      [{ type: "fact.run_accepted", payload: { sha: "tip1", replayed: 1, tailStaged: false } }],
       c1.newVersion,
-    );
-    const c3 = store.appendFact(
-      "c",
-      [{ type: "fact.run_committed", payload: { targetBranch: "main", sha: "d0d0", message: "m", parentSha: "p" } }],
-      c2.newVersion,
-    );
-    const c4 = store.appendFact(
-      "c",
-      [{ type: "fact.run_merged", payload: { targetBranch: "main", mode: "ff", sha: "e0e0", parentShas: ["p"] } }],
-      c3.newVersion,
     );
     const c5 = store.appendFact(
       "c",
       [{ type: "fact.run_discarded", payload: { refs: ["refs/swarm/snapshots/c"] } }],
-      c4.newVersion,
+      c2.newVersion,
     );
     // fact.message_appended is still a bookkeeping kind — must stay stripped.
     store.appendFact(
@@ -1453,10 +1443,8 @@ describe("global event feed (cross-run)", () => {
 
     // Lifecycle anchor present.
     expect(types).toContain("fact.run_started");
-    // All four operator-action facts must now appear in the feed.
-    expect(types).toContain("fact.run_branched");
-    expect(types).toContain("fact.run_committed");
-    expect(types).toContain("fact.run_merged");
+    // Operator-action facts must now appear in the feed.
+    expect(types).toContain("fact.run_accepted");
     expect(types).toContain("fact.run_discarded");
     // message_appended still stripped.
     expect(types).not.toContain("fact.message_appended");

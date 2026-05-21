@@ -81,22 +81,10 @@ describe("metaForEvent", () => {
 });
 
 describe("metaForEvent — operator-action git-centric verbs", () => {
-  test("fact.run_branched → short verb 'branched' (no payload suffix)", () => {
-    const m = metaForEvent(evt("fact.run_branched", { branch: "feature/my-fix", sha: "abc" }));
-    expect(m.verb).toBe("branched");
+  test("fact.run_accepted → short verb 'accepted'", () => {
+    const m = metaForEvent(evt("fact.run_accepted", { sha: "tip1", replayed: 0, tailStaged: true }));
+    expect(m.verb).toBe("accepted");
     expect(m.attention).toBeFalsy();
-  });
-
-  test("fact.run_committed → 'committed' (no onto suffix)", () => {
-    const m = metaForEvent(
-      evt("fact.run_committed", { targetBranch: "main", sha: "d0", message: "m", parentSha: "p" }),
-    );
-    expect(m.verb).toBe("committed");
-  });
-
-  test("fact.run_merged → 'merged' (no into suffix)", () => {
-    const m = metaForEvent(evt("fact.run_merged", { targetBranch: "main", mode: "ff", sha: "e0", parentShas: [] }));
-    expect(m.verb).toBe("merged");
   });
 
   test("fact.run_discarded → 'discarded'", () => {
@@ -106,12 +94,8 @@ describe("metaForEvent — operator-action git-centric verbs", () => {
   });
 
   test("operator-action facts always return single-word verbs regardless of payload", () => {
-    expect(metaForEvent(evt("fact.run_branched", {})).verb).toBe("branched");
-    expect(metaForEvent(evt("fact.run_committed", {})).verb).toBe("committed");
-    expect(metaForEvent(evt("fact.run_merged", {})).verb).toBe("merged");
-    expect(metaForEvent(evt("fact.run_branched", { branch: "any" })).verb).toBe("branched");
-    expect(metaForEvent(evt("fact.run_committed", { targetBranch: "main" })).verb).toBe("committed");
-    expect(metaForEvent(evt("fact.run_merged", { targetBranch: "develop" })).verb).toBe("merged");
+    expect(metaForEvent(evt("fact.run_accepted", {})).verb).toBe("accepted");
+    expect(metaForEvent(evt("fact.run_discarded", {})).verb).toBe("discarded");
   });
 });
 
@@ -124,9 +108,9 @@ describe("isFeedRowHidden", () => {
     expect(isFeedRowHidden(evt("fact.message_appended", { ordinal: 0, role: "assistant" }))).toBe(false);
   });
 
-  test("does not hide fact.run_branched / fanout_started / fanout_completed", () => {
-    // fact.run_branched is now in FEED_EVENT_KINDS and ships through the feed.
-    expect(isFeedRowHidden(evt("fact.run_branched", { branch: "swarm/runs/abc" }))).toBe(false);
+  test("does not hide fact.run_accepted / fanout_started / fanout_completed", () => {
+    // fact.run_accepted is in FEED_EVENT_KINDS and ships through the feed.
+    expect(isFeedRowHidden(evt("fact.run_accepted", { sha: "tip1", replayed: 1, tailStaged: false }))).toBe(false);
     expect(isFeedRowHidden(evt("fact.fanout_started", { fanoutId: "f1", count: 2 }))).toBe(false);
     expect(isFeedRowHidden(evt("fact.fanout_completed", { fanoutId: "f1" }))).toBe(false);
   });

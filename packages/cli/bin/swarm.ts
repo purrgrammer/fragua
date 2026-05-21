@@ -15,14 +15,11 @@ import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
   acceptCommand,
-  branchCommand,
   cancelCommand,
-  commitCommand,
   diffCommand,
   discardCommand,
   inboxCommand,
   lsCommand,
-  mergeCommand,
   respondCommand,
   resumeCommand,
   unquarantineCommand,
@@ -436,11 +433,9 @@ function runsHelp(): void {
   console.log(`swarm runs <verb> <runId> — operate on an existing run
 
   Disposition (terminal runs with recoverable work):
-    branch <id> <name> [--force]      promote committed history to a branch
-    commit <id> -m <msg> [--onto <b>] commit the full tree onto a branch (default base ref)
-    merge  <id> [--no-ff|--squash] [--into <b>]  merge committed history (ff default)
+    accept  <id>                      replay the run's commits onto your branch + stage the tail to commit
     discard <id>                      drop the run's swarm refs
-    diff   <id> [--against <ref>] [--snap <idx>]  print the snapshot diff
+    diff    <id> [--against <ref>] [--snap <idx>]  print the snapshot diff
 
   Lifecycle (blocked runs):
     respond <id> [route] [--note <t>] answer a HITL gate (interactive without a route)
@@ -455,12 +450,6 @@ function runsHelp(): void {
 
 cli
   .command("runs [action] [runId] [arg]", "Operate on an existing run (run without args for help)")
-  .option("--force", "branch: overwrite an existing branch")
-  .option("-m, --message <msg>", "commit: message")
-  .option("--onto <branch>", "commit: target branch (default: the run's base ref)")
-  .option("--no-ff", "merge: create a merge commit instead of fast-forwarding")
-  .option("--squash", "merge: squash the run's history into one commit")
-  .option("--into <branch>", "merge: target branch (default: the run's base ref)")
   .option("--against <ref>", "diff: base | previous | <eventIdx> (default base)")
   .option("--snap <eventIdx>", "diff: snapshot to show (default: latest)")
   .option("--route <route>", "respond: HITL route (omit for interactive)")
@@ -507,43 +496,6 @@ cli
             await lsCommand({
               ...(pickStr(options, "status") !== undefined ? { status: pickStr(options, "status")! } : {}),
               ...limitOpt,
-              ...discovery(options),
-            }),
-          );
-          break;
-        case "branch": {
-          const id = needId();
-          if (arg == null) {
-            console.error(chalk.red("runs branch: <branch> name required"));
-            process.exit(1);
-          }
-          process.exit(
-            await branchCommand({
-              runId: id,
-              branch: arg,
-              ...(options["force"] === true ? { force: true } : {}),
-              ...discovery(options),
-            }),
-          );
-          break;
-        }
-        case "commit":
-          process.exit(
-            await commitCommand({
-              runId: needId(),
-              ...(pickStr(options, "message") !== undefined ? { message: pickStr(options, "message")! } : {}),
-              ...(pickStr(options, "onto") !== undefined ? { onto: pickStr(options, "onto")! } : {}),
-              ...discovery(options),
-            }),
-          );
-          break;
-        case "merge":
-          process.exit(
-            await mergeCommand({
-              runId: needId(),
-              ...(options["ff"] === false ? { noFf: true } : {}),
-              ...(options["squash"] === true ? { squash: true } : {}),
-              ...(pickStr(options, "into") !== undefined ? { into: pickStr(options, "into")! } : {}),
               ...discovery(options),
             }),
           );

@@ -1,30 +1,14 @@
-// POST /runs/:id/{branch,commit,merge,discard} — operator post-run
-// primitives (docs/proposals/worktrees.md §7). Validation is column-based
-// for branch/commit; merge additionally consults an injected
-// RunSnapshotReader.mergeability. The intent write is asserted via the
-// run's event log; the daemon sweep (operator-actions.test.ts) covers the
-// git mutation half.
+// POST /runs/:id/{accept,discard} — operator post-run primitives
+// (docs/proposals/worktrees.md). The intent write is asserted via the run's
+// event log; the daemon sweep (operator-actions.test.ts) folds it into the
+// git mutation + fact.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 import { type IEventStore, SqliteStore } from "@swarm/store";
-import type { RunSnapshotReader } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
 
 const BASE = "a".repeat(40);
 const COMMIT = "b".repeat(40);
-
-function fakeReader(
-  mergeability: Awaited<ReturnType<RunSnapshotReader["mergeability"]>>,
-  refExists = false,
-): RunSnapshotReader {
-  return {
-    lsTree: async () => null,
-    showFile: async () => ({ kind: "not_found" }),
-    diff: async () => "",
-    mergeability: async () => mergeability,
-    refExists: async () => refExists,
-  };
-}
 
 interface SeedOpts {
   runId: string;
@@ -111,184 +95,13 @@ describe("operator post-run primitive endpoints", () => {
     store.saveWorkflow("wf", "noop", "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n");
   });
 
-  test("branch: 200 + intent.branch_run on a committed-history run", async () => {
+  test("accept: 200 + intent.accept_run on a recoverable run", async () => {
     const app = createRoutes({ store });
-    seed(store, { runId: "r1" }); // committed history (headSha=COMMIT != base)
-    const res = await app.request("/runs/r1/branch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ branch: "promoted" }),
-    });
+    seed(store, { runId: "r1" });
+    const res = await app.request("/runs/r1/accept", { method: "POST" });
     expect(res.status).toBe(200);
     expect(await res.json()).toHaveProperty("seq");
-    expect(lastIntent(store, "r1")).toBe("intent.branch_run");
-  });
-
-  test("branch: 409 branch_exists on a name collision without --force", async () => {
-    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }, true) });
-    seed(store, { runId: "r1c" });
-    const res = await app.request("/runs/r1c/branch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ branch: "taken" }),
-    });
-    expect(res.status).toBe(409);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: "branch_exists" });
-  });
-
-  test("branch: --force overrides an existing branch", async () => {
-    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }, true) });
-    seed(store, { runId: "r1f" });
-    const res = await app.request("/runs/r1f/branch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ branch: "taken", force: true }),
-    });
-    expect(res.status).toBe(200);
-    expect(lastIntent(store, "r1f")).toBe("intent.branch_run");
-  });
-
-  test("branch: 400 when branch name missing", async () => {
-    const app = createRoutes({ store });
-    seed(store, { runId: "r2" });
-    const res = await app.request("/runs/r2/branch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  test("branch: 409 nothing_to_branch when the run made no commits", async () => {
-    const app = createRoutes({ store });
-    // dirt-only: headSha null → no committed history; uncommitted keeps it in inbox
-    seed(store, {
-      runId: "r3",
-      headSha: null,
-      committed: null,
-      uncommitted: { filesChanged: 1, insertions: 2, deletions: 0 },
-    });
-    const res = await app.request("/runs/r3/branch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ branch: "x" }),
-    });
-    expect(res.status).toBe(409);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: "nothing_to_branch" });
-  });
-
-  test("commit: 200 + intent.commit_run; 400 without a message", async () => {
-    const app = createRoutes({ store });
-    seed(store, { runId: "r4" });
-    const ok = await app.request("/runs/r4/commit", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: "promote" }),
-    });
-    expect(ok.status).toBe(200);
-    expect(lastIntent(store, "r4")).toBe("intent.commit_run");
-
-    const bad = await app.request("/runs/r4/commit", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(bad.status).toBe(400);
-  });
-
-  test("commit: 409 target_not_found when --onto branch doesn't exist", async () => {
-    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }, false) });
-    seed(store, { runId: "r4nf" });
-    const res = await app.request("/runs/r4nf/commit", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: "m", onto: "no-such-branch" }),
-    });
-    expect(res.status).toBe(409);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: "target_not_found" });
-  });
-
-  test("merge: 409 target_not_found when the target/heads can't be resolved", async () => {
-    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }) });
-    seed(store, { runId: "r6nf" });
-    const res = await app.request("/runs/r6nf/merge", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ into: "no-such-branch" }),
-    });
-    expect(res.status).toBe(409);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: "target_not_found" });
-  });
-
-  test("commit: 400 onto_required when provisioned detached and no --onto", async () => {
-    const app = createRoutes({ store });
-    seed(store, { runId: "r5", baseGitRef: null });
-    const res = await app.request("/runs/r5/commit", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: "m" }),
-    });
-    expect(res.status).toBe(400);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: "onto_required" });
-  });
-
-  test("commit: explicit --onto overrides a detached default", async () => {
-    const app = createRoutes({ store });
-    seed(store, { runId: "r5b", baseGitRef: null });
-    const res = await app.request("/runs/r5b/commit", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: "m", onto: "main" }),
-    });
-    expect(res.status).toBe(200);
-    expect(lastIntent(store, "r5b")).toBe("intent.commit_run");
-  });
-
-  test("merge: 200 ff when the reader reports fast-forwardable", async () => {
-    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: true, ff: true, conflict: false }) });
-    seed(store, { runId: "r6" });
-    const res = await app.request("/runs/r6/merge", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(res.status).toBe(200);
-    expect(lastIntent(store, "r6")).toBe("intent.merge_run");
-  });
-
-  test("merge: 409 not_fast_forward when ff requested but not possible", async () => {
-    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: true, ff: false, conflict: false }) });
-    seed(store, { runId: "r7" });
-    const res = await app.request("/runs/r7/merge", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(res.status).toBe(409);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: "not_fast_forward" });
-  });
-
-  test("merge: 409 merge_conflict on a conflicting no-ff merge", async () => {
-    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: true, ff: false, conflict: true }) });
-    seed(store, { runId: "r8" });
-    const res = await app.request("/runs/r8/merge", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "no-ff" }),
-    });
-    expect(res.status).toBe(409);
-    expect((await res.json()) as { code?: string }).toMatchObject({ code: "merge_conflict" });
-  });
-
-  test("merge: 400 on an invalid mode", async () => {
-    const app = createRoutes({ store });
-    seed(store, { runId: "r8b" });
-    const res = await app.request("/runs/r8b/merge", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "rebase" }),
-    });
-    expect(res.status).toBe(400);
+    expect(lastIntent(store, "r1")).toBe("intent.accept_run");
   });
 
   test("discard: 200 + intent.discard_run", async () => {
@@ -311,11 +124,7 @@ describe("operator post-run primitive endpoints", () => {
     const app = createRoutes({ store });
     // no recoverable work: committed=null, uncommitted=null → inboxStatus null
     seed(store, { runId: "r11", committed: null, uncommitted: null });
-    const res = await app.request("/runs/r11/branch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ branch: "x" }),
-    });
+    const res = await app.request("/runs/r11/accept", { method: "POST" });
     expect(res.status).toBe(409);
     expect((await res.json()) as { code?: string }).toMatchObject({ code: "not_in_inbox" });
   });
@@ -323,11 +132,7 @@ describe("operator post-run primitive endpoints", () => {
   test("409 discarded after a discard fact", async () => {
     const app = createRoutes({ store });
     seed(store, { runId: "r12", discard: true });
-    const res = await app.request("/runs/r12/branch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ branch: "x" }),
-    });
+    const res = await app.request("/runs/r12/accept", { method: "POST" });
     expect(res.status).toBe(409);
     expect((await res.json()) as { code?: string }).toMatchObject({ code: "discarded" });
   });

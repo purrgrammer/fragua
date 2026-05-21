@@ -1,10 +1,11 @@
-// `swarm {branch,commit,merge,discard,diff}` — operator post-run
-// primitives over the HTTP surface (docs/proposals/worktrees.md §7).
+// `swarm runs {accept,discard,diff}` — operator post-run primitives over the
+// HTTP surface (docs/proposals/worktrees.md).
 //
-// branch/commit/merge/discard POST the post-terminal operator-action
-// intents the daemon sweep folds into git mutations; the server validates
-// synchronously and returns a 4xx the CLI surfaces verbatim. `diff` is a
-// read over the snapshot endpoints. Harness discovery mirrors `swarm run`:
+// accept/discard POST the post-terminal operator-action intents the daemon
+// sweep folds into git mutations (accept replays the run's commits onto the
+// operator's current branch + stages the tail; discard drops the refs).
+// `diff` is a read over the snapshot endpoints. Harness discovery mirrors
+// `swarm run`:
 //   1. --url   2. <cwd>/.swarm/serve.json (or <db-dir>/serve.json with --db)
 //   3. ~/.swarm/swarm.db daemon_lock.http_url   4. http://localhost:3000
 
@@ -86,53 +87,6 @@ async function failResponse(verb: string, res: Response): Promise<number> {
   return 1;
 }
 
-export interface BranchOptions extends DiscoveryOpts {
-  runId: string;
-  branch: string;
-  force?: boolean;
-}
-
-export function branchCommand(opts: BranchOptions): Promise<number> {
-  const body: { branch: string; force?: boolean } = { branch: opts.branch };
-  if (opts.force === true) body.force = true;
-  return postAction("branch", opts.runId, body, opts);
-}
-
-export interface CommitOptions extends DiscoveryOpts {
-  runId: string;
-  message?: string;
-  onto?: string;
-}
-
-export function commitCommand(opts: CommitOptions): Promise<number> {
-  if (opts.message == null || opts.message.length === 0) {
-    console.error(chalk.red("commit: -m/--message required"));
-    return Promise.resolve(1);
-  }
-  const body: { message: string; onto?: string } = { message: opts.message };
-  if (opts.onto != null && opts.onto.length > 0) body.onto = opts.onto;
-  return postAction("commit", opts.runId, body, opts);
-}
-
-export interface MergeOptions extends DiscoveryOpts {
-  runId: string;
-  noFf?: boolean;
-  squash?: boolean;
-  into?: string;
-}
-
-export function mergeCommand(opts: MergeOptions): Promise<number> {
-  if (opts.noFf === true && opts.squash === true) {
-    console.error(chalk.red("merge: --no-ff and --squash are mutually exclusive"));
-    return Promise.resolve(1);
-  }
-  // --ff-only is the implicit default; only a flag changes the mode.
-  const mode = opts.squash === true ? "squash" : opts.noFf === true ? "no-ff" : "ff";
-  const body: { mode: "ff" | "no-ff" | "squash"; into?: string } = { mode };
-  if (opts.into != null && opts.into.length > 0) body.into = opts.into;
-  return postAction("merge", opts.runId, body, opts);
-}
-
 export interface DiscardOptions extends DiscoveryOpts {
   runId: string;
 }
@@ -192,8 +146,8 @@ function blockedVerb(runStatus?: string): string {
  * Two-section operator inbox, mirroring the web /inbox:
  *   NEEDS INPUT  — blocked runs (HITL / paused / quarantined) → unblock so
  *                  the run continues (respond / resume / unquarantine).
- *   READY TO LAND — terminal runs with recoverable work → dispose the output
- *                  (branch / commit / merge / discard).
+ *   READY TO LAND — terminal runs with recoverable work → land the output
+ *                  (accept / discard).
  */
 export async function inboxCommand(opts: InboxOptions): Promise<number> {
   const baseUrl = await resolveBaseUrl(opts);
@@ -223,7 +177,7 @@ export async function inboxCommand(opts: InboxOptions): Promise<number> {
     console.log(chalk.bold(`READY TO LAND (${ready.length})`));
     for (const r of ready) {
       console.log(
-        `  ${chalk.cyan(r.runId)}  ${titleOf(r)}${changeBadge(r)} ${chalk.dim("→ swarm runs branch|commit|merge|discard")}`,
+        `  ${chalk.cyan(r.runId)}  ${titleOf(r)}${changeBadge(r)} ${chalk.dim("→ swarm runs accept|discard")}`,
       );
     }
   }

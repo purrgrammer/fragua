@@ -313,29 +313,6 @@ export type IntentEvent =
       payload: { newLimit: number; note?: string };
     }
   | {
-      /** Operator promotes a terminal run's workflow-authored commit
-       * history to a porcelain branch (worktrees.md). Post-terminal,
-       * worktree-free: the daemon `update-ref refs/heads/<branch>` at the
-       * run's `refs/swarm/heads/<runId>` sha. Inbox `pending → acted`. */
-      type: "intent.branch_run";
-      payload: { branch: string; force?: boolean };
-    }
-  | {
-      /** Operator promotes a terminal run's full snapshot tree (including
-       * uncommitted agent dirt) as a single commit onto `onto` (default
-       * `base_git_ref`). Daemon `commit-tree` + `update-ref` the target.
-       * Inbox `pending → acted`. */
-      type: "intent.commit_run";
-      payload: { message: string; onto?: string };
-    }
-  | {
-      /** Operator merges a terminal run's heads-ref into `into` (default
-       * `base_git_ref`). `ff` is the implicit default; `no-ff` / `squash`
-       * are explicit. Inbox `pending → acted`. */
-      type: "intent.merge_run";
-      payload: { mode?: "ff" | "no-ff" | "squash"; into?: string };
-    }
-  | {
       /** Operator lands a terminal run's work on their current branch: the
        * daemon replays the run's commits onto HEAD and stages the uncommitted
        * tail (worktrees.md). Folded into `fact.run_accepted`. Inbox
@@ -792,27 +769,6 @@ export type FactEvent =
     }
   | { type: "fact.daemon_takeover"; payload: { reclaimedFrom: number; at: number } }
   | {
-      /** Operator-driven (`intent.branch_run`): created a porcelain
-       * `refs/heads/<branch>` at the run's heads-ref sha. Post-terminal; sets
-       * `run_state.branch` and transitions the inbox `pending → acted`. No
-       * longer dispose-emitted (docs/proposals/worktrees.md step 6). */
-      type: "fact.run_branched";
-      payload: { branch: string; sha: string };
-    }
-  | {
-      /** Operator-driven (`intent.commit_run`): committed the run's snapshot
-       * tree onto a target branch via commit-tree. Sets `run_state.final_commit`;
-       * inbox `pending → acted`. */
-      type: "fact.run_committed";
-      payload: { targetBranch: string; sha: string; message: string; parentSha: string };
-    }
-  | {
-      /** Operator-driven (`intent.merge_run`): merged the run's heads-ref into a
-       * target branch. Sets `run_state.merged_into`; inbox `pending → acted`. */
-      type: "fact.run_merged";
-      payload: { targetBranch: string; mode: "ff" | "merge" | "squash"; sha: string; parentShas: string[] };
-    }
-  | {
       /** Daemon-folded from `intent.accept_run` (worktrees.md): replayed the
        * run's commits onto the operator's current branch (message + author
        * preserved) and staged the uncommitted tail for the operator to commit.
@@ -1030,10 +986,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // System health
   "fact.daemon_takeover",
   "fact.handler_timeout_leaked",
-  // Post-terminal operator actions (branch / commit / merge / discard)
-  "fact.run_branched",
-  "fact.run_committed",
-  "fact.run_merged",
+  // Post-terminal operator actions (accept / discard)
   "fact.run_discarded",
   "fact.run_accepted",
 ];

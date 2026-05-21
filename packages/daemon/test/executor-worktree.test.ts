@@ -134,33 +134,6 @@ describe("executor + worktree provisioner", () => {
     r.store.close();
   });
 
-  test("dispose emits no fact.run_branched (dispose no longer creates branches)", async () => {
-    const r = rig();
-    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
-    enqueue(r, "run-clean", "start");
-    r.store.claimNextRun(4);
-
-    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`));
-    const ctrl = new AbortController();
-    await runOne("run-clean", {
-      store: r.store,
-      dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
-      tools: r.tools,
-      llmCall: r.llmCall,
-      maxConcurrentRuns: 4,
-      shutdownSignal: ctrl.signal,
-      maxTurnsForTesting: 20,
-      provisioner,
-    });
-
-    const events = r.store.getEvents("run-clean");
-    expect(events.find((e) => e.type === "fact.run_branched")).toBeUndefined();
-    expect(r.store.getState("run-clean")?.branch).toBeNull();
-
-    r.store.close();
-  });
-
   test("ensure failure halts the run with worktree_provision_failed detail", async () => {
     const r = rig();
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
