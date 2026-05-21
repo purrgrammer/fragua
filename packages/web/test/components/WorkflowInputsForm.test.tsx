@@ -32,10 +32,9 @@ describe("WorkflowInputsForm", () => {
     ];
     const { getByTestId } = renderWithClient(<WorkflowInputsForm inputs={inputs} value={{}} onChange={() => {}} />);
 
-    // string → text input
-    const ticketEl = getByTestId("wf-input-ticket") as HTMLInputElement;
-    expect(ticketEl.tagName).toBe("INPUT");
-    expect(ticketEl.type).toBe("text");
+    // string → textarea
+    const ticketEl = getByTestId("wf-input-ticket") as HTMLTextAreaElement;
+    expect(ticketEl.tagName).toBe("TEXTAREA");
 
     // number → number input
     const countEl = getByTestId("wf-input-count") as HTMLInputElement;
@@ -125,7 +124,7 @@ describe("WorkflowInputsForm", () => {
       <WorkflowInputsForm inputs={inputs} value={{ ticket: "BUG-42" }} onChange={() => {}} />,
     );
 
-    const el = getByTestId("wf-input-ticket") as HTMLInputElement;
+    const el = getByTestId("wf-input-ticket") as HTMLTextAreaElement;
     expect(el.value).toBe("BUG-42");
   });
 

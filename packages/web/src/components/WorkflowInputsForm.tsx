@@ -1,7 +1,7 @@
 // Dynamic form rendered from a workflow's `inputs:` declarations.
 //
 // Each `WorkflowInputDecl` produces one labeled field:
-//   string  → <Input type="text">
+//   string  → <Textarea rows={1}> (auto-grows, capped at 3 lines)
 //   number  → <Input type="number">
 //   boolean → native <input type="checkbox"> (no shadcn checkbox exists yet)
 //   choice  → <Select> over the declared options
@@ -14,6 +14,7 @@ import { useEffect } from "react";
 import type { WorkflowInputDecl } from "../lib/api.ts";
 import { Input } from "./ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
+import { Textarea } from "./ui/textarea.tsx";
 
 export interface WorkflowInputsFormProps {
   /** Declared inputs from the selected workflow. */
@@ -122,10 +123,10 @@ export function WorkflowInputsForm({ inputs, value, onChange, onErrors }: Workfl
                   className="size-4 cursor-pointer rounded-[var(--sw-radius-default)] border border-[var(--sw-border)] accent-[var(--sw-text)]"
                 />
               </div>
-            ) : (
+            ) : decl.type === "number" ? (
               <Input
                 id={fieldId}
-                type={decl.type === "number" ? "number" : "text"}
+                type="number"
                 aria-labelledby={labelId}
                 aria-required={decl.required}
                 aria-invalid={missing}
@@ -133,6 +134,19 @@ export function WorkflowInputsForm({ inputs, value, onChange, onErrors }: Workfl
                 value={current}
                 onChange={(e) => set(decl.name, e.target.value)}
                 placeholder={decl.description ?? decl.name}
+              />
+            ) : (
+              <Textarea
+                id={fieldId}
+                rows={1}
+                aria-labelledby={labelId}
+                aria-required={decl.required}
+                data-testid={`wf-input-${decl.name}`}
+                value={current}
+                onChange={(e) => set(decl.name, e.target.value)}
+                placeholder={decl.description ?? decl.name}
+                className="min-h-0 resize-y"
+                style={{ maxHeight: "calc(3 * 1.4em + 2 * var(--sw-space-1))" }}
               />
             )}
           </div>
