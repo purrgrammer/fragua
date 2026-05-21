@@ -13,12 +13,12 @@
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
 import {
+  Anvil,
   BarChart3,
   BookOpen,
   Bot,
   CalendarClock,
   Cpu,
-  Drone,
   FolderGit2,
   Inbox as InboxIcon,
   ListChecks,
@@ -74,7 +74,7 @@ export function AppSidebar(): JSX.Element {
           {/* Plain icon — no filled square — keeps the brand visible at
               the icon-only width without a heavy block in the rail. */}
           <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center text-sw-text">
-            <Drone className="size-5" />
+            <Anvil className="size-5" />
           </span>
           <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">swarm</span>
         </NavLink>
