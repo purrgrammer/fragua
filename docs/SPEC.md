@@ -72,7 +72,7 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 
 `start` is synthesized by the parser (the entry node pointing at the first declared step) and is never authored; `exit` is the reserved sink. Declaring a step named `start` or `exit` with a mismatched type is rejected (`E029` / `E028`).
 
-Concurrent dispatch is not a graph primitive — it lives inside an llm node via the `agent` tool. An llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn (each with its own LLM context window, tool pool, and observability bracket on the parent's event stream) and synthesises in its own thread. See `review.yaml`'s `dispatch` step for the canonical orchestrator-workers shape.
+fragua has no concurrent-dispatch primitive: every step runs one handler to completion before the next is dispatched. Composition across concurrent work happens at the workflow level via separate runs sharing artifacts.
 
 Loops are **backward edges** bounded by `max-retries` on the target node — there is no `loop` primitive. A step that should re-run on failure routes back to itself or to an upstream step via `on: {fail: <step>}`, and its `max-retries` attribute caps how many times the retry counter can bump before the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise the cap via `intent.max_retries_adjusted`). The `retry: <step>` shorthand collapses the goal-gate-and-retarget idiom into one line.
 
@@ -289,7 +289,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **Interviewer interface** (attractor §6). Replaced by `human` nodes (`type: human`) plus the `intent.human_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Fragua handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
-- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). fragua has no fan-out / fan-in graph primitive. Concurrent dispatch lives in the llm `agent` tool — a single llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.yaml`'s `dispatch` step).
+- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). fragua has no fan-out / fan-in graph primitive, and no concurrent dispatch of any kind — steps run one at a time. Concurrent work is composed at the workflow level via separate runs sharing artifacts.
 
 **Surfaced as warnings, not errors:**
 
