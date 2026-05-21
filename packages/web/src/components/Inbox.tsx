@@ -172,7 +172,7 @@ function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.El
         data-testid={`inbox-run-${row.runId}`}
         data-reason={row.runStatus}
         style={{ borderLeftColor: borderVar }}
-        className="flex w-full min-w-0 items-center gap-3 rounded-sw-none border border-sw-border border-l-2 bg-sw-surface px-3 py-2 text-sw-sm hover:[&_.inbox-row-title]:underline"
+        className="flex w-full min-w-0 items-center gap-3 rounded-sw-card border border-sw-border border-l-2 bg-sw-surface px-3 py-2 text-sw-sm hover:[&_.inbox-row-title]:underline"
       >
         <Icon className={`size-4 shrink-0 ${iconClass}`} aria-hidden />
         <span className="inbox-row-title flex-1 min-w-0 truncate font-medium text-sw-text">{displayTitle(row)}</span>

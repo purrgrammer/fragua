@@ -206,7 +206,7 @@ export function GlobalFeed(): JSX.Element {
       {isLoading && rows.length === 0 ? (
         <ul
           aria-busy="true"
-          className="rounded-sw-none border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
+          className="rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
         >
           {(["a", "b", "c", "d"] as const).map((k) => (
             <FeedRowSkeleton key={k} />
@@ -232,7 +232,7 @@ export function GlobalFeed(): JSX.Element {
         // - Desktop (≥ sm): the `<ul>` is a 5-column grid and each row
         //   uses `grid-cols-subgrid`, so the icon / verb columns size
         //   to the widest content across every row.
-        <ul className="rounded-sw-none border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
+        <ul className="rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
           <AnimatePresence initial={false}>
             {rows.map((event) => (
               <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
