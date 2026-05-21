@@ -49,10 +49,11 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
       <div className="flex min-w-0 items-center gap-3">
         {stat && (
           <p className="flex-1 font-mono text-sw-sm text-sw-muted" data-testid="run-diff-stat">
-            {stat.filesChanged} {stat.filesChanged === 1 ? "file" : "files"}{" "}
+            {stat.filesChanged} {stat.filesChanged === 1 ? "file" : "files"} changed,{" "}
             <span className="text-sw-accent-success" data-testid="run-diff-insertions">
               +{stat.insertions}
             </span>{" "}
+            /{" "}
             <span className="text-sw-accent-error" data-testid="run-diff-deletions">
               −{stat.deletions}
             </span>

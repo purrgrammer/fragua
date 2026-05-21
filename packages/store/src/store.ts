@@ -274,6 +274,7 @@ function rowToRunState(row: RunStateRow): RunState {
     inboxStatus: row.inbox_status as InboxStatus | null,
     finalCommit: row.final_commit,
     mergedInto: row.merged_into,
+    acceptedSha: row.accepted_sha,
     cwd: row.cwd,
     workflowName: row.workflow_name,
     workflowScope: row.workflow_scope,
@@ -1268,6 +1269,7 @@ export class SqliteStore implements IEventStore {
       inboxStatus: state.inboxStatus,
       finalCommit: state.finalCommit,
       mergedInto: state.mergedInto,
+      acceptedSha: state.acceptedSha,
     });
   }
 

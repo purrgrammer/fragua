@@ -236,6 +236,9 @@ export interface RunState {
   inboxStatus: InboxStatus | null;
   finalCommit: string | null;
   mergedInto: string | null;
+  /** Tip of the operator's branch after the last `accept` (run → commit
+   * traceability). Set by `fact.run_accepted`. */
+  acceptedSha: string | null;
   /** Absolute project root the run was enqueued from. Only project
    * identifier in the harness-by-default model. `null` for runs
    * enqueued without filesystem context (CI, tests). */

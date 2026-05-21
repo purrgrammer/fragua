@@ -99,27 +99,6 @@ describe("WorktreeInbox", () => {
       }
     });
 
-    test("stat badge format is 'n file(s) +n −n' — no commas, no slash", async () => {
-      const { container, restore } = renderInbox({
-        [INBOX_URL]: () => json([PENDING_ROW_1]),
-      });
-      try {
-        const badge = await waitFor(() => {
-          const el = container.querySelector(`[data-testid="worktree-inbox-stat-run-aaa"]`);
-          if (!el) throw new Error("stat badge not found");
-          return el;
-        });
-        // Format must be "2 files +12 −3" — no commas, no "/"
-        expect(badge.textContent).not.toContain(",");
-        expect(badge.textContent).not.toContain("/");
-        expect(badge.textContent).toContain("2 files");
-        expect(badge.textContent).toContain("+12");
-        expect(badge.textContent).toContain("−3");
-      } finally {
-        restore();
-      }
-    });
-
     test("renders change-stat badge with real shape: filesChanged / insertions / deletions", async () => {
       const { container, restore } = renderInbox({
         [INBOX_URL]: () => json([PENDING_ROW_1]),

@@ -58,6 +58,7 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     inboxStatus: null,
     finalCommit: null,
     mergedInto: null,
+    acceptedSha: null,
     branch: null,
     cwd: null,
     workflowName: null,

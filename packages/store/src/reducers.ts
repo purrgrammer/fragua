@@ -195,6 +195,11 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.inboxStatus = "acted";
       return next;
     }
+    case "fact.run_accepted": {
+      next.acceptedSha = fact.payload.sha;
+      next.inboxStatus = "acted";
+      return next;
+    }
     case "fact.run_discarded": {
       next.inboxStatus = "discarded";
       return next;

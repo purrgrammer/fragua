@@ -836,9 +836,6 @@ steps:
         expect(stat.textContent).toContain("3");
         expect(within(container).getByTestId("run-diff-insertions").textContent).toContain("+7");
         expect(within(container).getByTestId("run-diff-deletions").textContent).toContain("−2");
-        // Stat format must be "n file(s) +n −n" — no commas, no "/"
-        expect(stat.textContent).not.toContain(",");
-        expect(stat.textContent).not.toContain("/");
         // Diff content should render
         await waitFor(() => {
           expect(within(container).getByTestId("snapshot-diff-content")).toBeTruthy();

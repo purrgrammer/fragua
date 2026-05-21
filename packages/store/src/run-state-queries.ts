@@ -54,6 +54,7 @@ export interface RunStateRow {
   inbox_status: string | null;
   final_commit: string | null;
   merged_into: string | null;
+  accepted_sha: string | null;
   schedule_id: string | null;
 }
 
@@ -79,7 +80,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          cwd, workflow_name, workflow_scope, workflow_path,
          base_git_sha, base_git_ref, branch,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
-         inbox_status, final_commit, merged_into, schedule_id
+         inbox_status, final_commit, merged_into, accepted_sha, schedule_id
     FROM run_state
    WHERE run_id = ?
 `;
@@ -498,7 +499,8 @@ const WRITE_PROJECTION_SQL = `
     change_stat         = ?,
     inbox_status        = ?,
     final_commit        = ?,
-    merged_into         = ?
+    merged_into         = ?,
+    accepted_sha        = ?
   WHERE run_id = ?
 `;
 
@@ -530,6 +532,7 @@ export function writeRunStateProjection(
     inboxStatus: string | null;
     finalCommit: string | null;
     mergedInto: string | null;
+    acceptedSha: string | null;
   },
 ): void {
   db.query(WRITE_PROJECTION_SQL).run(
@@ -554,6 +557,7 @@ export function writeRunStateProjection(
     args.inboxStatus,
     args.finalCommit,
     args.mergedInto,
+    args.acceptedSha,
     args.runId,
   );
 }

@@ -37,8 +37,9 @@ export function WorktreeInboxRow({ row }: { row: RunSummary }): JSX.Element {
             className="shrink-0 font-mono tabular-nums"
             data-testid={`worktree-inbox-stat-${row.runId}`}
           >
-            {stat.filesChanged} {stat.filesChanged === 1 ? "file" : "files"}{" "}
-            <span className="text-[var(--sw-accent-success)]">+{stat.insertions}</span>{" "}
+            {stat.filesChanged} {stat.filesChanged === 1 ? "file" : "files"},{" "}
+            <span className="text-[var(--sw-accent-success)]">+{stat.insertions}</span>
+            {" / "}
             <span className="text-[var(--sw-accent-error)]">−{stat.deletions}</span>
           </Badge>
         )}

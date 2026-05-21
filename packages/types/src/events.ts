@@ -336,6 +336,14 @@ export type IntentEvent =
       payload: { mode?: "ff" | "no-ff" | "squash"; into?: string };
     }
   | {
+      /** Operator lands a terminal run's work on their current branch: the
+       * daemon replays the run's commits onto HEAD and stages the uncommitted
+       * tail (worktrees.md). Folded into `fact.run_accepted`. Inbox
+       * `pending → acted`. */
+      type: "intent.accept_run";
+      payload: Record<string, never>;
+    }
+  | {
       /** Operator discards a terminal run's recoverable work: the daemon
        * deletes `refs/swarm/{snapshots,heads}/<runId>`. Inbox
        * `pending → discarded` (terminal-terminal). */
@@ -805,6 +813,15 @@ export type FactEvent =
       payload: { targetBranch: string; mode: "ff" | "merge" | "squash"; sha: string; parentShas: string[] };
     }
   | {
+      /** Daemon-folded from `intent.accept_run` (worktrees.md): replayed the
+       * run's commits onto the operator's current branch (message + author
+       * preserved) and staged the uncommitted tail for the operator to commit.
+       * `replayed` = commits replayed; `tailStaged` = an uncommitted tail was
+       * delivered. Sets `run_state.accepted_sha`; inbox `pending → acted`. */
+      type: "fact.run_accepted";
+      payload: { sha: string; replayed: number; tailStaged: boolean };
+    }
+  | {
       /** Operator-driven (`intent.discard_run`): deleted the run's
        * `refs/swarm/{snapshots,heads}/<id>`. Inbox `pending → discarded`
        * (terminal-terminal — subsequent actions fail). */
@@ -1018,4 +1035,5 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_committed",
   "fact.run_merged",
   "fact.run_discarded",
+  "fact.run_accepted",
 ];

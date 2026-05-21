@@ -33,6 +33,7 @@ function blankState(): RunState {
     inboxStatus: null,
     finalCommit: null,
     mergedInto: null,
+    acceptedSha: null,
     branch: null,
     cwd: null,
     workflowName: null,

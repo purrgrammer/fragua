@@ -43,6 +43,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [13, MIGRATION_013_DROP_PARALLEL_SUBRUNS()],
   [14, MIGRATION_014_PAUSED_HUMAN_RENAME()],
   [15, MIGRATION_015_WORKTREE_SNAPSHOTS()],
+  [16, MIGRATION_016_ACCEPTED_SHA()],
 ]);
 
 /**
@@ -1271,4 +1272,9 @@ function MIGRATION_015_WORKTREE_SNAPSHOTS(): string {
     ALTER TABLE run_state ADD COLUMN final_commit TEXT;
     ALTER TABLE run_state ADD COLUMN merged_into TEXT;
   `;
+}
+
+function MIGRATION_016_ACCEPTED_SHA(): string {
+  // `accept` projection: the operator's branch tip after the last accept.
+  return `ALTER TABLE run_state ADD COLUMN accepted_sha TEXT;`;
 }
