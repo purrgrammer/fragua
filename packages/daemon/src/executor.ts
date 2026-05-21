@@ -37,7 +37,6 @@ import {
   classifyAbortCause,
   deriveResumeOf,
   errorMessage,
-  isAbortError,
   MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY,
   MAX_LOOPS_OVERRIDE_KEY,
   maxRetriesOverrideKey,
@@ -52,13 +51,13 @@ import {
   resolveMaxRetries,
   routingString,
   sleep,
-  TIMEOUT_SENTINEL,
 } from "./executor-helpers.ts";
 
 // Compatibility re-exports: these helpers moved to executor-helpers.ts but
 // are imported from executor.ts by tests and other call sites.
 export { buildSubstitutionArgs, classifyAbortCause, resolveBackoff } from "./executor-helpers.ts";
 
+import { invokeHandler } from "./invoke-handler.ts";
 import { makeOccController, tryAppendFact } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import {
@@ -854,48 +853,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     let wasAborted = false;
     let abortCause: "timeout" | "aborted" = "aborted";
     let leakedTimeout = false;
-    // Leak-detection watchdog timer. Tracked so it can be cleared once
-    // the handler wins the race (normal completion / throw) — an
-    // un-cleared `setTimeout(maxMs + leakGrace)` would otherwise survive
-    // every bounded dispatch and keep the event loop (and tests' fake
-    // timers) populated long after the turn settled.
-    let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
-    // Register only here, not at steerCtrl creation: the build steps
-    // above (graph load, node-output fold, context build) can throw, and
-    // the `finally` below is the sole unregister — an earlier register
-    // leaks the entry on a build-path throw, and the next claim of this
-    // runId then trips `register`'s already-registered guard.
-    opts.registry.register(runId, steerCtrl);
-    try {
-      // Promise.race against a marker rather than a rejecting timer: a
-      // rejection from the timer would mask an ignored-AbortSignal as
-      // "handler error" in the catch block (the original code's
-      // `.then(_ => …)` callback never fired because `timeoutReject`
-      // never fulfilled). Resolving with a sentinel lets us detect the
-      // leak unambiguously.
-      if (spec.maxMs !== undefined) {
-        const watchdogMs = spec.maxMs + leakGrace;
-        const raced = await Promise.race<HandlerResult | typeof TIMEOUT_SENTINEL>([
-          spec.handler(ctx),
-          new Promise<typeof TIMEOUT_SENTINEL>((res) => {
-            watchdogTimer = setTimeout(() => res(TIMEOUT_SENTINEL), watchdogMs);
-          }),
-        ]);
-        if (raced === TIMEOUT_SENTINEL) {
-          leakedTimeout = true;
-          result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
-        } else {
-          result = raced;
-        }
-      } else {
-        // Unbounded llm (`max_ms=0`): no AbortSignal.timeout in the
-        // merged signal, so no leak watchdog either — cost/token bounds and
-        // operator intents are the operative ceiling. Steer + shutdown still
-        // abort cleanly via `ctx.signal`.
-        result = await spec.handler(ctx);
-      }
-    } catch (err) {
-      wasAborted = isAbortError(err);
+    // Run the handler under the abort registry + leak watchdog (see
+    // invoke-handler.ts), then interpret the structured outcome here —
+    // abort-cause classification + reactive-budget reclassification need
+    // this turn's `signal` and budget flags, so they stay in the loop.
+    const invocation = await invokeHandler({
+      spec,
+      ctx,
+      registry: opts.registry,
+      runId,
+      steerCtrl,
+      leakGraceMs: leakGrace,
+    });
+    if (invocation.kind === "leak") {
+      leakedTimeout = true;
+      result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
+    } else if (invocation.kind === "thrown") {
+      wasAborted = invocation.abortByName;
       // The reactive budget gate aborts via steerCtrl with a plain
       // `Error("budget")` / `Error("budget_pause")`. A handler that
       // surfaces that by rethrowing `ctx.signal.reason` (rather than
@@ -910,15 +884,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       ) {
         wasAborted = true;
       }
-      if (wasAborted) abortCause = classifyAbortCause(signal, err);
+      if (wasAborted) abortCause = classifyAbortCause(signal, invocation.error);
       result = {
         kind: "halt",
         reason: "error",
-        detail: errorMessage(err),
+        detail: errorMessage(invocation.error),
       };
-    } finally {
-      if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
-      opts.registry.unregister(runId);
+    } else {
+      result = invocation.result;
     }
 
     // Drain anything left in the soft-batch buffer before the terminal
