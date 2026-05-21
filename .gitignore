@@ -36,6 +36,3 @@ temp/
 *.tmp
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
-git.md
-
-attractor/
