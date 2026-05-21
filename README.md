@@ -4,6 +4,8 @@
 > estudiaban pa' el mañana, \
 > mi niñez era la fragua: \
 > yunque, clavo y alcayata.
+>
+> — Camarón de la Isla
 
 a local dark software forge
 
