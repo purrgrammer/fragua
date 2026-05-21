@@ -6,7 +6,7 @@
 
 ## 1. Vision
 
-**swarm** is a universal AI agent orchestrator. It takes a declarative YAML workflow, executes it through a deterministic state machine that drives LLM-based agents across any provider, and produces a complete, replayable audit trail.
+**swarm** is a git-native, auditable, local software dark factory. A workflow is a declarative YAML document; swarm executes it through a deterministic state machine that drives LLMs across any provider, and produces a complete, replayable audit trail.
 
 Core values, in priority order:
 
@@ -20,6 +20,7 @@ Core values, in priority order:
 
 - Not a data-engineering orchestrator (Airflow / Dagster / Prefect territory).
 - Not a cloud-scale workflow service (Temporal territory).
+- Not a multi-tenant always-on server. Execution is local or in ephemeral CI jobs; there is no shared runner that accepts submitted workflows. Trust is delegated to git (PR review gates the workflow library) and CI (permissions/environments gate secrets) — so the workflow-authz / multi-user-isolation problem a shared runner would create simply isn't in scope.
 - Not a chat framework (LangChain territory).
 - Not a replacement for Claude Code or Codex — it *drives* them.
 

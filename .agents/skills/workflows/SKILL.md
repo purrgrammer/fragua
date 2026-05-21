@@ -226,6 +226,26 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 
 Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-prompt`, `skills-disabled`. Full attribute list: `packages/core/src/types/graph.ts` (`NodeAttrs`). W013 flags an unrecognised key (typo).
 
+### The toolset
+
+`allowed-tools` / `denied-tools` name tools from this set (lowercase, exact). An `allowed-tools` listing names that match *nothing* in the registry is a runtime error — typos don't silently no-op.
+
+| Tool | Does | Notes |
+|---|---|---|
+| `read` | read a file | |
+| `write` | create / overwrite a file | |
+| `edit` | string-replace in a file | |
+| `bash` | run a shell command | the workhorse; also how a step runs a script and reasons about its output (§7) |
+| `grep` | content search | |
+| `find` | filename search | |
+| `ls` | list a directory | |
+| `web_fetch` | fetch a URL | |
+| `agent` | spawn sub-agents (orchestrator-workers, §1) | opt-in; see the gotcha below |
+
+Three tools are **force-included** and need not be listed — they're available even if `allowed-tools` omits them (and survive `denied-tools`): `skill` (load a skill), `abort` (fail the step with a reason, §4), and `route` (synthesised per-call on a node that declares `routes:`).
+
+> **`agent` gotcha — orchestrator steps must grant the workers' tools.** A sub-agent's tool pool **defaults to the *parent step's* `allowed-tools`** (minus `agent` — children can't recurse). So a dispatcher with `allowed-tools: [agent]` spawns **tool-less** sub-agents — they can't read, write, or run anything and abort immediately. Grant the workers' tools on the orchestrator step itself: `allowed-tools: [agent, bash, read, write, edit, grep]`. (Setting `allowed_tools` in the spawn spec only *narrows* within that inherited pool — it can't add tools the parent lacks.) The exception is a **named agent definition** (`.agents/agents/<name>.md`): its frontmatter `allowed_tools` are granted independently, which is why `review::dispatch` works with bare `[agent]` — its `lens-*` workers are defs, not inline specs.
+
 ### Tool steps
 
 ```yaml
@@ -331,6 +351,7 @@ Full table, including removed codes: `references/validator-codes.md`.
 - **Synthesizing a fail path.** There's no implicit `fail → exit`. A step with no fail route halts — that's the point. Add `on: {fail: …}` only to recover or land gracefully.
 - **A `loop` step.** Loops are back-edges (`on: {fail: <upstream>}` + `max-retries`) or goal-gate retargets (`retry:`).
 - **Two jobs in one step.** One prompt, one thread, one model, one tool pool.
+- **An orchestrator with `allowed-tools: [agent]` only.** Sub-agents inherit the parent step's tool pool — bare `[agent]` spawns tool-less workers that abort. Grant the workers' tools on the dispatcher (`[agent, bash, read, …]`), or use named agent defs (§7 toolset gotcha).
 - **A global thread.** Scope threads to the conversation that needs them; keep classifiers and mechanical steps stateless.
 - **Re-reading a classification from a thread.** Encode it in the topology, or re-derive fresh evidence at the point of decision.
 - **A `collect → analyze` tool→llm chain.** Tool steps don't feed data forward; run the collector inside the analyser's `bash` tool, or split it into a dedicated `llm` collector sharing the thread.

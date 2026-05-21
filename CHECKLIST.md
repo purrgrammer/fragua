@@ -2,17 +2,16 @@
 
 Pre-publish punch list. Drop or update items as you decide.
 
-- [ ] YAML authoring format 
-- [ ] YAML cleanup
 - [ ] JSON IR, versioned workflows by sha
-- [ ] Worktrees
+- [.] Worktrees
 - [ ] Collapse migrations
 - [ ] Rename to fragua
- + [ ] Skills pass & rename
-- [ ] E2E onboarding
+ + [ ] Skills pass
+- [ ] E2E onboarding test (mock db)
 - [ ] CONTRIBUTING.md
 - [ ] README.md
   + [ ] Screenshots
+  + [ ] Examples
 - [ ] Demo video and writeup
 
 ## Polish (recommended before strangers see it)
