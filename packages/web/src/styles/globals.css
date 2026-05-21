@@ -1,5 +1,5 @@
 /*
- * Global stylesheet for the Swarm web UI (Tailwind v4).
+ * Global stylesheet for the Fragua web UI (Tailwind v4).
  *
  * Shape:
  *   - `@import "tailwindcss"` is the v4 single-entry replacement for the
@@ -14,7 +14,7 @@
  *     at runtime works without a rebuild).
  *   - Dark mode is class-based: the `@custom-variant dark` wires `dark:`
  *     utilities to `.dark` (on <html> or any ancestor).
- *   - Swarm design-language tokens live in theme.css (--sw-* namespace)
+ *   - Fragua design-language tokens live in theme.css (--sw-* namespace)
  *     and are imported first; globals.css exposes the subset we want as
  *     Tailwind utilities (colors, radii, fonts).
  *   - Streamdown (via AI Elements' `MessageResponse`) emits Tailwind
@@ -26,7 +26,7 @@
 @import "tw-animate-css";
 @import "@fontsource-variable/geist";
 
-/* Swarm design-language tokens (--sw-* namespace). */
+/* Fragua design-language tokens (--sw-* namespace). */
 @import "./theme.css";
 
 @source "../../../../node_modules/streamdown/dist/*.js";
@@ -138,13 +138,13 @@
  *   for dark-mode class switching to re-resolve utilities at runtime.
  *
  *   Colors: shadcn baseline tokens (no prefix) are exposed as Tailwind
- *   color utilities (`bg-card`, `text-muted-foreground`, ...). Swarm
+ *   color utilities (`bg-card`, `text-muted-foreground`, ...). Fragua
  *   state tokens (--sw-*) are exposed under the `sw-*` namespace so
  *   `bg-sw-surface`, `text-sw-muted`, `border-sw-border` all work.
  *
  *   Radius: `rounded-sw-default`, `rounded-sw-card`, `rounded-sw-none`.
  *
- *   Fonts: `font-mono` is the monospace stack (Swarm voice);
+ *   Fonts: `font-mono` is the monospace stack (Fragua voice);
  *   `font-sans` is Geist, bound this way only so shadcn internals that
  *   default to sans render their intended face — do not reach for it
  *   on product surfaces.
@@ -152,7 +152,7 @@
  *   Text size: the whole scale is exposed as Tailwind sizes
  *   (`text-sw-sm`, ...) as well. `--text-base` is rebound to our
  *   default body size so stray `text-base` on a surface inherits the
- *   Swarm scale rather than Tailwind's 16px default.
+ *   Fragua scale rather than Tailwind's 16px default.
  */
 @theme inline {
   --color-background: var(--background);
@@ -183,7 +183,7 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Swarm state / surface palette. */
+  /* Fragua state / surface palette. */
   --color-sw-bg: var(--sw-bg);
   --color-sw-surface: var(--sw-surface);
   --color-sw-border: var(--sw-border);
@@ -219,7 +219,7 @@
   --text-sw-md: var(--sw-text-md);
   --text-sw-lg: var(--sw-text-lg);
 
-  /* Rebind Tailwind's default body size onto the Swarm scale so stray
+  /* Rebind Tailwind's default body size onto the Fragua scale so stray
    * `text-base` matches the rest of the app rather than 16px. */
   --text-base: var(--sw-text-sm);
 }
@@ -359,7 +359,7 @@ body {
 }
 
 /*
- * React Flow — hide the default handle circles. The swarm graph is a
+ * React Flow — hide the default handle circles. The fragua graph is a
  * read-only visualisation, so the little circles at each handle point
  * read as extra arrow-like decoration (and make edges look bidirectional
  * because the arrowhead at the target + the circle at the source frame

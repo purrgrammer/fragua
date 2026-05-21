@@ -11,7 +11,7 @@
 //      (e.g. "stats over the most-recent 50 runs", which the server
 //      can't easily express without a query parameter we don't need
 //      yet).
-//   3. The source of truth for our parity tests in @swarm/server's
+//   3. The source of truth for our parity tests in @fragua/server's
 //      stats route — keeping the two implementations honest.
 
 import type { RunSummary } from "./api.ts";

@@ -1,9 +1,9 @@
 ---
 name: workflows
-description: Author or edit a swarm workflow (YAML). Load this when the user says "write a workflow that …", "turn this task into a workflow", "add a step to <wf>.yaml", "why does my workflow fail to validate", "how do I wire a loop / HITL / routing here", or otherwise asks about shaping a workflow under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches deliverable-scoped design first, then the GHA-style YAML shape (steps / next / on / routes / inputs / defaults), the four terminal mechanisms, goal-gate vs edge-cycle loops, shared-thread vs environment data flow, idiomatic prompts, validator codes, and a smoke recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
+description: Author or edit a fragua workflow (YAML). Load this when the user says "write a workflow that …", "turn this task into a workflow", "add a step to <wf>.yaml", "why does my workflow fail to validate", "how do I wire a loop / HITL / routing here", or otherwise asks about shaping a workflow under `~/.fragua/workflows/` or `<project>/.fragua/workflows/`. Teaches deliverable-scoped design first, then the GHA-style YAML shape (steps / next / on / routes / inputs / defaults), the four terminal mechanisms, goal-gate vs edge-cycle loops, shared-thread vs environment data flow, idiomatic prompts, validator codes, and a smoke recipe. Assumes Claude Code with Read / Edit / Write and a local fragua repo.
 ---
 
-# workflows — authoring swarm workflows
+# workflows — authoring fragua workflows
 
 A workflow is a YAML file: a small state machine that wires LLM steps, tools, and human gates into a deterministic, replayable pipeline. The author declares **steps** and how they connect; the engine drives them.
 
@@ -53,7 +53,7 @@ Pick the pattern before drawing; topology follows.
 ## 2. Anatomy of a workflow
 
 ```yaml
-name: my-thing                 # bare-name identity; `swarm run my-thing`
+name: my-thing                 # bare-name identity; `fragua run my-thing`
 goal: One-sentence purpose.    # summarisers read this — keep it short
 description: |                 # optional prose
   Longer explanation for humans.
@@ -113,7 +113,7 @@ inputs:
 
 - Types: `string` | `boolean` | `number` | `choice` (choice requires `options`).
 - `required: true` with no value → enqueue rejected (`400 invalid_inputs`).
-- Provide at run time: `swarm run my-thing --input ticket=BUG-1 --input env=prod` (repeatable, gh-style).
+- Provide at run time: `fragua run my-thing --input ticket=BUG-1 --input env=prod` (repeatable, gh-style).
 - **E030** flags `${{ inputs.x }}` referencing an input not declared in `inputs:`.
 
 Reference inputs in prompts as if the value is present: `Plan ticket ${{ inputs.ticket }}.` Don't narrate the substitution mechanism.
@@ -194,7 +194,7 @@ Steps with the same `thread: <name>` share one LLM conversation; a downstream st
 
 Scope a thread to the steps that genuinely converse (e.g. `plan ↔ implement ↔ review` share `build`); don't run one global thread through the whole pipeline. Classifiers and mechanical steps stay off it.
 
-**Split heavy collectors into their own step.** When step one runs a data-gathering script (`bun .swarm/scripts/foo/collect.ts` dumping JSON), make `collect` a dedicated `llm` with `allowed-tools: [bash]` sharing the analyser's thread. The bash result lives in the thread for the analyser to read; and when a downstream goal-gate retargets the *analyser*, the collector doesn't re-run. Keep its prompt minimal (run the script, `abort` on non-zero, else reply `collected`).
+**Split heavy collectors into their own step.** When step one runs a data-gathering script (`bun .fragua/scripts/foo/collect.ts` dumping JSON), make `collect` a dedicated `llm` with `allowed-tools: [bash]` sharing the analyser's thread. The bash result lives in the thread for the analyser to read; and when a downstream goal-gate retargets the *analyser*, the collector doesn't re-run. Keep its prompt minimal (run the script, `abort` on non-zero, else reply `collected`).
 
 ### Environment re-derivation
 
@@ -293,7 +293,7 @@ defaults:
 - `claude-haiku-4-5` — cheap classification / collectors / diff gates.
 - A classifier's model should match the *cost of getting the call wrong*, not a blanket cheap tier.
 
-`POST /workflows` validates models at registration (`model_unresolved` lists offenders before enqueue). `bun run swarm providers ls` to see what's registered.
+`POST /workflows` validates models at registration (`model_unresolved` lists offenders before enqueue). `bun run fragua providers ls` to see what's registered.
 
 **Budget:** `budget` (run-level USD) + `budget-policy` (`warn` emits events; `stop` halts; `pause` → operator-resumable `fact.run_paused{reason:"budget"}`). Same semantics for per-step `max-cost` / `max-tokens`.
 
@@ -328,7 +328,7 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 
 ## 12. Validation
 
-`bun run swarm validate path/to/my-thing.yaml` is the fast loop. Fix every error; take warnings seriously. The codes you'll meet most:
+`bun run fragua validate path/to/my-thing.yaml` is the fast loop. Fix every error; take warnings seriously. The codes you'll meet most:
 
 - **E004** — edge targets a non-existent step id (typo). (An unknown `type:` is a *parse* error, not a validator code.)
 - **E017–E024** — routing/edge discipline (routing node with `outcome=`; edge with both `route` and `outcome`; `route` not in `routes:`; unannotated routing edge; undischarged route; `goal_gate` + `routes:`; shadowed edge).
@@ -430,8 +430,8 @@ steps:
 ```
 
 ```sh
-bun run swarm validate path/to/my-thing.yaml
-bun run swarm run      my-thing --input task="…"
+bun run fragua validate path/to/my-thing.yaml
+bun run fragua run      my-thing --input task="…"
 ```
 
 When a workflow misbehaves at runtime, switch to `postmortem` (post-mortem) or `operate` (steer / pause / resume a live run).

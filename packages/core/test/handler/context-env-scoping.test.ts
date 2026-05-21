@@ -4,7 +4,7 @@
 // env directly.
 
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { buildHandlerContext } from "../../src/handler/context.ts";
 import { InMemoryToolRegistry } from "../../src/handler/tool-registry.ts";
 import type { SideEffectRecorder } from "../../src/handler/types.ts";
@@ -110,7 +110,7 @@ describe("buildHandlerContext — env scoping follows allowed_tools", () => {
   });
 
   test("empty registry + allowed_tools lists mutators → env stays writable", async () => {
-    // Regression for the daemon path: swarm's executor receives an empty
+    // Regression for the daemon path: fragua's executor receives an empty
     // sentinel registry while llm uses its own. The env-wrap decision
     // must be based on the declared allowed_tools, not the runtime registry.
     const store = new SqliteStore({ path: ":memory:" });

@@ -25,12 +25,12 @@
 // the run with `title = null`, and the UI falls back to the raw
 // `routing.input` (the run's free-form description).
 
-import { type EventType, type SummariseInput, type SummariserBackend, titleSyntheticNodeId } from "@swarm/core";
-import type { IEventStore } from "@swarm/store";
+import { type EventType, type SummariseInput, type SummariserBackend, titleSyntheticNodeId } from "@fragua/core";
+import type { IEventStore } from "@fragua/store";
 
 export interface AutoTitlerOpts {
   /** Summariser implementation. When unset, `titleRun` is a no-op — the
-   * daemon wires this from `.swarm/config.yaml`'s `summariser:` block,
+   * daemon wires this from `.fragua/config.yaml`'s `summariser:` block,
    * and omits the backend when no provider/model is configured. */
   backend?: SummariserBackend;
   /** Policy toggle — `auto-title: false` in config disables even when a

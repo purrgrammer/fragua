@@ -3,7 +3,7 @@
 // tool gets `unknown tool: <name>`, same as for an unregistered one.
 
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { buildHandlerContext } from "../../src/handler/context.ts";
 import { InMemoryToolRegistry } from "../../src/handler/tool-registry.ts";
 import type { SideEffectRecorder } from "../../src/handler/types.ts";

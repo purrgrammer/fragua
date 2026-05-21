@@ -1,36 +1,36 @@
-// `swarm init` — bootstrap a project's `.swarm/config.yaml` and merge
+// `fragua init` — bootstrap a project's `.fragua/config.yaml` and merge
 // the runtime patterns into `.gitignore`. Hard-fails on non-git
-// directories. Refuses to overwrite an existing `.swarm/config.yaml`
-// (or the legacy `.swarm/config.jsonc`).
+// directories. Refuses to overwrite an existing `.fragua/config.yaml`
+// (or the legacy `.fragua/config.jsonc`).
 //
 // Side effects on success:
-//   - writes `<cwd>/.swarm/config.yaml`
-//   - creates `<cwd>/.swarm/workflows/` if absent
+//   - writes `<cwd>/.fragua/config.yaml`
+//   - creates `<cwd>/.fragua/workflows/` if absent
 //   - merges runtime patterns into `<cwd>/.gitignore` (idempotent)
 //
-// Bare invocation: `swarm init`. No flags in v0.
+// Bare invocation: `fragua init`. No flags in v0.
 
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import chalk from "chalk";
 
-const GITIGNORE_BLOCK = `# swarm runtime — never commit these
-.swarm/runs/
-.swarm/worktrees/
-.swarm/blobs/
-.swarm/swarm.db*
-.swarm/daemon/
-.swarm/credentials.jsonc
-.swarm/serve.json
+const GITIGNORE_BLOCK = `# fragua runtime — never commit these
+.fragua/runs/
+.fragua/worktrees/
+.fragua/blobs/
+.fragua/fragua.db*
+.fragua/daemon/
+.fragua/credentials.jsonc
+.fragua/serve.json
 
-# swarm — always commit these (negative patterns for clarity)
-!.swarm/config.yaml
-!.swarm/config.jsonc
-!.swarm/workflows/
+# fragua — always commit these (negative patterns for clarity)
+!.fragua/config.yaml
+!.fragua/config.jsonc
+!.fragua/workflows/
 `;
 
-const BLOCK_MARKER_START = "# swarm runtime — never commit these";
+const BLOCK_MARKER_START = "# fragua runtime — never commit these";
 
 export interface InitCommandOptions {
   /** Project root. Defaults to `process.cwd()`. */
@@ -39,12 +39,12 @@ export interface InitCommandOptions {
 
 export async function initCommand(opts: InitCommandOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const configPath = resolve(cwd, ".swarm/config.yaml");
-  const legacyPath = resolve(cwd, ".swarm/config.jsonc");
+  const configPath = resolve(cwd, ".fragua/config.yaml");
+  const legacyPath = resolve(cwd, ".fragua/config.jsonc");
 
   if (!(await isGitRepo(cwd))) {
     console.error(chalk.red("init: not a git repository"));
-    console.error(chalk.dim("  run `git init` first, then re-run `swarm init`."));
+    console.error(chalk.dim("  run `git init` first, then re-run `fragua init`."));
     return 1;
   }
 
@@ -55,22 +55,22 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
 
   if (await pathExists(legacyPath)) {
     console.error(chalk.red(`init: ${legacyPath} already exists — refusing to overwrite`));
-    console.error(chalk.dim(`  hint: rename it to config.yaml: mv .swarm/config.jsonc .swarm/config.yaml`));
+    console.error(chalk.dim(`  hint: rename it to config.yaml: mv .fragua/config.jsonc .fragua/config.yaml`));
     return 1;
   }
 
-  await mkdir(resolve(cwd, ".swarm/workflows"), { recursive: true });
+  await mkdir(resolve(cwd, ".fragua/workflows"), { recursive: true });
   await writeFile(configPath, renderConfig(), "utf8");
   await mergeGitignore(cwd);
 
   console.log(chalk.green(`✓ wrote ${configPath}`));
-  console.log(chalk.dim("  workflows: .swarm/workflows/ (empty)"));
+  console.log(chalk.dim("  workflows: .fragua/workflows/ (empty)"));
   return 0;
 }
 
 function renderConfig(): string {
-  return `# swarm project config — project-specific knobs only.
-# Generic preferences live in ~/.swarm/config.yaml.
+  return `# fragua project config — project-specific knobs only.
+# Generic preferences live in ~/.fragua/config.yaml.
 
 # Uncomment if the project needs a per-worktree bootstrap command:
 # bootstrap: "bun install --frozen-lockfile"

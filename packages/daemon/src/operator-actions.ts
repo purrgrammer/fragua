@@ -8,15 +8,15 @@
 // inbox projection (the reducer cases drive `inbox_status` from the fact).
 //
 //   accept   replay the run's commits onto the operator's current branch +
-//            stage the uncommitted tail (`@swarm/workspace.applyAccept`)
-//   discard  update-ref -d refs/swarm/{snapshots,heads}/<runId>
+//            stage the uncommitted tail (`@fragua/workspace.applyAccept`)
+//   discard  update-ref -d refs/fragua/{snapshots,heads}/<runId>
 //
 // A refusal (accept conflict / dirty tree / missing snapshot, or a discard
 // throw) yields `null` / a throw and the intent is left unadvanced — never a
 // half-applied mutation. The operator revives or re-issues.
 
-import { ConcurrencyError, type FactEvent, type IEventStore } from "@swarm/store";
-import type { IntentType } from "@swarm/types";
+import { ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
+import type { IntentType } from "@fragua/types";
 
 const OPERATOR_INTENT_TYPES = ["intent.accept_run", "intent.discard_run"] as const satisfies readonly IntentType[];
 

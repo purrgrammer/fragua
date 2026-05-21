@@ -1,11 +1,11 @@
-// Typed unions for swarm's event log — intent events (writer: "web"),
+// Typed unions for fragua's event log — intent events (writer: "web"),
 // fact events (writer: "daemon"), daemon-scope events, and the wire
 // envelopes used by per-run and global SSE/REST endpoints.
 //
-// Lives in @swarm/types (not @swarm/store or @swarm/core) so the web
+// Lives in @fragua/types (not @fragua/store or @fragua/core) so the web
 // client can import typed payloads without pulling the SQLite-backed
 // store or core's pure-reducer dependency tree into its compile graph.
-// @swarm/store re-exports the relevant pieces so existing daemon/server
+// @fragua/store re-exports the relevant pieces so existing daemon/server
 // callsites stay unchanged.
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
@@ -324,7 +324,7 @@ export type IntentEvent =
     }
   | {
       /** Operator discarded a terminal run's recoverable work — the request
-       * path deleted `refs/swarm/{snapshots,heads}/<runId>`; this intent
+       * path deleted `refs/fragua/{snapshots,heads}/<runId>`; this intent
        * records the deleted refs and is folded into `fact.run_discarded`. Inbox
        * `pending → discarded` (terminal-terminal). */
       type: "intent.discard_run";
@@ -338,7 +338,7 @@ export type IntentType = IntentEvent["type"];
 /**
  * Payload-shape contract for fact events: every payload must serialise
  * comfortably below the per-event byte cap enforced at insert time
- * (currently 4 KB; see `MAX_EVENT_PAYLOAD_BYTES` in @swarm/store). Bulky
+ * (currently 4 KB; see `MAX_EVENT_PAYLOAD_BYTES` in @fragua/store). Bulky
  * free-form strings (LLM output, prompts, large artefact snapshots) DO
  * NOT belong in fact payloads — push them to the `messages` table or to
  * an `artifacts` row and reference by sha or `(node, iteration, key)`.
@@ -395,7 +395,7 @@ export type FactEvent =
          * `WorktreeProvisioner` is configured; absent for runs with a
          * shared `LocalEnvironment` or no provisioner. Replay reads this
          * to reconstruct the starting tree even after the worktree dir
-         * and `swarm/runs/<runId>` branch are gone. */
+         * and `fragua/runs/<runId>` branch are gone. */
         baseGitSha?: string;
         /** Branch short name of the source repo HEAD at provision — the
          * post-run merge/commit target default.
@@ -780,7 +780,7 @@ export type FactEvent =
     }
   | {
       /** Operator-driven (`intent.discard_run`): deleted the run's
-       * `refs/swarm/{snapshots,heads}/<id>`. Inbox `pending → discarded`
+       * `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded`
        * (terminal-terminal — subsequent actions fail). */
       type: "fact.run_discarded";
       payload: { refs: string[] };
@@ -797,12 +797,12 @@ export type FactEvent =
 // the reducer doesn't filter on `subagent_id`. The bidirectional
 // handle the parent LLM sees is `tool_name="agent"` plus the
 // toolcall result's `data.subagent_id` — see SubagentStartData /
-// SubagentEndData in @swarm/core/types/events for the bracket
+// SubagentEndData in @fragua/core/types/events for the bracket
 // payloads.
 
 export type FactType = FactEvent["type"];
 
-/** Discriminated union over every typed event swarm emits. */
+/** Discriminated union over every typed event fragua emits. */
 export type AnyEvent = IntentEvent | FactEvent;
 export type AnyEventType = AnyEvent["type"];
 
@@ -936,7 +936,7 @@ export interface EventEnvelope {
  * The discriminated union excludes observability events (`agent.*`,
  * `llm.*`, `tool.*`, `cost.recorded`) — those use the broader
  * `RawEvent` shape because their payloads are pi-agent-core/pi-ai
- * specific and not central to the swarm contract.
+ * specific and not central to the fragua contract.
  */
 export type FeedEvent = EventEnvelope & AnyEvent;
 

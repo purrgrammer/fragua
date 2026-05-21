@@ -8,7 +8,7 @@
 //     expects (totals + bucket arrays present).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { Hono } from "hono";
 import { analyticsRoutes } from "../../src/store/analytics-routes.ts";
 

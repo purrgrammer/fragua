@@ -6,7 +6,7 @@
 // SummariserBackend is a stub so no pi-ai / network calls happen.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { SummariseInput, SummariseOutput, SummariserBackend } from "@swarm/core";
+import type { SummariseInput, SummariseOutput, SummariserBackend } from "@fragua/core";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { AutoTitler } from "../src/auto-titler.ts";
 import { runOne } from "../src/executor.ts";

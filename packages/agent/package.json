@@ -1,8 +1,8 @@
 {
-  "name": "@swarm/agent",
+  "name": "@fragua/agent",
   "version": "0.0.0",
   "private": true,
-  "description": "swarm agent layer — thin wrapper on pi-agent-core with swarm middleware",
+  "description": "fragua agent layer — thin wrapper on pi-agent-core with fragua middleware",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -16,10 +16,10 @@
     "@mariozechner/pi-agent-core": "0.71.0",
     "@mariozechner/pi-ai": "0.71.0",
     "@sinclair/typebox": "0.34.41",
-    "@swarm/core": "workspace:*",
-    "@swarm/store": "workspace:*",
-    "@swarm/types": "workspace:*",
-    "@swarm/workspace": "workspace:*"
+    "@fragua/core": "workspace:*",
+    "@fragua/store": "workspace:*",
+    "@fragua/types": "workspace:*",
+    "@fragua/workspace": "workspace:*"
   },
   "devDependencies": {
     "fast-check": "3.23.1",

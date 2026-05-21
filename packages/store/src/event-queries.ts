@@ -8,7 +8,7 @@
 // all share the same physical table.
 
 import type { Database } from "bun:sqlite";
-import type { IntentType } from "@swarm/types";
+import type { IntentType } from "@fragua/types";
 
 // ─────────────────────────────────────────────────────────────────────
 // Row types

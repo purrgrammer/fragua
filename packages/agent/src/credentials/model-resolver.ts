@@ -1,8 +1,8 @@
-// Model resolution helpers for swarm.
+// Model resolution helpers for fragua.
 //
 // pi-coding-agent's upstream resolver (model-resolver.ts) is much
 // richer — pattern matching, alias-vs-dated-version preference,
-// thinking-level suffix parsing. Swarm only needs the small subset
+// thinking-level suffix parsing. Fragua only needs the small subset
 // wired into the workflow validator + daemon autodetect path today:
 //
 //   - defaultModelPerProvider: one valid id per KnownProvider, used
@@ -14,7 +14,7 @@
 //
 // The rest of upstream's resolver (resolveModelScope with ":high"
 // suffixes and cross-provider ambiguity rejection) is skipped until
-// swarm grows a surface that needs it — we can port it 1:1 when that
+// fragua grows a surface that needs it — we can port it 1:1 when that
 // happens.
 //
 // `defaultModelPerProvider` is taken verbatim from pi-coding-agent

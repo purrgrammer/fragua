@@ -1,9 +1,9 @@
-// shadcn/ui — Sidebar (Swarm design language).
+// shadcn/ui — Sidebar (Fragua design language).
 //
 // Vendored, slimmed-down adaptation of the canonical shadcn `sidebar`
 // primitive. The full upstream version ships ~600 lines covering
 // off-canvas mobile drawers, floating variants, multi-sidebar layouts,
-// etc.; we keep just the surface the swarm dashboard actually uses:
+// etc.; we keep just the surface the fragua dashboard actually uses:
 //
 //   - `SidebarProvider`     — context + cookie-backed collapsed state
 //   - `Sidebar`             — `collapsible="icon"` rail, no off-canvas
@@ -142,7 +142,7 @@ export function SidebarProvider({
 
 export interface SidebarProps extends React.ComponentProps<"div"> {
   /**
-   * `"icon"` collapses to a narrow rail of icons (the swarm default —
+   * `"icon"` collapses to a narrow rail of icons (the fragua default —
    * the dashboard always wants *some* sidebar real estate visible).
    * `"none"` opts out of collapsing.
    */

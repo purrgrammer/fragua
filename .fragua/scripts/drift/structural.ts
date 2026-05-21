@@ -7,13 +7,13 @@
 //
 // Sections:
 //   1. contract_files       — line count + sha256(first 12) per surface
-//   2. taxonomy             — verbatim union literals from swarm-events.ts
+//   2. taxonomy             — verbatim union literals from fragua-events.ts
 //   3. schema_sql           — verbatim contents of schema.sql
 //   4. recent_commits       — last 30 across the repo
 //   5. contract_file_history — last 50 per contract file (for AGENTS.md rule #1)
 //   6. doc_code_blocks      — fenced typescript blocks in the structural docs
 //
-// Narrative surfaces (STATUS "delivers today", proposals, swarm-* skills) live
+// Narrative surfaces (STATUS "delivers today", proposals, fragua-* skills) live
 // in drift/narrative.ts.
 
 import { execSync } from "node:child_process";
@@ -23,7 +23,7 @@ import { resolve } from "node:path";
 
 const CONTRACT_FILES = [
   "packages/store/src/schema.sql",
-  "packages/types/src/swarm-events.ts",
+  "packages/types/src/fragua-events.ts",
   "packages/core/src/handler/types.ts",
   "packages/core/src/handler/intent-fold.ts",
   "docs/SPEC.md",
@@ -116,7 +116,7 @@ function extractDiscriminatorTypes(body: string, prefix: string): string[] {
 }
 
 function extractTaxonomy(): Taxonomy {
-  const src = readOrEmpty("packages/types/src/swarm-events.ts");
+  const src = readOrEmpty("packages/types/src/fragua-events.ts");
   return {
     run_statuses: extractStringUnion(src, "RunStatus"),
     pause_reasons: extractStringUnion(src, "PauseReason"),

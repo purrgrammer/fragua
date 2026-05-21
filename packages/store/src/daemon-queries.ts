@@ -103,7 +103,7 @@ const UPDATE_DAEMON_LOCK_HTTP_SQL = `
 `;
 
 /** Publish the harness/serve HTTP discovery info onto the lock row.
- *  Called by `swarm harness` after the listener binds — the harness
+ *  Called by `fragua harness` after the listener binds — the harness
  *  is the supervisor, so it owns the URL columns regardless of which
  *  pid currently holds the daemon role. */
 export function updateDaemonLockHttp(

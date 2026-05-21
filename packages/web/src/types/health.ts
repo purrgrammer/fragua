@@ -18,7 +18,7 @@ import { createContext, useContext } from "react";
  *   - `loading`     — first `/health` in flight
  *   - `connected`   — server is up AND the daemon heartbeat is fresh
  *   - `no-daemon`   — server is up but `/health` has no `daemon` key
- *                     (plain `swarm serve` OR the daemon process died /
+ *                     (plain `fragua serve` OR the daemon process died /
  *                     its heartbeat went stale). Distinct from `error`
  *                     because the server itself is answering; distinct
  *                     from `connected` because the job queue is offline.
@@ -27,7 +27,7 @@ import { createContext, useContext } from "react";
 export type HealthStatus = "loading" | "connected" | "no-daemon" | "error";
 
 /** Snapshot of the daemon, when the connected server is one. `undefined`
- * for plain `swarm serve` (no job queue → UI is read-only). */
+ * for plain `fragua serve` (no job queue → UI is read-only). */
 export interface HealthDaemonSnapshot {
   pid: number;
   port: number;

@@ -7,7 +7,7 @@
 // Test 3 directly exercises the intent fold + override read path.
 
 import { describe, expect, test } from "bun:test";
-import { foldIntents } from "@swarm/core/handler";
+import { foldIntents } from "@fragua/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";

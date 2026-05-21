@@ -119,7 +119,7 @@ export const grepTool: Tool<GrepArgs, GrepResultData> = {
       if (isDirectory) {
         // dot: true mirrors rg's default `--hidden` posture so dotfiles
         // (.env, .gitignore, .github/*) get searched. The default ignore
-        // set still excludes .git/, .swarm/, etc. via shouldIgnore().
+        // set still excludes .git/, .fragua/, etc. via shouldIgnore().
         const allEntries = await env.glob("**/*", { cwd: searchRoot, dot: true });
         const baseSet = args.glob ? new Set(await env.glob(args.glob, { cwd: searchRoot, dot: true })) : null;
         candidates = [];

@@ -51,7 +51,7 @@ export const skillTool: Tool<SkillToolArgs, SkillToolData> = {
   idempotent: true,
   truncation: { max_chars: 200_000, mode: "head_tail" },
   async execute(args, env, opts) {
-    const catalog = opts?.swarmContext?.skillCatalog ?? [];
+    const catalog = opts?.fraguaContext?.skillCatalog ?? [];
     const out = await loadSkill(env, args.name, args.arguments, catalog);
     if (!out.ok) {
       return {

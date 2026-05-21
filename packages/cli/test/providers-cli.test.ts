@@ -2,29 +2,29 @@
 // landed. The interactive flow's literal/env/shell chooser is gone —
 // keys are stored verbatim. We exercise the same `openGlobalStore +
 // AuthStorage.fromStore + auth.set` pipeline the command uses,
-// against a `$SWARM_HOME` pointed at a tmp dir.
+// against a `$FRAGUA_HOME` pointed at a tmp dir.
 //
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AuthStorage } from "@swarm/agent";
+import { AuthStorage } from "@fragua/agent";
 import { openGlobalStore } from "../src/commands/open-global-store.ts";
 
 describe("providers add", () => {
   let tmp: string;
-  let prevSwarmHome: string | undefined;
+  let prevFraguaHome: string | undefined;
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "swarm-providers-cli-"));
-    prevSwarmHome = process.env["SWARM_HOME"];
-    process.env["SWARM_HOME"] = tmp;
+    tmp = mkdtempSync(join(tmpdir(), "fragua-providers-cli-"));
+    prevFraguaHome = process.env["FRAGUA_HOME"];
+    process.env["FRAGUA_HOME"] = tmp;
   });
 
   afterEach(() => {
-    if (prevSwarmHome === undefined) delete process.env["SWARM_HOME"];
-    else process.env["SWARM_HOME"] = prevSwarmHome;
+    if (prevFraguaHome === undefined) delete process.env["FRAGUA_HOME"];
+    else process.env["FRAGUA_HOME"] = prevFraguaHome;
     rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -39,7 +39,7 @@ describe("providers add", () => {
       store.close();
     }
 
-    // Re-open against the same SWARM_HOME and confirm the row exists
+    // Re-open against the same FRAGUA_HOME and confirm the row exists
     // with the verbatim key — no `!`-prefix normalisation, no shell-
     // form bookkeeping.
     const verify = openGlobalStore();
@@ -60,10 +60,10 @@ describe("providers add", () => {
     }
   });
 
-  test("openGlobalStore creates ~/.swarm if missing and returns an open SqliteStore", () => {
-    // Nested SWARM_HOME, parent doesn't exist yet; the helper mkdir -p's it.
+  test("openGlobalStore creates ~/.fragua if missing and returns an open SqliteStore", () => {
+    // Nested FRAGUA_HOME, parent doesn't exist yet; the helper mkdir -p's it.
     const nested = join(tmp, "deeper", "nest");
-    process.env["SWARM_HOME"] = nested;
+    process.env["FRAGUA_HOME"] = nested;
 
     const store = openGlobalStore();
     try {

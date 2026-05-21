@@ -5,7 +5,7 @@
 // reach into the store directly. All side effects route through the context
 // helpers, which the executor wires to the event store.
 
-import type { AgentMessage, Message as PiMessage } from "@swarm/types";
+import type { AgentMessage, Message as PiMessage } from "@fragua/types";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 

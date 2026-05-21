@@ -10,16 +10,16 @@
       },
     },
     "packages/agent": {
-      "name": "@swarm/agent",
+      "name": "@fragua/agent",
       "version": "0.0.0",
       "dependencies": {
+        "@fragua/core": "workspace:*",
+        "@fragua/store": "workspace:*",
+        "@fragua/types": "workspace:*",
+        "@fragua/workspace": "workspace:*",
         "@mariozechner/pi-agent-core": "0.71.0",
         "@mariozechner/pi-ai": "0.71.0",
         "@sinclair/typebox": "0.34.41",
-        "@swarm/core": "workspace:*",
-        "@swarm/store": "workspace:*",
-        "@swarm/types": "workspace:*",
-        "@swarm/workspace": "workspace:*",
       },
       "devDependencies": {
         "fast-check": "3.23.1",
@@ -27,19 +27,19 @@
       },
     },
     "packages/cli": {
-      "name": "@swarm/cli",
+      "name": "@fragua/cli",
       "version": "0.0.0",
       "bin": {
-        "swarm": "./bin/swarm.ts",
+        "fragua": "./bin/fragua.ts",
       },
       "dependencies": {
+        "@fragua/agent": "workspace:*",
+        "@fragua/core": "workspace:*",
+        "@fragua/daemon": "workspace:*",
+        "@fragua/server": "workspace:*",
+        "@fragua/store": "workspace:*",
+        "@fragua/workspace": "workspace:*",
         "@sinclair/typebox": "0.34.41",
-        "@swarm/agent": "workspace:*",
-        "@swarm/core": "workspace:*",
-        "@swarm/daemon": "workspace:*",
-        "@swarm/server": "workspace:*",
-        "@swarm/store": "workspace:*",
-        "@swarm/workspace": "workspace:*",
         "cac": "6.7.14",
         "chalk": "5.6.2",
         "ink": "5.2.1",
@@ -50,7 +50,7 @@
         "yaml": "2.7.0",
       },
       "devDependencies": {
-        "@swarm/daemon": "workspace:*",
+        "@fragua/daemon": "workspace:*",
         "@types/prompts": "2.4.9",
         "@types/react": "18.3.12",
         "typescript": "5.7.3",
@@ -61,44 +61,44 @@
       },
     },
     "packages/core": {
-      "name": "@swarm/core",
+      "name": "@fragua/core",
       "version": "0.0.0",
       "dependencies": {
+        "@fragua/types": "workspace:*",
         "@sinclair/typebox": "0.34.41",
-        "@swarm/types": "workspace:*",
         "yaml": "2.7.0",
       },
       "devDependencies": {
-        "@swarm/store": "workspace:*",
+        "@fragua/store": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },
     },
     "packages/daemon": {
-      "name": "@swarm/daemon",
+      "name": "@fragua/daemon",
       "version": "0.0.0",
       "dependencies": {
-        "@swarm/core": "workspace:*",
-        "@swarm/store": "workspace:*",
-        "@swarm/workspace": "workspace:*",
+        "@fragua/core": "workspace:*",
+        "@fragua/store": "workspace:*",
+        "@fragua/workspace": "workspace:*",
       },
       "devDependencies": {
-        "@swarm/server": "workspace:*",
+        "@fragua/server": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },
     },
     "packages/server": {
-      "name": "@swarm/server",
+      "name": "@fragua/server",
       "version": "0.0.0",
       "dependencies": {
+        "@fragua/agent": "workspace:*",
+        "@fragua/core": "workspace:*",
+        "@fragua/store": "workspace:*",
+        "@fragua/types": "workspace:*",
+        "@fragua/workspace": "workspace:*",
         "@mariozechner/pi-ai": "0.71.0",
         "@sinclair/typebox": "0.34.41",
-        "@swarm/agent": "workspace:*",
-        "@swarm/core": "workspace:*",
-        "@swarm/store": "workspace:*",
-        "@swarm/types": "workspace:*",
-        "@swarm/workspace": "workspace:*",
         "hono": "4.12.14",
       },
       "devDependencies": {
@@ -107,10 +107,10 @@
       },
     },
     "packages/store": {
-      "name": "@swarm/store",
+      "name": "@fragua/store",
       "version": "0.0.0",
       "dependencies": {
-        "@swarm/types": "workspace:*",
+        "@fragua/types": "workspace:*",
       },
       "devDependencies": {
         "fast-check": "3.23.1",
@@ -118,7 +118,7 @@
       },
     },
     "packages/types": {
-      "name": "@swarm/types",
+      "name": "@fragua/types",
       "version": "0.0.0",
       "dependencies": {
         "@mariozechner/pi-agent-core": "0.71.0",
@@ -129,10 +129,12 @@
       },
     },
     "packages/web": {
-      "name": "@swarm/web",
+      "name": "@fragua/web",
       "version": "0.0.0",
       "dependencies": {
         "@fontsource-variable/geist": "5.2.8",
+        "@fragua/core": "workspace:*",
+        "@fragua/types": "workspace:*",
         "@number-flow/react": "0.6.0",
         "@radix-ui/react-separator": "1.1.1",
         "@radix-ui/react-slot": "1.1.1",
@@ -142,8 +144,6 @@
         "@streamdown/code": "1.1.1",
         "@streamdown/math": "1.0.2",
         "@streamdown/mermaid": "1.0.2",
-        "@swarm/core": "workspace:*",
-        "@swarm/types": "workspace:*",
         "@tanstack/react-query": "5.99.1",
         "@xyflow/react": "12.10.2",
         "ai": "6.0.168",
@@ -185,14 +185,14 @@
       },
     },
     "packages/workspace": {
-      "name": "@swarm/workspace",
+      "name": "@fragua/workspace",
       "version": "0.0.0",
       "dependencies": {
+        "@fragua/core": "workspace:*",
+        "@fragua/types": "workspace:*",
         "@mariozechner/pi-agent-core": "0.71.0",
         "@mariozechner/pi-ai": "0.71.0",
         "@sinclair/typebox": "0.34.41",
-        "@swarm/core": "workspace:*",
-        "@swarm/types": "workspace:*",
         "diff": "8.0.4",
         "turndown": "7.2.4",
         "yaml": "2.7.0",
@@ -436,6 +436,24 @@
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
 
     "@fontsource-variable/geist": ["@fontsource-variable/geist@5.2.8", "", {}, "sha512-cJ6m9e+8MQ5dCYJsLylfZrgBh6KkG4bOLckB35Tr9J/EqdkEM6QllH5PxqP1dhTvFup+HtMRPuz9xOjxXJggxw=="],
+
+    "@fragua/agent": ["@fragua/agent@workspace:packages/agent"],
+
+    "@fragua/cli": ["@fragua/cli@workspace:packages/cli"],
+
+    "@fragua/core": ["@fragua/core@workspace:packages/core"],
+
+    "@fragua/daemon": ["@fragua/daemon@workspace:packages/daemon"],
+
+    "@fragua/server": ["@fragua/server@workspace:packages/server"],
+
+    "@fragua/store": ["@fragua/store@workspace:packages/store"],
+
+    "@fragua/types": ["@fragua/types@workspace:packages/types"],
+
+    "@fragua/web": ["@fragua/web@workspace:packages/web"],
+
+    "@fragua/workspace": ["@fragua/workspace@workspace:packages/workspace"],
 
     "@google/genai": ["@google/genai@1.50.1", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-YbkX7H9+1Pt8wOt7DDREy8XSoiL6fRDzZQRyaVBarFf8MR3zHGqVdvM4cLbDXqPhxqvegZShgfxb8kw9C7YhAQ=="],
 
@@ -816,24 +834,6 @@
     "@streamdown/math": ["@streamdown/math@1.0.2", "", { "dependencies": { "katex": "^0.16.27", "rehype-katex": "^7.0.1", "remark-math": "^6.0.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-r8Ur9/lBuFnzZAFdEWrLUF2s/gRwRRRwruqltdZibyjbCBnuW7SJbFm26nXqvpJPW/gzpBUMrBVBzd88z05D5g=="],
 
     "@streamdown/mermaid": ["@streamdown/mermaid@1.0.2", "", { "dependencies": { "mermaid": "^11.12.2" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-Fr/4sBWnAeSnxM3PcrV/+DiZe5oPMq9gOkUIAH7ZauJeuwrZ/DVzD4g0zlav6AH0axh2m/sOfrfLtY5aLT7niw=="],
-
-    "@swarm/agent": ["@swarm/agent@workspace:packages/agent"],
-
-    "@swarm/cli": ["@swarm/cli@workspace:packages/cli"],
-
-    "@swarm/core": ["@swarm/core@workspace:packages/core"],
-
-    "@swarm/daemon": ["@swarm/daemon@workspace:packages/daemon"],
-
-    "@swarm/server": ["@swarm/server@workspace:packages/server"],
-
-    "@swarm/store": ["@swarm/store@workspace:packages/store"],
-
-    "@swarm/types": ["@swarm/types@workspace:packages/types"],
-
-    "@swarm/web": ["@swarm/web@workspace:packages/web"],
-
-    "@swarm/workspace": ["@swarm/workspace@workspace:packages/workspace"],
 
     "@tailwindcss/node": ["@tailwindcss/node@4.2.2", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "enhanced-resolve": "^5.19.0", "jiti": "^2.6.1", "lightningcss": "1.32.0", "magic-string": "^0.30.21", "source-map-js": "^1.2.1", "tailwindcss": "4.2.2" } }, "sha512-pXS+wJ2gZpVXqFaUEjojq7jzMpTGf8rU6ipJz5ovJV6PUGmlJ+jvIwGrzdHdQ80Sg+wmQxUFuoW1UAAwHNEdFA=="],
 

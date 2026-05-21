@@ -13,9 +13,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { EventType, NodeAttrs } from "@fragua/core";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
-import type { EventType, NodeAttrs } from "@swarm/core";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { findAbortToolCall, PiLlmBackend } from "../src/backend.ts";
 
 describe("findAbortToolCall", () => {
@@ -132,7 +132,7 @@ async function runWithAbort(opts: {
 
 describe("PiLlmBackend abort tool wiring", () => {
   test("an `abort` tool call yields a non-retryable fail outcome", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-abort-outcome-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-abort-outcome-"));
     try {
       const { outcome } = await runWithAbort({
         scratch,
@@ -149,7 +149,7 @@ describe("PiLlmBackend abort tool wiring", () => {
   });
 
   test("abort tool is force-included even when node.attrs.allowed_tools omits it", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-abort-allow-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-abort-allow-"));
     try {
       const { events, outcome } = await runWithAbort({
         scratch,
@@ -172,7 +172,7 @@ describe("PiLlmBackend abort tool wiring", () => {
   });
 
   test("abort tool is force-included even when node.attrs.denied_tools lists it", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-abort-deny-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-abort-deny-"));
     try {
       const { events, outcome } = await runWithAbort({
         scratch,

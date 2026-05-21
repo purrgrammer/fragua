@@ -1,12 +1,12 @@
-// User-preference config for swarm. Two-layer cascade:
-//   global   ~/.swarm/config.yaml   — generic preferences (LLM defaults,
+// User-preference config for fragua. Two-layer cascade:
+//   global   ~/.fragua/config.yaml   — generic preferences (LLM defaults,
 //                                      auto-title, blocklist, concurrency,
 //                                      timeouts, blob GC, skills paths, …)
-//   project  <cwd>/.swarm/config.yaml — project-specific knobs only
+//   project  <cwd>/.fragua/config.yaml — project-specific knobs only
 //                                      (today: `bootstrap`). Overlays
 //                                      global; project keys win.
 //
-// Legacy: `.swarm/config.jsonc` is read with a deprecation warning for one
+// Legacy: `.fragua/config.jsonc` is read with a deprecation warning for one
 // release. When both `.yaml` and `.jsonc` exist in the same layer, YAML
 // wins and a "shadowed" warning is emitted. Delete `.jsonc` to silence it.
 //
@@ -22,9 +22,9 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { parseDurationMs } from "@fragua/core";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
-import { parseDurationMs } from "@swarm/core";
 import YAML from "yaml";
 
 const TimeoutValue = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
@@ -87,10 +87,10 @@ const Web = Type.Object(
   { additionalProperties: false },
 );
 
-export const SwarmConfigSchema = Type.Object(
+export const FraguaConfigSchema = Type.Object(
   {
-    // UUIDv7 stable project identity, minted by `swarm init`. Optional
-    // here so hand-rolled configs (e.g. `swarm init` predates the field)
+    // UUIDv7 stable project identity, minted by `fragua init`. Optional
+    // here so hand-rolled configs (e.g. `fragua init` predates the field)
     // don't fail validation. Routing keys on the daemon's internal
     // project mapping, not this; treat `id` as advisory metadata.
     id: Type.Optional(Type.String()),
@@ -102,7 +102,7 @@ export const SwarmConfigSchema = Type.Object(
     // --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
     // `./scripts/bootstrap.sh`, etc. Omit for source-only projects.
     // Non-zero exit fails the run. Project-specific by nature; lives in
-    // `<project>/.swarm/config.yaml`, not the global config.
+    // `<project>/.fragua/config.yaml`, not the global config.
     bootstrap: Type.Optional(Type.String()),
     // Per-bootstrap timeout in milliseconds. Pairs with `bootstrap` —
     // ergonomically grouped at top level so a project that pins both
@@ -150,7 +150,7 @@ export const SwarmConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type SwarmConfig = Static<typeof SwarmConfigSchema>;
+export type FraguaConfig = Static<typeof FraguaConfigSchema>;
 
 /** Every timeout key, resolved to milliseconds. Absent keys stay
  * `undefined` so callers fall through to handler defaults. */
@@ -167,7 +167,7 @@ export interface ResolvedTimeouts {
 /** Parse and validate each present key in `cfg.timeouts`. Throws a
  * caller-friendly Error on the first invalid value so the daemon
  * startup path can surface the name + reason without a stack-trace. */
-export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
+export function resolveTimeouts(cfg: FraguaConfig): ResolvedTimeouts {
   const out: ResolvedTimeouts = {};
   if (cfg.timeouts == null) return out;
   // Single-word keys map to themselves in ResolvedTimeouts; hyphenated
@@ -292,44 +292,44 @@ function parseYamlBody(body: string, filePath: string): unknown | null {
   }
 }
 
-/** Validate the parsed value against SwarmConfigSchema.
+/** Validate the parsed value against FraguaConfigSchema.
  * Non-fatal: unknown/extra properties are stripped with a warning;
  * wrong-typed top-level values are dropped with a warning.
  * Returns the salvaged (schema-valid) config, or {} when the root
  * is not an object at all. */
-function validateParsed(parsed: unknown, filePath: string): SwarmConfig {
+function validateParsed(parsed: unknown, filePath: string): FraguaConfig {
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
     console.warn(`config: ${filePath} must be a JSON object — ignoring file, using defaults`);
     return {};
   }
-  if (Value.Check(SwarmConfigSchema, parsed)) {
+  if (Value.Check(FraguaConfigSchema, parsed)) {
     return parsed;
   }
   // Capture errors before mutating.
-  const errors = [...Value.Errors(SwarmConfigSchema, parsed)];
+  const errors = [...Value.Errors(FraguaConfigSchema, parsed)];
   const msg = formatValidationErrors(errors);
   console.warn(`config: validation issues in ${filePath}: ${msg} — unknown/invalid keys will be ignored`);
   // Step 1: strip unknown properties at all nesting levels.
-  const cleaned = Value.Clean(SwarmConfigSchema, structuredClone(parsed)) as Record<string, unknown>;
+  const cleaned = Value.Clean(FraguaConfigSchema, structuredClone(parsed)) as Record<string, unknown>;
   // Step 2: drop any top-level key that still has a type error after cleaning.
-  for (const err of Value.Errors(SwarmConfigSchema, cleaned)) {
+  for (const err of Value.Errors(FraguaConfigSchema, cleaned)) {
     const topKey = err.path.split("/").filter(Boolean)[0];
     if (topKey !== undefined) delete cleaned[topKey];
   }
-  return cleaned as SwarmConfig;
+  return cleaned as FraguaConfig;
 }
 
 /** Parse and validate one config layer from a directory.
  *
  * Resolution order (per layer directory):
- *   1. `<dir>/.swarm/config.yaml` — canonical
- *   2. `<dir>/.swarm/config.jsonc` — legacy, emits a deprecation warning
+ *   1. `<dir>/.fragua/config.yaml` — canonical
+ *   2. `<dir>/.fragua/config.jsonc` — legacy, emits a deprecation warning
  *
  * When both exist, YAML wins and a "shadowed" warning is emitted.
  * Returns `{}` when neither file is present. */
-async function loadConfigFile(layerDir: string, layerLabel: "global" | "project"): Promise<SwarmConfig> {
-  const yamlPath = resolve(layerDir, ".swarm/config.yaml");
-  const jsoncPath = resolve(layerDir, ".swarm/config.jsonc");
+async function loadConfigFile(layerDir: string, layerLabel: "global" | "project"): Promise<FraguaConfig> {
+  const yamlPath = resolve(layerDir, ".fragua/config.yaml");
+  const jsoncPath = resolve(layerDir, ".fragua/config.jsonc");
 
   let yamlBody: string | null = null;
   let jsoncBody: string | null = null;
@@ -368,7 +368,7 @@ async function loadConfigFile(layerDir: string, layerLabel: "global" | "project"
 
 /** One-level deep merge: top-level scalars from `overlay` win; nested
  * objects merge field-by-field. Arrays replace wholesale. */
-function mergeConfig(base: SwarmConfig, overlay: SwarmConfig): SwarmConfig {
+function mergeConfig(base: FraguaConfig, overlay: FraguaConfig): FraguaConfig {
   const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
   for (const [key, value] of Object.entries(overlay)) {
     if (value === undefined) continue;
@@ -381,27 +381,27 @@ function mergeConfig(base: SwarmConfig, overlay: SwarmConfig): SwarmConfig {
       out[key] = value;
     }
   }
-  return out as SwarmConfig;
+  return out as FraguaConfig;
 }
 
-/** Load the merged user config: `~/.swarm/config.yaml` (global) overlaid
- * by `<cwd>/.swarm/config.yaml` (project). Either layer may be absent.
- * Legacy `.swarm/config.jsonc` is read with a deprecation warning.
+/** Load the merged user config: `~/.fragua/config.yaml` (global) overlaid
+ * by `<cwd>/.fragua/config.yaml` (project). Either layer may be absent.
+ * Legacy `.fragua/config.jsonc` is read with a deprecation warning.
  * Project keys win on collisions; nested objects merge one level deep.
  *
  * `opts.homeDir` overrides the global path's base — used by tests to
- * isolate from the user's real `~/.swarm/`. Production callers omit it. */
-export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): Promise<SwarmConfig> {
+ * isolate from the user's real `~/.fragua/`. Production callers omit it. */
+export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): Promise<FraguaConfig> {
   const globalDir = opts.homeDir ?? homedir();
   const [global, project] = await Promise.all([loadConfigFile(globalDir, "global"), loadConfigFile(cwd, "project")]);
   return mergeConfig(global, project);
 }
 
-/** Load *only* `<cwd>/.swarm/config.yaml` — no global cascade. Used
+/** Load *only* `<cwd>/.fragua/config.yaml` — no global cascade. Used
  * for keys that must be strictly project-scoped (e.g. `bootstrap`,
  * which is per-project tooling and would silently leak between
  * projects if the global layer was allowed to supply a default).
  * Returns `{}` when the project file is absent. */
-export async function loadProjectConfig(cwd: string): Promise<SwarmConfig> {
+export async function loadProjectConfig(cwd: string): Promise<FraguaConfig> {
   return loadConfigFile(cwd, "project");
 }

@@ -3,8 +3,8 @@
 // same surface used by P9; here we assert the audit trail.
 
 import { describe, expect, test } from "bun:test";
-import * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
+import * as handler from "@fragua/core/handler";
+import { SqliteStore } from "@fragua/store";
 import { Dispatcher } from "../src/dispatch.ts";
 import { startDaemon } from "../src/entrypoint.ts";
 

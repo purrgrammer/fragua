@@ -3,7 +3,7 @@
 // shifts only this file changes and both UIs follow.
 
 import { describe, expect, it } from "bun:test";
-import type { NodeAttrs } from "@swarm/core";
+import type { NodeAttrs } from "@fragua/core";
 import { canRetry, isStructural, showsLlm } from "../../src/lib/node-metadata.ts";
 
 const empty: NodeAttrs = {} as NodeAttrs;

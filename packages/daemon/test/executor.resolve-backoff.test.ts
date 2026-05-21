@@ -3,8 +3,8 @@
 // are correctly resolved to a BackoffConfig before the reducer sees them.
 
 import { describe, expect, test } from "bun:test";
-import type { GraphAttrs, NodeAttrs } from "@swarm/core";
-import { RETRY_PRESETS } from "@swarm/core";
+import type { GraphAttrs, NodeAttrs } from "@fragua/core";
+import { RETRY_PRESETS } from "@fragua/core";
 import { resolveBackoff } from "../src/executor.ts";
 
 describe("resolveBackoff", () => {

@@ -2,7 +2,7 @@
 // per-row Ajv validation contract from
 
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { AuthStorage, ModelRegistry } from "../src/index.ts";
 
 function freshStore(): SqliteStore {

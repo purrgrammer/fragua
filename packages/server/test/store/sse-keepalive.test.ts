@@ -10,13 +10,13 @@
 //      with zero traffic — onmessage doesn't fire, so the client-side
 //      stall watchdog can't notice.
 //
-// Both are addressed by emitting a real `data: {"type":"swarm.ping"}`
+// Both are addressed by emitting a real `data: {"type":"fragua.ping"}`
 // SSE frame on idle. Bytes-on-wire reset the proxy timer; the `data:`
 // shape (vs `:` comment) fires `onmessage` so the watchdog re-arms.
 // These tests pin that wire shape.
 
 import { describe, expect, test } from "bun:test";
-import type { StoredEvent } from "@swarm/store";
+import type { StoredEvent } from "@fragua/store";
 import type { SSEStreamingApi } from "hono/streaming";
 import { runSseLoop } from "../../src/store/sse.ts";
 
@@ -75,13 +75,13 @@ function ev(seq: number, ts: number): StoredEvent {
 
 /** Ping frames are emitted via `writeSSE`, so they show up as `kind:"sse"`
  * in the fake stream's frame log. They're disambiguated from real events
- * by the lack of an `id:` field and a payload of `{"type":"swarm.ping",…}`. */
+ * by the lack of an `id:` field and a payload of `{"type":"fragua.ping",…}`. */
 function isPingFrame(f: FakeStreamFrame): boolean {
-  return f.kind === "sse" && f.text.startsWith("id:|") && /"type":"swarm\.ping"/.test(f.text);
+  return f.kind === "sse" && f.text.startsWith("id:|") && /"type":"fragua\.ping"/.test(f.text);
 }
 
 describe("runSseLoop keepalive", () => {
-  test("emits a swarm.ping data frame after keepaliveMs of silence", async () => {
+  test("emits a fragua.ping data frame after keepaliveMs of silence", async () => {
     const { api, frames, abort, setClock } = makeFakeStream();
     let now = 1_000_000;
     setClock((ms) => {
@@ -108,7 +108,7 @@ describe("runSseLoop keepalive", () => {
     // The ping carries a server-side `ts` so the client can log it; we
     // only pin the envelope (lacks runId/seq, has the type sentinel) so
     // future `ts` shape changes don't break this test.
-    expect(pings[0]?.text).toMatch(/"type":"swarm\.ping","ts":\d+/);
+    expect(pings[0]?.text).toMatch(/"type":"fragua\.ping","ts":\d+/);
     expect(pings[0]?.text).not.toMatch(/"runId"|"seq"/);
     // No real (non-ping) events emitted.
     expect(frames.filter((f) => f.kind === "sse" && !isPingFrame(f))).toHaveLength(0);

@@ -1,12 +1,12 @@
 // Store → RunSummary / RunDetail adapter.
 //
-// The authoritative data lives in @swarm/store (run_state + events); this
+// The authoritative data lives in @fragua/store (run_state + events); this
 // module projects a RunState + its event tail into the shapes the
 // `/runs` REST endpoints hand to the web UI.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@swarm/store";
+import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
 import type { NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
@@ -164,7 +164,7 @@ export function runStateToDetail(
   if (workflowSource !== undefined) detail.workflowSource = workflowSource;
 
   if (state.cwd != null) {
-    const candidate = join(state.cwd, ".swarm", "worktrees", state.runId);
+    const candidate = join(state.cwd, ".fragua", "worktrees", state.runId);
     if (existsSync(candidate)) detail.worktreePath = candidate;
   }
 

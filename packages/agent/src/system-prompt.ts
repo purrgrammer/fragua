@@ -2,8 +2,8 @@
 // Pulled into a separate module so it can be unit-tested without pi-agent-core.
 
 import { createHash } from "node:crypto";
-import type { ExecutionEnvironment, Skill } from "@swarm/workspace";
-import { renderSkillsCatalog } from "@swarm/workspace";
+import type { ExecutionEnvironment, Skill } from "@fragua/workspace";
+import { renderSkillsCatalog } from "@fragua/workspace";
 
 /** Hard cap on the total bytes of project-conventions content prepended to the
  * system prompt. A single oversized AGENTS.md should not blow the context
@@ -256,7 +256,7 @@ function sha256Hex(contents: string): string {
 }
 
 /** Spec subset `materialiseForChild` consumes. The full `SubagentSpec`
- *  in @swarm/workspace carries a few runtime-only fields (signal,
+ *  in @fragua/workspace carries a few runtime-only fields (signal,
  *  allowed_tools, etc.) we don't need here — the prompt builder
  *  cares only about persona override + skill name filter. Kept local
  *  so this module doesn't pull the workspace types graph. */

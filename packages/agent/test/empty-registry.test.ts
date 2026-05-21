@@ -13,13 +13,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { registerFauxProvider } from "@mariozechner/pi-ai";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 
 describe("PiLlmBackend — empty registry guard", () => {
   test("allowed_tools set + empty registry → fail with explicit reason", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-registry-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-registry-"));
     try {
       const faux = registerFauxProvider();
       try {
@@ -61,7 +61,7 @@ describe("PiLlmBackend — empty registry guard", () => {
   });
 
   test("allowed_tools set + registry populated → guard doesn't trip", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-registry-ok-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-registry-ok-"));
     try {
       const faux = registerFauxProvider();
       try {

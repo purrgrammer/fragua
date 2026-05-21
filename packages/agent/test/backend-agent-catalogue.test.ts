@@ -6,10 +6,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentDefinition } from "@fragua/types";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import type { AssistantMessage, Context, StreamOptions } from "@mariozechner/pi-ai";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
-import type { AgentDefinition } from "@swarm/types";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 
 function mkDef(name: string, description: string, projectCwd: string): AgentDefinition {
@@ -28,7 +28,7 @@ function mkDef(name: string, description: string, projectCwd: string): AgentDefi
 
 describe("PiLlmBackend — agent catalogue injection", () => {
   test("agent tool present + agentDefinitions non-empty → catalogue rendered into systemPrompt", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-agent-cat-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-cat-"));
     try {
       const faux = registerFauxProvider();
       try {
@@ -79,7 +79,7 @@ describe("PiLlmBackend — agent catalogue injection", () => {
   });
 
   test("agent tool absent in pool → catalogue not rendered (cost-control)", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-agent-cat-no-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-cat-no-"));
     try {
       const faux = registerFauxProvider();
       try {

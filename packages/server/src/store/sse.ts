@@ -14,7 +14,7 @@
 // forward cursor stepped past. See `queries.ts` for the full
 // rationale.
 
-import type { GetGlobalEventsAtFloorOpts, GetGlobalEventsForwardOpts, StoredEvent } from "@swarm/store";
+import type { GetGlobalEventsAtFloorOpts, GetGlobalEventsForwardOpts, StoredEvent } from "@fragua/store";
 import type { SSEStreamingApi } from "hono/streaming";
 
 /**
@@ -50,7 +50,7 @@ interface SseLoopConfig<C> {
   shouldClose?: () => boolean;
   batchSize: number;
   pollMs: number;
-  /** Send a `swarm.ping` data frame on the wire after this many ms
+  /** Send a `fragua.ping` data frame on the wire after this many ms
    * without any event. Two jobs in one wire write:
    *   1. Resets dev proxies / load balancers' idle timers (any bytes
    *      flushed do this — comments would too).
@@ -70,7 +70,7 @@ const DEFAULT_KEEPALIVE_MS = 10_000;
  * client's loose envelope check (which requires both) drops it from the
  * feed atom — the watchdog rearm fires regardless via `onmessage`. */
 export function pingFrameData(now: number): string {
-  return JSON.stringify({ type: "swarm.ping", ts: now });
+  return JSON.stringify({ type: "fragua.ping", ts: now });
 }
 
 /**

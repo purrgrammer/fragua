@@ -15,7 +15,7 @@ export interface TextShimmerProps {
    */
   duration?: number;
   /**
-   * Retained for API parity. The Swarm design language has no decorative
+   * Retained for API parity. The Fragua design language has no decorative
    * shimmer band ("No gradients on surfaces"; "Data as decor"); the
    * `.sw-pulse` opacity oscillation carries the "this is happening"
    * signal instead.

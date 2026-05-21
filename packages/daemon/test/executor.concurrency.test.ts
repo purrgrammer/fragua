@@ -9,7 +9,7 @@
 //      `fact.run_halted` event so the run's capacity slot is released.
 
 import { describe, expect, test } from "bun:test";
-import type * as handler from "@swarm/core/handler";
+import type * as handler from "@fragua/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runExecutor, runOne } from "../src/executor.ts";
 import { enqueue, rig, type TestRig } from "./helpers.ts";

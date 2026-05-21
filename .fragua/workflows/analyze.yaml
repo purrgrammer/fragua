@@ -1,7 +1,7 @@
-# analyze.yaml — mine recent swarm runs for cost / confusion / redundancy patterns.
+# analyze.yaml — mine recent fragua runs for cost / confusion / redundancy patterns.
 #
 # Loop A from the meta-evaluation design: discovery only. A single llm
-# runs `.swarm/scripts/analyze/collect.ts` via the bash tool to get a JSON
+# runs `.fragua/scripts/analyze/collect.ts` via the bash tool to get a JSON
 # snapshot of recent runs, then synthesises evidence-backed hypotheses in
 # its own reply. Does NOT apply changes — that lives in a separate optimize
 # workflow with an eval gate.
@@ -10,13 +10,13 @@
 # workflows that run 1–2×/week; capped so cost stays bounded on
 # high-traffic projects. Override via inputs as needed.
 #
-#   bun run swarm run analyze
-#   bun run swarm run analyze --input workflow=change
-#   bun run swarm run analyze --input since-days=30
-#   bun run swarm run analyze --input limit=50
+#   bun run fragua run analyze
+#   bun run fragua run analyze --input workflow=change
+#   bun run fragua run analyze --input since-days=30
+#   bun run fragua run analyze --input limit=50
 
 name: analyze
-goal: Mine recent swarm runs for cost, confusion, and redundancy patterns; emit ranked, evidence-backed hypotheses for workflow improvements.
+goal: Mine recent fragua runs for cost, confusion, and redundancy patterns; emit ranked, evidence-backed hypotheses for workflow improvements.
 budget: 1.50
 
 inputs:
@@ -43,15 +43,15 @@ steps:
     effort: high
     max-cost: 1.20
     prompt: |
-      Audit recent swarm runs and emit ranked, evidence-backed improvement hypotheses.
+      Audit recent fragua runs and emit ranked, evidence-backed improvement hypotheses.
 
-      First: run `bun .swarm/scripts/analyze/collect.ts --workflow=${{ inputs.workflow }} --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }}` via the bash tool and read its JSON report. Fields: `totals`, `by_workflow[]` (aggregates + `node_profiles[]`), `runs[]` (per-run records + `per_node[]`). Trust its numbers; quote only them; never invent fields.
+      First: run `bun .fragua/scripts/analyze/collect.ts --workflow=${{ inputs.workflow }} --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }}` via the bash tool and read its JSON report. Fields: `totals`, `by_workflow[]` (aggregates + `node_profiles[]`), `runs[]` (per-run records + `per_node[]`). Trust its numbers; quote only them; never invent fields.
 
       Field caveats: `partial`/`partial_in_runs` figures are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap.
 
       Emit a markdown report as your FINAL message verbatim — no file writes, no preamble, no postscript. Headings, exactly:
 
-      # Swarm Analysis — <ISO date from collected_at>
+      # Fragua Analysis — <ISO date from collected_at>
 
       ## Scope
       One paragraph: total runs, distinct workflows, time window, sum cost. Note workflows with <3 runs are listed but not analysed.

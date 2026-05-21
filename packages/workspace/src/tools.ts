@@ -1,7 +1,7 @@
 // Agent tools — read / write / edit / bash. The four power tools.
 //
 // These are the LLM-callable primitives that drive every llm
-// node. They mirror pi-coding-agent's tools 1:1 in behavior so swarm
+// node. They mirror pi-coding-agent's tools 1:1 in behavior so fragua
 // agents debug the same way pi-coding-agent users do, and a fix
 // upstream can land here verbatim.
 //
@@ -24,7 +24,7 @@
 //            transcript recoverable when output exceeds the truncation
 //            window. Optional onUpdate streams partial output during
 //            execution. Blocklist refuses dangerous commands before
-//            spawn; that check is swarm-specific (pi has no blocklist).
+//            spawn; that check is fragua-specific (pi has no blocklist).
 //
 // Tool result shape:
 //   - `text` is the human/LLM-readable summary, always set.
@@ -57,7 +57,7 @@ import { grepTool } from "./grep.ts";
 import { lsTool } from "./ls.ts";
 import { detectImageMimeType, resolveReadPath, withFileMutationQueue } from "./path-utils.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateTail } from "./truncate-v2.ts";
-import type { AnyTool, ExecutionEnvironment, SwarmToolContext, Tool, ToolRegistry } from "./types.ts";
+import type { AnyTool, ExecutionEnvironment, FraguaToolContext, Tool, ToolRegistry } from "./types.ts";
 
 // ─── read ──────────────────────────────────────────────────────────
 
@@ -324,7 +324,7 @@ export interface BashResultData {
 }
 
 function bashTempFile(): string {
-  return join(tmpdir(), `swarm-bash-${randomBytes(8).toString("hex")}.log`);
+  return join(tmpdir(), `fragua-bash-${randomBytes(8).toString("hex")}.log`);
 }
 
 export const bashTool: Tool<{ command: string; timeout?: number }, BashResultData> = {
@@ -532,7 +532,7 @@ export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
 export interface SanitiseUnpairedCtx {
   toolRegistry: ToolRegistry;
   env: ExecutionEnvironment;
-  swarmContext: SwarmToolContext;
+  fraguaContext: FraguaToolContext;
   signal?: AbortSignal;
 }
 
@@ -605,7 +605,7 @@ export async function sanitiseUnpairedToolCalls(
     if (canReExecute && tool !== undefined) {
       try {
         const out = await tool.execute(tc.arguments, ctx.env, {
-          swarmContext: ctx.swarmContext,
+          fraguaContext: ctx.fraguaContext,
           tool_call_id: tc.id,
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
         });

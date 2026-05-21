@@ -17,7 +17,7 @@ export function DaemonBanner(): JSX.Element {
       <div className="min-w-0 flex-1 leading-relaxed">
         <span className="font-medium">Daemon not running.</span>{" "}
         <span>
-          Runs will queue until the daemon starts. Start it with <code className="font-mono">swarm daemon start</code>.
+          Runs will queue until the daemon starts. Start it with <code className="font-mono">fragua daemon start</code>.
         </span>
       </div>
     </output>

@@ -14,7 +14,7 @@
 //   - 15-minute in-memory cache keyed by (url, prompt).
 //   - HTML → markdown via turndown, capped at MAX_INPUT_CHARS.
 //   - Markdown is fed to the configured summariser (via
-//     `opts.swarmContext.summarise`) with the user's prompt as a
+//     `opts.fraguaContext.summarise`) with the user's prompt as a
 //     `system_prompt_override`.
 
 import { Type } from "@sinclair/typebox";
@@ -82,7 +82,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
   defaultDisabled: true,
 
   async execute(args, _env, opts = {}) {
-    const ctx = opts.swarmContext;
+    const ctx = opts.fraguaContext;
     const signal = opts.signal;
     const httpFetch = ctx?.http?.fetch ?? globalThis.fetch.bind(globalThis);
 
@@ -124,7 +124,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     if (!isRawMode && !ctx?.summarise) {
       return errorResult(
         "web_fetch with `prompt` requires a configured summariser, but none is wired to this daemon. " +
-          "Either omit `prompt` for raw markdown, or set `summariser.{provider,model}` in .swarm/config.yaml.",
+          "Either omit `prompt` for raw markdown, or set `summariser.{provider,model}` in .fragua/config.yaml.",
       );
     }
 
@@ -140,7 +140,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
           redirect: "manual",
           ...(signal ? { signal } : {}),
           headers: {
-            "user-agent": "swarm-web-fetch/0",
+            "user-agent": "fragua-web-fetch/0",
             accept: "text/html,application/xhtml+xml,text/plain,*/*;q=0.8",
           },
         });

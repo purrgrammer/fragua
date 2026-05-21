@@ -1,4 +1,4 @@
-export const SWARM_CORE_VERSION = "0.0.0";
+export const FRAGUA_CORE_VERSION = "0.0.0";
 
 export * from "./duration.ts";
 export * from "./engine/index.ts";
@@ -10,5 +10,5 @@ export * from "./uuid.ts";
 // `handler/` is intentionally NOT re-exported here. It is a server-side
 // helper surface (runtime clients, idempotency hashing, context wiring),
 // while the main entry stays browser-safe for the web bundle. Import
-// from `@swarm/core/handler` directly when you need handler execution
+// from `@fragua/core/handler` directly when you need handler execution
 // primitives.

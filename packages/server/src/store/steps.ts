@@ -405,7 +405,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
 
 /**
  * Cost / token aggregate row produced by `IEventStore.getStepAggregates()`,
- * shaped here to avoid a hard dependency on `@swarm/store` types in the
+ * shaped here to avoid a hard dependency on `@fragua/store` types in the
  * UI bundle. Wire-compatible with `StepAggregateRow`.
  */
 export interface StepCostAggregate {

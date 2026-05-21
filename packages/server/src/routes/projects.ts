@@ -13,7 +13,7 @@
 // routes only do decoding, store-lookup, and response shaping \u2014 same
 // pattern as `workflowsRoutes` (`routes/workflows.ts`).
 
-import type { IEventStore } from "@swarm/store";
+import type { IEventStore } from "@fragua/store";
 import { Hono } from "hono";
 import type { ProjectTreeReader } from "../ports.ts";
 

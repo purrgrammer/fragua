@@ -5,9 +5,9 @@
 import { plugin } from "bun";
 
 plugin({
-  name: "swarm-virtual-stubs",
+  name: "fragua-virtual-stubs",
   setup(build) {
-    build.module("virtual:swarm-extensions", () => ({
+    build.module("virtual:fragua-extensions", () => ({
       contents: "export const renderers = new Map();",
       loader: "ts",
     }));

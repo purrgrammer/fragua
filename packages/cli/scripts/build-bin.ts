@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// Compile the swarm CLI to a single executable via `bun build --compile`.
+// Compile the fragua CLI to a single executable via `bun build --compile`.
 //
 // Steps:
-//   1. Build the web bundle (`bun run --filter @swarm/web build`). The
+//   1. Build the web bundle (`bun run --filter @fragua/web build`). The
 //      compile step embeds whatever is at `packages/web/dist/` at this
 //      moment, so building first guarantees the binary ships fresh UI.
 //   2. Regenerate `packages/cli/src/web-assets.ts` with a `with { type: "file" }`
@@ -10,7 +10,7 @@
 //      Bun's bundler inlines those files into the executable and the
 //      generated map (`url path → virtual /$bunfs/root/… path`) is what
 //      the server hands to `Bun.file()` at request time.
-//   3. `bun build --compile --target=bun packages/cli/bin/swarm.ts
+//   3. `bun build --compile --target=bun packages/cli/bin/fragua.ts
 //      --outfile <out>`.
 //   4. Restore the empty `web-assets.ts` stub so the source tree stays
 //      diff-clean. We write a known-good stub rather than `git checkout`
@@ -18,7 +18,7 @@
 //      committed, and in CI worktrees. The restore runs in a finally so
 //      a failed compile still leaves the working copy in a clean state.
 //
-// Defaults: outfile=`dist/swarm` at the repo root. Override with `--out
+// Defaults: outfile=`dist/fragua` at the repo root. Override with `--out
 // <path>`. `--keep-assets` skips the restore (debugging).
 
 import { spawn } from "node:child_process";
@@ -28,12 +28,12 @@ import { dirname, join, relative, resolve } from "node:path";
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const WEB_DIST_DIR = join(REPO_ROOT, "packages/web/dist");
 const WEB_ASSETS_FILE = join(REPO_ROOT, "packages/cli/src/web-assets.ts");
-const CLI_ENTRY = join(REPO_ROOT, "packages/cli/bin/swarm.ts");
-const DEFAULT_OUTFILE = join(REPO_ROOT, "dist/swarm");
+const CLI_ENTRY = join(REPO_ROOT, "packages/cli/bin/fragua.ts");
+const DEFAULT_OUTFILE = join(REPO_ROOT, "dist/fragua");
 
 const STUB_CONTENTS = `// Web bundle embedding for \`bun build --compile\`.
 //
-// In dev (\`bun run packages/cli/bin/swarm.ts\`), this file exports an empty
+// In dev (\`bun run packages/cli/bin/fragua.ts\`), this file exports an empty
 // map and the CLI falls back to reading \`packages/web/dist/\` from disk via
 // \`ensureWebBundle()\`.
 //
@@ -52,14 +52,14 @@ const args = parseArgs(process.argv.slice(2));
 const outfile = resolve(args.out ?? DEFAULT_OUTFILE);
 const keepAssets = args.keepAssets;
 
-console.log(`swarm: compiling binary → ${relative(process.cwd(), outfile)}`);
+console.log(`fragua: compiling binary → ${relative(process.cwd(), outfile)}`);
 
 try {
   // 1. Build the web bundle. We always rebuild rather than relying on
   //    mtime checks — the cost is ~5s and it guarantees the embedded
   //    bytes match the source tree at compile time.
   console.log("  [1/3] building web bundle (vite)…");
-  await runOrExit("bun", ["run", "--filter", "@swarm/web", "build"], { cwd: REPO_ROOT });
+  await runOrExit("bun", ["run", "--filter", "@fragua/web", "build"], { cwd: REPO_ROOT });
 
   // 2. Regenerate the embedded-assets manifest. Walk the dist tree,
   //    write one `import` per file plus the populated map.
@@ -113,7 +113,7 @@ function parseArgs(argv: string[]): CliArgs {
       out.keepAssets = true;
     } else if (a === "--help" || a === "-h") {
       console.log("usage: build-bin.ts [--out <path>] [--keep-assets]");
-      console.log("  --out PATH      output binary path (default dist/swarm)");
+      console.log("  --out PATH      output binary path (default dist/fragua)");
       console.log("  --keep-assets   skip restoring the web-assets stub after compile");
       process.exit(0);
     } else {

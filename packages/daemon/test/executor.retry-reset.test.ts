@@ -7,7 +7,7 @@
 // max_retries one step earlier than authors expect.
 
 import { describe, expect, test } from "bun:test";
-import { retryCountKey } from "@swarm/core";
+import { retryCountKey } from "@fragua/core";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";

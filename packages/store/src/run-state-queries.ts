@@ -16,7 +16,7 @@
 // where they care about recency.
 
 import type { Database } from "bun:sqlite";
-import type { InboxStatus, RunStatus } from "@swarm/types";
+import type { InboxStatus, RunStatus } from "@fragua/types";
 
 // ─────────────────────────────────────────────────────────────────────
 // Row types
@@ -125,7 +125,7 @@ export interface ListRunIdsOpts {
 
 export interface ListRunSummaryRowsOpts extends ListRunIdsOpts {
   /** Narrow to a single inbox status (`pending` powers the worktree inbox
-   *  view + `swarm inbox`). `undefined` = no inbox filter. */
+   *  view + `fragua inbox`). `undefined` = no inbox filter. */
   inbox?: InboxStatus;
 }
 
@@ -362,7 +362,7 @@ const SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL = `
 /** Terminal runs in `cwd` whose snapshot refs are eligible for GC: settled
  *  (not `running`/`queued`/`paused`), older than `cutoff` (ms epoch), and
  *  not awaiting an operator decision (`inbox_status` not `pending`). The
- *  caller deletes each run's `refs/swarm/{snapshots,heads}/<runId>`; runs
+ *  caller deletes each run's `refs/fragua/{snapshots,heads}/<runId>`; runs
  *  that never used a worktree simply have no such refs (a no-op delete). */
 export function selectGcEligibleSnapshotRuns(db: Database, opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[] {
   return db.query<GcSnapshotRunRow, [string, number]>(SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL).all(opts.cwd, opts.cutoff);

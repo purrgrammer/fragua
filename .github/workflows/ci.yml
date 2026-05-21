@@ -39,7 +39,7 @@ jobs:
           banned='node:fs|node:child_process|node:net|node:http|node:https|node:dns|node:os|node:process'
           # Scope the purity check to the genuinely-pure subtrees.
           # packages/core/src/handler/context.ts legitimately persists via
-          # @swarm/store; handlers themselves are separately enforced by
+          # @fragua/store; handlers themselves are separately enforced by
           # packages/core/test/handler/discipline.test.ts.
           hits=$(grep -rE "from [\"']($banned)" packages/core/src/parser packages/core/src/types packages/core/src/handler/types.ts packages/core/src/handler/intent-fold.ts packages/core/src/handler/handlers || true)
           if [ -n "$hits" ]; then

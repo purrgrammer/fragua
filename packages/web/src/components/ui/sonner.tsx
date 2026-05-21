@@ -2,7 +2,7 @@ import { Toaster as SonnerToaster } from "sonner";
 import { useTheme } from "../../lib/theme.ts";
 
 /**
- * Drop-in `<Toaster />` styled with Swarm design-language tokens.
+ * Drop-in `<Toaster />` styled with Fragua design-language tokens.
  *
  * Mount once at the app root (inside QueryClientProvider, outside the
  * router) so the portal survives navigation and toast lifetime is

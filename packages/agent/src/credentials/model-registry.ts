@@ -2,7 +2,7 @@
 // per-request auth + headers via AuthStorage.
 //
 // Built-in models come from pi-ai's registry (getProviders + getModels).
-// The `provider_config` table on the global swarm store (one row per
+// The `provider_config` table on the global fragua store (one row per
 // provider id) lets the user:
 //   - add custom providers (Ollama, vLLM, LM Studio, proxies)
 //   - override a built-in provider's baseUrl / compat (route through a
@@ -18,7 +18,7 @@
 // packages/coding-agent/src/core/model-registry.ts) — MIT. Upstream in
 // @mariozechner/pi-mono. Revisit if the pi project splits this out.
 //
-// Swarm-specific deltas:
+// Fragua-specific deltas:
 // - Custom-provider definitions live in `provider_config` rows, not
 //   on disk. `ModelRegistry.create(authStorage, store)` reads them at
 //   construction; `refresh()` re-reads.
@@ -30,6 +30,7 @@
 // - Extension registration (custom streamSimple + OAuth provider) is
 //   preserved since summariser / custom-provider flows may need it.
 
+import type { IProviderConfigStore } from "@fragua/store";
 import {
   type Api,
   type AssistantMessageEventStream,
@@ -48,7 +49,6 @@ import {
 import { registerOAuthProvider, resetOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
-import type { IProviderConfigStore } from "@swarm/store";
 import type { AuthStorage } from "./auth-storage.ts";
 
 // ---------------------------------------------------------------------------
@@ -287,7 +287,7 @@ export class ModelRegistry {
   /** Revision watermark captured at the end of `loadModels`. Compared
    * against the store's current `getProviderConfigRevision()` at the
    * start of every public read to detect out-of-process mutations
-   * (CLI `swarm providers add --custom` while the daemon runs). */
+   * (CLI `fragua providers add --custom` while the daemon runs). */
   private lastConfigRevision: { maxUpdatedAt: number; rowCount: number } = {
     maxUpdatedAt: 0,
     rowCount: 0,

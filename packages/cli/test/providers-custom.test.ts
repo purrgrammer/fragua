@@ -3,7 +3,7 @@
 // prompts UI is not under test \u2014 it never was.
 
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import {
   buildModelEntry,
   buildProviderEntry,

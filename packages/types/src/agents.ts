@@ -1,5 +1,5 @@
 // Agent-definition metadata types. Runtime discovery + parsing live in
-// @swarm/workspace (which depends on node:fs); only the static shapes are
+// @fragua/workspace (which depends on node:fs); only the static shapes are
 // exported here so downstream packages — daemon, agent backend, future
 // web UI / server endpoints — can reference profile records without
 // pulling in the workspace layer.

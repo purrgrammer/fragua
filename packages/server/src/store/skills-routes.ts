@@ -18,9 +18,9 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import type { IEventStore } from "@swarm/store";
-import type { Skill, SkillsConfig } from "@swarm/types";
-import { discoverSkills, parseSkillMd } from "@swarm/workspace";
+import type { IEventStore } from "@fragua/store";
+import type { Skill, SkillsConfig } from "@fragua/types";
+import { discoverSkills, parseSkillMd } from "@fragua/workspace";
 import { Hono } from "hono";
 
 export interface SkillsRoutesOpts {

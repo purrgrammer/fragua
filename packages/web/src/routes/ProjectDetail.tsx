@@ -33,8 +33,8 @@ import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { formatDuration } from "../lib/time.ts";
 
-const CONFIG_PATH_YAML = ".swarm/config.yaml";
-const CONFIG_PATH_JSONC = ".swarm/config.jsonc";
+const CONFIG_PATH_YAML = ".fragua/config.yaml";
+const CONFIG_PATH_JSONC = ".fragua/config.jsonc";
 
 export function ProjectDetail(): JSX.Element {
   const { cwdEnc = "" } = useParams();
@@ -300,7 +300,7 @@ export function ProjectDetail(): JSX.Element {
                 description={
                   <span>
                     Add a <code className="font-mono">.yaml</code> file under{" "}
-                    <code className="font-mono">.swarm/workflows/</code> to launch workflows from this project.
+                    <code className="font-mono">.fragua/workflows/</code> to launch workflows from this project.
                   </span>
                 }
               />

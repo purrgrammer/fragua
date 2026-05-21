@@ -739,7 +739,7 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
  *
  * Pure additive: `provider_credentials` is one row per provider, holds
  * api_key + oauth credentials, backs the new `SqliteAuthStorageBackend`,
- * replaces `~/.swarm/auth.json`. No data migration — the old file is
+ * replaces `~/.fragua/auth.json`. No data migration — the old file is
  * dropped outright per ground rule #11 (pre-release, no backwards-compat).
  *
  * `IF NOT EXISTS` is intentional: dev DBs that ran an earlier draft of
@@ -764,7 +764,7 @@ function MIGRATION_011_PROVIDER_CREDENTIALS(): string {
  *
  * Pure additive: `provider_config` is one row per provider, holds the
  * per-provider definition blob (baseUrl, headers, compat, models,
- * modelOverrides) that previously lived in `~/.swarm/models.json`.
+ * modelOverrides) that previously lived in `~/.fragua/models.json`.
  * Per-row Ajv validation lives in `ModelRegistry.loadCustomModels`.
  * No data migration — the legacy file is dropped outright per ground
  * rule #11 (pre-release, no backwards-compat).

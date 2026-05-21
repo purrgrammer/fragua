@@ -57,7 +57,7 @@ describe("createFsWorkflowReader", () => {
   let dir: string;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "swarm-wf-"));
+    dir = await mkdtemp(join(tmpdir(), "fragua-wf-"));
     await writeFile(
       join(dir, "alpha.yaml"),
       'name: alpha\nlabel: "Alpha workflow"\nnodes:\n  start: {type: start}\nedges: []\n',
@@ -182,7 +182,7 @@ describe("createFsWorkflowReader.read", () => {
   let dir: string;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "swarm-wf-read-"));
+    dir = await mkdtemp(join(tmpdir(), "fragua-wf-read-"));
     await writeFile(
       join(dir, "alpha.yaml"),
       'name: alpha\nlabel: "Alpha workflow"\nnodes:\n  start: {type: start}\nedges: []\n',

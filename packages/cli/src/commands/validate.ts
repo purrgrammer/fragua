@@ -1,10 +1,10 @@
-// `swarm validate <workflow>` — parse + lint a workflow without executing.
-// `<workflow>` resolves the same way `swarm run` does: bare name looks up
-// `<cwd>/.swarm/workflows/<name>.yaml`, anything pathy is read directly.
+// `fragua validate <workflow>` — parse + lint a workflow without executing.
+// `<workflow>` resolves the same way `fragua run` does: bare name looks up
+// `<cwd>/.fragua/workflows/<name>.yaml`, anything pathy is read directly.
 
 import { readFile } from "node:fs/promises";
-import { validateWorkflowModels } from "@swarm/agent";
-import { parseWorkflow, validate } from "@swarm/core";
+import { validateWorkflowModels } from "@fragua/agent";
+import { parseWorkflow, validate } from "@fragua/core";
 import chalk from "chalk";
 import { resolveWorkflow } from "../workflow-path.ts";
 
@@ -14,7 +14,7 @@ export async function validateCommand(workflow: string): Promise<number> {
   if (resolved == null) {
     console.error(
       chalk.red(
-        `validate: workflow not found: ${workflow} (looked in .swarm/workflows/${workflow}.yaml, then as a path)`,
+        `validate: workflow not found: ${workflow} (looked in .fragua/workflows/${workflow}.yaml, then as a path)`,
       ),
     );
     return 1;

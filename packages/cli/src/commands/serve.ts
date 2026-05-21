@@ -1,4 +1,4 @@
-// `swarm serve` — start the HTTP server from @swarm/server and keep it running
+// `fragua serve` — start the HTTP server from @fragua/server and keep it running
 // in the foreground. Users then open a browser to the printed URL.
 //
 // Design:
@@ -15,9 +15,9 @@
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AuthStorage, ModelRegistry, validateWorkflowModels } from "@swarm/agent";
-import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@swarm/server";
-import { SqliteStore } from "@swarm/store";
+import { AuthStorage, ModelRegistry, validateWorkflowModels } from "@fragua/agent";
+import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@fragua/server";
+import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
@@ -29,7 +29,7 @@ import { ensureWebBundle } from "../web-build.ts";
 const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
 
 /** TCP port used when neither `--port` nor `web.port` (in
- * `~/.swarm/config.yaml`) is set. Picked once and stable so the user
+ * `~/.fragua/config.yaml`) is set. Picked once and stable so the user
  * can bookmark `http://localhost:6767/` across harness restarts. When
  * 6767 is occupied, `startServer` walks up one port at a time (see
  * `portRetries` below) so a stray collision doesn't kill startup. */
@@ -56,8 +56,8 @@ export interface ServeCommandOptions {
   port?: number;
   /** Working directory. Default `process.cwd()`. */
   cwd?: string;
-  /** Explicit store path. Overrides `<cwd>/.swarm/swarm.db`. The discovery
-   * file (`serve.json`) is written alongside it so parallel swarms with
+  /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. The discovery
+   * file (`serve.json`) is written alongside it so parallel fraguas with
    * different DBs have isolated discovery. */
   dbPath?: string;
   /** Hostname to bind. Default `"::"` (dual-stack IPv4+IPv6). */
@@ -81,7 +81,7 @@ export interface ServeCommandOptions {
   webDistDir?: string | undefined;
   /**
    * Override the home directory used to locate the global config
-   * (`~/.swarm/config.yaml`). Intended for test isolation — omit in
+   * (`~/.fragua/config.yaml`). Intended for test isolation — omit in
    * production callers so the real `homedir()` is used.
    */
   homeDir?: string;
@@ -111,10 +111,10 @@ export interface ServerHandle {
  */
 export async function startServer(opts: ServeCommandOptions = {}): Promise<ServerHandle> {
   if (typeof Bun?.serve !== "function") {
-    throw new Error("swarm serve requires the Bun runtime (>=1.2). Run via `bun run` instead of `node`.");
+    throw new Error("fragua serve requires the Bun runtime (>=1.2). Run via `bun run` instead of `node`.");
   }
   const cwd = opts.cwd ?? process.cwd();
-  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
+  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
   mkdirSync(dirname(storePath), { recursive: true });
   const discoveryPath = resolve(dirname(storePath), "serve.json");
   const store = new SqliteStore({ path: storePath });
@@ -139,7 +139,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // every other coordination surface (`provider_credentials` table).
   const authStorage = AuthStorage.fromStore(store);
   const modelRegistry = ModelRegistry.create(authStorage, store);
-  // Backpressure cap on `status='queued'` runs from `.swarm/config.yaml`.
+  // Backpressure cap on `status='queued'` runs from `.fragua/config.yaml`.
   // Opt-in (default uncapped); non-positive / unparseable values are
   // silently ignored.
   const cfg = await loadConfig(cwd, opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
@@ -168,8 +168,8 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   const hostname = opts.hostname ?? "::";
   const portExplicit = opts.port !== undefined;
   // Resolution: explicit caller arg > config.web.port > DEFAULT_WEB_PORT.
-  // Keeping this here (not in the bin layer) means `swarm serve`,
-  // `swarm harness`, and any future programmatic caller share one
+  // Keeping this here (not in the bin layer) means `fragua serve`,
+  // `fragua harness`, and any future programmatic caller share one
   // resolution path — config-without-flag works the same everywhere.
   const startPort = portExplicit ? (opts.port as number) : (cfg.web?.port ?? DEFAULT_WEB_PORT);
   // Auto-bump on collision when the port came from config-or-default —
@@ -203,7 +203,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   const port = server.port ?? 0;
   const origin = `http://localhost:${port}`;
   // In web mode the API is scoped under `/api/*`; API-only mode keeps bare
-  // paths. Discovery publishes the prefix so `swarm run` appends routes
+  // paths. Discovery publishes the prefix so `fragua run` appends routes
   // verbatim (e.g. `${url}/runs`) regardless of mode. The compiled binary
   // ships the SPA embedded, so it's "web mode" with no distDir.
   const webMode = webDistDir !== undefined || COMPILED;
@@ -263,7 +263,7 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
       const start = opts.port ?? DEFAULT_WEB_PORT;
       console.error(chalk.red(`serve: port ${start} is already in use`));
       console.error(
-        chalk.dim("  hint: pick another with `swarm serve --port <n>`, or set web.port in ~/.swarm/config.yaml"),
+        chalk.dim("  hint: pick another with `fragua serve --port <n>`, or set web.port in ~/.fragua/config.yaml"),
       );
     } else {
       console.error(chalk.red(`serve: failed to start — ${e.message ?? String(err)}`));
@@ -271,17 +271,17 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
     return 1;
   }
 
-  console.log(chalk.green(`swarm serve listening on ${handle.origin}`));
+  console.log(chalk.green(`fragua serve listening on ${handle.origin}`));
   console.log(chalk.dim(`  store: ${handle.storePath}`));
   if (handle.webDistDir) {
     console.log(chalk.dim(`  web:   ${handle.origin}/ (${handle.webDistDir})`));
     console.log(chalk.dim(`  api:   ${handle.url}`));
   } else {
     console.log(chalk.dim(`  api:   ${handle.url}`));
-    console.log(chalk.dim(`  web:   API-only — build the UI with \`bun run --filter @swarm/web build\``));
+    console.log(chalk.dim(`  web:   API-only — build the UI with \`bun run --filter @fragua/web build\``));
     console.log(
       chalk.dim(
-        `         or run Vite separately: \`SWARM_API_URL=${handle.origin}/api bun run --filter @swarm/web dev\``,
+        `         or run Vite separately: \`FRAGUA_API_URL=${handle.origin}/api bun run --filter @fragua/web dev\``,
       ),
     );
   }

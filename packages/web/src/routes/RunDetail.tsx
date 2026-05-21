@@ -13,7 +13,7 @@
 // design language as Home's dashboard. The mix of stats is picked for
 // a run's essentials: status, duration, cost, tokens, current node.
 
-import { parseWorkflow } from "@swarm/core";
+import { parseWorkflow } from "@fragua/core";
 import { useQuery } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";

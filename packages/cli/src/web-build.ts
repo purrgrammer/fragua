@@ -1,16 +1,16 @@
-// Locate + (re)build the @swarm/web bundle on demand.
+// Locate + (re)build the @fragua/web bundle on demand.
 //
 // The harness ships with a built bundle at `packages/web/dist/`, but the
 // devloop edits live in `packages/web/src/`. This helper detects when src
 // is newer than dist (or dist is missing entirely) and runs `vite build`
 // before the HTTP server mounts the static handler. No-op for production
 // installs where the source tree is stripped — we trust whatever dist
-// shipped. `SWARM_NO_WEB_BUILD=1` skips the check even when source is
+// shipped. `FRAGUA_NO_WEB_BUILD=1` skips the check even when source is
 // present (CI smoke tests where the bundle is built once upstream).
 //
 // Test-friendliness: this lives outside `startServer` so the existing
 // startup-path tests don't pay a 5s vite build per spec. CLI commands
-// (`swarm harness`, `swarm serve`) call it explicitly and pass the
+// (`fragua harness`, `fragua serve`) call it explicitly and pass the
 // resolved distDir into `startServer`.
 
 import { spawn } from "node:child_process";
@@ -68,7 +68,7 @@ export async function ensureWebBundle(opts: EnsureWebBundleOptions = {}): Promis
   if (!existsSync(srcDir)) {
     return { distDir: distExists ? distDir : undefined, built: false, reason: "no-source" };
   }
-  if (process.env["SWARM_NO_WEB_BUILD"] === "1") {
+  if (process.env["FRAGUA_NO_WEB_BUILD"] === "1") {
     return { distDir: distExists ? distDir : undefined, built: false, reason: "skipped-env" };
   }
 

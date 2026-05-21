@@ -1,6 +1,6 @@
 # Handler contract
 
-How to write a handler for a swarm node. Companion to [ARCHITECTURE.md](./ARCHITECTURE.md) §5; this doc is the practical guide.
+How to write a handler for a fragua node. Companion to [ARCHITECTURE.md](./ARCHITECTURE.md) §5; this doc is the practical guide.
 
 ---
 
@@ -9,7 +9,7 @@ How to write a handler for a swarm node. Companion to [ARCHITECTURE.md](./ARCHIT
 A handler is a pure async function that takes an immutable `HandlerContext` and returns a `HandlerResult`:
 
 ```typescript
-import type { handler } from "@swarm/core";
+import type { handler } from "@fragua/core";
 
 const spec: handler.HandlerSpec = {
   kind: "my-node-kind",
@@ -49,7 +49,7 @@ Emit an observability event — `agent.*`, `llm.*`, `tool.*`, `cost.recorded`, `
 
 ### `ctx.env?: ExecutionEnvironment`
 
-Per-run shell + filesystem environment. Set by the executor when a `WorktreeProvisioner` is wired — `ctx.env` then points at the run's isolated `git worktree`. Required for every production dispatch: the `tool` graph-step handler (`packages/core/src/handler/handlers/tool.ts`) halts immediately when invoked with `ctx.env === undefined` and no explicit `cfg.spawner`. Silently falling back to `process.cwd()` was the worktree-isolation leak vector under a same-cwd daemon (`bun run swarm harness` from a project root would write tool-node edits straight into the main checkout). The only legitimate env-less path is test code that injects `cfg.spawner` to bypass cwd entirely. Handlers that spawn subprocesses or read files MUST prefer `ctx.env` over `process.cwd()` so concurrent runs don't step on each other. The agent-tools section below covers how `ctx.env` is wrapped in a read-only proxy when the node's narrowed toolset carries no mutator.
+Per-run shell + filesystem environment. Set by the executor when a `WorktreeProvisioner` is wired — `ctx.env` then points at the run's isolated `git worktree`. Required for every production dispatch: the `tool` graph-step handler (`packages/core/src/handler/handlers/tool.ts`) halts immediately when invoked with `ctx.env === undefined` and no explicit `cfg.spawner`. Silently falling back to `process.cwd()` was the worktree-isolation leak vector under a same-cwd daemon (`bun run fragua harness` from a project root would write tool-node edits straight into the main checkout). The only legitimate env-less path is test code that injects `cfg.spawner` to bypass cwd entirely. Handlers that spawn subprocesses or read files MUST prefer `ctx.env` over `process.cwd()` so concurrent runs don't step on each other. The agent-tools section below covers how `ctx.env` is wrapped in a read-only proxy when the node's narrowed toolset carries no mutator.
 
 ### `ctx.budgetSnapshot?: BudgetSnapshotInput`
 
@@ -161,7 +161,7 @@ return {
 // (not via a handler return).
 ```
 
-When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/swarm-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
+When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/fragua-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
 
 ### `pause_provider`
 Recoverable provider transport failure (HTTP 402/408/429/5xx, network reset). The executor commits `fact.run_paused` with a reason-discriminated payload: `payment_required` (402; manual top-up) → `paused`; `provider_error` (manual class — 400/401/403/404/413/422) → `paused`; `provider_retry` (transient transport class — 408/429/5xx/529/network; carries `attempt`, `resumeAt`) → `paused_auto`. The process is free in every case. An operator `intent.resume` wakes the run — or the wake-pending sweeper does it automatically when status is `paused_auto` and `now >= resumeAt` — and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the llm agent boundary detects provider transport errors and returns this kind on the handler's behalf.
@@ -255,7 +255,7 @@ The agent-callable tool surface is deliberately minimal:
 | `write`| Write / overwrite a file. Atomic temp+rename via the env, serialized per-path through a mutation queue so concurrent writes can't interleave. Creates parent dirs. |
 | `edit` | Multi-edit exact-text replacement with fuzzy fallback (NFKC + smart-quote / dash / NBSP normalization). Per-edit `oldText` must be unique and non-overlapping; error messages reference `edits[i]` so the model can self-correct. `prepareArguments` recovers from JSON-stringified `edits` arrays and legacy `{oldText, newText}` flat shape. |
 | `bash` | Run a shell command. Detached process group + tree kill on timeout/abort. Rolling buffer + temp-file spill keeps the full transcript recoverable when output exceeds the truncation window — the spill path appears in the truncation notice and in `data.full_output_path`. Optional `onUpdate` streams partial output during execution. Blocklist refuses dangerous commands before spawn. |
-| `grep` | Native regex search across files via `env.glob` — no shell spawn, no `rg` dependency. Skips default-ignored directories (`node_modules/`, `.git/`, `dist/`, `build/`, `.swarm/`, `.next/`, `coverage/`, `*.pyc`, `*.min.js`), binary files (null byte in first 1KB), and files larger than 1MB. 100-match limit by default; lines longer than 500 chars are truncated. Schema: `{ pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }`. |
+| `grep` | Native regex search across files via `env.glob` — no shell spawn, no `rg` dependency. Skips default-ignored directories (`node_modules/`, `.git/`, `dist/`, `build/`, `.fragua/`, `.next/`, `coverage/`, `*.pyc`, `*.min.js`), binary files (null byte in first 1KB), and files larger than 1MB. 100-match limit by default; lines longer than 500 chars are truncated. Schema: `{ pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }`. |
 | `find` | Native glob enumeration via `env.glob` — no shell spawn, no `fd` dependency. Default ignores honoured. 1000-result limit by default. Schema: `{ pattern, path?, limit? }`. |
 | `ls`   | Non-recursive directory listing via `env.listDir`. Sorted alphabetical case-insensitive; directories carry a `/` suffix; dotfiles included. 500-entry limit by default. Schema: `{ path?, limit? }`. |
 
@@ -316,7 +316,7 @@ The `agent` tool is subject to the same `allowed_tools`/`denied_tools` narrowing
 
 ### Bracketing observability events
 
-Three event types bracket each sub-agent slice on the parent's stream (declared in `packages/types/src/events.ts` and noted at `packages/types/src/swarm-events.ts:429-438`):
+Three event types bracket each sub-agent slice on the parent's stream (declared in `packages/types/src/events.ts` and noted at `packages/types/src/fragua-events.ts:429-438`):
 
 - **`subagent.start`** — emitted before the first LLM call. Payload: `{ subagent_id, parent_node_id, iteration, provider, model, tool_call_id, name?, agent_def? }`. `name` is the caller-supplied free-form label from `agent({ name: … })`; `agent_def` is the resolved profile name from `agent({ agent: "<def-name>" })`; both, either, or neither may be present.
 - **`subagent.end`** — emitted after the last LLM call or on abort. Payload: `{ subagent_id, status: "completed" | "halted" | "cancelled", summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`. The cost/token fields are **cumulative across respawns** for this `subagent_id` — on a fresh run they equal the single bracket's totals; after a daemon crash-and-restart they include all prior brackets' seeds so the terminal `subagent.end` always represents the full end-to-end spend.
@@ -366,7 +366,7 @@ A tool node is not an agent tool. Agent-callable tools (read / write /
 edit / bash) are what an LLM invokes *inside* an llm turn; the
 graph-level `tool` node is a distinct primitive for side-effect-only
 shell steps (CI gates, idempotent commands) with no LLM in the loop.
-See the `format` / `ci` steps in `.swarm/workflows/work.yaml` for
+See the `format` / `ci` steps in `.fragua/workflows/work.yaml` for
 `tool` nodes in a mixed pipeline.
 
 ## LLM self-abort (`abort` tool)
@@ -396,7 +396,7 @@ back to a default string.
 
 Stray `<promise>X_READY</promise>` markers in earlier prompt versions
 were prose convention only — never engine signals. They have been
-removed from `.swarm/workflows/*.yaml` and should not be reintroduced.
+removed from `.fragua/workflows/*.yaml` and should not be reintroduced.
 
 ## Loops
 
@@ -416,7 +416,7 @@ steps:
 
 `ctx.iteration` tracks the re-entry counter; the executor bumps it each
 time the backward edge re-enters. Pure retry-policy semantics live in
-`@swarm/core`'s `engine/retry-policy.ts` — `retryStep(state, status)`
+`@fragua/core`'s `engine/retry-policy.ts` — `retryStep(state, status)`
 returns `advance` / `retry` / `fail` / `halt`. The executor consults it
 after every handler completion.
 
@@ -473,7 +473,7 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 ## Example: minimal LLM handler
 
 ```typescript
-import { handler } from "@swarm/core";
+import { handler } from "@fragua/core";
 
 export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
   return {
@@ -506,7 +506,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
 }
 ```
 
-For a fully-featured LLM backend with skills, context files, and tool-calling, use `makeLlmHandler` from `@swarm/agent` which wraps `PiLlmBackend`.
+For a fully-featured LLM backend with skills, context files, and tool-calling, use `makeLlmHandler` from `@fragua/agent` which wraps `PiLlmBackend`.
 
 ---
 

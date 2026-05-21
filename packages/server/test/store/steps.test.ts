@@ -1,7 +1,7 @@
 // Unit tests for the eventsToSteps reducer.
 
 import { describe, expect, test } from "bun:test";
-import type { StoredEvent } from "@swarm/store";
+import type { StoredEvent } from "@fragua/store";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "../../src/store/steps.ts";
 
 function ev(type: string, ts: number, payload: Record<string, unknown>): StoredEvent {

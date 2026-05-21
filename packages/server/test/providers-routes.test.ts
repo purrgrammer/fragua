@@ -5,8 +5,8 @@
 //
 
 import { describe, expect, test } from "bun:test";
-import { AuthStorage, ModelRegistry } from "@swarm/agent";
-import { SqliteStore } from "@swarm/store";
+import { AuthStorage, ModelRegistry } from "@fragua/agent";
+import { SqliteStore } from "@fragua/store";
 import { providersRoutes } from "../src/routes/providers.ts";
 
 function mount(): { app: ReturnType<typeof providersRoutes>; store: SqliteStore } {

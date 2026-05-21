@@ -1,4 +1,4 @@
-// Design-discipline gate: enforces Swarm token hygiene across product
+// Design-discipline gate: enforces Fragua token hygiene across product
 // surfaces. Mirrors the approach used by store/test/lint.test.ts and
 // core/test/handler/discipline.test.ts.
 //

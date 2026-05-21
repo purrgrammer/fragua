@@ -40,7 +40,7 @@ describe("resolveReadPath", () => {
   let scratch: string;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-path-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-path-"));
   });
 
   afterEach(async () => {

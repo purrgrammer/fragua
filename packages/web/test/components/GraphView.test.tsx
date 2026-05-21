@@ -26,7 +26,7 @@
 // caught by the running dev server + Playwright (future).
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { parseWorkflow } from "@swarm/core";
+import { parseWorkflow } from "@fragua/core";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
 import type { RunDetail } from "../../src/lib/api.ts";
@@ -595,7 +595,7 @@ steps:
     next: verify
   verify:
     type: tool
-    run: bun run --filter='@swarm/*' typecheck && bun run lint && bun test
+    run: bun run --filter='@fragua/*' typecheck && bun run lint && bun test
 `;
     const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);

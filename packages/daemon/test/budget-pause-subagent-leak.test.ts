@@ -21,15 +21,15 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PiLlmBackend } from "@fragua/agent";
+import { SqliteStore } from "@fragua/store";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
-import { PiLlmBackend } from "@swarm/agent";
-import { SqliteStore } from "@swarm/store";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { makeSpawnSubagent } from "../src/spawn-subagent.ts";
 
 describe("budget-pause sub-agent leak — overshoot measurement", () => {
   test("parent abort during in-flight sub-agent stream: cost events stop within a bounded window", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-budget-leak-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-budget-leak-"));
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     store.enqueueRun({ runId: "test-leak", workflowSha: "wf" });

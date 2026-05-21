@@ -146,7 +146,7 @@ describe("RunComposer", () => {
     });
     try {
       const workflows: WorkflowSummary[] = [
-        workflow("local-a", { cwd: PROJECT_CWD, path: "/work/proj-a/.swarm/workflows/local-a.yaml", sha: "sha-LA" }),
+        workflow("local-a", { cwd: PROJECT_CWD, path: "/work/proj-a/.fragua/workflows/local-a.yaml", sha: "sha-LA" }),
       ];
       const { getByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
 
@@ -192,7 +192,7 @@ describe("RunComposer", () => {
     });
     try {
       const workflows: WorkflowSummary[] = [
-        workflow("global-a", { path: "/home/u/.swarm/workflows/global-a.yaml", sha: "sha-GA" }),
+        workflow("global-a", { path: "/home/u/.fragua/workflows/global-a.yaml", sha: "sha-GA" }),
       ];
       const { getByTestId } = renderWithClient(<RunComposer cwd={PROJECT_CWD} workflows={workflows} />);
 

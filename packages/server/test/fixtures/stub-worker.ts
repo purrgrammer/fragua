@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Minimal test stub used as `swarmScript` by local-process-supervisor
+// Minimal test stub used as `fraguaScript` by local-process-supervisor
 // tests. Exits with the code from FAKE_EXIT_CODE (default 0) after
 // optionally sleeping FAKE_SLEEP_MS so callers can test terminate().
 

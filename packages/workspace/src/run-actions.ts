@@ -1,12 +1,12 @@
 // Synchronous post-terminal operator actions on a run's worktree refs.
 //
 // `accept` lands a terminal run's work on the operator's current branch and
-// `discard` drops it — both pure git plumbing over `refs/swarm/{snapshots,
+// `discard` drops it — both pure git plumbing over `refs/fragua/{snapshots,
 // heads}/<runId>`, callable inline from the server route and the CLI (no daemon
 // sweep). `accept` is the validated replay+stage algorithm
 // probe the whole run merge in
 // memory first, then replay the workflow's commits onto HEAD and stage the
-// uncommitted tail for the operator to commit. Nothing swarm-authored enters
+// uncommitted tail for the operator to commit. Nothing fragua-authored enters
 // history — replayed commits keep their own message/author; the tail is the
 // operator's commit.
 import { execFile } from "node:child_process";
@@ -75,12 +75,12 @@ export interface AcceptOpts {
  */
 export async function applyAccept(git: GitExec, opts: AcceptOpts): Promise<AcceptResult> {
   const { cwd, runId, baseGitSha } = opts;
-  const snapRef = `refs/swarm/snapshots/${runId}`;
+  const snapRef = `refs/fragua/snapshots/${runId}`;
 
   const snapCommit = await revParse(git, cwd, snapRef);
   if (snapCommit == null) return { ok: false, reason: "no_work", detail: `no ${snapRef}` };
   const snapTree = await revParse(git, cwd, `${snapRef}^{tree}`);
-  const runHead = (await revParse(git, cwd, `refs/swarm/heads/${runId}`)) ?? baseGitSha;
+  const runHead = (await revParse(git, cwd, `refs/fragua/heads/${runId}`)) ?? baseGitSha;
   const runTree = await revParse(git, cwd, `${runHead}^{tree}`);
   const target = await revParse(git, cwd, "HEAD");
   if (snapTree == null || runTree == null || target == null) {
@@ -139,10 +139,10 @@ export async function applyAccept(git: GitExec, opts: AcceptOpts): Promise<Accep
 
 export type DiscardResult = { ok: true; refs: string[] };
 
-/** Drop a run's recoverable work — delete its `refs/swarm/{snapshots,heads}`.
+/** Drop a run's recoverable work — delete its `refs/fragua/{snapshots,heads}`.
  * Idempotent: a missing ref is tolerated. */
 export async function applyDiscard(git: GitExec, cwd: string, runId: string): Promise<DiscardResult> {
-  const refs = [`refs/swarm/snapshots/${runId}`, `refs/swarm/heads/${runId}`];
+  const refs = [`refs/fragua/snapshots/${runId}`, `refs/fragua/heads/${runId}`];
   const deleted: string[] = [];
   for (const ref of refs) {
     const sha = await revParse(git, cwd, ref);

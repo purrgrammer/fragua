@@ -22,7 +22,7 @@ describe("WorktreeEnvironment", () => {
   let repo: string;
 
   beforeEach(async () => {
-    repo = await mkdtemp(join(tmpdir(), "swarm-wt-"));
+    repo = await mkdtemp(join(tmpdir(), "fragua-wt-"));
     gitInitRepo(repo);
     await writeFile(join(repo, "README.md"), "# test\n");
     gitCommit(repo, "init");
@@ -37,9 +37,9 @@ describe("WorktreeEnvironment", () => {
     await env.init();
     expect(existsSync(env.worktreePath)).toBe(true);
 
-    // No `swarm/runs/abc` branch exists at provision time — branch is lazy.
+    // No `fragua/runs/abc` branch exists at provision time — branch is lazy.
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).not.toContain("swarm/runs/abc");
+    expect(branches.stdout).not.toContain("fragua/runs/abc");
 
     // baseGitSha matches main HEAD.
     const head = spawnSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
@@ -69,18 +69,18 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
     expect(existsSync(env.worktreePath)).toBe(false);
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).not.toContain("swarm/runs/clean-run");
+    expect(branches.stdout).not.toContain("fragua/runs/clean-run");
   });
 
   test("dispose removes the worktree and creates NO branch, even with committed + dirty + untracked work", async () => {
-    // Work preservation is the snapshotter's job now (refs/swarm/snapshots +
+    // Work preservation is the snapshotter's job now (refs/fragua/snapshots +
     // heads, captured before dispose). Dispose just tears down — it no longer
-    // inspects the tree or creates a porcelain swarm/runs branch.
+    // inspects the tree or creates a porcelain fragua/runs branch.
     const env = new WorktreeEnvironment({ repoRoot: repo, runId: "teardown-run" });
     await env.init();
     await env.writeFile("feature.ts", "export const x = 1;\n");
     await env.exec(
-      "git add -A && git -c user.email=node@swarm -c user.name=node commit --no-gpg-sign -m 'in-worktree commit'",
+      "git add -A && git -c user.email=node@fragua -c user.name=node commit --no-gpg-sign -m 'in-worktree commit'",
     );
     await env.writeFile("dirty.ts", "export const u = 2;\n"); // uncommitted
     await env.writeFile("brand-new.log", "untracked output"); // untracked
@@ -88,7 +88,7 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
     expect(existsSync(env.worktreePath)).toBe(false);
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).not.toContain("swarm/runs/teardown-run");
+    expect(branches.stdout).not.toContain("fragua/runs/teardown-run");
   });
 
   test("writeFile in worktree does not touch repoRoot files", async () => {
@@ -182,7 +182,7 @@ describe("WorktreeEnvironment", () => {
       expect(existsSync(path)).toBe(true);
     } finally {
       spawnSync("git", ["-C", repo, "worktree", "remove", "--force", path], { stdio: "ignore" });
-      spawnSync("git", ["-C", repo, "branch", "-D", "swarm/keep"], { stdio: "ignore" });
+      spawnSync("git", ["-C", repo, "branch", "-D", "fragua/keep"], { stdio: "ignore" });
     }
   });
 

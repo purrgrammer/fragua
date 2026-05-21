@@ -10,7 +10,7 @@ describe("grepTool", () => {
   let env: LocalEnvironment;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-grep-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-grep-"));
     env = new LocalEnvironment({ cwd: scratch });
   });
 

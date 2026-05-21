@@ -1,4 +1,4 @@
-// `swarm db <action>` — DB maintenance.
+// `fragua db <action>` — DB maintenance.
 //   vacuum    — reclaim free pages (VACUUM).
 //   gc-blobs  — delete orphaned rows in the `blobs` table (no artifact refs).
 //   backup    — SQLite online backup API into a target path.
@@ -6,13 +6,13 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
 export interface DbCommandOptions {
   action: "vacuum" | "gc-blobs" | "backup";
   cwd?: string;
-  /** Explicit store path. Overrides `<cwd>/.swarm/swarm.db`. */
+  /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. */
   dbPath?: string;
   /** For `backup` — destination path. */
   to?: string;
@@ -22,7 +22,7 @@ export interface DbCommandOptions {
 
 export async function dbCommand(opts: DbCommandOptions): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
+  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
   if (!existsSync(storePath)) {
     console.error(chalk.red(`db ${opts.action}: no store at ${storePath}`));
     return 1;

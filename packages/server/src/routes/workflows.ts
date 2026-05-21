@@ -11,8 +11,8 @@
 // POST /workflows), then falls back to the file reader for forward
 // compatibility. 404 when neither source resolves the identifier.
 
-import { parseWorkflow } from "@swarm/core";
-import type { IEventStore } from "@swarm/store";
+import { parseWorkflow } from "@fragua/core";
+import type { IEventStore } from "@fragua/store";
 import { Hono } from "hono";
 import type { WorkflowDetail, WorkflowReader } from "../ports.ts";
 

@@ -3,8 +3,8 @@
 // (intent / done / failed) are NOT included — they're already durable via
 // the pre-commit recorder before this function runs.
 
-import type * as handler from "@swarm/core/handler";
-import type { FactEvent, RunState } from "@swarm/store";
+import type * as handler from "@fragua/core/handler";
+import type { FactEvent, RunState } from "@fragua/store";
 
 type HandlerResult = handler.HandlerResult;
 

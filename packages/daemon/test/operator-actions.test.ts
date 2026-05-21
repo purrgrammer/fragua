@@ -5,8 +5,8 @@
 // discarded}, advancing applied-seq in OCC lockstep. No git here.
 
 import { describe, expect, test } from "bun:test";
-import type { FactEvent, IEventStore, RunState, WakeCandidateRow } from "@swarm/store";
-import type { IntentType } from "@swarm/types";
+import type { FactEvent, IEventStore, RunState, WakeCandidateRow } from "@fragua/store";
+import type { IntentType } from "@fragua/types";
 import { processOperatorActions } from "../src/operator-actions.ts";
 
 interface FakeIntent {
@@ -63,7 +63,7 @@ describe("processOperatorActions", () => {
   });
 
   test("discard: projects intent.discard_run → fact.run_discarded from the carried refs", () => {
-    const refs = ["refs/swarm/heads/run-d", "refs/swarm/snapshots/run-d"];
+    const refs = ["refs/fragua/heads/run-d", "refs/fragua/snapshots/run-d"];
     const { store, appended } = fakeStore({
       runId: "run-d",
       state: {},

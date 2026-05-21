@@ -8,19 +8,19 @@
 //   2. The handler-bridge loads prior messages from the store before
 //      each backend.run() so a fresh backend instance post-restart
 //      sees history via `input.priorMessages` (typed AgentMessage[]).
-//      Swarm-internal `role:"system"` rows (SystemPromptMessage) are
+//      Fragua-internal `role:"system"` rows (SystemPromptMessage) are
 //      filtered out — pi-ai carries the system prompt separately.
 //   3. Event payloads never carry the message content — only the
 //      messages table does — so §I7 (4KB event cap) stays intact even
 //      for 8 KB+ assistant turns.
 
 import { describe, expect, test } from "bun:test";
+import type { LlmBackend, LlmInput, Node } from "@fragua/core";
+import { ok } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
+import { SqliteStore } from "@fragua/store";
+import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { LlmBackend, LlmInput, Node } from "@swarm/core";
-import { ok } from "@swarm/core";
-import * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
-import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 import { makeLlmHandler } from "../src/handler-bridge.ts";
 

@@ -1,6 +1,6 @@
 // Thin `NumberFlow` wrapper for animated numeric counters.
 //
-// Most swarm numeric readouts tick via SSE (stats tiles, run detail
+// Most fragua numeric readouts tick via SSE (stats tiles, run detail
 // header, per-step metrics). Snapping between values makes the UI feel
 // static; number-flow's digit transition adds a light sense of motion
 // without changing the underlying format.

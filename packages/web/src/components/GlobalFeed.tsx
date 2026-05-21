@@ -12,7 +12,7 @@
 //     `useQuery(queries.runs.detail(id))`; TanStack dedupes
 //     concurrent reads of the same id.
 
-import { AUTO_WAKE_PAUSE_REASONS, type FeedEvent, type PauseReason } from "@swarm/types";
+import { AUTO_WAKE_PAUSE_REASONS, type FeedEvent, type PauseReason } from "@fragua/types";
 import { useQuery } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 import {
@@ -145,7 +145,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
 
-/** Defense-in-depth client filter. `FEED_EVENT_KINDS` in `@swarm/types`
+/** Defense-in-depth client filter. `FEED_EVENT_KINDS` in `@fragua/types`
  *  is the authoritative server-side allowlist; this set catches anything
  *  that slips through. Currently `fact.subrun_completed` is the only
  *  entry: it is not in `FEED_EVENT_KINDS` today, but the guard protects

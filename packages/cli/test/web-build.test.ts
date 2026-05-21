@@ -15,11 +15,11 @@ afterEach(async () => {
     await rm(scratch, { recursive: true, force: true });
     scratch = undefined;
   }
-  delete process.env["SWARM_NO_WEB_BUILD"];
+  delete process.env["FRAGUA_NO_WEB_BUILD"];
 });
 
 async function setup(opts: { withSrc?: boolean; withDist?: boolean; distMtime?: number } = {}): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "swarm-web-build-"));
+  const root = await mkdtemp(join(tmpdir(), "fragua-web-build-"));
   if (opts.withSrc !== false) {
     await mkdir(join(root, "src"), { recursive: true });
     await writeFile(join(root, "src", "main.tsx"), "// dummy");
@@ -51,9 +51,9 @@ describe("ensureWebBundle", () => {
     expect(r.distDir).toBeUndefined();
   });
 
-  test("SWARM_NO_WEB_BUILD=1 short-circuits even with stale source", async () => {
+  test("FRAGUA_NO_WEB_BUILD=1 short-circuits even with stale source", async () => {
     scratch = await setup({ withSrc: true, withDist: true, distMtime: 0 });
-    process.env["SWARM_NO_WEB_BUILD"] = "1";
+    process.env["FRAGUA_NO_WEB_BUILD"] = "1";
     let buildCalls = 0;
     const r = await ensureWebBundle({
       webPackageDir: scratch,

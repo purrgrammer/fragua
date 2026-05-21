@@ -3,7 +3,7 @@
 // Walks every node in a parsed workflow and rejects those whose
 // declared `(provider, model)` pair does not resolve in the ModelRegistry
 // (pi-ai built-ins + any custom providers in the `provider_config`
-// table on the global swarm store). Catches the
+// table on the global fragua store). Catches the
 // `claude-sonnet-4-6` (hyphen form) typo that silently runs a plan node,
 // then halts on the first downstream LLM dispatch — wasting real tokens
 // before the misconfiguration surfaces.
@@ -21,10 +21,10 @@
 // don't LLM-dispatch.
 
 import { join } from "node:path";
-import { parseWorkflow } from "@swarm/core";
-import { SqliteStore } from "@swarm/store";
+import { parseWorkflow } from "@fragua/core";
+import { SqliteStore } from "@fragua/store";
 import type { ModelRegistry } from "./credentials/index.ts";
-import { AuthStorage, findByBareId, getSwarmHome, ModelRegistry as Registry } from "./credentials/index.ts";
+import { AuthStorage, findByBareId, getFraguaHome, ModelRegistry as Registry } from "./credentials/index.ts";
 
 export interface ModelOffender {
   nodeId: string;
@@ -38,14 +38,14 @@ export type WorkflowModelValidationResult = { ok: true } | { ok: false; offender
 /** Lazy process-wide registry used when the caller didn't pass one.
  * Covers legacy call sites (validate command, tests) without forcing
  * them to construct + pass a registry they don't otherwise need. The
- * paired store handle is opened against the global swarm DB; it lives
+ * paired store handle is opened against the global fragua DB; it lives
  * for the process lifetime. The store is also the source of
  * custom-provider definitions (`provider_config` table). */
 let cachedRegistry: ModelRegistry | undefined;
 let cachedStore: SqliteStore | undefined;
 function getDefaultRegistry(): ModelRegistry {
   if (!cachedRegistry) {
-    if (!cachedStore) cachedStore = new SqliteStore({ path: join(getSwarmHome(), "swarm.db") });
+    if (!cachedStore) cachedStore = new SqliteStore({ path: join(getFraguaHome(), "fragua.db") });
     cachedRegistry = Registry.create(AuthStorage.fromStore(cachedStore), cachedStore);
   }
   return cachedRegistry;

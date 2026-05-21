@@ -23,8 +23,8 @@
 // All git invocations go through the injected RunSnapshotReader — no
 // direct git calls here; pure request routing + error shaping.
 
-import type { IEventStore, StoredEvent } from "@swarm/store";
-import type { SnapshotCapturedData } from "@swarm/types";
+import type { IEventStore, StoredEvent } from "@fragua/store";
+import type { SnapshotCapturedData } from "@fragua/types";
 import { Hono } from "hono";
 import type { RunSnapshotReader } from "../ports.ts";
 

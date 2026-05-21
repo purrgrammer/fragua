@@ -6,7 +6,7 @@
 // readers and search engines see an actual breadcrumb, not a sea of
 // divs.
 //
-// Swarm design alignment:
+// Fragua design alignment:
 //   § Color       — `--sw-muted` for the trail, `--sw-text` for the
 //                   current page. No shadcn `*-foreground` aliases.
 //   § Typography  — body sized at `--sw-text-sm` (12px). Weight (500)

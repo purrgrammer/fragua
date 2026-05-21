@@ -4,7 +4,7 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import { InvalidDurationError, parseDurationMs, parseWorkflow, validateInputBindings } from "@swarm/core";
+import { InvalidDurationError, parseDurationMs, parseWorkflow, validateInputBindings } from "@fragua/core";
 import {
   FEED_EVENT_KINDS,
   type IEventStore,
@@ -13,8 +13,8 @@ import {
   PayloadTooLargeError,
   type RunState,
   sha256Hex,
-} from "@swarm/store";
-import { applyAccept, applyDiscard, defaultGitExec } from "@swarm/workspace";
+} from "@fragua/store";
+import { applyAccept, applyDiscard, defaultGitExec } from "@fragua/workspace";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -38,7 +38,7 @@ export interface ServerDeps {
    *  merge validation (the daemon sweep is the defense-in-depth backstop). */
   runSnapshotReader?: RunSnapshotReader;
   /** Runs post-terminal accept/discard synchronously in the request path so
-   *  the operator sees the result. Defaults to the @swarm/workspace git
+   *  the operator sees the result. Defaults to the @fragua/workspace git
    *  implementation; injected by tests to stub the outcome. */
   runActions?: RunActionExec;
   /** Poll interval for SSE streams in ms. */
@@ -60,7 +60,7 @@ export interface ServerDeps {
    * Validate every llm node's `(provider, model)` declaration at
    * workflow registration. Rejects typos that would otherwise only
    * surface mid-run (after an expensive `plan` phase already spent
-   * tokens). Injected rather than imported so @swarm/server stays
+   * tokens). Injected rather than imported so @fragua/server stays
    * free of the pi-ai dependency; the daemon wires in the real
    * resolver on startup.
    */
@@ -156,7 +156,7 @@ export function registryPreflight(args: {
     return {
       ok: false,
       detail:
-        "no provider credentials configured. run `swarm providers add <provider>` or `swarm providers login <provider>`.",
+        "no provider credentials configured. run `fragua providers add <provider>` or `fragua providers login <provider>`.",
     };
   };
 }
@@ -241,8 +241,8 @@ export function createRoutes(deps: ServerDeps): Hono {
        *  omitted. Surfaced on `run_state.workflow_name`. */
       workflowName?: string;
       /** How the workflow argument resolved. When `workflowSha` is
-       *  omitted, "global" pins lookup to `~/.swarm/workflows/`,
-       *  "local" pins to `<cwd>/.swarm/workflows/`, anything else
+       *  omitted, "global" pins lookup to `~/.fragua/workflows/`,
+       *  "local" pins to `<cwd>/.fragua/workflows/`, anything else
        *  falls back to the global → projects search order. */
       workflowScope?: "global" | "local" | "path" | "ephemeral";
       /** Optional provenance: filesystem path of the .yaml file the

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import fc from "fast-check";
 import { autoDispatcherResolver, resolveMaxMs } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
@@ -228,7 +228,7 @@ describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
         store,
         codergenFactory: (node, _next, maxMs) => {
           if (node.id === nodeId) recorded = maxMs;
-          const spec: import("@swarm/core/handler").HandlerSpec = {
+          const spec: import("@fragua/core/handler").HandlerSpec = {
             kind: "llm",
             sideEffect: "external",
             handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),

@@ -7,7 +7,7 @@
 // before the halt.
 
 import { describe, expect, test } from "bun:test";
-import { ConcurrencyError, type FactEvent } from "@swarm/store";
+import { ConcurrencyError, type FactEvent } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";

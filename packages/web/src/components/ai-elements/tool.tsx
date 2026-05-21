@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils";
 import { CodeBlock } from "./code-block";
 
 /*
- * Swarm design language — tool / tool-call card
+ * Fragua design language — tool / tool-call card
  *
  *   § Color           — state colours mapped to `--sw-accent-*` tokens
  *                       (success / error / warn / thinking / idle). The
@@ -134,7 +134,7 @@ export const getStatusBadge = (status: ToolPart["state"]) => (
   </Badge>
 );
 
-/** Built-in swarm tool registry — header icon + human-readable label,
+/** Built-in fragua tool registry — header icon + human-readable label,
  * keyed by canonical `domain:name` (see `packages/workspace/src/tools.ts`).
  * Unknown tools fall back to a generic wrench and a sentence-cased slug. */
 interface ToolPresentation {
@@ -142,7 +142,7 @@ interface ToolPresentation {
   label: string;
 }
 
-// Sentence case (skill: "Never Title Case anywhere."). Swarm tool
+// Sentence case (skill: "Never Title Case anywhere."). Fragua tool
 // names are bare identifiers — `read`, `write`, `edit`, `bash`.
 export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   bash: { icon: TerminalIcon, label: "Bash" },

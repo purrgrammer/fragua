@@ -10,7 +10,7 @@ describe("core tools", () => {
   let env: LocalEnvironment;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-tools-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-tools-"));
     env = new LocalEnvironment({ cwd: scratch });
   });
 

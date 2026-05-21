@@ -1,6 +1,6 @@
-// MultiSourceWorkflowReader: aggregates a global `~/.swarm/workflows`
+// MultiSourceWorkflowReader: aggregates a global `~/.fragua/workflows`
 // directory plus every project root the store has ever seen
-// (`store.listCwds()` → `<cwd>/.swarm/workflows`). The cwd field on
+// (`store.listCwds()` → `<cwd>/.fragua/workflows`). The cwd field on
 // each entry tells the listing surface which source owns the workflow;
 // `read(name, { cwd })` resolves a single source explicitly.
 
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { createMultiSourceWorkflowReader } from "../src/adapters/multi-source-workflow-reader.ts";
 
 interface Fixture {
@@ -20,29 +20,29 @@ interface Fixture {
 }
 
 async function setup(): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), "swarm-multi-wf-"));
-  const globalDir = join(root, "global", ".swarm", "workflows");
+  const root = await mkdtemp(join(tmpdir(), "fragua-multi-wf-"));
+  const globalDir = join(root, "global", ".fragua", "workflows");
   const projectAlpha = join(root, "alpha");
   const projectBeta = join(root, "beta");
   await mkdir(globalDir, { recursive: true });
-  await mkdir(join(projectAlpha, ".swarm", "workflows"), { recursive: true });
-  await mkdir(join(projectBeta, ".swarm", "workflows"), { recursive: true });
+  await mkdir(join(projectAlpha, ".fragua", "workflows"), { recursive: true });
+  await mkdir(join(projectBeta, ".fragua", "workflows"), { recursive: true });
 
   await writeFile(
     join(globalDir, "shared.yaml"),
     "name: shared\ndescription: Global shared\nsteps:\n  work: {type: llm, prompt: x}\n",
   );
   await writeFile(
-    join(projectAlpha, ".swarm", "workflows", "alpha-only.yaml"),
+    join(projectAlpha, ".fragua", "workflows", "alpha-only.yaml"),
     "name: aonly\nsteps:\n  work: {type: llm, prompt: x}\n",
   );
   await writeFile(
-    join(projectBeta, ".swarm", "workflows", "beta-only.yaml"),
+    join(projectBeta, ".fragua", "workflows", "beta-only.yaml"),
     "name: bonly\nsteps:\n  work: {type: llm, prompt: x}\n",
   );
   // Name collision across sources: `shared` exists globally + in alpha.
   await writeFile(
-    join(projectAlpha, ".swarm", "workflows", "shared.yaml"),
+    join(projectAlpha, ".fragua", "workflows", "shared.yaml"),
     "name: shared\nsteps:\n  work: {type: llm, prompt: x}\n",
   );
 

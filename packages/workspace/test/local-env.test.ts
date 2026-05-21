@@ -9,7 +9,7 @@ describe("LocalEnvironment", () => {
   let env: LocalEnvironment;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-env-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-env-"));
     env = new LocalEnvironment({ cwd: scratch });
   });
 
@@ -48,7 +48,7 @@ describe("LocalEnvironment", () => {
 
   describe("path-escape isolation", () => {
     test("writeFile throws PathEscapeError on absolute path outside cwd", async () => {
-      const outside = join(tmpdir(), "swarm-escape-target.txt");
+      const outside = join(tmpdir(), "fragua-escape-target.txt");
       await expect(env.writeFile(outside, "leak")).rejects.toBeInstanceOf(PathEscapeError);
     });
 
@@ -57,12 +57,12 @@ describe("LocalEnvironment", () => {
     });
 
     test("readFile throws PathEscapeError on absolute path outside cwd", async () => {
-      const outside = join(tmpdir(), "swarm-escape-read.txt");
+      const outside = join(tmpdir(), "fragua-escape-read.txt");
       await expect(env.readFile(outside)).rejects.toBeInstanceOf(PathEscapeError);
     });
 
     test("exists throws PathEscapeError on out-of-cwd path", async () => {
-      const outside = join(tmpdir(), "swarm-escape-exists.txt");
+      const outside = join(tmpdir(), "fragua-escape-exists.txt");
       expect(() => env.exists(outside)).toThrow(PathEscapeError);
     });
 
@@ -91,11 +91,11 @@ describe("LocalEnvironment", () => {
       // the scratch dir name is in the output.
       const r = await env.exec("pwd");
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain("swarm-env-");
+      expect(r.stdout).toContain("fragua-env-");
     });
 
     test("writeFile through a symlink inside cwd that targets outside throws PathEscapeError", async () => {
-      const outside = await mkdtemp(join(tmpdir(), "swarm-escape-target-"));
+      const outside = await mkdtemp(join(tmpdir(), "fragua-escape-target-"));
       try {
         await symlink(outside, join(scratch, "linked"));
         await expect(env.writeFile("linked/leak.txt", "data")).rejects.toBeInstanceOf(PathEscapeError);
@@ -105,7 +105,7 @@ describe("LocalEnvironment", () => {
     });
 
     test("readFile through a symlink inside cwd that targets outside throws PathEscapeError", async () => {
-      const outside = await mkdtemp(join(tmpdir(), "swarm-escape-read-"));
+      const outside = await mkdtemp(join(tmpdir(), "fragua-escape-read-"));
       try {
         await fsWriteFile(join(outside, "secret.txt"), "leaked");
         await symlink(outside, join(scratch, "linked"));
@@ -116,7 +116,7 @@ describe("LocalEnvironment", () => {
     });
 
     test("symlink file inside cwd that targets outside throws PathEscapeError on read", async () => {
-      const outside = await mkdtemp(join(tmpdir(), "swarm-escape-file-"));
+      const outside = await mkdtemp(join(tmpdir(), "fragua-escape-file-"));
       try {
         await fsWriteFile(join(outside, "secret.txt"), "leaked");
         await symlink(join(outside, "secret.txt"), join(scratch, "shortcut"));

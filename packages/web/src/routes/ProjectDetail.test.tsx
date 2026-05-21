@@ -106,7 +106,7 @@ describe("ProjectDetail · tabs", () => {
 
   test("workflows tab is the active panel when ?tab=workflows", async () => {
     installFetch({
-      workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
+      workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
     const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
     const wfSection = await waitFor(() => within(container).getByTestId("project-workflows-section"));
@@ -116,7 +116,7 @@ describe("ProjectDetail · tabs", () => {
 
   test("activating Workflows tab updates the URL search param to tab=workflows", async () => {
     installFetch({
-      workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
+      workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
     const probe: { current: URLSearchParams | null } = { current: null };
     const { container } = renderAt(`/projects/${TEST_ENC}?tab=runs`, probe);
@@ -133,7 +133,7 @@ describe("ProjectDetail · tabs", () => {
 
   test("RunComposer renders inside the Runs tab panel", async () => {
     installFetch({
-      workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
+      workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
     const { container } = renderAt(`/projects/${TEST_ENC}`);
     // Default tab is `runs` (no ?tab= param). The composer must live inside the
@@ -151,7 +151,7 @@ describe("ProjectDetail · tabs", () => {
 
   test("RunComposer is not rendered inside the Workflows tab panel", async () => {
     installFetch({
-      workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
+      workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
     const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
     const wfSection = await waitFor(() => within(container).getByTestId("project-workflows-section"));
@@ -186,7 +186,7 @@ describe("ProjectDetail · tabs", () => {
 
   test("links project workflows to /workflows/:name with the project cwd", async () => {
     installFetch({
-      workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
+      workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
     const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
     const link = (await waitFor(() =>

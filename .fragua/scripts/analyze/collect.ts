@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { HANDLER_BY_SHAPE, parseDotSource } from "@swarm/core";
+import { HANDLER_BY_SHAPE, parseDotSource } from "@fragua/core";
 
 interface Args {
   storePath: string;
@@ -13,12 +13,12 @@ interface Args {
 }
 
 function defaultStorePath(): string {
-  const project = resolve(process.cwd(), ".swarm/swarm.db");
+  const project = resolve(process.cwd(), ".fragua/fragua.db");
   // Empty/stray project DBs sometimes appear (test fixtures, mis-init).
   // Treat as absent unless populated — falls through to the harness store
-  // so `swarm run analyze` from a project root keeps working.
+  // so `fragua run analyze` from a project root keeps working.
   if (existsSync(project) && projectStoreHasRuns(project)) return project;
-  return resolve(homedir(), ".swarm/swarm.db");
+  return resolve(homedir(), ".fragua/fragua.db");
 }
 
 function projectStoreHasRuns(path: string): boolean {

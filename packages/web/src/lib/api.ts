@@ -1,4 +1,4 @@
-// Thin fetch client for the @swarm/server REST surface.
+// Thin fetch client for the @fragua/server REST surface.
 //
 // URL discipline — READ BEFORE EDITING:
 //
@@ -20,7 +20,7 @@
 // boundary (`mock.module`) — both standard bun patterns, no in-module
 // injection seam required.
 
-import type { AgentMessage, FeedEvent, SnapshotStat } from "@swarm/types";
+import type { AgentMessage, FeedEvent, SnapshotStat } from "@fragua/types";
 import type { AnalyticsPayload, AnalyticsRunsPage, BucketKind } from "../types/analytics.ts";
 
 export type { FeedEvent };
@@ -30,8 +30,8 @@ export const BASE_URL = "/api";
 export interface HealthResponse {
   ok: boolean;
   /**
-   * Present when the server runs as the swarm daemon (exposes a job
-   * queue + process supervisor). Absent for plain `swarm serve`, which
+   * Present when the server runs as the fragua daemon (exposes a job
+   * queue + process supervisor). Absent for plain `fragua serve`, which
    * the UI treats as a read-only archive view.
    */
   daemon?: {
@@ -108,7 +108,7 @@ export interface NodeState {
  * `workflowSource` is the raw workflow captured on `run.started`; absent
  * when the run predates source capture. There is intentionally NO
  * `edges` field — topology lives in the workflow source and is parsed
- * client-side by `@swarm/core`'s `parseWorkflow` so the server isn't a
+ * client-side by `@fragua/core`'s `parseWorkflow` so the server isn't a
  * second parser.
  */
 /** `(from, to, iteration)` triple for an edge the executor traversed — see
@@ -162,7 +162,7 @@ export interface RunDetail {
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;
   /** Absolute path to the still-mounted worktree under
-   * `<cwd>/.swarm/worktrees/<runId>`. Absent once the worktree was
+   * `<cwd>/.fragua/worktrees/<runId>`. Absent once the worktree was
    * disposed or for runs that never had one. */
   worktreePath?: string;
   /** Source repo branch + HEAD sha at provision — shown in run-detail git
@@ -173,7 +173,7 @@ export interface RunDetail {
 
 /** One row in `GET /runs/:runId/changes`. Server projects
  *  `git diff --numstat` + `--name-status` between the run's
- *  `baseGitSha` and the tip of `swarm/runs/<runId>`. */
+ *  `baseGitSha` and the tip of `fragua/runs/<runId>`. */
 export interface RunChange {
   path: string;
   status: "added" | "modified" | "deleted" | "renamed";
@@ -187,7 +187,7 @@ export interface WorkflowSummary {
   sha: string;
   label?: string;
   /** Project root that owns this workflow. `undefined` means the global
-   *  source (`~/.swarm/workflows/`); a string is the absolute cwd of a
+   *  source (`~/.fragua/workflows/`); a string is the absolute cwd of a
    *  project shown by `/projects`. Names may collide across sources, so
    *  the listing surface must show the cwd to disambiguate and the
    *  detail link must thread `?cwd=` through. */
@@ -195,7 +195,7 @@ export interface WorkflowSummary {
 }
 
 /** A typed input declaration from a workflow's `inputs:` block. Mirrors
- *  `InputDecl` from `@swarm/core` — kept local so the web bundle doesn't
+ *  `InputDecl` from `@fragua/core` — kept local so the web bundle doesn't
  *  import the core package directly. */
 export interface WorkflowInputDecl {
   name: string;
@@ -208,7 +208,7 @@ export interface WorkflowInputDecl {
 
 /** Full workflow, including the raw workflow source. Fetched on demand by
  *  the workflow detail page — the list endpoint stays cheap. The source is
- *  parsed client-side by `@swarm/core`'s `parseWorkflow`; the server
+ *  parsed client-side by `@fragua/core`'s `parseWorkflow`; the server
  *  never parses the source itself. */
 export interface WorkflowDetail extends WorkflowSummary {
   source: string;
@@ -452,7 +452,7 @@ const isAcceptedSeq = (v: unknown): v is { seq: number } =>
 // ── URL helpers ─────────────────────────────────────────────────────
 
 /** Loose runtime shape check for a `FeedEvent`. The full discriminated
- * union (`@swarm/types` `FeedEvent`) is enforced at the type layer;
+ * union (`@fragua/types` `FeedEvent`) is enforced at the type layer;
  * over the wire we only validate the envelope columns are present and
  * trust the server-side allow-list to keep `type` to a known kind. */
 const isFeedEvent = (v: unknown): v is FeedEvent =>
@@ -599,7 +599,7 @@ export async function getRunBlob(runId: string, path: string): Promise<string> {
 }
 
 /** Change-stat shape for a snapshot's committed or uncommitted deltas —
- *  the canonical server shape (`@swarm/types` SnapshotStat), not a web-local
+ *  the canonical server shape (`@fragua/types` SnapshotStat), not a web-local
  *  re-spelling. The `/runs/:id/snapshots` payload uses these exact keys. */
 export type SnapshotChangeStat = SnapshotStat;
 
@@ -779,7 +779,7 @@ export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
 }
 
 /** A messages-table row. `content` is a pi-agent-core `AgentMessage`
- * (lossless JSON round-trip). `nodeId` is swarm's projection of which
+ * (lossless JSON round-trip). `nodeId` is fragua's projection of which
  * graph node emitted the turn.
  *
  * `runId` is intentionally absent — the URL pins it for single-run
@@ -973,7 +973,7 @@ export async function adjustMaxLoops(id: string, newLimit: number, note?: string
 }
 
 // ── Schedules ────────────────────────────────────────────────────────
-// Mirror of `Schedule` from @swarm/store/types.ts. Camel-case on the wire
+// Mirror of `Schedule` from @fragua/store/types.ts. Camel-case on the wire
 // per the server's `schedule-routes.ts` payload (the store boundary
 // performs row→domain translation). `recentRuns` is embedded by
 // `GET /schedules` (last-10 health stripe — keeps the list a single round

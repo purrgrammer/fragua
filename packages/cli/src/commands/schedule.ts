@@ -1,17 +1,17 @@
-// `swarm schedule {add,list,rm,pause,resume}` \u2014 thin shells over the
+// `fragua schedule {add,list,rm,pause,resume}` \u2014 thin shells over the
 // HTTP /schedules surface.
 //
-// Discovers the harness URL the same way `swarm run` does:
+// Discovers the harness URL the same way `fragua run` does:
 //   1. --url override
-//   2. <cwd>/.swarm/serve.json (or <db-dir>/serve.json with --db)
-//   3. ~/.swarm/swarm.db daemon_lock.http_url
+//   2. <cwd>/.fragua/serve.json (or <db-dir>/serve.json with --db)
+//   3. ~/.fragua/fragua.db daemon_lock.http_url
 //   4. http://localhost:3000
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
 const ALLOWED_INTERVALS = new Set(["30m", "1h", "6h", "24h", "3d", "7d"]);
@@ -52,8 +52,8 @@ async function resolveBaseUrl(opts: DiscoveryOpts): Promise<string> {
   const cwd = opts.cwd ?? process.cwd();
   const serveJsonPath = opts.dbPath
     ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
-    : resolve(cwd, ".swarm/serve.json");
-  const harnessDbPath = resolve(homedir(), ".swarm/swarm.db");
+    : resolve(cwd, ".fragua/serve.json");
+  const harnessDbPath = resolve(homedir(), ".fragua/fragua.db");
   const url =
     opts.url ??
     (await discoverServerUrl(serveJsonPath)) ??
@@ -243,7 +243,7 @@ function formatRelative(ts: number, now: number): string {
 }
 
 export function scheduleHelp(): number {
-  console.log(chalk.bold("swarm schedule \u2014 manage recurring workflow runs\n"));
+  console.log(chalk.bold("fragua schedule \u2014 manage recurring workflow runs\n"));
   console.log("Subcommands:");
   console.log(`  ${chalk.cyan("add <workflow>")}   Create a schedule (--every required)`);
   console.log(`  ${chalk.cyan("list")}             List schedules (--cwd to filter)`);

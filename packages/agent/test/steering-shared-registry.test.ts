@@ -6,7 +6,7 @@
 // one registry across all backends; this test pins the wiring.
 
 import { describe, expect, test } from "bun:test";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 import { type SteerableAgent, SteeringRegistry } from "../src/steering-registry.ts";
 

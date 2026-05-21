@@ -1,4 +1,4 @@
-// TypeBox schemas for the REST surface. Exported so `@swarm/web` can reuse
+// TypeBox schemas for the REST surface. Exported so `@fragua/web` can reuse
 // the same contracts.
 
 import { type Static, Type } from "@sinclair/typebox";
@@ -15,7 +15,7 @@ const UiStatus = Type.Union([
   Type.Literal("unknown"),
 ]);
 
-/** Raw run lifecycle status, mirrored from `@swarm/types` `RunStatus`.
+/** Raw run lifecycle status, mirrored from `@fragua/types` `RunStatus`.
  * Carried alongside the coarse `status` so the web can distinguish
  * `paused_human` vs `paused` (Inbox) and `halted` vs `quarantined`
  * (Inbox vs Feed) without re-reading the event log. */
@@ -31,7 +31,7 @@ const RawRunStatus = Type.Union([
   Type.Literal("quarantined"),
 ]);
 
-/** Per-side diff stat — mirrors `@swarm/types` SnapshotStat. */
+/** Per-side diff stat — mirrors `@fragua/types` SnapshotStat. */
 const SnapshotStat = Type.Object({
   filesChanged: Type.Integer({ minimum: 0 }),
   insertions: Type.Integer({ minimum: 0 }),
@@ -139,7 +139,7 @@ export const RunDetail = Type.Object({
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
   /** Absolute path to the still-mounted worktree under
-   * `<cwd>/.swarm/worktrees/<runId>`. Absent once the worktree has
+   * `<cwd>/.fragua/worktrees/<runId>`. Absent once the worktree has
    * been disposed (run terminal + provisioner cleanup) or for runs
    * whose cwd wasn't a git repo (per-run LocalEnvironment fallback). */
   worktreePath: Type.Optional(Type.String()),

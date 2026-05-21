@@ -6,8 +6,8 @@
 // its current turn; supervisor exits; release lock.
 
 import { hostname as osHostname } from "node:os";
-import type * as coreHandler from "@swarm/core/handler";
-import type { IEventStore } from "@swarm/store";
+import type * as coreHandler from "@fragua/core/handler";
+import type { IEventStore } from "@fragua/store";
 import { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler } from "./auto-titler.ts";
 import { type BlobGcOpts, DEFAULT_BLOB_GC_INTERVAL_MS, DEFAULT_BLOB_GC_MAX_ROWS, startBlobGc } from "./blob-gc.ts";
@@ -67,7 +67,7 @@ export interface DaemonMainOpts {
   abortLoopCeiling?: number;
   /** Interval (ms) between background `gcBlobs` sweeps. Defaults to 6h.
    * Set to 0 to disable the background sweep entirely (operator runs
-   * `swarm db gc` manually). */
+   * `fragua db gc` manually). */
   blobGcIntervalMs?: number;
   /** Max rows visited per `gcBlobs` sweep. Bounds latency on huge
    * stores. Defaults to 1000. */
@@ -86,7 +86,7 @@ export interface DaemonMainOpts {
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
 const DEFAULT_CONCURRENCY = 16;
-// Matches @swarm/agent's llm default — the supervisor must never
+// Matches @fragua/agent's llm default — the supervisor must never
 // trip a legitimate long-running llm node just because the spec
 // wasn't resolvable at the moment of the leak check.
 const DEFAULT_UNKNOWN_SPEC_FALLBACK_MS = 4 * 60 * 60 * 1000;
@@ -169,7 +169,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       const supervisor = startSupervisor(supervisorOpts);
 
       // Background blob GC. Only starts when interval > 0 (operators can
-      // disable by setting `blob_gc.interval: 0` and run `swarm db gc`
+      // disable by setting `blob_gc.interval: 0` and run `fragua db gc`
       // manually). Lifetimes track the executor: on shutdown signal the
       // sweep wakes from sleep and exits before `done` resolves.
       const gcInterval = opts.blobGcIntervalMs ?? DEFAULT_BLOB_GC_INTERVAL_MS;

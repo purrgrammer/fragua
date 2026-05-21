@@ -4,7 +4,7 @@
 // Each row is a pi-agent-core `AgentMessage`; we iterate
 // `content[]` blocks (text, thinking, toolCall) and pair each
 // `toolCall` to its matching `toolResult` message by `tool_use_id`.
-// Swarm-internal `system` rows (the assembled system prompt) collapse
+// Fragua-internal `system` rows (the assembled system prompt) collapse
 // by default.
 //
 // Messages group by `nodeId` into sections divided by a hairline
@@ -23,7 +23,7 @@
 //   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
 
-import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@swarm/types";
+import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
 import { type ReactNode, useMemo, useState } from "react";
 import {
   CodeBlock,
@@ -921,7 +921,7 @@ function toolTypeFromName(name: string): `tool-${string}` {
 // renderer so unknown tools keep working.
 
 interface ToolResultDetails {
-  swarm_tool?: string;
+  fragua_tool?: string;
   is_error?: boolean;
   data?: unknown;
   full_output_path?: string;

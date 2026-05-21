@@ -12,7 +12,7 @@ export const DEFAULT_IGNORE_GLOBS = [
   ".git/",
   "dist/",
   "build/",
-  ".swarm/",
+  ".fragua/",
   ".next/",
   "coverage/",
   "*.pyc",

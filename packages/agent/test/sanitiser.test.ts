@@ -14,16 +14,16 @@
 //      registry (deterministic-id resume path handles recursion).
 
 import { describe, expect, test } from "bun:test";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   CORE_TOOLS,
+  type FraguaToolContext,
   LocalEnvironment,
   type SubagentResult,
   type SubagentSpec,
-  type SwarmToolContext,
   sanitiseUnpairedToolCalls,
   ToolRegistry,
-} from "@swarm/workspace";
+} from "@fragua/workspace";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 /** Collect every unpaired tool_use id (assistant toolCall with no
  *  following toolResult) and every orphan tool_result id (toolResult
@@ -61,15 +61,15 @@ function freshRegistry(): ToolRegistry {
   return r;
 }
 
-function freshSwarmContext(spawnSubagent?: (spec: SubagentSpec) => Promise<SubagentResult>): SwarmToolContext {
+function freshFraguaContext(spawnSubagent?: (spec: SubagentSpec) => Promise<SubagentResult>): FraguaToolContext {
   const base = {
     runId: "r",
     nodeId: "n",
     iteration: 0,
-    http: {} as SwarmToolContext["http"],
+    http: {} as FraguaToolContext["http"],
     emit: () => {},
   };
-  return spawnSubagent ? ({ ...base, spawnSubagent } as SwarmToolContext) : (base as SwarmToolContext);
+  return spawnSubagent ? ({ ...base, spawnSubagent } as FraguaToolContext) : (base as FraguaToolContext);
 }
 
 describe("sanitiseUnpairedToolCalls", () => {
@@ -99,7 +99,7 @@ describe("sanitiseUnpairedToolCalls", () => {
     const out = await sanitiseUnpairedToolCalls(messages, {
       toolRegistry: freshRegistry(),
       env: new LocalEnvironment({ cwd: "/tmp" }),
-      swarmContext: freshSwarmContext(),
+      fraguaContext: freshFraguaContext(),
     });
     expect(out).toBe(messages);
   });
@@ -134,7 +134,7 @@ describe("sanitiseUnpairedToolCalls", () => {
     const out = await sanitiseUnpairedToolCalls(messages, {
       toolRegistry: freshRegistry(),
       env: new LocalEnvironment({ cwd: dir }),
-      swarmContext: freshSwarmContext(),
+      fraguaContext: freshFraguaContext(),
     });
     expect(out.length).toBe(messages.length + 1);
     const tail = out[out.length - 1] as AgentMessage & {
@@ -192,7 +192,7 @@ describe("sanitiseUnpairedToolCalls", () => {
     const out = await sanitiseUnpairedToolCalls(messages, {
       toolRegistry: registry,
       env: new LocalEnvironment({ cwd: "/tmp" }),
-      swarmContext: freshSwarmContext(),
+      fraguaContext: freshFraguaContext(),
     });
     expect(bashCalled).toBe(false);
     expect(out.length).toBe(messages.length + 1);
@@ -230,7 +230,7 @@ describe("sanitiseUnpairedToolCalls", () => {
     const out = await sanitiseUnpairedToolCalls(messages, {
       toolRegistry: freshRegistry(),
       env: new LocalEnvironment({ cwd: "/tmp" }),
-      swarmContext: freshSwarmContext(),
+      fraguaContext: freshFraguaContext(),
     });
     const { unpairedToolUseIds, orphanToolResultIds } = findUnpairedToolIds(out);
     expect(orphanToolResultIds).toEqual([]);
@@ -275,7 +275,7 @@ describe("sanitiseUnpairedToolCalls", () => {
     const out = await sanitiseUnpairedToolCalls(messages, {
       toolRegistry: freshRegistry(),
       env: new LocalEnvironment({ cwd: "/tmp" }),
-      swarmContext: freshSwarmContext(),
+      fraguaContext: freshFraguaContext(),
     });
     const { unpairedToolUseIds, orphanToolResultIds } = findUnpairedToolIds(out);
     expect(orphanToolResultIds).toEqual([]);
@@ -322,7 +322,7 @@ describe("sanitiseUnpairedToolCalls", () => {
     const out = await sanitiseUnpairedToolCalls(messages, {
       toolRegistry: freshRegistry(),
       env: new LocalEnvironment({ cwd: "/tmp" }),
-      swarmContext: freshSwarmContext(spawnSubagent),
+      fraguaContext: freshFraguaContext(spawnSubagent),
     });
     expect(observedSpec).toBeDefined();
     expect(observedSpec!.tool_call_id).toBe("toolu_z");

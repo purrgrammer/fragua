@@ -7,8 +7,8 @@
 //   - P19: SSE replay via Last-Event-ID
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { SqliteStore, sha256Hex } from "@swarm/store";
-import { FEED_EVENT_KINDS } from "@swarm/types";
+import { SqliteStore, sha256Hex } from "@fragua/store";
+import { FEED_EVENT_KINDS } from "@fragua/types";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
 
@@ -181,7 +181,7 @@ steps:
 
   test("validator rejects a workflow with unresolved model IDs", async () => {
     // Inject a stub validator — mirrors the daemon wiring. Production
-    // uses @swarm/agent's validateWorkflowModels, but @swarm/server
+    // uses @fragua/agent's validateWorkflowModels, but @fragua/server
     // stays pi-ai-free.
     const localStore = new SqliteStore({ path: ":memory:" });
     const local = createRoutes({
@@ -1425,7 +1425,7 @@ describe("global event feed (cross-run)", () => {
     );
     const c5 = store.appendFact(
       "c",
-      [{ type: "fact.run_discarded", payload: { refs: ["refs/swarm/snapshots/c"] } }],
+      [{ type: "fact.run_discarded", payload: { refs: ["refs/fragua/snapshots/c"] } }],
       c2.newVersion,
     );
     // fact.message_appended is still a bookkeeping kind — must stay stripped.

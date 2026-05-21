@@ -30,8 +30,8 @@
 #   - "PR <n>" / "<branch>" → checks out, diff vs base
 #   - any of the above + a free-text focus hint
 #
-#   bun run swarm run review
-#   bun run swarm run review --input target="PR 128 focus on token storage"
+#   bun run fragua run review
+#   bun run fragua run review --input target="PR 128 focus on token storage"
 
 name: review
 goal: Code review scaled to the change — minimum work for trivial diffs, full multi-lens rigor where it matters.

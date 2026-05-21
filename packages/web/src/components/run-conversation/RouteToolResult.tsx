@@ -8,7 +8,7 @@
 // the choice as a named card gives operators a clear signal of which path
 // the agent selected.
 
-import type { ToolResultMessage } from "@swarm/types";
+import type { ToolResultMessage } from "@fragua/types";
 import { SignpostIcon } from "lucide-react";
 import type { JSX } from "react";
 

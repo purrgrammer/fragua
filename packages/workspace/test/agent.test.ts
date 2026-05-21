@@ -3,12 +3,12 @@
 // round-trip through a mocked spawnSubagent.
 
 import { describe, expect, test } from "bun:test";
+import type { AgentDefinition } from "@fragua/types";
 import { Value } from "@sinclair/typebox/value";
-import type { AgentDefinition } from "@swarm/types";
 import { agentTool } from "../src/agent.ts";
 import { LocalEnvironment } from "../src/local-env.ts";
 import { CORE_TOOLS, stripAgentTool } from "../src/tools.ts";
-import type { SubagentResult, SubagentSpec, SwarmToolContext } from "../src/types.ts";
+import type { FraguaToolContext, SubagentResult, SubagentSpec } from "../src/types.ts";
 import { ToolRegistry } from "../src/types.ts";
 
 describe("agent tool", () => {
@@ -34,37 +34,37 @@ describe("agent tool", () => {
     expect(picked.map((t) => t.name)).toEqual(["agent"]);
   });
 
-  test("is_error returned when swarmContext is missing", async () => {
+  test("is_error returned when fraguaContext is missing", async () => {
     const env = new LocalEnvironment();
     const out = await agentTool.execute({ prompt: "x" }, env, {});
     expect(out.is_error).toBe(true);
-    expect(out.text).toContain("swarmContext.spawnSubagent");
+    expect(out.text).toContain("fraguaContext.spawnSubagent");
   });
 
-  test("is_error returned when swarmContext is present but spawnSubagent is undefined", async () => {
+  test("is_error returned when fraguaContext is present but spawnSubagent is undefined", async () => {
     const env = new LocalEnvironment();
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "r",
       nodeId: "n",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
     };
-    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext });
+    const out = await agentTool.execute({ prompt: "x" }, env, { fraguaContext });
     expect(out.is_error).toBe(true);
   });
 
   test("is_error returned when tool_call_id is missing from execute opts", async () => {
     const env = new LocalEnvironment();
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "r",
       nodeId: "n",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
       spawnSubagent: async () => ({ summary: "", subagentId: "x", status: "completed", totalToolCalls: 0 }),
     };
-    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext });
+    const out = await agentTool.execute({ prompt: "x" }, env, { fraguaContext });
     expect(out.is_error).toBe(true);
     expect(out.text).toContain("tool_call_id");
   });
@@ -78,11 +78,11 @@ describe("agent tool", () => {
       status: "completed",
       totalToolCalls: 3,
     };
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "parent",
       nodeId: "plan",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
       spawnSubagent: async (spec) => {
         calls.push(spec);
@@ -93,7 +93,7 @@ describe("agent tool", () => {
     const out = await agentTool.execute(
       { prompt: "summarise this", name: "summary", allowed_tools: ["read", "agent"] },
       env,
-      { swarmContext, tool_call_id: "toolu_t1" },
+      { fraguaContext, tool_call_id: "toolu_t1" },
     );
 
     expect(out.is_error).toBeFalsy();
@@ -111,11 +111,11 @@ describe("agent tool", () => {
 
   test("haltReason is surfaced under data.halt_reason and is_error flips to true", async () => {
     const env = new LocalEnvironment();
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "parent",
       nodeId: "plan",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
       spawnSubagent: async () => ({
         summary: "",
@@ -126,7 +126,7 @@ describe("agent tool", () => {
       }),
     };
 
-    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext, tool_call_id: "toolu_t2" });
+    const out = await agentTool.execute({ prompt: "x" }, env, { fraguaContext, tool_call_id: "toolu_t2" });
     expect(out.is_error).toBe(true);
     const data = out.data as { halt_reason?: string };
     expect(data.halt_reason).toBe("max_loops");
@@ -148,7 +148,7 @@ describe("agent tool — named-profile path", () => {
     };
   }
 
-  test("agent: <name> resolves a def from swarmContext.agentCatalog and merges fields", async () => {
+  test("agent: <name> resolves a def from fraguaContext.agentCatalog and merges fields", async () => {
     const env = new LocalEnvironment();
     const calls: SubagentSpec[] = [];
     const reviewer = mkDef("reviewer", {
@@ -157,11 +157,11 @@ describe("agent tool — named-profile path", () => {
       model: "claude-haiku-4-5",
       provider: "anthropic",
     });
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "r",
       nodeId: "n",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
       agentCatalog: [reviewer],
       spawnSubagent: async (spec) => {
@@ -170,7 +170,7 @@ describe("agent tool — named-profile path", () => {
       },
     };
     const out = await agentTool.execute({ prompt: "please review", agent: "reviewer" }, env, {
-      swarmContext,
+      fraguaContext,
       tool_call_id: "toolu_t3",
     });
     expect(out.is_error).toBeFalsy();
@@ -186,11 +186,11 @@ describe("agent tool — named-profile path", () => {
     const env = new LocalEnvironment();
     const calls: SubagentSpec[] = [];
     const reviewer = mkDef("reviewer", { body: "def body", allowed_tools: ["read", "grep"] });
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "r",
       nodeId: "n",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
       agentCatalog: [reviewer],
       spawnSubagent: async (spec) => {
@@ -206,7 +206,7 @@ describe("agent tool — named-profile path", () => {
         allowed_tools: ["read"],
       },
       env,
-      { swarmContext, tool_call_id: "toolu_t4" },
+      { fraguaContext, tool_call_id: "toolu_t4" },
     );
     expect(calls[0]!.system_prompt).toBe("inline persona");
     expect(calls[0]!.allowed_tools).toEqual(["read"]);
@@ -214,11 +214,11 @@ describe("agent tool — named-profile path", () => {
 
   test("agent: <unknown> returns is_error listing discovered names", async () => {
     const env = new LocalEnvironment();
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "r",
       nodeId: "n",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
       agentCatalog: [mkDef("alpha"), mkDef("beta")],
       spawnSubagent: async () => {
@@ -226,7 +226,7 @@ describe("agent tool — named-profile path", () => {
       },
     };
     const out = await agentTool.execute({ prompt: "x", agent: "missing" }, env, {
-      swarmContext,
+      fraguaContext,
       tool_call_id: "toolu_t5",
     });
     expect(out.is_error).toBe(true);
@@ -238,11 +238,11 @@ describe("agent tool — named-profile path", () => {
   test("inline allowed_tools with non-canonical entries are normalised before passing to spawnSubagent", async () => {
     const env = new LocalEnvironment();
     const calls: SubagentSpec[] = [];
-    const swarmContext: SwarmToolContext = {
+    const fraguaContext: FraguaToolContext = {
       runId: "r",
       nodeId: "n",
       iteration: 0,
-      http: {} as SwarmToolContext["http"],
+      http: {} as FraguaToolContext["http"],
       emit: () => {},
       spawnSubagent: async (spec) => {
         calls.push(spec);
@@ -250,7 +250,7 @@ describe("agent tool — named-profile path", () => {
       },
     };
     await agentTool.execute({ prompt: "x", allowed_tools: ["Read", "WebFetch"] }, env, {
-      swarmContext,
+      fraguaContext,
       tool_call_id: "toolu_t6",
     });
     expect(calls[0]!.allowed_tools).toEqual(["read", "web_fetch"]);

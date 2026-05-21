@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /*
- * Node — Swarm design language.
+ * Node — Fragua design language.
  *
  * A graph node is a Card placed on a canvas; it re-uses Card's tokens
  * verbatim and adds only what a flow-node needs: xyflow handles and the
@@ -30,7 +30,7 @@ export type NodeProps = ComponentProps<typeof Card> & {
      * Flow direction this node sits in. `"TB"` routes handles through
      * Top/Bottom (workflow reads top-to-bottom), `"LR"` through
      * Left/Right. Defaults to `"TB"` — the canonical orientation for
-     * swarm workflows. xyflow needs this to know which edge port each
+     * fragua workflows. xyflow needs this to know which edge port each
      * Handle binds to.
      */
     orientation?: "TB" | "LR";

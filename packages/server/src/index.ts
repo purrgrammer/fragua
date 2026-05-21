@@ -1,14 +1,14 @@
-// Public entry point for @swarm/server.
+// Public entry point for @fragua/server.
 //
 // DB-first: `store` is required; reads and intent writes both go through
-// @swarm/store. `workflowReader` (disk-backed workflow listing) stays optional
+// @fragua/store. `workflowReader` (disk-backed workflow listing) stays optional
 // for the Workflows page.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
-import type { AuthStorage, ModelRegistry } from "@swarm/agent";
-import type { IEventStore } from "@swarm/store";
+import type { AuthStorage, ModelRegistry } from "@fragua/agent";
+import type { IEventStore } from "@fragua/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
@@ -33,13 +33,13 @@ export interface ServerOptions {
   store: IEventStore;
   /** Global workflows directory listed by `GET /workflows` alongside every
    * project root the store has ever seen. Defaults to
-   * `~/.swarm/workflows`. The single-source `workflowsDir` option below
+   * `~/.fragua/workflows`. The single-source `workflowsDir` option below
    * overrides this aggregation entirely (one directory, no projects);
    * leave it unset to get the multi-source view the web UI expects. */
   globalWorkflowsDir?: string;
   /** Legacy single-directory override. When set, the server scans only
    * this path and ignores the project list — kept for the CI-primitive
-   * `swarm serve --workflows-dir` shape and tests. New deployments
+   * `fragua serve --workflows-dir` shape and tests. New deployments
    * should leave it unset and let `globalWorkflowsDir` + the store-fed
    * project enumeration drive the listing. */
   workflowsDir?: string;
@@ -187,7 +187,7 @@ export function createServer(opts: ServerOptions): Hono {
   // In web mode the API lives ONLY at `/api/*`. The bare paths (`/runs/:id`,
   // `/workflows`) are client-side routes owned by React Router — anything
   // unmatched on the server falls through to index.html so SPA routing works.
-  // `swarm run` uses the discovery file's URL which already includes `/api`
+  // `fragua run` uses the discovery file's URL which already includes `/api`
   // (see packages/cli/src/commands/serve.ts).
   app.route("/api", api);
 
@@ -235,15 +235,15 @@ export function createServer(opts: ServerOptions): Hono {
 }
 
 function defaultWorkflowReader(opts: ServerOptions, cwd: string): WorkflowReader {
-  // Legacy single-source override: tests + the CI-primitive `swarm serve
+  // Legacy single-source override: tests + the CI-primitive `fragua serve
   // --workflows-dir <dir>` shape pin one directory and skip the project
   // enumeration entirely. Also covers anyone who was previously relying
-  // on the old `<cwd>/.swarm/workflows`-only behaviour by setting the
+  // on the old `<cwd>/.fragua/workflows`-only behaviour by setting the
   // option explicitly.
   if (opts.workflowsDir !== undefined) {
     return createFsWorkflowReader({ workflowsDir: opts.workflowsDir });
   }
-  const globalDir = opts.globalWorkflowsDir ?? resolve(homedir(), ".swarm/workflows");
+  const globalDir = opts.globalWorkflowsDir ?? resolve(homedir(), ".fragua/workflows");
   return createMultiSourceWorkflowReader({
     store: opts.store,
     globalDir,

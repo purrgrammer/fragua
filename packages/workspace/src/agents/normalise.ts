@@ -1,5 +1,5 @@
 // Tool-name normalisation for agent definitions and inline `agent`
-// tool calls. Swarm's canonical tool-name shape is lowercase snake_case
+// tool calls. Fragua's canonical tool-name shape is lowercase snake_case
 // (`read`, `web_fetch`, `bash`). Cross-client agent files (especially
 // Claude-style) often use PascalCase (`Read`, `WebFetch`) which would
 // silently fail the intersection check against the parent's pool.

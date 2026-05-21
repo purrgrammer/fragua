@@ -1,10 +1,13 @@
-# Swarm runtime state (event logs, worktrees, checkpoints, DB)
-/.swarm/runs/
-/.swarm/worktrees/
-/.swarm/daemon/
-/.swarm/blobs/
-/.swarm/swarm.db*
-/.swarm/serve.json
+# Fragua runtime state (event logs, worktrees, checkpoints, DB)
+/.fragua/runs/
+/.fragua/worktrees/
+/.fragua/daemon/
+/.fragua/blobs/
+/.fragua/fragua.db*
+/.fragua/serve.json
+
+# Legacy swarm runtime dir (pre-rename leftover; never tracked)
+/.swarm/
 
 # Node / Bun
 node_modules/

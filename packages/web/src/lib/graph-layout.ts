@@ -48,7 +48,7 @@ export interface LayoutOptions {
   crossSize?: number;
   /**
    * Flow direction. `"TB"` (top → bottom, the default) mirrors the way
-   * swarm workflows read on paper; `"LR"` is kept for the few
+   * fragua workflows read on paper; `"LR"` is kept for the few
    * places a horizontal strip is more useful. Left-to-right is the
    * legacy default — new views should stay on `"TB"`.
    */

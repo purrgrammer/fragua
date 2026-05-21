@@ -1,8 +1,8 @@
-// `swarm run <workflow>` — enqueue a run via HTTP and stream events.
+// `fragua run <workflow>` — enqueue a run via HTTP and stream events.
 //
 // `<workflow>` resolves in two flavours:
 //   - bare name (no slash, no `.yaml` suffix): looks up
-//     `~/.swarm/workflows/<name>.yaml`. Misses surface as "workflow not
+//     `~/.fragua/workflows/<name>.yaml`. Misses surface as "workflow not
 //     found" with a hint to either drop a file there or pass a path.
 //   - path (relative or absolute, with slash or `.yaml` suffix): read
 //     directly.
@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
@@ -62,7 +62,7 @@ async function discoverServerUrl(searchPath: string): Promise<string | undefined
   }
 }
 
-/** Read the harness URL from `~/.swarm/swarm.db` daemon_lock. Returns
+/** Read the harness URL from `~/.fragua/fragua.db` daemon_lock. Returns
  * undefined if the file is missing, the lock row is absent, or the
  * URL hasn't been published yet. Opens read-only-by-convention: we
  * only SELECT, no writes. */
@@ -83,8 +83,8 @@ function discoverHarnessUrl(dbPath: string): string | undefined {
 
 export interface RunCommandOptions {
   workflow: string;
-  /** Base URL of the running server. When omitted, reads `.swarm/serve.json`
-   * (written by `swarm serve`), then falls back to `http://localhost:3000`. */
+  /** Base URL of the running server. When omitted, reads `.fragua/serve.json`
+   * (written by `fragua serve`), then falls back to `http://localhost:3000`. */
   url?: string;
   /** Priority tie-breaker. Higher runs first. Default 0. */
   priority?: number;
@@ -101,7 +101,7 @@ export interface RunCommandOptions {
   /** Base directory used to resolve relative workflow paths. Default cwd. */
   cwd?: string;
   /** Store path. When set, discovers the server URL at `<dirname(db)>/serve.json`
-   * instead of `<cwd>/.swarm/serve.json`. Pairs with `swarm serve --db`. */
+   * instead of `<cwd>/.fragua/serve.json`. Pairs with `fragua serve --db`. */
   dbPath?: string;
 }
 
@@ -117,14 +117,14 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
   // Discovery cascade:
   //   1. --url flag (explicit)
-  //   2. <cwd>/.swarm/serve.json (or <db-dir>/serve.json when --db is set)
-  //      — written by `swarm serve --db <path>` (CI primitive)
-  //   3. ~/.swarm/swarm.db daemon_lock.http_url — written by `swarm harness`
+  //   2. <cwd>/.fragua/serve.json (or <db-dir>/serve.json when --db is set)
+  //      — written by `fragua serve --db <path>` (CI primitive)
+  //   3. ~/.fragua/fragua.db daemon_lock.http_url — written by `fragua harness`
   //   4. http://localhost:3000 (last-resort default)
   const serveJsonPath = opts.dbPath
     ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
-    : resolve(cwd, ".swarm/serve.json");
-  const harnessDbPath = resolve(homedir(), ".swarm/swarm.db");
+    : resolve(cwd, ".fragua/serve.json");
+  const harnessDbPath = resolve(homedir(), ".fragua/fragua.db");
   const resolvedUrl =
     opts.url ??
     (await discoverServerUrl(serveJsonPath)) ??

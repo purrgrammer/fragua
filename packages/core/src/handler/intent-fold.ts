@@ -33,7 +33,7 @@
 //
 // See `docs/intent-fold.md` for the full truth table.
 
-import type { RunStatus } from "@swarm/types";
+import type { RunStatus } from "@fragua/types";
 
 export type DroppedReason = "wrong_state" | "superseded_by_cancel" | "later_input_won" | "already_paused";
 

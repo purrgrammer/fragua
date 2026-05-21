@@ -1,4 +1,4 @@
-# swarm
+# fragua
 
 > Cuando los niños en la escuela \
 > estudiaban pa' el mañana, \
@@ -28,30 +28,30 @@ built on the assumption that the **control plane** is worth being deterministic 
 
 ```sh
 bun install
-bun run build:bin              # compiles dist/swarm (web UI embedded)
-export PATH="$PWD/dist:$PATH"   # or symlink dist/swarm into /usr/local/bin
+bun run build:bin              # compiles dist/fragua (web UI embedded)
+export PATH="$PWD/dist:$PATH"   # or symlink dist/fragua into /usr/local/bin
 
-swarm providers add            # pick a provider, paste a key
-swarm harness                  # daemon + HTTP on :6767, Ctrl-C to stop
-swarm run work --input task="add a touch tool to @swarm/workspace"
+fragua providers add            # pick a provider, paste a key
+fragua harness                  # daemon + HTTP on :6767, Ctrl-C to stop
+fragua run work --input task="add a touch tool to @fragua/workspace"
 ```
 
-> hacking on swarm itself? skip the build — `bun run swarm <args…>` hits the same entry point. `swarm` and `bun run swarm` are interchangeable.
+> hacking on fragua itself? skip the build — `bun run fragua <args…>` hits the same entry point. `fragua` and `bun run fragua` are interchangeable.
 
-run discovery is automatic (via the global DB), so `swarm run` works from any directory. point it at a `.yaml` path or a bare name resolved under `~/.swarm/workflows/` then `<cwd>/.swarm/workflows/`. inputs: `-i name=value` (repeatable, `@path` reads a file, `@-` reads stdin). `--title` names the run, `--no-follow` prints the id and exits.
+run discovery is automatic (via the global DB), so `fragua run` works from any directory. point it at a `.yaml` path or a bare name resolved under `~/.fragua/workflows/` then `<cwd>/.fragua/workflows/`. inputs: `-i name=value` (repeatable, `@path` reads a file, `@-` reads stdin). `--title` names the run, `--no-follow` prints the id and exits.
 
 ## workflows
 
-ships under `.swarm/workflows/` — run from the repo, or copy into `~/.swarm/workflows/` to use anywhere.
+ships under `.fragua/workflows/` — run from the repo, or copy into `~/.fragua/workflows/` to use anywhere.
 
 | workflow | what it does |
 |---|---|
 | `work`    | triage → (plan / reproduce) → implement → review → CI. leaves the change in the worktree to accept. |
 | `review`  | scope a PR / diff → structured review, with a gated apply tail. |
 | `analyze` | cost / token / latency analytics over recorded runs. |
-| `drift`   | audit swarm's own arch / spec / skill docs against the code. |
+| `drift`   | audit fragua's own arch / spec / skill docs against the code. |
 
-author your own; `swarm validate <file>` parses + lints before you run. the `workflows` skill is the authoring guide.
+author your own; `fragua validate <file>` parses + lints before you run. the `workflows` skill is the authoring guide.
 
 ## skills
 
@@ -68,47 +68,47 @@ domain context loaded on demand by the agents a workflow runs. live under `.agen
 
 ## command reference
 
-**providers & models** — `swarm providers <action>`
+**providers & models** — `fragua providers <action>`
 
 ```sh
-swarm providers add [provider]          # add credentials; --custom for OpenAI-compatible
-swarm providers ls                      # configured providers + default models
-swarm providers rm | test | login | logout <provider>
-swarm providers {ls,add,rm,edit}-model  <provider> <id> [flags]
+fragua providers add [provider]          # add credentials; --custom for OpenAI-compatible
+fragua providers ls                      # configured providers + default models
+fragua providers rm | test | login | logout <provider>
+fragua providers {ls,add,rm,edit}-model  <provider> <id> [flags]
 ```
 
 `add-model` / `edit-model` flags: `--name`, `--context-window`, `--max-tokens`, `--reasoning`, `--input text,image`, `--cost-input`, `--cost-output`, `-y`.
 
-**create runs** — `swarm run <workflow>`
+**create runs** — `fragua run <workflow>`
 
 ```sh
-swarm run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--no-follow]
+fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--no-follow]
                      [--url <url>] [--cwd <dir>] [--db <path>]
 ```
 
-**operate on runs** — `swarm runs <verb> <runId>` (plural operates; singular creates)
+**operate on runs** — `fragua runs <verb> <runId>` (plural operates; singular creates)
 
 ```sh
-swarm runs inbox                                   # runs needing attention
-swarm runs ls [--status running,paused_human] [--limit N]
+fragua runs inbox                                   # runs needing attention
+fragua runs ls [--status running,paused_human] [--limit N]
 
 # disposition — nothing touches your git until you ask
-swarm runs diff    <runId> [--against base|previous|<idx>] [--snap <idx>]
-swarm runs accept  <runId>                         # replay commits onto your branch + stage the tail
-swarm runs discard <runId>                         # drop the run's swarm refs
+fragua runs diff    <runId> [--against base|previous|<idx>] [--snap <idx>]
+fragua runs accept  <runId>                         # replay commits onto your branch + stage the tail
+fragua runs discard <runId>                         # drop the run's fragua refs
 
 # lifecycle
-swarm runs respond <runId> [route] [--note "…"]    # answer a HITL gate
-swarm runs resume  <runId> [--note "…"]
-swarm runs unquarantine <runId> --resolution treat_as_done|retry|cancel
-swarm runs cancel  <runId> [--reason "…"]
+fragua runs respond <runId> [route] [--note "…"]    # answer a HITL gate
+fragua runs resume  <runId> [--note "…"]
+fragua runs unquarantine <runId> --resolution treat_as_done|retry|cancel
+fragua runs cancel  <runId> [--reason "…"]
 ```
 
-**schedules** — `swarm schedule <action>`
+**schedules** — `fragua schedule <action>`
 
 ```sh
-swarm schedule add <workflow> --every 1h [--input "…"] [--on-overlap skip|queue|concurrent] [--no-fire-on-create]
-swarm schedule list | pause <id> | resume <id> | rm <id>
+fragua schedule add <workflow> --every 1h [--input "…"] [--on-overlap skip|queue|concurrent] [--no-fire-on-create]
+fragua schedule list | pause <id> | resume <id> | rm <id>
 ```
 
 `--every` accepts `30m | 1h | 6h | 24h | 3d | 7d`.
@@ -116,21 +116,21 @@ swarm schedule list | pause <id> | resume <id> | rm <id>
 **server / daemon primitives**
 
 ```sh
-swarm harness [--port <n>] [--db <path>]                 # daemon + HTTP under one supervisor (:6767)
-swarm serve   [--port <n>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only; writes <db-dir>/serve.json
-swarm daemon  start [--concurrency <n>] [--provider <name>] [--model <id>] [--cwd <dir>] [--db <path>]
-swarm daemon  stop                                       # SIGTERM the daemon holding the store lock
+fragua harness [--port <n>] [--db <path>]                 # daemon + HTTP under one supervisor (:6767)
+fragua serve   [--port <n>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only; writes <db-dir>/serve.json
+fragua daemon  start [--concurrency <n>] [--provider <name>] [--model <id>] [--cwd <dir>] [--db <path>]
+fragua daemon  stop                                       # SIGTERM the daemon holding the store lock
 ```
 
-discovery cascade: `--url` → `<cwd>/.swarm/serve.json` → `~/.swarm/swarm.db` `daemon_lock.http_url` → `http://localhost:3000`.
+discovery cascade: `--url` → `<cwd>/.fragua/serve.json` → `~/.fragua/fragua.db` `daemon_lock.http_url` → `http://localhost:3000`.
 
 **maintenance & authoring**
 
 ```sh
-swarm validate <workflow.yaml>          # parse + lint, no execution
-swarm init [--cwd <path>]               # write <cwd>/.swarm/config.yaml
-swarm gc --snapshots [--older-than 30d] [--dry-run]
-swarm db {vacuum, gc-blobs [--limit N], backup --to <path>}
+fragua validate <workflow.yaml>          # parse + lint, no execution
+fragua init [--cwd <path>]               # write <cwd>/.fragua/config.yaml
+fragua gc --snapshots [--older-than 30d] [--dry-run]
+fragua db {vacuum, gc-blobs [--limit N], backup --to <path>}
 ```
 
 **developing on the repo**
@@ -139,13 +139,13 @@ swarm db {vacuum, gc-blobs [--limit N], backup --to <path>}
 bun run {typecheck, lint, format, ci}   # ci = lint + typecheck + tests
 bun test                                # all package suites
 bun run dev:web                         # Vite dev server (:5173), proxies /api to a running harness
-bun run build:bin                       # compile dist/swarm
+bun run build:bin                       # compile dist/fragua
 ```
 
 ## status & docs
 
 - **[STATUS.md](STATUS.md)** — what's working today, what's not yet
-- **[docs/SPEC.md](docs/SPEC.md)** — what swarm is
+- **[docs/SPEC.md](docs/SPEC.md)** — what fragua is
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — schema, invariants, property matrix
 - **[docs/handler-contract.md](docs/handler-contract.md)** — writing handlers
 - **[docs/providers.md](docs/providers.md)** — providers + credential setup
@@ -153,7 +153,7 @@ bun run build:bin                       # compile dist/swarm
 
 ## stack
 
-Bun ≥ 1.2 · TypeScript strict · SQLite (WAL + STRICT) · Hono · React 18 + Vite 5 + Tailwind 4. LLM layer is [`pi-ai`](https://github.com/badlogic/pi-mono/tree/main/packages/ai) (15+ providers) + [`pi-agent-core`](https://github.com/badlogic/pi-mono/tree/main/packages/agent). store, daemon, server, and handler contract are swarm's own.
+Bun ≥ 1.2 · TypeScript strict · SQLite (WAL + STRICT) · Hono · React 18 + Vite 5 + Tailwind 4. LLM layer is [`pi-ai`](https://github.com/badlogic/pi-mono/tree/main/packages/ai) (15+ providers) + [`pi-agent-core`](https://github.com/badlogic/pi-mono/tree/main/packages/agent). store, daemon, server, and handler contract are fragua's own.
 
 ## license
 

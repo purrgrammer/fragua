@@ -8,7 +8,7 @@
 // dump of the rendered SKILL.md body; the skill load is a distinct beat
 // in the run timeline, so it earns its own viz.
 
-import type { ToolResultMessage } from "@swarm/types";
+import type { ToolResultMessage } from "@fragua/types";
 import { BookOpenIcon } from "lucide-react";
 import type { JSX } from "react";
 

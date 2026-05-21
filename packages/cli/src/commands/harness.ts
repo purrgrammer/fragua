@@ -1,19 +1,19 @@
-// `swarm harness` — supervise the executor daemon + HTTP server as a single
+// `fragua harness` — supervise the executor daemon + HTTP server as a single
 // foreground process. Discovery via the DB itself: the harness publishes
 // its URL onto `daemon_lock` so CLI invocations from any cwd find it
 // without a JSON file.
 //
 // Topology:
 //   - HTTP server runs in-process via `startServer` (cheap).
-//   - Executor daemon runs as a `swarm daemon start --db <path>` subprocess
+//   - Executor daemon runs as a `fragua daemon start --db <path>` subprocess
 //     so we don't have to re-implement its 200-line setup. The subprocess
 //     inherits stdio for visibility.
-//   - Both share `~/.swarm/swarm.db` (override with --db). SQLite WAL
+//   - Both share `~/.fragua/fragua.db` (override with --db). SQLite WAL
 //     handles concurrent connections.
 //
 // Lifecycle:
 //   1. Bind the HTTP server at port 0 (ephemeral) or --port <n>.
-//   2. Spawn `swarm daemon start --db <path>`. The daemon acquires
+//   2. Spawn `fragua daemon start --db <path>`. The daemon acquires
 //      daemon_lock as part of its boot.
 //   3. Wait for the lock row to appear (poll up to LOCK_WAIT_MS).
 //   4. UPDATE daemon_lock SET http_url, http_port, harness_version. CLIs
@@ -25,7 +25,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
@@ -37,32 +37,32 @@ const LOCK_WAIT_MS = 5_000;
 const LOCK_POLL_MS = 50;
 
 export interface HarnessCommandOptions {
-  /** Store path. Default `~/.swarm/swarm.db`. */
+  /** Store path. Default `~/.fragua/fragua.db`. */
   dbPath?: string;
   /** TCP port for the HTTP server. When omitted, `startServer` resolves
-   * via `web.port` from `~/.swarm/config.yaml`, then `DEFAULT_WEB_PORT`
+   * via `web.port` from `~/.fragua/config.yaml`, then `DEFAULT_WEB_PORT`
    * (6767). Pass 0 for an ephemeral bind. */
   port?: number;
 }
 
 export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<number> {
-  const dbPath = opts.dbPath ? resolve(opts.dbPath) : resolve(homedir(), ".swarm/swarm.db");
+  const dbPath = opts.dbPath ? resolve(opts.dbPath) : resolve(homedir(), ".fragua/fragua.db");
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  console.log(chalk.green("swarm harness starting"));
+  console.log(chalk.green("fragua harness starting"));
   console.log(chalk.dim(`  store: ${dbPath}`));
 
   // Build / refresh the web bundle before binding so the moment the URL
   // prints, the latest UI is what gets served. Compiled binary: the
   // bundle is embedded — skip the vite spawn entirely (there's no source
   // tree to read from anyway). Dev / source install: skipped
-  // automatically for production installs (no src/) and SWARM_NO_WEB_BUILD=1.
+  // automatically for production installs (no src/) and FRAGUA_NO_WEB_BUILD=1.
   const webDistDir = COMPILED ? undefined : (await ensureWebBundle()).distDir;
 
   // 1. HTTP server (in-process). Binds before the daemon spawns so the
   //    URL is ready to publish the moment the daemon takes the lock.
   //    Port resolution lives in startServer: `--port` (when set) >
-  //    `web.port` from ~/.swarm/config.yaml > DEFAULT_WEB_PORT (6767).
+  //    `web.port` from ~/.fragua/config.yaml > DEFAULT_WEB_PORT (6767).
   let serverHandle: Awaited<ReturnType<typeof startServer>>;
   try {
     const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir };
@@ -73,7 +73,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     return 1;
   }
 
-  // 2. Daemon subprocess. `swarm daemon start --db <path>` does its own
+  // 2. Daemon subprocess. `fragua daemon start --db <path>` does its own
   //    setup; we just spawn + monitor. Compiled binary: re-invoke
   //    ourselves (`process.execPath`) with no script arg — the entry is
   //    the binary itself. Dev: re-invoke `bun <argv[1]>` so the daemon
@@ -108,7 +108,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   }
 
   console.log("");
-  console.log(chalk.green(`swarm harness ready — ${chalk.bold.underline(hyperlink(serverHandle.origin))}`));
+  console.log(chalk.green(`fragua harness ready — ${chalk.bold.underline(hyperlink(serverHandle.origin))}`));
   console.log(chalk.dim(`  api:  ${hyperlink(serverHandle.url)}`));
   console.log(chalk.dim("  press Ctrl-C to stop"));
 

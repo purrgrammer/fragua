@@ -1,8 +1,8 @@
-// LlmBackend / LlmInput — the contract @swarm/agent's
+// LlmBackend / LlmInput — the contract @fragua/agent's
 // PiLlmBackend implements so makeLlmHandler can drive it inside
 // a HandlerContext.
 
-import type { AgentMessage } from "@swarm/types";
+import type { AgentMessage } from "@fragua/types";
 import type { BudgetSnapshotInput } from "../handler/types.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";

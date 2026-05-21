@@ -1,17 +1,17 @@
 // Event types. Immutable records written to the EventSink.
 // See docs/SPEC.md §3.5.
 //
-// The string-literal `EventType` union lives in `@swarm/types/events`
+// The string-literal `EventType` union lives in `@fragua/types/events`
 // so web + agent + daemon can import it without pulling in core's
 // pure-reducer dep tree. Envelope shapes (data payloads, EventPayloadMap,
 // FactEvent / IntentEvent / ObservabilityEvent) stay here — they carry
 // core-specific types (Outcome, SummaryLevel, SummaryPurpose).
 
-import type { EventType } from "@swarm/types";
+import type { EventType } from "@fragua/types";
 import type { Outcome } from "./outcome.ts";
 import type { SummaryLevel } from "./summary.ts";
 
-export type { EventType } from "@swarm/types";
+export type { EventType } from "@fragua/types";
 
 /** Current event envelope version. Bumped when an incompatible field rename
  * or removal lands. Additive field changes do NOT bump this number; they're
@@ -293,7 +293,7 @@ export interface EdgeSelectedData {
 }
 
 // ───── Control channel ──────────────────────────────────────────────────
-// Control requests live in `.swarm/runs/<runId>/control.jsonl` (written by
+// Control requests live in `.fragua/runs/<runId>/control.jsonl` (written by
 // the CLI/daemon) and are mirrored into `events.jsonl` by the runtime as
 // `control.requested` events. The request's `id` is a client-supplied
 // idempotency key (uuid) that survives restarts via the checkpoint's

@@ -1,7 +1,7 @@
 // HTTP route coverage for the schedules surface
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { createScheduleRoutes } from "../../src/store/schedule-routes.ts";
 
 let store: SqliteStore;

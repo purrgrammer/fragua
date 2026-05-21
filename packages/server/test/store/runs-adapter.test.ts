@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunState, StoredEvent } from "@swarm/store";
+import type { RunState, StoredEvent } from "@fragua/store";
 import {
   deriveNodeStates,
   deriveSelectedEdges,
@@ -444,10 +444,10 @@ describe("runStateToDetail \u2014 lastEventSeq", () => {
 
 describe("runStateToDetail \u2014 worktreePath", () => {
   test("populates worktreePath when worktree directory exists", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "swarm-runs-adapter-wt-"));
+    const cwd = await mkdtemp(join(tmpdir(), "fragua-runs-adapter-wt-"));
     try {
       const runId = "r-wt-1";
-      const wt = join(cwd, ".swarm", "worktrees", runId);
+      const wt = join(cwd, ".fragua", "worktrees", runId);
       // First call: dir absent → worktreePath should stay undefined.
       const stateNoDir = makeState({ runId, cwd });
       const detailNoDir = runStateToDetail(stateNoDir, [], undefined, undefined);

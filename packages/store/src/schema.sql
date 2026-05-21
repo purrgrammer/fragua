@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 17
+-- fragua event store schema — Revision 17
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -11,7 +11,7 @@
 -- gains `workflow_name` / `_scope` / `_path` so resolution metadata
 -- survives the daemon contract.
 -- v3 → v4: `workflow_scope` enum widens to include 'local' so bare-name
--- resolution can fall back to <cwd>/.swarm/workflows/<name>.yaml when
+-- resolution can fall back to <cwd>/.fragua/workflows/<name>.yaml when
 -- the global directory misses.
 -- v4 → v5: conversation runs as a kind (since abandoned, see v7).
 -- v5 → v6: scheduled runs. New `schedules` table holds the recurring
@@ -47,13 +47,13 @@
 -- transitions the parent back to `queued` (collect phase).
 -- v10 → v11: provider credentials in the store. New
 -- `provider_credentials` table holds built-in pi-ai provider keys +
--- OAuth tokens, replacing `~/.swarm/auth.json`. `kind` is denormalised
+-- OAuth tokens, replacing `~/.fragua/auth.json`. `kind` is denormalised
 -- from `payload.type` so postmortem can SELECT the shape without
 -- JSON-parsing. Pure additive; no row migrations.
 -- v11 → v12: custom-provider config in the store. New `provider_config`
 -- table holds the per-provider definition blob (baseUrl, headers,
 -- compat, models, modelOverrides) that previously lived in
--- `~/.swarm/models.json`. Per-row Ajv validation lives in the agent
+-- `~/.fragua/models.json`. Per-row Ajv validation lives in the agent
 -- layer (`ModelRegistry.loadCustomModels`); one broken row no longer
 -- poisons the entire registry. No `apiKey` field — credentials always
 -- come from `provider_credentials`. Pure additive; no row migrations.
@@ -234,8 +234,8 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_blob ON artifacts(blob_sha);
 -- Daemon coordination. `http_url` / `http_port` / `harness_version` let
 -- CLIs discover the running daemon (or harness) via the DB itself —
 -- the only filesystem rendezvous is the DB path. NULL on rows written
--- by `swarm daemon --db <path>` directly (CI primitives don't expose
--- HTTP unless paired with `swarm serve`).
+-- by `fragua daemon --db <path>` directly (CI primitives don't expose
+-- HTTP unless paired with `fragua serve`).
 CREATE TABLE IF NOT EXISTS daemon_lock (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   pid INTEGER NOT NULL,

@@ -7,7 +7,7 @@
 // every env yields a block.
 
 import { describe, expect, test } from "bun:test";
-import { LocalEnvironment } from "@swarm/workspace";
+import { LocalEnvironment } from "@fragua/workspace";
 import { deriveRunEnv } from "../src/backend.ts";
 import { renderRunEnvironment } from "../src/system-prompt.ts";
 
@@ -34,7 +34,7 @@ describe("renderRunEnvironment after RunEnvironment.cwd rename", () => {
   test("deriveRunEnv picks up env.runId and env.bootstrapCommand structurally when present", () => {
     // Simulate the WorktreeEnvironment-shaped duck-type: cwd() plus
     // own `runId` and `bootstrapCommand` fields. Both are picked up
-    // without taking a hard dep on @swarm/workspace here.
+    // without taking a hard dep on @fragua/workspace here.
     const fakeWorktree = {
       cwd: () => "/wt/abc",
       projectCwd: () => "/repo",

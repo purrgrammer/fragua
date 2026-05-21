@@ -8,8 +8,8 @@
 // And the supervisor's stuck-node watchdog must not trip the controller.
 
 import { describe, expect, test } from "bun:test";
-import type * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
+import type * as handler from "@fragua/core/handler";
+import { SqliteStore } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";

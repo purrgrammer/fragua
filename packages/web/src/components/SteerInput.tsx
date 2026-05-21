@@ -13,7 +13,7 @@
 // message and a retry / dismiss affordance. Retry re-fires `steerRun`
 // with the same text under a fresh local id.
 //
-// Styling follows the Swarm design language: no shadows / gradients,
+// Styling follows the Fragua design language: no shadows / gradients,
 // hairline borders, `bg-sw-surface` for the surface, state-only accents.
 
 import { useMutation } from "@tanstack/react-query";

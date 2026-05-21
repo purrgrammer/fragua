@@ -1,11 +1,11 @@
 // Multi-source WorkflowReader: aggregates `*.yaml` files from the global
-// workflows directory (`~/.swarm/workflows/`) plus every project root the
-// store has ever seen (`store.listCwds()` → `<cwd>/.swarm/workflows/`).
+// workflows directory (`~/.fragua/workflows/`) plus every project root the
+// store has ever seen (`store.listCwds()` → `<cwd>/.fragua/workflows/`).
 //
-// The CLI's `swarm run` already resolves names against the same two
+// The CLI's `fragua run` already resolves names against the same two
 // sources (global first, then project-local). The web UI used to scan
 // only one directory bound at server-startup time, so per-project
-// workflows like `<project>/.swarm/workflows/crowdin-review.yaml` were
+// workflows like `<project>/.fragua/workflows/crowdin-review.yaml` were
 // invisible. This adapter closes that gap.
 //
 // Each entry on the wire carries a `cwd` field — `undefined` for the
@@ -16,13 +16,13 @@
 // not supplied: global → projects in `listCwds()` order (most-recent
 // activity first); first hit wins.
 
-import type { IEventStore } from "@swarm/store";
+import type { IEventStore } from "@fragua/store";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../ports.ts";
 import { createFsWorkflowReader } from "./fs-workflow-reader.ts";
 
 export interface MultiSourceWorkflowReaderOptions {
   store: IEventStore;
-  /** Global workflows directory. Convention: `~/.swarm/workflows`. */
+  /** Global workflows directory. Convention: `~/.fragua/workflows`. */
   globalDir: string;
   /** Optional extra project roots to always include even if absent from
    *  `listCwds()`. Used by the harness to surface its own cwd before any
@@ -38,7 +38,7 @@ export function createMultiSourceWorkflowReader(opts: MultiSourceWorkflowReaderO
   const globalReader = createFsWorkflowReader({ workflowsDir: globalDir });
 
   function projectReader(cwd: string): WorkflowReader {
-    return createFsWorkflowReader({ workflowsDir: `${cwd}/.swarm/workflows` });
+    return createFsWorkflowReader({ workflowsDir: `${cwd}/.fragua/workflows` });
   }
 
   // Project ordering used by both list() and the unscoped read() fallback:

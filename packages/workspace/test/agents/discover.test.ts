@@ -7,7 +7,7 @@ import { discoverAgents } from "../../src/agents/discover.ts";
 let tmp: string;
 
 beforeEach(async () => {
-  tmp = await mkdtemp(join(tmpdir(), "swarm-agents-"));
+  tmp = await mkdtemp(join(tmpdir(), "fragua-agents-"));
 });
 afterEach(async () => {
   await rm(tmp, { recursive: true, force: true });
@@ -120,7 +120,7 @@ describe("discoverAgents", () => {
   test("Claude-Code-style `tools:` frontmatter is accepted as a synonym for `allowed_tools`", async () => {
     // AGENTS.md advertises `.claude/agents/` as a cross-client fallback.
     // Profiles authored for Claude Code use `tools: Read, Write, Edit, ...`
-    // (not swarm's canonical `allowed_tools:`); honour them so the
+    // (not fragua's canonical `allowed_tools:`); honour them so the
     // explicit-required check on the `agent` tool passes without
     // forcing every Claude-Code profile to be edited.
     const cwd = tmp;

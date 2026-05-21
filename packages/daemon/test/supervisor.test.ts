@@ -4,7 +4,7 @@
 // process was down.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { HandlerLeakedError, startSupervisor } from "../src/supervisor.ts";

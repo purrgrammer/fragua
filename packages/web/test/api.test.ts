@@ -7,7 +7,7 @@
 //   - Generic failure branches (HTTP status, malformed body)
 //   - URL helpers are relative and /api-prefixed (the single enforcement
 //     point for "no absolute URLs in the client" — absolute URLs would
-//     land on Vite's dev server at 5173 instead of the swarm server).
+//     land on Vite's dev server at 5173 instead of the fragua server).
 
 import { afterEach, describe, expect, it } from "bun:test";
 import * as api from "../src/lib/api.ts";

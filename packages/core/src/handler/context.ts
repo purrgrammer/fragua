@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@swarm/types";
+import type { AgentMessage } from "@fragua/types";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
@@ -211,7 +211,7 @@ function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): Handl
   // otherwise bypass them. Parallel branches rely on this to guarantee
   // read-only filesystem access. We read the rules directly from
   // allowed_tools / denied_tools rather than `scopedTools.has(...)`: the
-  // executor's registry is sometimes intentionally empty (e.g. swarm's
+  // executor's registry is sometimes intentionally empty (e.g. fragua's
   // daemon hands llm its own registry; the executor's `tools` is a
   // sentinel) and querying an empty registry would falsely wrap every
   // node's env.

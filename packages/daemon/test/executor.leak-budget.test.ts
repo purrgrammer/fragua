@@ -4,7 +4,7 @@
 // callback fires (production wires this to ctrl.abort()).
 
 import { describe, expect, test } from "bun:test";
-import type * as handler from "@swarm/core/handler";
+import type * as handler from "@fragua/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { makeLeakBudget, runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";

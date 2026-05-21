@@ -6,12 +6,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import type { EventType, ExecutionEnvironment, LlmInput, Outcome } from "@fragua/core";
+import { ok } from "@fragua/core";
+import { SqliteStore } from "@fragua/store";
+import type { Skill } from "@fragua/workspace";
+import { CORE_TOOLS, ToolRegistry } from "@fragua/workspace";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { EventType, ExecutionEnvironment, LlmInput, Outcome } from "@swarm/core";
-import { ok } from "@swarm/core";
-import { SqliteStore } from "@swarm/store";
-import type { Skill } from "@swarm/workspace";
-import { CORE_TOOLS, ToolRegistry } from "@swarm/workspace";
 import { makeSpawnSubagent } from "../src/spawn-subagent.ts";
 
 function freshStore(): SqliteStore {
@@ -433,14 +433,14 @@ describe("makeSpawnSubagent", () => {
     const { emit } = recordingEmit();
 
     const skillA: Skill = {
-      name: "swarm-debug",
+      name: "fragua-debug",
       description: "post-mortem",
-      location: "/skills/swarm-debug/SKILL.md",
-      skill_dir: "/skills/swarm-debug",
+      location: "/skills/fragua-debug/SKILL.md",
+      skill_dir: "/skills/fragua-debug",
       sha256: "deadbeef",
       bytes: 100,
       scope: "user",
-      source_dir: "/skills/swarm-debug",
+      source_dir: "/skills/fragua-debug",
     };
     const skillB: Skill = {
       ...skillA,

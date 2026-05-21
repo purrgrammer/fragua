@@ -1,9 +1,9 @@
-// Translate pi-agent-core AgentEvents into swarm Event types.
+// Translate pi-agent-core AgentEvents into fragua Event types.
 // See docs/SPEC.md §3.5.
 
+import type { EventType } from "@fragua/core";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { EventType } from "@swarm/core";
 import { unsanitizeToolName } from "./tool-adapter.ts";
 
 export interface BridgedEvent {
@@ -36,7 +36,7 @@ export function costPayload(msg: AssistantMessage): Record<string, unknown> {
   };
 }
 
-/** Map a pi AgentEvent to a swarm Event envelope payload. Returns undefined for
+/** Map a pi AgentEvent to a fragua Event envelope payload. Returns undefined for
  * events we intentionally drop (e.g. internal streaming updates that would
  * flood the log). */
 export function bridgeAgentEvent(event: AgentEvent): BridgedEvent | undefined {
@@ -96,7 +96,7 @@ type AssistantStreamEvent = Extract<AgentEvent, { type: "message_update" }>["ass
 function bridgeMessageUpdate(e: AssistantStreamEvent): BridgedEvent | undefined {
   switch (e.type) {
     case "start":
-      // swarm's `llm.start` fires once per `backend.run()` with the resolved
+      // fragua's `llm.start` fires once per `backend.run()` with the resolved
       // prompt + system prompt (see PiLlmBackend.run). Don't duplicate
       // it on every pi-agent message_start — `agent.message_start` already
       // marks message boundaries inside a turn.

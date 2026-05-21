@@ -103,7 +103,7 @@ async function listViaGit(root: string): Promise<string[] | null> {
 }
 
 /** Recursive dir-walk fallback for non-git checkouts. Skips dot-dirs
- *  (`.git`, `.swarm`, …) and symlinks; caps total entries to keep a
+ *  (`.git`, `.fragua`, …) and symlinks; caps total entries to keep a
  *  pathological tree from melting the response. */
 async function listViaWalk(root: string): Promise<string[]> {
   const out: string[] = [];

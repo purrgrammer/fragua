@@ -13,10 +13,10 @@ describe("resolveWorkflow", () => {
   let home: string;
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), "swarm-cwd-"));
-    home = await mkdtemp(join(tmpdir(), "swarm-home-"));
-    await mkdir(join(cwd, ".swarm/workflows"), { recursive: true });
-    await mkdir(join(home, ".swarm/workflows"), { recursive: true });
+    cwd = await mkdtemp(join(tmpdir(), "fragua-cwd-"));
+    home = await mkdtemp(join(tmpdir(), "fragua-home-"));
+    await mkdir(join(cwd, ".fragua/workflows"), { recursive: true });
+    await mkdir(join(home, ".fragua/workflows"), { recursive: true });
   });
 
   afterEach(async () => {
@@ -26,13 +26,13 @@ describe("resolveWorkflow", () => {
 
   test("bare name in global wins", async () => {
     await writeFile(
-      join(home, ".swarm/workflows/foo.yaml"),
+      join(home, ".fragua/workflows/foo.yaml"),
       "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
       "utf8",
     );
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
-      dotPath: resolve(home, ".swarm/workflows/foo.yaml"),
+      dotPath: resolve(home, ".fragua/workflows/foo.yaml"),
       name: "foo",
       scope: "global",
     });
@@ -40,13 +40,13 @@ describe("resolveWorkflow", () => {
 
   test("bare name falls back to project when global misses", async () => {
     await writeFile(
-      join(cwd, ".swarm/workflows/foo.yaml"),
+      join(cwd, ".fragua/workflows/foo.yaml"),
       "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
       "utf8",
     );
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
-      dotPath: resolve(cwd, ".swarm/workflows/foo.yaml"),
+      dotPath: resolve(cwd, ".fragua/workflows/foo.yaml"),
       name: "foo",
       scope: "local",
     });
@@ -54,18 +54,18 @@ describe("resolveWorkflow", () => {
 
   test("global wins over local when both exist", async () => {
     await writeFile(
-      join(home, ".swarm/workflows/foo.yaml"),
+      join(home, ".fragua/workflows/foo.yaml"),
       "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
       "utf8",
     );
     await writeFile(
-      join(cwd, ".swarm/workflows/foo.yaml"),
+      join(cwd, ".fragua/workflows/foo.yaml"),
       "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
       "utf8",
     );
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r?.scope).toBe("global");
-    expect(r?.dotPath).toBe(resolve(home, ".swarm/workflows/foo.yaml"));
+    expect(r?.dotPath).toBe(resolve(home, ".fragua/workflows/foo.yaml"));
   });
 
   test("explicit relative path resolves against cwd", async () => {

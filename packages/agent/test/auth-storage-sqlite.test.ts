@@ -1,7 +1,7 @@
 // AuthStorage backed by the SQLite `provider_credentials` table.
 
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { AuthStorage, SqliteAuthStorageBackend } from "../src/credentials/auth-storage.ts";
 
 function freshStore(): SqliteStore {

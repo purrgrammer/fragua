@@ -1,12 +1,12 @@
-# swarm — Specification
+# fragua — Specification
 
-> What swarm **is**. For design detail see [`ARCHITECTURE.md`](./ARCHITECTURE.md); for writing handlers see [`handler-contract.md`](./handler-contract.md).
+> What fragua **is**. For design detail see [`ARCHITECTURE.md`](./ARCHITECTURE.md); for writing handlers see [`handler-contract.md`](./handler-contract.md).
 
 ---
 
 ## 1. Vision
 
-**swarm** is a git-native, auditable, local software dark factory. A workflow is a declarative YAML document; swarm executes it through a deterministic state machine that drives LLMs across any provider, and produces a complete, replayable audit trail.
+**fragua** is a git-native, auditable, local software dark factory. A workflow is a declarative YAML document; fragua executes it through a deterministic state machine that drives LLMs across any provider, and produces a complete, replayable audit trail.
 
 Core values, in priority order:
 
@@ -28,15 +28,15 @@ Core values, in priority order:
 
 ## 2. System shape
 
-Single machine, one harness process, one SQLite database. The harness supervises a daemon subprocess and an in-process HTTP server against `~/.swarm/swarm.db`.
+Single machine, one harness process, one SQLite database. The harness supervises a daemon subprocess and an in-process HTTP server against `~/.fragua/fragua.db`.
 
 ```
 ┌──────────────────────────────────┐
-│            swarm harness         │      ┌───────────────┐
+│            fragua harness         │      ┌───────────────┐
 │  ┌───────────────────────────┐   │      │               │
 │  │ daemon subprocess         │ ──┼─────▶│   SQLite      │
-│  │ (executor + supervisor)   │ ◀─┼──────│  ~/.swarm/    │
-│  └───────────────────────────┘   │      │  swarm.db     │
+│  │ (executor + supervisor)   │ ◀─┼──────│  ~/.fragua/    │
+│  └───────────────────────────┘   │      │  fragua.db     │
 │  ┌───────────────────────────┐   │      │               │
 │  │ HTTP + SSE (in-process)   │ ◀─┼──────│  WAL,         │
 │  │ default :6767             │ ──┼─────▶│  single coord │
@@ -49,11 +49,11 @@ Single machine, one harness process, one SQLite database. The harness supervises
         └────────────────┘
 ```
 
-- **Harness** (`swarm harness`) is the default entry point: foreground process that spawns the daemon as a subprocess and runs the HTTP server in-process. Publishes its URL on `daemon_lock.{http_url, http_port, harness_version}` so CLIs discover it via the DB itself. SIGINT clears the URL columns on the way out.
+- **Harness** (`fragua harness`) is the default entry point: foreground process that spawns the daemon as a subprocess and runs the HTTP server in-process. Publishes its URL on `daemon_lock.{http_url, http_port, harness_version}` so CLIs discover it via the DB itself. SIGINT clears the URL columns on the way out.
 - **Daemon** runs the executor fiber + a 50ms supervisor fiber (heartbeat + intent detection + watchdog). Writes **facts** under OCC.
 - **Server** exposes a Hono HTTP surface. Writes **intents** (always appendable, no OCC). Reads go straight to the store's projection.
-- **CLI** wraps everything via `swarm harness` (default), `swarm run`, `swarm validate`, `swarm db`. `swarm daemon --db <path>` and `swarm serve --db <path>` are CI/power-user primitives.
-- **Store** (`@swarm/store`) is the only coordination surface. WAL-mode SQLite; harness, daemon, and any client read and write.
+- **CLI** wraps everything via `fragua harness` (default), `fragua run`, `fragua validate`, `fragua db`. `fragua daemon --db <path>` and `fragua serve --db <path>` are CI/power-user primitives.
+- **Store** (`@fragua/store`) is the only coordination surface. WAL-mode SQLite; harness, daemon, and any client read and write.
 
 ---
 
@@ -287,9 +287,9 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **`stack.manager_loop` / `house` shape** (attractor §4.11). Composition lives at the workflow level via separate runs sharing artifacts.
 - **`tool_hooks.pre` / `tool_hooks.post`** (attractor §9.7). The agent backend handles tool interception.
 - **Interviewer interface** (attractor §6). Replaced by `human` nodes (`type: human`) plus the `intent.human_input` event.
-- **`auto_status` node attribute** (attractor §2.6 / Appendix C). Swarm handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
+- **`auto_status` node attribute** (attractor §2.6 / Appendix C). Fragua handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
-- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). swarm has no fan-out / fan-in graph primitive. Concurrent dispatch lives in the llm `agent` tool — a single llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.yaml`'s `dispatch` step).
+- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). fragua has no fan-out / fan-in graph primitive. Concurrent dispatch lives in the llm `agent` tool — a single llm step with `agent` in `allowed-tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.yaml`'s `dispatch` step).
 
 **Surfaced as warnings, not errors:**
 

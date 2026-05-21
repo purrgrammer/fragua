@@ -1,6 +1,6 @@
-# swarm project config — <project>/.swarm/config.yaml.
+# fragua project config — <project>/.fragua/config.yaml.
 # Project-specific knobs only. Generic preferences live in
-# ~/.swarm/config.yaml and cascade under this file.
+# ~/.fragua/config.yaml and cascade under this file.
 
 # Stack-agnostic bootstrap. Runs inside each fresh worktree before the
 # first node fires, after `git worktree add`. Non-zero exit fails the

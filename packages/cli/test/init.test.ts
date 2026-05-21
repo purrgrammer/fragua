@@ -1,4 +1,4 @@
-// Tests for `swarm init` — bootstrap a project's .swarm/config.yaml.
+// Tests for `fragua init` — bootstrap a project's .fragua/config.yaml.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -11,11 +11,11 @@ async function makeGitRepo(dir: string): Promise<void> {
   const proc = Bun.spawn(["git", "init", dir], { stdio: ["ignore", "pipe", "pipe"] });
   await proc.exited;
   // git init needs at least a name/email to avoid warnings on some CI hosts
-  const cfg1 = Bun.spawn(["git", "-C", dir, "config", "user.email", "test@swarm"], {
+  const cfg1 = Bun.spawn(["git", "-C", dir, "config", "user.email", "test@fragua"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   await cfg1.exited;
-  const cfg2 = Bun.spawn(["git", "-C", dir, "config", "user.name", "swarm-test"], {
+  const cfg2 = Bun.spawn(["git", "-C", dir, "config", "user.name", "fragua-test"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   await cfg2.exited;
@@ -25,7 +25,7 @@ describe("initCommand", () => {
   let scratch: string;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-init-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-init-"));
     await makeGitRepo(scratch);
   });
 
@@ -42,44 +42,44 @@ describe("initCommand", () => {
     }
   }
 
-  test("writes .swarm/config.yaml, not .swarm/config.jsonc", async () => {
+  test("writes .fragua/config.yaml, not .fragua/config.jsonc", async () => {
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(0);
-    expect(await exists(".swarm/config.yaml")).toBe(true);
-    expect(await exists(".swarm/config.jsonc")).toBe(false);
+    expect(await exists(".fragua/config.yaml")).toBe(true);
+    expect(await exists(".fragua/config.jsonc")).toBe(false);
     // The default template is comments-only — loads as an empty config.
     const cfg = await loadProjectConfig(scratch);
     expect(cfg).toEqual({});
   });
 
-  test(".gitignore allowlists both .swarm/config.yaml and .swarm/config.jsonc", async () => {
+  test(".gitignore allowlists both .fragua/config.yaml and .fragua/config.jsonc", async () => {
     await initCommand({ cwd: scratch });
     const gitignore = await readFile(join(scratch, ".gitignore"), "utf8");
-    expect(gitignore).toContain("!.swarm/config.yaml");
-    expect(gitignore).toContain("!.swarm/config.jsonc");
+    expect(gitignore).toContain("!.fragua/config.yaml");
+    expect(gitignore).toContain("!.fragua/config.jsonc");
   });
 
-  test("refuses to overwrite an existing .swarm/config.yaml", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `auto-title: false\n`, "utf8");
+  test("refuses to overwrite an existing .fragua/config.yaml", async () => {
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.yaml"), `auto-title: false\n`, "utf8");
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(1);
     // File is untouched
-    const content = await readFile(join(scratch, ".swarm/config.yaml"), "utf8");
+    const content = await readFile(join(scratch, ".fragua/config.yaml"), "utf8");
     expect(content).toBe(`auto-title: false\n`);
   });
 
-  test("refuses to overwrite an existing .swarm/config.jsonc (legacy)", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "auto-title": false }`, "utf8");
+  test("refuses to overwrite an existing .fragua/config.jsonc (legacy)", async () => {
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "auto-title": false }`, "utf8");
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(1);
     // JSONC untouched, no YAML written
-    expect(await exists(".swarm/config.yaml")).toBe(false);
+    expect(await exists(".fragua/config.yaml")).toBe(false);
   });
 
   test("fails on non-git directory", async () => {
-    const nonGit = await mkdtemp(join(tmpdir(), "swarm-nongit-"));
+    const nonGit = await mkdtemp(join(tmpdir(), "fragua-nongit-"));
     try {
       const code = await initCommand({ cwd: nonGit });
       expect(code).toBe(1);
@@ -88,9 +88,9 @@ describe("initCommand", () => {
     }
   });
 
-  test("creates .swarm/workflows/ directory", async () => {
+  test("creates .fragua/workflows/ directory", async () => {
     await initCommand({ cwd: scratch });
-    expect(await exists(".swarm/workflows")).toBe(true);
+    expect(await exists(".fragua/workflows")).toBe(true);
   });
 
   test("idempotent gitignore — second init on same repo does not duplicate block", async () => {
@@ -100,7 +100,7 @@ describe("initCommand", () => {
     // by checking the count of the marker in .gitignore.
     await initCommand({ cwd: scratch });
     const first = await readFile(join(scratch, ".gitignore"), "utf8");
-    const count = (first.match(/# swarm runtime — never commit these/g) ?? []).length;
+    const count = (first.match(/# fragua runtime — never commit these/g) ?? []).length;
     expect(count).toBe(1);
   });
 });

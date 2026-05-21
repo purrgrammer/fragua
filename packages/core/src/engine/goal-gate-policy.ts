@@ -11,7 +11,7 @@
 //
 // If no target resolves, the run halts with `goal_gate_unsatisfied`.
 //
-// Swarm caps each retarget loop with the failing gate's own `max_retries`
+// Fragua caps each retarget loop with the failing gate's own `max_retries`
 // so a misconfigured retry target can't burn the run forever. The cap is
 // required (E031) on every step authored via `retry:`. Operators raise the
 // live cap via `intent.goal_gate_adjusted` → `routing.max_goal_gate_retries_override`.

@@ -7,7 +7,7 @@ import { discoverSkills } from "../../src/skills/discover.ts";
 let tmp: string;
 
 beforeEach(async () => {
-  tmp = await mkdtemp(join(tmpdir(), "swarm-skills-"));
+  tmp = await mkdtemp(join(tmpdir(), "fragua-skills-"));
 });
 afterEach(async () => {
   await rm(tmp, { recursive: true, force: true });

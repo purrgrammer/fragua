@@ -1,8 +1,8 @@
-// `swarm providers …` — inspect, credential, test, and OAuth-login
+// `fragua providers …` — inspect, credential, test, and OAuth-login
 // LLM providers.
 //
 // Credentials and custom-provider definitions both live in the global
-// swarm store (`~/.swarm/swarm.db`) under `provider_credentials` and
+// fragua store (`~/.fragua/fragua.db`) under `provider_credentials` and
 // `provider_config` respectively. Each command opens the global store
 // briefly and closes it before returning.
 
@@ -14,9 +14,9 @@ export {
   providersRmModelCommand,
 } from "./providers-custom.ts";
 
+import { AuthStorage, defaultModelPerProvider, getFraguaHome, ModelRegistry } from "@fragua/agent";
 import type { OAuthLoginCallbacks } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { AuthStorage, defaultModelPerProvider, getSwarmHome, ModelRegistry } from "@swarm/agent";
 import chalk from "chalk";
 import prompts from "prompts";
 import { openGlobalStore } from "./open-global-store.ts";
@@ -26,7 +26,7 @@ import { openGlobalStore } from "./open-global-store.ts";
 // ---------------------------------------------------------------------------
 
 export function providersHelpCommand(): number {
-  console.log(chalk.bold("swarm providers — manage LLM provider credentials + custom models\n"));
+  console.log(chalk.bold("fragua providers — manage LLM provider credentials + custom models\n"));
   console.log("Subcommands:");
   console.log(`  ${chalk.cyan("ls")}                       List all providers + credentialed status`);
   console.log(`  ${chalk.cyan("add [provider]")}           Add API-key credentials interactively`);
@@ -42,8 +42,8 @@ export function providersHelpCommand(): number {
   console.log(`  ${chalk.cyan("rm-model <provider> <id>")}  Remove one model entry from a custom provider`);
   console.log(`  ${chalk.cyan("edit-model <provider> <id>")} Update one or more fields on an existing model entry`);
   console.log();
-  console.log(chalk.dim("Credentials live in ~/.swarm/swarm.db (provider_credentials table)."));
-  console.log(chalk.dim("Custom providers + model overrides live in ~/.swarm/swarm.db (provider_config table)."));
+  console.log(chalk.dim("Credentials live in ~/.fragua/fragua.db (provider_credentials table)."));
+  console.log(chalk.dim("Custom providers + model overrides live in ~/.fragua/fragua.db (provider_config table)."));
   return 0;
 }
 
@@ -82,8 +82,8 @@ export function providersListCommand(): number {
       console.log(chalk.yellow(`provider_config: ${err}`));
     }
     console.log(chalk.dim(`\n${credentialed}/${rows.length} providers credentialed`));
-    console.log(chalk.dim(`swarm home: ${getSwarmHome()}`));
-    console.log(chalk.dim("run `swarm providers add <provider>` to configure one, or `login <provider>` for OAuth"));
+    console.log(chalk.dim(`fragua home: ${getFraguaHome()}`));
+    console.log(chalk.dim("run `fragua providers add <provider>` to configure one, or `login <provider>` for OAuth"));
     return 0;
   } finally {
     store.close();
@@ -96,7 +96,7 @@ export function providersListCommand(): number {
 
 export async function providersRmCommand(provider: string | undefined): Promise<number> {
   if (!provider) {
-    console.error(chalk.red("usage: swarm providers rm <provider>"));
+    console.error(chalk.red("usage: fragua providers rm <provider>"));
     return 1;
   }
   const store = openGlobalStore();
@@ -132,7 +132,7 @@ export async function providersRmCommand(provider: string | undefined): Promise<
 
 export async function providersLogoutCommand(provider: string | undefined): Promise<number> {
   if (!provider) {
-    console.error(chalk.red("usage: swarm providers logout <provider>"));
+    console.error(chalk.red("usage: fragua providers logout <provider>"));
     return 1;
   }
   const store = openGlobalStore();
@@ -145,7 +145,7 @@ export async function providersLogoutCommand(provider: string | undefined): Prom
     }
     if (cred.type !== "oauth") {
       console.error(
-        chalk.red(`"${provider}" is stored as ${cred.type}, not oauth — use \`swarm providers rm\` instead`),
+        chalk.red(`"${provider}" is stored as ${cred.type}, not oauth — use \`fragua providers rm\` instead`),
       );
       return 1;
     }
@@ -166,7 +166,7 @@ export async function providersTestCommand(
   modelOverride: string | undefined,
 ): Promise<number> {
   if (!provider) {
-    console.error(chalk.red("usage: swarm providers test <provider> [model]"));
+    console.error(chalk.red("usage: fragua providers test <provider> [model]"));
     return 1;
   }
   const store = openGlobalStore();
@@ -184,7 +184,7 @@ export async function providersTestCommand(
       model = registry.find(provider, modelOverride);
       if (!model) {
         console.error(chalk.red(`model "${provider}/${modelOverride}" not registered`));
-        console.error(chalk.dim("  check `swarm providers ls` for the list of known providers"));
+        console.error(chalk.dim("  check `fragua providers ls` for the list of known providers"));
         return 1;
       }
     } else {
@@ -193,7 +193,7 @@ export async function providersTestCommand(
       if (!model) model = registry.getAll().find((m) => m.provider === provider);
       if (!model) {
         console.error(chalk.red(`no models registered for provider "${provider}"`));
-        console.error(chalk.dim("  check `swarm providers ls` for the list of known providers"));
+        console.error(chalk.dim("  check `fragua providers ls` for the list of known providers"));
         return 1;
       }
     }
@@ -201,7 +201,7 @@ export async function providersTestCommand(
     if (!auth.hasAuth(provider)) {
       console.error(chalk.red(`no credentials configured for "${provider}"`));
       console.error(
-        chalk.dim(`  run \`swarm providers add ${provider}\`, or \`swarm providers login ${provider}\` for OAuth`),
+        chalk.dim(`  run \`fragua providers add ${provider}\`, or \`fragua providers login ${provider}\` for OAuth`),
       );
       return 1;
     }
@@ -284,7 +284,7 @@ export async function providersAddCommand(providerArg: string | undefined): Prom
     if (!knownProviders.includes(provider)) {
       console.log(
         chalk.yellow(
-          `"${provider}" is not a pi-ai built-in — add it as a custom provider via \`swarm providers add --custom\` if you want models under it`,
+          `"${provider}" is not a pi-ai built-in — add it as a custom provider via \`fragua providers add --custom\` if you want models under it`,
         ),
       );
     }
@@ -314,7 +314,7 @@ export async function providersAddCommand(providerArg: string | undefined): Prom
     }
 
     auth.set(provider, { type: "api_key", key: keyField });
-    console.log(chalk.green(`✓ stored credentials for "${provider}" in ${getSwarmHome()}/swarm.db`));
+    console.log(chalk.green(`✓ stored credentials for "${provider}" in ${getFraguaHome()}/fragua.db`));
     chosenProvider = provider;
   } finally {
     store.close();

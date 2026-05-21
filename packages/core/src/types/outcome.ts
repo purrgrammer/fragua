@@ -1,7 +1,7 @@
 // Outcome: the result returned by every handler. See docs/SPEC.md §3.6.
 
+import type { HaltReason } from "@fragua/types";
 import { type Static, Type } from "@sinclair/typebox";
-import type { HaltReason } from "@swarm/types";
 
 export type OutcomeStatus = "success" | "fail" | "retry";
 

@@ -3,7 +3,7 @@
 // RichToolResult. Result shape is produced by
 // `packages/workspace/src/web-fetch.ts`.
 
-import type { ToolResultMessage } from "@swarm/types";
+import type { ToolResultMessage } from "@fragua/types";
 import { CircleAlertIcon, ExternalLinkIcon, Globe } from "lucide-react";
 import type { JSX, ReactNode } from "react";
 

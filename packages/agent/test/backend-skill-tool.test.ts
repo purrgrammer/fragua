@@ -14,10 +14,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { EventType, NodeAttrs } from "@fragua/core";
+import type { Skill } from "@fragua/types";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
-import type { EventType, NodeAttrs } from "@swarm/core";
-import type { Skill } from "@swarm/types";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 
 interface CapturedEvent {
@@ -98,7 +98,7 @@ async function runOnce(opts: {
 
 describe("PiLlmBackend skill tool wiring", () => {
   test("skill tool is present even when node.attrs.allowed_tools omits it", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-skill-allow-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-skill-allow-"));
     try {
       const { skillsCatalog } = await setupSkill(scratch);
       const { events, outcome } = await runOnce({
@@ -124,7 +124,7 @@ describe("PiLlmBackend skill tool wiring", () => {
   });
 
   test("skill tool is present even when node.attrs.denied_tools lists it", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-skill-deny-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-skill-deny-"));
     try {
       const { skillsCatalog } = await setupSkill(scratch);
       const { events, outcome } = await runOnce({
@@ -144,12 +144,12 @@ describe("PiLlmBackend skill tool wiring", () => {
   });
 
   test("skillCatalog is populated by the time the skill tool executes", async () => {
-    // Pins the contract that the swarmContext.skillCatalog field is
+    // Pins the contract that the fraguaContext.skillCatalog field is
     // visible from inside a tool-execute closure invoked during the
     // agent loop. If the patch were applied AFTER tool wiring AND the
     // closure captured by value (rather than by object reference), the
     // tool would see an empty catalogue and fail with unknown-name.
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-skill-catalog-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-skill-catalog-"));
     try {
       const { skillsCatalog } = await setupSkill(scratch);
       const { events, outcome } = await runOnce({

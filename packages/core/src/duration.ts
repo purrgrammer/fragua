@@ -1,4 +1,4 @@
-// Duration string parser — shared between config (.swarm/config.yaml
+// Duration string parser — shared between config (.fragua/config.yaml
 // `timeouts:`) and workflow node attrs (`timeout="…"`). Output is milliseconds
 // so callers can plug straight into setTimeout / AbortSignal.timeout.
 //

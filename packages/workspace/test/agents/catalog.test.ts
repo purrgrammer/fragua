@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentDefinition } from "@swarm/types";
+import type { AgentDefinition } from "@fragua/types";
 import { filterAgentsCatalogueForRun, lookupAgentDef, renderAgentsCatalog } from "../../src/agents/catalog.ts";
 
 function mk(name: string, description: string, extra: Partial<AgentDefinition> = {}): AgentDefinition {

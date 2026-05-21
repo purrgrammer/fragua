@@ -26,10 +26,10 @@ export function useDom(): void {
   let savedFetch: typeof globalThis.fetch | undefined;
   beforeAll(() => {
     savedFetch = globalThis.fetch;
-    const g = globalThis as unknown as { __swarmWebDomInstalled?: boolean };
-    if (!g.__swarmWebDomInstalled) {
+    const g = globalThis as unknown as { __fraguaWebDomInstalled?: boolean };
+    if (!g.__fraguaWebDomInstalled) {
       GlobalRegistrator.register();
-      g.__swarmWebDomInstalled = true;
+      g.__fraguaWebDomInstalled = true;
       installed = true;
     }
     // Override `matchMedia` to force `(prefers-reduced-motion: reduce)` in
@@ -54,10 +54,10 @@ export function useDom(): void {
   });
   afterAll(async () => {
     if (savedFetch !== undefined) globalThis.fetch = savedFetch;
-    const g = globalThis as unknown as { __swarmWebDomInstalled?: boolean };
-    if (installed && g.__swarmWebDomInstalled) {
+    const g = globalThis as unknown as { __fraguaWebDomInstalled?: boolean };
+    if (installed && g.__fraguaWebDomInstalled) {
       await GlobalRegistrator.unregister();
-      g.__swarmWebDomInstalled = false;
+      g.__fraguaWebDomInstalled = false;
     }
   });
 }

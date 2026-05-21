@@ -11,7 +11,7 @@
 //      forward alone would never see them.
 
 import { describe, expect, test } from "bun:test";
-import type { GetGlobalEventsAtFloorOpts, GetGlobalEventsForwardOpts, StoredEvent } from "@swarm/store";
+import type { GetGlobalEventsAtFloorOpts, GetGlobalEventsForwardOpts, StoredEvent } from "@fragua/store";
 import type { SSEStreamingApi } from "hono/streaming";
 import { parseGlobalCursorFromHeader, runGlobalFeedLoop } from "../../src/store/sse.ts";
 
@@ -64,7 +64,7 @@ function ev(runId: string, seq: number, ts: number, type = "fact.run_started"): 
 }
 
 function isPing(f: FakeFrame): boolean {
-  return f.kind === "sse" && f.text.startsWith("id:|") && /"type":"swarm\.ping"/.test(f.text);
+  return f.kind === "sse" && f.text.startsWith("id:|") && /"type":"fragua\.ping"/.test(f.text);
 }
 
 function realFrames(frames: FakeFrame[]): FakeFrame[] {

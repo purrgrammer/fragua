@@ -64,9 +64,9 @@ describe("WorkflowSelector", () => {
     // The cwd is URL-encoded so paths with colons (Windows drives) or
     // slashes can ride the Radix value string safely. Decoding is
     // exact-match against the original.
-    const sel = { scope: "local" as const, name: "research", cwd: "/Users/me/swarm" };
+    const sel = { scope: "local" as const, name: "research", cwd: "/Users/me/fragua" };
     const v = workflowSelectionToValue(sel);
-    expect(v).toBe("local:research:%2FUsers%2Fme%2Fswarm");
+    expect(v).toBe("local:research:%2FUsers%2Fme%2Ffragua");
     expect(workflowSelectValueToSelection(v)).toEqual(sel);
   });
 

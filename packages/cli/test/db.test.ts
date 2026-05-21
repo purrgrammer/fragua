@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { dbCommand } from "../src/commands/db.ts";
 
 const workdirs: string[] = [];
@@ -17,17 +17,17 @@ afterEach(() => {
 });
 
 function makeStore(): string {
-  const cwd = mkdtempSync(join(tmpdir(), "swarm-db-"));
+  const cwd = mkdtempSync(join(tmpdir(), "fragua-db-"));
   workdirs.push(cwd);
-  mkdirSync(join(cwd, ".swarm"), { recursive: true });
-  const store = new SqliteStore({ path: join(cwd, ".swarm/swarm.db") });
+  mkdirSync(join(cwd, ".fragua"), { recursive: true });
+  const store = new SqliteStore({ path: join(cwd, ".fragua/fragua.db") });
   store.saveWorkflow("sha", "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId: "r", workflowSha: "sha" });
   store.close();
   return cwd;
 }
 
-describe("swarm db", () => {
+describe("fragua db", () => {
   test("vacuum completes", async () => {
     const cwd = makeStore();
     const code = await dbCommand({ action: "vacuum", cwd });
@@ -55,7 +55,7 @@ describe("swarm db", () => {
   });
 
   test("error when store missing", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "swarm-empty-"));
+    const cwd = mkdtempSync(join(tmpdir(), "fragua-empty-"));
     workdirs.push(cwd);
     const code = await dbCommand({ action: "vacuum", cwd });
     expect(code).toBe(1);

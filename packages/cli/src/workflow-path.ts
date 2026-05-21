@@ -1,9 +1,9 @@
-// Workflow argument resolution shared by `swarm run` and `swarm validate`.
+// Workflow argument resolution shared by `fragua run` and `fragua validate`.
 //
 // Bare names (no slash, no `.yaml` suffix) resolve in two stages:
-//   1. `~/.swarm/workflows/<name>.yaml` — global. Generic workflows live
+//   1. `~/.fragua/workflows/<name>.yaml` — global. Generic workflows live
 //      here so they're available from any cwd.
-//   2. `<cwd>/.swarm/workflows/<name>.yaml` — project-local fallback.
+//   2. `<cwd>/.fragua/workflows/<name>.yaml` — project-local fallback.
 //      Project-internal workflows (this repo's introspect, ci-gate, …)
 //      stay near the codebase that owns them.
 //
@@ -24,18 +24,18 @@ export interface ResolvedWorkflow {
    * lookups this is the input verbatim; for path lookups it's the file
    * basename without extension. */
   name: string;
-  /** How the argument resolved. `global` matched `~/.swarm/workflows/`,
-   * `local` fell back to `<cwd>/.swarm/workflows/`, `path` resolved
+  /** How the argument resolved. `global` matched `~/.fragua/workflows/`,
+   * `local` fell back to `<cwd>/.fragua/workflows/`, `path` resolved
    * as an explicit filesystem path. */
   scope: WorkflowScope;
 }
 
 export function globalWorkflowsDir(home?: string): string {
-  return resolve(home ?? homedir(), ".swarm/workflows");
+  return resolve(home ?? homedir(), ".fragua/workflows");
 }
 
 export function projectWorkflowsDir(cwd: string): string {
-  return resolve(cwd, ".swarm/workflows");
+  return resolve(cwd, ".fragua/workflows");
 }
 
 /** Resolve a workflow argument. `opts.homeDir` overrides the home base

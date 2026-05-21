@@ -1,4 +1,4 @@
-// `swarm daemon` — run the packages/daemon process against the local store.
+// `fragua daemon` — run the packages/daemon process against the local store.
 //
 // Out of the box the daemon uses a stub LLM. Pass `--provider` +
 // `--model` (or omit both for the defaults) and the auto-dispatcher
@@ -9,7 +9,6 @@
 import { mkdirSync } from "node:fs";
 import { homedir, hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
-import type { Model } from "@mariozechner/pi-ai";
 import {
   AuthStorage,
   defaultSummariserModel,
@@ -20,9 +19,9 @@ import {
   PiSummariserBackend,
   type SpawnSubagentParentCtx,
   SteeringRegistry,
-} from "@swarm/agent";
-import { parseDurationMs } from "@swarm/core";
-import * as handler from "@swarm/core/handler";
+} from "@fragua/agent";
+import { parseDurationMs } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
 import {
   AutoTitler,
   autoDispatcherResolver,
@@ -31,14 +30,15 @@ import {
   type Provisioner,
   startDaemon,
   WorktreeProvisioner,
-} from "@swarm/daemon";
-import { SqliteStore } from "@swarm/store";
-import { CORE_TOOLS, discoverAgents, discoverSkills, ToolRegistry } from "@swarm/workspace";
+} from "@fragua/daemon";
+import { SqliteStore } from "@fragua/store";
+import { CORE_TOOLS, discoverAgents, discoverSkills, ToolRegistry } from "@fragua/workspace";
+import type { Model } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import { loadConfig, loadProjectConfig, resolveTimeouts } from "../config.ts";
 
 /**
- * Poll interval for `swarm daemon stop` — how often we check whether
+ * Poll interval for `fragua daemon stop` — how often we check whether
  * the lock row has cleared after SIGTERM. Kept small so the CLI feels
  * responsive; the 10s timeout is enforced by a separate deadline.
  */
@@ -46,7 +46,7 @@ const STOP_POLL_MS = 100;
 const STOP_TIMEOUT_MS = 10_000;
 
 /**
- * `swarm daemon stop` — SIGTERM the daemon identified by the
+ * `fragua daemon stop` — SIGTERM the daemon identified by the
  * daemon_lock row and poll for the row to clear. Coordination is
  * DB-only; no pidfile.
  *
@@ -57,7 +57,7 @@ const STOP_TIMEOUT_MS = 10_000;
  */
 export async function daemonStopCommand(opts: { cwd?: string; dbPath?: string } = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
+  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
   const store = new SqliteStore({ path: storePath });
   try {
     const lock = store.currentDaemonLock();
@@ -115,7 +115,7 @@ function hostnameSafe(): string {
 export interface DaemonCommandOptions {
   /** Working directory used to resolve the store path. Default `process.cwd()`. */
   cwd?: string;
-  /** Explicit store path. Overrides `<cwd>/.swarm/swarm.db`. */
+  /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. */
   dbPath?: string;
   /** Max concurrent runs. Default 4. */
   concurrency?: number;
@@ -127,7 +127,7 @@ export interface DaemonCommandOptions {
 
 export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
+  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
   mkdirSync(dirname(storePath), { recursive: true });
 
   const store = new SqliteStore({ path: storePath });
@@ -150,7 +150,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const getApiKey = (p: string) => authStorage.getApiKey(p);
 
   // Resolve provider/model. Precedence: CLI flags >
-  // .swarm/config.yaml defaults > env autodetect > stub.
+  // .fragua/config.yaml defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
   let timeouts: ReturnType<typeof resolveTimeouts>;
   try {
@@ -423,7 +423,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // **resolved per run** against the run's project root via
   // `loadProjectConfig(<run.cwd>)` — so one daemon can serve runs
   // from many projects, each picking up its own
-  // `.swarm/config.yaml` `bootstrap` field. No global / no
+  // `.fragua/config.yaml` `bootstrap` field. No global / no
   // daemon-startup-cwd fallback: a project that doesn't declare a
   // bootstrap gets no bootstrap (the previous behaviour silently
   // leaked the daemon's startup-cwd config to every project, which
@@ -457,13 +457,13 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   });
   const provisionerLabel =
     `worktree per-run when run cwd is a git repo, else LocalEnvironment rooted at run cwd ` +
-    `(bootstrap: per-run from <project>/.swarm/config.yaml)`;
+    `(bootstrap: per-run from <project>/.fragua/config.yaml)`;
 
-  console.log(chalk.green(`swarm daemon running`));
+  console.log(chalk.green(`fragua daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));
   console.log(chalk.dim(`  concurrency: ${concurrency}`));
   const sourceSuffix =
-    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.yaml)" : "";
+    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .fragua/config.yaml)" : "";
   const llmLabel = useLlm
     ? `${provider}/${model}${sourceSuffix}`
     : "stub (set a provider API key, or pass --provider + --model)";
@@ -475,7 +475,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // `buildSummariserBackend` rejected the configured model at validation
   // (model not registered / no default for provider), `summariserInfo.backend`
   // is undefined and the label carries the rejection reason — surface it
-  // loudly so the operator updates `.swarm/config.yaml` rather than
+  // loudly so the operator updates `.fragua/config.yaml` rather than
   // chasing the failure at runtime.
   if (summariserInfo.backend) {
     console.log(chalk.dim(`  summariser: ${summariserInfo.label}`));
@@ -556,11 +556,11 @@ function buildSummariserBackend(args: {
   // (autoTitler / per-node `summary=`) and looks like a tool failure
   // rather than a config error. Catching it here gives the operator
   // one obvious "fix this in config.yaml" line at startup.
-  // `swarm providers` lists valid ids per provider.
+  // `fragua providers` lists valid ids per provider.
   if (!modelRegistry.find(sumProvider, sumModel)) {
     return {
       backend: undefined,
-      label: `model "${sumProvider}/${sumModel}" not registered (run \`swarm providers\` for valid ids)`,
+      label: `model "${sumProvider}/${sumModel}" not registered (run \`fragua providers\` for valid ids)`,
     };
   }
   const backend = new PiSummariserBackend({

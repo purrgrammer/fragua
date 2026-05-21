@@ -10,7 +10,7 @@ describe("lsTool", () => {
   let env: LocalEnvironment;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-ls-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-ls-"));
     env = new LocalEnvironment({ cwd: scratch });
   });
 

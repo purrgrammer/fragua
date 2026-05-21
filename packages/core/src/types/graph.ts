@@ -44,7 +44,7 @@ export interface NodeAttrs {
   /** Per-step retry cap (tool self-retry or goal-gate retarget cap). */
   max_retries?: number;
   /** Per-node hard timeout. Duration-string form (e.g. "30s", "5m", "2h").
-   * Wins over `.swarm/config.yaml` `timeouts.<kind>`. */
+   * Wins over `.fragua/config.yaml` `timeouts.<kind>`. */
   timeout?: string;
   /** Per-node hard timeout in raw milliseconds. Mutex with `timeout`. */
   max_ms?: number;

@@ -1,6 +1,6 @@
 // Per-model CLI ops \u2014 covers
 // ls-models / add-model / rm-model / edit-model end-to-end against a
-// real SqliteStore opened under a temp `$SWARM_HOME`. The wizard
+// real SqliteStore opened under a temp `$FRAGUA_HOME`. The wizard
 // `prompts` UI is not under test; commands are driven with `--yes`
 // (or the equivalent flag bag) to skip interactive confirmation.
 
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import {
   buildModelEntry,
   type ModelEntry,
@@ -27,13 +27,13 @@ interface Captured {
 }
 
 let tmp: string;
-let prevSwarmHome: string | undefined;
+let prevFraguaHome: string | undefined;
 let captured: Captured;
 let origLog: typeof console.log;
 let origError: typeof console.error;
 
 function seed(provider: string, entry: ProviderEntry): void {
-  const store = new SqliteStore({ path: join(tmp, "swarm.db") });
+  const store = new SqliteStore({ path: join(tmp, "fragua.db") });
   try {
     store.upsertProviderConfig({ provider, config: JSON.stringify(entry) });
   } finally {
@@ -42,7 +42,7 @@ function seed(provider: string, entry: ProviderEntry): void {
 }
 
 function read(provider: string): ProviderEntry | null {
-  const store = new SqliteStore({ path: join(tmp, "swarm.db") });
+  const store = new SqliteStore({ path: join(tmp, "fragua.db") });
   try {
     const row = store.getProviderConfig(provider);
     return row == null ? null : (row.config as ProviderEntry);
@@ -52,7 +52,7 @@ function read(provider: string): ProviderEntry | null {
 }
 
 function readUpdatedAt(provider: string): number | null {
-  const store = new SqliteStore({ path: join(tmp, "swarm.db") });
+  const store = new SqliteStore({ path: join(tmp, "fragua.db") });
   try {
     const row = store.getProviderConfig(provider);
     return row == null ? null : row.updatedAt;
@@ -70,9 +70,9 @@ function makeEntry(modelIds: string[]): ProviderEntry {
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "swarm-providers-model-ops-"));
-  prevSwarmHome = process.env["SWARM_HOME"];
-  process.env["SWARM_HOME"] = tmp;
+  tmp = mkdtempSync(join(tmpdir(), "fragua-providers-model-ops-"));
+  prevFraguaHome = process.env["FRAGUA_HOME"];
+  process.env["FRAGUA_HOME"] = tmp;
   captured = { logs: [], errors: [], out: "", err: "" };
   origLog = console.log;
   origError = console.error;
@@ -91,8 +91,8 @@ beforeEach(() => {
 afterEach(() => {
   console.log = origLog;
   console.error = origError;
-  if (prevSwarmHome === undefined) delete process.env["SWARM_HOME"];
-  else process.env["SWARM_HOME"] = prevSwarmHome;
+  if (prevFraguaHome === undefined) delete process.env["FRAGUA_HOME"];
+  else process.env["FRAGUA_HOME"] = prevFraguaHome;
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -178,7 +178,7 @@ describe("add-model", () => {
 
   test("Ajv-rejects a blob that fails the per-provider schema", async () => {
     // Seed a structurally-invalid row directly: `models` not an array.
-    const store = new SqliteStore({ path: join(tmp, "swarm.db") });
+    const store = new SqliteStore({ path: join(tmp, "fragua.db") });
     try {
       store.upsertProviderConfig({
         provider: "broken",

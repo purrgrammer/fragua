@@ -4,7 +4,7 @@
 // impl registers one spec per (workflow, nodeId) pair; callers responsible
 // for wiring. No graph parsing happens here — that stays in core/parser.
 
-import type * as handler from "@swarm/core/handler";
+import type * as handler from "@fragua/core/handler";
 
 type HandlerSpec = handler.HandlerSpec;
 

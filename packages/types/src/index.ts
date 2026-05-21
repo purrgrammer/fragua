@@ -1,15 +1,15 @@
-// @swarm/types — pi-agent-core / pi-ai types used throughout the
-// codebase, plus swarm-specific declaration merges. Every package
+// @fragua/types — pi-agent-core / pi-ai types used throughout the
+// codebase, plus fragua-specific declaration merges. Every package
 // that handles messages imports from here instead of directly from
 // pi-agent-core so the custom-role merges below apply consistently
 // across the TypeScript compile graph.
 //
 // Why a separate package: TypeScript declaration merging only applies
 // to files that are actually part of a compile unit. A merge living
-// in @swarm/store won't be visible to @swarm/web unless web's tsc
+// in @fragua/store won't be visible to @fragua/web unless web's tsc
 // pulls store's source into its graph — which it doesn't, since web
-// only imports @swarm/core. Putting the merge here and having every
-// consumer import from @swarm/types guarantees the merge activates.
+// only imports @fragua/core. Putting the merge here and having every
+// consumer import from @fragua/types guarantees the merge activates.
 
 export type { AgentMessage, AgentToolCall, AgentToolResult } from "@mariozechner/pi-agent-core";
 export type {
@@ -54,7 +54,7 @@ export {
 } from "./events.ts";
 export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "./skills.ts";
 
-/** Swarm-specific custom message type: the assembled system prompt
+/** Fragua-specific custom message type: the assembled system prompt
  * for a single LLM call. Persisted in the `messages` table so UIs
  * and debuggers can reconstruct exactly what the model saw, without
  * hitting the 4KB cap on `llm.start`'s event payload. Filtered back
@@ -66,7 +66,7 @@ export interface SystemPromptMessage {
   timestamp: number;
 }
 
-/** Swarm-specific custom message type: a graph-level `tool` node
+/** Fragua-specific custom message type: a graph-level `tool` node
  * (tool node) execution. Captures the shell command, the
  * cwd it ran in, the exit code, and a tail-truncated slice of
  * stdout/stderr — enough for the UI to render a terminal card from

@@ -1,4 +1,4 @@
-# swarm — Architecture
+# fragua — Architecture
 
 > **Authoritative.** The design the codebase implements. Companion to [`SPEC.md`](./SPEC.md) (goals) and [`handler-contract.md`](./handler-contract.md) (writing handlers).
 >
@@ -9,7 +9,7 @@
 ## 0. Context and decisions
 
 ### What we're committing to
-- **Single coordination surface: one SQLite database.** All state, events, queue, locks, and artifact metadata. The harness supervises a daemon subprocess + in-process HTTP server against `~/.swarm/swarm.db` by default; both halves read and write. WAL mode handles multi-process access. Artifact *content* lives on the filesystem under `blobsDir`, keyed by sha256 — keeping raw bytes out of the WAL. The CI primitives (`swarm daemon --db <path>` + `swarm serve --db <path>`) hit the same store contract against an explicit DB path.
+- **Single coordination surface: one SQLite database.** All state, events, queue, locks, and artifact metadata. The harness supervises a daemon subprocess + in-process HTTP server against `~/.fragua/fragua.db` by default; both halves read and write. WAL mode handles multi-process access. Artifact *content* lives on the filesystem under `blobsDir`, keyed by sha256 — keeping raw bytes out of the WAL. The CI primitives (`fragua daemon --db <path>` + `fragua serve --db <path>`) hit the same store contract against an explicit DB path.
 - **Event sourcing with projection-in-transaction.** Events are the immutable log of truth. A materialized projection (`run_state`) is updated inside the same transaction as the event append. Reads of current state are one row; event fold is only used for migration/debug.
 - **Intent/fact split.** Web writes intents (always-appendable, no OCC). Daemon writes facts (OCC-checked against `run_state.version`). 90% of retry pressure disappears.
 - **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `fact.node_aborted` with partial metrics, executor re-enters (or halts) based on new state.
@@ -296,7 +296,7 @@ CREATE TABLE daemon_lock (
   hostname TEXT NOT NULL,
   started_at INTEGER NOT NULL,
   heartbeat_at INTEGER NOT NULL,
-  http_url TEXT,                                  -- harness/serve listener URL; NULL for `swarm daemon --db <path>` only
+  http_url TEXT,                                  -- harness/serve listener URL; NULL for `fragua daemon --db <path>` only
   http_port INTEGER,
   harness_version TEXT
 ) STRICT;
@@ -371,7 +371,7 @@ CREATE TABLE provider_credentials (
 -- Custom-provider definitions. One row per provider id; `config` is
 -- the per-provider definition blob (baseUrl, headers, compat, models,
 -- modelOverrides) — the `ProviderConfigSchema` shape from
--- `@swarm/agent` minus the `apiKey` field. Credentials always come
+-- `@fragua/agent` minus the `apiKey` field. Credentials always come
 -- from `provider_credentials`. Per-row Ajv validation lives in the
 -- agent layer (`ModelRegistry.loadCustomModels`) so one corrupt
 -- provider can be skipped without poisoning sibling rows. No indexes
@@ -412,13 +412,13 @@ CREATE TABLE provider_config (
 | `intent.max_retries_adjusted` | `nodeId: string`, `newLimit: number` (>0), `note?: string` | Operator raises a node's `max_retries` cap on a `paused{reason:'max_retries'}` run; folded into `routing.max_retries_override.<nodeId>`. Stage 3 of recoverable-budget-pause.md |
 | `intent.goal_gate_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the failing gate's retarget cap on a `paused{reason:'goal_gate'}` run; folded into `routing.max_goal_gate_retries_override` (takes precedence over the gate's `max_retries`) |
 | `intent.max_loops_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the per-run dispatch ceiling on a `paused{reason:'max_loops'}` run; folded into `routing.max_loops_override` |
-| `intent.branch_run` | `branch: string`, `force?: boolean` | Post-terminal: promote the run's committed history to porcelain `refs/heads/<branch>` at the `refs/swarm/heads/<runId>` sha. Daemon `update-ref`; inbox `pending → acted`. Worktree-free |
+| `intent.branch_run` | `branch: string`, `force?: boolean` | Post-terminal: promote the run's committed history to porcelain `refs/heads/<branch>` at the `refs/fragua/heads/<runId>` sha. Daemon `update-ref`; inbox `pending → acted`. Worktree-free |
 | `intent.commit_run` | `message: string`, `onto?: string` | Post-terminal: `commit-tree` the run's full snapshot tree (incl. uncommitted dirt) onto `onto` (default `base_git_ref`) and advance that branch. Inbox `pending → acted` |
-| `intent.merge_run` | `mode?: 'ff'\|'no-ff'\|'squash'`, `into?: string` | Post-terminal: merge the run's `refs/swarm/heads/<runId>` into `into` (default `base_git_ref`); `ff` is the implicit default. Inbox `pending → acted` |
+| `intent.merge_run` | `mode?: 'ff'\|'no-ff'\|'squash'`, `into?: string` | Post-terminal: merge the run's `refs/fragua/heads/<runId>` into `into` (default `base_git_ref`); `ff` is the implicit default. Inbox `pending → acted` |
 | `intent.accept_run` | `sha`, `replayed: number`, `tailStaged: boolean` | Records a completed accept: the request path (server route / CLI) already replayed the run's commits onto the operator's HEAD + staged the tail **synchronously**; this intent carries the result and is folded into `fact.run_accepted`. Inbox `pending → acted` |
-| `intent.discard_run` | `refs: string[]` | Records a completed discard: the request path already deleted `refs/swarm/{snapshots,heads}/<runId>`; this intent carries the deleted refs and is folded into `fact.run_discarded`. Inbox `pending → discarded` (terminal-terminal) |
+| `intent.discard_run` | `refs: string[]` | Records a completed discard: the request path already deleted `refs/fragua/{snapshots,heads}/<runId>`; this intent carries the deleted refs and is folded into `fact.run_discarded`. Inbox `pending → discarded` (terminal-terminal) |
 
-Post-terminal operator actions run **synchronously in the request path** (the `POST /runs/:id/{accept,discard}` handler executes the git via `@swarm/workspace`, returns the result, and on success appends the intent above carrying that result) — so the CLI/web see the outcome immediately, and a conflict / dirty tree returns 4xx and writes nothing. The daemon's `processOperatorActions` sweep then **projects** each intent into its `fact.run_*` (OCC lockstep with `inbox_status`) — no second git run. This keeps facts daemon-written while the operator's experience is synchronous.
+Post-terminal operator actions run **synchronously in the request path** (the `POST /runs/:id/{accept,discard}` handler executes the git via `@fragua/workspace`, returns the result, and on success appends the intent above carrying that result) — so the CLI/web see the outcome immediately, and a conflict / dirty tree returns 4xx and writes nothing. The daemon's `processOperatorActions` sweep then **projects** each intent into its `fact.run_*` (OCC lockstep with `inbox_status`) — no second git run. This keeps facts daemon-written while the operator's experience is synchronous.
 
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
@@ -450,7 +450,7 @@ Post-terminal operator actions run **synchronously in the request path** (the `P
 | `fact.run_committed` | `targetBranch`, `sha`, `message`, `parentSha` | Operator (`intent.commit_run`): committed the run's snapshot tree onto `targetBranch`. Sets `run_state.final_commit`; inbox `pending → acted`. |
 | `fact.run_merged` | `targetBranch`, `mode: 'ff'\|'merge'\|'squash'`, `sha`, `parentShas: string[]` | Operator (`intent.merge_run`): merged the run's heads-ref into `targetBranch`. Sets `run_state.merged_into`; inbox `pending → acted`. |
 | `fact.run_accepted` | `sha`, `replayed: number`, `tailStaged: boolean` | Daemon-folded from `intent.accept_run`: replayed the run's commits onto the operator's current branch and staged the uncommitted tail. Sets `run_state.accepted_sha`; inbox `pending → acted`. |
-| `fact.run_discarded` | `refs: string[]` | Operator (`intent.discard_run`): deleted the run's `refs/swarm/{snapshots,heads}/<id>`. Inbox `pending → discarded` (terminal-terminal). |
+| `fact.run_discarded` | `refs: string[]` | Operator (`intent.discard_run`): deleted the run's `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded` (terminal-terminal). |
 
 **Sub-agents have no dedicated facts and no `run_state` row.** A sub-agent (LLM-spawned via the `agent` tool) is a tool implementation that runs inline as a fresh llm call against the parent's event stream. Three **observability** event types bracket the slice: `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`, `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`, and `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` (fires on respawn after a daemon crash). `name` and `agent_def` are independent: `name` carries the free-form caller-supplied label from `agent({ name: <label>, … })`; `agent_def` carries the resolved profile name from `agent({ agent: <def-name>, … })` against a discovered definition. Either, both, or neither can be present. UIs prefer `name` when present (the caller chose it for this spawn) and fall back to `agent_def`. Every event the sub-agent emits in between (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) carries `subagent_id` on its payload as a discriminator. The cost-rollup fields (`costUsd`, `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) sum every `cost.recorded` the sub-agent forwarded onto the parent's stream during its bracket — a per-spawn view UIs and analytics can render without scanning the slice. Required numbers, default 0 when no `cost.recorded` fired (e.g. spawn halted before any LLM call). Field shape mirrors `fact.node_aborted.partial*`. The fields are a per-spawn view of the same stream, not a duplicate accounting path: cost still rolls into the parent's `metrics` through the existing accumulation path — the reducer doesn't filter on `subagent_id`. The tool result (`{ subagent_id, status, total_tool_calls, halt_reason? }`) is the bidirectional handle the parent LLM gets back. Parallel `agent` toolcalls in one parent message run concurrently and demux by `subagent_id`. The `subagent_id` is picked at spawn time via two paths. **Content-addressed pending-resume (FIFO queue, default when `spec.args_hash` is set — the agent tool computes it from the spec's canonical args: prompt, system_prompt, allowed_tools, disallowed_tools, skills, max_iterations, agent_def, model, provider):** spawn-subagent queries prior `subagent.start` / `subagent.end` / `subagent.resumed` events for brackets in the same `(parentRunId, parentNodeId, parentIteration, args_hash)` scope whose latest terminal is `subagent.end{status:"cancelled"}` and that haven't been consumed by a `subagent.resumed`. The oldest such bracket's id is reused — same id ⇒ the hydration path below replays its transcript ⇒ the LLM's retry with byte-identical args automatically picks up where the cancelled bracket left off, without a `resume_subagent_id` parameter, without LLM cooperation. Six parallel siblings with same args each pop a distinct cancelled bracket because the eagerly-emitted `subagent.resumed` consumes its id before the next sibling's findPendingResumeCandidate runs (bun:sqlite writes are sync; the first sibling's resumed-write lands before the second's read). Stays scoped to `(parent_node_id, iteration)` so a goal-gate retarget into the same node doesn't accidentally bleed stale brackets into a fresh dispatch. **Fresh deterministic id (fallback):** `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars — so a sub-agent respawned after a daemon crash hashes to the same id and rehydrates its prior transcript under the existing `__subagent:<id>` namespace in the messages table. The respawn path emits `subagent.resumed` (no fresh `subagent.start` — the original is still in the event log) and either skips the LLM call (when the persisted transcript ended in `stopReason:"stop"` with no pending toolCalls) or hands `priorMessages` to the backend so the child picks up where it left off. On a resumed bracket, `subagent.end.costUsd` and the token fields are **cumulative** across every spawn of the same `subagent_id` — the daemon seeds the per-spawn rollup from prior `subagent.end` events for that id (via `IEventReader.getEventsByType`). **Consumers summing cost across `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket; naive summation across every bracket over-counts.** The parent's `total_cost_usd` projection is unaffected — it folds each `fact.node_completed.costUsd` once. Typed payload schemas: `SubagentStartData` / `SubagentEndData` / `SubagentResumedData` in `packages/core/src/types/events.ts`.
 
@@ -935,8 +935,8 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 
 Built-in pi-ai provider credentials (api_key + OAuth tokens) live in
 the `provider_credentials` table on the global store
-(`~/.swarm/swarm.db`). The store is the only credential coordination
-surface: the harness daemon, `swarm serve`, and `swarm providers`
+(`~/.fragua/fragua.db`). The store is the only credential coordination
+surface: the harness daemon, `fragua serve`, and `fragua providers`
 share one view of which providers are credentialed, and OAuth refresh
 is last-writer-wins under SQLite WAL rather than file-locked. Keys
 are stored verbatim — no `!cmd` / env-var resolution anywhere in the
@@ -1057,7 +1057,7 @@ app.get("/agents",                    (c) => listAgents(c));
 app.get("/agents/:locId",             (c) => agentDetail(c));      // metadata + body (the prompt)
 
 // Worktree snapshot read endpoints. Pure git object-database queries — no checkouts, no worktree
-// mutation. Snapshot commits are reachable via refs/swarm/snapshots/<runId>;
+// mutation. Snapshot commits are reachable via refs/fragua/snapshots/<runId>;
 // eventIdx in the URL is the event seq, resolved to a commitSha by walking
 // the run's snapshot events. All endpoints 404 on unknown run or eventIdx.
 app.get("/runs/:id/snapshots",                    (c) => { /* ordered scrubber feed: Array<{eventIdx,nodeId,label,commitSha,treeSha,committed,uncommitted}> */ });
@@ -1276,8 +1276,8 @@ packages/
       handler-bridge.ts                ← makeLlmHandler (LlmBackend → HandlerSpec)
       summariser.ts                    ← PiSummariserBackend
       thread.ts                        ← buildSummarySeed (summariser-backed)
-      event-bridge.ts                  ← pi-agent AgentEvent → swarm EventType
-      tool-adapter.ts                  ← swarm Tool → pi AgentTool
+      event-bridge.ts                  ← pi-agent AgentEvent → fragua EventType
+      tool-adapter.ts                  ← fragua Tool → pi AgentTool
       message-store.ts                 ← in-process per-thread transcript cache
       system-prompt.ts                 ← buildSystemPrompt (context-files + skills + runEnv)
   server/
@@ -1295,7 +1295,7 @@ packages/
       tools.ts                         ← read / write / edit / bash
       skills/                          ← SKILL.md discovery + catalog
   web/                                 ← UI (React + Tanstack Router)
-  cli/                                 ← bin/swarm.ts + commands/*.ts
+  cli/                                 ← bin/fragua.ts + commands/*.ts
 ```
 
 
@@ -1305,7 +1305,7 @@ packages/
 
 - **Blob encryption** for secret-bearing outputs — single-user local; deferred.
 - **Cross-machine deployment** — single-machine by design. `IEventStore` is synchronous (matches `bun:sqlite`); a Postgres backing would require async-ifying the interface and every callsite, so this is a future direction rather than a clean drop-in.
-- **Retention policies** per workflow — manual `swarm prune` until demand.
+- **Retention policies** per workflow — manual `fragua prune` until demand.
 - **Blob streaming** for >16MB — handler must chunk; revisit on real use case.
 - **Auto-migration across breaking schema bumps** — refuse + manual for v1. Additive bumps are handled in-place by `applyAdditiveMigrations` (`packages/store/src/migrations.ts`) without touching the version row's compat range.
 - **Workflow hot-reload for in-flight runs** — not planned; `workflow_sha` pinned.

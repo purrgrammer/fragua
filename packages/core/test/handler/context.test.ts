@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { buildHandlerContext } from "../../src/handler/context.ts";
 import { makeHttpClient } from "../../src/handler/http-client.ts";
 import { makeLlmClient } from "../../src/handler/llm-client.ts";

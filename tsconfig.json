@@ -25,5 +25,5 @@
 
     "types": ["bun-types"]
   },
-  "exclude": ["node_modules", "dist", "attractor", "Archon", "pi-mono", ".swarm"]
+  "exclude": ["node_modules", "dist", "attractor", "Archon", "pi-mono", ".fragua"]
 }

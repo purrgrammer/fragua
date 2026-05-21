@@ -1,9 +1,9 @@
 // ExecutionEnvironment — the shell + filesystem surface a run operates
-// against. The interface lives in @swarm/core (not @swarm/workspace)
+// against. The interface lives in @fragua/core (not @fragua/workspace)
 // so HandlerContext can carry an `env: ExecutionEnvironment` without
-// inducing a @swarm/core → @swarm/workspace dependency. Concrete
+// inducing a @fragua/core → @fragua/workspace dependency. Concrete
 // implementations (`LocalEnvironment`, `WorktreeEnvironment`) still
-// live in @swarm/workspace and re-export this type for convenience.
+// live in @fragua/workspace and re-export this type for convenience.
 //
 // Keep this surface small and fully serialisable over IPC-style
 // boundaries — a remote / Docker / sandbox backend should be able to
@@ -12,7 +12,7 @@
 export interface ExecutionEnvironment {
   /** Absolute path of the working directory for this run. For
    * worktree-backed runs this points at the run's isolated worktree
-   * (under `.swarm/worktrees/<run-id>/`); for `LocalEnvironment` this
+   * (under `.fragua/worktrees/<run-id>/`); for `LocalEnvironment` this
    * coincides with the project root. */
   cwd(): string;
   /** Absolute path of the *project root* this env was provisioned from.

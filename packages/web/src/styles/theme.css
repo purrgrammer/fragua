@@ -1,5 +1,5 @@
 /*
- * Swarm design-language tokens.
+ * Fragua design-language tokens.
  *
  * Values are restrained guesses in oklch(); reviewers will tune the
  * lightness/chroma pairs. The 15–30% desaturation rule is applied: first
@@ -9,7 +9,7 @@
  *   :root          → light (default — skill says "light is the default")
  *   .dark          → dark peer (intentionally designed, not auto-inverted)
  *
- * Naming: --sw-<token> so Swarm tokens never collide with shadcn vars.
+ * Naming: --sw-<token> so Fragua tokens never collide with shadcn vars.
  * Components reference these either via `var(--sw-*)` directly or via the
  * Tailwind utilities we expose from them in `globals.css`'s `@theme inline`
  * block (`bg-sw-surface`, `text-sw-muted`, `rounded-sw-card`, ...).

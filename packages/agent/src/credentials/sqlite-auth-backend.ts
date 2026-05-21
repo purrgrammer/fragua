@@ -20,7 +20,7 @@
 // pi-ai built-in providers; revisit if a provider lands with
 // single-use refresh.
 
-import type { IProviderCredentialStore, ProviderCredentialRow } from "@swarm/store";
+import type { IProviderCredentialStore, ProviderCredentialRow } from "@fragua/store";
 
 type LockResult<T> = {
   result: T;

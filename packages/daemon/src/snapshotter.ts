@@ -5,14 +5,14 @@
 //
 // Mechanism per the proposal's "Snapshot capture sequence":
 //   - a per-worktree sentinel index (resolved via `git rev-parse --git-path
-//     swarm-index`, so it works in a LINKED worktree where `.git` is a file)
+//     fragua-index`, so it works in a LINKED worktree where `.git` is a file)
 //     seeded from the real index for a warm stat cache,
 //   - `git add -A` + `write-tree` into the sentinel (never touches `.git/index`),
 //   - `commit-tree` parented to the previous snapshot (lineage),
-//   - a single per-run tip ref `refs/swarm/snapshots/<runId>` moved forward —
+//   - a single per-run tip ref `refs/fragua/snapshots/<runId>` moved forward —
 //     the parent chain keeps every prior snapshot reachable, so intermediate
 //     snapshots are addressed by `commitSha`, not per-eventIdx refs,
-//   - `refs/swarm/heads/<runId>` tracking HEAD when it has moved off base.
+//   - `refs/fragua/heads/<runId>` tracking HEAD when it has moved off base.
 //
 // Dormant: not wired into the executor yet (that is step 3).
 
@@ -105,14 +105,14 @@ export function parseShortstat(out: string): SnapshotStat | null {
 
 /**
  * Resolve the lineage parent for the next snapshot: the run's existing tip
- * ref `refs/swarm/snapshots/<runId>` if present (so a daemon that restarted
+ * ref `refs/fragua/snapshots/<runId>` if present (so a daemon that restarted
  * mid-run continues the chain — keeping every prior snapshot reachable under
  * the single tip), else `baseGitSha`. The executor prefers its in-memory
  * cursor and only falls back here on a cold resume.
  */
 export async function resolveSnapshotParent(worktree: string, runId: string, baseGitSha: string): Promise<string> {
   try {
-    const sha = await git(worktree, ["rev-parse", "--verify", "--quiet", `refs/swarm/snapshots/${runId}`]);
+    const sha = await git(worktree, ["rev-parse", "--verify", "--quiet", `refs/fragua/snapshots/${runId}`]);
     return sha !== "" ? sha : baseGitSha;
   } catch {
     return baseGitSha;
@@ -123,8 +123,8 @@ export async function resolveSnapshotParent(worktree: string, runId: string, bas
  * Capture a snapshot of `worktree`. Returns the result, or `null` when a
  * `step` snapshot is delta-suppressed (tree unchanged since `prevTreeSha`).
  *
- * Side effects: moves `refs/swarm/snapshots/<runId>` forward and, when HEAD
- * has moved off `baseGitSha`, updates `refs/swarm/heads/<runId>`. The sentinel
+ * Side effects: moves `refs/fragua/snapshots/<runId>` forward and, when HEAD
+ * has moved off `baseGitSha`, updates `refs/fragua/heads/<runId>`. The sentinel
  * index is created and removed within the call; the real index and HEAD are
  * never touched.
  */
@@ -136,15 +136,15 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
     return isAbsolute(p) ? p : join(worktree, p);
   };
 
-  const swarmIndex = await gitPath("swarm-index");
+  const fraguaIndex = await gitPath("fragua-index");
   // Seed from the real index so `add -A` re-hashes only changed files. A
   // fresh worktree always has an index; tolerate its absence regardless.
   try {
-    await copyFile(await gitPath("index"), swarmIndex);
+    await copyFile(await gitPath("index"), fraguaIndex);
   } catch {
     // no real index yet — start from an empty sentinel (full rehash).
   }
-  const idxEnv = { GIT_INDEX_FILE: swarmIndex };
+  const idxEnv = { GIT_INDEX_FILE: fraguaIndex };
 
   try {
     await git(worktree, ["add", "-A"], idxEnv);
@@ -154,15 +154,15 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
       return null;
     }
 
-    const commitArgs = ["commit-tree", treeSha, "-m", `swarm-snapshot:${runId}:${boundary}`];
+    const commitArgs = ["commit-tree", treeSha, "-m", `fragua-snapshot:${runId}:${boundary}`];
     if (parentSnap !== "") commitArgs.push("-p", parentSnap);
     const commitSha = await git(worktree, commitArgs);
 
-    await updateRefWithRetry(worktree, `refs/swarm/snapshots/${runId}`, commitSha);
+    await updateRefWithRetry(worktree, `refs/fragua/snapshots/${runId}`, commitSha);
 
     const headSha = await git(worktree, ["rev-parse", "HEAD"]);
     if (baseGitSha !== "" && headSha !== baseGitSha) {
-      await updateRefWithRetry(worktree, `refs/swarm/heads/${runId}`, headSha);
+      await updateRefWithRetry(worktree, `refs/fragua/heads/${runId}`, headSha);
     }
 
     const result: SnapshotResult = { treeSha, commitSha, parentSnap, headSha };
@@ -199,6 +199,6 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
 
     return result;
   } finally {
-    await rm(swarmIndex, { force: true });
+    await rm(fraguaIndex, { force: true });
   }
 }

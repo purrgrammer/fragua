@@ -8,8 +8,8 @@
 //   1. status              — verbatim 'delivers today' / 'does not deliver' sections from STATUS.md and README.md (whichever has them)
 //   2. proposals           — front-matter (title/status/maturity/last_reviewed) per proposal
 //   3. skills              — per generic skill (operate / postmortem / workflows): path, name, frontmatter description, lines + sha256_12, target_hint.
-//                            These document swarm's own universal surface. The other skills
-//                            (frontend / design / backend) are repo-specific to swarm itself — their drift is not in scope.
+//                            These document fragua's own universal surface. The other skills
+//                            (frontend / design / backend) are repo-specific to fragua itself — their drift is not in scope.
 //
 // Structural surfaces (schema, event taxonomy, handler contract, intent fold,
 // doc code blocks, recent commits) live in drift/structural.ts.
@@ -29,7 +29,7 @@ const SKILL_TARGET_HINTS: Record<string, string> = {
   operate:
     "Operator HTTP routes (POST /runs/:id/{steer,pause,cancel,hitl,resume,unquarantine,priority,budget}) — cross-reference packages/server/src/store/routes.ts and runs-routes.ts; flag examples whose body shape would 4xx.",
   postmortem:
-    "Event taxonomy / halt reasons / quarantine reasons / payload field names — cross-reference packages/types/src/swarm-events.ts. Verify §4.1 fact-type table, §8 halt + paused statuses, §8.1 schedule daemon-events, §8.2 subagent observability events match current literals.",
+    "Event taxonomy / halt reasons / quarantine reasons / payload field names — cross-reference packages/types/src/fragua-events.ts. Verify §4.1 fact-type table, §8 halt + paused statuses, §8.1 schedule daemon-events, §8.2 subagent observability events match current literals.",
 };
 
 interface FileSnapshot {
@@ -138,9 +138,9 @@ function collectSkills(): Skill[] {
     }
     entries.sort();
     for (const name of entries) {
-      // The generic operate / postmortem / workflows skills document swarm's
+      // The generic operate / postmortem / workflows skills document fragua's
       // own universal surface; audit those. The repo-specific skills
-      // (frontend / design / backend) are bound to swarm's own code surface,
+      // (frontend / design / backend) are bound to fragua's own code surface,
       // not the universal narrative, so they're out of scope.
       if (name !== "operate" && name !== "postmortem" && name !== "workflows") continue;
       const skillDir = resolve(dir, name);
@@ -177,13 +177,13 @@ const snapshot = {
   focus: focus || null,
   status: {
     file: existsSync(resolve(process.cwd(), "STATUS.md")) ? "STATUS.md" : null,
-    delivers_today: extractMarkdownSection(statusSrc, "## What swarm delivers today"),
-    does_not_deliver: extractMarkdownSection(statusSrc, "## What swarm does not deliver today"),
+    delivers_today: extractMarkdownSection(statusSrc, "## What fragua delivers today"),
+    does_not_deliver: extractMarkdownSection(statusSrc, "## What fragua does not deliver today"),
   },
   readme: {
     file: existsSync(resolve(process.cwd(), "README.md")) ? "README.md" : null,
-    delivers_today: extractMarkdownSection(readmeSrc, "## What swarm delivers today"),
-    does_not_deliver: extractMarkdownSection(readmeSrc, "## What swarm does not deliver today"),
+    delivers_today: extractMarkdownSection(readmeSrc, "## What fragua delivers today"),
+    does_not_deliver: extractMarkdownSection(readmeSrc, "## What fragua does not deliver today"),
   },
   proposals: collectProposals(),
   skills: collectSkills(),

@@ -3,16 +3,16 @@
 // (operator-actions.test.ts) folds it into the git mutation + fact.
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { type IEventStore, SqliteStore } from "@swarm/store";
+import { type IEventStore, SqliteStore } from "@fragua/store";
 import type { RunActionExec } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
 
 // Stub the synchronous git action so route tests assert the route's job (gate
 // → run action → on ok append intent + return result; on fail 409) without a
-// real repo. The real applyAccept/applyDiscard are covered in @swarm/workspace.
+// real repo. The real applyAccept/applyDiscard are covered in @fragua/workspace.
 const okActions: RunActionExec = {
   accept: async () => ({ ok: true, sha: "tip1", replayed: 1, tailStaged: false }),
-  discard: async () => ({ ok: true, refs: ["refs/swarm/snapshots/x", "refs/swarm/heads/x"] }),
+  discard: async () => ({ ok: true, refs: ["refs/fragua/snapshots/x", "refs/fragua/heads/x"] }),
 };
 
 const BASE = "a".repeat(40);

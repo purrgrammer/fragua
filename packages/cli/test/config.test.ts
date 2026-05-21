@@ -1,7 +1,7 @@
-// Tests for .swarm/config.yaml loading. Missing file returns `{}`
+// Tests for .fragua/config.yaml loading. Missing file returns `{}`
 // for first-run UX. Malformed YAML and schema-invalid content throw
 // — silent fallback would hide typos that mis-route runs.
-// Legacy .swarm/config.jsonc is read with a deprecation warning.
+// Legacy .fragua/config.jsonc is read with a deprecation warning.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -15,8 +15,8 @@ describe("loadConfig", () => {
   let scratchHome: string;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-config-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-config-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-home-"));
   });
 
   afterEach(async () => {
@@ -25,13 +25,13 @@ describe("loadConfig", () => {
   });
 
   async function write(body: string, ext: "yaml" | "jsonc" = "yaml"): Promise<void> {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, `.swarm/config.${ext}`), body, "utf8");
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, `.fragua/config.${ext}`), body, "utf8");
   }
 
   async function writeGlobal(body: string, ext: "yaml" | "jsonc" = "yaml"): Promise<void> {
-    await mkdir(join(scratchHome, ".swarm"), { recursive: true });
-    await writeFile(join(scratchHome, `.swarm/config.${ext}`), body, "utf8");
+    await mkdir(join(scratchHome, ".fragua"), { recursive: true });
+    await writeFile(join(scratchHome, `.fragua/config.${ext}`), body, "utf8");
   }
 
   function load(): Promise<ReturnType<typeof loadConfig> extends Promise<infer T> ? T : never> {
@@ -285,7 +285,7 @@ web:
   // ─── YAML format tests ──────────────────────────────────────────────
 
   describe("YAML format", () => {
-    test("reads <cwd>/.swarm/config.yaml", async () => {
+    test("reads <cwd>/.fragua/config.yaml", async () => {
       await write(`
 defaults:
   provider: openrouter
@@ -296,17 +296,17 @@ defaults:
     });
 
     test("YAML wins when both .yaml and .jsonc exist in the same layer", async () => {
-      await mkdir(join(scratch, ".swarm"), { recursive: true });
-      await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
-      await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
+      await mkdir(join(scratch, ".fragua"), { recursive: true });
+      await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
+      await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
       const cfg = await load();
       expect(cfg.bootstrap).toBe("yaml-bootstrap");
     });
 
     test("emits a deprecation warning when .jsonc shadows present .yaml", async () => {
-      await mkdir(join(scratch, ".swarm"), { recursive: true });
-      await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
-      await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
+      await mkdir(join(scratch, ".fragua"), { recursive: true });
+      await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
+      await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
       try {
         await load();
@@ -318,8 +318,8 @@ defaults:
     });
 
     test("emits a deprecation warning when only .jsonc is present", async () => {
-      await mkdir(join(scratch, ".swarm"), { recursive: true });
-      await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "old-style" }`, "utf8");
+      await mkdir(join(scratch, ".fragua"), { recursive: true });
+      await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "old-style" }`, "utf8");
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
       try {
         await load();
@@ -486,7 +486,7 @@ describe("loadProjectConfig", () => {
   let scratch: string;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-projectconfig-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-projectconfig-"));
   });
 
   afterEach(async () => {
@@ -501,16 +501,16 @@ describe("loadProjectConfig", () => {
     expect(await loadProjectConfig(scratch)).toEqual({});
   });
 
-  test("reads <cwd>/.swarm/config.yaml verbatim", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "pnpm install --frozen-lockfile"`, "utf8");
+  test("reads <cwd>/.fragua/config.yaml verbatim", async () => {
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "pnpm install --frozen-lockfile"`, "utf8");
     const cfg = await loadProjectConfig(scratch);
     expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
   });
 
-  test("reads <cwd>/.swarm/config.jsonc verbatim (legacy)", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "pnpm install --frozen-lockfile" }`, "utf8");
+  test("reads <cwd>/.fragua/config.jsonc verbatim (legacy)", async () => {
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "pnpm install --frozen-lockfile" }`, "utf8");
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const cfg = await loadProjectConfig(scratch);
@@ -521,9 +521,9 @@ describe("loadProjectConfig", () => {
   });
 
   test("YAML wins over JSONC in the project layer", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
-    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
+    await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const cfg = await loadProjectConfig(scratch);
@@ -534,8 +534,8 @@ describe("loadProjectConfig", () => {
   });
 
   test("warns on validation error and drops bad value (non-fatal)", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `bootstrap: 123`, "utf8");
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: 123`, "utf8");
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const cfg = await loadProjectConfig(scratch);

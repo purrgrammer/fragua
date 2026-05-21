@@ -1,21 +1,18 @@
 // PiLlmBackend — LlmBackend backed by pi-agent-core + pi-ai.
 
 import { createHash } from "node:crypto";
-import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
-import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
-import type { EventType, LlmBackend, LlmInput, Outcome, SummariserBackend } from "@swarm/core";
-import { fail, failHalt, failProvider, ok } from "@swarm/core";
-import { makeHttpClient } from "@swarm/core/handler";
+import type { EventType, LlmBackend, LlmInput, Outcome, SummariserBackend } from "@fragua/core";
+import { fail, failHalt, failProvider, ok } from "@fragua/core";
+import { makeHttpClient } from "@fragua/core/handler";
 import type {
   AgentDefinition,
   ExecutionEnvironment,
+  FraguaToolContext,
   Skill,
   SubagentResult,
   SubagentSpec,
-  SwarmToolContext,
   ToolRegistry,
-} from "@swarm/workspace";
+} from "@fragua/workspace";
 import {
   filterAgentsCatalogueForRun,
   filterCatalogueForRun,
@@ -24,7 +21,10 @@ import {
   renderSkillsCatalog,
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
-} from "@swarm/workspace";
+} from "@fragua/workspace";
+import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
+import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { MessageStore } from "./message-store.ts";
 import { SteeringRegistry } from "./steering-registry.ts";
@@ -56,7 +56,7 @@ export interface PiLlmBackendOptions {
    * When omitted, the summary path falls back to a deterministic
    * role-census + tail template with a soft warning. */
   summariser?: SummariserBackend;
-  /** Skills discovered by the CLI at startup (see @swarm/workspace
+  /** Skills discovered by the CLI at startup (see @fragua/workspace
    * `discoverSkills`). Filtered per-node via `node.attrs.skills` and
    * `skills_disabled`. When the effective set is non-empty for a call,
    * the backend renders a tier-1 catalog into the system prompt and
@@ -89,17 +89,17 @@ export interface PiLlmBackendOptions {
   /** Factory that builds a per-call sub-agent spawner for the `agent`
    * tool. Called once per `backend.run()` with the parent's resolved
    * persona + skills + pool, and returns the `spawnSubagent` closure
-   * that lands on `swarmContext.spawnSubagent`. The daemon wires this
+   * that lands on `fraguaContext.spawnSubagent`. The daemon wires this
    * to its store + tool registry; tests / one-shots can omit it (the
    * tool then surfaces `is_error` to the LLM rather than silently
    * stalling). */
   spawnSubagentFactory?: (parentCtx: SpawnSubagentParentCtx) => (spec: SubagentSpec) => Promise<SubagentResult>;
   /** Named sub-agent profiles discovered by the CLI at startup (see
-   * `@swarm/workspace`'s `discoverAgents`). When the run's tool pool
+   * `@fragua/workspace`'s `discoverAgents`). When the run's tool pool
    * includes the `agent` tool and this list is non-empty, the backend
    * appends an `## Available sub-agents` catalogue block to the
    * system prompt and exposes the catalogue on
-   * `swarmContext.agentCatalog` so the `agent` tool can resolve
+   * `fraguaContext.agentCatalog` so the `agent` tool can resolve
    * `agent: <name>` calls. */
   agentDefinitions?: readonly AgentDefinition[];
 }
@@ -250,7 +250,7 @@ export class PiLlmBackend implements LlmBackend {
       return fail(
         `model "${provider}/${modelId}" is not registered in pi-ai. ` +
           "Check spelling (OpenRouter uses dotted IDs like `anthropic/claude-opus-4.7`; Anthropic-direct uses hyphens like `claude-opus-4-7`). " +
-          "Run `swarm providers` to list supported providers.",
+          "Run `fragua providers` to list supported providers.",
       );
     }
     if (typeof model.api !== "string" || model.api === "" || model.api === "unknown") {
@@ -320,7 +320,7 @@ export class PiLlmBackend implements LlmBackend {
     // Resolve the skill catalog for this call. Filter by node attrs, render
     // the catalog block for the system prompt. The catalog drives both
     // the system-prompt advertisement and the `skill` tool's name lookup
-    // (via swarmContext.skillCatalog patched onto the closure below).
+    // (via fraguaContext.skillCatalog patched onto the closure below).
     const nodeSkills = input.node.attrs.skills as string[] | undefined;
     const skillFilter: { skills?: readonly string[] } = {};
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
@@ -332,22 +332,22 @@ export class PiLlmBackend implements LlmBackend {
     // also doesn't pay for the catalogue's tokens (~1 KB per profile).
     const wantsAgentTool = selectedTools.some((t) => t.name === "agent");
     const agentsCatalog = wantsAgentTool && runCwdAgents.length > 0 ? renderAgentsCatalog(runCwdAgents) : "";
-    // Per-run swarm context. Built-in I/O tools ignore this field; the
+    // Per-run fragua context. Built-in I/O tools ignore this field; the
     // `agent` tool reads `spawnSubagent` + `skillCatalog` + `agentCatalog`
     // to drive sub-agent runs. Captured by closure on each `toAgentTool`
     // call — a fresh `Agent({tools})` is built per `backend.run()`,
     // so closure values are correct for that run.
-    const swarmEmit = input.emit;
+    const fraguaEmit = input.emit;
     const summariser = this.summariser;
     // The `agent` tool needs the resolved parent system prompt + skills
     // to seed sub-agent runs, but `systemPrompt` isn't built until
-    // after context-file loading below. Stage swarmContext as a
+    // after context-file loading below. Stage fraguaContext as a
     // `let` and patch in `spawnSubagent` + `skillCatalog` once those
     // resources are ready. Tools captured by `toAgentTool` close over
     // the SAME object reference, so the patches are visible to every
     // tool call without re-mapping.
-    const swarmContext: SwarmToolContext & {
-      spawnSubagent?: SwarmToolContext["spawnSubagent"];
+    const fraguaContext: FraguaToolContext & {
+      spawnSubagent?: FraguaToolContext["spawnSubagent"];
       skillCatalog?: readonly Skill[];
       agentCatalog?: readonly AgentDefinition[];
     } = {
@@ -355,14 +355,14 @@ export class PiLlmBackend implements LlmBackend {
       nodeId: input.node.id,
       iteration: input.iteration?.n ?? 0,
       http: makeHttpClient({ signal: input.signal }),
-      emit: swarmEmit
+      emit: fraguaEmit
         ? (type, payload) => {
-            void swarmEmit(type as EventType, payload);
+            void fraguaEmit(type as EventType, payload);
           }
         : () => {},
       ...(summariser ? { summarise: (i) => summariser.summarise(i) } : {}),
     };
-    const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
+    const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
 
     // Route-tool synthesis. When the node declares `routes=`, append an
     // ephemeral, per-call `route`
@@ -426,7 +426,7 @@ export class PiLlmBackend implements LlmBackend {
     // `materialiseForChild`). `skillCatalog` makes the parent's
     // resolved skill set available so `spec.skills` can be intersected
     // against it on each spawn.
-    Object.assign(swarmContext, { skillCatalog: effectiveSkills, agentCatalog: runCwdAgents });
+    Object.assign(fraguaContext, { skillCatalog: effectiveSkills, agentCatalog: runCwdAgents });
     if (this.spawnSubagentFactory !== undefined) {
       // The sub-agent's emit channel: same `input.emit` the parent's
       // llm call uses, so sub-agent observability lands on the
@@ -453,7 +453,7 @@ export class PiLlmBackend implements LlmBackend {
         ...(allow !== undefined ? { parentAllowedTools: allow } : {}),
         ...(deny !== undefined ? { parentDeniedTools: deny } : {}),
       };
-      Object.assign(swarmContext, { spawnSubagent: this.spawnSubagentFactory(parentCtx) });
+      Object.assign(fraguaContext, { spawnSubagent: this.spawnSubagentFactory(parentCtx) });
     }
 
     // Thread policy gates. A node with a resolved thread_id participates
@@ -515,7 +515,7 @@ export class PiLlmBackend implements LlmBackend {
       hydrateMessages = await sanitiseUnpairedToolCalls(hydrateMessages, {
         toolRegistry: this.registry,
         env: effectiveEnv,
-        swarmContext,
+        fraguaContext,
         ...(input.signal !== undefined ? { signal: input.signal } : {}),
       });
     }
@@ -525,7 +525,7 @@ export class PiLlmBackend implements LlmBackend {
     // and the user prompt is unchanged.
     const graphGoal = typeof input.goal === "string" && input.goal.length > 0 ? input.goal : undefined;
     // Summariser events land under synthetic node ids (see
-    // @swarm/core/types/summariser.ts). `buildSummarySeed` wires the
+    // @fragua/core/types/summariser.ts). `buildSummarySeed` wires the
     // emit callback so `summary.started` / `summary.completed` /
     // `cost.recorded` for a summary call carry the right node_id on
     // their envelope — not the caller's.
@@ -582,9 +582,9 @@ export class PiLlmBackend implements LlmBackend {
       ...(this.getApiKey !== undefined ? { getApiKey: this.getApiKey } : {}),
     });
 
-    // Persist the system prompt as a swarm `system` custom message
+    // Persist the system prompt as a fragua `system` custom message
     // (declaration-merged into pi-agent-core's CustomAgentMessages in
-    // @swarm/store) so the full text is recoverable from the messages
+    // @fragua/store) so the full text is recoverable from the messages
     // table. Keeps `llm.start` under the 4KB event cap (§I7) — prior
     // turns + a sizable system_prompt easily blow past it. The messages
     // table is JSON + unbounded (§I9), so full content lives there.
@@ -1138,7 +1138,7 @@ function buildRouteTool(routes: readonly string[]): AgentTool {
       const chosen = (params as { name: string }).name;
       return {
         content: [{ type: "text", text: `route: ${chosen}` }],
-        details: { swarm_tool: "route", is_error: false, data: { route: chosen } },
+        details: { fragua_tool: "route", is_error: false, data: { route: chosen } },
         terminate: true,
       };
     },

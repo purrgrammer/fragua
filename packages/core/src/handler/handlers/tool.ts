@@ -36,7 +36,7 @@
 //     non-idempotent, but the intent / done facts let the startup sweep
 //     quarantine a run whose daemon crashed mid-spawn.
 
-import type { ToolNodeMessage } from "@swarm/types";
+import type { ToolNodeMessage } from "@fragua/types";
 import { substitute } from "../../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../../types/execution.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
@@ -271,7 +271,7 @@ function errorMessage(err: unknown): string {
  * Default Bun-based spawner. Runs the command through `sh -c` so shell
  * expansions, pipes, and redirections work. Captures stdout + stderr
  * as UTF-8 text up to a soft cap (8 MiB combined); beyond that the
- * output is truncated with a `[swarm: truncated]` marker.
+ * output is truncated with a `[fragua: truncated]` marker.
  */
 export async function runWithBun(cmd: string, signal: AbortSignal): Promise<ToolRunResult> {
   const start = Date.now();
@@ -326,7 +326,7 @@ async function readStream(stream: ReadableStream<Uint8Array> | number): Promise<
     reader.releaseLock();
   }
   const joined = new TextDecoder().decode(concat(chunks));
-  if (total >= SOFT_CAP_BYTES) return `${joined.slice(0, SOFT_CAP_BYTES)}\n[swarm: truncated]\n`;
+  if (total >= SOFT_CAP_BYTES) return `${joined.slice(0, SOFT_CAP_BYTES)}\n[fragua: truncated]\n`;
   return joined;
 }
 

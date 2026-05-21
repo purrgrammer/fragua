@@ -10,14 +10,14 @@
 
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import * as handler from "@swarm/core/handler";
+import * as handler from "@fragua/core/handler";
 import {
   ConcurrencyError,
   MIN_COMPATIBLE_SCHEMA_VERSION,
   type RunStatus,
   type StoredEvent,
   sha256Hex as sha256,
-} from "@swarm/store";
+} from "@fragua/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";

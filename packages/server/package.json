@@ -1,8 +1,8 @@
 {
-  "name": "@swarm/server",
+  "name": "@fragua/server",
   "version": "0.0.0",
   "private": true,
-  "description": "swarm HTTP server — SSE event stream, REST API for the web UI",
+  "description": "fragua HTTP server — SSE event stream, REST API for the web UI",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -15,11 +15,11 @@
   "dependencies": {
     "@mariozechner/pi-ai": "0.71.0",
     "@sinclair/typebox": "0.34.41",
-    "@swarm/agent": "workspace:*",
-    "@swarm/core": "workspace:*",
-    "@swarm/store": "workspace:*",
-    "@swarm/types": "workspace:*",
-    "@swarm/workspace": "workspace:*",
+    "@fragua/agent": "workspace:*",
+    "@fragua/core": "workspace:*",
+    "@fragua/store": "workspace:*",
+    "@fragua/types": "workspace:*",
+    "@fragua/workspace": "workspace:*",
     "hono": "4.12.14"
   },
   "devDependencies": {

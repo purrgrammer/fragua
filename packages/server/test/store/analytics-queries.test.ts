@@ -7,7 +7,7 @@
 // depending on wall-clock.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { decodeCursor, encodeCursor, SqliteStore } from "@swarm/store";
+import { decodeCursor, encodeCursor, SqliteStore } from "@fragua/store";
 
 let store: SqliteStore;
 let nowMs: number;
@@ -49,8 +49,8 @@ function seedRun(opts: {
    *  filter tests can pin runs to specific projects. */
   cwd?: string;
   /** Optional resolved workflow identity. `scope='global'` mirrors a
-   *  `~/.swarm/workflows/<name>.yaml` resolution; `scope='local'`
-   *  mirrors `<cwd>/.swarm/workflows/<name>.yaml`. `path` / `ephemeral`
+   *  `~/.fragua/workflows/<name>.yaml` resolution; `scope='local'`
+   *  mirrors `<cwd>/.fragua/workflows/<name>.yaml`. `path` / `ephemeral`
    *  runs leave both NULL and never appear in the workflow filter. */
   workflowScope?: "global" | "local" | "path" | "ephemeral";
   workflowName?: string;

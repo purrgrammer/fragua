@@ -4,13 +4,13 @@
 // (§I8 — file-then-row commit ordering). A hard crash between the file
 // write and the row insert leaves an orphan file. The store's `gcBlobs`
 // reaps these on demand. Without this driver it never runs unless an
-// operator types `swarm db gc` — orphans accumulate until disk pressure
+// operator types `fragua db gc` — orphans accumulate until disk pressure
 // surfaces them.
 //
 // This loop ticks slowly (default every 6 hours) and bounds work per
 // tick (default 1000 rows). It's idempotent and safe to call any time.
 
-import type { IEventStore } from "@swarm/store";
+import type { IEventStore } from "@fragua/store";
 
 export interface BlobGcOpts {
   store: IEventStore;

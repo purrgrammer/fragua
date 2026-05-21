@@ -17,14 +17,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { registerFauxProvider } from "@mariozechner/pi-ai";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 
 describe("PiLlmBackend — empty-content failure envelopes are not persisted", () => {
   test("provider transport error (stopReason=error, content=[]) does not reach persistMessage; cost.recorded still fires", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-persist-fail-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-persist-fail-"));
     const faux = registerFauxProvider();
     try {
       // streamFn that throws — pi-agent-core's runWithLifecycle catches,
@@ -84,7 +84,7 @@ describe("PiLlmBackend — empty-content failure envelopes are not persisted", (
   }, 15_000);
 
   test("aborted run (stopReason=aborted, content=[]) does not reach persistMessage either", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-persist-abort-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-persist-abort-"));
     const faux = registerFauxProvider();
     try {
       // Hang until signal aborts; pi-agent-core then synthesises the

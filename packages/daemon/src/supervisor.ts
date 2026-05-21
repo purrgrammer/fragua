@@ -11,7 +11,7 @@
 // The supervisor owns no state of its own; it reads run_state and events and
 // trips controllers held by the abort registry.
 
-import type { IEventStore, StoredEvent } from "@swarm/store";
+import type { IEventStore, StoredEvent } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 
 export interface SupervisorOpts {

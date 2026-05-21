@@ -1,4 +1,4 @@
-// Skill metadata types. Runtime discovery + parsing live in @swarm/workspace
+// Skill metadata types. Runtime discovery + parsing live in @fragua/workspace
 // (which depends on node:fs); only the static shapes are exported here so
 // downstream packages — web UI, server endpoints, future store rows —
 // can reference skill records without pulling in the workspace layer.
@@ -73,7 +73,7 @@ export interface SkillsConfig {
    * that keeps the skill visible in /skills, use `"trust-project": false`
    * on project-scope skills instead. */
   disabled?: string[];
-  /** Trust gate for project-scope skills. Default true — swarm agents
+  /** Trust gate for project-scope skills. Default true — fragua agents
    * already have full FS access on the same repo, so gating discovery
    * adds friction without a real security delta. Flip to false in
    * untrusted clones where project-scope skills should be hidden until

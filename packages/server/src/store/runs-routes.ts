@@ -4,7 +4,7 @@
 // run_state + the event log. Workflow name/source comes from the
 // workflows table (saveWorkflow writes the source on enqueue).
 
-import { type IEventStore, isTerminal as isTerminalStatus, type RunStatus } from "@swarm/store";
+import { type IEventStore, isTerminal as isTerminalStatus, type RunStatus } from "@fragua/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
 import { runStateToDetail, runSummaryRowToSummary } from "./runs-adapter.ts";

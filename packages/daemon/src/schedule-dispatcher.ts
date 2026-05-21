@@ -6,8 +6,8 @@
 //   - skip-on-overlap: if `overlap_policy='skip'` and the prior run
 //     hasn't reached a terminal state, advance `next_fire_at` and
 //     emit `fact.schedule_skipped { reason: "overlap" }` \u2014 no fire.
-//   - resolve workflow_ref: try `~/.swarm/workflows/<ref>.yaml`, then
-//     `<cwd>/.swarm/workflows/<ref>.yaml`, else literal path. On miss
+//   - resolve workflow_ref: try `~/.fragua/workflows/<ref>.yaml`, then
+//     `<cwd>/.fragua/workflows/<ref>.yaml`, else literal path. On miss
 //     or parse failure, emit `fact.schedule_invalid_workflow` and
 //     auto-pause the schedule.
 //   - emit `fact.schedule_late { missedIntervals }` *before* the
@@ -24,8 +24,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
-import { parseWorkflow } from "@swarm/core";
-import { type IEventStore, isTerminal as isTerminalStatus, sha256Hex } from "@swarm/store";
+import { parseWorkflow } from "@fragua/core";
+import { type IEventStore, isTerminal as isTerminalStatus, sha256Hex } from "@fragua/store";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
 
@@ -36,7 +36,7 @@ export interface ScheduleDispatcherOpts {
   tickIntervalMs?: number;
   /** Clock injection for tests. Defaults to `Date.now`. */
   now?: () => number;
-  /** `~/.swarm/workflows/` override for tests. */
+  /** `~/.fragua/workflows/` override for tests. */
   homeDir?: string;
   /** Run id minter. Defaults to a 16-char crockford-base32 stamp. */
   newRunId?: () => string;
@@ -201,10 +201,10 @@ interface ResolvedSchedulingWorkflow {
 }
 
 /** Synchronous workflow-path resolver used by the dispatcher tick.
- *  Mirrors `@swarm/cli`'s async `resolveWorkflow` cascade: bare name \u2192
- *  `~/.swarm/workflows/<name>.yaml` \u2192 `<cwd>/.swarm/workflows/<name>.yaml`;
- *  paths resolve directly. We keep a local copy because @swarm/daemon
- *  must not depend on @swarm/cli (the dependency direction is the
+ *  Mirrors `@fragua/cli`'s async `resolveWorkflow` cascade: bare name \u2192
+ *  `~/.fragua/workflows/<name>.yaml` \u2192 `<cwd>/.fragua/workflows/<name>.yaml`;
+ *  paths resolve directly. We keep a local copy because @fragua/daemon
+ *  must not depend on @fragua/cli (the dependency direction is the
  *  other way around). */
 function resolveSchedulingWorkflow(
   arg: string,
@@ -213,12 +213,12 @@ function resolveSchedulingWorkflow(
 ): ResolvedSchedulingWorkflow | null {
   const looksLikePath = arg.includes("/") || arg.includes("\\") || arg.endsWith(".yaml");
   if (!looksLikePath) {
-    const globalDir = resolvePath(homeDir ?? homedir(), ".swarm/workflows");
+    const globalDir = resolvePath(homeDir ?? homedir(), ".fragua/workflows");
     const globalCandidate = resolvePath(globalDir, `${arg}.yaml`);
     if (existsSync(globalCandidate)) {
       return { dotPath: globalCandidate, name: arg, scope: "global" };
     }
-    const localCandidate = resolvePath(cwd, ".swarm/workflows", `${arg}.yaml`);
+    const localCandidate = resolvePath(cwd, ".fragua/workflows", `${arg}.yaml`);
     if (existsSync(localCandidate)) {
       return { dotPath: localCandidate, name: arg, scope: "local" };
     }

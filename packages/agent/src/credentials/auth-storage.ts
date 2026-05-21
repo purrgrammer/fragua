@@ -1,5 +1,5 @@
 // Credential storage for API keys and OAuth tokens. Persists into the
-// global swarm store (`provider_credentials` table).
+// global fragua store (`provider_credentials` table).
 //
 // Resolution order:
 //   1. provider_credentials row, kind=api_key → return the stored key verbatim.
@@ -17,9 +17,9 @@
 // Adapted from pi-coding-agent (https://github.com/badlogic/pi-mono,
 // packages/coding-agent/src/core/auth-storage.ts) — MIT.
 
+import type { IProviderCredentialStore } from "@fragua/store";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderId } from "@mariozechner/pi-ai";
 import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@mariozechner/pi-ai/oauth";
-import type { IProviderCredentialStore } from "@swarm/store";
 import { SqliteAuthStorageBackend } from "./sqlite-auth-backend.ts";
 
 export type ApiKeyCredential = {
@@ -86,7 +86,7 @@ export class AuthStorage {
     return data;
   }
 
-  /** Canonical factory: read credentials from the swarm store's
+  /** Canonical factory: read credentials from the fragua store's
    *  `provider_credentials` table. */
   static fromStore(store: IProviderCredentialStore): AuthStorage {
     return new AuthStorage(new SqliteAuthStorageBackend(store));

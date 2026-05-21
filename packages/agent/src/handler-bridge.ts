@@ -6,10 +6,10 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import { type EventType, type LlmBackend, type Node, type Outcome, substitute } from "@swarm/core";
-import type * as handler from "@swarm/core/handler";
-import { MessageTooLargeError } from "@swarm/store";
-import type { AgentMessage } from "@swarm/types";
+import { type EventType, type LlmBackend, type Node, type Outcome, substitute } from "@fragua/core";
+import type * as handler from "@fragua/core/handler";
+import { MessageTooLargeError } from "@fragua/store";
+import type { AgentMessage } from "@fragua/types";
 import { PiLlmBackend, type PiLlmBackendOptions } from "./backend.ts";
 
 export interface MakeLlmHandlerOpts {
@@ -312,7 +312,7 @@ function strAt(data: Record<string, unknown>, key: string): string | undefined {
  * synthesis, no shape reconstruction. Filters by `node_id` when the
  * thread id equals a node id (the common case); falls back to all
  * graph-level messages otherwise so authors who set `thread_id="dev"`
- * get their cross-node history. Swarm-internal `system` rows (the
+ * get their cross-node history. Fragua-internal `system` rows (the
  * assembled system prompt — pi-ai carries it separately via
  * `Context.systemPrompt`) and `tool_node` rows (graph-level shell
  * step output, not conversational; pi-ai's `Message` union has no

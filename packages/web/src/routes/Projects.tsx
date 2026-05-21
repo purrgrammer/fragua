@@ -48,7 +48,7 @@ export function Projects(): JSX.Element {
           title="No projects yet"
           description={
             <span>
-              Run <code className="font-mono">swarm run</code> from any project root to surface it here.
+              Run <code className="font-mono">fragua run</code> from any project root to surface it here.
             </span>
           }
         />

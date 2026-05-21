@@ -295,10 +295,10 @@ describe("fact.snapshot_recorded projection (worktrees.md)", () => {
     // not agent work. headRef being a named branch (not detached) excludes it.
     const s = applyFact(
       base(),
-      snap({ headRef: "swarm/runs/xyz", committed: { filesChanged: 3, insertions: 32, deletions: 31 } }),
+      snap({ headRef: "fragua/runs/xyz", committed: { filesChanged: 3, insertions: 32, deletions: 31 } }),
       1,
     );
-    expect(s.finalHeadRef).toBe("swarm/runs/xyz");
+    expect(s.finalHeadRef).toBe("fragua/runs/xyz");
     expect(s.changeStat?.committed).toEqual({ filesChanged: 3, insertions: 32, deletions: 31 });
     expect(s.inboxStatus).toBeNull(); // checked out, not authored → out of inbox
   });
@@ -320,7 +320,7 @@ describe("operator post-run primitives projection (worktrees.md)", () => {
   });
 
   test("fact.run_discarded → inbox discarded", () => {
-    const s = applyFact(pending(), { type: "fact.run_discarded", payload: { refs: ["refs/swarm/snapshots/r"] } }, 1);
+    const s = applyFact(pending(), { type: "fact.run_discarded", payload: { refs: ["refs/fragua/snapshots/r"] } }, 1);
     expect(s.inboxStatus).toBe("discarded");
   });
 });

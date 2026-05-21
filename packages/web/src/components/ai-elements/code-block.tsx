@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 
 /*
- * Swarm design language — code-block
+ * Fragua design language — code-block
  *   § Color           — theme tokens only (`var(--sw-*)`); shadcn `bg-muted` /
  *                       `text-muted-foreground` swapped for `--sw-surface` /
  *                       `--sw-muted`.

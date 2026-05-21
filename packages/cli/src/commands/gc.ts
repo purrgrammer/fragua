@@ -1,11 +1,11 @@
-// `swarm gc --snapshots` — reclaim worktree snapshot refs. Per-run snapshots
+// `fragua gc --snapshots` — reclaim worktree snapshot refs. Per-run snapshots
 // live under two non-porcelain refs,
-// `refs/swarm/snapshots/<runId>` (the parented tip) and
-// `refs/swarm/heads/<runId>`; deleting the tip drops the whole chain so the
+// `refs/fragua/snapshots/<runId>` (the parented tip) and
+// `refs/fragua/heads/<runId>`; deleting the tip drops the whole chain so the
 // next `git gc --auto` reclaims its commits + trees + blobs.
 //
 // Retention (operator-invoked, not an automatic sweep — pairs with the
-// `swarm db prune` model):
+// `fragua db prune` model):
 //   - `inbox_status = 'pending'`  → kept (operator hasn't decided).
 //   - everything else, once the run is settled and older than the window
 //     (default 30d) → eligible. `acted` runs are kept inside the window so
@@ -19,7 +19,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
 const DEFAULT_OLDER_THAN_MS = 30 * 24 * 60 * 60 * 1000;
@@ -29,7 +29,7 @@ export interface GcCommandOptions {
   target: "snapshots";
   /** Repo root the refs live in. Default `process.cwd()`. */
   cwd?: string;
-  /** Explicit DB path. Default `<cwd>/.swarm/swarm.db`. */
+  /** Explicit DB path. Default `<cwd>/.fragua/fragua.db`. */
   dbPath?: string;
   /** Retention window in ms. Default 30 days. */
   olderThanMs?: number;
@@ -43,7 +43,7 @@ export async function gcCommand(opts: GcCommandOptions): Promise<number> {
     return 1;
   }
   const cwd = resolve(opts.cwd ?? process.cwd());
-  const dbPath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
+  const dbPath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
   if (!existsSync(dbPath)) {
     console.error(chalk.red(`gc --snapshots: no store at ${dbPath}`));
     return 1;
@@ -52,14 +52,14 @@ export async function gcCommand(opts: GcCommandOptions): Promise<number> {
   const cutoff = Date.now() - olderThanMs;
   const dryRun = opts.dryRun === true;
 
-  const existing = await listSwarmRefs(cwd);
+  const existing = await listFraguaRefs(cwd);
   const store = new SqliteStore({ path: dbPath });
   let runsCleaned = 0;
   let refsDeleted = 0;
   try {
     const eligible = store.getGcEligibleSnapshotRuns({ cwd, cutoff });
     for (const run of eligible) {
-      const refs = [`refs/swarm/snapshots/${run.runId}`, `refs/swarm/heads/${run.runId}`].filter((r) =>
+      const refs = [`refs/fragua/snapshots/${run.runId}`, `refs/fragua/heads/${run.runId}`].filter((r) =>
         existing.has(r),
       );
       if (refs.length === 0) continue; // bare-cwd run, or already discarded
@@ -102,13 +102,13 @@ export async function gcCommand(opts: GcCommandOptions): Promise<number> {
   return 0;
 }
 
-/** Every existing `refs/swarm/{snapshots,heads}/*` ref in `cwd`, by full name. */
-async function listSwarmRefs(cwd: string): Promise<Set<string>> {
+/** Every existing `refs/fragua/{snapshots,heads}/*` ref in `cwd`, by full name. */
+async function listFraguaRefs(cwd: string): Promise<Set<string>> {
   const { stdout } = await runGitCapture(cwd, [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/swarm/snapshots/",
-    "refs/swarm/heads/",
+    "refs/fragua/snapshots/",
+    "refs/fragua/heads/",
   ]);
   return new Set(
     stdout

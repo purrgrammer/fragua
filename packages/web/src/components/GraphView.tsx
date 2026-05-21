@@ -1,4 +1,4 @@
-// GraphView — renders a swarm workflow graph using Vercel AI Elements
+// GraphView — renders a fragua workflow graph using Vercel AI Elements
 // (`Canvas`, `Node`, `Edge`, `Controls`) on top of `@xyflow/react`.
 //
 // Two call shapes:
@@ -13,7 +13,7 @@
 //      to inspect a `.yaml` file without needing a run.
 //
 // Data path notes:
-//   - Topology is ALWAYS parsed from the workflow source via `@swarm/core`'s
+//   - Topology is ALWAYS parsed from the workflow source via `@fragua/core`'s
 //     `parseWorkflow` — the same parser the runtime uses. One source
 //     of truth, zero risk of drift.
 //   - There is NO `detail.edges` field on the server — topology lives
@@ -32,7 +32,7 @@ import {
   handlerOf,
   parseWorkflow,
   resolveRetargetChain,
-} from "@swarm/core";
+} from "@fragua/core";
 import { useQuery } from "@tanstack/react-query";
 import type { Edge as FlowEdge, Node as FlowNode, NodeProps as FlowNodeProps } from "@xyflow/react";
 import { Handle, MarkerType, Position } from "@xyflow/react";
@@ -86,8 +86,8 @@ export interface GraphViewProps {
   activeNodeIds?: ReadonlySet<string>;
 }
 
-const NODE_TYPE = "swarmNode";
-const EDGE_TYPE = "swarmEdge";
+const NODE_TYPE = "fraguaNode";
+const EDGE_TYPE = "fraguaEdge";
 
 // Arrowhead used on every edge so flow direction is unambiguous.
 // Theme tokens via CSS vars — modern browsers resolve var() in SVG
@@ -279,8 +279,8 @@ function typeStripTone(handler: string, goalGate: boolean, isRouter: boolean): s
   }
 }
 
-function SwarmNode({ data }: FlowNodeProps): JSX.Element {
-  const d = data as SwarmNodeData;
+function FraguaNode({ data }: FlowNodeProps): JSX.Element {
+  const d = data as FraguaNodeData;
   const handlerLabel = d.handler;
   // start / exit are lifecycle markers — no metadata, no LLM, no
   // retries — so they render as a compact header-only card. The
@@ -463,7 +463,7 @@ function stateStyle(state: NodeState["state"] | "waiting"): { tone: string; puls
  * `outcome` (if set) overrides the stroke / pill tone — a failure path
  * reads red regardless of the structural variant.
  */
-function SwarmEdge(props: FlowEdgeRenderProps): JSX.Element {
+function FraguaEdge(props: FlowEdgeRenderProps): JSX.Element {
   // `data.dim` is threaded down via FlowEdge.data and each edge variant
   // fades both its SVG path and its HTML label pill in lockstep.
   const d = props.data;
@@ -546,12 +546,12 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
   };
 };
 
-const nodeTypes = { [NODE_TYPE]: SwarmNode };
-const edgeTypes = { [EDGE_TYPE]: SwarmEdge };
+const nodeTypes = { [NODE_TYPE]: FraguaNode };
+const edgeTypes = { [EDGE_TYPE]: FraguaEdge };
 
 // ── Detail + Graph → React-Flow shape ────────────────────────────────────
 
-interface SwarmNodeData extends Record<string, unknown> {
+interface FraguaNodeData extends Record<string, unknown> {
   nodeId: string;
   /** the `label` attr attr, with id fallback — used for the primary label
    *  in the header only when it differs from the id. Preserved for
@@ -747,16 +747,16 @@ export function toFlowGraph(
     const stateEntry = stateById.get(id);
     const topo: GraphNode | undefined = graph.nodes[id];
     const handler = topo ? handlerOf(topo) : "unknown";
-    const rawState: SwarmNodeData["state"] = stateEntry ? stateEntry.state : detail ? "pending" : null;
+    const rawState: FraguaNodeData["state"] = stateEntry ? stateEntry.state : detail ? "pending" : null;
     // When the run is paused at a HITL gate, show that node as "waiting"
     // so operators can distinguish it from an actively-running node.
-    const resolvedState: SwarmNodeData["state"] = hitlNodeId === id && rawState === "running" ? "waiting" : rawState;
+    const resolvedState: FraguaNodeData["state"] = hitlNodeId === id && rawState === "running" ? "waiting" : rawState;
     const a = topo?.attrs;
     // Per-handler relevance predicates live in `lib/node-metadata.ts`
     // so the GraphView card and the NodeInspector drawer can't drift.
     const isLlmHandler = showsLlm(handler, a);
     const canRetry = canRetryHandler(handler);
-    const data: SwarmNodeData = {
+    const data: FraguaNodeData = {
       nodeId: id,
       label: a?.label ?? id,
       customLabel: a?.label,
@@ -942,7 +942,7 @@ export function toFlowGraph(
       source: e.from,
       target: e.to,
       type: EDGE_TYPE,
-      // `animated` drives the SwarmEdge variant: Animated (solid, accent)
+      // `animated` drives the FraguaEdge variant: Animated (solid, accent)
       // for any taken forward edge — whether or not the run is still live.
       data: {
         animated: !isBackEdge && !isSelfLoop && !isSkipEdge && !loopRestart && !parallelArc && taken,

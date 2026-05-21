@@ -12,8 +12,8 @@
 // (node_completed / node_aborted) can use the latest OCC token after the
 // handler returns.
 
-import type * as handler from "@swarm/core/handler";
-import type { FactEvent, IEventStore } from "@swarm/store";
+import type * as handler from "@fragua/core/handler";
+import type { FactEvent, IEventStore } from "@fragua/store";
 
 type SideEffectRecorder = handler.SideEffectRecorder;
 

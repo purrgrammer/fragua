@@ -32,15 +32,15 @@ import {
   retryStep,
   type SubstitutionArgs,
   selectEdge,
-} from "@swarm/core";
-import * as core from "@swarm/core/handler";
+} from "@fragua/core";
+import * as core from "@fragua/core/handler";
 import {
   ConcurrencyError,
   CURRENT_SCHEMA_VERSION,
   type FactEvent,
   type IEventStore,
   MIN_COMPATIBLE_SCHEMA_VERSION,
-} from "@swarm/store";
+} from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
@@ -1723,7 +1723,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // truly terminal — the run will never execute another node.
     //
     // Before dispose removes the worktree, capture the terminal snapshot
-    // (refs/swarm/{snapshots,heads}/<runId>) — the only thing preserving the
+    // (refs/fragua/{snapshots,heads}/<runId>) — the only thing preserving the
     // run's work. Its fact drives the inbox + change_stat projection. A
     // capture failure GATES dispose so work is never lost.
     if (opts.provisioner) {
@@ -1732,7 +1732,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // Terminal worktree snapshot — captured BEFORE dispose, which removes
         // the worktree. The fact drives the inbox + change_stat projection,
         // and the snapshot/heads refs are now the ONLY thing preserving the
-        // run's work (dispose no longer creates a swarm/runs branch). So a
+        // run's work (dispose no longer creates a fragua/runs branch). So a
         // capture failure GATES dispose: keep the worktree rather than lose the
         // work.
         let snapshotFailed = false;

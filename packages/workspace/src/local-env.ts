@@ -111,8 +111,8 @@ export class LocalEnvironment implements ExecutionEnvironment {
    *
    * The check turns silent isolation leaks (Phase 9 run
    * 01ks01m6bt9ryccn4b: the agent passed
-   * `/Users/bandarra/swarm/.agents/skills/workflows/SKILL.md` as a
-   * write target while running in a `.swarm/worktrees/<runId>`
+   * `/Users/bandarra/fragua/.agents/skills/workflows/SKILL.md` as a
+   * write target while running in a `.fragua/worktrees/<runId>`
    * environment; the resolved absolute path bypassed `_cwd` and
    * landed in main) into loud {@link PathEscapeError}s. Tools catch
    * these and surface them as tool errors so the LLM self-corrects
@@ -145,7 +145,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
   async writeFile(path: string, contents: string): Promise<void> {
     const absolute = this.resolvePath(path);
     await mkdir(dirname(absolute), { recursive: true });
-    const tmp = `${absolute}.swarm-tmp-${process.pid}-${Date.now()}`;
+    const tmp = `${absolute}.fragua-tmp-${process.pid}-${Date.now()}`;
     await writeFile(tmp, contents, "utf8");
     await rename(tmp, absolute);
   }
@@ -195,13 +195,13 @@ export class LocalEnvironment implements ExecutionEnvironment {
     if (blocked) {
       return {
         stdout: "",
-        stderr: `[swarm: blocked command — matched pattern "${blocked}". Edit .swarm/config.yaml blocklist to adjust.]`,
+        stderr: `[fragua: blocked command — matched pattern "${blocked}". Edit .fragua/config.yaml blocklist to adjust.]`,
         exitCode: 126,
         durationMs: 0,
       };
     }
     // Refuse `cd <abs-path-outside-cwd>` segments. Matches the agent's
-    // most common escape pattern (`cd /Users/bandarra/swarm && bun
+    // most common escape pattern (`cd /Users/bandarra/fragua && bun
     // run …`) at Phase 9 run 01ks01m6bt9ryccn4b. Returned as a
     // non-zero exit so the LLM sees an actionable error and
     // self-corrects rather than halting the run.
@@ -210,10 +210,10 @@ export class LocalEnvironment implements ExecutionEnvironment {
       return {
         stdout: "",
         stderr:
-          `[swarm: command refused — \`cd ${cdEscape}\` escapes the run's cwd ${this._cwd}. ` +
+          `[fragua: command refused — \`cd ${cdEscape}\` escapes the run's cwd ${this._cwd}. ` +
           "All work must stay inside cwd; do not cd outside the worktree. " +
           "If you wanted to run tests/build commands, do so from cwd directly " +
-          "(`bun run --filter='@swarm/<pkg>' typecheck`, etc.) — the worktree is a full git checkout.]",
+          "(`bun run --filter='@fragua/<pkg>' typecheck`, etc.) — the worktree is a full git checkout.]",
         exitCode: 126,
         durationMs: 0,
       };
@@ -302,7 +302,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
         if (killReason === "timeout") {
           resolvePromise({
             stdout,
-            stderr: `${stderr}\n[swarm: exec timed out after ${timeoutMs}ms]`,
+            stderr: `${stderr}\n[fragua: exec timed out after ${timeoutMs}ms]`,
             exitCode: 124,
             durationMs: Date.now() - start,
           });
@@ -311,7 +311,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
         if (killReason === "abort") {
           resolvePromise({
             stdout,
-            stderr: `${stderr}\n[swarm: exec aborted]`,
+            stderr: `${stderr}\n[fragua: exec aborted]`,
             exitCode: 130,
             durationMs: Date.now() - start,
           });

@@ -17,9 +17,9 @@
 //     indirection). Transport-layer protection (TLS / loopback-only
 //     bind) is the deployment's responsibility on writes.
 
+import type { AuthStorage, ModelRegistry } from "@fragua/agent";
+import { defaultModelPerProvider } from "@fragua/agent";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { AuthStorage, ModelRegistry } from "@swarm/agent";
-import { defaultModelPerProvider } from "@swarm/agent";
 import { Hono } from "hono";
 
 export interface ProvidersRouteOptions {
@@ -41,7 +41,7 @@ interface ProviderSummary {
   /** Surface OAuth-login availability so the UI can show a "Sign in"
    * affordance only for providers that actually support it. */
   oauth_available: boolean;
-  /** Pre-filled default model id (the same one `swarm daemon start` picks
+  /** Pre-filled default model id (the same one `fragua daemon start` picks
    * when the user omits `--model`). `null` for custom providers. */
   default_model: string | null;
 }

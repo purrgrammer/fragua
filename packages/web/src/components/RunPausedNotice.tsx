@@ -2,13 +2,13 @@
 // run is in `paused` or `paused_auto`. Dispatches on the reason carried
 // by the latest `fact.run_paused.payload.reason` via an exhaustive
 // `Renderers` map keyed by `PauseReason`. Adding a literal to
-// `PauseReason` (in `@swarm/types`) without a renderer entry below
+// `PauseReason` (in `@fragua/types`) without a renderer entry below
 // forces a TypeScript compile error here — the design's exhaustiveness
 // anchor.
 //
 // Hidden on `paused_human`-only pauses (no fact.run_paused in the trail).
 
-import type { PauseReason } from "@swarm/types";
+import type { PauseReason } from "@fragua/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
@@ -179,7 +179,7 @@ type Renderer<K extends PauseReason> = (input: {
 }) => RenderOutput;
 
 /** Exhaustiveness anchor. Adding a `PauseReason` literal in
- * `@swarm/types` without an entry here is a TypeScript compile error
+ * `@fragua/types` without an entry here is a TypeScript compile error
  * at this object literal — the design's "no UI body branch goes
  * missing" guarantee. */
 type Renderers = { [K in PauseReason]: Renderer<K> };

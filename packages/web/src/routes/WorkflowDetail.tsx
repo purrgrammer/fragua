@@ -5,7 +5,7 @@
 // uncropped while the operator inspects details.
 // No live run is involved — this is the "what does this workflow do?"
 // answer before you press launch. Topology is parsed client-side via
-// `@swarm/core`'s `parseWorkflow`; on parse failure the server's raw
+// `@fragua/core`'s `parseWorkflow`; on parse failure the server's raw
 // YAML source is still rendered so operators can debug it.
 //
 // Route params / data:
@@ -16,7 +16,7 @@
 //   - `selectedNodeId` is local state; the graph shows it as a neutral
 //     ring, and the drawer reads the matching `Graph.nodes[id]`.
 
-import { parseWorkflow } from "@swarm/core";
+import { parseWorkflow } from "@fragua/core";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -151,7 +151,7 @@ export function WorkflowDetail(): JSX.Element {
             name: <code className="text-sw-text">{detail.name}</code>
           </span>
           <span>·</span>
-          <span title={detail.cwd ?? "~/.swarm/workflows"}>
+          <span title={detail.cwd ?? "~/.fragua/workflows"}>
             source: <code className="text-sw-text">{detail.cwd ? basename(detail.cwd) : "global"}</code>
           </span>
           <span>·</span>

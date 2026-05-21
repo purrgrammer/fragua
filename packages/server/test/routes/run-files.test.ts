@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import type { ProjectTreeEntry, ProjectTreeReader, ReadBlobResult } from "../../src/ports.ts";
 import { runFilesRoutes } from "../../src/routes/run-files.ts";
 
@@ -42,10 +42,10 @@ function stubReader(): ProjectTreeReader {
 }
 
 async function setup(opts: { withWorktreeDir?: boolean } = {}): Promise<Fixture> {
-  const cwd = await mkdtemp(join(tmpdir(), "swarm-run-files-"));
+  const cwd = await mkdtemp(join(tmpdir(), "fragua-run-files-"));
   const runId = "r-files-1";
   if (opts.withWorktreeDir !== false) {
-    await mkdir(join(cwd, ".swarm", "worktrees", runId), { recursive: true });
+    await mkdir(join(cwd, ".fragua", "worktrees", runId), { recursive: true });
   }
 
   const store = new SqliteStore({ path: ":memory:" });
@@ -142,11 +142,11 @@ interface GitFixture {
 
 // Build a real git repo with a base commit (keep.txt + remove.txt +
 // edit.txt). When `withTip` is true, also create a delta commit and point
-// `refs/swarm/snapshots/<id>` at it (edits edit.txt, removes remove.txt,
+// `refs/fragua/snapshots/<id>` at it (edits edit.txt, removes remove.txt,
 // adds new.txt) — the shape the snapshotter writes at the terminal
 // boundary. baseGitSha is stamped onto the projection via `fact.run_started`.
 async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string }): Promise<GitFixture> {
-  const cwd = await mkdtemp(join(tmpdir(), `swarm-run-files-${opts.slug}-`));
+  const cwd = await mkdtemp(join(tmpdir(), `fragua-run-files-${opts.slug}-`));
   const runId = opts.runId;
 
   await git(cwd, ["init", "--quiet", "-b", "main"]);
@@ -163,14 +163,14 @@ async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string
 
   if (opts.withTip) {
     // Build the run's delta and point the snapshot tip ref at it — mirrors
-    // what the snapshotter writes (refs/swarm/snapshots/<id>), no porcelain branch.
+    // what the snapshotter writes (refs/fragua/snapshots/<id>), no porcelain branch.
     await writeFile(join(cwd, "edit.txt"), "line1\nline2 changed\nline3\n");
     await rm(join(cwd, "remove.txt"));
     await writeFile(join(cwd, "new.txt"), "fresh\n");
     await git(cwd, ["add", "-A"]);
     await git(cwd, ["commit", "-m", "run delta", "--no-gpg-sign", "--quiet"]);
     const tipSha = (await git(cwd, ["rev-parse", "HEAD"])).trim();
-    await git(cwd, ["update-ref", `refs/swarm/snapshots/${runId}`, tipSha]);
+    await git(cwd, ["update-ref", `refs/fragua/snapshots/${runId}`, tipSha]);
   }
 
   const store = new SqliteStore({ path: ":memory:" });

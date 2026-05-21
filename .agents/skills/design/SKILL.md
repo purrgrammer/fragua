@@ -1,9 +1,9 @@
 ---
 name: design
-description: "Swarm UI design language for packages/web. Load this skill before writing or modifying any React/TSX component, CSS, style, or theme token in packages/web — including small changes like a button class, spacing, color, font size, radius, or animation, and any time you're choosing between a shadcn token (bg-card, text-foreground) and a Swarm token (bg-sw-surface, text-sw-muted, rounded-sw-card). The web UI is on Tailwind v4 with CSS-first config: there is no tailwind.config.ts, theme tokens live in globals.css's @theme inline block, dark mode is a @custom-variant on .dark. Encodes the 'clarity through restraint' philosophy: monospace voice, data-as-decor (no shadows/gradients), bento layouts with hairline borders, semantic color reserved strictly for state, light-mode default with both themes first-class, and motion that indicates state rather than decorates."
+description: "Fragua UI design language for packages/web. Load this skill before writing or modifying any React/TSX component, CSS, style, or theme token in packages/web — including small changes like a button class, spacing, color, font size, radius, or animation, and any time you're choosing between a shadcn token (bg-card, text-foreground) and a Fragua token (bg-sw-surface, text-sw-muted, rounded-sw-card). The web UI is on Tailwind v4 with CSS-first config: there is no tailwind.config.ts, theme tokens live in globals.css's @theme inline block, dark mode is a @custom-variant on .dark. Encodes the 'clarity through restraint' philosophy: monospace voice, data-as-decor (no shadows/gradients), bento layouts with hairline borders, semantic color reserved strictly for state, light-mode default with both themes first-class, and motion that indicates state rather than decorates."
 ---
 
-# Swarm design language
+# Fragua design language
 
 *Clarity through restraint — data is the decoration, structure is the grid, motion indicates state.*
 
@@ -28,7 +28,7 @@ Foundational language for `packages/web`. If a pattern isn't here, derive it fro
 
 Two token layers coexist. Know which to reach for before writing a class:
 
-- **`--sw-*` (Swarm design language)** — defined in `theme.css`. Surfaces, state accents, typography scale, spacing scale, radii, motion durations. Exposed as Tailwind utilities via `@theme inline`: **`bg-sw-surface`**, **`text-sw-muted`**, **`border-sw-border`**, **`bg-sw-accent-thinking`**, **`rounded-sw-card`**, **`text-sw-md`**, etc. **Reach here first** for product surfaces.
+- **`--sw-*` (Fragua design language)** — defined in `theme.css`. Surfaces, state accents, typography scale, spacing scale, radii, motion durations. Exposed as Tailwind utilities via `@theme inline`: **`bg-sw-surface`**, **`text-sw-muted`**, **`border-sw-border`**, **`bg-sw-accent-thinking`**, **`rounded-sw-card`**, **`text-sw-md`**, etc. **Reach here first** for product surfaces.
 - **shadcn vars (no prefix: `--background`, `--foreground`, `--card`, `--muted`, `--border`, `--popover`, `--sidebar*`)** — baseline the bundled shadcn / AI Elements components are wired to. Exposed as Tailwind utilities too (`bg-card`, `text-foreground`, `border-border`, `bg-sidebar`). Don't fight them inside shadcn primitives; match them when extending those primitives.
 
 Rule of thumb: **pick one layer per element's visual identity.** A bento cell you're authoring → `bg-sw-surface` + `border-sw-border`. A shadcn `<Dialog>` you're skinning → shadcn tokens. Mixing the two inside one element's palette is how the design drifts.
@@ -41,7 +41,7 @@ In `globals.css`:
 - `border-radius: var(--sw-radius-default, 2px)` default on `*`.
 - `font-variant-numeric: tabular-nums` + `"tnum" 1` on body — numbers are tabular everywhere.
 - `html, body` inherit the mono stack via `--font-mono`.
-- Tailwind's default `text-base` is rebound onto `--sw-text-sm` so stray `text-base` follows the Swarm scale rather than jumping to 16px.
+- Tailwind's default `text-base` is rebound onto `--sw-text-sm` so stray `text-base` follows the Fragua scale rather than jumping to 16px.
 - **`.sw-pulse` utility** — 1.0 → 0.55 → 1.0 opacity, 1800ms, respects `prefers-reduced-motion`. Use this; don't hand-roll keyframes for "thinking."
 - **`dark` variant** wired via `@custom-variant dark (&:where(.dark, .dark *))` — `dark:bg-…` works off a `class="dark"` anywhere up the tree.
 
@@ -56,7 +56,7 @@ In `globals.css`:
 
 ## Themes
 
-**Light is the default.** Swarm flips the dev-tool dark convention. Dark is a peer; every token has both values in `theme.css` (`:root` vs `.dark`), both intentionally designed — not auto-inverted.
+**Light is the default.** Fragua flips the dev-tool dark convention. Dark is a peer; every token has both values in `theme.css` (`:root` vs `.dark`), both intentionally designed — not auto-inverted.
 
 Both modes share the vibe: **low contrast between surface layers**. A card and the page are nearly the same value — separation is a 1px hairline, not a lighter panel.
 
@@ -198,7 +198,7 @@ What's doing the work: mono inherited from root, no shadow (global), 1px hairlin
 
 - [ ] No `box-shadow`, no decorative gradient, no border ≥ 2px
 - [ ] No hex literals — `sw-*` or shadcn token utilities only
-- [ ] Picked **one** token layer (Swarm or shadcn), not both, for the element's palette
+- [ ] Picked **one** token layer (Fragua or shadcn), not both, for the element's palette
 - [ ] Every accent maps to a state
 - [ ] Padding and radius are tokens (`p-3`, `rounded-sw-card`)
 - [ ] Font size uses the scale (`text-sw-sm` / `text-sw-md` / …), never raw `text-base` / `text-lg` / px values

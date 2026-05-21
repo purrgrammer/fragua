@@ -7,8 +7,8 @@
 // `${scope}:${path}` rather than by name.
 //
 // `workflowScope` is derived from each summary's `cwd`:
-//   cwd === currentCwd  → "local"   (workflow lives under <currentCwd>/.swarm/workflows)
-//   cwd == null         → "global"  (workflow lives under ~/.swarm/workflows)
+//   cwd === currentCwd  → "local"   (workflow lives under <currentCwd>/.fragua/workflows)
+//   cwd == null         → "global"  (workflow lives under ~/.fragua/workflows)
 //   anything else       → "path"    (workflow tied to a different project)
 //
 // When a workflow is selected the composer fetches its detail via

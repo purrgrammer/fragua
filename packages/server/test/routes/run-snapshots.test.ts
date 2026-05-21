@@ -17,7 +17,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { createRunSnapshotReader } from "../../src/adapters/run-snapshot-reader.ts";
 import { runSnapshotsRoutes } from "../../src/routes/run-snapshots.ts";
 
@@ -43,7 +43,7 @@ interface SnapFixture {
 }
 
 async function setupFixture(): Promise<SnapFixture> {
-  const cwd = await mkdtemp(join(tmpdir(), "swarm-snap-test-"));
+  const cwd = await mkdtemp(join(tmpdir(), "fragua-snap-test-"));
   const runId = "snap-run-1";
 
   // Init a git repo with a base commit
@@ -73,7 +73,7 @@ async function setupFixture(): Promise<SnapFixture> {
   await git(cwd, ["reset", "--hard", baseSha]);
 
   // Create the tip ref so both snapshot commits are reachable
-  await git(cwd, ["update-ref", `refs/swarm/snapshots/${runId}`, snap2CommitSha]);
+  await git(cwd, ["update-ref", `refs/fragua/snapshots/${runId}`, snap2CommitSha]);
 
   // Build the store
   const store = new SqliteStore({ path: ":memory:" });

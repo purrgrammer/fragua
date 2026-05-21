@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 
 const workdirs: string[] = [];
@@ -28,13 +28,13 @@ function refExists(cwd: string, ref: string): boolean {
 }
 
 /** Build a repo + DB with a terminal run that owns
- * `refs/swarm/{snapshots,heads}/<id>`, backdated by `ageMs`. When `pending`,
+ * `refs/fragua/{snapshots,heads}/<id>`, backdated by `ageMs`. When `pending`,
  * the run's terminal snapshot leaves recoverable work (inbox_status=pending,
  * so GC must keep it). */
 function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?: boolean }): string {
-  const cwd = mkdtempSync(join(tmpdir(), "swarm-gc-"));
+  const cwd = mkdtempSync(join(tmpdir(), "fragua-gc-"));
   workdirs.push(cwd);
-  mkdirSync(join(cwd, ".swarm"), { recursive: true });
+  mkdirSync(join(cwd, ".fragua"), { recursive: true });
 
   spawnSync("git", ["init", "-b", "main", cwd], { stdio: "ignore" });
   git(cwd, "config", "user.email", "test@test");
@@ -44,10 +44,10 @@ function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?:
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "init");
   const head = git(cwd, "rev-parse", "HEAD");
-  git(cwd, "update-ref", `refs/swarm/snapshots/${opts.runId}`, head);
-  git(cwd, "update-ref", `refs/swarm/heads/${opts.runId}`, head);
+  git(cwd, "update-ref", `refs/fragua/snapshots/${opts.runId}`, head);
+  git(cwd, "update-ref", `refs/fragua/heads/${opts.runId}`, head);
 
-  const dbPath = join(cwd, ".swarm/swarm.db");
+  const dbPath = join(cwd, ".fragua/fragua.db");
   const store = new SqliteStore({ path: dbPath });
   store.saveWorkflow("sha", "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId: opts.runId, workflowSha: "sha", cwd });
@@ -104,36 +104,36 @@ function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?:
 
 const MONTH = 30 * 24 * 60 * 60 * 1000;
 
-describe("swarm gc --snapshots", () => {
+describe("fragua gc --snapshots", () => {
   test("dry-run reports eligible refs without deleting", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
     const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH, dryRun: true });
     expect(code).toBe(0);
-    expect(refExists(cwd, "refs/swarm/snapshots/old-run")).toBe(true);
-    expect(refExists(cwd, "refs/swarm/heads/old-run")).toBe(true);
+    expect(refExists(cwd, "refs/fragua/snapshots/old-run")).toBe(true);
+    expect(refExists(cwd, "refs/fragua/heads/old-run")).toBe(true);
   });
 
   test("deletes both refs for a settled run outside the retention window", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
     const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
-    expect(refExists(cwd, "refs/swarm/snapshots/old-run")).toBe(false);
-    expect(refExists(cwd, "refs/swarm/heads/old-run")).toBe(false);
+    expect(refExists(cwd, "refs/fragua/snapshots/old-run")).toBe(false);
+    expect(refExists(cwd, "refs/fragua/heads/old-run")).toBe(false);
   });
 
   test("refs inside the retention window survive", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "fresh-run", ageMs: 1 * 24 * 60 * 60 * 1000 });
     const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
-    expect(refExists(cwd, "refs/swarm/snapshots/fresh-run")).toBe(true);
+    expect(refExists(cwd, "refs/fragua/snapshots/fresh-run")).toBe(true);
   });
 
   test("pending (inbox) runs are kept regardless of age", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "pending-run", ageMs: 60 * 24 * 60 * 60 * 1000, pending: true });
     const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
-    expect(refExists(cwd, "refs/swarm/snapshots/pending-run")).toBe(true);
-    expect(refExists(cwd, "refs/swarm/heads/pending-run")).toBe(true);
+    expect(refExists(cwd, "refs/fragua/snapshots/pending-run")).toBe(true);
+    expect(refExists(cwd, "refs/fragua/heads/pending-run")).toBe(true);
   });
 });
 

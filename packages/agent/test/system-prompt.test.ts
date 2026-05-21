@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Skill } from "@swarm/types";
-import { loadSkill } from "@swarm/workspace";
+import type { Skill } from "@fragua/types";
+import { loadSkill } from "@fragua/workspace";
 import {
   applyDefaultContextFiles,
   buildSystemPrompt,

@@ -21,13 +21,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { registerFauxProvider } from "@mariozechner/pi-ai";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 
 describe("PiLlmBackend — cancel signal (fetch wedged)", () => {
   test("aborting input.signal tears down a provider fetch that ignores signal", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-cancel-stuck-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-cancel-stuck-"));
     try {
       const faux = registerFauxProvider();
       try {

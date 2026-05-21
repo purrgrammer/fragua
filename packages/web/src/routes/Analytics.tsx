@@ -24,8 +24,8 @@ import { DrillDownDrawer } from "../components/analytics/DrillDownDrawer.tsx";
 // interactions (auto-pin on local pick, auto-clear on project unpick)
 // were subtle enough to defer. The server still accepts `?cwd=` and
 // the WorkflowSelector still threads the local's owning cwd through
-// the request — picking `Local · swarm:research` scopes everything to
-// `swarm` implicitly. A separate, deliberate ProjectSelector
+// the request — picking `Local · fragua:research` scopes everything to
+// `fragua` implicitly. A separate, deliberate ProjectSelector
 // integration is a follow-up.
 // import { HaltDonut } from "../components/analytics/HaltDonut.tsx";
 // import { ModelDonut } from "../components/analytics/ModelDonut.tsx";

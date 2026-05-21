@@ -61,7 +61,7 @@ export function Schedules(): JSX.Element {
           title="No schedules configured"
           description={
             <span>
-              Create one from the CLI: <code className="font-mono">swarm schedule create</code>.
+              Create one from the CLI: <code className="font-mono">fragua schedule create</code>.
             </span>
           }
         />

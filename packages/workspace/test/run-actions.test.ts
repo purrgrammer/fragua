@@ -52,12 +52,12 @@ async function makeRun(cwd: string, base: string, nCommits: number, dirt: boolea
   if (nCommits >= 1) {
     content = content.replace("L02\n", "L02-RUN\n");
     rewrite();
-    await must(wt, ["commit", "-qam", "[run] edit L02", "--author=Bot <bot@swarm>"]);
+    await must(wt, ["commit", "-qam", "[run] edit L02", "--author=Bot <bot@fragua>"]);
   }
   if (nCommits >= 2) {
     content = content.replace("L04\n", "L04-RUN\n");
     rewrite();
-    await must(wt, ["commit", "-qam", "[run] edit L04", "--author=Bot <bot@swarm>"]);
+    await must(wt, ["commit", "-qam", "[run] edit L04", "--author=Bot <bot@fragua>"]);
   }
   if (dirt) {
     content = content.replace("L06\n", "L06-DIRT\n");
@@ -67,9 +67,9 @@ async function makeRun(cwd: string, base: string, nCommits: number, dirt: boolea
   await must(wt, ["add", "-A"]);
   const snTree = await must(wt, ["write-tree"]);
   const runHead = await must(wt, ["rev-parse", "HEAD"]);
-  const snapCommit = await must(cwd, ["commit-tree", snTree, "-p", runHead, "-m", "swarm-snap"]);
-  await must(cwd, ["update-ref", `refs/swarm/snapshots/${RUN}`, snapCommit]);
-  if (nCommits >= 1) await must(cwd, ["update-ref", `refs/swarm/heads/${RUN}`, runHead]);
+  const snapCommit = await must(cwd, ["commit-tree", snTree, "-p", runHead, "-m", "fragua-snap"]);
+  await must(cwd, ["update-ref", `refs/fragua/snapshots/${RUN}`, snapCommit]);
+  if (nCommits >= 1) await must(cwd, ["update-ref", `refs/fragua/heads/${RUN}`, runHead]);
   await must(cwd, ["worktree", "remove", "--force", wt]);
 }
 
@@ -125,7 +125,7 @@ describe("applyAccept", () => {
     expect(await has(cwd, "L02-RUN")).toBe(true);
     expect(await has(cwd, "L04-RUN")).toBe(true);
     const authors = await must(cwd, ["log", "-2", "--format=%ae"]);
-    expect(authors.split("\n")).toEqual(["bot@swarm", "bot@swarm"]);
+    expect(authors.split("\n")).toEqual(["bot@fragua", "bot@fragua"]);
     expect(await clean(cwd)).toBe(true);
   });
 
@@ -137,7 +137,7 @@ describe("applyAccept", () => {
     expect(r.ok).toBe(true);
     expect(await has(cwd, "L02-RUN")).toBe(true);
     expect(await has(cwd, "L11-USER")).toBe(true);
-    expect(await must(cwd, ["log", "-1", "--format=%ae"])).toBe("bot@swarm");
+    expect(await must(cwd, ["log", "-1", "--format=%ae"])).toBe("bot@fragua");
   });
 
   test("F. commits(1)+dirt → replays commit, stages tail", async () => {
@@ -146,7 +146,7 @@ describe("applyAccept", () => {
     const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
     expect(r).toMatchObject({ ok: true, replayed: 1, tailStaged: true });
     expect(await has(cwd, "L02-RUN")).toBe(true); // committed
-    expect(await must(cwd, ["log", "-1", "--format=%ae"])).toBe("bot@swarm");
+    expect(await must(cwd, ["log", "-1", "--format=%ae"])).toBe("bot@fragua");
     expect((await must(cwd, ["show", ":f.txt"])).includes("L06-DIRT")).toBe(true); // staged tail
     expect(await staged(cwd)).toBe("f.txt");
   });
@@ -184,8 +184,8 @@ describe("applyDiscard", () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 1, true);
     const r = await applyDiscard(git, cwd, RUN);
-    expect(r.refs.sort()).toEqual([`refs/swarm/heads/${RUN}`, `refs/swarm/snapshots/${RUN}`]);
-    expect(await git(cwd, ["rev-parse", "--verify", "--quiet", `refs/swarm/snapshots/${RUN}`])).toMatchObject({
+    expect(r.refs.sort()).toEqual([`refs/fragua/heads/${RUN}`, `refs/fragua/snapshots/${RUN}`]);
+    expect(await git(cwd, ["rev-parse", "--verify", "--quiet", `refs/fragua/snapshots/${RUN}`])).toMatchObject({
       exitCode: 1,
     });
     // second discard is a no-op

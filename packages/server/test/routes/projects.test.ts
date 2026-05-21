@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import type { ProjectTreeEntry, ProjectTreeReader, ReadBlobResult } from "../../src/ports.ts";
 import { projectsRoutes } from "../../src/routes/projects.ts";
 
@@ -24,7 +24,7 @@ function encodeProjectId(cwd: string): string {
 }
 
 async function setup(): Promise<Fixture> {
-  const cwd = await mkdtemp(join(tmpdir(), "swarm-projects-route-"));
+  const cwd = await mkdtemp(join(tmpdir(), "fragua-projects-route-"));
   await writeFile(join(cwd, "hello.txt"), "world\n");
   await mkdir(join(cwd, "src"), { recursive: true });
   await writeFile(join(cwd, "src", "index.ts"), "export {};\n");

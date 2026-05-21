@@ -1,8 +1,8 @@
 {
-  "name": "@swarm/workspace",
+  "name": "@fragua/workspace",
   "version": "0.0.0",
   "private": true,
-  "description": "swarm execution environments — local, worktree, blocklist, env-leak gate",
+  "description": "fragua execution environments — local, worktree, blocklist, env-leak gate",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -16,8 +16,8 @@
     "@mariozechner/pi-agent-core": "0.71.0",
     "@mariozechner/pi-ai": "0.71.0",
     "@sinclair/typebox": "0.34.41",
-    "@swarm/core": "workspace:*",
-    "@swarm/types": "workspace:*",
+    "@fragua/core": "workspace:*",
+    "@fragua/types": "workspace:*",
     "diff": "8.0.4",
     "turndown": "7.2.4",
     "yaml": "2.7.0"

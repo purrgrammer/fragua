@@ -9,10 +9,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { EventType, NodeAttrs } from "@fragua/core";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import type { AssistantMessage, Context } from "@mariozechner/pi-ai";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
-import type { EventType, NodeAttrs } from "@swarm/core";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { findRouteToolCall, PiLlmBackend } from "../src/backend.ts";
 
 describe("findRouteToolCall", () => {
@@ -138,7 +138,7 @@ async function runWithRoute(opts: RunWithRouteOpts): Promise<{
 
 describe("PiLlmBackend route tool synthesis", () => {
   test("routing node gets a route tool with the declared enum", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-enum-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-enum-"));
     try {
       let advertised: { name: string; parameters: unknown }[] = [];
       const { outcome } = await runWithRoute({
@@ -173,7 +173,7 @@ describe("PiLlmBackend route tool synthesis", () => {
   });
 
   test("non-routing node does not get a route tool", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-absent-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-absent-"));
     try {
       let advertised: string[] = [];
       await runWithRoute({
@@ -192,7 +192,7 @@ describe("PiLlmBackend route tool synthesis", () => {
   });
 
   test("an isolated route tool call yields a success outcome with route set", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-ok-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-ok-"));
     try {
       const { outcome } = await runWithRoute({
         scratch,
@@ -212,7 +212,7 @@ describe("PiLlmBackend route tool synthesis", () => {
   });
 
   test("route call alongside another tool call yields halt outcome with reason route_call_not_isolated", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-isolation-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-isolation-"));
     try {
       const { outcome } = await runWithRoute({
         scratch,
@@ -243,7 +243,7 @@ describe("PiLlmBackend route tool synthesis", () => {
   });
 
   test("routing node that ends without calling route yields halt outcome with reason route_not_picked", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-missing-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-missing-"));
     try {
       const { outcome } = await runWithRoute({
         scratch,
@@ -259,7 +259,7 @@ describe("PiLlmBackend route tool synthesis", () => {
   });
 
   test("route tool is force-included even when node.attrs.allowed_tools omits it", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-force-allow-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-force-allow-"));
     try {
       let advertised: string[] = [];
       const { outcome } = await runWithRoute({
@@ -287,7 +287,7 @@ describe("PiLlmBackend route tool synthesis", () => {
   });
 
   test("route tool is force-included even when node.attrs.denied_tools lists it", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-force-deny-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-force-deny-"));
     try {
       let advertised: string[] = [];
       const { outcome } = await runWithRoute({
@@ -312,7 +312,7 @@ describe("PiLlmBackend route tool synthesis", () => {
   });
 
   test("abort wins over route when both are called", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-route-abort-precedence-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-abort-precedence-"));
     try {
       const { outcome } = await runWithRoute({
         scratch,

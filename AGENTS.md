@@ -1,4 +1,4 @@
-# swarm — conventions for AI agents
+# fragua — conventions for AI agents
 
 > Read this first. If anything here conflicts with `docs/`, the docs win — update this file.
 >
@@ -6,11 +6,11 @@
 
 ## What this is
 
-**swarm** is a universal AI agent orchestrator. YAML workflows → deterministic state machine → LLM-based agents across any provider → replayable event log on top of a single SQLite store.
+**fragua** is a universal AI agent orchestrator. YAML workflows → deterministic state machine → LLM-based agents across any provider → replayable event log on top of a single SQLite store.
 
 Authoritative docs:
 
-- `docs/SPEC.md` — what swarm is, invariants
+- `docs/SPEC.md` — what fragua is, invariants
 - `docs/ARCHITECTURE.md` — schema, design, property matrix
 - `docs/handler-contract.md` — handler API
 
@@ -28,36 +28,36 @@ bun run lint                             # biome check
 bun run format                           # biome format --write
 bun run ci                               # lint + typecheck + tests, pass-noise filtered
 
-bun run swarm harness                    # default entry point: daemon + HTTP, ~/.swarm/swarm.db, default :6767, auto-builds web bundle
-bun run swarm daemon --db <path>         # CI primitive: executor only against an explicit DB
-bun run swarm serve  --db <path>         # CI primitive: standalone HTTP + SSE, default :3000
-bun run swarm run <workflow|name> [--input "…"]    # upload + enqueue + stream events; bare names resolve against ~/.swarm/workflows/, then <cwd>/.swarm/workflows/
-bun run swarm validate <workflow.yaml>   # parse + lint, no execution
-bun run swarm db {vacuum,gc-blobs,backup --to <path>}
+bun run fragua harness                    # default entry point: daemon + HTTP, ~/.fragua/fragua.db, default :6767, auto-builds web bundle
+bun run fragua daemon --db <path>         # CI primitive: executor only against an explicit DB
+bun run fragua serve  --db <path>         # CI primitive: standalone HTTP + SSE, default :3000
+bun run fragua run <workflow|name> [--input "…"]    # upload + enqueue + stream events; bare names resolve against ~/.fragua/workflows/, then <cwd>/.fragua/workflows/
+bun run fragua validate <workflow.yaml>   # parse + lint, no execution
+bun run fragua db {vacuum,gc-blobs,backup --to <path>}
 bun run dev:web                          # Vite dev server (:5173), proxies /api/** to harness; run harness first
 ```
 
 ## Codebase map
 
-Dependency direction: `web → server → store ← daemon → core ← agent`. `core`'s main entry is browser-safe (no `node:fs` / `node:child_process`); the `./handler` sub-entry pulls in `@swarm/store` for server-side use and is intentionally excluded from the browser bundle. `store` is the only coordination surface.
+Dependency direction: `web → server → store ← daemon → core ← agent`. `core`'s main entry is browser-safe (no `node:fs` / `node:child_process`); the `./handler` sub-entry pulls in `@fragua/store` for server-side use and is intentionally excluded from the browser bundle. `store` is the only coordination surface.
 
 | Package | Entry points | What lives here |
 |---|---|---|
-| `@swarm/types` | `src/index.ts`, `src/events.ts`, `src/agents.ts`, `src/skills.ts` | Shared `AgentMessage` + swarm-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
-| `@swarm/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
-| `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy,thread}.ts`, `src/parser/yaml.ts` | Pure types; YAML parser; handler contract; engine reducers |
-| `@swarm/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
-| `@swarm/agent` | `src/{backend,handler-bridge,system-prompt,thread,event-bridge,tool-adapter}.ts` | `PiLlmBackend`; pi-ai → handler bridge; per-run system-prompt builder |
-| `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/`, `src/agents/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills + agent-definition discovery |
-| `@swarm/server` | `src/index.ts`, `src/store/{routes,runs-routes,runs-adapter,steps,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
-| `@swarm/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Swarm primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
-| `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `harness` (default) / `daemon` / `serve` / `run` / `validate` / `init` / `providers` / `db` / `gc` |
+| `@fragua/types` | `src/index.ts`, `src/events.ts`, `src/agents.ts`, `src/skills.ts` | Shared `AgentMessage` + fragua-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
+| `@fragua/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
+| `@fragua/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy,thread}.ts`, `src/parser/yaml.ts` | Pure types; YAML parser; handler contract; engine reducers |
+| `@fragua/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
+| `@fragua/agent` | `src/{backend,handler-bridge,system-prompt,thread,event-bridge,tool-adapter}.ts` | `PiLlmBackend`; pi-ai → handler bridge; per-run system-prompt builder |
+| `@fragua/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/`, `src/agents/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills + agent-definition discovery |
+| `@fragua/server` | `src/index.ts`, `src/store/{routes,runs-routes,runs-adapter,steps,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
+| `@fragua/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Fragua primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
+| `@fragua/cli` | `bin/fragua.ts`, `src/commands/` | `harness` (default) / `daemon` / `serve` / `run` / `validate` / `init` / `providers` / `db` / `gc` |
 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
 
-Runtime state: `~/.swarm/swarm.db` (the global store the harness binds to by default; `daemon_lock.{http_url, http_port, harness_version}` carry the running URL — that's how `swarm run` discovers the harness, no JSON file). The CI primitive (`swarm daemon --db <path>` + `swarm serve --db <path>`) writes its serve URL to `<cwd>/.swarm/serve.json`; `swarm run` falls back to that when no harness lock is present. `cwd` on `run_state` is the only project identifier — there is no `projects` table; the UI lists projects via `SELECT DISTINCT cwd`. Worktrees live under each run's `cwd` at `.swarm/worktrees/<run_id>/`.
+Runtime state: `~/.fragua/fragua.db` (the global store the harness binds to by default; `daemon_lock.{http_url, http_port, harness_version}` carry the running URL — that's how `fragua run` discovers the harness, no JSON file). The CI primitive (`fragua daemon --db <path>` + `fragua serve --db <path>`) writes its serve URL to `<cwd>/.fragua/serve.json`; `fragua run` falls back to that when no harness lock is present. `cwd` on `run_state` is the only project identifier — there is no `projects` table; the UI lists projects via `SELECT DISTINCT cwd`. Worktrees live under each run's `cwd` at `.fragua/worktrees/<run_id>/`.
 
-Config cascade: `~/.swarm/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.swarm/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. Legacy `config.jsonc` is read with a deprecation warning for one release; rename to `config.yaml` to silence it.
+Config cascade: `~/.fragua/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.fragua/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. Legacy `config.jsonc` is read with a deprecation warning for one release; rename to `config.yaml` to silence it.
 
 Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `postmortem`, `operate`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 
@@ -76,7 +76,7 @@ Named sub-agent profiles live alongside skills under `.agents/agents/` (project)
    **Enum-literal consumers.** Adding or removing a literal in a contract union (`RunStatus`, `HaltReason`, `IntentEvent['type']`, `FactEvent['type']`, etc.) requires a grep across `packages/` for every consumer — many use string-literal sets (`Set<RunStatus>`, hardcoded `WHERE status IN (…)` SQL, label maps in `web/src/lib/humanize.ts`, allowed-status arrays in `server/src/store/runs-routes.ts:VALID_STATUSES`) that don't trip TypeScript exhaustiveness checks. The typecheck pass is necessary but not sufficient — when in doubt, `rg '"<old-literal>"' packages/` and update each.
 2. **Tests before done.** `bun test` green + monorepo typecheck clean are table stakes.
 3. **No silent deps.** Every runtime dep through `package.json` with an exact pin and a one-line rationale in the commit message.
-4. **One coordination surface.** `@swarm/store` is the only place state transitions land. No filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
+4. **One coordination surface.** `@fragua/store` is the only place state transitions land. No filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
 5. **Events are truth.** Every state transition is `intent.*` (writer: web) or `fact.*` (writer: daemon). The `run_state` projection is updated in the same transaction.
 6. **NO INLINE IMPORTS.** All `import`s at file top — no `await import(…)` inside functions. Hoist + guard the call. Rare exception for genuinely-circular module graphs; document the cycle.
 7. **NO SKILL CITATIONS IN CODE.** Don't write `// SKILL.md § Motion — ...` or attribute rules to skill files. Skills load on demand; citations drift the moment the skill is edited.

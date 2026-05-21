@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentTool } from "../src/agent.ts";
 import { bashTool, editFileTool, readFileTool, writeFileTool } from "../src/tools.ts";
-import type { SubagentResult, SubagentSpec, SwarmToolContext } from "../src/types.ts";
+import type { FraguaToolContext, SubagentResult, SubagentSpec } from "../src/types.ts";
 import { WorktreeEnvironment } from "../src/worktree-env.ts";
 
 function gitInitRepo(dir: string): void {
@@ -46,7 +46,7 @@ describe("worktree isolation under same-cwd daemon", () => {
 
   beforeEach(async () => {
     originalCwd = process.cwd();
-    repo = await mkdtemp(join(tmpdir(), "swarm-iso-"));
+    repo = await mkdtemp(join(tmpdir(), "fragua-iso-"));
     gitInitRepo(repo);
     // Sentinel: a tracked file we'll try to mutate via the agent tools.
     // The whole point of isolation is that the main-checkout copy of
@@ -55,7 +55,7 @@ describe("worktree isolation under same-cwd daemon", () => {
     gitCommit(repo, "init");
 
     // Critical: pretend the daemon was started from the project root.
-    // This is the worktree-leak repro condition (`bun run swarm
+    // This is the worktree-leak repro condition (`bun run fragua
     // harness` from a project cwd).
     process.chdir(repo);
 
@@ -118,7 +118,7 @@ describe("worktree isolation under same-cwd daemon", () => {
   });
 
   test("sub-agent (agent tool) inherits parent env: write inside spawned agent lands in worktree", async () => {
-    // The `agent` tool reads `swarmContext.spawnSubagent` and hands it
+    // The `agent` tool reads `fraguaContext.spawnSubagent` and hands it
     // a SubagentSpec. The spawn factory in production threads
     // `parentCtx.parentEnv` straight into the child llm call;
     // tests simulate that contract by capturing the env the factory
@@ -143,16 +143,16 @@ describe("worktree isolation under same-cwd daemon", () => {
       };
     };
 
-    const ctx: SwarmToolContext = {
+    const ctx: FraguaToolContext = {
       runId: "iso-test",
       nodeId: "n1",
       iteration: 0,
-      http: { fetch: () => Promise.reject(new Error("no http in this test")) } as unknown as SwarmToolContext["http"],
+      http: { fetch: () => Promise.reject(new Error("no http in this test")) } as unknown as FraguaToolContext["http"],
       emit: () => {},
       spawnSubagent: fakeSpawn,
     };
 
-    const out = await agentTool.execute({ prompt: "write a file" }, env, { swarmContext: ctx, tool_call_id: "tc-1" });
+    const out = await agentTool.execute({ prompt: "write a file" }, env, { fraguaContext: ctx, tool_call_id: "tc-1" });
     expect(out.is_error).toBeFalsy();
     expect(capturedEnv).toBe(env);
 

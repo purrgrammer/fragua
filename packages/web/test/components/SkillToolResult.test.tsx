@@ -6,7 +6,7 @@
 // against the proposal's contract.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import type { ToolResultMessage } from "@swarm/types";
+import type { ToolResultMessage } from "@fragua/types";
 import { cleanup, render, within } from "@testing-library/react";
 import { SkillToolResult } from "../../src/components/run-conversation/SkillToolResult.tsx";
 import { useDom } from "../setup.ts";

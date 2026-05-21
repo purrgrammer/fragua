@@ -8,9 +8,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as handler from "@swarm/core/handler";
-import { createServer } from "@swarm/server";
-import { SqliteStore } from "@swarm/store";
+import * as handler from "@fragua/core/handler";
+import { createServer } from "@fragua/server";
+import { SqliteStore } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
@@ -18,8 +18,8 @@ import { wakePending } from "../src/wake-pending.ts";
 
 describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
   test("enqueue via POST /runs → daemon runs → GET /runs/:id shows success", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "swarm-e2e-"));
-    const store = new SqliteStore({ path: join(dir, "swarm.db") });
+    const dir = mkdtempSync(join(tmpdir(), "fragua-e2e-"));
+    const store = new SqliteStore({ path: join(dir, "fragua.db") });
     const echoSource = "name: echo-wf\nsteps:\n  work: {type: llm, prompt: x}\n";
     store.saveWorkflow("wf-sha", "echo-wf", echoSource);
 
@@ -110,8 +110,8 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
   });
 
   test("HITL loop: pause at wait.human, reopen store, finish via intent", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "swarm-e2e-hitl-"));
-    const dbPath = join(dir, "swarm.db");
+    const dir = mkdtempSync(join(tmpdir(), "fragua-e2e-hitl-"));
+    const dbPath = join(dir, "fragua.db");
 
     // Phase 1 ─────────────────────────────────────────────────
     const s1 = new SqliteStore({ path: dbPath });

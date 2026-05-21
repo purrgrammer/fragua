@@ -11,7 +11,7 @@
 // the backfill ended, with the server's `ts >= cursor` semantics
 // absorbing any boundary-ms appends via per-connection dedup.
 
-import type { FeedEvent } from "@swarm/types";
+import type { FeedEvent } from "@fragua/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useState } from "react";
@@ -120,7 +120,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
       // and shouldn't trigger query invalidations. Drop it before the
       // envelope check so it doesn't show up in any future "rejected
       // frame" instrumentation either.
-      if ((parsed as { type?: string }).type === "swarm.ping") return;
+      if ((parsed as { type?: string }).type === "fragua.ping") return;
       if (typeof (parsed as FeedEvent).runId !== "string" || typeof (parsed as FeedEvent).seq !== "number") return;
       const evt = parsed as FeedEvent;
 

@@ -13,8 +13,8 @@
 // the body has no placeholder but args were passed, they're appended
 // as a trailing <invocation> block so they're never silently dropped.
 
-import type { ExecutionEnvironment } from "@swarm/core";
-import type { Skill } from "@swarm/types";
+import type { ExecutionEnvironment } from "@fragua/core";
+import type { Skill } from "@fragua/types";
 import { parseSkillMd } from "./parse.ts";
 
 export interface LoadSkillSuccess {

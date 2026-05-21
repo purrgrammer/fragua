@@ -1,13 +1,13 @@
-// `swarm {branch,commit,merge,discard,diff}` CLI verbs against a live
+// `fragua {branch,commit,merge,discard,diff}` CLI verbs against a live
 // HTTP server (no executor — these are post-terminal). Asserts the verb
 // posts the right intent / surfaces the server's refusal as a non-zero
 // exit. Git mutation (operator-actions.test.ts) and endpoint validation
 // (operator-actions.routes.test.ts) are covered in their own suites.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import type { RunActionExec, RunSnapshotReader } from "@swarm/server";
-import { createServer } from "@swarm/server";
-import { type IEventStore, SqliteStore } from "@swarm/store";
+import type { RunActionExec, RunSnapshotReader } from "@fragua/server";
+import { createServer } from "@fragua/server";
+import { type IEventStore, SqliteStore } from "@fragua/store";
 import {
   acceptCommand,
   cancelCommand,
@@ -20,7 +20,7 @@ import {
 
 // Permissive git reader — these tests exercise the CLI client against a fake
 // cwd (no real repo), so the snapshot reader (diff) and the accept/discard git
-// actions are stubbed satisfiable. The real git lives in @swarm/workspace tests.
+// actions are stubbed satisfiable. The real git lives in @fragua/workspace tests.
 const permissiveReader: RunSnapshotReader = {
   lsTree: async () => null,
   showFile: async () => ({ kind: "not_found" }),
@@ -111,7 +111,7 @@ function lastIntent(store: IEventStore, runId: string): string | undefined {
   return undefined;
 }
 
-describe("swarm operator verbs", () => {
+describe("fragua operator verbs", () => {
   let r: Rig;
   beforeEach(() => {
     r = rig();

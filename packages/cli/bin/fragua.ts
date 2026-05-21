@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// swarm CLI entry — dispatches subcommands.
+// fragua CLI entry — dispatches subcommands.
 //
 // Commands that depended on the legacy fs-based control plane (run, daemon,
 // pause, cancel, steer, resume, list, dashboard) were removed in the
@@ -51,7 +51,7 @@ import {
 import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 
-const cli = cac("swarm");
+const cli = cac("fragua");
 
 // Translate cac's option bag into the per-model-ops flag shape.
 // cac kebab-cases multi-word options: `--context-window` → `contextWindow`.
@@ -100,7 +100,7 @@ cli.command("validate <workflow>", "Parse + lint a workflow without executing").
 });
 
 cli
-  .command("init", "Initialize this directory as a swarm project (writes .swarm/config.yaml)")
+  .command("init", "Initialize this directory as a fragua project (writes .fragua/config.yaml)")
   .option("--cwd <path>", "Project root (default process.cwd)")
   .action(async (options: Record<string, unknown>) => {
     const cwd = typeof options["cwd"] === "string" ? (options["cwd"] as string) : undefined;
@@ -108,10 +108,10 @@ cli
     process.exit(code);
   });
 
-// `swarm providers [action]` — bare form prints subcommand help, per
+// `fragua providers [action]` — bare form prints subcommand help, per
 // the "top-level commands without arguments should list options"
 // convention. cac 6.x doesn't cleanly match multi-word commands
-// (`swarm providers ls` fell through to the parent), so actions are
+// (`fragua providers ls` fell through to the parent), so actions are
 // dispatched via a positional.
 cli
   .command(
@@ -202,8 +202,8 @@ cli
 
 cli
   .command("harness", "Supervise the daemon + HTTP server as a foreground process (Ctrl-C to stop)")
-  .option("--port <n>", "TCP port for HTTP (default 6767, configurable via web.port in ~/.swarm/config.yaml)")
-  .option("--db <path>", "Store path (default ~/.swarm/swarm.db)")
+  .option("--port <n>", "TCP port for HTTP (default 6767, configurable via web.port in ~/.fragua/config.yaml)")
+  .option("--db <path>", "Store path (default ~/.fragua/fragua.db)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -223,7 +223,7 @@ cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
   .option("--port <n>", "TCP port to bind (default 6767, configurable via web.port; writes <db-dir>/serve.json)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
-  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db); enables parallel swarms")
+  .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db); enables parallel fraguas")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -244,7 +244,7 @@ cli
     process.exit(code);
   });
 
-// `swarm daemon [action]` — bare form prints help; `start` runs the
+// `fragua daemon [action]` — bare form prints help; `start` runs the
 // daemon foreground; `stop` SIGTERMs the process holding the store
 // lock. cac 6.x doesn't cleanly match multi-word commands so actions
 // are dispatched via a positional (same pattern as providers / db).
@@ -252,7 +252,7 @@ cli
   .command("daemon [action]", "Run or stop the execution daemon (run without args for help)")
   .option("--concurrency <n>", "`start` only: max concurrent runs (default 16)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
-  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
+  .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
   .option("--provider <name>", "`start` only: LLM provider override (default: auto-detected)")
   .option("--model <id>", "`start` only: model id override (e.g. claude-opus-4-7)")
   .action(async (action: string | undefined, options: Record<string, unknown>) => {
@@ -261,7 +261,7 @@ cli
       return typeof v === "string" ? v : undefined;
     };
     if (action === undefined) {
-      console.log(chalk.bold("swarm daemon — run or stop the execution daemon\n"));
+      console.log(chalk.bold("fragua daemon — run or stop the execution daemon\n"));
       console.log("Subcommands:");
       console.log(`  ${chalk.cyan("start")}    Run the store-backed daemon in the foreground (Ctrl-C to stop)`);
       console.log(`  ${chalk.cyan("stop")}     SIGTERM the running daemon identified by the store's daemon_lock`);
@@ -302,7 +302,7 @@ cli
   .option("--older-than <duration>", "Retention window (e.g. 30d, 12h, 2w). Default 30d.")
   .option("--dry-run", "Report what would be deleted without touching anything")
   .option("--cwd <path>", "Repo root (default process.cwd)")
-  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
+  .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -334,7 +334,7 @@ cli
   .option("--to <path>", "`backup` only: destination path")
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
-  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
+  .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
   .action(async (action: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -415,10 +415,10 @@ cli
     process.exit(code);
   });
 
-// `swarm runs <verb> <runId>` — operate on an existing run. Disposition
+// `fragua runs <verb> <runId>` — operate on an existing run. Disposition
 // (branch/commit/merge/discard/diff) + lifecycle (respond/resume/
-// unquarantine/cancel) + listing (ls/inbox). `swarm run <workflow>`
-// (singular) creates a run; `swarm runs` (plural) acts on one.
+// unquarantine/cancel) + listing (ls/inbox). `fragua run <workflow>`
+// (singular) creates a run; `fragua runs` (plural) acts on one.
 const pickStr = (options: Record<string, unknown>, key: string): string | undefined => {
   const v = options[key];
   return typeof v === "string" ? v : undefined;
@@ -430,11 +430,11 @@ const discovery = (options: Record<string, unknown>): { url?: string; cwd?: stri
 });
 
 function runsHelp(): void {
-  console.log(`swarm runs <verb> <runId> — operate on an existing run
+  console.log(`fragua runs <verb> <runId> — operate on an existing run
 
   Disposition (terminal runs with recoverable work):
     accept  <id>                      replay the run's commits onto your branch + stage the tail to commit
-    discard <id>                      drop the run's swarm refs
+    discard <id>                      drop the run's fragua refs
     diff    <id> [--against <ref>] [--snap <idx>]  print the snapshot diff
 
   Lifecycle (blocked runs):

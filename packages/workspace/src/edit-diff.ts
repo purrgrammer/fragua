@@ -1,6 +1,6 @@
 // Edit-diff utilities — exact-text replacement with fuzzy fallback,
 // LF/CRLF/BOM round-tripping, and unified-diff output with per-line
-// numbering. Ported from pi-coding-agent's edit-diff.ts so swarm and
+// numbering. Ported from pi-coding-agent's edit-diff.ts so fragua and
 // the upstream coding agent stay in sync on edit semantics.
 //
 // The fuzzy normalization handles common provider quirks:

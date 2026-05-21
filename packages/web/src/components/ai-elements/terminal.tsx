@@ -3,7 +3,7 @@
 // Terminal — ANSI-aware console-output renderer for tool nodes
 // (tool node) and any other captured shell output.
 //
-// Adapted from the ai-elements Terminal component to match the Swarm
+// Adapted from the ai-elements Terminal component to match the Fragua
 // design language: hairline border, no shadow, monospace voice, sw-*
 // tokens for surfaces/borders/spacing. In dark mode the body keeps a
 // darker terminal-idiom surface so ANSI colors from `ansi-to-react`

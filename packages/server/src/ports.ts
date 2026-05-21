@@ -1,9 +1,9 @@
 // Server ports. Under the store-backed architecture the only port we keep
 // is WorkflowReader — listing workflow files on disk for the Workflows page.
-// Everything else reads directly from @swarm/store.
+// Everything else reads directly from @fragua/store.
 
-import type { InputDecl } from "@swarm/core";
-import type { AcceptResult, DiscardResult } from "@swarm/workspace";
+import type { InputDecl } from "@fragua/core";
+import type { AcceptResult, DiscardResult } from "@fragua/workspace";
 import type { HealthDaemonInfo } from "./routes/health.ts";
 
 export type { InputDecl };
@@ -11,7 +11,7 @@ export type { InputDecl };
 /** Runs post-terminal worktree actions **synchronously** in the request path
  *  so the operator (CLI/web) sees the real result. Injected so route tests can
  *  stub the git outcome without a real repo. The default wires the
- *  `@swarm/workspace` implementations over a real git exec. */
+ *  `@fragua/workspace` implementations over a real git exec. */
 export interface RunActionExec {
   accept(cwd: string, runId: string, baseGitSha: string): Promise<AcceptResult>;
   discard(cwd: string, runId: string): Promise<DiscardResult>;
@@ -23,7 +23,7 @@ export interface WorkflowSummary {
   sha: string;
   label?: string;
   /** Project root that owns this workflow. `undefined` means the global
-   *  source (`~/.swarm/workflows/`); a string is the absolute cwd of a
+   *  source (`~/.fragua/workflows/`); a string is the absolute cwd of a
    *  project listed by `GET /projects`. Workflow names are unique within
    *  a source but may collide across sources, so the wire identity is
    *  `(name, cwd)` — list consumers must show the cwd to disambiguate. */

@@ -1,6 +1,6 @@
 // Web bundle embedding for `bun build --compile`.
 //
-// In dev (`bun run packages/cli/bin/swarm.ts`), this file exports an empty
+// In dev (`bun run packages/cli/bin/fragua.ts`), this file exports an empty
 // map and the CLI falls back to reading `packages/web/dist/` from disk via
 // `ensureWebBundle()`.
 //

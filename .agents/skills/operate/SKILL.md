@@ -1,11 +1,11 @@
 ---
 name: operate
-description: Drive a swarm run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), the two equivalent entry points (`swarm run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a swarm checkout.
+description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), the two equivalent entry points (`fragua run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a fragua checkout.
 ---
 
 # operate — enqueue, watch, and control a live run
 
-The goal is to go from a workflow (a name resolvable under `~/.swarm/workflows/` or `<cwd>/.swarm/workflows/`, or a literal `.yaml` path) to a running, observable run that you can steer safely. Prefer the CLI for interactive runs; reach for the HTTP surface when you need priority / routing / no-follow / scripting.
+The goal is to go from a workflow (a name resolvable under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run that you can steer safely. Prefer the CLI for interactive runs; reach for the HTTP surface when you need priority / routing / no-follow / scripting.
 
 Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §7 (web server), `AGENTS.md` (commands).
 
@@ -15,15 +15,15 @@ Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs
 
 ```sh
 # Pre-flight — both must be true.
-sqlite3 -readonly ~/.swarm/swarm.db \
+sqlite3 -readonly ~/.fragua/fragua.db \
   "SELECT pid, http_url, (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS age_s
      FROM daemon_lock;"      # row present + http_url non-null + age < 30s
-bun run swarm providers ls   # at least one provider shows ✓
+bun run fragua providers ls   # at least one provider shows ✓
 
 # Run. Trailing args become $ARGUMENTS; --input name=value (repeatable)
 # binds typed inputs declared in the workflow's `inputs:` block.
-bun run swarm run change "rename foo() to bar() in packages/core"
-bun run swarm run deploy --input ticket=BUG-1 --input env=prod
+bun run fragua run change "rename foo() to bar() in packages/core"
+bun run fragua run deploy --input ticket=BUG-1 --input env=prod
 ```
 
 The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
@@ -38,7 +38,7 @@ The harness owns the daemon + HTTP server in one foreground process. Discovery r
 
 ```sh
 # Default DB (harness layout)
-sqlite3 -readonly ~/.swarm/swarm.db <<'SQL'
+sqlite3 -readonly ~/.fragua/fragua.db <<'SQL'
 .mode column
 SELECT pid, hostname, http_url, http_port,
        datetime(heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
@@ -47,22 +47,22 @@ FROM daemon_lock;
 SQL
 
 # `http_url` populated → harness running. Hit /health to confirm.
-URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
+URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
 [ -n "$URL" ] && curl -fsS --max-time 2 "$URL/health" | jq .
 
 # Provider credential
-bun run swarm providers ls
+bun run fragua providers ls
 ```
 
 Common failures:
 
-- **No `daemon_lock` row** — no daemon running. Start: `bun run swarm harness` (default) or `bun run swarm daemon start --db <path>` (CI primitive).
+- **No `daemon_lock` row** — no daemon running. Start: `bun run fragua harness` (default) or `bun run fragua daemon start --db <path>` (CI primitive).
 - **Heartbeat > 30s old** — daemon dead. Runs stay `queued` until a new one claims the lock. Restart the harness.
-- **`http_url` NULL** — the daemon is up but the harness hasn't published the HTTP URL. Either the harness is mid-startup, or the user is on the CI-primitive path (`swarm daemon` + `swarm serve` separately) — in that case, fall back to `<cwd>/.swarm/serve.json` for discovery.
-- **Provider not credentialed** — `POST /runs` 400s with `code="provider_unavailable"`. Fix: `swarm providers add <provider>` or `swarm providers login <provider>`.
-- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model or switch the workflow's `model=` attr. For a *new* provider use the full wizard (`swarm providers add --custom`); when the provider already exists and you just want one more model, skip the wizard with `swarm providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`. Both write to `~/.swarm/swarm.db`'s `provider_config` table; the per-model verbs (`ls-models` / `add-model` / `rm-model` / `edit-model`) Ajv-validate on read and write so a typo refuses cleanly instead of poisoning the row.
+- **`http_url` NULL** — the daemon is up but the harness hasn't published the HTTP URL. Either the harness is mid-startup, or the user is on the CI-primitive path (`fragua daemon` + `fragua serve` separately) — in that case, fall back to `<cwd>/.fragua/serve.json` for discovery.
+- **Provider not credentialed** — `POST /runs` 400s with `code="provider_unavailable"`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`.
+- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model or switch the workflow's `model=` attr. For a *new* provider use the full wizard (`fragua providers add --custom`); when the provider already exists and you just want one more model, skip the wizard with `fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`. Both write to `~/.fragua/fragua.db`'s `provider_config` table; the per-model verbs (`ls-models` / `add-model` / `rm-model` / `edit-model`) Ajv-validate on read and write so a typo refuses cleanly instead of poisoning the row.
 
-The user should run `swarm harness` themselves — don't start it on their behalf without asking; the harness attaches to the current shell.
+The user should run `fragua harness` themselves — don't start it on their behalf without asking; the harness attaches to the current shell.
 
 ---
 
@@ -70,18 +70,18 @@ The user should run `swarm harness` themselves — don't start it on their behal
 
 Two equivalent surfaces. Use the CLI unless the task requires scripting.
 
-### CLI (`swarm run`)
+### CLI (`fragua run`)
 
 ```sh
-bun run swarm run <workflow> [trailing positional args]  \
+bun run fragua run <workflow> [trailing positional args]  \
   [--input name=value]   # typed input; repeat for several (gh-style)
   [--priority 10]        # higher runs first (queue tie-breaker)
   [--no-follow]          # enqueue and exit; print only the run id
   [--url http://…]       # override DB-based discovery
-  [--db path/to/db]      # pairs with `swarm serve --db` for parallel swarms
+  [--db path/to/db]      # pairs with `fragua serve --db` for parallel fraguas
 ```
 
-`<workflow>` resolves: bare name → `~/.swarm/workflows/<name>.yaml` first, then `<cwd>/.swarm/workflows/<name>.yaml`. Anything containing `/` or ending `.yaml` resolves as a literal path.
+`<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`. Anything containing `/` or ending `.yaml` resolves as a literal path.
 
 Trailing positional args are joined with spaces into `$ARGUMENTS`. `--input name=value` (repeatable) binds the typed inputs declared in the workflow's `inputs:` block, substituted as `${{ inputs.name }}`; a missing required input or an out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts print colorised as they stream.
 
@@ -90,7 +90,7 @@ Trailing positional args are joined with spaces into `$ARGUMENTS`. `--input name
 The CLI is a thin client over this. Use directly when you need arbitrary `routing`, scripted enqueue, or multiple runs in flight.
 
 ```sh
-URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
+URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
 
 # 1. Upload (idempotent; sha is content-addressed).
 SHA=$(curl -fsS -X POST "$URL/workflows" \
@@ -139,7 +139,7 @@ until curl -fsS "$URL/runs/$RUN" | jq -e '.runStatus | IN("completed","halted","
 done
 ```
 
-For running-but-silent runs: if the last event is `fact.node_started` with no follow-up after the node's `maxMs`, the supervisor watchdog should have fired — if it hasn't, the daemon is wedged. Jump to swarm-debug.
+For running-but-silent runs: if the last event is `fact.node_started` with no follow-up after the node's `maxMs`, the supervisor watchdog should have fired — if it hasn't, the daemon is wedged. Jump to fragua-debug.
 
 **`runStatus` lifecycle states beyond `running` / `completed`:**
 
@@ -148,7 +148,7 @@ For running-but-silent runs: if the last event is `fact.node_started` with no fo
 - `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` (operator paused), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
 - `paused_auto` — daemon owes a clock tick. Reason on `fact.run_paused.payload.reason`: `handler_retry` (node returned `outcome=retry`, engine scheduled a backoff), or `provider_retry` (auto-retryable provider transport error — 408/429/5xx/529/network). The run *frees its concurrency slot* during the wait. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_auto" }` followed by the same node re-dispatched. No operator action unless the timer never fires (then check daemon heartbeat); operators can short-circuit with `POST /runs/:id/resume`.
 - `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
-- `halted` / `cancelled` — terminal. swarm-debug §8 has the `reason` codes.
+- `halted` / `cancelled` — terminal. fragua-debug §8 has the `reason` codes.
 
 ---
 
@@ -176,7 +176,7 @@ A terminal run that left recoverable agent work sits in the inbox (`run_state.in
 | POST | Body | Returns (200) | Post-condition |
 |---|---|---|---|
 | `/runs/:id/accept` | `{}` | `{seq, sha, replayed, tailStaged}` | Replays the run's commits onto the operator's current branch (HEAD in the run's cwd) + stages the uncommitted tail to commit. 409 `conflict` (doesn't merge cleanly) / `dirty_tree` (uncommitted local changes) / `no_work` → resolve via revive. Inbox `pending → acted`. |
-| `/runs/:id/discard` | `{}` | `{seq, refs}` | Delete the run's `refs/swarm/{snapshots,heads}/<id>`. `pending → discarded` (terminal-terminal — later actions 409 `discarded`). |
+| `/runs/:id/discard` | `{}` | `{seq, refs}` | Delete the run's `refs/fragua/{snapshots,heads}/<id>`. `pending → discarded` (terminal-terminal — later actions 409 `discarded`). |
 
 Shared gate for all four: 404 unknown run · 409 `not_terminal` / `not_in_inbox` (clean run) / `discarded` / `no_worktree` (bare-cwd). `branch`/`commit`/`merge` compose freely (branch then later merge); `discard` is final.
 
@@ -228,7 +228,7 @@ Present the decision to the user — don't answer on their behalf unless they've
 
 ## 6. Quarantine resolution
 
-A run lands in `quarantined` when the startup sweep finds `fact.side_effect_intent` without a matching `_done`/`_failed`. The external effect may have succeeded, failed, or never reached the provider — swarm can't tell. Operator decides.
+A run lands in `quarantined` when the startup sweep finds `fact.side_effect_intent` without a matching `_done`/`_failed`. The external effect may have succeeded, failed, or never reached the provider — fragua can't tell. Operator decides.
 
 ```sh
 # The orphans:
@@ -254,24 +254,24 @@ A schedule fires a workflow on a fixed shorthand interval (`30m` / `1h` / `6h` /
 
 ```sh
 # Add
-bun run swarm schedule add analyze --every 1h
-bun run swarm schedule add introspect --every 6h --on-overlap skip
-bun run swarm schedule add change --every 24h --input "sweep deps" --no-fire-on-create
+bun run fragua schedule add analyze --every 1h
+bun run fragua schedule add introspect --every 6h --on-overlap skip
+bun run fragua schedule add change --every 24h --input "sweep deps" --no-fire-on-create
 
 # Inspect
-bun run swarm schedule list
-bun run swarm schedule list --cwd "$PWD"
+bun run fragua schedule list
+bun run fragua schedule list --cwd "$PWD"
 
 # Operate
-bun run swarm schedule pause sch_xxxxxx
-bun run swarm schedule resume sch_xxxxxx       # no catch-up; next_fire_at = now + interval
-bun run swarm schedule rm sch_xxxxxx
+bun run fragua schedule pause sch_xxxxxx
+bun run fragua schedule resume sch_xxxxxx       # no catch-up; next_fire_at = now + interval
+bun run fragua schedule rm sch_xxxxxx
 ```
 
 HTTP equivalents (mirrors the CLI 1:1):
 
 ```sh
-URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
+URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
 
 curl -fsS -X POST   "$URL/schedules"               -H 'content-type: application/json' \
    -d '{"workflow":"analyze","cwd":"'"$PWD"'","every":"1h"}'
@@ -290,7 +290,7 @@ When a schedule's workflow file is missing or fails to parse at fire time, the d
 - **Don't spam steer.** 5 steering intents in 30s usually means `cancel` + re-enqueue with a better prompt. The runtime halts with `reason:"abort_loop"` after 5 consecutive aborts without progress anyway.
 - **Don't tail SSE forever.** Open streams keep the server's goroutine budget busy; the CLI terminates on terminal facts.
 - **Don't write intents the user didn't ask for.** Steering / pausing / cancelling / unquarantining without explicit go-ahead risks losing work or changing external state. Present evidence, let the user decide.
-- **Don't assume one daemon.** Parallel swarms (different `--db`) coexist. `curl -fsS "$URL/health" | jq .storePath` echoes the path you're hitting.
+- **Don't assume one daemon.** Parallel fraguas (different `--db`) coexist. `curl -fsS "$URL/health" | jq .storePath` echoes the path you're hitting.
 - **Don't treat `queued` as broken.** No daemon = no dispatch. Check the heartbeat first.
 
 ---
@@ -299,11 +299,11 @@ When a schedule's workflow file is missing or fails to parse at fire time, the d
 
 ```sh
 # Discover
-URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
+URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
 curl -fsS "$URL/health" | jq .
 
 # Enqueue + watch
-bun run swarm run change --input="…"
+bun run fragua run change --input="…"
 
 # Manual enqueue
 SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
@@ -329,9 +329,9 @@ curl -fsS -X POST "$URL/runs/$RUN/accept"       -d '{}'                         
 curl -fsS -X POST "$URL/runs/$RUN/discard"      -d '{}'                                            -H 'content-type: application/json'
 
 # Schedules
-bun run swarm schedule add <workflow> --every 1h          # create + fire immediately
-bun run swarm schedule list [--cwd <dir>]                  # tabular health view
-bun run swarm schedule pause | resume | rm <sch_id>
+bun run fragua schedule add <workflow> --every 1h          # create + fire immediately
+bun run fragua schedule list [--cwd <dir>]                  # tabular health view
+bun run fragua schedule pause | resume | rm <sch_id>
 ```
 
-For diagnosis after terminal state, switch to swarm-debug. This skill drives runs forward; that one looks backward.
+For diagnosis after terminal state, switch to fragua-debug. This skill drives runs forward; that one looks backward.

@@ -1,23 +1,23 @@
 // GET /runs/:runId/tree           — flat {path,type}[] under the run's worktree.
 // GET /runs/:runId/blob?path=…    — raw text of one file inside the worktree.
 // GET /runs/:runId/changes        — git diff numstat + name-status from
-//                                   `diff_base_sha..refs/swarm/snapshots/<id>`.
+//                                   `diff_base_sha..refs/fragua/snapshots/<id>`.
 //
 // Lookup model:
 //
 //   1) `state = store.getState(runId)` → 404 when null. Same shape as
 //      `runs-routes.ts:GET /runs/:id` so the web treats unknown runs
 //      consistently.
-//   2) Worktree path: `<state.cwd>/.swarm/worktrees/<runId>` — the
+//   2) Worktree path: `<state.cwd>/.fragua/worktrees/<runId>` — the
 //      canonical layout `WorktreeProvisioner` writes (cli/daemon.ts:349,
-//      worktreesDir default ".swarm/worktrees"). `fs.access` the dir;
+//      worktreesDir default ".fragua/worktrees"). `fs.access` the dir;
 //      ENOENT → 410 Gone (`worktree_disposed`). 410 is the precise
 //      "this used to exist; it doesn't anymore" status, which lets the
 //      web branch on `error.status === 410` to keep the diff view but
 //      drop the live file tree.
 //   3) `/changes` + `/diff` don't need the worktree on disk — they run git
 //      against the run's project root (`state.cwd`) and read the run's
-//      snapshot tip `refs/swarm/snapshots/<runId>` (the terminal snapshot
+//      snapshot tip `refs/fragua/snapshots/<runId>` (the terminal snapshot
 //      commit, committed + dirty tree) against the honest base
 //      `run_state.diff_base_sha` (== `baseGitSha` unless the workflow
 //      relocated HEAD). The snapshotter writes the ref before dispose, so
@@ -31,7 +31,7 @@ import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { IEventStore, StoredEvent } from "@swarm/store";
+import type { IEventStore, StoredEvent } from "@fragua/store";
 import { Hono } from "hono";
 import type { ProjectTreeReader } from "../ports.ts";
 
@@ -149,7 +149,7 @@ async function resolveRunWorktree(store: IEventStore, runId: string): Promise<Wo
   const state = store.getState(runId);
   if (state == null) return { kind: "not_found" };
   if (state.cwd == null) return { kind: "disposed" };
-  const worktreePath = join(state.cwd, ".swarm", "worktrees", runId);
+  const worktreePath = join(state.cwd, ".fragua", "worktrees", runId);
   try {
     await access(worktreePath);
   } catch {
@@ -184,16 +184,16 @@ function pickBaseGitSha(projected: string | null, events: StoredEvent[]): string
   return null;
 }
 
-/** `git rev-parse refs/heads/swarm/runs/<runId>` from the run's project
+/** `git rev-parse refs/heads/fragua/runs/<runId>` from the run's project
  *  root. Returns null if the ref doesn't exist (run never had its
  *  worktree disposed with content) or git itself is unavailable. */
-/** Resolve the run's snapshot tip — `refs/swarm/snapshots/<runId>`, the
+/** Resolve the run's snapshot tip — `refs/fragua/snapshots/<runId>`, the
  *  terminal snapshot commit whose tree carries the run's committed + dirty
- *  state. Replaces the old dispose-preserved `swarm/runs/<runId>` branch.
+ *  state. Replaces the old dispose-preserved `fragua/runs/<runId>` branch.
  *  `null` for runs without a snapshot yet (live, or pre-terminal / bare-cwd). */
 async function resolveSnapshotTip(cwd: string, runId: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", `refs/swarm/snapshots/${runId}`], {
+    const { stdout } = await execFileAsync("git", ["rev-parse", `refs/fragua/snapshots/${runId}`], {
       cwd,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,

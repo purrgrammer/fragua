@@ -3,18 +3,18 @@
 // runs don't collide on a branch and clean runs leave zero porcelain residue.
 //
 // Layout:
-//   <repoRoot>/.swarm/worktrees/<run-id>/   ← the worktree (detached HEAD)
+//   <repoRoot>/.fragua/worktrees/<run-id>/   ← the worktree (detached HEAD)
 //
 // Full isolation: untracked/ignored paths (node_modules, .env, etc.) are NOT
 // shared with the main repo. If the project needs dependencies installed,
-// set `.swarm/config.yaml` `bootstrap` to the appropriate command
+// set `.fragua/config.yaml` `bootstrap` to the appropriate command
 // (e.g. `bun install --frozen-lockfile`, `pnpm install`, `pip install -r
 // requirements.txt`). The command runs inside the fresh worktree before the
 // first node executes; a non-zero exit fails the run.
 //
 // Dispose removes the worktree, nothing more. Recoverability is structural:
 // the snapshotter captures the run's tree (committed + uncommitted) and HEAD
-// into `refs/swarm/snapshots/<run-id>` + `refs/swarm/heads/<run-id>` at the
+// into `refs/fragua/snapshots/<run-id>` + `refs/fragua/heads/<run-id>` at the
 // terminal boundary, before dispose.
 
 import { spawn } from "node:child_process";
@@ -33,7 +33,7 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
   repoRoot?: string;
   /** Opaque session identifier — becomes the worktree dirname. */
   runId: string;
-  /** Directory under repoRoot where worktrees live. Default `.swarm/worktrees`. */
+  /** Directory under repoRoot where worktrees live. Default `.fragua/worktrees`. */
   worktreesDir?: string;
   /** Starting branch/commit for the worktree. Default current HEAD. */
   baseRef?: string;
@@ -74,7 +74,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   constructor(opts: WorktreeEnvironmentOptions) {
     this.repoRoot = resolve(opts.repoRoot ?? process.cwd());
     this.runId = opts.runId;
-    const dir = opts.worktreesDir ?? ".swarm/worktrees";
+    const dir = opts.worktreesDir ?? ".fragua/worktrees";
     this.worktreePath = isAbsolute(dir) ? join(dir, opts.runId) : join(this.repoRoot, dir, opts.runId);
     if (opts.baseRef !== undefined) this.baseRef = opts.baseRef;
     this.keepAfterDispose = opts.keepAfterDispose ?? false;
@@ -100,7 +100,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    * stamp it onto `fact.run_started`. */
   async init(): Promise<void> {
     if (this.initialized) return;
-    await mkdir(join(this.repoRoot, ".swarm", "worktrees"), { recursive: true });
+    await mkdir(join(this.repoRoot, ".fragua", "worktrees"), { recursive: true });
 
     const alreadyProvisioned = await this.isExistingWorktree();
     if (!alreadyProvisioned) {
@@ -183,7 +183,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    *
    * Recoverability is structural, not derived here: the snapshotter captures
    * the run's tree (incl. uncommitted dirt) and HEAD into
-   * `refs/swarm/snapshots/<runId>` + `refs/swarm/heads/<runId>` at the terminal
+   * `refs/fragua/snapshots/<runId>` + `refs/fragua/heads/<runId>` at the terminal
    * boundary, BEFORE dispose runs. The executor gates dispose on that
    * terminal snapshot succeeding, so a captured snapshot is the
    * precondition for removal.
@@ -205,7 +205,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   }
 
   /** The source repo root the worktree was provisioned from. Distinct
-   * from `cwd()` which points at the worktree under `.swarm/worktrees/`. */
+   * from `cwd()` which points at the worktree under `.fragua/worktrees/`. */
   projectCwd(): string {
     return this.repoRoot;
   }

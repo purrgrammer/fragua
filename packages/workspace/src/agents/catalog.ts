@@ -4,7 +4,7 @@
 // here — they materialise on spawn into the sub-agent's own system
 // prompt via `materialiseForChild`.
 
-import type { AgentDefinition } from "@swarm/types";
+import type { AgentDefinition } from "@fragua/types";
 
 const HEADER = "## Available sub-agents";
 const PREAMBLE = [

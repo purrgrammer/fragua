@@ -16,7 +16,7 @@
 // the panel renders a hint instead of collapsing — the layout stays
 // stable so the graph doesn't reflow on click.
 
-import { type Node as GraphNode, handlerOf } from "@swarm/core";
+import { type Node as GraphNode, handlerOf } from "@fragua/core";
 import type { NodeState } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { canRetry, showsLlm } from "../lib/node-metadata.ts";

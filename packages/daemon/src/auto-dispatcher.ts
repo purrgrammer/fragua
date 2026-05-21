@@ -4,10 +4,10 @@
 // after daemon start get their nodes registered on first dispatch. Each
 // node's spec is derived from its shape / `type` attribute.
 
-import type { Node, NodeAttrs } from "@swarm/core";
-import { InvalidDurationError, parseDurationMs, parseWorkflow } from "@swarm/core";
-import * as handler from "@swarm/core/handler";
-import type { IEventStore } from "@swarm/store";
+import type { Node, NodeAttrs } from "@fragua/core";
+import { InvalidDurationError, parseDurationMs, parseWorkflow } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
+import type { IEventStore } from "@fragua/store";
 import type { DispatcherResolver } from "./dispatch.ts";
 
 type HandlerSpec = handler.HandlerSpec;
@@ -63,7 +63,7 @@ export function resolveMaxMs(attrs: NodeAttrs, fallbackMs: number | undefined): 
   // Same 0→undefined collapse on the fallback path: config-level
   // `timeouts.llm: 0` is the unbounded sentinel just like the
   // node-attr form. Without this, a `timeouts.llm: 0` in
-  // `.swarm/config.yaml` resolves to a 0-ms abort timer.
+  // `.fragua/config.yaml` resolves to a 0-ms abort timer.
   return fallbackMs === 0 ? undefined : fallbackMs;
 }
 

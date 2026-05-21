@@ -1,11 +1,9 @@
-// Tool primitives for swarm. The ExecutionEnvironment contract now
-// lives in @swarm/core (see `types/execution.ts`) so HandlerContext
+// Tool primitives for fragua. The ExecutionEnvironment contract now
+// lives in @fragua/core (see `types/execution.ts`) so HandlerContext
 // can carry an env without inducing a core→workspace dependency. We
 // re-export the types here for legacy import paths.
 // See docs/SPEC.md §3.4.
 
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
-import type { TSchema } from "@sinclair/typebox";
 import type {
   ContextValue,
   DirEntry,
@@ -13,17 +11,19 @@ import type {
   ExecutionEnvironment,
   SummariseInput,
   SummariseOutput,
-} from "@swarm/core";
-import type { HttpClient } from "@swarm/core/handler";
-import type { AgentDefinition, Skill } from "@swarm/types";
+} from "@fragua/core";
+import type { HttpClient } from "@fragua/core/handler";
+import type { AgentDefinition, Skill } from "@fragua/types";
+import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { TSchema } from "@sinclair/typebox";
 
 export type { DirEntry, ExecResult, ExecutionEnvironment };
 
-/** Per-call swarm context passed through `ToolExecuteOptions.swarmContext`.
+/** Per-call fragua context passed through `ToolExecuteOptions.fraguaContext`.
  *  Built-in I/O tools (read / write / edit / bash) ignore this field —
  *  they run off `env` alone. The `agent` tool reads `spawnSubagent`,
  *  `skillCatalog`, and `agentCatalog` to drive sub-agent runs. */
-export interface SwarmToolContext {
+export interface FraguaToolContext {
   readonly runId: string;
   readonly nodeId: string;
   readonly iteration: number;
@@ -155,7 +155,7 @@ export interface TruncationPolicy {
  * (long-running bash, abortable network calls, streaming progress,
  * `agent` driving sub-agents) read what they need off the third
  * argument. Mirrors `AgentTool.execute`'s signal/onUpdate plumbing in
- * pi-agent-core, plus a swarm-specific `swarmContext` slot the `agent`
+ * pi-agent-core, plus a fragua-specific `fraguaContext` slot the `agent`
  * tool uses for sub-agent spawning. */
 export interface ToolExecuteOptions<TResult = ContextValue> {
   /** Cancellation signal. Tools should clean up promptly when fired. */
@@ -164,9 +164,9 @@ export interface ToolExecuteOptions<TResult = ContextValue> {
    * output (bash, long curls) call this with partial `ToolOutput`s
    * during execution; consumers can render a live preview. */
   onUpdate?: (partial: ToolOutput<TResult>) => void;
-  /** Swarm-side run context. Required by the `agent` tool to drive
+  /** Fragua-side run context. Required by the `agent` tool to drive
    * sub-agents; ignored by built-in I/O tools. */
-  swarmContext?: SwarmToolContext;
+  fraguaContext?: FraguaToolContext;
   /** Pi-agent-core tool-call id (e.g. `toolu_01ABC…`). The `agent` tool
    * stamps this onto the resulting `subagent.start` event so the web
    * UI can link a parent toolCall card to its in-flight sub-agent
@@ -174,7 +174,7 @@ export interface ToolExecuteOptions<TResult = ContextValue> {
   tool_call_id?: string;
 }
 
-/** Swarm tool definition. Names are bare identifiers — namespace
+/** Fragua tool definition. Names are bare identifiers — namespace
  * collisions are prevented by the registry rather than encoded in the
  * name. */
 export interface Tool<TArgs = unknown, TResult = ContextValue> {

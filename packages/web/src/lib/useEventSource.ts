@@ -23,7 +23,7 @@
 //      `readyState=1` and fires neither `error` nor `message`. We arm
 //      a timer on `open` / `message`; if it fires without re-arming,
 //      we close the dead ES manually and fall into the same backoff-
-//      reconnect path. The server emits `data: {"type":"swarm.ping"}`
+//      reconnect path. The server emits `data: {"type":"fragua.ping"}`
 //      every ~10s precisely so this timer sees signal on a healthy
 //      connection — ANY frame, real or ping, rearms it.
 

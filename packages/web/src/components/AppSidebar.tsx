@@ -1,4 +1,4 @@
-// Persistent left-rail navigation. Hosts the "swarm" wordmark in the
+// Persistent left-rail navigation. Hosts the "fragua" wordmark in the
 // header, two grouped nav sections (Operate / Build) in the content
 // slot, and the connection-status badge in the footer.
 //
@@ -76,7 +76,7 @@ export function AppSidebar(): JSX.Element {
           <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center text-sw-text">
             <Anvil className="size-5" />
           </span>
-          <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">swarm</span>
+          <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">fragua</span>
         </NavLink>
       </SidebarHeader>
       <SidebarContent>

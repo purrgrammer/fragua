@@ -63,7 +63,7 @@ function parentSpawningTwoAgents(): RunMessageRow[] {
         toolCallId: "call-A",
         toolName: "agent",
         content: [{ type: "text", text: "(subagent A still running)" }],
-        details: { swarm_tool: "agent", data: { subagent_id: "sidA" } },
+        details: { fragua_tool: "agent", data: { subagent_id: "sidA" } },
       } as never,
     },
     {
@@ -74,7 +74,7 @@ function parentSpawningTwoAgents(): RunMessageRow[] {
         toolCallId: "call-B",
         toolName: "agent",
         content: [{ type: "text", text: "(subagent B still running)" }],
-        details: { swarm_tool: "agent", data: { subagent_id: "sidB" } },
+        details: { fragua_tool: "agent", data: { subagent_id: "sidB" } },
       } as never,
     },
   ];

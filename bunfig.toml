@@ -3,7 +3,7 @@ exact = true
 frozenLockfile = false
 
 [test]
-# Stubs for Vite virtual modules consumed by @swarm/web components,
+# Stubs for Vite virtual modules consumed by @fragua/web components,
 # so `bun test ./packages` from the repo root can resolve them. The
 # per-package `packages/web/bunfig.toml` carries the same preload
 # for `cd packages/web && bun test`.

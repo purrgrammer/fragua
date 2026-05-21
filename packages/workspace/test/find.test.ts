@@ -10,7 +10,7 @@ describe("findTool", () => {
   let env: LocalEnvironment;
 
   beforeEach(async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-find-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-find-"));
     env = new LocalEnvironment({ cwd: scratch });
   });
 

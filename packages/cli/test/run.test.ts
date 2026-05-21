@@ -1,4 +1,4 @@
-// swarm run: full round-trip — CLI uploads the workflow, enqueues a run, streams
+// fragua run: full round-trip — CLI uploads the workflow, enqueues a run, streams
 // events until terminal. Spins up a real server + a foreground daemon
 // fiber so the SSE stream actually progresses.
 
@@ -6,10 +6,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as handler from "@swarm/core/handler";
-import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@swarm/daemon";
-import { createServer } from "@swarm/server";
-import { SqliteStore } from "@swarm/store";
+import * as handler from "@fragua/core/handler";
+import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@fragua/daemon";
+import { createServer } from "@fragua/server";
+import { SqliteStore } from "@fragua/store";
 import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
 
 interface Rig {
@@ -30,10 +30,10 @@ afterEach(() => {
 });
 
 async function rig(): Promise<Rig> {
-  const dir = mkdtempSync(join(tmpdir(), "swarm-run-"));
+  const dir = mkdtempSync(join(tmpdir(), "fragua-run-"));
   tmps.push(dir);
-  mkdirSync(join(dir, ".swarm"), { recursive: true });
-  const store = new SqliteStore({ path: join(dir, ".swarm/swarm.db") });
+  mkdirSync(join(dir, ".fragua"), { recursive: true });
+  const store = new SqliteStore({ path: join(dir, ".fragua/fragua.db") });
 
   const dispatcher = new Dispatcher();
   dispatcher.setResolver(autoDispatcherResolver({ store }));
@@ -77,11 +77,11 @@ async function rig(): Promise<Rig> {
   };
 }
 
-describe("swarm run", () => {
+describe("fragua run", () => {
   test("round-trip: YAML file → upload → enqueue → stream → completed", async () => {
     const r = await rig();
     try {
-      const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
+      const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
       tmps.push(workflowDir);
       const yamlPath = join(workflowDir, "echo.yaml");
       writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
@@ -107,7 +107,7 @@ describe("swarm run", () => {
   test("--no-follow exits immediately after enqueue", async () => {
     const r = await rig();
     try {
-      const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
+      const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
       tmps.push(workflowDir);
       const yamlPath = join(workflowDir, "echo.yaml");
       writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
@@ -135,7 +135,7 @@ describe("swarm run", () => {
       return originalFetch(input, init);
     }) as typeof fetch;
     try {
-      const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
+      const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
       tmps.push(workflowDir);
       const yamlPath = join(workflowDir, "echo.yaml");
       writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
@@ -172,7 +172,7 @@ describe("resolveInputArgs", () => {
   });
 
   test("@path sources the value verbatim from a file", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "swarm-input-"));
+    const dir = mkdtempSync(join(tmpdir(), "fragua-input-"));
     tmps.push(dir);
     const specPath = join(dir, "spec.md");
     writeFileSync(specPath, "add a touch tool\nwith two lines\n");

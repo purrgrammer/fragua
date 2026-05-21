@@ -74,7 +74,7 @@ describe("ProjectDetail · Config tab", () => {
   useDom();
   afterEach(() => cleanup());
 
-  test("renders summary from .swarm/config.yaml", async () => {
+  test("renders summary from .fragua/config.yaml", async () => {
     installFetchWithConfig({
       yamlConfig: `bootstrap: "bun install --frozen-lockfile"\ndefaults:\n  provider: anthropic\n`,
       jsoncConfig: null,
@@ -87,7 +87,7 @@ describe("ProjectDetail · Config tab", () => {
     expect(llmRow.textContent).toContain("anthropic");
   });
 
-  test("falls back to .swarm/config.jsonc when YAML is absent (legacy)", async () => {
+  test("falls back to .fragua/config.jsonc when YAML is absent (legacy)", async () => {
     installFetchWithConfig({
       yamlConfig: null,
       jsoncConfig: `{ "bootstrap": "legacy-cmd" }`,

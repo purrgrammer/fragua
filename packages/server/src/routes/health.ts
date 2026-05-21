@@ -1,8 +1,8 @@
 // GET /health — liveness probe.
 //
 // Shape:
-//   { ok: true }                                 — plain `swarm serve` (no daemon)
-//   { ok: true, daemon: {...} }                  — running as the swarm daemon
+//   { ok: true }                                 — plain `fragua serve` (no daemon)
+//   { ok: true, daemon: {...} }                  — running as the fragua daemon
 //
 // The `daemon` key lets the web UI distinguish "can I enqueue jobs?"
 // from "view-only archive". Keys:
@@ -20,15 +20,15 @@
 //
 // NOTE: we intentionally do NOT bake the daemon info into the route
 // factory itself — the daemon injects a small provider callback, and
-// the standalone `swarm serve` path leaves it unset. That keeps
+// the standalone `fragua serve` path leaves it unset. That keeps
 // `createServer()` free of daemon lifecycle concerns.
 
-import type { IEventStore } from "@swarm/store";
+import type { IEventStore } from "@fragua/store";
 import { Hono } from "hono";
 import { reapStaleDaemon } from "../reaper.ts";
 
 /** Daemons heartbeat at ~10s; treat 30s without one as dead. Matches
- * `DEFAULT_LOCK_TTL_MS` in `@swarm/daemon`. */
+ * `DEFAULT_LOCK_TTL_MS` in `@fragua/daemon`. */
 export const DAEMON_LIVENESS_TTL_MS = 30_000;
 
 export interface DaemonInfoFromStoreOptions {
@@ -66,7 +66,7 @@ export function daemonInfoFromStore(opts: DaemonInfoFromStoreOptions): () => Hea
     if (now() - lock.heartbeatAt > ttl) {
       // Stale heartbeat: the daemon died without releasing. Sweep any
       // runs it had in flight and clear the lock row so the next
-      // `swarm daemon` doesn't have to wait out the TTL. Idempotent —
+      // `fragua daemon` doesn't have to wait out the TTL. Idempotent —
       // safe to fire on every /health request when the lock is stale.
       reapStaleDaemon({ store: opts.store, ttlMs: ttl, now });
       throw new Error("daemon heartbeat stale");

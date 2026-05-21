@@ -7,7 +7,7 @@
 //
 // `defaultDisabled: true` keeps `agent` out of every node's tool set
 // unless the workflow opts in via `allowed_tools="\u2026,agent"`. The host
-// (the daemon's per-call llm context) wires `swarmContext.spawnSubagent`;
+// (the daemon's per-call llm context) wires `fraguaContext.spawnSubagent`;
 // without it the tool returns an `is_error` so the LLM sees a clear
 // "host doesn't support sub-agents" signal rather than a silent stall.
 
@@ -20,7 +20,7 @@ import type { SubagentSpec, Tool } from "./types.ts";
 export interface AgentToolArgs {
   /** Optional resolved-profile name. When set, the named def's fields
    *  fill in unspecified slots; inline params on the same call
-   *  override the def. Resolved against `swarmContext.agentCatalog`. */
+   *  override the def. Resolved against `fraguaContext.agentCatalog`. */
   agent?: string;
   name?: string;
   prompt: string;
@@ -95,10 +95,10 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
   defaultDisabled: true,
   truncation: { max_chars: 50_000, mode: "tail" },
   async execute(args, _env, opts) {
-    const ctx = opts?.swarmContext;
+    const ctx = opts?.fraguaContext;
     if (ctx?.spawnSubagent == null) {
       return {
-        text: "agent tool requires host wiring \u2014 swarmContext.spawnSubagent is missing. This usually means the runtime didn't supply a sub-agent factory (tests often skip it).",
+        text: "agent tool requires host wiring \u2014 fraguaContext.spawnSubagent is missing. This usually means the runtime didn't supply a sub-agent factory (tests often skip it).",
         is_error: true,
       };
     }

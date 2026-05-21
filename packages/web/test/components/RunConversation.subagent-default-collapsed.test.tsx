@@ -53,7 +53,7 @@ function parentAgentToolCallWithPersistedSubagent(): RunMessageRow[] {
         toolCallId: "call-A",
         toolName: "agent",
         content: [{ type: "text", text: "done" }],
-        details: { swarm_tool: "agent", data: { subagent_id: "sidA" } },
+        details: { fragua_tool: "agent", data: { subagent_id: "sidA" } },
       } as never,
     },
     {

@@ -1,9 +1,9 @@
-// swarm store — public types. Mirrors §4 of docs/ARCHITECTURE.md.
+// fragua store — public types. Mirrors §4 of docs/ARCHITECTURE.md.
 //
 // The typed event unions (IntentEvent, FactEvent, RunStatus, etc.) live
-// in @swarm/types so the web client can import them without pulling in
+// in @fragua/types so the web client can import them without pulling in
 // the SQLite-backed store. We re-export them here so existing daemon /
-// server callers keep their `from "@swarm/store"` imports working.
+// server callers keep their `from "@fragua/store"` imports working.
 
 import type {
   AgentMessage,
@@ -22,7 +22,7 @@ import type {
   PauseReason as PauseReasonFromTypes,
   QuarantineReason as QuarantineReasonFromTypes,
   RunStatus as RunStatusFromTypes,
-} from "@swarm/types";
+} from "@fragua/types";
 import type {
   AnalyticsWindow,
   BucketedWindow,
@@ -70,8 +70,8 @@ export type {
   QuarantineReason,
   RawEvent,
   RunStatus,
-} from "@swarm/types";
-export { ALL_DAEMON_EVENT_TYPES, AUTO_WAKE_PAUSE_REASONS } from "@swarm/types";
+} from "@fragua/types";
+export { ALL_DAEMON_EVENT_TYPES, AUTO_WAKE_PAUSE_REASONS } from "@fragua/types";
 export type {
   AnalyticsWindow,
   BucketedWindow,
@@ -238,8 +238,8 @@ export interface RunState {
    * for path-based or ephemeral runs. */
   workflowName: string | null;
   /** How the workflow argument resolved. `'global'` → matched
-   * `~/.swarm/workflows/<name>.yaml`. `'local'` → matched
-   * `<cwd>/.swarm/workflows/<name>.yaml` (fallback when global misses).
+   * `~/.fragua/workflows/<name>.yaml`. `'local'` → matched
+   * `<cwd>/.fragua/workflows/<name>.yaml` (fallback when global misses).
    * `'path'` → caller passed an explicit path. `'ephemeral'` →
    * enqueued via the API without filesystem context. `null` on legacy
    * rows pre-globalization. */
@@ -271,11 +271,11 @@ export interface ObservabilityEvent {
 }
 
 /** Re-export: `AnyEvent["type"]` — preserved as `EventType` for
- * @swarm/store callers that already imported it under that name. New
- * code should prefer `AnyEventType` from @swarm/types. */
-export type EventType = import("@swarm/types").AnyEventType;
+ * @fragua/store callers that already imported it under that name. New
+ * code should prefer `AnyEventType` from @fragua/types. */
+export type EventType = import("@fragua/types").AnyEventType;
 
-export { FEED_EVENT_KINDS } from "@swarm/types";
+export { FEED_EVENT_KINDS } from "@fragua/types";
 
 /**
  * What the store actually gives you back from the `events` table. The
@@ -309,7 +309,7 @@ export interface DaemonEventRow {
 
 // ─────────────── Messages and artifacts ───────────────
 
-// `MessageRole` is re-exported from @swarm/types at the top of this file.
+// `MessageRole` is re-exported from @fragua/types at the top of this file.
 
 export interface Message {
   runId: string;
@@ -351,8 +351,8 @@ export interface DaemonLockRow {
   hostname: string;
   startedAt: number;
   heartbeatAt: number;
-  /** HTTP URL the harness or `swarm serve` is listening on. `null` for
-   * `swarm daemon --db <path>` runs that don't expose HTTP. */
+  /** HTTP URL the harness or `fragua serve` is listening on. `null` for
+   * `fragua daemon --db <path>` runs that don't expose HTTP. */
   httpUrl: string | null;
   httpPort: number | null;
   harnessVersion: string | null;
@@ -513,8 +513,8 @@ export interface EnqueueRunParams {
    * on `run_state.workflow_name`. Omitted for path-based runs. */
   workflowName?: string;
   /** How the workflow argument resolved. `'global'` matched
-   * `~/.swarm/workflows/<name>.yaml`; `'local'` fell back to
-   * `<cwd>/.swarm/workflows/<name>.yaml`; `'path'` for explicit paths;
+   * `~/.fragua/workflows/<name>.yaml`; `'local'` fell back to
+   * `<cwd>/.fragua/workflows/<name>.yaml`; `'path'` for explicit paths;
    * `'ephemeral'` for runs enqueued via the API without filesystem
    * context. */
   workflowScope?: "global" | "local" | "path" | "ephemeral";
@@ -522,7 +522,7 @@ export interface EnqueueRunParams {
    * only; replay still keys on `workflowSha`. */
   workflowPath?: string;
   /** Schedule lineage — the id of the schedule that fired this run.
-   * Set only by the daemon's schedule-dispatcher; manual `swarm run`
+   * Set only by the daemon's schedule-dispatcher; manual `fragua run`
    * leaves it undefined. Surfaced on `run_state.schedule_id`. Schedule
    * deletion does NOT cascade here; lineage outlives the schedule. */
   scheduleId?: string;
@@ -771,7 +771,7 @@ export interface IEventReader {
    * Terminal runs in `cwd` whose worktree snapshot refs are eligible for
    * GC: settled status, older than `cutoff` (ms epoch), and not awaiting an
    * operator decision (`inbox_status` not `pending`). Drives
-   * `swarm gc --snapshots`.
+   * `fragua gc --snapshots`.
    */
   getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[];
   /**
@@ -1008,7 +1008,7 @@ export interface IDaemonCoordinator {
    */
   recordScheduleSkipped(scheduleId: string, now: number): void;
   /** Return the last `limit` runs fired by `scheduleId`, newest-first.
-   *  Powers the health stripe in `swarm schedule list`. */
+   *  Powers the health stripe in `fragua schedule list`. */
   getScheduleRuns(scheduleId: string, limit: number): Array<{ runId: string; status: string; enqueuedAt: number }>;
 }
 
@@ -1053,7 +1053,7 @@ export interface IProviderCredentialStore {
  * One row per `provider` id; the JSON `config` body carries the
  * per-provider definition (baseUrl, headers, compat, models,
  * modelOverrides) — the `ProviderConfigSchema` shape from
- * `@swarm/agent` minus the `apiKey` field. Credentials always come
+ * `@fragua/agent` minus the `apiKey` field. Credentials always come
  * from `provider_credentials`. Per-row Ajv validation lives in
  * `ModelRegistry.loadCustomModels` so one corrupt provider can be
  * skipped without poisoning sibling rows.

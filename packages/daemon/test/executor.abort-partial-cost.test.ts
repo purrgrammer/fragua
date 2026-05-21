@@ -11,7 +11,7 @@
 // when the handler aborts mid-turn, those closures never reach
 // the executor and the resulting fact.node_aborted carries
 // partialTokens=0 / partialCostUsd=0. Real-world consequence on
-// ~/.swarm/swarm.db run 01kqwzpt0hyfws0a0j: 423 cost.recorded
+// ~/.fragua/fragua.db run 01kqwzpt0hyfws0a0j: 423 cost.recorded
 // events totalling ~$16.79, fact.node_aborted rows on the
 // orchestrate-node node show partialCostUsd=0, run_state.metrics
 // .totalCostUsd=0, budget_usd never trips.

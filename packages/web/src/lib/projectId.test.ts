@@ -3,12 +3,12 @@ import { decodeProjectId, encodeProjectId } from "./projectId.ts";
 
 describe("projectId encode/decode", () => {
   test("round-trips a typical absolute path", () => {
-    const cwd = "/Users/me/work/swarm";
+    const cwd = "/Users/me/work/fragua";
     expect(decodeProjectId(encodeProjectId(cwd))).toBe(cwd);
   });
 
   test("encoded form contains no URL-reserved characters", () => {
-    const enc = encodeProjectId("/Users/me/work/swarm");
+    const enc = encodeProjectId("/Users/me/work/fragua");
     expect(enc).not.toContain("/");
     expect(enc).not.toContain("+");
     expect(enc).not.toContain("=");

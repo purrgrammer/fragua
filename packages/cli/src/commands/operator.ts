@@ -1,19 +1,19 @@
-// `swarm runs {accept,discard,diff}` — operator post-run primitives over the
+// `fragua runs {accept,discard,diff}` — operator post-run primitives over the
 // HTTP surface.
 //
 // accept/discard POST the post-terminal operator-action intents the daemon
 // sweep folds into git mutations (accept replays the run's commits onto the
 // operator's current branch + stages the tail; discard drops the refs).
 // `diff` is a read over the snapshot endpoints. Harness discovery mirrors
-// `swarm run`:
-//   1. --url   2. <cwd>/.swarm/serve.json (or <db-dir>/serve.json with --db)
-//   3. ~/.swarm/swarm.db daemon_lock.http_url   4. http://localhost:3000
+// `fragua run`:
+//   1. --url   2. <cwd>/.fragua/serve.json (or <db-dir>/serve.json with --db)
+//   3. ~/.fragua/fragua.db daemon_lock.http_url   4. http://localhost:3000
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
 interface DiscoveryOpts {
@@ -49,8 +49,8 @@ async function resolveBaseUrl(opts: DiscoveryOpts): Promise<string> {
   const cwd = opts.cwd ?? process.cwd();
   const serveJsonPath = opts.dbPath
     ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
-    : resolve(cwd, ".swarm/serve.json");
-  const harnessDbPath = resolve(homedir(), ".swarm/swarm.db");
+    : resolve(cwd, ".fragua/serve.json");
+  const harnessDbPath = resolve(homedir(), ".fragua/fragua.db");
   const url =
     opts.url ??
     (await discoverServerUrl(serveJsonPath)) ??
@@ -182,7 +182,7 @@ export async function inboxCommand(opts: InboxOptions): Promise<number> {
     console.log(chalk.bold(`NEEDS INPUT (${blocked.length})`));
     for (const r of blocked) {
       console.log(
-        `  ${chalk.cyan(r.runId)}  ${titleOf(r)} ${chalk.yellow(`· ${r.runStatus ?? "?"}`)} ${chalk.dim(`→ swarm runs ${blockedVerb(r.runStatus)}`)}`,
+        `  ${chalk.cyan(r.runId)}  ${titleOf(r)} ${chalk.yellow(`· ${r.runStatus ?? "?"}`)} ${chalk.dim(`→ fragua runs ${blockedVerb(r.runStatus)}`)}`,
       );
     }
   }
@@ -190,7 +190,7 @@ export async function inboxCommand(opts: InboxOptions): Promise<number> {
     console.log(chalk.bold(`READY TO LAND (${ready.length})`));
     for (const r of ready) {
       console.log(
-        `  ${chalk.cyan(r.runId)}  ${titleOf(r)}${changeBadge(r)} ${chalk.dim("→ swarm runs accept|discard")}`,
+        `  ${chalk.cyan(r.runId)}  ${titleOf(r)}${changeBadge(r)} ${chalk.dim("→ fragua runs accept|discard")}`,
       );
     }
   }

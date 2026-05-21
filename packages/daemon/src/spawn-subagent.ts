@@ -22,13 +22,13 @@
 // isn't a run or a node.
 
 import { createHash } from "node:crypto";
+import { materialiseForChild } from "@fragua/agent";
+import type { EventType, ExecutionEnvironment, LlmBackend, Node, Outcome } from "@fragua/core";
+import { fail } from "@fragua/core";
+import type { IEventStore } from "@fragua/store";
+import type { AnyTool, Skill, SubagentResult, SubagentSpec, ToolRegistry } from "@fragua/workspace";
+import { stripAgentTool } from "@fragua/workspace";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { materialiseForChild } from "@swarm/agent";
-import type { EventType, ExecutionEnvironment, LlmBackend, Node, Outcome } from "@swarm/core";
-import { fail } from "@swarm/core";
-import type { IEventStore } from "@swarm/store";
-import type { AnyTool, Skill, SubagentResult, SubagentSpec, ToolRegistry } from "@swarm/workspace";
-import { stripAgentTool } from "@swarm/workspace";
 
 export interface SpawnSubagentDeps {
   store: IEventStore;
@@ -50,7 +50,7 @@ export interface SpawnSubagentParentCtx {
   parentContextBlock?: string;
   /** Per-run isolation facts (cwd, bootstrap, runId) the parent saw.
    *  Sub-agents inherit verbatim — same worktree, same bootstrap. */
-  parentRunEnv?: import("@swarm/agent").RunEnvironment;
+  parentRunEnv?: import("@fragua/agent").RunEnvironment;
   parentSkills: readonly Skill[];
   /** Provider/model the parent llm call resolved to. The child
    *  inherits both verbatim — no per-call model selection from the LLM. */
@@ -78,7 +78,7 @@ const SUBAGENT_NODE_PREFIX = "__subagent:";
 
 /** Build a `spawnSubagent` closure scoped to one parent llm call.
  *  Wired by the daemon into `PiLlmBackend.spawnSubagentFactory`
- *  so `swarmContext.spawnSubagent` resolves per call. */
+ *  so `fraguaContext.spawnSubagent` resolves per call. */
 export function makeSpawnSubagent(
   deps: SpawnSubagentDeps,
   parentCtx: SpawnSubagentParentCtx,
@@ -304,7 +304,7 @@ export function makeSpawnSubagent(
     // name from `agent({ agent: <def-name> })`. Both can coexist
     // (`agent({ agent: "reviewer", name: "reviewer-1" })`), either
     // alone, or neither (a bare `agent({ prompt })` spawn). See
-    // SubagentStartData in @swarm/core/types/events for the schema.
+    // SubagentStartData in @fragua/core/types/events for the schema.
     //
     // Skipped on resume (content-addressed pending-resume match OR
     // crash-resilience rehydrate): the original `subagent.start` is

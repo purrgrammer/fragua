@@ -1,6 +1,6 @@
 // Workflow-coverage smoke test.
 //
-// Every `.yaml` file in the repo's `.swarm/workflows/` directory parses
+// Every `.yaml` file in the repo's `.fragua/workflows/` directory parses
 // AND validates cleanly. A broken example is broken onboarding.
 
 import { describe, expect, test } from "bun:test";
@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseWorkflow, validate } from "../src/index.ts";
 
-const WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "..", ".swarm", "workflows");
+const WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "..", ".fragua", "workflows");
 
 function listWorkflowFiles(): string[] {
   return readdirSync(WORKFLOWS_DIR)
@@ -16,7 +16,7 @@ function listWorkflowFiles(): string[] {
     .map((f) => join(WORKFLOWS_DIR, f));
 }
 
-describe(".swarm/workflows/*.yaml — coverage + validity", () => {
+describe(".fragua/workflows/*.yaml — coverage + validity", () => {
   const files = listWorkflowFiles();
 
   test("repo ships at least one workflow", () => {

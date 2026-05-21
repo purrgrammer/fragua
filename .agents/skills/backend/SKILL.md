@@ -14,7 +14,7 @@ Foundational patterns only. If a situation isn't covered here, derive it from th
 ## Principles (earlier wins on conflict)
 
 1. **Aggregations belong in SQL.** Sums, counts, max/min, grouped totals — never `.reduce()` over `getEvents(runId, { limit: BIG })`. SQL has the planner, the indexes, and one source of truth. In-memory folding is only correct when the projection is fundamentally non-aggregatable (a list of message blocks, a finalText built from streaming deltas, etc.). When you see a TypeScript loop accumulating a number, replace it with a query.
-2. **SQL lives in `<domain>-queries.ts`, not in handlers.** Every named query gets a function in the matching `packages/store/src/<domain>-queries.ts` (one of: `analytics`, `artifact`, `daemon`, `event`, `message`, `provider-config`, `provider-credentials`, `run-state`, `schedule`, `workflow`). Route handlers and adapters in `packages/server` import named functions from `@swarm/store`; they never inline `db.prepare("SELECT …")`. The queries files are the audit point for what the database is asked, and the only place a column rename has to land.
+2. **SQL lives in `<domain>-queries.ts`, not in handlers.** Every named query gets a function in the matching `packages/store/src/<domain>-queries.ts` (one of: `analytics`, `artifact`, `daemon`, `event`, `message`, `provider-config`, `provider-credentials`, `run-state`, `schedule`, `workflow`). Route handlers and adapters in `packages/server` import named functions from `@fragua/store`; they never inline `db.prepare("SELECT …")`. The queries files are the audit point for what the database is asked, and the only place a column rename has to land.
 3. **Reducers are pure.** `applyFact` and `eventsToSteps` style folders take inputs, return outputs, and never read clocks, fetch the network, or mutate globals. Same input ⇒ same output, every time. They're called from tests AND production with the same contract.
 4. **The store guards its own invariants.** `IEventStore` enforces seq monotonicity, the 4KB payload cap, expected-version concurrency, and CASCADE on run deletion. Callers don't reimplement those checks. If you need a new invariant, push it into `store.ts` (not into a route handler).
 5. **Observability events skip the reducer.** `appendObservabilityEvents` (`agent.*`, `llm.*`, `tool.*`, `cost.recorded`) shares the seq space but does NOT bump `run_state.version` and does NOT require `expectedVersion`. Handlers can emit them mid-step without racing the terminal `appendFact`.
@@ -61,7 +61,7 @@ packages/store/src/
   schedule-queries.ts     ← schedule + run-of-schedule reads
   workflow-queries.ts     ← workflow registry reads
 packages/server/src/store/
-  routes.ts               ← Hono handlers — never embed SQL, import from @swarm/store
+  routes.ts               ← Hono handlers — never embed SQL, import from @fragua/store
   runs-routes.ts          ← Hono handlers — never embed SQL
   runs-adapter.ts         ← projects rows into RunSummary / RunDetail
   steps.ts                ← reducer for non-aggregatable step fields
@@ -188,7 +188,7 @@ A useful sanity check: if your TS code calls `.reduce()` on an array longer than
 
 ### Routes don't touch `db`
 
-Hono routes get a `store: IEventStore` (or a higher-level adapter). They call store methods and adapter functions. They do not import `bun:sqlite`. If a new query is needed, it goes in the matching `packages/store/src/<domain>-queries.ts` and is imported from `@swarm/store`. Intrinsic store invariants (seq monotonicity, payload cap, expectedVersion) live in `store.ts` itself.
+Hono routes get a `store: IEventStore` (or a higher-level adapter). They call store methods and adapter functions. They do not import `bun:sqlite`. If a new query is needed, it goes in the matching `packages/store/src/<domain>-queries.ts` and is imported from `@fragua/store`. Intrinsic store invariants (seq monotonicity, payload cap, expectedVersion) live in `store.ts` itself.
 
 ### Schema is `STRICT`
 
@@ -224,14 +224,14 @@ app.get("/runs/:id/steps", (c) => {
 
 - One existence check, one delegation. The route doesn't know the schema.
 - 404 payload uses `{ error, code, details }` — that's the project's error envelope.
-- Aggregations go through the matching `<domain>-queries.ts` in `@swarm/store`; non-aggregations go through an adapter (`runs-adapter.ts`, `runStateToSummary`, etc.).
+- Aggregations go through the matching `<domain>-queries.ts` in `@fragua/store`; non-aggregations go through an adapter (`runs-adapter.ts`, `runStateToSummary`, etc.).
 
 ---
 
 ## Anti-patterns (caught in review)
 
 - `let total = 0; for (const e of events) total += e.payload.cost_usd` — folding what SQL can sum.
-- `db.prepare("SELECT …").all()` inside a route handler or adapter — SQL outside a `<domain>-queries.ts` in `@swarm/store`.
+- `db.prepare("SELECT …").all()` inside a route handler or adapter — SQL outside a `<domain>-queries.ts` in `@fragua/store`.
 - `getEvents(runId, { limit: 5000 })` to "save memory" on a derivation that needs all events — silent data loss.
 - A reducer that calls `Date.now()`, `crypto.randomUUID()`, `fetch()`, or imports `process` — not pure.
 - A new event type that emits via `appendFact` but doesn't change `run_state.version` — picked the wrong lane.
@@ -247,4 +247,4 @@ app.get("/runs/:id/steps", (c) => {
 - [ ] Routes are thin — no SQL, no large reducers inline.
 - [ ] If you added an observability field that consumers depend on, you also added it to the truncation marker.
 - [ ] If you added a fact event type, you bumped reducer logic AND the event taxonomy in `packages/types`.
-- [ ] `bun run --filter='@swarm/<pkg>' typecheck` clean. Schema changes have a migration.
+- [ ] `bun run --filter='@fragua/<pkg>' typecheck` clean. Schema changes have a migration.

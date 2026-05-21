@@ -25,10 +25,10 @@ describe("captureSnapshot", () => {
   let repo: string;
 
   beforeEach(async () => {
-    repo = await mkdtemp(join(tmpdir(), "swarm-snap-"));
+    repo = await mkdtemp(join(tmpdir(), "fragua-snap-"));
     g(repo, "init", "-q");
-    g(repo, "config", "user.email", "test@swarm.local");
-    g(repo, "config", "user.name", "swarm test");
+    g(repo, "config", "user.email", "test@fragua.local");
+    g(repo, "config", "user.name", "fragua test");
     g(repo, "config", "commit.gpgsign", "false");
     await writeFile(join(repo, "a.txt"), "A\n");
     g(repo, "add", "-A");
@@ -49,11 +49,11 @@ describe("captureSnapshot", () => {
     expect(res.uncommitted).toBeNull();
     expect(res.diffBaseSha).toBe(base);
     // tip ref points at the snapshot commit; no heads ref since HEAD == base.
-    expect(g(repo, "rev-parse", "refs/swarm/snapshots/r1")).toBe(res.commitSha);
-    expect(gStatus(repo, "rev-parse", "--verify", "refs/swarm/heads/r1")).not.toBe(0);
+    expect(g(repo, "rev-parse", "refs/fragua/snapshots/r1")).toBe(res.commitSha);
+    expect(gStatus(repo, "rev-parse", "--verify", "refs/fragua/heads/r1")).not.toBe(0);
     // real index + HEAD untouched, sentinel cleaned up.
     expect(g(repo, "rev-parse", "HEAD")).toBe(base);
-    expect(gStatus(repo, "cat-file", "-e", ":swarm-index")).not.toBe(0);
+    expect(gStatus(repo, "cat-file", "-e", ":fragua-index")).not.toBe(0);
   });
 
   test("uncommitted dirt → uncommitted delta; snapshot tree captures untracked files", async () => {
@@ -83,7 +83,7 @@ describe("captureSnapshot", () => {
     expect(res.headSha).toBe(head);
     expect(res.committed).not.toBeNull();
     expect(res.diffBaseSha).toBe(base); // base is an ancestor of head
-    expect(g(repo, "rev-parse", "refs/swarm/heads/r3")).toBe(head);
+    expect(g(repo, "rev-parse", "refs/fragua/heads/r3")).toBe(head);
   });
 
   test("HEAD relocation (checkout a divergent branch) → diff base is the merge-base", async () => {

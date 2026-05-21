@@ -43,7 +43,7 @@ export const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus
 interface ReasonMeta {
   Icon: typeof Pause;
   label: string;
-  /** Swarm state-accent class for the leading icon. The matching attention
+  /** Fragua state-accent class for the leading icon. The matching attention
    * border on the row uses the same accent via the `--sw-accent-*` vars. */
   iconClass: string;
   borderVar: string;

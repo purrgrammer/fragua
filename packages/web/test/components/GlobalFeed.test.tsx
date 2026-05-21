@@ -1,7 +1,7 @@
 // Pure-function tests for GlobalFeed's payload-aware verb resolver.
 
 import { describe, expect, test } from "bun:test";
-import type { FeedEvent } from "@swarm/types";
+import type { FeedEvent } from "@fragua/types";
 import { isFeedRowHidden, metaForEvent } from "../../src/components/GlobalFeed.tsx";
 
 function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {

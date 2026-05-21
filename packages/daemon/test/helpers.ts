@@ -1,5 +1,5 @@
-import * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
+import * as handler from "@fragua/core/handler";
+import { SqliteStore } from "@fragua/store";
 import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 

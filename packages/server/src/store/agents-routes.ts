@@ -9,9 +9,9 @@
 // ship `reviewer.md`), so the absolute file path is the canonical
 // handle.
 
-import type { IEventStore } from "@swarm/store";
-import type { AgentDefinition } from "@swarm/types";
-import { discoverAgents } from "@swarm/workspace";
+import type { IEventStore } from "@fragua/store";
+import type { AgentDefinition } from "@fragua/types";
+import { discoverAgents } from "@fragua/workspace";
 import { Hono } from "hono";
 
 export interface AgentsRoutesOpts {

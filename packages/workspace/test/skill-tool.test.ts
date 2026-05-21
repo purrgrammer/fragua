@@ -3,10 +3,10 @@
 // (rides on tool.execution_end.data.result.details.data).
 
 import { describe, expect, test } from "bun:test";
-import type { ExecutionEnvironment } from "@swarm/core";
+import type { ExecutionEnvironment } from "@fragua/core";
 import { skillTool } from "../src/skill-tool.ts";
 import type { Skill } from "../src/skills/types.ts";
-import type { SwarmToolContext } from "../src/types.ts";
+import type { FraguaToolContext } from "../src/types.ts";
 
 function skill(name: string, body: string, extras: Partial<Skill> = {}): Skill {
   return {
@@ -34,7 +34,7 @@ function envFor(files: Record<string, string>): ExecutionEnvironment {
   } as unknown as ExecutionEnvironment;
 }
 
-function ctx(catalog: readonly Skill[]): SwarmToolContext {
+function ctx(catalog: readonly Skill[]): FraguaToolContext {
   // We don't exercise http in these tests — cast through unknown so we
   // don't have to scaffold a full HttpClient.
   return {
@@ -44,15 +44,15 @@ function ctx(catalog: readonly Skill[]): SwarmToolContext {
     http: {} as never,
     emit: () => {},
     skillCatalog: catalog,
-  } as unknown as SwarmToolContext;
+  } as unknown as FraguaToolContext;
 }
 
 describe("skill tool", () => {
-  test("execute resolves a known skill via swarmContext.skillCatalog", async () => {
+  test("execute resolves a known skill via fraguaContext.skillCatalog", async () => {
     const md = `---\nname: frontend\ndescription: React patterns\n---\nuse react`;
     const env = envFor({ "/abs/frontend/SKILL.md": md });
     const cat = [skill("frontend", md, { location: "/abs/frontend/SKILL.md", description: "React patterns" })];
-    const out = await skillTool.execute({ name: "frontend" }, env, { swarmContext: ctx(cat) });
+    const out = await skillTool.execute({ name: "frontend" }, env, { fraguaContext: ctx(cat) });
     expect(out.is_error).toBeFalsy();
     expect(out.text).toContain("# Skill: frontend");
     expect(out.text).toContain("_React patterns_");
@@ -69,14 +69,14 @@ describe("skill tool", () => {
     const md = `---\nname: a\ndescription: A\n---\nbody-a`;
     const env = envFor({ "/abs/a/SKILL.md": md });
     const cat = [skill("a", md, { location: "/abs/a/SKILL.md" })];
-    const out = await skillTool.execute({ name: "z" }, env, { swarmContext: ctx(cat) });
+    const out = await skillTool.execute({ name: "z" }, env, { fraguaContext: ctx(cat) });
     expect(out.is_error).toBe(true);
     expect(out.text).toContain("unknown skill");
     expect(out.text).toContain('"z"');
     expect(out.text).toContain("a");
   });
 
-  test("execute when swarmContext is omitted falls back to is_error with empty-catalogue message", async () => {
+  test("execute when fraguaContext is omitted falls back to is_error with empty-catalogue message", async () => {
     const env = envFor({});
     const out = await skillTool.execute({ name: "x" }, env, {});
     expect(out.is_error).toBe(true);
@@ -87,7 +87,7 @@ describe("skill tool", () => {
     const md = `---\nname: x\ndescription: d\n---\nhello $ARGUMENTS`;
     const env = envFor({ "/abs/x/SKILL.md": md });
     const cat = [skill("x", md, { location: "/abs/x/SKILL.md" })];
-    const out = await skillTool.execute({ name: "x", arguments: "world" }, env, { swarmContext: ctx(cat) });
+    const out = await skillTool.execute({ name: "x", arguments: "world" }, env, { fraguaContext: ctx(cat) });
     expect(out.is_error).toBeFalsy();
     expect(out.data?.content).toBe("hello world");
     expect(out.text).toContain("hello world");

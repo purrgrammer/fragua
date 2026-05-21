@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ChangeStat, InboxStatus } from "@swarm/types";
+import type { ChangeStat, InboxStatus } from "@fragua/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -350,7 +350,7 @@ export class SqliteStore implements IEventStore {
       this.blobsDir = opts.blobsDir;
       this.blobsDirOwned = false;
     } else if (path === ":memory:") {
-      this.blobsDir = mkdtempSync(join(tmpdir(), "swarm-blobs-"));
+      this.blobsDir = mkdtempSync(join(tmpdir(), "fragua-blobs-"));
       this.blobsDirOwned = true;
     } else {
       this.blobsDir = join(dirname(path), "blobs");

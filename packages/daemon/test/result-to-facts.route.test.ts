@@ -5,8 +5,8 @@
 // when the handler set it.
 
 import { describe, expect, test } from "bun:test";
-import type * as handler from "@swarm/core/handler";
-import type { FactEvent, RunState } from "@swarm/store";
+import type * as handler from "@fragua/core/handler";
+import type { FactEvent, RunState } from "@fragua/store";
 import { resultToFacts } from "../src/result-to-facts.ts";
 
 type HandlerResult = handler.HandlerResult;

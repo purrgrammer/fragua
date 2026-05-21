@@ -2,7 +2,7 @@
 // global dashboard and the RunDetail header so the design language
 // stays coherent.
 //
-// Layout matches the Swarm design skill: no shadow (global reset),
+// Layout matches the Fragua design skill: no shadow (global reset),
 // hairline border via Card, tabular figures, subdued label text,
 // single big numeric/value line. Supports three input modes:
 //

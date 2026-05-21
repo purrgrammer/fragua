@@ -8,7 +8,7 @@
 // server's `ts >= cursor` filter intentionally re-emits at the
 // boundary millisecond).
 
-import type { FeedEvent } from "@swarm/types";
+import type { FeedEvent } from "@fragua/types";
 import { atom } from "jotai";
 import type { SseStatus } from "./useEventSource.ts";
 

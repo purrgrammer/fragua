@@ -5,12 +5,12 @@
 // boundary so the parent contract stays a typed union).
 //
 // Local-workflow visibility:
-//   - Project pinned ("swarm") → that project's locals only,
+//   - Project pinned ("fragua") → that project's locals only,
 //                                 labelled by name.
 //   - All projects             → every local across every project,
 //                                 grouped per-project so the user can
 //                                 tell apart same-named locals
-//                                 (e.g. `research` in `swarm` vs in
+//                                 (e.g. `research` in `fragua` vs in
 //                                 `frontend`). Picking one auto-pins
 //                                 the project (the parent observes
 //                                 `selection.cwd` on the change).

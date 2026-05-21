@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { agentsRoutes } from "../../src/store/agents-routes.ts";
 
 let store: SqliteStore;
@@ -13,7 +13,7 @@ let server: { fetch: (req: Request) => Response | Promise<Response> };
 
 beforeEach(async () => {
   store = new SqliteStore({ path: ":memory:" });
-  tmp = await mkdtemp(join(tmpdir(), "swarm-agents-routes-"));
+  tmp = await mkdtemp(join(tmpdir(), "fragua-agents-routes-"));
 });
 
 afterEach(async () => {

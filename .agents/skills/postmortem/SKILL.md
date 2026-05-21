@@ -1,6 +1,6 @@
 ---
 name: postmortem
-description: Post-mortem a swarm run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches swarm-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), schedule and sub-agent post-mortems, and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
+description: Post-mortem a fragua run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches fragua-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), schedule and sub-agent post-mortems, and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
 ---
 
 # postmortem — run post-mortem procedure
@@ -13,12 +13,12 @@ Authoritative references: `docs/SPEC.md` §3 (primitives + lifecycle), `docs/ARC
 
 ## Fast path
 
-1. **Locate the store.** Default is `~/.swarm/swarm.db` (harness). The CI primitive (`swarm daemon --db <path>`) writes elsewhere — ask the user if `~/.swarm/swarm.db` is missing.
+1. **Locate the store.** Default is `~/.fragua/fragua.db` (harness). The CI primitive (`fragua daemon --db <path>`) writes elsewhere — ask the user if `~/.fragua/fragua.db` is missing.
 2. **Pick a read path.** If `daemon_lock.http_url` is populated and `/health` answers, use HTTP. Otherwise read SQLite directly. Both reveal the same projection.
 3. **Summarise the run.** Pull `run_state` + the tail of `events`. The last `fact.*` is usually the story.
 
 ```sh
-DB=~/.swarm/swarm.db                      # harness default; override with the user's --db
+DB=~/.fragua/fragua.db                      # harness default; override with the user's --db
 URL=$(sqlite3 -readonly "$DB" "SELECT http_url FROM daemon_lock;")
 RUN=<run-id>                              # or a prefix; resolve first (§2)
 
@@ -42,22 +42,22 @@ After this you know: current status, which node (if any), when it last moved, an
 
 ---
 
-## 1. Locate the swarm instance
+## 1. Locate the fragua instance
 
 One SQLite file is the coordination surface; the daemon + HTTP server are processes that poll it. The UI is derived from it.
 
 ```sh
 # Default (harness)
-ls -la ~/.swarm/
+ls -la ~/.fragua/
 
 # CI primitive (per-cwd)
-ls -la <cwd>/.swarm/
+ls -la <cwd>/.fragua/
 ```
 
 Confirm liveness via the lock row:
 
 ```sh
-sqlite3 -readonly ~/.swarm/swarm.db <<'SQL'
+sqlite3 -readonly ~/.fragua/fragua.db <<'SQL'
 .mode column
 SELECT pid, hostname, http_url, http_port,
        datetime(started_at/1000,'unixepoch','localtime') AS started,
@@ -69,7 +69,7 @@ SQL
 
 - `seconds_since_beat` > 30s → daemon presumed dead (`DEFAULT_LOCK_TTL_MS = 30_000` ms in `packages/daemon/src/entrypoint.ts:82`). `running` runs may be orphaned until the next daemon start sweeps them.
 - No rows → no daemon has ever claimed the lock, or shutdown released it cleanly. Runs sit `queued`.
-- `http_url` NULL → daemon up but no HTTP (the user is on the CI primitive: `swarm daemon` + `swarm serve` separately, or harness mid-startup). `<cwd>/.swarm/serve.json` is the fallback.
+- `http_url` NULL → daemon up but no HTTP (the user is on the CI primitive: `fragua daemon` + `fragua serve` separately, or harness mid-startup). `<cwd>/.fragua/serve.json` is the fallback.
 - `ps -p <pid>` confirms the process actually exists.
 
 Server liveness doesn't block reads — web + intent writes work daemon-down.
@@ -161,7 +161,7 @@ Observability events outside fact/intent (`llm.start`, `llm.text_delta`, `llm.do
 
 ### 4.1 Fact-event quick reference
 
-Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`. The §8 playbook covers terminal / blocking facts in detail; this table covers the *informational* facts you'll see walking the timeline.
+Authoritative source: `FactEvent` union in `packages/types/src/fragua-events.ts`. The §8 playbook covers terminal / blocking facts in detail; this table covers the *informational* facts you'll see walking the timeline.
 
 | Fact type | Payload highlights | When you'd read it |
 |---|---|---|
@@ -189,7 +189,7 @@ Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`.
 | `fact.run_branched` | `branch`, `sha` | Operator post-run primitive (`intent.branch_run`): created `refs/heads/<branch>` at the run's heads-ref sha. Sets `run_state.branch`; inbox `pending → acted`. No longer dispose-emitted (worktrees.md step 6). Now in `FEED_EVENT_KINDS` — appears in the global feed (Home + `/inbox`). |
 | `fact.run_committed` | `targetBranch`, `sha`, `message`, `parentSha` | Operator (`intent.commit_run`): committed the run's snapshot tree onto `targetBranch`. Sets `final_commit`; inbox `pending → acted`. Now in `FEED_EVENT_KINDS`. |
 | `fact.run_merged` | `targetBranch`, `mode`, `sha`, `parentShas` | Operator (`intent.merge_run`): merged the run's heads-ref into `targetBranch`. Sets `merged_into`; inbox `pending → acted`. Now in `FEED_EVENT_KINDS`. |
-| `fact.run_discarded` | `refs[]` | Operator (`intent.discard_run`): deleted the run's `refs/swarm/{snapshots,heads}/<id>`. Inbox `pending → discarded`. Now in `FEED_EVENT_KINDS`. |
+| `fact.run_discarded` | `refs[]` | Operator (`intent.discard_run`): deleted the run's `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded`. Now in `FEED_EVENT_KINDS`. |
 | `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (worktrees.md). Once per worktree-backed run, after the terminal status fact; projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event (no fact). |
 
 ---
@@ -209,7 +209,7 @@ No SQL equivalent — steps are a pure reducer over events. If the server is dow
 
 ## 6. Read the messages transcript
 
-`messages.content` stores pi-agent-core `AgentMessage` JSON (§I9) — same shape pi-ai accepts as `priorMessages`. Block structure round-trips losslessly: text, thinking (`thinkingSignature` + optional `redacted`), toolCall (`thoughtSignature` on Gemini), toolResult (paired by `toolCallId`), plus swarm's `SystemPromptMessage` custom type (`role:"system"`).
+`messages.content` stores pi-agent-core `AgentMessage` JSON (§I9) — same shape pi-ai accepts as `priorMessages`. Block structure round-trips losslessly: text, thinking (`thinkingSignature` + optional `redacted`), toolCall (`thoughtSignature` on Gemini), toolResult (paired by `toolCallId`), plus fragua's `SystemPromptMessage` custom type (`role:"system"`).
 
 Reach for the transcript when:
 
@@ -277,10 +277,10 @@ Binary artifacts (mime ≠ text/*) — copy to disk, don't `cat` in-terminal.
 
 ### Provider credentials
 
-Credentials live in the global store (`~/.swarm/swarm.db`, table `provider_credentials`) since the credentials-in-the-store proposal landed. Use it during post-mortems when a run halts with `provider_unavailable` or `paused{reason:"provider_error"}`:
+Credentials live in the global store (`~/.fragua/fragua.db`, table `provider_credentials`) since the credentials-in-the-store proposal landed. Use it during post-mortems when a run halts with `provider_unavailable` or `paused{reason:"provider_error"}`:
 
 ```sh
-sqlite3 -readonly ~/.swarm/swarm.db \
+sqlite3 -readonly ~/.fragua/fragua.db \
   "SELECT provider, kind, updated_at FROM provider_credentials ORDER BY provider;"
 ```
 
@@ -291,15 +291,15 @@ sqlite3 -readonly ~/.swarm/swarm.db \
 Custom providers (Ollama, vLLM, LM Studio, proxies) and built-in-provider overrides live in `provider_config` on the same store since the follow-up provider-config-storage proposal landed. Use it during post-mortems when a workflow targets a custom provider and the run halts with `model_unresolved` or the registry surfaces a `provider_config: …` warning:
 
 ```sh
-sqlite3 -readonly ~/.swarm/swarm.db \
+sqlite3 -readonly ~/.fragua/fragua.db \
   "SELECT provider, length(config), updated_at FROM provider_config ORDER BY provider;"
 ```
 
 Per-row Ajv failures land on `ModelRegistry.getError()` (surfaced via the `/providers` route's `provider_config_error` field) and don't poison sibling providers — if one row is corrupt the rest still load. The `config` blob is the per-provider definition body (baseUrl, headers, compat, models, modelOverrides); credentials live in `provider_credentials`. There is no `apiKey` field on the blob — `!cmd` / env-var resolution is gone repo-wide.
 
-When a provider row's `models[]` looks wrong, prefer the structured CLI over hand-crafted SQL: `swarm providers ls-models <provider>` prints every entry with `ctx / max / reasoning / cost(in,out)`; `swarm providers edit-model <provider> <id> --<flag> <value>` updates one or more fields while preserving everything else byte-identical; `swarm providers rm-model <provider> <id>` removes a single entry. Each verb Ajv-validates the blob both on read (refuses a structurally-broken row before mutation) and on write, so post-mortem repairs land cleanly without re-walking the whole `add --custom` wizard or hand-crafting `sqlite3 UPDATE provider_config SET config = json_set(...)`.
+When a provider row's `models[]` looks wrong, prefer the structured CLI over hand-crafted SQL: `fragua providers ls-models <provider>` prints every entry with `ctx / max / reasoning / cost(in,out)`; `fragua providers edit-model <provider> <id> --<flag> <value>` updates one or more fields while preserving everything else byte-identical; `fragua providers rm-model <provider> <id>` removes a single entry. Each verb Ajv-validates the blob both on read (refuses a structurally-broken row before mutation) and on write, so post-mortem repairs land cleanly without re-walking the whole `add --custom` wizard or hand-crafting `sqlite3 UPDATE provider_config SET config = json_set(...)`.
 
-For "what did the run actually change in the working tree?" use the worktree endpoints — they sit on top of the run's `.swarm/worktrees/<run_id>/` directory and the preserved `swarm/runs/<run_id>` branch:
+For "what did the run actually change in the working tree?" use the worktree endpoints — they sit on top of the run's `.fragua/worktrees/<run_id>/` directory and the preserved `fragua/runs/<run_id>` branch:
 
 ```sh
 curl -fsS "$URL/runs/$RUN/tree"           | jq '.[] | select(.type=="file") | .path'   # 410 if worktree disposed without a branch; otherwise live ls
@@ -460,14 +460,14 @@ When something looks broken, check §12.1 first.
 - **Don't read `events` without `ORDER BY seq`.** PK is `(run_id, seq)`, per-run monotonic. Other orderings produce gibberish.
 - **Don't dump full `messages.content` into your reply.** Previews first (`substr(content, 1, 600)`); fetch the whole body only when the preview proves the hypothesis.
 - **Don't unquarantine on the user's behalf.** `intent.unquarantine` is a decision with external-world consequences — present evidence, let the user pick.
-- **Don't assume one daemon.** Parallel swarms (different `--db`) can coexist. Always print the `storePath` so the user can verify which instance you're on.
+- **Don't assume one daemon.** Parallel fraguas (different `--db`) can coexist. Always print the `storePath` so the user can verify which instance you're on.
 
 ---
 
 ## Cheat sheet
 
 ```sh
-DB=~/.swarm/swarm.db
+DB=~/.fragua/fragua.db
 URL=$(sqlite3 -readonly "$DB" "SELECT http_url FROM daemon_lock;")
 [ -n "$URL" ] && curl -fsS "$URL/health" | jq .
 

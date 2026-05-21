@@ -6,7 +6,7 @@
 // chosen route clearly and degrades gracefully in every state.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import type { ToolResultMessage } from "@swarm/types";
+import type { ToolResultMessage } from "@fragua/types";
 import { cleanup, render, within } from "@testing-library/react";
 import { RouteToolResult } from "../../src/components/run-conversation/RouteToolResult.tsx";
 import { useDom } from "../setup.ts";

@@ -1,5 +1,5 @@
 // Pure port for a small-model summariser backend. Concrete
-// implementations live outside @swarm/core (pi-ai wrapper in @swarm/agent,
+// implementations live outside @fragua/core (pi-ai wrapper in @fragua/agent,
 // test stubs in tests). Kept separate from LlmBackend because:
 //
 // 1. Summarisation runs on a different (cheaper) model than the node

@@ -1,6 +1,6 @@
-// `swarm providers add --custom` and per-model ops (ls-models /
+// `fragua providers add --custom` and per-model ops (ls-models /
 // add-model / rm-model / edit-model) — read and write the global
-// swarm store's `provider_config` table.
+// fragua store's `provider_config` table.
 //
 // A "custom provider" means an OpenAI-completions-compatible endpoint
 // (Ollama, vLLM, LM Studio, a corporate proxy, etc.) that is NOT built
@@ -11,7 +11,7 @@
 //   - API shape (openai-completions | openai-responses)
 //
 // Credentials are NOT prompted here — a custom provider that needs
-// auth uses the normal `swarm providers add <name>` flow into the
+// auth uses the normal `fragua providers add <name>` flow into the
 // `provider_credentials` table. Keyless providers (Ollama) need no
 // credential row at all.
 //
@@ -19,9 +19,9 @@
 // parsed `ProviderEntry`,
 // mutates `models[]`, validates the whole blob, and upserts.
 
+import { ProviderConfigSchema } from "@fragua/agent";
+import type { IProviderConfigStore } from "@fragua/store";
 import { Value } from "@sinclair/typebox/value";
-import { ProviderConfigSchema } from "@swarm/agent";
-import type { IProviderConfigStore } from "@swarm/store";
 import chalk from "chalk";
 import prompts from "prompts";
 import { openGlobalStore } from "./open-global-store.ts";
@@ -61,7 +61,7 @@ export interface ModelCost {
   cacheWrite: number;
 }
 
-/** Flag bag for `swarm providers add-model` / `edit-model`. All
+/** Flag bag for `fragua providers add-model` / `edit-model`. All
  * fields optional — undefined means "use heuristic default" (add)
  * or "preserve existing value" (edit). */
 export interface ModelOpsFlags {
@@ -233,7 +233,7 @@ export function loadProviderEntry(store: IProviderConfigStore, provider: string)
   const row = store.getProviderConfig(provider);
   if (row == null) {
     console.error(chalk.red(`provider "${provider}" not found in provider_config`));
-    console.error(chalk.dim("  run `swarm providers ls` to see what's installed"));
+    console.error(chalk.dim("  run `fragua providers ls` to see what's installed"));
     return null;
   }
   const entry = row.config as ProviderEntry;
@@ -321,7 +321,7 @@ export async function providersAddModelCommand(
     if (entry == null) return 1;
     if (entry.models.some((m) => m.id === modelId)) {
       console.error(
-        chalk.red(`model "${modelId}" already exists in "${provider}" — use \`swarm providers edit-model\` instead`),
+        chalk.red(`model "${modelId}" already exists in "${provider}" — use \`fragua providers edit-model\` instead`),
       );
       return 1;
     }
@@ -371,7 +371,7 @@ export async function providersRmModelCommand(
     if (entry == null) return 1;
     if (!entry.models.some((m) => m.id === modelId)) {
       console.error(
-        chalk.red(`model "${modelId}" not found in "${provider}" — run \`swarm providers ls-models ${provider}\``),
+        chalk.red(`model "${modelId}" not found in "${provider}" — run \`fragua providers ls-models ${provider}\``),
       );
       return 1;
     }
@@ -420,7 +420,7 @@ export async function providersEditModelCommand(
     const idx = entry.models.findIndex((m) => m.id === modelId);
     if (idx < 0) {
       console.error(
-        chalk.red(`model "${modelId}" not found in "${provider}" — use \`swarm providers add-model\` instead`),
+        chalk.red(`model "${modelId}" not found in "${provider}" — use \`fragua providers add-model\` instead`),
       );
       return 1;
     }
@@ -466,7 +466,7 @@ export async function providersEditModelCommand(
 }
 
 // ---------------------------------------------------------------------------
-// Main wizard (swarm providers add --custom)
+// Main wizard (fragua providers add --custom)
 // ---------------------------------------------------------------------------
 
 export async function providersAddCustomCommand(): Promise<number> {
@@ -495,7 +495,7 @@ export async function providersAddCustomCommand(): Promise<number> {
       const { choice } = await prompts({
         type: "select",
         name: "choice",
-        message: `"${providerName}" already exists in provider_config — what should swarm do?`,
+        message: `"${providerName}" already exists in provider_config — what should fragua do?`,
         choices: [
           { title: "Merge — keep existing models, add/update the ones I specify", value: "merge" },
           { title: "Overwrite — replace the entire provider entry", value: "overwrite" },
@@ -600,9 +600,9 @@ export async function providersAddCustomCommand(): Promise<number> {
     console.log(chalk.dim(`  base URL: ${baseUrl}`));
     console.log();
     console.log(
-      chalk.dim(`If this provider needs auth, run \`swarm providers add ${providerName}\` to store a credential.`),
+      chalk.dim(`If this provider needs auth, run \`fragua providers add ${providerName}\` to store a credential.`),
     );
-    console.log(chalk.dim(`Use \`swarm providers test ${providerName} ${modelIds[0]}\` to verify the connection.`));
+    console.log(chalk.dim(`Use \`fragua providers test ${providerName} ${modelIds[0]}\` to verify the connection.`));
 
     return 0;
   } finally {

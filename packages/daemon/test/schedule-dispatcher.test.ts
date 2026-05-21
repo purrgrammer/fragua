@@ -12,7 +12,7 @@ import {
   type IEventStore,
   isTerminal as isTerminalStatus,
   SqliteStore,
-} from "@swarm/store";
+} from "@fragua/store";
 import { scheduleDispatcherTick } from "../src/schedule-dispatcher.ts";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -25,7 +25,7 @@ interface Fixture {
   cleanup: () => void;
   now: number;
   setNow: (t: number) => void;
-  /** Write `<homeDir>/.swarm/workflows/<name>.yaml` with the given source. */
+  /** Write `<homeDir>/.fragua/workflows/<name>.yaml` with the given source. */
   writeWorkflow: (name: string, yamlSource?: string) => string;
   tick: () => { fired: number; skipped: number; paused: number };
   freshRunId: () => string;
@@ -34,7 +34,7 @@ interface Fixture {
 function newFixture(): Fixture {
   const home = mkdtempSync(join(tmpdir(), "sched-home-"));
   const cwd = mkdtempSync(join(tmpdir(), "sched-cwd-"));
-  mkdirSync(join(home, ".swarm/workflows"), { recursive: true });
+  mkdirSync(join(home, ".fragua/workflows"), { recursive: true });
   let now = 1_000_000;
   const store = new SqliteStore({ path: ":memory:", now: () => now });
 
@@ -52,7 +52,7 @@ function newFixture(): Fixture {
       now = t;
     },
     writeWorkflow: (name, yamlSource) => {
-      const path = join(home, ".swarm/workflows", `${name}.yaml`);
+      const path = join(home, ".fragua/workflows", `${name}.yaml`);
       writeFileSync(path, yamlSource ?? TRIVIAL_YAML);
       return path;
     },

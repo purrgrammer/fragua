@@ -5,7 +5,7 @@
 // default Bun spawner to confirm the shell path works end-to-end.
 
 import { describe, expect, test } from "bun:test";
-import type { AgentMessage } from "@swarm/types";
+import type { AgentMessage } from "@fragua/types";
 import fc from "fast-check";
 import { makeToolHandler, runWithBun, type SpawnFn, type ToolRunResult } from "../../src/handler/handlers/tool.ts";
 import type { HandlerContext, SideEffectRecorder, ToolRegistry } from "../../src/handler/types.ts";
@@ -191,8 +191,8 @@ describe("makeToolHandler — substitution", () => {
   // Tool commands run substitution with `escapeForShell: true`, so
   // every substituted value is wrapped in POSIX single quotes. Adjacent
   // quoted/unquoted segments concatenate at shell tokenisation
-  // (e.g. `--filter=''@swarm/core''` is one argument equal to
-  // `--filter=@swarm/core`), so existing workflows that pre-quoted
+  // (e.g. `--filter=''@fragua/core''` is one argument equal to
+  // `--filter=@fragua/core`), so existing workflows that pre-quoted
   // their substitutions keep the same semantics.
 
   test("an input is substituted into tool_command (shell-quoted)", async () => {
@@ -493,7 +493,7 @@ describe("makeToolHandler — smoke test with real Bun spawner", () => {
   test("a simple `echo` command runs through runWithBun and returns exit 0", async () => {
     const ctx = stubCtx();
     const spec = makeToolHandler({
-      toolCommand: "echo swarm-tool-smoke",
+      toolCommand: "echo fragua-tool-smoke",
       spawner: runWithBun,
     });
     const result = await spec.handler(ctx);
@@ -502,7 +502,7 @@ describe("makeToolHandler — smoke test with real Bun spawner", () => {
       expect(result.outcomeStatus).toBe("success");
     }
     const stdout = ctx.__artifacts.find((a) => a.key.endsWith(":stdout"))?.content ?? "";
-    expect(stdout).toContain("swarm-tool-smoke");
+    expect(stdout).toContain("fragua-tool-smoke");
   });
 
   test("a non-zero exit command (`false`) runs through runWithBun and returns outcome=fail", async () => {

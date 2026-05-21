@@ -19,7 +19,7 @@
 //  it into the "no LLM" bucket so the cascade-resolved model
 //  doesn't render and mislead.
 
-import type { NodeAttrs } from "@swarm/core";
+import type { NodeAttrs } from "@fragua/core";
 
 /** True when the handler will issue an LLM call at runtime, which is the
  *  only case where `model` / `provider` / `reasoning_effort` /

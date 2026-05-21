@@ -23,7 +23,7 @@
 // intent and an unquarantine / human_input ends up cancelled (fold rule
 // R1: cancel beats everything).
 
-import { ConcurrencyError, type FactEvent, type IEventStore, type OrphanSideEffectRow } from "@swarm/store";
+import { ConcurrencyError, type FactEvent, type IEventStore, type OrphanSideEffectRow } from "@fragua/store";
 
 export interface WakePendingResult {
   cancelled: string[];

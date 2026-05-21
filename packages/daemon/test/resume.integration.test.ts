@@ -18,8 +18,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
+import * as handler from "@fragua/core/handler";
+import { SqliteStore } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
@@ -36,8 +36,8 @@ interface Rig {
 }
 
 function makeRig(yaml: string, sha = "wf"): Rig {
-  const dir = mkdtempSync(join(tmpdir(), "swarm-resume-"));
-  const dbPath = join(dir, "swarm.db");
+  const dir = mkdtempSync(join(tmpdir(), "fragua-resume-"));
+  const dbPath = join(dir, "fragua.db");
   const store = new SqliteStore({ path: dbPath });
   store.saveWorkflow(sha, "wf", yaml);
   return {

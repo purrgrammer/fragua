@@ -2,7 +2,7 @@
 //
 // Every method is a one-shot `git` invocation against the run's project
 // `cwd` git dir — no checkouts, no worktree mutation. The snapshot
-// commits are reachable via `refs/swarm/snapshots/<runId>`; we query by
+// commits are reachable via `refs/fragua/snapshots/<runId>`; we query by
 // raw sha so the single tip ref carries the whole chain without needing
 // per-eventIdx refs.
 //

@@ -5,7 +5,7 @@
 //   - stale + orphan run    → run requeued, sweep result returned
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { reapStaleDaemon } from "../src/reaper.ts";
 
 let store: SqliteStore | null = null;

@@ -4,14 +4,14 @@
 // `GET /workflows/:name` the `read` method returns the same metadata
 // plus the raw YAML source on demand.
 //
-// This adapter is the only place in @swarm/server that reads workflow
+// This adapter is the only place in @fragua/server that reads workflow
 // sources from disk. Handlers stay pure so tests can inject an in-memory
 // reader and assert on the derived shape without touching the filesystem.
 
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseWorkflow } from "@swarm/core";
+import { parseWorkflow } from "@fragua/core";
 import type { WorkflowDetail, WorkflowReader, WorkflowSummary } from "../ports.ts";
 
 export interface FsWorkflowReaderOptions {

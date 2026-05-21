@@ -315,7 +315,7 @@ describe("useEventSource", () => {
     // fire mid-heartbeat and a second instance would appear.
     for (let i = 0; i < 6; i++) {
       await new Promise((r) => setTimeout(r, 20));
-      act(() => es._emit('{"type":"swarm.ping","ts":1}'));
+      act(() => es._emit('{"type":"fragua.ping","ts":1}'));
     }
     expect(FakeEventSource.instances.length).toBe(1);
     expect(es.closed).toBe(false);

@@ -10,12 +10,12 @@
 // Fix: reap on observation. Any process with store access (the server's
 // /health path, a dedicated tick) can detect a stale heartbeat and run
 // the same sweep startupSweep does, plus clear the lock row so the next
-// `swarm daemon` doesn't have to wait out the TTL again.
+// `fragua daemon` doesn't have to wait out the TTL again.
 //
 // The reaper is IDEMPOTENT: calling it while a live daemon is heart-
 // beating is a no-op (the TTL check exits early).
 
-import type { IEventStore, SweepResult } from "@swarm/store";
+import type { IEventStore, SweepResult } from "@fragua/store";
 
 /** Heartbeats are ~10s; 30s without one is the established "dead" line.
  * Kept here (not imported from /routes/health.ts) so the reaper has no

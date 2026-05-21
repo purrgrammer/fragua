@@ -5,15 +5,15 @@
 //   - execute() to generate the async run title from `routing.input`
 //   - PiLlmBackend to produce the tail for `summary=low|medium|high`
 //
-// Each call rides as a synthetic node (see @swarm/core/types/summariser.ts).
+// Each call rides as a synthetic node (see @fragua/core/types/summariser.ts).
 // Events are emitted via the `emit` callback on SummariseInput so the
 // envelope carries the synthetic node_id and a caller-side run_id /
 // workflow_sha. The per-call event sequence is:
 //   summary.started → summary.text_delta × N → cost.recorded → summary.completed
 // No state persists between calls — the backend is a pure adapter.
 
+import type { SummariseInput, SummariseOutput, SummariserBackend } from "@fragua/core";
 import { type AssistantMessage, getModel, type Message, type Model, streamSimple } from "@mariozechner/pi-ai";
-import type { SummariseInput, SummariseOutput, SummariserBackend } from "@swarm/core";
 import { costPayload } from "./event-bridge.ts";
 
 export interface PiSummariserBackendOptions {
@@ -39,7 +39,7 @@ export interface PiSummariserBackendOptions {
 /** Small but conservative defaults. The runtime picks one from the CLI /
  * workflow attrs; this const exists so `resolveDefaults("anthropic")`
  * gives a sensible answer for the "user just set ANTHROPIC_API_KEY and
- * ran swarm" path. */
+ * ran fragua" path. */
 export const DEFAULT_SUMMARISER_MODEL_BY_PROVIDER: Readonly<Record<string, string>> = {
   anthropic: "claude-haiku-4-5",
   openai: "gpt-4o-mini",

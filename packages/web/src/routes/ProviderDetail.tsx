@@ -224,7 +224,7 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
         )}
         {oauthAvailable && authKind !== "oauth" && (
           <span className="text-sw-muted text-xs self-center">
-            OAuth login available via <code className="font-mono">swarm providers login {name}</code>
+            OAuth login available via <code className="font-mono">fragua providers login {name}</code>
           </span>
         )}
       </div>
@@ -256,8 +256,8 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
       >
         <div>
           <p className="text-sw-muted text-xs">
-            Stored verbatim in the global swarm store (provider_credentials table). Protect the connection with TLS or a
-            loopback bind when adding keys from a remote browser.
+            Stored verbatim in the global fragua store (provider_credentials table). Protect the connection with TLS or
+            a loopback bind when adding keys from a remote browser.
           </p>
         </div>
         <div>

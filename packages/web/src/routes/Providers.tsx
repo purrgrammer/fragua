@@ -3,7 +3,7 @@
 // credentialed status and model count per provider; row click drills
 // into the detail page.
 //
-// Data comes from `GET /providers` (see @swarm/server's
+// Data comes from `GET /providers` (see @fragua/server's
 // routes/providers.ts). The server never exposes the key itself — just
 // the human-readable source label ("stored api_key" / "stored oauth" /
 // null) — so this page is safe to render even if the daemon is
@@ -80,7 +80,7 @@ export function Providers(): JSX.Element {
       <header className="flex items-baseline justify-between">
         <h2 className="font-heading text-base font-semibold">Providers</h2>
         <p className="text-sw-muted text-xs">
-          <code className="font-mono">~/.swarm/swarm.db</code> (provider_credentials + provider_config)
+          <code className="font-mono">~/.fragua/fragua.db</code> (provider_credentials + provider_config)
         </p>
       </header>
 
@@ -251,7 +251,7 @@ export function Providers(): JSX.Element {
       )}
 
       <p className="text-sw-muted text-xs">
-        Need the CLI instead? Try <code className="font-mono">swarm providers ls</code>,{" "}
+        Need the CLI instead? Try <code className="font-mono">fragua providers ls</code>,{" "}
         <code className="font-mono">add</code>, <code className="font-mono">test</code>.
       </p>
     </section>

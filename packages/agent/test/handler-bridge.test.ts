@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { LlmBackend, Node, OutcomeStatus } from "@swarm/core";
-import { failProvider, ok } from "@swarm/core";
-import * as handler from "@swarm/core/handler";
-import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@swarm/store";
+import type { LlmBackend, Node, OutcomeStatus } from "@fragua/core";
+import { failProvider, ok } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
+import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@fragua/store";
 import fc from "fast-check";
 import { makeLlmHandler } from "../src/handler-bridge.ts";
 

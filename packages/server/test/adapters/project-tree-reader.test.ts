@@ -13,7 +13,7 @@ import { createFsProjectTreeReader } from "../../src/adapters/project-tree-reade
 const execFileAsync = promisify(execFile);
 
 async function setupGitRepo(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "swarm-tree-git-"));
+  const root = await mkdtemp(join(tmpdir(), "fragua-tree-git-"));
   await execFileAsync("git", ["init", "-q", "-b", "main"], { cwd: root });
   await execFileAsync("git", ["config", "user.email", "t@t"], { cwd: root });
   await execFileAsync("git", ["config", "user.name", "t"], { cwd: root });
@@ -33,7 +33,7 @@ async function setupGitRepo(): Promise<string> {
 }
 
 async function setupPlainDir(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "swarm-tree-plain-"));
+  const root = await mkdtemp(join(tmpdir(), "fragua-tree-plain-"));
   await writeFile(join(root, "a.txt"), "alpha\n");
   await mkdir(join(root, "nested"), { recursive: true });
   await writeFile(join(root, "nested", "b.txt"), "beta\n");

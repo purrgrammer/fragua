@@ -21,14 +21,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 
 describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () => {
   test("paired [assistant{toolCall}, toolResult] hydrate tail: pi-agent streams the next turn, doesn't re-emit the prior", async () => {
-    const scratch = await mkdtemp(join(tmpdir(), "swarm-rehydrate-"));
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-rehydrate-"));
     const faux = registerFauxProvider();
     try {
       // Observe every LLM call. The faux factory captures the

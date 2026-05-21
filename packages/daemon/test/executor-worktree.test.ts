@@ -7,8 +7,8 @@
 // about the executor's contract with the provisioner interface.
 
 import { describe, expect, test } from "bun:test";
-import type { ExecutionEnvironment } from "@swarm/core";
-import * as handler from "@swarm/core/handler";
+import type { ExecutionEnvironment } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import type { SnapshotResult } from "../src/snapshotter.ts";

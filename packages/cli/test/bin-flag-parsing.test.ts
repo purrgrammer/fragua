@@ -3,7 +3,7 @@
 // camelCases option keys (`--run-id` → `options.runId`), so reading
 // `options["run-id"]` silently returns undefined and drops the flag.
 //
-// This test reproduces the same cac option shape as `packages/cli/bin/swarm.ts`
+// This test reproduces the same cac option shape as `packages/cli/bin/fragua.ts`
 // and asserts the camelCased keys we rely on are present after parsing. If
 // cac ever changes its convention, or someone adds a new kebab option and
 // reads it with the wrong key, this test fails first.
@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import cac from "cac";
 
 function parseRun(argv: string[]): Record<string, unknown> {
-  const cli = cac("swarm");
+  const cli = cac("fragua");
   let captured: Record<string, unknown> = {};
   cli
     .command("run <workflow>")
@@ -31,11 +31,11 @@ function parseRun(argv: string[]): Record<string, unknown> {
     .action((_workflow: string, options: Record<string, unknown>) => {
       captured = options;
     });
-  cli.parse(["node", "swarm", ...argv], { run: true });
+  cli.parse(["node", "fragua", ...argv], { run: true });
   return captured;
 }
 
-describe("swarm run — CLI argv → options mapping (cac camelCase contract)", () => {
+describe("fragua run — CLI argv → options mapping (cac camelCase contract)", () => {
   test("--run-id lands on options.runId (NOT options['run-id'])", () => {
     const opts = parseRun(["run", "w.yaml", "--run-id", "abc"]);
     expect(opts["runId"]).toBe("abc");

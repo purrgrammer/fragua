@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { RunStatus } from "@swarm/types";
+import type { RunStatus } from "@fragua/types";
 import fc from "fast-check";
 import { foldIntents, type IntentFoldEvent } from "../../src/handler/intent-fold.ts";
 

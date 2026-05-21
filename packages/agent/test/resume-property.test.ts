@@ -12,12 +12,12 @@
 // comparing the final `AgentMessage[]` arrays.
 
 import { describe, expect, test } from "bun:test";
+import type { Node } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
+import { SqliteStore } from "@fragua/store";
+import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { type FauxResponseStep, fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
-import type { Node } from "@swarm/core";
-import * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
-import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import fc from "fast-check";
 import { PiLlmBackend } from "../src/backend.ts";
 import { makeLlmHandler } from "../src/handler-bridge.ts";

@@ -51,7 +51,7 @@ export function RunsList(): JSX.Element {
           title="No runs yet"
           description={
             <span>
-              Start one with <code className="font-mono">swarm run</code>.
+              Start one with <code className="font-mono">fragua run</code>.
             </span>
           }
           className="min-h-[120px]"

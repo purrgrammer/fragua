@@ -11,8 +11,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
+import * as handler from "@fragua/core/handler";
+import { SqliteStore } from "@fragua/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
@@ -194,8 +194,8 @@ describe("P10 — concurrency cap honored", () => {
 
 describe("P11 — HITL durability across simulated crash", () => {
   test("paused_human run survives a full store reopen (in-memory: sim via two SqliteStore instances on same file)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "swarm-hitl-"));
-    const dbPath = join(dir, "swarm.db");
+    const dir = mkdtempSync(join(tmpdir(), "fragua-hitl-"));
+    const dbPath = join(dir, "fragua.db");
 
     // Phase 1: open, pause at HITL.
     const s1 = new SqliteStore({ path: dbPath });

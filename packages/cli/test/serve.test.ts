@@ -1,4 +1,4 @@
-// Tests for the `swarm serve` command.
+// Tests for the `fragua serve` command.
 //
 // Strategy: bind to port 0 (ephemeral) so tests run in parallel without
 // stepping on each other, hit `/health` via real fetch, then close. We never
@@ -32,8 +32,8 @@ describe("startServer", () => {
   });
 
   test("binds an ephemeral port and returns a handle", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
     expect(handle.port).toBeGreaterThan(0);
     expect(handle.origin).toBe(`http://localhost:${handle.port}`);
@@ -44,8 +44,8 @@ describe("startServer", () => {
   });
 
   test("GET /health returns 200 {ok:true}", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
     const res = await fetch(`${handle.url}/health`);
     expect(res.status).toBe(200);
@@ -54,8 +54,8 @@ describe("startServer", () => {
   });
 
   test("close() releases the port (subsequent bind to same port succeeds)", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     const first = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
     const port = first.port;
     await first.close();
@@ -65,9 +65,9 @@ describe("startServer", () => {
     expect(handle.port).toBe(port);
   });
 
-  test("config.web.port via .swarm/config.yaml wins when --port is omitted", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+  test("config.web.port via .fragua/config.yaml wins when --port is omitted", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     // Pick a port the test owns by binding ephemeral first to discover a
     // free one, then closing and writing it into the project config.
     // Avoids hardcoding a port that might collide on a busy CI host.
@@ -75,16 +75,16 @@ describe("startServer", () => {
     const target = probe.port;
     await probe.close();
 
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `web:\n  port: ${target}\n`);
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.yaml"), `web:\n  port: ${target}\n`);
 
     handle = await startServer({ cwd: scratch, homeDir: scratchHome });
     expect(handle.port).toBe(target);
   });
 
   test("default port falls back to DEFAULT_WEB_PORT (6767) and auto-bumps on collision", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     // We don't know whether 6767 is free on the test host, so we hold an
     // occupant on it (best-effort) and assert the server lands within the
     // bump window. If 6767 was already busy from another process the
@@ -96,8 +96,8 @@ describe("startServer", () => {
   });
 
   test("explicit --port disables the auto-bump (hard fail on EADDRINUSE)", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     const occupant = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
     try {
       await expect(startServer({ port: occupant.port, cwd: scratch, homeDir: scratchHome })).rejects.toMatchObject({
@@ -125,8 +125,8 @@ describe("serveCommand", () => {
   });
 
   test("SIGINT triggers clean shutdown and returns exit code 0", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     // Pass `webDistDir: undefined` to opt out of the auto-build that
     // serveCommand normally runs — keeps the test fast and doesn't depend
     // on the state of the real packages/web/dist tree.
@@ -138,8 +138,8 @@ describe("serveCommand", () => {
   });
 
   test("conflicting port → exit code 1", async () => {
-    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    scratchHome = await mkdtemp(join(tmpdir(), "swarm-serve-home-"));
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     const occupied = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
     try {
       const code = await serveCommand({

@@ -3,7 +3,7 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 /*
- * Panel — Swarm design language.
+ * Panel — Fragua design language.
  *
  * Floating overlay anchored to a ReactFlow canvas (zoom controls,
  * minimap frames, contextual toolbars). Visually a small bento cell

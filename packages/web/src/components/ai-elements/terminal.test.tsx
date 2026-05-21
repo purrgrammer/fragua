@@ -22,7 +22,7 @@ describe("Terminal", () => {
     const cls = body?.className ?? "";
 
     // Forbid an unconditional dark-only fill — it makes the component
-    // identical in both themes, which is the bug. Either use a swarm
+    // identical in both themes, which is the bug. Either use a fragua
     // token (bg-sw-surface / bg-sw-bg) or gate the dark fill behind
     // the `dark:` variant.
     const hasUnconditionalZinc950 = /(?:^|\s)bg-zinc-950(?:\s|$)/.test(cls);

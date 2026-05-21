@@ -88,7 +88,7 @@ export class MessageStore {
 
   /** Serialise into a JSON-safe plain object for `checkpoint.pi_sessions`.
    * Keys are the composite `runId\x00threadId` strings — opaque to
-   * @swarm/core but round-trippable by `hydrate()` below. */
+   * @fragua/core but round-trippable by `hydrate()` below. */
   serialise(): Record<string, AgentMessage[]> {
     const out: Record<string, AgentMessage[]> = {};
     for (const [k, v] of this.map.entries()) out[k] = v.slice();

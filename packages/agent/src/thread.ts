@@ -25,9 +25,9 @@
 // deterministic template — behaviour difference is visible in
 // `events.jsonl` via the synthetic node.
 
+import type { EventType, SummariserBackend, SummaryLevel } from "@fragua/core";
+import { summarySyntheticNodeId } from "@fragua/core";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { EventType, SummariserBackend, SummaryLevel } from "@swarm/core";
-import { summarySyntheticNodeId } from "@swarm/core";
 
 /** Whether to hydrate prior messages from the store into the new Agent's
  * `initialState.messages`. True iff the node is on a thread. */
@@ -70,7 +70,7 @@ export interface SummarySeed {
 /** Build the user-prompt seed when a node has opted into summarisation.
  *
  * Behaviour is deliberately minimal — when a seed exists, it is exactly
- * `<swarm-context summary="<level>">\n<text>\n</swarm-context>` and
+ * `<fragua-context summary="<level>">\n<text>\n</fragua-context>` and
  * nothing else. No goal / run-id / role-census framing; the receiving
  * agent has the workflow goal in its system prompt and the run id on
  * every event envelope.
@@ -118,7 +118,7 @@ export async function buildSummarySeed(params: {
     };
     const out = await params.summariser.summarise(built);
     if (out.ok && out.text.length > 0) {
-      return { seed: `<swarm-context summary="${summary}">\n${out.text}\n</swarm-context>`, warnings: [] };
+      return { seed: `<fragua-context summary="${summary}">\n${out.text}\n</fragua-context>`, warnings: [] };
     }
     return {
       seed: "",

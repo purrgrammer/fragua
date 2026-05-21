@@ -22,9 +22,9 @@
 # commit-hygiene gap is historical. Those land in `## Manual`, never edited.
 # At signoff the operator applies the verified edits or keeps the report only.
 #
-#   bun run swarm run drift
-#   bun run swarm run drift --input surface=structural
-#   bun run swarm run drift --input surface=narrative --input focus="only workflows"
+#   bun run fragua run drift
+#   bun run fragua run drift --input surface=structural
+#   bun run fragua run drift --input surface=narrative --input focus="only workflows"
 
 name: drift
 goal: Cross-reference the docs against the code they describe, surface evidence-cited drift, and apply the doc-fixable corrections with operator signoff.
@@ -56,8 +56,8 @@ steps:
     max-cost: 0.15
     prompt: |
       Run the drift collector(s) for surface `${{ inputs.surface }}` via the bash tool — once each, in this order:
-        - structural or both → `bun .swarm/scripts/drift/structural.ts ${{ inputs.focus }}`
-        - narrative  or both → `bun .swarm/scripts/drift/narrative.ts ${{ inputs.focus }}`
+        - structural or both → `bun .fragua/scripts/drift/structural.ts ${{ inputs.focus }}`
+        - narrative  or both → `bun .fragua/scripts/drift/narrative.ts ${{ inputs.focus }}`
 
       Do not interpret, summarise, or reformat the JSON. If a script exits non-zero or emits malformed JSON, call `abort` with reason `collector failed: <exit code or parse error>`. Otherwise reply with EXACTLY: `collected`.
 
@@ -88,7 +88,7 @@ steps:
 
         | Severity | Surface | Doc location | Code surface | Drift |
         |---|---|---|---|---|
-        | CRITICAL | structural | ARCHITECTURE.md §3 | swarm-events.ts:88 | `paused_budget` status missing from §3 table |
+        | CRITICAL | structural | ARCHITECTURE.md §3 | fragua-events.ts:88 | `paused_budget` status missing from §3 table |
         | MEDIUM | narrative | STATUS.md:14 | (no evidence found) | 'workflow_resolution' claim UNBACKED |
 
       Severity: CRITICAL = misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish. If genuinely nothing, reply EXACTLY: `no drift detected`.

@@ -7,7 +7,7 @@
 // `reason="aborted_exit"`. A generic ToolOutput dump would bury the one
 // thing that matters (the reason), so it earns an error-tone card.
 
-import type { ToolResultMessage } from "@swarm/types";
+import type { ToolResultMessage } from "@fragua/types";
 import { OctagonXIcon } from "lucide-react";
 import type { JSX } from "react";
 

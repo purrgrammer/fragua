@@ -13,7 +13,7 @@
 //      and `getApiKey` returns the stored key verbatim.
 
 import { describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { AuthStorage, ModelRegistry } from "../src/index.ts";
 
 describe("AuthStorage no longer resolves custom-provider keys", () => {

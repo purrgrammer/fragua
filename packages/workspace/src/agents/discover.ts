@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { AgentDefinition, AgentDefinitionScope, AgentDefinitionsConfig } from "@swarm/types";
+import type { AgentDefinition, AgentDefinitionScope, AgentDefinitionsConfig } from "@fragua/types";
 import { normaliseToolName } from "./normalise.ts";
 import { parseAgentMd } from "./parse.ts";
 import type { DiscoverAgentsOptions } from "./types.ts";
@@ -188,11 +188,11 @@ async function scanRoot(rootPath: string, scope: AgentDefinitionScope, warnings:
 /** Accept array form `[read, grep]` or space-separated string `read grep`,
  *  mirroring skills' loose ingestion. Each entry is run through
  *  `normaliseToolName` so cross-client casing (`Read`, `WebFetch`)
- *  resolves to swarm's canonical lowercase snake_case silently. */
+ *  resolves to fragua's canonical lowercase snake_case silently. */
 function readAllowedTools(fm: Record<string, unknown>): string[] | undefined {
   // `tools:` is the Claude Code convention; AGENTS.md advertises
   // `.claude/agents/` as a cross-client fallback, so accept it as a
-  // synonym alongside swarm's canonical `allowed_tools` / `allowed-tools`.
+  // synonym alongside fragua's canonical `allowed_tools` / `allowed-tools`.
   const raw = fm["allowed_tools"] ?? fm["allowed-tools"] ?? fm["tools"];
   if (raw === undefined) return undefined;
   let parts: string[];

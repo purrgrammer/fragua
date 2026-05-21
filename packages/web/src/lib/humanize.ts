@@ -135,7 +135,7 @@ export function categoryLabel(c: RunCategory): string {
   return CATEGORY_LABELS[c];
 }
 
-/** Map a halt-reason key to a Swarm CSS-var name (without the `--` prefix)
+/** Map a halt-reason key to a Fragua CSS-var name (without the `--` prefix)
  *  so chart segments and donut slices share colour with the rest of the
  *  UI. Reads off `theme.css` accents — defined per the design skill. */
 export function haltReasonAccentVar(status: string): string {

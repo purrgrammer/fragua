@@ -1,8 +1,8 @@
 {
-  "name": "@swarm/web",
+  "name": "@fragua/web",
   "version": "0.0.0",
   "private": true,
-  "description": "swarm web UI — Vite + React + Tailwind client for the HTTP/SSE server",
+  "description": "fragua web UI — Vite + React + Tailwind client for the HTTP/SSE server",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,8 +22,8 @@
     "@streamdown/code": "1.1.1",
     "@streamdown/math": "1.0.2",
     "@streamdown/mermaid": "1.0.2",
-    "@swarm/core": "workspace:*",
-    "@swarm/types": "workspace:*",
+    "@fragua/core": "workspace:*",
+    "@fragua/types": "workspace:*",
     "@tanstack/react-query": "5.99.1",
     "@xyflow/react": "12.10.2",
     "ai": "6.0.168",

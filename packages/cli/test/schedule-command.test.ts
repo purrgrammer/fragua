@@ -1,9 +1,9 @@
-// `swarm schedule` CLI \u2014 covers the four happy-path commands by spinning
-// up a real `@swarm/server` schedule routes app and pointing the
+// `fragua schedule` CLI \u2014 covers the four happy-path commands by spinning
+// up a real `@fragua/server` schedule routes app and pointing the
 // command's URL discovery at it via the explicit `--url` override.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { Hono } from "hono";
 import { createScheduleRoutes, type ScheduleRoutesDeps } from "../../server/src/store/schedule-routes.ts";
 import {

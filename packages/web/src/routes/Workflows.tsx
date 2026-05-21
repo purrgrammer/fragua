@@ -3,7 +3,7 @@
 // is owned by P5.14.
 //
 // Columns: Name / Source / Path / Short SHA. `Source` resolves a
-// workflow's owning cwd: the global source (`~/.swarm/workflows/`) shows
+// workflow's owning cwd: the global source (`~/.fragua/workflows/`) shows
 // `global`; a project source shows the project's basename with the full
 // cwd in `title=`. Long paths truncate inside the cell rather than
 // wrapping or pushing the table wider than its container — the
@@ -51,8 +51,8 @@ export function Workflows(): JSX.Element {
           description={
             <span>
               Add a <code className="font-mono">.yaml</code> file under{" "}
-              <code className="font-mono">.swarm/workflows/</code>, or run <code className="font-mono">swarm init</code>{" "}
-              if this project hasn't been initialized.
+              <code className="font-mono">.fragua/workflows/</code>, or run{" "}
+              <code className="font-mono">fragua init</code> if this project hasn't been initialized.
             </span>
           }
         />
@@ -71,7 +71,7 @@ export function Workflows(): JSX.Element {
             <TableBody>
               {rows.map((row) => {
                 const sourceLabel = row.cwd ? basename(row.cwd) : "global";
-                const sourceTitle = row.cwd ?? "~/.swarm/workflows";
+                const sourceTitle = row.cwd ?? "~/.fragua/workflows";
                 const rowKey = `${row.cwd ?? ""}::${row.path}`;
                 return (
                   <TableRow key={rowKey} data-testid={`workflow-row-${row.name}`}>

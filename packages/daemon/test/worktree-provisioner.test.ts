@@ -27,8 +27,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExecutionEnvironment } from "@swarm/core";
-import { LocalEnvironment, WorktreeEnvironment } from "@swarm/workspace";
+import type { ExecutionEnvironment } from "@fragua/core";
+import { LocalEnvironment, WorktreeEnvironment } from "@fragua/workspace";
 import { WorktreeProvisioner } from "../src/worktree-provisioner.ts";
 
 function stubEnv(cwd: string): ExecutionEnvironment {
@@ -192,7 +192,7 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
   // irrelevant. Regression: a daemon launched outside a git repo was
   // previously locked into a single shared LocalEnvironment for every run.
   test("non-git run cwd → LocalEnvironment rooted at the run's cwd", async () => {
-    const nonGit = mkdtempSync(join(tmpdir(), "swarm-prov-nogit-"));
+    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-nogit-"));
     try {
       const p = new WorktreeProvisioner();
       const env = await p.ensure("r1", { cwd: nonGit });
@@ -204,8 +204,8 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
   });
 
   test("two non-git runs from different cwds → distinct envs at their own cwds", async () => {
-    const a = mkdtempSync(join(tmpdir(), "swarm-prov-a-"));
-    const b = mkdtempSync(join(tmpdir(), "swarm-prov-b-"));
+    const a = mkdtempSync(join(tmpdir(), "fragua-prov-a-"));
+    const b = mkdtempSync(join(tmpdir(), "fragua-prov-b-"));
     try {
       const p = new WorktreeProvisioner();
       const envA = await p.ensure("r-a", { cwd: a });
@@ -220,7 +220,7 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
   });
 
   test("git run cwd → WorktreeEnvironment under that cwd", async () => {
-    const repo = mkdtempSync(join(tmpdir(), "swarm-prov-git-"));
+    const repo = mkdtempSync(join(tmpdir(), "fragua-prov-git-"));
     try {
       const initRes = Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: repo });
       if (initRes.exitCode !== 0) throw new Error(`git init failed (exit ${initRes.exitCode})`);
@@ -234,7 +234,7 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
       const env = await p.ensure("r-git", { cwd: repo });
       expect(env).toBeInstanceOf(WorktreeEnvironment);
       expect(env.cwd().startsWith(repo)).toBe(true);
-      expect(env.cwd()).toContain(".swarm/worktrees/r-git");
+      expect(env.cwd()).toContain(".fragua/worktrees/r-git");
 
       // Clean up the worktree (registers + removes) so the temp dir is removable.
       await p.dispose("r-git");
@@ -247,8 +247,8 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
     // Simulate a daemon launched from a non-git dir (this.repoRoot is non-git)
     // but serving a run whose cwd IS a git repo. The provisioner must pick
     // the git path based on the run's cwd, not the constructor default.
-    const nonGitRoot = mkdtempSync(join(tmpdir(), "swarm-prov-bootcwd-"));
-    const gitRoot = mkdtempSync(join(tmpdir(), "swarm-prov-runcwd-"));
+    const nonGitRoot = mkdtempSync(join(tmpdir(), "fragua-prov-bootcwd-"));
+    const gitRoot = mkdtempSync(join(tmpdir(), "fragua-prov-runcwd-"));
     try {
       const initRes = Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: gitRoot });
       if (initRes.exitCode !== 0) throw new Error(`git init failed (exit ${initRes.exitCode})`);
@@ -271,7 +271,7 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
 
 describe("WorktreeProvisioner — snapshots (worktrees.md)", () => {
   function initRepo(): string {
-    const repo = mkdtempSync(join(tmpdir(), "swarm-prov-snap-"));
+    const repo = mkdtempSync(join(tmpdir(), "fragua-prov-snap-"));
     if (Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: repo }).exitCode !== 0) {
       throw new Error("git init failed");
     }
@@ -297,7 +297,7 @@ describe("WorktreeProvisioner — snapshots (worktrees.md)", () => {
       expect(first).not.toBeNull();
       expect(first?.uncommitted).not.toBeNull();
       // Tip ref points at the snapshot commit.
-      expect(refSha(repo, "refs/swarm/snapshots/r-snap")).toBe(first?.commitSha ?? "");
+      expect(refSha(repo, "refs/fragua/snapshots/r-snap")).toBe(first?.commitSha ?? "");
 
       // No further change → a step snapshot is delta-suppressed (cursor treeSha matches).
       const second = await p.snapshot("r-snap", "step");
@@ -310,7 +310,7 @@ describe("WorktreeProvisioner — snapshots (worktrees.md)", () => {
   });
 
   test("bare-cwd run (LocalEnvironment) → snapshot returns null", async () => {
-    const nonGit = mkdtempSync(join(tmpdir(), "swarm-prov-snap-local-"));
+    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-snap-local-"));
     try {
       const p = new WorktreeProvisioner();
       await p.ensure("r-local", { cwd: nonGit });

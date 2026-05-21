@@ -1,4 +1,4 @@
-// Unit tests for `swarm daemon stop`. The happy SIGTERM path requires a
+// Unit tests for `fragua daemon stop`. The happy SIGTERM path requires a
 // live child process and a kernel signal round-trip; rather than spawn
 // one here we exercise the two deterministic branches:
 //   - no lock row present          → prints "no daemon running", exit 0
@@ -11,15 +11,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "@swarm/store";
+import { SqliteStore } from "@fragua/store";
 import { daemonStopCommand } from "../src/commands/daemon.ts";
 
 let dir: string;
 let dbPath: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "swarm-stop-"));
-  dbPath = join(dir, "swarm.db");
+  dir = mkdtempSync(join(tmpdir(), "fragua-stop-"));
+  dbPath = join(dir, "fragua.db");
 });
 
 afterEach(() => {
