@@ -27,13 +27,7 @@ import {
   selectEdge,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
-import {
-  ConcurrencyError,
-  CURRENT_SCHEMA_VERSION,
-  type FactEvent,
-  type IEventStore,
-  MIN_COMPATIBLE_SCHEMA_VERSION,
-} from "@fragua/store";
+import { CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore, MIN_COMPATIBLE_SCHEMA_VERSION } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
@@ -66,6 +60,7 @@ import {
 // are imported from executor.ts by tests and other call sites.
 export { buildSubstitutionArgs, classifyAbortCause, resolveBackoff } from "./executor-helpers.ts";
 
+import { makeOccController, tryAppendFact } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import {
   decideProviderRetry,
@@ -288,83 +283,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // halt here instead of running forever.
   let dispatches = 0;
 
-  // OCC ceiling guards the unbounded `if (!ok) continue` retry path.
-  // Each fact-append site that retries on `ConcurrencyError` increments
-  // a counter; the counter resets on the first successful append. At
-  // OCC_WARN_AT we emit one observability event per (run, node,
-  // iteration); at OCC_CEILING we halt the run with a structured
-  // `occ_exhausted` payload. The counter is in-memory, scoped to this
-  // dispatch — daemon restart re-enters with a fresh count, which is
-  // the correct semantics: the bug shape is "supervisor wedged this
-  // turn", which doesn't survive a process restart.
-  const OCC_CEILING = 3;
-  const OCC_WARN_AT = 2;
-  const OCC_BACKOFF_CAP_MS = 16;
-  let occCount = 0;
-  let occWarned = false;
-  const onOccConflict = async (
-    attemptedFactType: string,
-    nodeId: string,
-    iteration: number,
-    lastVersion: number,
-  ): Promise<{ halted: boolean }> => {
-    occCount++;
-    if (occCount >= OCC_CEILING) {
-      // The occ_exhausted halt is itself a fact append and can itself
-      // conflict (the same wedged-supervisor that produced the upstream
-      // conflicts may still be committing). Retry it against fresh state
-      // a bounded number of times so the run actually terminates instead
-      // of returning `halted: true` while the halt fact never landed —
-      // which left the run stranded `running`.
-      const HALT_APPEND_MAX_ATTEMPTS = OCC_CEILING + 2;
-      for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
-        const fresh = opts.store.getState(runId);
-        // Already terminal (a concurrent writer halted/cancelled/completed
-        // it) — nothing left to do.
-        if (fresh == null || fresh.status !== "running") return { halted: true };
-        const ok = await tryAppendFact(opts.store, runId, fresh.version, [
-          {
-            type: "fact.run_halted",
-            payload: {
-              reason: "occ_exhausted",
-              detail: `${occCount} consecutive OCC conflicts on ${attemptedFactType} for node ${nodeId}`,
-              occContext: { count: occCount, nodeId, iteration, lastVersion, attemptedFactType },
-            },
-          },
-        ]);
-        if (ok) break;
-        await sleep(Math.min(2 ** attempt, OCC_BACKOFF_CAP_MS), opts.shutdownSignal);
-      }
-      return { halted: true };
-    }
-    if (occCount === OCC_WARN_AT && !occWarned) {
-      opts.store.appendObservabilityEvents(runId, [
-        {
-          type: "occ_conflict_warning",
-          payload: { count: occCount, ceiling: OCC_CEILING, nodeId, iteration },
-        },
-      ]);
-      occWarned = true;
-    }
-    // Exponential backoff: 1ms, 2ms, then capped at 16ms. Gives the
-    // conflicting writer's commit a chance to land so the next OCC
-    // version-read sees the advanced state.
-    const delayMs = Math.min(2 ** (occCount - 1), OCC_BACKOFF_CAP_MS);
-    await sleep(delayMs, opts.shutdownSignal);
-    return { halted: false };
-  };
-  const onOccResolved = (nodeId: string, iteration: number): void => {
-    if (occCount > 0) {
-      opts.store.appendObservabilityEvents(runId, [
-        {
-          type: "occ_conflict_resolved",
-          payload: { count: occCount, nodeId, iteration },
-        },
-      ]);
-    }
-    occCount = 0;
-    occWarned = false;
-  };
+  // OCC controller guards the unbounded `if (!ok) continue` retry path.
+  // Each fact-append site that retries on `ConcurrencyError` reports the
+  // conflict; the controller backs off, warns once, and halts the run on
+  // exhaustion. Scoped to this runOne pass — see occ-append.ts.
+  const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
+  const onOccConflict = occ.onConflict;
+  const onOccResolved = occ.onResolved;
 
   let runEnv: ExecutionEnvironment | undefined;
   // Lazy per-run graph cache. Parsed once on first edge-selection need.
@@ -1920,26 +1845,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       }
     }
-  }
-}
-
-async function tryAppendFact(
-  store: IEventStore,
-  runId: string,
-  expectedVersion: number,
-  facts: FactEvent[],
-  opts?: {
-    routingPatch?: Record<string, unknown>;
-    advanceAppliedTo?: number;
-  },
-): Promise<boolean> {
-  if (facts.length === 0) return true;
-  try {
-    store.appendFact(runId, facts, expectedVersion, opts);
-    return true;
-  } catch (err) {
-    if (err instanceof ConcurrencyError) return false;
-    throw err;
   }
 }
 
