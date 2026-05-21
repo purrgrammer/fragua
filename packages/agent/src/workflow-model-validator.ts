@@ -20,6 +20,7 @@
 // Llm nodes only — other handler kinds (start/exit/tool/human)
 // don't LLM-dispatch.
 
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseWorkflow } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
@@ -45,7 +46,11 @@ let cachedRegistry: ModelRegistry | undefined;
 let cachedStore: SqliteStore | undefined;
 function getDefaultRegistry(): ModelRegistry {
   if (!cachedRegistry) {
-    if (!cachedStore) cachedStore = new SqliteStore({ path: join(getFraguaHome(), "fragua.db") });
+    if (!cachedStore) {
+      const home = getFraguaHome();
+      mkdirSync(home, { recursive: true });
+      cachedStore = new SqliteStore({ path: join(home, "fragua.db") });
+    }
     cachedRegistry = Registry.create(AuthStorage.fromStore(cachedStore), cachedStore);
   }
   return cachedRegistry;
