@@ -64,6 +64,16 @@ export type SnapshotResult = {
   uncommitted?: SnapshotStat | null;
 };
 
+/** Snapshot commits are internal fragua machinery, not user authorship —
+ * stamp them with a fixed identity so `commit-tree` never depends on the
+ * ambient `user.name` / `user.email` git config (absent on fresh CI runners). */
+const SNAPSHOT_IDENT: Record<string, string> = {
+  GIT_AUTHOR_NAME: "fragua",
+  GIT_AUTHOR_EMAIL: "fragua@localhost",
+  GIT_COMMITTER_NAME: "fragua",
+  GIT_COMMITTER_EMAIL: "fragua@localhost",
+};
+
 async function git(cwd: string, args: string[], env?: Record<string, string>): Promise<string> {
   const { stdout } = await execFileP("git", args, {
     cwd,
@@ -156,7 +166,7 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
 
     const commitArgs = ["commit-tree", treeSha, "-m", `fragua-snapshot:${runId}:${boundary}`];
     if (parentSnap !== "") commitArgs.push("-p", parentSnap);
-    const commitSha = await git(worktree, commitArgs);
+    const commitSha = await git(worktree, commitArgs, SNAPSHOT_IDENT);
 
     await updateRefWithRetry(worktree, `refs/fragua/snapshots/${runId}`, commitSha);
 
