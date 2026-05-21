@@ -989,7 +989,7 @@ export interface RawEvent extends EventEnvelope {
  * intent rows in addition to the fact rows just duplicates signal.
  *
  * Excludes node-level facts, side-effect facts, bookkeeping kinds
- * (run_branched, message_appended), and the
+ * (message_appended), and the
  * entire observability family (`agent.*`, `llm.*`, `tool.*`,
  * `cost.recorded`) because at sustained run rates those would drown
  * the feed.
@@ -1013,4 +1013,9 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // System health
   "fact.daemon_takeover",
   "fact.handler_timeout_leaked",
+  // Post-terminal operator actions (branch / commit / merge / discard)
+  "fact.run_branched",
+  "fact.run_committed",
+  "fact.run_merged",
+  "fact.run_discarded",
 ];
