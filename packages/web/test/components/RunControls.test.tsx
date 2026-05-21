@@ -5,7 +5,7 @@
 // module boundary using `mock.module("sonner", ...)` so the spies are in
 // place before the component's module resolves its import.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { RunControls } from "../../src/components/RunControls.tsx";
