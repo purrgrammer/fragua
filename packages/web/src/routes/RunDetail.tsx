@@ -114,6 +114,15 @@ export function RunDetail(): JSX.Element {
     return new Set<string>((detail?.nodes ?? []).filter((n) => n.state === "running").map((n) => n.nodeId));
   }, [detail?.nodes]);
 
+  const { data: diffSnapshots } = useQuery({
+    ...queries.runs.snapshots(id),
+    enabled: !!id && detail?.cwd != null,
+  });
+  // Disable the tab only once snapshots have resolved to empty — while
+  // the query is still pending (undefined) we leave the tab enabled so
+  // it doesn't flicker disabled→enabled on first load.
+  const diffTabDisabled = diffSnapshots !== undefined && diffSnapshots.length === 0;
+
   // `isLive` here means "actively dispatching", not just "SSE connected".
   // A paused run keeps the SSE socket open (so resume facts still arrive)
   // but isn't producing tokens, so streaming labels / pulses must stop.
@@ -190,7 +199,7 @@ export function RunDetail(): JSX.Element {
               Cost
             </TabsTrigger>
             {detail?.cwd != null && (
-              <TabsTrigger value="diff" data-testid="view-tab-diff">
+              <TabsTrigger value="diff" data-testid="view-tab-diff" disabled={diffTabDisabled}>
                 Diff
               </TabsTrigger>
             )}

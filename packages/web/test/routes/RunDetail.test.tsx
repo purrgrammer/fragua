@@ -882,5 +882,71 @@ steps:
         mock.restore();
       }
     });
+
+    it("disables the Diff tab trigger when snapshots resolve to an empty array", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-disabled",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cwd: "/home/user/project",
+      };
+      const client = createTestQueryClient();
+      client.setQueryData(queries.runs.detail("run-diff-disabled").queryKey, detail);
+      const mock = installFetchMock(
+        {
+          "/api/runs/run-diff-disabled/events.json": () => json([]),
+          "/api/runs/run-diff-disabled/messages": () => json([]),
+          "/api/runs/run-diff-disabled/steps": () => json([]),
+          "/api/runs/run-diff-disabled": () => json(detail),
+          "/api/runs/run-diff-disabled/snapshots": () => json([]),
+        },
+        () => json([]),
+      );
+      try {
+        const { container } = mount(client, "/runs/run-diff-disabled");
+        // Wait for the tab to render and snapshots to resolve.
+        await waitFor(() => {
+          const tab = within(container).getByTestId("view-tab-diff");
+          expect(tab.hasAttribute("disabled")).toBe(true);
+        });
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("does not disable the Diff tab when snapshots are present", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-enabled",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 30,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cwd: "/home/user/project",
+      };
+      const { client, mock } = prepareWithDiff("run-diff-enabled", detail);
+      try {
+        const { container } = mount(client, "/runs/run-diff-enabled");
+        // Wait for the snapshots to load (non-empty), then confirm tab is not disabled.
+        await waitFor(() => {
+          expect(within(container).getByTestId("view-tab-diff")).toBeTruthy();
+        });
+        await waitFor(() => {
+          const tab = within(container).getByTestId("view-tab-diff");
+          expect(tab.hasAttribute("disabled")).toBe(false);
+        });
+      } finally {
+        mock.restore();
+      }
+    });
   });
 });

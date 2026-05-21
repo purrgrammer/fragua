@@ -63,9 +63,7 @@ export function RunDiffTab({ runId }: RunDiffTabProps): JSX.Element {
         ) : diffQuery.isError ? (
           <DiffError error={diffQuery.error} />
         ) : diffQuery.data === "" ? (
-          <div className="p-3 text-sw-sm text-sw-muted" data-testid="snapshot-diff-empty">
-            No changes vs base.
-          </div>
+          <EmptyState data-testid="snapshot-diff-empty" title="No changes vs base" density="compact" />
         ) : diffQuery.data !== undefined ? (
           <CodeBlock code={diffQuery.data} language="diff" />
         ) : null}
@@ -80,9 +78,5 @@ function DiffError({ error }: { error: unknown }): JSX.Element {
   if (status === 410) msg = "Worktree or base ref disposed; diff unavailable.";
   else if (status === 404) msg = "Snapshot not found.";
   else msg = "Couldn't load diff.";
-  return (
-    <div className="p-3 text-sw-sm text-sw-muted" data-testid="snapshot-diff-error">
-      {msg}
-    </div>
-  );
+  return <EmptyState data-testid="snapshot-diff-error" title={msg} density="compact" />;
 }
