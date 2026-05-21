@@ -72,28 +72,9 @@ Named sub-agent profiles live alongside skills under `.agents/agents/` (project)
 
 ## Ground rules
 
-1. **Spec-first.** Code uncovered by `docs/SPEC.md` / `docs/ARCHITECTURE.md` / `docs/handler-contract.md` — stop, update the docs first or check in. Same-PR obligations when load-bearing contract files change:
-
-   | If you touch | Update in the same PR |
-   |---|---|
-   | `packages/store/src/schema.sql` | `ARCHITECTURE.md` §2 (schema) |
-   | `packages/types/src/events.ts` — status / intent / fact / halt / quarantine types, or `DaemonEvent` literals | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` — §4.1 for new informational fact types, §8 for new halt/quarantine reasons or paused statuses, §8.1 for new schedule daemon-events, §8.2 for new subagent observability events; `STATUS.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the doc claims |
-   | `packages/core/src/handler/types.ts` | `handler-contract.md` |
-   | `packages/core/src/handler/intent-fold.ts` | `docs/intent-fold.md` |
-   | `packages/core/src/engine/validator.ts` — error/warning codes (E001–E0NN, W001–W0NN) | `.agents/skills/workflows/SKILL.md` validator-codes table |
-   | `packages/server/src/store/routes.ts` / `runs-routes.ts` — operator endpoint shapes | `.agents/skills/swarm-run/SKILL.md` cheat sheet; `ARCHITECTURE.md` §7 |
-   | `packages/store/src/schema.sql` — blobs / artifacts layout | `.agents/skills/swarm-debug/SKILL.md` §7 (artifact read path) |
-   | `packages/cli/bin/swarm.ts` (new entry point) or `packages/cli/src/commands/*` (default-changing flag, renamed flag, or new subcommand) | `README.md` (Quick tour: command invocations, default ports, storage paths) |
-
-   Half-baked is fine — mark it (`> Status: in-progress` or `> Status: sketch`). An honest known-rough section beats silence; we revisit as the design firms up.
+1. **Spec-first.** Code uncovered by `docs/SPEC.md` / `docs/ARCHITECTURE.md` / `docs/handler-contract.md` — stop, update the docs first or check in. Half-baked is fine — mark it (`> Status: in-progress` or `> Status: sketch`). An honest known-rough section beats silence; we revisit as the design firms up.
 
    **Enum-literal consumers.** Adding or removing a literal in a contract union (`RunStatus`, `HaltReason`, `IntentEvent['type']`, `FactEvent['type']`, etc.) requires a grep across `packages/` for every consumer — many use string-literal sets (`Set<RunStatus>`, hardcoded `WHERE status IN (…)` SQL, label maps in `web/src/lib/humanize.ts`, allowed-status arrays in `server/src/store/runs-routes.ts:VALID_STATUSES`) that don't trip TypeScript exhaustiveness checks. The typecheck pass is necessary but not sufficient — when in doubt, `rg '"<old-literal>"' packages/` and update each.
-
-   **Common drift patterns.** Three patterns the introspect workflow keeps re-finding — worth a 30-second self-check before merging:
-
-   - **Status-enum changes that don't propagate to STATUS.md.** A new `RunStatus` literal (or a renamed one — e.g. `paused_provider_error` → unified `paused{reason}`) lands in `swarm-events.ts` + ARCH §3 + the schema CHECK, but `STATUS.md`'s "What swarm delivers today" still describes the old shape. `rg '<old-literal>' STATUS.md README.md docs/` before merging.
-   - **Route additions that don't update ARCH §7.** A new `app.post("/runs/:id/<verb>", …)` in `routes.ts` ships without the corresponding row in §7's web-server routes table. §7 is the operator's index — if it's not there, the route is invisible.
-   - **CLI default-changing flags that don't update README.** Renaming `--provider` → `--llm-provider`, changing a default port (3000 → 6767), or adding a new subcommand leaves the README quick-tour pointing at the wrong invocation. The quick-tour is the first thing new users copy verbatim.
 2. **Tests before done.** `bun test` green + monorepo typecheck clean are table stakes.
 3. **No silent deps.** Every runtime dep through `package.json` with an exact pin and a one-line rationale in the commit message.
 4. **One coordination surface.** `@swarm/store` is the only place state transitions land. No filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
