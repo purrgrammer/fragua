@@ -246,7 +246,7 @@ export function RunDetail(): JSX.Element {
             </TabsContent>
             {detail?.cwd != null && (
               <TabsContent value="diff" className="h-full">
-                <RunDiffTab runId={id} />
+                <RunDiffTab runId={id} run={detail ?? undefined} />
               </TabsContent>
             )}
           </div>
@@ -316,6 +316,19 @@ const DetailHeader = memo(function DetailHeader({
             <ProjectLink cwd={detail.cwd} variant="text" title={detail.cwd} data-testid="detail-project-link">
               {projectBasename(detail.cwd)}
             </ProjectLink>
+          </>
+        )}
+        {(detail?.baseGitRef ?? detail?.baseGitSha) && (
+          <>
+            <span className="text-xs text-sw-muted/40">·</span>
+            <span
+              data-testid="detail-base-ref"
+              className="font-mono text-xs text-sw-muted"
+              title={detail?.baseGitSha ?? undefined}
+            >
+              {detail?.baseGitRef ?? ""}
+              {detail?.baseGitSha ? ` ${detail.baseGitSha.slice(0, 7)}` : ""}
+            </span>
           </>
         )}
         {showLive && (

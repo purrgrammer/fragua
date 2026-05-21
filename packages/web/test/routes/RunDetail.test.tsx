@@ -949,4 +949,88 @@ steps:
       }
     });
   });
+
+  describe("RunDetail header — git base", () => {
+    it("renders baseGitRef + short baseGitSha when both present", async () => {
+      const detail: RunDetailT = {
+        runId: "run-git-base",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 5,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        baseGitRef: "main",
+        baseGitSha: "abcdef1234567890",
+      };
+      const { client, mock } = prepare("run-git-base", detail);
+      try {
+        const { container } = mount(client, "/runs/run-git-base/conversation");
+        await waitFor(() => {
+          const pill = container.querySelector(`[data-testid="detail-base-ref"]`);
+          if (!pill) throw new Error("base-ref pill not found");
+          return pill;
+        });
+        const pill = container.querySelector(`[data-testid="detail-base-ref"]`)!;
+        expect(pill.textContent).toContain("main");
+        expect(pill.textContent).toContain("abcdef1");
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("renders only baseGitSha when baseGitRef is absent", async () => {
+      const detail: RunDetailT = {
+        runId: "run-sha-only",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 5,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        baseGitSha: "abcdef1234567890",
+      };
+      const { client, mock } = prepare("run-sha-only", detail);
+      try {
+        const { container } = mount(client, "/runs/run-sha-only/conversation");
+        await waitFor(() => {
+          const pill = container.querySelector(`[data-testid="detail-base-ref"]`);
+          if (!pill) throw new Error("base-ref pill not found");
+          return pill;
+        });
+        const pill = container.querySelector(`[data-testid="detail-base-ref"]`)!;
+        expect(pill.textContent).toContain("abcdef1");
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("does not render the base-ref pill when both fields are absent", async () => {
+      const detail: RunDetailT = {
+        runId: "run-no-git",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        lastEventSeq: 5,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      const { client, mock } = prepare("run-no-git", detail);
+      try {
+        const { container } = mount(client, "/runs/run-no-git/conversation");
+        await waitFor(() => {
+          expect(container.querySelector(`[data-testid="detail-status"]`)).toBeTruthy();
+        });
+        expect(container.querySelector(`[data-testid="detail-base-ref"]`)).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+  });
 });

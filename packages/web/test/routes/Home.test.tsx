@@ -5,13 +5,12 @@
 // round-trip. A `never`-resolving fetch is installed when we need to
 // observe the loading-skeleton state.
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, test } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
-import { INBOX_HOME_LIMIT } from "../../src/routes/Home.tsx";
 import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
@@ -29,6 +28,10 @@ function row(overrides: Partial<RunSummary> = {}): RunSummary {
     ...(overrides.workflow !== undefined ? { workflow: overrides.workflow } : {}),
     ...(overrides.workflowName !== undefined ? { workflowName: overrides.workflowName } : {}),
     ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
+    ...(overrides.runStatus !== undefined ? { runStatus: overrides.runStatus } : {}),
+    ...(overrides.inboxStatus !== undefined ? { inboxStatus: overrides.inboxStatus } : {}),
+    ...(overrides.changeStat !== undefined ? { changeStat: overrides.changeStat } : {}),
+    ...(overrides.baseGitRef !== undefined ? { baseGitRef: overrides.baseGitRef } : {}),
   };
 }
 
@@ -38,8 +41,8 @@ function mount(client = createTestQueryClient(), path = "/") {
 }
 
 /** Seed the per-section caches the way the server would respond.
- * Stats uses the unfiltered list; Running and Inbox use narrowed
- * queries with server-enforced status/order/limit. */
+ * Stats uses the unfiltered list; Running, Inbox (blocked), and worktree
+ * (pending) use narrowed queries. */
 function withRows(rows: RunSummary[]) {
   const client = createTestQueryClient();
   client.setQueryData(queries.runs.list().queryKey, rows);
@@ -47,16 +50,23 @@ function withRows(rows: RunSummary[]) {
     queries.runs.list({ status: ["running"] }).queryKey,
     rows.filter((r) => r.status === "running"),
   );
-  const inboxRows = rows.filter(
+  const blockedRows = rows.filter(
     (r) => r.runStatus === "paused_human" || r.runStatus === "paused" || r.runStatus === "quarantined",
   );
   client.setQueryData(
     queries.runs.list({
       status: ["paused_human", "paused", "quarantined"],
       order: "oldest",
-      limit: INBOX_HOME_LIMIT + 1,
     }).queryKey,
-    inboxRows.slice(0, INBOX_HOME_LIMIT + 1),
+    blockedRows,
+  );
+  const worktreeRows = rows.filter((r) => r.inboxStatus === "pending");
+  client.setQueryData(
+    queries.runs.list({
+      inbox: "pending",
+      order: "oldest",
+    }).queryKey,
+    worktreeRows,
   );
   return client;
 }
@@ -227,5 +237,103 @@ describe("Home route", () => {
 
     const tokens = q.getByTestId("tile-tokens");
     expect(tokens.querySelector(".sw-pulse")).toBeNull();
+  });
+
+  // ── Unified Watchtower inbox ─────────────────────────────────────────
+
+  describe("Home — unified Watchtower inbox", () => {
+    test("renders a single 'inbox' section combining blocked and worktree rows", async () => {
+      const blockedRun = row({
+        runId: "blocked-1",
+        status: "paused",
+        runStatus: "paused_human",
+        startedAt: "2024-01-01T00:00:00Z",
+        title: "Blocked run",
+      });
+      const worktreeRun = row({
+        runId: "worktree-1",
+        status: "success",
+        runStatus: "completed",
+        startedAt: "2024-01-02T00:00:00Z",
+        title: "Worktree run",
+        inboxStatus: "pending",
+        changeStat: {
+          committed: { filesChanged: 1, insertions: 5, deletions: 2 },
+          uncommitted: null,
+        },
+      });
+      const client = withRows([blockedRun, worktreeRun]);
+      const { container } = mount(client);
+      const q = within(container);
+
+      await waitFor(() => {
+        expect(q.getByTestId("inbox")).toBeTruthy();
+      });
+
+      // There is exactly one inbox section
+      expect(container.querySelectorAll(`[data-testid="inbox"]`).length).toBe(1);
+
+      // Both row types should be inside the one section
+      const inbox = q.getByTestId("inbox");
+      await waitFor(() => {
+        expect(within(inbox).getByTestId(`inbox-run-blocked-1`)).toBeTruthy();
+      });
+      expect(within(inbox).getByTestId(`worktree-inbox-row-worktree-1`)).toBeTruthy();
+    });
+
+    test("renders ONE empty state when both lists are empty", async () => {
+      const client = withRows([]);
+      const { container } = mount(client);
+      const q = within(container);
+
+      await waitFor(() => {
+        expect(q.getByTestId("inbox-empty")).toBeTruthy();
+      });
+
+      // Only one empty state for the unified inbox
+      expect(container.querySelectorAll(`[data-testid="inbox-empty"]`).length).toBe(1);
+      // The legacy separate worktree empty state must NOT appear on Home
+      expect(q.queryByTestId("worktree-inbox-empty")).toBeNull();
+    });
+
+    test("does not render a separate 'Ready to land' section on Watchtower", async () => {
+      const client = withRows([]);
+      const { container } = mount(client);
+      await waitFor(() => {
+        expect(container.querySelector(`[data-testid="inbox"]`)).toBeTruthy();
+      });
+      // The WorktreeInbox standalone section must not appear on Home
+      expect(container.querySelector(`[data-testid="worktree-inbox"]`)).toBeNull();
+      // The text "Ready to land" must not appear on Home
+      expect(container.textContent).not.toContain("Ready to land");
+    });
+
+    test("shows the combined count badge when there are items in either list", async () => {
+      const blockedRun = row({
+        runId: "blocked-x",
+        status: "paused",
+        runStatus: "paused",
+        startedAt: "2024-01-01T00:00:00Z",
+      });
+      const worktreeRun = row({
+        runId: "worktree-x",
+        status: "success",
+        runStatus: "completed",
+        startedAt: "2024-01-02T00:00:00Z",
+        inboxStatus: "pending",
+        changeStat: { committed: null, uncommitted: { filesChanged: 1, insertions: 1, deletions: 0 } },
+      });
+      const client = withRows([blockedRun, worktreeRun]);
+      const { container } = mount(client);
+
+      await waitFor(() => {
+        const badge = container.querySelector(`[data-testid="inbox-count-badge"]`);
+        if (!badge) throw new Error("count badge not found");
+        return badge;
+      });
+
+      const badge = container.querySelector(`[data-testid="inbox-count-badge"]`);
+      expect(badge?.textContent?.trim()).toBe("2");
+    });
   });
 });

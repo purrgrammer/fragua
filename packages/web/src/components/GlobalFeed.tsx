@@ -43,7 +43,7 @@ import type { RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { rowEnterFromTop } from "../lib/feedMotion.ts";
 import { feedAtom, feedEventKey, feedLoadingAtom } from "../lib/globalFeed.ts";
-import { humanizeOperatorActionVerb } from "../lib/humanize.ts";
+import { humanizeOperatorActionShortVerb } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatRelative } from "../lib/time.ts";
@@ -195,9 +195,9 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
     if (fromStatus === "paused") return { ...base, verb: "retrying" };
     if (fromStatus === "paused_auto") return { ...base, verb: "retrying" };
   }
-  // Operator-action facts: build a payload-aware verb from the humanize helper.
-  const opVerb = humanizeOperatorActionVerb(event.type, (event.payload ?? {}) as Record<string, unknown>);
-  if (opVerb !== null) return { ...base, verb: opVerb };
+  // Operator-action facts: short single verb (git-centric row).
+  const opShortVerb = humanizeOperatorActionShortVerb(event.type);
+  if (opShortVerb !== null) return { ...base, verb: opShortVerb };
   return base;
 }
 
@@ -257,6 +257,14 @@ export function GlobalFeed(): JSX.Element {
   );
 }
 
+/** The four operator-action fact kinds that get git-centric row chrome. */
+const OPERATOR_ACTION_KINDS: ReadonlySet<string> = new Set([
+  "fact.run_branched",
+  "fact.run_committed",
+  "fact.run_merged",
+  "fact.run_discarded",
+]);
+
 interface FeedRowProps {
   event: FeedEvent;
   reduce: boolean;
@@ -283,6 +291,9 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
   // fallback for the legacy attention rows that don't carry an
   // explicit borderVar (daemon_takeover, handler_timeout_leaked).
   const stripColor = borderVar ?? "var(--sw-accent-thinking)";
+
+  const isOperatorAction = OPERATOR_ACTION_KINDS.has(event.type);
+  const baseRefLabel = run?.baseGitRef ?? (run?.baseGitSha ? run.baseGitSha.slice(0, 7) : undefined);
 
   return (
     <motion.li
@@ -315,12 +326,13 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
     >
       <Icon className={`col-start-1 row-start-1 size-4 self-center ${iconClass ?? "text-sw-muted"}`} aria-hidden />
       <span className="col-start-2 row-start-1 truncate text-sw-muted">{verb}</span>
-      {/* Time: top-right on mobile (col 3 row 1); col 5 row 1 on
-          desktop. Explicit `sm:row-start-1` everywhere (instead of
-          `row-auto`) keeps the desktop row truly single-line — the
-          row-auto shorthand was unreliable next to a longhand
-          `row-start-2` from the mobile variant. */}
-      <FeedRowTime ts={event.ts} className="col-start-3 row-start-1 ml-auto text-right sm:col-start-5 sm:ml-0" />
+      {/* For operator-action rows: hide the timestamp, show base-ref instead.
+          For all other rows: show the timestamp as before. */}
+      {isOperatorAction ? (
+        <span aria-hidden className="col-start-3 row-start-1 ml-auto hidden sm:col-start-5 sm:ml-0 sm:inline" />
+      ) : (
+        <FeedRowTime ts={event.ts} className="col-start-3 row-start-1 ml-auto text-right sm:col-start-5 sm:ml-0" />
+      )}
       <Link
         to={`/runs/${event.runId}`}
         title={runTitleTooltip(event.runId, run)}
@@ -328,7 +340,19 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       >
         {displayRunTitle(event.runId, run)}
       </Link>
-      {wf ? (
+      {/* For operator-action rows: show base ref/sha instead of workflow badge. */}
+      {isOperatorAction ? (
+        baseRefLabel ? (
+          <span
+            data-testid={`feed-row-baseref-${event.runId}`}
+            className="col-start-3 row-start-2 max-w-[10rem] truncate text-right font-mono text-sw-xs text-sw-muted justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto"
+          >
+            {baseRefLabel}
+          </span>
+        ) : (
+          <span aria-hidden className="hidden sm:inline" />
+        )
+      ) : wf ? (
         <WorkflowLink
           name={wf}
           variant="badge"

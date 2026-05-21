@@ -80,35 +80,38 @@ describe("metaForEvent", () => {
   });
 });
 
-describe("metaForEvent — operator-action facts", () => {
-  test("fact.run_branched builds payload-aware verb with branch name", () => {
+describe("metaForEvent — operator-action git-centric verbs", () => {
+  test("fact.run_branched → short verb 'branched' (no payload suffix)", () => {
     const m = metaForEvent(evt("fact.run_branched", { branch: "feature/my-fix", sha: "abc" }));
-    expect(m.verb).toBe("branched → feature/my-fix");
+    expect(m.verb).toBe("branched");
     expect(m.attention).toBeFalsy();
   });
 
-  test("fact.run_committed includes targetBranch in verb", () => {
+  test("fact.run_committed → 'committed' (no onto suffix)", () => {
     const m = metaForEvent(
       evt("fact.run_committed", { targetBranch: "main", sha: "d0", message: "m", parentSha: "p" }),
     );
-    expect(m.verb).toBe("committed onto main");
+    expect(m.verb).toBe("committed");
   });
 
-  test("fact.run_merged includes targetBranch in verb", () => {
+  test("fact.run_merged → 'merged' (no into suffix)", () => {
     const m = metaForEvent(evt("fact.run_merged", { targetBranch: "main", mode: "ff", sha: "e0", parentShas: [] }));
-    expect(m.verb).toBe("merged into main");
+    expect(m.verb).toBe("merged");
   });
 
-  test("fact.run_discarded renders static verb", () => {
+  test("fact.run_discarded → 'discarded'", () => {
     const m = metaForEvent(evt("fact.run_discarded", { refs: [] }));
     expect(m.verb).toBe("discarded");
     expect(m.attention).toBeFalsy();
   });
 
-  test("operator-action facts fall back gracefully when payload fields are absent", () => {
+  test("operator-action facts always return single-word verbs regardless of payload", () => {
     expect(metaForEvent(evt("fact.run_branched", {})).verb).toBe("branched");
     expect(metaForEvent(evt("fact.run_committed", {})).verb).toBe("committed");
     expect(metaForEvent(evt("fact.run_merged", {})).verb).toBe("merged");
+    expect(metaForEvent(evt("fact.run_branched", { branch: "any" })).verb).toBe("branched");
+    expect(metaForEvent(evt("fact.run_committed", { targetBranch: "main" })).verb).toBe("committed");
+    expect(metaForEvent(evt("fact.run_merged", { targetBranch: "develop" })).verb).toBe("merged");
   });
 });
 

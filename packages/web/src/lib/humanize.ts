@@ -48,6 +48,26 @@ export function humanizeNodeCompletedSuffix(payload: { route?: string; outcomeSt
   return "";
 }
 
+/** Single-word verb for the four post-terminal operator-action facts.
+ *  Used by the git-centric feed rows that render just the verb.
+ *  Returns `null` for any other event type. */
+export function humanizeOperatorActionShortVerb(
+  type: string,
+): "branched" | "committed" | "merged" | "discarded" | null {
+  switch (type) {
+    case "fact.run_branched":
+      return "branched";
+    case "fact.run_committed":
+      return "committed";
+    case "fact.run_merged":
+      return "merged";
+    case "fact.run_discarded":
+      return "discarded";
+    default:
+      return null;
+  }
+}
+
 /** Build a short feed verb for the four post-terminal operator-action facts.
  *  Returns `null` for any other event type.
  *
