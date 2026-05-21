@@ -42,21 +42,19 @@ describe("initCommand", () => {
     }
   }
 
-  test("writes .fragua/config.yaml, not .fragua/config.jsonc", async () => {
+  test("writes .fragua/config.yaml", async () => {
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(0);
     expect(await exists(".fragua/config.yaml")).toBe(true);
-    expect(await exists(".fragua/config.jsonc")).toBe(false);
     // The default template is comments-only — loads as an empty config.
     const cfg = await loadProjectConfig(scratch);
     expect(cfg).toEqual({});
   });
 
-  test(".gitignore allowlists both .fragua/config.yaml and .fragua/config.jsonc", async () => {
+  test(".gitignore allowlists .fragua/config.yaml", async () => {
     await initCommand({ cwd: scratch });
     const gitignore = await readFile(join(scratch, ".gitignore"), "utf8");
     expect(gitignore).toContain("!.fragua/config.yaml");
-    expect(gitignore).toContain("!.fragua/config.jsonc");
   });
 
   test("refuses to overwrite an existing .fragua/config.yaml", async () => {
@@ -67,15 +65,6 @@ describe("initCommand", () => {
     // File is untouched
     const content = await readFile(join(scratch, ".fragua/config.yaml"), "utf8");
     expect(content).toBe(`auto-title: false\n`);
-  });
-
-  test("refuses to overwrite an existing .fragua/config.jsonc (legacy)", async () => {
-    await mkdir(join(scratch, ".fragua"), { recursive: true });
-    await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "auto-title": false }`, "utf8");
-    const code = await initCommand({ cwd: scratch });
-    expect(code).toBe(1);
-    // JSONC untouched, no YAML written
-    expect(await exists(".fragua/config.yaml")).toBe(false);
   });
 
   test("fails on non-git directory", async () => {

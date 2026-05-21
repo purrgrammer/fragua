@@ -6,10 +6,6 @@
 //                                      (today: `bootstrap`). Overlays
 //                                      global; project keys win.
 //
-// Legacy: `.fragua/config.jsonc` is read with a deprecation warning for one
-// release. When both `.yaml` and `.jsonc` exist in the same layer, YAML
-// wins and a "shadowed" warning is emitted. Delete `.jsonc` to silence it.
-//
 // Top-level keys merge shallowly between the two layers. Nested objects
 // (`defaults`, `blob-gc`, `skills`, `timeouts`, `summariser`) merge one level
 // deep so a project config can override `defaults.model` without losing
@@ -205,79 +201,6 @@ function formatValidationErrors(errors: Iterable<{ path: string; message: string
   return list.map((e) => `${e.path || "<root>"}: ${e.message}`).join("; ");
 }
 
-// ─── Legacy JSONC stripper (retained for the deprecation-window reader) ───
-
-function stripJsonc(src: string): string {
-  let out = "";
-  let i = 0;
-  let inString = false;
-  let inLineComment = false;
-  let inBlockComment = false;
-  while (i < src.length) {
-    const c = src[i];
-    const next = src[i + 1];
-    if (inLineComment) {
-      if (c === "\n") {
-        inLineComment = false;
-        out += c;
-      }
-      i++;
-      continue;
-    }
-    if (inBlockComment) {
-      if (c === "*" && next === "/") {
-        inBlockComment = false;
-        i += 2;
-        continue;
-      }
-      i++;
-      continue;
-    }
-    if (inString) {
-      if (c === "\\" && i + 1 < src.length) {
-        out += src.slice(i, i + 2);
-        i += 2;
-        continue;
-      }
-      if (c === '"') inString = false;
-      out += c;
-      i++;
-      continue;
-    }
-    if (c === '"') {
-      inString = true;
-      out += c;
-      i++;
-      continue;
-    }
-    if (c === "/" && next === "/") {
-      inLineComment = true;
-      i += 2;
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      inBlockComment = true;
-      i += 2;
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out.replace(/,(\s*[}\]])/g, "$1");
-}
-
-/** Parse a JSONC body. Returns the parsed object or null on parse
- * failure (caller will warn and return {}). */
-function parseJsoncBody(body: string, filePath: string): unknown | null {
-  try {
-    return JSON.parse(stripJsonc(body));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`config: parse error in ${filePath}: ${msg} — ignoring file, using defaults`);
-    return null;
-  }
-}
-
 /** Parse a YAML body. Returns the parsed object, or null on parse
  * failure (caller will warn and return {}). */
 function parseYamlBody(body: string, filePath: string): unknown | null {
@@ -319,51 +242,20 @@ function validateParsed(parsed: unknown, filePath: string): FraguaConfig {
   return cleaned as FraguaConfig;
 }
 
-/** Parse and validate one config layer from a directory.
- *
- * Resolution order (per layer directory):
- *   1. `<dir>/.fragua/config.yaml` — canonical
- *   2. `<dir>/.fragua/config.jsonc` — legacy, emits a deprecation warning
- *
- * When both exist, YAML wins and a "shadowed" warning is emitted.
- * Returns `{}` when neither file is present. */
-async function loadConfigFile(layerDir: string, layerLabel: "global" | "project"): Promise<FraguaConfig> {
+/** Parse and validate one config layer's `<dir>/.fragua/config.yaml`.
+ * Returns `{}` when the file is absent. */
+async function loadConfigFile(layerDir: string): Promise<FraguaConfig> {
   const yamlPath = resolve(layerDir, ".fragua/config.yaml");
-  const jsoncPath = resolve(layerDir, ".fragua/config.jsonc");
 
-  let yamlBody: string | null = null;
-  let jsoncBody: string | null = null;
-
+  let yamlBody: string;
   try {
     yamlBody = await readFile(yamlPath, "utf8");
   } catch {
-    // absent
-  }
-  try {
-    jsoncBody = await readFile(jsoncPath, "utf8");
-  } catch {
-    // absent
+    return {};
   }
 
-  if (yamlBody === null && jsoncBody === null) return {};
-
-  if (yamlBody !== null && jsoncBody !== null) {
-    console.warn(
-      `config (${layerLabel}): ${jsoncPath} is shadowed by ${yamlPath} — delete the .jsonc file to silence this warning`,
-    );
-    const parsed = parseYamlBody(yamlBody, yamlPath);
-    return parsed === null ? {} : validateParsed(parsed, yamlPath);
-  }
-
-  if (yamlBody !== null) {
-    const parsed = parseYamlBody(yamlBody, yamlPath);
-    return parsed === null ? {} : validateParsed(parsed, yamlPath);
-  }
-
-  // jsoncBody is non-null — legacy path
-  console.warn(`config (${layerLabel}): ${jsoncPath} is deprecated — rename it to config.yaml to silence this warning`);
-  const parsed = parseJsoncBody(jsoncBody!, jsoncPath);
-  return parsed === null ? {} : validateParsed(parsed, jsoncPath);
+  const parsed = parseYamlBody(yamlBody, yamlPath);
+  return parsed === null ? {} : validateParsed(parsed, yamlPath);
 }
 
 /** One-level deep merge: top-level scalars from `overlay` win; nested
@@ -386,14 +278,13 @@ function mergeConfig(base: FraguaConfig, overlay: FraguaConfig): FraguaConfig {
 
 /** Load the merged user config: `~/.fragua/config.yaml` (global) overlaid
  * by `<cwd>/.fragua/config.yaml` (project). Either layer may be absent.
- * Legacy `.fragua/config.jsonc` is read with a deprecation warning.
  * Project keys win on collisions; nested objects merge one level deep.
  *
  * `opts.homeDir` overrides the global path's base — used by tests to
  * isolate from the user's real `~/.fragua/`. Production callers omit it. */
 export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): Promise<FraguaConfig> {
   const globalDir = opts.homeDir ?? homedir();
-  const [global, project] = await Promise.all([loadConfigFile(globalDir, "global"), loadConfigFile(cwd, "project")]);
+  const [global, project] = await Promise.all([loadConfigFile(globalDir), loadConfigFile(cwd)]);
   return mergeConfig(global, project);
 }
 
@@ -403,5 +294,5 @@ export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): 
  * projects if the global layer was allowed to supply a default).
  * Returns `{}` when the project file is absent. */
 export async function loadProjectConfig(cwd: string): Promise<FraguaConfig> {
-  return loadConfigFile(cwd, "project");
+  return loadConfigFile(cwd);
 }

@@ -1,7 +1,6 @@
 // `fragua init` — bootstrap a project's `.fragua/config.yaml` and merge
 // the runtime patterns into `.gitignore`. Hard-fails on non-git
-// directories. Refuses to overwrite an existing `.fragua/config.yaml`
-// (or the legacy `.fragua/config.jsonc`).
+// directories. Refuses to overwrite an existing `.fragua/config.yaml`.
 //
 // Side effects on success:
 //   - writes `<cwd>/.fragua/config.yaml`
@@ -26,7 +25,6 @@ const GITIGNORE_BLOCK = `# fragua runtime — never commit these
 
 # fragua — always commit these (negative patterns for clarity)
 !.fragua/config.yaml
-!.fragua/config.jsonc
 !.fragua/workflows/
 `;
 
@@ -40,7 +38,6 @@ export interface InitCommandOptions {
 export async function initCommand(opts: InitCommandOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
   const configPath = resolve(cwd, ".fragua/config.yaml");
-  const legacyPath = resolve(cwd, ".fragua/config.jsonc");
 
   if (!(await isGitRepo(cwd))) {
     console.error(chalk.red("init: not a git repository"));
@@ -50,12 +47,6 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
 
   if (await pathExists(configPath)) {
     console.error(chalk.red(`init: ${configPath} already exists — refusing to overwrite`));
-    return 1;
-  }
-
-  if (await pathExists(legacyPath)) {
-    console.error(chalk.red(`init: ${legacyPath} already exists — refusing to overwrite`));
-    console.error(chalk.dim(`  hint: rename it to config.yaml: mv .fragua/config.jsonc .fragua/config.yaml`));
     return 1;
   }
 

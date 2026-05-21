@@ -1,4 +1,4 @@
-// Config-section tests for ProjectDetail — YAML / JSONC resolution and rendering.
+// Config-section tests for ProjectDetail — YAML resolution and rendering.
 // Kept in a separate file so useDom() lifecycle doesn't interfere with the
 // tabs describe block in ProjectDetail.test.tsx.
 
@@ -13,8 +13,8 @@ import { ProjectDetail } from "./ProjectDetail.tsx";
 const TEST_CWD = "/projects/alpha";
 const TEST_ENC = encodeProjectId(TEST_CWD);
 
-function installFetchWithConfig(opts: { yamlConfig?: string | null; jsoncConfig?: string | null }): void {
-  const { yamlConfig, jsoncConfig } = opts;
+function installFetchWithConfig(opts: { yamlConfig?: string | null }): void {
+  const { yamlConfig } = opts;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url.includes("/projects/") && url.includes("/tree")) {
@@ -25,12 +25,6 @@ function installFetchWithConfig(opts: { yamlConfig?: string | null; jsoncConfig?
         if (yamlConfig === null) return new Response("not found", { status: 404 });
         if (yamlConfig !== undefined)
           return new Response(yamlConfig, { status: 200, headers: { "Content-Type": "text/plain" } });
-        return new Response("not found", { status: 404 });
-      }
-      if (url.includes("config.jsonc")) {
-        if (jsoncConfig === null) return new Response("not found", { status: 404 });
-        if (jsoncConfig !== undefined)
-          return new Response(jsoncConfig, { status: 200, headers: { "Content-Type": "text/plain" } });
         return new Response("not found", { status: 404 });
       }
       return new Response("not found", { status: 404 });
@@ -77,7 +71,6 @@ describe("ProjectDetail · Config tab", () => {
   test("renders summary from .fragua/config.yaml", async () => {
     installFetchWithConfig({
       yamlConfig: `bootstrap: "bun install --frozen-lockfile"\ndefaults:\n  provider: anthropic\n`,
-      jsoncConfig: null,
     });
     const { container } = renderAt(`/projects/${TEST_ENC}`);
     const section = await waitFor(() => within(container).getByTestId("project-config-section"));
@@ -87,38 +80,16 @@ describe("ProjectDetail · Config tab", () => {
     expect(llmRow.textContent).toContain("anthropic");
   });
 
-  test("falls back to .fragua/config.jsonc when YAML is absent (legacy)", async () => {
-    installFetchWithConfig({
-      yamlConfig: null,
-      jsoncConfig: `{ "bootstrap": "legacy-cmd" }`,
-    });
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
-    const bootstrapRow = await waitFor(() => within(container).getByTestId("project-config-bootstrap"));
-    expect(bootstrapRow.textContent).toContain("legacy-cmd");
-  });
-
-  test("YAML takes precedence when both files exist", async () => {
-    installFetchWithConfig({
-      yamlConfig: `bootstrap: "yaml-cmd"`,
-      jsoncConfig: `{ "bootstrap": "jsonc-cmd" }`,
-    });
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
-    const bootstrapRow = await waitFor(() => within(container).getByTestId("project-config-bootstrap"));
-    expect(bootstrapRow.textContent).toContain("yaml-cmd");
-    expect(bootstrapRow.textContent).not.toContain("jsonc-cmd");
-  });
-
   test("shows unparsable state when YAML body is malformed", async () => {
     installFetchWithConfig({
       yamlConfig: `key: [unclosed bracket`,
-      jsoncConfig: null,
     });
     const { container } = renderAt(`/projects/${TEST_ENC}`);
     await waitFor(() => within(container).getByTestId("project-config-unparsable"));
   });
 
-  test("shows empty state when both config files are absent", async () => {
-    installFetchWithConfig({ yamlConfig: null, jsoncConfig: null });
+  test("shows empty state when the config file is absent", async () => {
+    installFetchWithConfig({ yamlConfig: null });
     const { container } = renderAt(`/projects/${TEST_ENC}`);
     await waitFor(() => within(container).getByTestId("project-config-empty"));
   });
@@ -126,7 +97,6 @@ describe("ProjectDetail · Config tab", () => {
   test("renders auto-title / max-loops / bootstrap-timeout-ms from kebab keys", async () => {
     installFetchWithConfig({
       yamlConfig: `auto-title: false\nmax-loops: 7\nbootstrap-timeout-ms: 30000\n`,
-      jsoncConfig: null,
     });
     const { container } = renderAt(`/projects/${TEST_ENC}`);
     const autoTitleRow = await waitFor(() => within(container).getByTestId("project-config-auto-title"));

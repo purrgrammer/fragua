@@ -83,7 +83,6 @@ fragua serve  --db <path>       # standalone HTTP + SSE on :3000
 
 Two-layer cascade — global `~/.fragua/config.yaml` (defaults,
 auto-title, blocklist, …) overlaid by `<project>/.fragua/config.yaml`.
-Legacy `config.jsonc` is read with a deprecation warning for one release—rename to `config.yaml` to silence it.
 Project keys win; nested objects merge one level deep.
 
 ## See also

@@ -1,7 +1,6 @@
 // Tests for .fragua/config.yaml loading. Missing file returns `{}`
 // for first-run UX. Malformed YAML and schema-invalid content throw
 // — silent fallback would hide typos that mis-route runs.
-// Legacy .fragua/config.jsonc is read with a deprecation warning.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -24,14 +23,14 @@ describe("loadConfig", () => {
     await rm(scratchHome, { recursive: true, force: true });
   });
 
-  async function write(body: string, ext: "yaml" | "jsonc" = "yaml"): Promise<void> {
+  async function write(body: string): Promise<void> {
     await mkdir(join(scratch, ".fragua"), { recursive: true });
-    await writeFile(join(scratch, `.fragua/config.${ext}`), body, "utf8");
+    await writeFile(join(scratch, ".fragua/config.yaml"), body, "utf8");
   }
 
-  async function writeGlobal(body: string, ext: "yaml" | "jsonc" = "yaml"): Promise<void> {
+  async function writeGlobal(body: string): Promise<void> {
     await mkdir(join(scratchHome, ".fragua"), { recursive: true });
-    await writeFile(join(scratchHome, `.fragua/config.${ext}`), body, "utf8");
+    await writeFile(join(scratchHome, ".fragua/config.yaml"), body, "utf8");
   }
 
   function load(): Promise<ReturnType<typeof loadConfig> extends Promise<infer T> ? T : never> {
@@ -295,41 +294,6 @@ defaults:
       expect(cfg.defaults?.provider).toBe("openrouter");
     });
 
-    test("YAML wins when both .yaml and .jsonc exist in the same layer", async () => {
-      await mkdir(join(scratch, ".fragua"), { recursive: true });
-      await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
-      await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
-      const cfg = await load();
-      expect(cfg.bootstrap).toBe("yaml-bootstrap");
-    });
-
-    test("emits a deprecation warning when .jsonc shadows present .yaml", async () => {
-      await mkdir(join(scratch, ".fragua"), { recursive: true });
-      await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
-      await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        await load();
-        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
-        expect(calls.some((m) => m.includes("shadowed"))).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-
-    test("emits a deprecation warning when only .jsonc is present", async () => {
-      await mkdir(join(scratch, ".fragua"), { recursive: true });
-      await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "old-style" }`, "utf8");
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        await load();
-        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
-        expect(calls.some((m) => m.includes("deprecated"))).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-
     test("warns and returns {} on malformed YAML (non-fatal)", async () => {
       await write("key: [unclosed bracket");
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
@@ -392,94 +356,6 @@ defaults:
       }
     });
   });
-
-  // ─── Legacy JSONC support (deprecation window) ──────────────────────
-
-  describe("legacy JSONC support", () => {
-    test("accepts comments and trailing commas (JSONC features)", async () => {
-      await write(
-        `{
-      // pin model so the demo doesn't drift
-      "defaults": {
-        "provider": "ppq",
-        "model": "claude-sonnet-4.6",
-      },
-    }`,
-        "jsonc",
-      );
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        expect((await load()).defaults?.provider).toBe("ppq");
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-
-    test("warns and returns {} on malformed JSONC (non-fatal)", async () => {
-      await write("{ this is not json }", "jsonc");
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const cfg = await load();
-        expect(cfg).toEqual({});
-        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
-        expect(calls.some((m) => m.includes("parse error"))).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-
-    test("warns and returns {} when the root is not an object (JSONC, non-fatal)", async () => {
-      await write(`"just-a-string"`, "jsonc");
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const cfg = await load();
-        expect(cfg).toEqual({});
-        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
-        expect(calls.some((m) => m.includes("must be a JSON object"))).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-
-    test("warns on schema violation in JSONC and drops bad key (non-fatal)", async () => {
-      await write(`{ "autoTitler": true }`, "jsonc");
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const cfg = await load();
-        expect((cfg as Record<string, unknown>)["autoTitler"]).toBeUndefined();
-        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
-        expect(calls.some((m) => m.includes("validation"))).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-
-    test("warns on snake_case key (JSONC) and drops it (non-fatal)", async () => {
-      await write(`{ "auto_title": true }`, "jsonc");
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const cfg = await load();
-        expect((cfg as Record<string, unknown>)["auto_title"]).toBeUndefined();
-        const calls = warnSpy.mock.calls.map((c) => c.join(" "));
-        expect(calls.some((m) => m.includes("validation"))).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-
-    test("global → project cascade works with JSONC files", async () => {
-      await writeGlobal(`{ "auto-title": true, "blocklist": ["sudo "] }`, "jsonc");
-      await write(`{ "bootstrap": "pnpm install --frozen-lockfile" }`, "jsonc");
-      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const cfg = await load();
-        expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
-        expect(cfg["auto-title"]).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    });
-  });
 });
 
 describe("loadProjectConfig", () => {
@@ -506,31 +382,6 @@ describe("loadProjectConfig", () => {
     await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "pnpm install --frozen-lockfile"`, "utf8");
     const cfg = await loadProjectConfig(scratch);
     expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
-  });
-
-  test("reads <cwd>/.fragua/config.jsonc verbatim (legacy)", async () => {
-    await mkdir(join(scratch, ".fragua"), { recursive: true });
-    await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "pnpm install --frozen-lockfile" }`, "utf8");
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const cfg = await loadProjectConfig(scratch);
-      expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test("YAML wins over JSONC in the project layer", async () => {
-    await mkdir(join(scratch, ".fragua"), { recursive: true });
-    await writeFile(join(scratch, ".fragua/config.yaml"), `bootstrap: "yaml-bootstrap"`, "utf8");
-    await writeFile(join(scratch, ".fragua/config.jsonc"), `{ "bootstrap": "jsonc-bootstrap" }`, "utf8");
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const cfg = await loadProjectConfig(scratch);
-      expect(cfg.bootstrap).toBe("yaml-bootstrap");
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 
   test("warns on validation error and drops bad value (non-fatal)", async () => {

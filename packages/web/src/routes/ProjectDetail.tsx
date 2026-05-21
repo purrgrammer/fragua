@@ -34,7 +34,6 @@ import { computeStats } from "../lib/stats.ts";
 import { formatDuration } from "../lib/time.ts";
 
 const CONFIG_PATH_YAML = ".fragua/config.yaml";
-const CONFIG_PATH_JSONC = ".fragua/config.jsonc";
 
 export function ProjectDetail(): JSX.Element {
   const { cwdEnc = "" } = useParams();
@@ -81,24 +80,14 @@ export function ProjectDetail(): JSX.Element {
     retry: false,
   });
 
-  const {
-    data: configJsoncText,
-    error: configJsoncError,
-    isFetching: configJsoncLoading,
-  } = useQuery({
-    ...queries.projects.blob(cwdEnc, CONFIG_PATH_JSONC),
-    enabled: cwd !== null && cwdEnc.length > 0 && configYamlText === undefined,
-    retry: false,
-  });
-
   const resolvedConfig = useMemo(
-    () => pickConfigSource(configYamlText, configJsoncText, configYamlError, configJsoncError),
-    [configYamlText, configJsoncText, configYamlError, configJsoncError],
+    () => pickConfigSource(configYamlText, configYamlError),
+    [configYamlText, configYamlError],
   );
 
   const stats = useMemo(() => computeStats(rows ?? []), [rows]);
   const parsedConfig = useMemo(
-    () => (resolvedConfig.text !== undefined ? parseConfig(resolvedConfig.text, resolvedConfig.kind) : null),
+    () => (resolvedConfig.text !== undefined ? parseYamlConfig(resolvedConfig.text) : null),
     [resolvedConfig],
   );
 
@@ -210,7 +199,7 @@ export function ProjectDetail(): JSX.Element {
       </section>
 
       <ConfigSummary
-        loading={(configYamlLoading || configJsoncLoading) && resolvedConfig.text === undefined}
+        loading={configYamlLoading && resolvedConfig.text === undefined}
         missing={configMissing}
         errored={!configMissing && resolvedConfig.errored}
         parsed={parsedConfig}
@@ -425,7 +414,7 @@ function cacheTooltip(stats: ReturnType<typeof computeStats>): string {
 //
 // Surfaces the keys an operator typically wants to see at a glance —
 // bootstrap command, default LLM, concurrency, loop ceilings — instead
-// of dumping the raw JSONC. The full file is still readable via the
+// of dumping the raw YAML. The full file is still readable via the
 // Files tab, so this view stays purpose-built for "what knobs is this
 // project running with?".
 
@@ -590,127 +579,28 @@ function ConfigValues({ parsed }: { parsed: ConfigShape }): JSX.Element {
 
 interface ResolvedConfigSource {
   path: string;
-  kind: "yaml" | "jsonc";
   text: string | undefined;
   missing: boolean;
   errored: boolean;
 }
 
-function pickConfigSource(
-  yamlText: string | undefined,
-  jsoncText: string | undefined,
-  yamlError: unknown,
-  jsoncError: unknown,
-): ResolvedConfigSource {
+function pickConfigSource(yamlText: string | undefined, yamlError: unknown): ResolvedConfigSource {
   const yamlMissing = yamlError instanceof ApiError && yamlError.status === 404;
-  const jsoncMissing = jsoncError instanceof ApiError && jsoncError.status === 404;
 
   if (yamlText !== undefined) {
-    return { path: CONFIG_PATH_YAML, kind: "yaml", text: yamlText, missing: false, errored: false };
-  }
-  if (jsoncText !== undefined) {
-    return { path: CONFIG_PATH_JSONC, kind: "jsonc", text: jsoncText, missing: false, errored: false };
+    return { path: CONFIG_PATH_YAML, text: yamlText, missing: false, errored: false };
   }
   if (!yamlMissing && yamlError != null) {
-    return { path: CONFIG_PATH_YAML, kind: "yaml", text: undefined, missing: false, errored: true };
+    return { path: CONFIG_PATH_YAML, text: undefined, missing: false, errored: true };
   }
-  if (!jsoncMissing && jsoncError != null) {
-    return { path: CONFIG_PATH_JSONC, kind: "jsonc", text: undefined, missing: false, errored: true };
-  }
-  // Both missing (or neither query has resolved yet)
-  return {
-    path: CONFIG_PATH_YAML,
-    kind: "yaml",
-    text: undefined,
-    missing: yamlMissing && jsoncMissing,
-    errored: false,
-  };
+  return { path: CONFIG_PATH_YAML, text: undefined, missing: yamlMissing, errored: false };
 }
 
-// ─── Config parsers ─────────────────────────────────────────────────
-
-function parseConfig(src: string, kind: "yaml" | "jsonc"): ConfigShape | null {
-  if (kind === "yaml") {
-    return parseYamlConfig(src);
-  }
-  return parseJsoncConfig(src);
-}
+// ─── Config parser ──────────────────────────────────────────────────
 
 function parseYamlConfig(src: string): ConfigShape | null {
   try {
     const value = YAML.parse(src);
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as ConfigShape;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// Legacy JSONC parser (retained for the deprecation-window reader)
-function stripJsonc(src: string): string {
-  let out = "";
-  let i = 0;
-  let inString = false;
-  let inLineComment = false;
-  let inBlockComment = false;
-  while (i < src.length) {
-    const c = src[i];
-    const next = src[i + 1];
-    if (inLineComment) {
-      if (c === "\n") {
-        inLineComment = false;
-        out += c;
-      }
-      i++;
-      continue;
-    }
-    if (inBlockComment) {
-      if (c === "*" && next === "/") {
-        inBlockComment = false;
-        i += 2;
-        continue;
-      }
-      i++;
-      continue;
-    }
-    if (inString) {
-      if (c === "\\" && i + 1 < src.length) {
-        out += src.slice(i, i + 2);
-        i += 2;
-        continue;
-      }
-      if (c === '"') inString = false;
-      out += c;
-      i++;
-      continue;
-    }
-    if (c === '"') {
-      inString = true;
-      out += c;
-      i++;
-      continue;
-    }
-    if (c === "/" && next === "/") {
-      inLineComment = true;
-      i += 2;
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      inBlockComment = true;
-      i += 2;
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out.replace(/,(\s*[}\]])/g, "$1");
-}
-
-function parseJsoncConfig(src: string): ConfigShape | null {
-  try {
-    const value = JSON.parse(stripJsonc(src));
     if (value && typeof value === "object" && !Array.isArray(value)) {
       return value as ConfigShape;
     }
