@@ -95,8 +95,8 @@ it, pause it, or feed it a HITL response.
 bun run swarm daemon --db <path>         # executor only, against an explicit DB
 bun run swarm serve  --db <path>         # standalone HTTP + SSE
 bun run swarm validate workflow.yaml      # parse + lint a workflow file, no execution
-bun run swarm schedule add <workflow> --every 1h --input "…"   # fire on an interval
-bun run swarm schedule list              # show schedules + recent-run stripes
+bun run swarm run <workflow> --every 1h --input "…"   # create a recurring schedule
+bun run swarm schedules list             # show schedules + recent-run stripes
 bun run swarm db vacuum                  # reclaim free pages
 bun run swarm db gc-blobs                # drop orphaned artifact blobs
 bun run swarm db backup --to backup.db   # snapshot via SQLite serialize()

@@ -255,19 +255,19 @@ Present options + evidence to the user. Never auto-choose.
 A schedule fires a workflow on a fixed shorthand interval (`30m` / `1h` / `6h` / `24h` only — cron is out of scope). Each fire enqueues a normal run with `run_state.schedule_id` carrying lineage. Skip-on-overlap is the default; one coalesced catch-up after daemon downtime.
 
 ```sh
-# Add
-bun run swarm schedule add analyze --every 1h
-bun run swarm schedule add introspect --every 6h --on-overlap skip
-bun run swarm schedule add change --every 24h --input "sweep deps" --no-fire-on-create
+# Create (folds into `swarm run`; no streaming — prints schedule id and exits)
+bun run swarm run analyze --every 1h
+bun run swarm run introspect --every 6h --on-overlap skip
+bun run swarm run change --every 24h --input "sweep deps" --no-fire-on-create
 
 # Inspect
-bun run swarm schedule list
-bun run swarm schedule list --cwd "$PWD"
+bun run swarm schedules list
+bun run swarm schedules list --cwd "$PWD"
 
 # Operate
-bun run swarm schedule pause sch_xxxxxx
-bun run swarm schedule resume sch_xxxxxx       # no catch-up; next_fire_at = now + interval
-bun run swarm schedule rm sch_xxxxxx
+bun run swarm schedules pause sch_xxxxxx
+bun run swarm schedules resume sch_xxxxxx      # no catch-up; next_fire_at = now + interval
+bun run swarm schedules rm sch_xxxxxx
 ```
 
 HTTP equivalents (mirrors the CLI 1:1):
@@ -332,9 +332,9 @@ curl -fsS -X POST "$URL/runs/$RUN/merge"        -d '{"mode":"no-ff","into":"main
 curl -fsS -X POST "$URL/runs/$RUN/discard"      -d '{}'                                            -H 'content-type: application/json'
 
 # Schedules (proposal: docs/proposals/scheduled-runs.md)
-bun run swarm schedule add <workflow> --every 1h          # create + fire immediately
-bun run swarm schedule list [--cwd <dir>]                  # tabular health view
-bun run swarm schedule pause | resume | rm <sch_id>
+bun run swarm run <workflow> --every 1h           # create a schedule + fire immediately
+bun run swarm schedules list [--cwd <dir>]         # tabular health view
+bun run swarm schedules pause | resume | rm <sch_id>
 ```
 
 For diagnosis after terminal state, switch to swarm-debug. This skill drives runs forward; that one looks backward.
