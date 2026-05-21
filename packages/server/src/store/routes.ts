@@ -675,6 +675,16 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!hasCommittedHistory(gate.state)) {
       return c.json({ error: "nothing to branch: run made no commits; use commit", code: "nothing_to_branch" }, 409);
     }
+    // Refuse a name collision synchronously (the daemon would otherwise
+    // silently no-op a non-force collision and the operator sees false success).
+    if (body.force !== true && deps.runSnapshotReader != null && gate.state.cwd != null) {
+      if (await deps.runSnapshotReader.refExists(gate.state.cwd, `refs/heads/${body.branch}`)) {
+        return c.json(
+          { error: `branch "${body.branch}" already exists; pass --force to overwrite`, code: "branch_exists" },
+          409,
+        );
+      }
+    }
     const payload: { branch: string; force?: boolean } = { branch: body.branch };
     if (body.force === true) payload.force = true;
     return appendIntentOr413(c, runId, { type: "intent.branch_run", payload });

@@ -173,10 +173,14 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
   // One leak budget per executor process — counts handler leaks across
   // every run; fires opts.onLeakLimitExceeded once when the limit trips.
   const leakBudget = makeLeakBudget(opts);
+  // Persistent across ticks: `${runId}:${seq}` of operator-action intents the
+  // sweep couldn't apply, so an unsatisfiable one doesn't re-pick forever and
+  // jam later actions on the run (operator-actions.ts).
+  const operatorRefused = new Set<string>();
 
   while (!opts.shutdownSignal.aborted) {
     wakePending(opts.store);
-    await processOperatorActions(opts.store);
+    await processOperatorActions(opts.store, { refused: operatorRefused });
     const claimed = opts.store.claimNextRun(opts.maxConcurrentRuns);
     if (claimed == null) {
       await sleep(pollMs, opts.shutdownSignal);

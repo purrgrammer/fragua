@@ -176,13 +176,32 @@ interface PendingOperatorIntent {
   payload: unknown;
 }
 
-/** Lowest-seq unapplied operator-action intent on the run, scanning the four
- * types and taking the earliest so actions apply in operator order. */
-function nextOperatorIntent(store: IEventStore, runId: string, sinceSeq: number): PendingOperatorIntent | null {
+/** Lowest-seq unapplied operator-action intent on the run NOT in `refused`,
+ * scanning the four types and taking the earliest so actions apply in
+ * operator order. Skipping refused seqs is load-bearing: without it an
+ * unsatisfiable intent (e.g. `branch <existing>` without `--force`) is picked
+ * every tick, never advances applied-seq, and blocks every LATER operator
+ * action on the run (a real jam — see processOperatorActions). */
+function nextOperatorIntent(
+  store: IEventStore,
+  runId: string,
+  sinceSeq: number,
+  refused: ReadonlySet<string>,
+): PendingOperatorIntent | null {
   let best: PendingOperatorIntent | null = null;
   for (const type of OPERATOR_INTENT_TYPES) {
-    const it = store.getNextPendingIntent(runId, type, sinceSeq);
-    if (it != null && (best == null || it.seq < best.seq)) best = { type, seq: it.seq, payload: it.payload };
+    let since = sinceSeq;
+    // Walk forward past any refused seqs of this type to the next live one.
+    for (;;) {
+      const it = store.getNextPendingIntent(runId, type, since);
+      if (it == null) break;
+      if (refused.has(`${runId}:${it.seq}`)) {
+        since = it.seq;
+        continue;
+      }
+      if (best == null || it.seq < best.seq) best = { type, seq: it.seq, payload: it.payload };
+      break;
+    }
   }
   return best;
 }
@@ -211,12 +230,26 @@ async function applyAction(
  * mutation + fact. Idempotent and safe to call on every executor tick — the
  * scoped candidate query (`getInboxActionCandidates`) returns nothing when no
  * operator has acted. Returns the run ids whose intent was applied this pass.
+ *
+ * `refused` is the executor's persistent set of `${runId}:${seq}` intents that
+ * couldn't be applied (precondition unmet, or the git mutation threw). It's
+ * load-bearing: a refused intent can't advance applied-seq (appendFact needs a
+ * fact), so without remembering it the sweep would re-pick it forever and jam
+ * every later operator action on the run. Recording it lets the next live
+ * intent through. Cost: a genuinely transient git failure won't auto-retry —
+ * the operator re-issues (a fresh, higher-seq intent). That tradeoff beats a
+ * stuck queue; the common refusals (branch collision, non-ff, conflict) are
+ * the server's job to reject synchronously anyway.
  */
-export async function processOperatorActions(store: IEventStore, opts: { git?: GitExec } = {}): Promise<string[]> {
+export async function processOperatorActions(
+  store: IEventStore,
+  opts: { git?: GitExec; refused?: Set<string> } = {},
+): Promise<string[]> {
   const git = opts.git ?? defaultGitExec;
+  const refused = opts.refused ?? new Set<string>();
   const applied: string[] = [];
   for (const row of store.getInboxActionCandidates()) {
-    const intent = nextOperatorIntent(store, row.runId, row.lastAppliedSeq);
+    const intent = nextOperatorIntent(store, row.runId, row.lastAppliedSeq, refused);
     if (intent == null) continue;
     const state = store.getState(row.runId);
     if (state?.cwd == null) continue;
@@ -226,11 +259,13 @@ export async function processOperatorActions(store: IEventStore, opts: { git?: G
     try {
       fact = await applyAction(git, state.cwd, row.runId, state, intent);
     } catch {
-      // Mutation failed (e.g. CAS lost a target-moved race). Leave the
-      // intent unadvanced; the next tick retries against fresh state.
+      refused.add(`${row.runId}:${intent.seq}`); // don't jam the queue on a throw
       continue;
     }
-    if (fact == null) continue; // precondition unmet — server should have refused
+    if (fact == null) {
+      refused.add(`${row.runId}:${intent.seq}`); // precondition unmet — never satisfiable
+      continue;
+    }
 
     try {
       store.appendFact(row.runId, [fact], row.version, { advanceAppliedTo: intent.seq });

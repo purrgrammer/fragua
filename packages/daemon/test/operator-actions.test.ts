@@ -300,4 +300,35 @@ describe("processOperatorActions", () => {
     expect(await processOperatorActions(discarded.store)).toEqual([]);
     expect(discarded.appended).toHaveLength(0);
   });
+
+  test("a refused intent does NOT jam later intents (regression: stuck-queue)", async () => {
+    // A branch-collision intent (seq 1) is unsatisfiable — its target ref
+    // already exists and there's no --force. Without the refused-set it would
+    // be re-picked every tick and block the discard (seq 2) behind it forever.
+    await writeFile(join(repo, "w.txt"), "w\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "w");
+    const head = g(repo, "rev-parse", "HEAD");
+    g(repo, "reset", "-q", "--hard", base);
+    g(repo, "update-ref", "refs/swarm/heads/run-j", head);
+    g(repo, "update-ref", "refs/swarm/snapshots/run-j", head);
+    g(repo, "branch", "taken", base); // collision target
+
+    const { store, appended } = fakeStore({
+      runId: "run-j",
+      state: { cwd: repo },
+      intents: [
+        { type: "intent.branch_run", seq: 1, payload: { branch: "taken" } }, // refused (exists, no force)
+        { type: "intent.discard_run", seq: 2, payload: {} },
+      ],
+    });
+    const refused = new Set<string>();
+
+    // Tick 1: the collision is picked + refused (no fact), recorded.
+    expect(await processOperatorActions(store, { refused })).toEqual([]);
+    expect(refused.has("run-j:1")).toBe(true);
+    // Tick 2: the refused intent is skipped; the discard behind it applies.
+    expect(await processOperatorActions(store, { refused })).toEqual(["run-j"]);
+    expect(appended.at(-1)?.fact.type).toBe("fact.run_discarded");
+  });
 });

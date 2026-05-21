@@ -176,7 +176,7 @@ export async function inboxCommand(opts: InboxOptions): Promise<number> {
   for (const r of rows) {
     const stat = r.changeStat?.committed ?? r.changeStat?.uncommitted ?? null;
     const counts = stat
-      ? ` ${chalk.dim(`(${stat.filesChanged} files, `)}${chalk.green(`+${stat.insertions}`)}${chalk.dim(" / ")}${chalk.red(`−${stat.deletions}`)}${chalk.dim(")")}`
+      ? ` ${chalk.dim(`(${stat.filesChanged} file${stat.filesChanged === 1 ? "" : "s"}, `)}${chalk.green(`+${stat.insertions}`)}${chalk.dim(" / ")}${chalk.red(`−${stat.deletions}`)}${chalk.dim(")")}`
       : "";
     const title = r.title != null && r.title.length > 0 ? r.title : chalk.dim("(untitled)");
     console.log(`${chalk.cyan(r.runId)}  ${title}${counts}`);

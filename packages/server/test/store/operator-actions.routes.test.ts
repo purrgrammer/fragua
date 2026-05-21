@@ -13,12 +13,16 @@ import { createRoutes } from "../../src/store/routes.ts";
 const BASE = "a".repeat(40);
 const COMMIT = "b".repeat(40);
 
-function fakeReader(mergeability: Awaited<ReturnType<RunSnapshotReader["mergeability"]>>): RunSnapshotReader {
+function fakeReader(
+  mergeability: Awaited<ReturnType<RunSnapshotReader["mergeability"]>>,
+  refExists = false,
+): RunSnapshotReader {
   return {
     lsTree: async () => null,
     showFile: async () => ({ kind: "not_found" }),
     diff: async () => "",
     mergeability: async () => mergeability,
+    refExists: async () => refExists,
   };
 }
 
@@ -118,6 +122,30 @@ describe("operator post-run primitive endpoints", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toHaveProperty("seq");
     expect(lastIntent(store, "r1")).toBe("intent.branch_run");
+  });
+
+  test("branch: 409 branch_exists on a name collision without --force", async () => {
+    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }, true) });
+    seed(store, { runId: "r1c" });
+    const res = await app.request("/runs/r1c/branch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ branch: "taken" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { code?: string }).toMatchObject({ code: "branch_exists" });
+  });
+
+  test("branch: --force overrides an existing branch", async () => {
+    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }, true) });
+    seed(store, { runId: "r1f" });
+    const res = await app.request("/runs/r1f/branch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ branch: "taken", force: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(lastIntent(store, "r1f")).toBe("intent.branch_run");
   });
 
   test("branch: 400 when branch name missing", async () => {

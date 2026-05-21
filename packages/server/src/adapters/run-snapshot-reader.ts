@@ -93,6 +93,10 @@ export function createRunSnapshotReader(): RunSnapshotReader {
       const conflict = ff ? false : (await gitExit(cwd, ["merge-tree", "--write-tree", into, heads])) !== 0;
       return { resolved: true, ff, conflict };
     },
+
+    async refExists(cwd: string, ref: string) {
+      return (await revParse(cwd, ref)) != null;
+    },
   };
 }
 

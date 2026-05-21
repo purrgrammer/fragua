@@ -102,6 +102,10 @@ export interface RunSnapshotReader {
     intoRef: string,
     headsRef: string,
   ): Promise<{ resolved: false } | { resolved: true; ff: boolean; conflict: boolean }>;
+  /** Whether `ref` resolves in `cwd` — used by `POST /runs/:id/branch` to
+   *  refuse a name collision synchronously (without `--force`) instead of
+   *  letting the daemon silently no-op. */
+  refExists(cwd: string, ref: string): Promise<boolean>;
 }
 
 export interface ServerPorts {
