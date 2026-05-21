@@ -41,6 +41,20 @@ needs three properties the executor doesn't fully expose today:
    (today `opts.clock` exists and provider-retry takes `random`, but backoff
    jitter and `sleep` still read wall-clock / real timers).
 
+4. **Injectable assembly (dependencies, not just step logic).** `runOne`/
+   `runExecutor` already take their dependencies via `ExecutorOpts` (`store`,
+   `dispatcher`, `registry`, `tools`, `llmCall`, `provisioner`) — so the
+   executor *itself* is injectable. The gap is that the **assembly** of those
+   dependencies is ~400 lines inlined in `daemonCommand`
+   (`packages/cli/src/commands/daemon.ts:128–~520`): provider-credential
+   resolution → backend → tool registry → dispatcher → provisioner → `llmCall`.
+   The harness wants to substitute a virtual store + a fake **tool registry** +
+   a fake **credentials registry**; `fragua ci` wants the same seam with
+   CI-appropriate adapters (env-sourced creds, no worktree, JSONL tailer). Both
+   need that assembly extracted into a factory with the registries injectable —
+   see Phase 8. **The `fragua ci` story (`docs/proposals/fragua-ci.md`) builds
+   directly on this untangled executor.**
+
 ## 2. Done so far (shipped, behaviour-preserving)
 
 - `executor-helpers.ts` — pure leaf helpers (abort classification, routing
@@ -113,6 +127,22 @@ out, so the scheduler is separable from the per-run driver.
 `fast-check` model that generates `(graph shape, handler-result stream, fault
 schedule)` and drives `RunSession.step()` against a virtual store + virtual
 clock, asserting invariants after every step and every injected fault.
+
+### Phase 8 — Assembly factory + injectable registries. *Unblocks `fragua ci`.*
+
+Extract the executor assembly out of `daemonCommand`
+(`packages/cli/src/commands/daemon.ts:128–~520`) into a reusable factory:
+`buildExecutorDeps(env): ExecutorOpts`-shaped, with the **tool registry** and a
+**credentials registry** as injected ports rather than inline construction.
+Today credentials are resolved from the store's `provider_credentials` /
+`provider_config` rows (`daemon.ts:145`); making the cred *source* a port lets
+the PBT harness pass fakes and lets `fragua ci` pass an env-sourced adapter
+without the daemon's wiring. The pre-0.1.0 cleanup
+(`docs/proposals/cleanup-pre-0.1.0.md`) removes the sub-agent backend first, so
+there is less to extract. This phase is orthogonal to the per-turn-loop phases
+(4–6) — it is about the executor's *construction*, not its *step logic* — but it
+is the prerequisite the `fragua ci` deliverable stands on, so it is likely
+sequenced earlier in practice than its number suggests.
 
 ## 4. Determinism debt to clear along the way
 
