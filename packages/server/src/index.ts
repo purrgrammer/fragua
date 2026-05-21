@@ -21,7 +21,6 @@ import { providersRoutes } from "./routes/providers.ts";
 import { runFilesRoutes } from "./routes/run-files.ts";
 import { runSnapshotsRoutes } from "./routes/run-snapshots.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
-import { agentsRoutes } from "./store/agents-routes.ts";
 import { analyticsRoutes } from "./store/analytics-routes.ts";
 import { createRoutes as createStoreRoutes, type WorkflowModelValidator } from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
@@ -111,7 +110,6 @@ function buildApiApp(opts: ServerOptions): Hono {
   );
   api.route("/", createScheduleRoutes({ store: opts.store }));
   api.route("/", skillsRoutes({ store: opts.store, homeDir: homedir(), cwd }));
-  api.route("/", agentsRoutes({ store: opts.store, homeDir: homedir(), cwd }));
   if (opts.authStorage && opts.modelRegistry) {
     api.route("/", providersRoutes({ authStorage: opts.authStorage, modelRegistry: opts.modelRegistry }));
   }
