@@ -92,6 +92,17 @@ describe("POST /workflows — upload", () => {
     expect(res2.status).toBe(400);
   });
 
+  test("rejects unparseable workflow source with 400 + invalid_workflow code", async () => {
+    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const sha = sha256Hex(source);
+    const res = await req("POST", "/workflows", { name: "bad", source });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("invalid_workflow");
+    expect(body.error).toMatch(/workflow/i);
+    expect(store.getWorkflow(sha)).toBeNull();
+  });
+
   test("idempotent on same source — same sha, no duplicate row", async () => {
     const src = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
     const a = (await (await req("POST", "/workflows", { name: "x", source: src })).json()) as { sha: string };
@@ -123,13 +134,8 @@ steps:
     const res = await req("POST", "/workflows", {
       name: "ok",
       source: `name: ok
-nodes:
-  start: {type: start}
+steps:
   a: {type: llm, prompt: x, max_ms: 0}
-  done: {type: exit}
-edges:
-  - {from: start, to: a}
-  - {from: a, to: done}
 `,
     });
     expect(res.status).toBe(200);
@@ -261,6 +267,17 @@ describe("POST /runs — enqueue", () => {
     expect(res.status).toBe(400);
   });
 
+  test("rejects enqueue against a stored but unparseable workflow sha", async () => {
+    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const sha = sha256Hex(source);
+    store.saveWorkflow(sha, "bad", source);
+    const res = await req("POST", "/runs", { workflowSha: sha });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("invalid_workflow");
+    expect(body.error).toMatch(/workflow/i);
+  });
+
   test("rejects when workflowSha is omitted and workflowName is missing", async () => {
     const res = await req("POST", "/runs", { cwd: "/tmp/p" });
     expect(res.status).toBe(400);
@@ -302,6 +319,20 @@ describe("POST /runs — enqueue", () => {
     // Server registered the resolved workflow so subsequent runs
     // against the same sha skip the disk read.
     expect(store.getWorkflow(state!.workflowSha)?.name).toBe("change");
+  });
+
+  test("rejects simple-flow enqueue when workflowReader returns unparseable source", async () => {
+    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x}\n";
+    workflowReader.set("bad", source, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "bad",
+      workflowScope: "local",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("invalid_workflow");
+    expect(store.getWorkflow(sha256Hex(source))).toBeNull();
   });
 
   test("simple flow: workflowScope:'global' pins lookup to the global source", async () => {

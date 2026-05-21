@@ -94,19 +94,12 @@ const DEFAULT_SSE_BATCH_SIZE = 500;
  * Scan a workflow source for nodes with malformed `timeout=` or `max_ms=`
  * attrs. Returns the first offender so the API can reject before a
  * workflow is saved (and therefore before any run is enqueued against
- * a broken sha). Returns `null` when every timeout attr parses, the
- * source is unparseable (graph-validation errors surface elsewhere), or
+ * a broken sha). Returns `null` when every timeout attr parses or
  * nothing is set.
  */
 function findInvalidTimeoutAttr(
-  source: string,
+  graph: ReturnType<typeof parseWorkflow>,
 ): { nodeId: string; attr: "timeout" | "max_ms"; value: unknown; detail: string } | null {
-  let graph: ReturnType<typeof parseWorkflow>;
-  try {
-    graph = parseWorkflow(source);
-  } catch {
-    return null;
-  }
   for (const node of Object.values(graph.nodes)) {
     const { timeout, max_ms } = node.attrs;
     if (typeof max_ms === "number") {
@@ -142,6 +135,18 @@ function findInvalidTimeoutAttr(
     }
   }
   return null;
+}
+
+function invalidWorkflowResponse(c: Context, err: unknown): Response {
+  const detail = err instanceof Error ? err.message : String(err);
+  return c.json(
+    {
+      error: `invalid workflow: ${detail}`,
+      code: "invalid_workflow",
+      detail,
+    },
+    400,
+  );
 }
 
 /** Registry-backed preflight. Rejects only when no provider in the
@@ -183,6 +188,12 @@ export function createRoutes(deps: ServerDeps): Hono {
     ) {
       return c.json({ error: "name and source required" }, 400);
     }
+    let graph: ReturnType<typeof parseWorkflow>;
+    try {
+      graph = parseWorkflow(body.source);
+    } catch (err) {
+      return invalidWorkflowResponse(c, err);
+    }
     if (deps.validateWorkflowModels != null) {
       const check = deps.validateWorkflowModels(body.source);
       if (!check.ok) {
@@ -196,7 +207,7 @@ export function createRoutes(deps: ServerDeps): Hono {
         );
       }
     }
-    const timeoutOffender = findInvalidTimeoutAttr(body.source);
+    const timeoutOffender = findInvalidTimeoutAttr(graph);
     if (timeoutOffender != null) {
       return c.json(
         {
@@ -274,6 +285,7 @@ export function createRoutes(deps: ServerDeps): Hono {
     let workflowSha: string;
     let resolvedWorkflowName: string | undefined;
     let resolvedSource: string | undefined;
+    let resolvedGraph: ReturnType<typeof parseWorkflow> | undefined;
     if (typeof body.workflowSha === "string" && body.workflowSha.length > 0) {
       workflowSha = body.workflowSha;
       if (typeof body.workflowName === "string") resolvedWorkflowName = body.workflowName;
@@ -312,8 +324,27 @@ export function createRoutes(deps: ServerDeps): Hono {
       workflowSha = sha256Hex(detail.source);
       resolvedWorkflowName = body.workflowName;
       resolvedSource = detail.source;
+    }
+
+    if (resolvedSource !== undefined) {
+      try {
+        resolvedGraph = parseWorkflow(resolvedSource);
+      } catch (err) {
+        return invalidWorkflowResponse(c, err);
+      }
+      const timeoutOffender = findInvalidTimeoutAttr(resolvedGraph);
+      if (timeoutOffender != null) {
+        return c.json(
+          {
+            error: `node "${timeoutOffender.nodeId}": ${timeoutOffender.detail}`,
+            code: "invalid_timeout_attr",
+            offender: timeoutOffender,
+          },
+          400,
+        );
+      }
       if (deps.store.getWorkflow(workflowSha) == null) {
-        deps.store.saveWorkflow(workflowSha, body.workflowName, detail.source);
+        deps.store.saveWorkflow(workflowSha, resolvedWorkflowName ?? body.workflowName ?? workflowSha, resolvedSource);
       }
     }
 
@@ -321,13 +352,8 @@ export function createRoutes(deps: ServerDeps): Hono {
     // `inputs:` block before enqueue, so a missing required input or a
     // bad choice value fails fast with operator-actionable feedback
     // instead of collapsing to "" silently at dispatch.
-    if (resolvedSource !== undefined) {
-      let inputDecls: ReturnType<typeof parseWorkflow>["attrs"]["inputs"];
-      try {
-        inputDecls = parseWorkflow(resolvedSource).attrs.inputs;
-      } catch {
-        inputDecls = undefined; // unparseable source surfaces elsewhere
-      }
+    if (resolvedGraph !== undefined) {
+      const inputDecls = resolvedGraph.attrs.inputs;
       const inputErrors = validateInputBindings(inputDecls, body.inputs ?? {});
       if (inputErrors.length > 0) {
         return c.json(
