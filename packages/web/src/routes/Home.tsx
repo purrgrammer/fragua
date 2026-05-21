@@ -128,9 +128,7 @@ function UnifiedInboxSection(): JSX.Element {
           <AnimatePresence initial={false}>
             {rows.map((row) =>
               row.inboxStatus === "pending" ? (
-                <motion.div key={row.runId} layout style={{ willChange: reduce ? undefined : "transform" }}>
-                  <WorktreeInboxRow row={row} />
-                </motion.div>
+                <WorktreeInboxRow key={row.runId} row={row} />
               ) : (
                 <InboxRow key={row.runId} row={row} reduce={reduce} />
               ),
