@@ -1,6 +1,7 @@
-// `swarm schedule` CLI \u2014 covers the four happy-path commands by spinning
-// up a real `@swarm/server` schedule routes app and pointing the
-// command's URL discovery at it via the explicit `--url` override.
+// `swarm schedules` CLI — covers the management commands (list/pause/resume/rm)
+// and the `add` guidance message, by spinning up a real `@swarm/server`
+// schedule routes app and pointing the command's URL discovery at it via
+// the explicit `--url` override.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SqliteStore } from "@swarm/store";
@@ -8,6 +9,7 @@ import { Hono } from "hono";
 import { createScheduleRoutes, type ScheduleRoutesDeps } from "../../server/src/store/schedule-routes.ts";
 import {
   scheduleAddCommand,
+  scheduleHelp,
   scheduleListCommand,
   schedulePauseCommand,
   scheduleResumeCommand,
@@ -56,7 +58,7 @@ afterEach(() => {
   r.close();
 });
 
-describe("scheduleAddCommand", () => {
+describe("scheduleAddCommand (direct — reused by run --every)", () => {
   test("POSTs /schedules with the right body and reports the new id", async () => {
     const code = await scheduleAddCommand({
       workflow: "analyze",
@@ -71,7 +73,6 @@ describe("scheduleAddCommand", () => {
     expect(rows[0]!.intervalText).toBe("1h");
     expect(rows[0]!.overlapPolicy).toBe("skip");
     expect(rows[0]!.cwd).toBe("/repo");
-    // CLI announces the id.
     expect(logs.some((l) => l.includes("schedule created"))).toBe(true);
   });
 
@@ -95,8 +96,22 @@ describe("scheduleAddCommand", () => {
     });
     expect(code).toBe(0);
     const row = r.store.listSchedules()[0]!;
-    // fireOnCreate=false \u2192 nextFireAt = now + intervalMs (~1h ahead).
     expect(row.nextFireAt).toBeGreaterThan(row.createdAt + 30 * 60 * 1000);
+  });
+});
+
+describe("scheduleHelp (swarm schedules bare)", () => {
+  test("prints management subcommands and creation hint; does not mention 'add'", () => {
+    const code = scheduleHelp();
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("list");
+    expect(out).toContain("rm");
+    expect(out).toContain("pause");
+    expect(out).toContain("resume");
+    expect(out).toContain("swarm run");
+    expect(out).toContain("--every");
+    expect(out).not.toContain("add <workflow>");
   });
 });
 
@@ -122,7 +137,6 @@ describe("scheduleListCommand", () => {
     expect(out).toContain("wf-a");
     expect(out).toContain("paused");
     expect(out).toContain("active");
-    // Health stripe column header present.
     expect(out).toContain("Last 10");
   });
 
@@ -134,14 +148,12 @@ describe("scheduleListCommand", () => {
       Date.now(),
     );
 
-    // Seed runs: completed, halted, queued (in-flight)
     const r1 = "run_s1";
     const r2 = "run_s2";
     const r3 = "run_s3";
     for (const id of [r1, r2, r3]) {
       r.store.enqueueRun({ runId: id, workflowSha: sha, scheduleId: "sch_stripe" });
     }
-    // Walk r1 to completed and r2 to halted via appendFact.
     const s1 = r.store.getState(r1)!;
     const s2 = r.store.getState(r2)!;
     r.store.appendFact(
@@ -166,8 +178,6 @@ describe("scheduleListCommand", () => {
     const code = await scheduleListCommand({ url: r.url });
     expect(code).toBe(0);
     const out = logs.join("\n");
-    // r1=completed→✅, r2=halted→❌, r3=queued(in-flight)→⏳
-    // recentRuns is newest-first from server, reversed by CLI for display.
     expect(out).toContain("✅");
     expect(out).toContain("❌");
     expect(out).toContain("⏳");
