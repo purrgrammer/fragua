@@ -5,7 +5,7 @@
 // (operator-actions.routes.test.ts) are covered in their own suites.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import type { RunSnapshotReader } from "@swarm/server";
+import type { RunActionExec, RunSnapshotReader } from "@swarm/server";
 import { createServer } from "@swarm/server";
 import { type IEventStore, SqliteStore } from "@swarm/store";
 import {
@@ -19,16 +19,19 @@ import {
 } from "../src/commands/operator.ts";
 
 // Permissive git reader — these tests exercise the CLI client against a fake
-// cwd (no real repo), so server-side git validation (target existence, ff)
-// is stubbed satisfiable. The real git checks live in the server route tests.
+// cwd (no real repo), so the snapshot reader (diff) and the accept/discard git
+// actions are stubbed satisfiable. The real git lives in @swarm/workspace tests.
 const permissiveReader: RunSnapshotReader = {
   lsTree: async () => null,
   showFile: async () => ({ kind: "not_found" }),
   diff: async () => "",
   mergeability: async () => ({ resolved: true, ff: true, conflict: false }),
-  // The base branch exists (commit/merge target resolves); a fresh branch
-  // name does not (no false collision on `branch`).
-  refExists: async (_cwd, ref) => ref === "refs/heads/main",
+  refExists: async () => true,
+};
+
+const okActions: RunActionExec = {
+  accept: async () => ({ ok: true, sha: "tip1", replayed: 1, tailStaged: false }),
+  discard: async () => ({ ok: true, refs: [] }),
 };
 
 const BASE = "a".repeat(40);
@@ -43,7 +46,7 @@ interface Rig {
 function rig(): Rig {
   const store = new SqliteStore({ path: ":memory:" });
   store.saveWorkflow("wf", "noop", "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n");
-  const app = createServer({ store, ports: { runSnapshotReader: permissiveReader } });
+  const app = createServer({ store, ports: { runSnapshotReader: permissiveReader, runActions: okActions } });
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
   return {
     url: `http://127.0.0.1:${server.port}`,

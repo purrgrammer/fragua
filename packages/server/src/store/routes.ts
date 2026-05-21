@@ -14,10 +14,11 @@ import {
   type RunState,
   sha256Hex,
 } from "@swarm/store";
+import { applyAccept, applyDiscard, defaultGitExec } from "@swarm/workspace";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { RunSnapshotReader, WorkflowReader } from "../ports.ts";
+import type { RunActionExec, RunSnapshotReader, WorkflowReader } from "../ports.ts";
 import { newRunId } from "./run-id.ts";
 import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
 
@@ -36,6 +37,10 @@ export interface ServerDeps {
    *  non-ff or conflicting merge synchronously. Omit to skip git-level
    *  merge validation (the daemon sweep is the defense-in-depth backstop). */
   runSnapshotReader?: RunSnapshotReader;
+  /** Runs post-terminal accept/discard synchronously in the request path so
+   *  the operator sees the result. Defaults to the @swarm/workspace git
+   *  implementation; injected by tests to stub the outcome. */
+  runActions?: RunActionExec;
   /** Poll interval for SSE streams in ms. */
   ssePollMs?: number;
   /** Per-iteration batch size for SSE replay. Defaults to 500. */
@@ -160,6 +165,10 @@ export function createRoutes(deps: ServerDeps): Hono {
   const app = new Hono();
   const pollMs = deps.ssePollMs ?? DEFAULT_SSE_POLL_MS;
   const batchSize = deps.sseBatchSize ?? DEFAULT_SSE_BATCH_SIZE;
+  const runActions: RunActionExec = deps.runActions ?? {
+    accept: (cwd, runId, baseGitSha) => applyAccept(defaultGitExec, { cwd, runId, baseGitSha }),
+    discard: (cwd, runId) => applyDiscard(defaultGitExec, cwd, runId),
+  };
 
   // ─── Workflow upload ────────────────────────────────────────
 
@@ -646,22 +655,42 @@ export function createRoutes(deps: ServerDeps): Hono {
     return { ok: true, state };
   }
 
-  app.post("/runs/:id/accept", (c) => {
+  app.post("/runs/:id/accept", async (c) => {
     const runId = c.req.param("id");
     const gate = operatorActionGate(c, runId);
     if (!gate.ok) return gate.res;
-    // Lands the run's work on the operator's current branch. The daemon sweep
-    // folds this into fact.run_accepted (replay + stage); a conflict / dirty
-    // tree leaves the run pending (resolve via revive) — the sweep refuses and
-    // emits no fact, so the inbox entry stays until the operator retries.
-    return appendIntentOr413(c, runId, { type: "intent.accept_run", payload: {} });
+    const cwd = gate.state.cwd;
+    if (cwd == null) return c.json({ error: "run has no worktree (bare-cwd)", code: "no_worktree" }, 409);
+    // Run the accept SYNCHRONOUSLY so the operator sees the result now: replay
+    // the run's commits onto HEAD + stage the tail. On success append
+    // intent.accept_run carrying the result — the daemon folds it into
+    // fact.run_accepted (the projection). A conflict / dirty tree returns 409
+    // and writes nothing (resolve via revive). The git side effect runs once.
+    const res = await runActions.accept(cwd, runId, gate.state.baseGitSha ?? "");
+    if (!res.ok) return c.json({ error: res.detail, code: res.reason }, 409);
+    try {
+      const { seq } = deps.store.appendIntent(runId, {
+        type: "intent.accept_run",
+        payload: { sha: res.sha, replayed: res.replayed, tailStaged: res.tailStaged },
+      });
+      return c.json({ seq, sha: res.sha, replayed: res.replayed, tailStaged: res.tailStaged });
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        return c.json({ error: "payload too large", code: "payload_too_large" }, 413);
+      }
+      throw err;
+    }
   });
 
-  app.post("/runs/:id/discard", (c) => {
+  app.post("/runs/:id/discard", async (c) => {
     const runId = c.req.param("id");
     const gate = operatorActionGate(c, runId);
     if (!gate.ok) return gate.res;
-    return appendIntentOr413(c, runId, { type: "intent.discard_run", payload: {} });
+    const cwd = gate.state.cwd;
+    if (cwd == null) return c.json({ error: "run has no worktree (bare-cwd)", code: "no_worktree" }, 409);
+    const res = await runActions.discard(cwd, runId);
+    const { seq } = deps.store.appendIntent(runId, { type: "intent.discard_run", payload: { refs: res.refs } });
+    return c.json({ seq, refs: res.refs });
   });
 
   // ─── Reads ──────────────────────────────────────────────────

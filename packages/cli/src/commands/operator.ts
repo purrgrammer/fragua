@@ -67,8 +67,21 @@ async function postAction(verb: string, runId: string, body: unknown, opts: Disc
     body: JSON.stringify(body),
   });
   if (!res.ok) return failResponse(verb, res);
-  const { seq } = (await res.json()) as { seq?: number };
-  console.log(chalk.green(`${verb} requested`) + chalk.dim(` (run ${runId}, intent seq ${seq})`));
+  const body2 = (await res.json()) as {
+    seq?: number;
+    sha?: string;
+    replayed?: number;
+    tailStaged?: boolean;
+  };
+  // accept/discard run synchronously server-side and return their result.
+  if (verb === "accept" && body2.sha != null) {
+    const tail = body2.tailStaged === true ? "; tail staged — `git commit` when ready" : "";
+    console.log(chalk.green("accepted") + chalk.dim(` (run ${runId}, replayed ${body2.replayed ?? 0}${tail})`));
+  } else if (verb === "discard") {
+    console.log(chalk.green("discarded") + chalk.dim(` (run ${runId})`));
+  } else {
+    console.log(chalk.green(`${verb} requested`) + chalk.dim(` (run ${runId}, intent seq ${body2.seq})`));
+  }
   return 0;
 }
 

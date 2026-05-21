@@ -1,21 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// processOperatorActions — the daemon fold for post-terminal operator
+// actions. The action (accept replay+stage / discard ref delete) already ran
+// synchronously in the request path; the intent carries its result. This sweep
+// is pure projection: intent.{accept,discard}_run → fact.run_{accepted,
+// discarded}, advancing applied-seq in OCC lockstep. No git here.
+
+import { describe, expect, test } from "bun:test";
 import type { FactEvent, IEventStore, RunState, WakeCandidateRow } from "@swarm/store";
 import type { IntentType } from "@swarm/types";
 import { processOperatorActions } from "../src/operator-actions.ts";
-
-function g(cwd: string, ...args: string[]): string {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
-  return r.stdout.trim();
-}
-
-function gStatus(cwd: string, ...args: string[]): number {
-  return spawnSync("git", args, { cwd, encoding: "utf8" }).status ?? 1;
-}
 
 interface FakeIntent {
   type: IntentType;
@@ -23,9 +15,9 @@ interface FakeIntent {
   payload: unknown;
 }
 
-/** Minimal IEventStore exposing only the four methods the sweep calls.
- * Records appended facts so assertions can inspect what the daemon emitted. */
-function fakeStore(opts: { runId: string; state: Partial<RunState> & { cwd: string }; intents: FakeIntent[] }): {
+/** Minimal IEventStore exposing only the methods the sweep calls. Records
+ * appended facts so assertions can inspect what the daemon emitted. */
+function fakeStore(opts: { runId: string; state: Partial<RunState>; intents: FakeIntent[] }): {
   store: IEventStore;
   appended: Array<{ runId: string; fact: FactEvent; advanceAppliedTo: number | undefined }>;
 } {
@@ -35,16 +27,13 @@ function fakeStore(opts: { runId: string; state: Partial<RunState> & { cwd: stri
     runId: opts.runId,
     status: "completed",
     inboxStatus: "pending",
-    baseGitRef: "main",
-    title: null,
     ...opts.state,
   } as unknown as RunState;
 
   const store = {
     getInboxActionCandidates: () => [candidate],
     getNextPendingIntent: (_runId: string, type: IntentType, since: number) => {
-      const matches = opts.intents.filter((i) => i.type === type && i.seq > since).sort((a, b) => a.seq - b.seq);
-      const it = matches[0];
+      const it = opts.intents.filter((i) => i.type === type && i.seq > since).sort((a, b) => a.seq - b.seq)[0];
       return it == null ? null : { seq: it.seq, payload: it.payload };
     },
     getState: (runId: string) => (runId === opts.runId ? state : null),
@@ -58,100 +47,54 @@ function fakeStore(opts: { runId: string; state: Partial<RunState> & { cwd: stri
 }
 
 describe("processOperatorActions", () => {
-  let repo: string;
-  let base: string;
-
-  beforeEach(async () => {
-    repo = await mkdtemp(join(tmpdir(), "swarm-op-"));
-    g(repo, "init", "-q", "-b", "main");
-    g(repo, "config", "user.email", "test@swarm.local");
-    g(repo, "config", "user.name", "swarm test");
-    g(repo, "config", "commit.gpgsign", "false");
-    await writeFile(join(repo, "a.txt"), "A\n");
-    g(repo, "add", "-A");
-    g(repo, "commit", "-q", "-m", "A");
-    base = g(repo, "rev-parse", "HEAD");
-  });
-
-  afterEach(async () => {
-    await rm(repo, { recursive: true, force: true });
-  });
-
-  test("accept: replays the run's commits onto HEAD and emits fact.run_accepted", async () => {
-    await writeFile(join(repo, "work.txt"), "work\n");
-    g(repo, "add", "-A");
-    g(repo, "commit", "-q", "-m", "agent work");
-    const head = g(repo, "rev-parse", "HEAD");
-    g(repo, "reset", "-q", "--hard", base); // main back to base; the run's work survives via the refs
-    g(repo, "update-ref", "refs/swarm/heads/run-a", head);
-    g(repo, "update-ref", "refs/swarm/snapshots/run-a", head); // snapshot commit; tree == head's tree → no tail
-
+  test("accept: projects intent.accept_run → fact.run_accepted from the carried result", () => {
     const { store, appended } = fakeStore({
       runId: "run-a",
-      state: { cwd: repo, baseGitSha: base },
-      intents: [{ type: "intent.accept_run", seq: 7, payload: {} }],
+      state: {},
+      intents: [{ type: "intent.accept_run", seq: 7, payload: { sha: "tip1", replayed: 2, tailStaged: true } }],
     });
-    const applied = await processOperatorActions(store);
-
-    expect(applied).toEqual(["run-a"]);
-    expect(g(repo, "show", "HEAD:work.txt")).toBe("work"); // replayed onto the current branch
+    expect(processOperatorActions(store)).toEqual(["run-a"]);
     expect(appended).toHaveLength(1);
-    const fact = appended[0]?.fact;
-    expect(fact?.type).toBe("fact.run_accepted");
-    if (fact?.type === "fact.run_accepted") {
-      expect(fact.payload.replayed).toBe(1);
-      expect(fact.payload.tailStaged).toBe(false);
-    }
+    expect(appended[0]?.fact).toEqual({
+      type: "fact.run_accepted",
+      payload: { sha: "tip1", replayed: 2, tailStaged: true },
+    });
     expect(appended[0]?.advanceAppliedTo).toBe(7);
   });
 
-  test("discard: deletes both swarm refs and reports them", async () => {
-    g(repo, "update-ref", "refs/swarm/snapshots/run-d", base);
-    g(repo, "update-ref", "refs/swarm/heads/run-d", base);
+  test("discard: projects intent.discard_run → fact.run_discarded from the carried refs", () => {
+    const refs = ["refs/swarm/heads/run-d", "refs/swarm/snapshots/run-d"];
     const { store, appended } = fakeStore({
       runId: "run-d",
-      state: { cwd: repo },
-      intents: [{ type: "intent.discard_run", seq: 7, payload: {} }],
+      state: {},
+      intents: [{ type: "intent.discard_run", seq: 4, payload: { refs } }],
     });
-    expect(await processOperatorActions(store)).toEqual(["run-d"]);
-    expect(gStatus(repo, "rev-parse", "--verify", "refs/swarm/snapshots/run-d")).not.toBe(0);
-    expect(gStatus(repo, "rev-parse", "--verify", "refs/swarm/heads/run-d")).not.toBe(0);
-    const fact = appended[0]?.fact;
-    if (fact?.type === "fact.run_discarded") {
-      expect(fact.payload.refs.sort()).toEqual(["refs/swarm/heads/run-d", "refs/swarm/snapshots/run-d"]);
-    }
+    expect(processOperatorActions(store)).toEqual(["run-d"]);
+    expect(appended[0]?.fact).toEqual({ type: "fact.run_discarded", payload: { refs } });
+    expect(appended[0]?.advanceAppliedTo).toBe(4);
   });
 
-  test("lowest-seq intent applies first; discarded runs are skipped", async () => {
-    g(repo, "update-ref", "refs/swarm/snapshots/run-x", base);
-    const discarded = fakeStore({
-      runId: "run-x",
-      state: { cwd: repo, inboxStatus: "discarded" },
-      intents: [{ type: "intent.accept_run", seq: 1, payload: {} }],
-    });
-    expect(await processOperatorActions(discarded.store)).toEqual([]);
-    expect(discarded.appended).toHaveLength(0);
-  });
-
-  test("a refused intent does NOT jam later intents (regression: stuck-queue)", async () => {
-    // An accept on a run with no snapshot ref is unsatisfiable (no_work).
-    // Without the refused-set it would be re-picked every tick and block the
-    // discard (seq 2) behind it forever.
+  test("lowest-seq intent applies first", () => {
     const { store, appended } = fakeStore({
-      runId: "run-j",
-      state: { cwd: repo, baseGitSha: base },
+      runId: "run-s",
+      state: {},
       intents: [
-        { type: "intent.accept_run", seq: 1, payload: {} }, // refused (no snapshot ref → no_work)
-        { type: "intent.discard_run", seq: 2, payload: {} },
+        { type: "intent.discard_run", seq: 9, payload: { refs: [] } },
+        { type: "intent.accept_run", seq: 3, payload: { sha: "x", replayed: 0, tailStaged: true } },
       ],
     });
-    const refused = new Set<string>();
+    expect(processOperatorActions(store)).toEqual(["run-s"]);
+    expect(appended[0]?.fact.type).toBe("fact.run_accepted"); // seq 3 before seq 9
+    expect(appended[0]?.advanceAppliedTo).toBe(3);
+  });
 
-    // Tick 1: the unsatisfiable accept is picked + refused (no fact), recorded.
-    expect(await processOperatorActions(store, { refused })).toEqual([]);
-    expect(refused.has("run-j:1")).toBe(true);
-    // Tick 2: the refused intent is skipped; the discard behind it applies.
-    expect(await processOperatorActions(store, { refused })).toEqual(["run-j"]);
-    expect(appended.at(-1)?.fact.type).toBe("fact.run_discarded");
+  test("discarded runs are skipped (terminal-terminal)", () => {
+    const { store, appended } = fakeStore({
+      runId: "run-x",
+      state: { inboxStatus: "discarded" },
+      intents: [{ type: "intent.accept_run", seq: 1, payload: { sha: "x", replayed: 0, tailStaged: true } }],
+    });
+    expect(processOperatorActions(store)).toEqual([]);
+    expect(appended).toHaveLength(0);
   });
 });

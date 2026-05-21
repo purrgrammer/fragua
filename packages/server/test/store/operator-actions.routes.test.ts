@@ -5,7 +5,16 @@
 
 import { beforeEach, describe, expect, test } from "bun:test";
 import { type IEventStore, SqliteStore } from "@swarm/store";
+import type { RunActionExec } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
+
+// Stub the synchronous git action so route tests assert the route's job (gate
+// → run action → on ok append intent + return result; on fail 409) without a
+// real repo. The real applyAccept/applyDiscard are covered in @swarm/workspace.
+const okActions: RunActionExec = {
+  accept: async () => ({ ok: true, sha: "tip1", replayed: 1, tailStaged: false }),
+  discard: async () => ({ ok: true, refs: ["refs/swarm/snapshots/x", "refs/swarm/heads/x"] }),
+};
 
 const BASE = "a".repeat(40);
 const COMMIT = "b".repeat(40);
@@ -95,17 +104,30 @@ describe("operator post-run primitive endpoints", () => {
     store.saveWorkflow("wf", "noop", "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n");
   });
 
-  test("accept: 200 + intent.accept_run on a recoverable run", async () => {
-    const app = createRoutes({ store });
+  test("accept: 200 with the sync result + intent.accept_run on a recoverable run", async () => {
+    const app = createRoutes({ store, runActions: okActions });
     seed(store, { runId: "r1" });
     const res = await app.request("/runs/r1/accept", { method: "POST" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toHaveProperty("seq");
+    expect(await res.json()).toMatchObject({ sha: "tip1", replayed: 1, tailStaged: false });
     expect(lastIntent(store, "r1")).toBe("intent.accept_run");
   });
 
+  test("accept: 409 with the reason + no intent when the action refuses (conflict)", async () => {
+    const conflictActions: RunActionExec = {
+      ...okActions,
+      accept: async () => ({ ok: false, reason: "conflict", detail: "run does not merge cleanly onto HEAD" }),
+    };
+    const app = createRoutes({ store, runActions: conflictActions });
+    seed(store, { runId: "rc" });
+    const res = await app.request("/runs/rc/accept", { method: "POST" });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { code?: string }).toMatchObject({ code: "conflict" });
+    expect(lastIntent(store, "rc")).not.toBe("intent.accept_run"); // refusal appends no accept intent
+  });
+
   test("discard: 200 + intent.discard_run", async () => {
-    const app = createRoutes({ store });
+    const app = createRoutes({ store, runActions: okActions });
     seed(store, { runId: "r9" });
     const res = await app.request("/runs/r9/discard", { method: "POST" });
     expect(res.status).toBe(200);

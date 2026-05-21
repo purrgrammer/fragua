@@ -171,15 +171,12 @@ All endpoints return `{ seq }` — quote it in any follow-up so the user can fin
 
 ### Post-run primitives (worktree inbox)
 
-A terminal run that left recoverable agent work sits in the inbox (`run_state.inbox_status='pending'`). Promote or drop it with one of four **post-terminal** actions; the daemon sweep folds each into worktree-free git plumbing on the run's `refs/swarm/{snapshots,heads}/<id>` and the matching `fact.run_*`. The endpoint validates synchronously and returns a 4xx on refusal.
+A terminal run that left recoverable agent work sits in the inbox (`run_state.inbox_status='pending'`). Land or drop it with one of two **post-terminal** actions. The action runs **synchronously in the request** — the handler executes the git, returns the result, and on success appends `intent.{accept,discard}_run` (carrying the result) which the daemon folds into `fact.run_*` (the `inbox_status` projection). A conflict / dirty tree returns 4xx and writes nothing.
 
-| POST | Body | Written intent | Post-condition |
+| POST | Body | Returns (200) | Post-condition |
 |---|---|---|---|
-| `/runs/:id/accept` | `{}` | `intent.accept_run` | Daemon replays the run's commits onto the operator's current branch (HEAD in the run's cwd) and stages the uncommitted tail for the operator to commit. A conflict / dirty tree leaves the run `pending` (resolve via revive). Inbox `pending → acted`. |
-| `/runs/:id/branch` | `{branch, force?}` | `intent.branch_run` | `update-ref refs/heads/<branch>` at the run's heads sha (committed history). 409 `nothing_to_branch` when the run made no commits. Inbox `pending → acted`. |
-| `/runs/:id/commit` | `{message, onto?}` | `intent.commit_run` | `commit-tree` the full snapshot tree (incl. uncommitted dirt) onto `onto` (default `base_git_ref`) and advance it. 400 `onto_required` when detached/relocated and no `onto`. `pending → acted`. |
-| `/runs/:id/merge` | `{mode?, into?}` | `intent.merge_run` | Merge heads into `into` (default `base_git_ref`); `mode` ∈ `ff`(default)`\|no-ff\|squash`. 409 `not_fast_forward` (ff impossible) / `merge_conflict` (non-ff conflicts). `pending → acted`. |
-| `/runs/:id/discard` | `{}` | `intent.discard_run` | Delete the run's `refs/swarm/{snapshots,heads}/<id>`. `pending → discarded` (terminal-terminal — later actions 409 `discarded`). |
+| `/runs/:id/accept` | `{}` | `{seq, sha, replayed, tailStaged}` | Replays the run's commits onto the operator's current branch (HEAD in the run's cwd) + stages the uncommitted tail to commit. 409 `conflict` (doesn't merge cleanly) / `dirty_tree` (uncommitted local changes) / `no_work` → resolve via revive. Inbox `pending → acted`. |
+| `/runs/:id/discard` | `{}` | `{seq, refs}` | Delete the run's `refs/swarm/{snapshots,heads}/<id>`. `pending → discarded` (terminal-terminal — later actions 409 `discarded`). |
 
 Shared gate for all four: 404 unknown run · 409 `not_terminal` / `not_in_inbox` (clean run) / `discarded` / `no_worktree` (bare-cwd). `branch`/`commit`/`merge` compose freely (branch then later merge); `discard` is final.
 
@@ -326,10 +323,9 @@ curl -fsS -X POST "$URL/runs/$RUN/resume"       -d '{}'                         
 curl -fsS -X POST "$URL/runs/$RUN/unquarantine" -d '{"resolution":"cancel","note":"…"}'            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/priority"     -d '{"newPriority":10}'                            -H 'content-type: application/json'
 
-# Post-run primitives (worktree inbox; terminal runs only)
-curl -fsS -X POST "$URL/runs/$RUN/branch"       -d '{"branch":"feat/x"}'                           -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/commit"       -d '{"message":"…","onto":"main"}'                 -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/merge"        -d '{"mode":"no-ff","into":"main"}'                -H 'content-type: application/json'
+# Post-run primitives (worktree inbox; terminal runs only) — synchronous: the
+# response carries the result (accept → {sha, replayed, tailStaged}); 409 on conflict.
+curl -fsS -X POST "$URL/runs/$RUN/accept"       -d '{}'                                            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/discard"      -d '{}'                                            -H 'content-type: application/json'
 
 # Schedules (proposal: docs/proposals/scheduled-runs.md)

@@ -313,19 +313,22 @@ export type IntentEvent =
       payload: { newLimit: number; note?: string };
     }
   | {
-      /** Operator lands a terminal run's work on their current branch: the
-       * daemon replays the run's commits onto HEAD and stages the uncommitted
-       * tail (worktrees.md). Folded into `fact.run_accepted`. Inbox
+      /** Operator landed a terminal run's work on their current branch
+       * (worktrees.md). The accept ran **synchronously** in the request path
+       * (server replayed the run's commits onto HEAD + staged the tail); this
+       * intent records the result and is folded into `fact.run_accepted` by the
+       * daemon (projection only — the git already happened). Inbox
        * `pending → acted`. */
       type: "intent.accept_run";
-      payload: Record<string, never>;
+      payload: { sha: string; replayed: number; tailStaged: boolean };
     }
   | {
-      /** Operator discards a terminal run's recoverable work: the daemon
-       * deletes `refs/swarm/{snapshots,heads}/<runId>`. Inbox
+      /** Operator discarded a terminal run's recoverable work — the request
+       * path deleted `refs/swarm/{snapshots,heads}/<runId>`; this intent
+       * records the deleted refs and is folded into `fact.run_discarded`. Inbox
        * `pending → discarded` (terminal-terminal). */
       type: "intent.discard_run";
-      payload: Record<string, never>;
+      payload: { refs: string[] };
     };
 
 export type IntentType = IntentEvent["type"];

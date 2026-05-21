@@ -3,9 +3,19 @@
 // Everything else reads directly from @swarm/store.
 
 import type { InputDecl } from "@swarm/core";
+import type { AcceptResult, DiscardResult } from "@swarm/workspace";
 import type { HealthDaemonInfo } from "./routes/health.ts";
 
 export type { InputDecl };
+
+/** Runs post-terminal worktree actions **synchronously** in the request path
+ *  so the operator (CLI/web) sees the real result. Injected so route tests can
+ *  stub the git outcome without a real repo. The default wires the
+ *  `@swarm/workspace` implementations over a real git exec. */
+export interface RunActionExec {
+  accept(cwd: string, runId: string, baseGitSha: string): Promise<AcceptResult>;
+  discard(cwd: string, runId: string): Promise<DiscardResult>;
+}
 
 export interface WorkflowSummary {
   name: string;
@@ -112,5 +122,6 @@ export interface ServerPorts {
   workflowReader?: WorkflowReader;
   projectTreeReader?: ProjectTreeReader;
   runSnapshotReader?: RunSnapshotReader;
+  runActions?: RunActionExec;
   daemonInfo?: () => HealthDaemonInfo | Promise<HealthDaemonInfo>;
 }
