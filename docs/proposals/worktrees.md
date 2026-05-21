@@ -223,40 +223,50 @@ The cases you might worry about are the degenerate ends of one algorithm:
 | commit series | N commits, messages + authors preserved | — |
 | both | N commits preserved | trailing dirt → staged for your commit |
 
-Mechanism, all on a **scratch ref** so your live branch is never touched until
-everything is known to be clean:
+Mechanism — **probe in memory first, mutate only when it's known clean.**
+Validated end-to-end against stock git 2.39 (`docs/proposals/worktrees-accept-spike.sh`,
+27/27 across dirt-only / commits-only / both × target-at-base / moved / conflict):
 
 ```sh
 TARGET=$(git rev-parse HEAD)        # your current branch tip
 RUNHEAD=<refs/swarm/heads/<runId>, or BASE if the workflow never committed>
-SNAPTREE=<terminal snapshot tree (HEAD + dirt)>
+SNAPCOMMIT=<terminal snapshot commit (tree = HEAD + dirt), parented on the run line>
 
-# 1. replay the workflow's real commits onto TARGET (linear; messages/authors kept)
-#    empty when RUNHEAD == BASE
-SCRATCH=$(replay BASE..RUNHEAD onto TARGET)            # cherry-pick range; conflict → revive
+# PRE-PROBE — in-memory 3-way of the WHOLE run onto TARGET; no mutation.
+# auto-base = merge-base(TARGET, SNAPCOMMIT) = the run's base, so this single
+# probe predicts BOTH the replay and the tail. exit != 0 → revive, repo untouched.
+git merge-tree --write-tree "$TARGET" "$SNAPCOMMIT"   || revive
 
-# 2. the unauthored tail = whatever dirt sat on top of RUNHEAD
-if [ "$SNAPTREE" != "$(tree-of RUNHEAD)" ]; then
-  # 3-way the tail onto SCRATCH; merge-tree probes it in memory first
-  git merge-tree --write-tree $SCRATCH <snapshot-terminal-commit>   # exit 1 → revive
+if [ "$RUNHEAD" = "$BASE" ]; then
+  # dirt-only: stage the merged tree the probe already produced — no cherry-pick
+  git read-tree "$MERGED_TREE"; git checkout-index -a -f
+else
+  # replay the workflow's commits onto your branch (author + message preserved)
+  git cherry-pick "$BASE..$RUNHEAD"   || { git cherry-pick --abort; revive; }
+  # the unauthored tail = dirt that sat on top of RUNHEAD, staged on top (piped, no temp file)
+  if [ "$(tree-of $RUNHEAD)" != "$(tree-of $SNAPCOMMIT)" ]; then
+    git diff --full-index --binary $(tree-of $RUNHEAD) $(tree-of $SNAPCOMMIT) \
+      | git apply --3way --index   || { git reset --hard "$TARGET"; revive; }
+  fi
 fi
-
-# 3. clean → fast-forward your branch to the replayed commits AND
-#    drop the tail into your working tree, staged, for you to commit
 ```
 
-**Pre-flight is a real dry-run.** `git merge-tree --write-tree <yourHEAD>
-<runCommit>` does an in-memory 3-way merge: exit 0 = clean (and hands back the
-merged tree), exit 1 = conflict, **zero working-tree touch**. So "is this even
-possible?" is answered before anything mutates. (`git apply --check` only
-covers a *direct* apply; `git apply --check --3way` is **not** a dry-run — it
-returns 0 on conflict and writes markers. Use `merge-tree`.)
+**The pre-probe is the real dry-run.** A single 2-arg `git merge-tree
+--write-tree TARGET SNAPCOMMIT` is an in-memory 3-way merge of the *entire* run
+(commits + dirt) onto your branch: exit 0 = clean (and hands back the merged
+tree, reused directly for the dirt-only case), exit 1 = conflict, **zero
+working-tree touch**. `--merge-base` is **not** available on git 2.39, so the
+replay can't be a pure-plumbing per-commit merge — it uses `cherry-pick`, with
+`--abort` / `reset --hard TARGET` as the backstop for the rare net-clean-but-
+per-commit-conflict case. (`git apply --check` only covers a *direct* apply;
+`git apply --check --3way` is **not** a dry-run — it returns 0 on conflict and
+writes markers. Use `merge-tree`.)
 
-**Conflicts → `revive`.** A replay conflict or a tail conflict aborts cleanly
-(scratch discarded, your branch untouched) and points to `revive`: re-provision
-a worktree from the snapshot so you resolve by hand. `revive` is the same
-primitive as fork-from-snapshot and is the *only* path that needs a working
-tree.
+**Conflicts → `revive`.** A probe failure (or the cherry-pick backstop) leaves
+your branch and working tree **completely untouched** (verified) and points to
+`revive`: re-provision a worktree from the snapshot so you resolve by hand.
+`revive` is the same primitive as fork-from-snapshot and is the *only* path
+that needs a working tree.
 
 **Preconditions.** `accept` requires a clean-enough working tree on the target
 (it advances your branch and stages the tail). If your checkout is dirty it
@@ -562,14 +572,17 @@ Each step independently shippable.
    STATUS.md.
 
 7. **`accept` + `discard` (synchronous).** Shared `applyRunAction(store, gitDir,
-   runId, action)`: `merge-tree` probe → scratch replay (`base..heads` onto
-   HEAD) → tail materialize (staged) → ff your branch; idempotent, git-first,
-   then one fact + projection in a txn. Two CLI verbs (`swarm runs accept |
-   discard`, direct DB write, harness-down ok), two HTTP endpoints, two facts
-   (`run_accepted`, `run_discarded`) with `source` + commit sha. Conflict → 409
-   / CLI message pointing to `revive`. Same-PR: `swarm-events.ts`, ARCH §3 + §7,
-   README quick tour, swarm-run SKILL, and the SPEC/ARCH blessing of the
-   synchronous operator-action writer.
+   runId, action)`: 2-arg `merge-tree --write-tree TARGET SNAPCOMMIT` probe →
+   `cherry-pick base..heads` (dirt-only: `read-tree` the merged tree) → tail
+   materialize (`git diff … | git apply --3way --index`, staged) → ff your
+   branch; idempotent, git-first, then one fact + projection in a txn. Conflict
+   (probe or cherry-pick backstop) → `reset --hard TARGET`, repo untouched. Port
+   `docs/proposals/worktrees-accept-spike.sh` (27 cases) as the test matrix. Two
+   CLI verbs (`swarm runs accept | discard`, direct DB write, harness-down ok),
+   two HTTP endpoints, two facts (`run_accepted`, `run_discarded`) with `source`
+   + commit sha. Conflict → 409 / CLI message pointing to `revive`. Same-PR:
+   `swarm-events.ts`, ARCH §3 + §7, README quick tour, swarm-run SKILL, and the
+   SPEC/ARCH blessing of the synchronous operator-action writer.
 
 8. **`revive`** — re-provision a worktree from a snapshot `commitSha` for
    conflict resolution. Operator-owned; shares the provisioner.
