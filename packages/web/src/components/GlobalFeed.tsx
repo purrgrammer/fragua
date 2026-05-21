@@ -7,9 +7,6 @@
 // users see the rows snap in with no transition.
 //
 // Re-render discipline:
-//   - The "Xs ago" tick lives in `useNowSeconds` (external store), so
-//     the parent component never re-renders on the per-second tick —
-//     only `<FeedRowTime>` does.
 //   - `<FeedRow>` is memo'd on `(event, reduce)`. Per-row run metadata
 //     (title, workflow) is fetched inside the row via
 //     `useQuery(queries.runs.detail(id))`; TanStack dedupes
@@ -43,13 +40,10 @@ import { feedAtom, feedEventKey, feedLoadingAtom } from "../lib/globalFeed.ts";
 import { humanizeOperatorActionShortVerb } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
-import { formatRelative } from "../lib/time.ts";
-import { useNowSeconds } from "../lib/useNowExternal.ts";
 import { SseLiveDot } from "./SseLiveDot.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { SectionTitle } from "./ui/section-title.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
-import { WorkflowLink } from "./WorkflowLink.tsx";
 
 /** Activity heading composes a live-stream dot inline with the title.
  * The dot is the only signal an operator gets that the timeline below
@@ -145,8 +139,8 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
   // Post-terminal operator actions — informational, no attention strip.
   // Verb is payload-aware: see metaForEvent below.
-  "fact.run_accepted": { Icon: Check, verb: "accepted", iconClass: "text-sw-muted" },
-  "fact.run_discarded": { Icon: Trash2, verb: "discarded", iconClass: "text-sw-muted" },
+  "fact.run_accepted": { Icon: Check, verb: "accepted", iconClass: "text-sw-accent-success" },
+  "fact.run_discarded": { Icon: Trash2, verb: "discarded", iconClass: "text-sw-accent-error" },
 };
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
@@ -233,7 +227,7 @@ export function GlobalFeed(): JSX.Element {
         // verb columns size to the widest content across all rows
         // without a hand-tuned width.
         // - Mobile (< sm): each row is its own 3-column grid laid out
-        //   in two rows: `[icon][verb][ts] / [title spans 2][workflow]`.
+        //   in two rows: `[icon][verb][·] / [title spans 2][git-ref]`.
         //   We can't use subgrid for the mobile layout because the
         //   cross-row alignment we want there is intra-row, not
         //   inter-row.
@@ -251,9 +245,6 @@ export function GlobalFeed(): JSX.Element {
     </section>
   );
 }
-
-/** The operator-action fact kinds that get git-centric row chrome. */
-const OPERATOR_ACTION_KINDS: ReadonlySet<string> = new Set(["fact.run_accepted", "fact.run_discarded"]);
 
 interface FeedRowProps {
   event: FeedEvent;
@@ -273,8 +264,6 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
 
   const { initial, animate, exit, transition } = rowEnterFromTop(reduce);
 
-  const wf = run?.workflowName ?? run?.workflow;
-
   // The strip color follows the row's mood: meta.borderVar when set
   // (carried by attention-class kinds — paused, halted, quarantined
   // etc.), otherwise the row's icon tone via the `--sw-accent-thinking`
@@ -282,7 +271,6 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
   // explicit borderVar (daemon_takeover, handler_timeout_leaked).
   const stripColor = borderVar ?? "var(--sw-accent-thinking)";
 
-  const isOperatorAction = OPERATOR_ACTION_KINDS.has(event.type);
   const baseRefLabel = run?.baseGitRef ?? (run?.baseGitSha ? run.baseGitSha.slice(0, 7) : undefined);
 
   return (
@@ -316,13 +304,8 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
     >
       <Icon className={`col-start-1 row-start-1 size-4 self-center ${iconClass ?? "text-sw-muted"}`} aria-hidden />
       <span className="col-start-2 row-start-1 truncate text-sw-muted">{verb}</span>
-      {/* For operator-action rows: hide the timestamp, show base-ref instead.
-          For all other rows: show the timestamp as before. */}
-      {isOperatorAction ? (
-        <span aria-hidden className="col-start-3 row-start-1 ml-auto hidden sm:col-start-5 sm:ml-0 sm:inline" />
-      ) : (
-        <FeedRowTime ts={event.ts} className="col-start-3 row-start-1 ml-auto text-right sm:col-start-5 sm:ml-0" />
-      )}
+      {/* Timestamp removed — timestamp column now holds the git ref/sha badge (col-start-5 slot used by baseRefLabel). */}
+      <span aria-hidden className="col-start-3 row-start-1 ml-auto hidden sm:col-start-5 sm:ml-0 sm:inline" />
       <Link
         to={`/runs/${event.runId}`}
         title={runTitleTooltip(event.runId, run)}
@@ -330,46 +313,20 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       >
         {displayRunTitle(event.runId, run)}
       </Link>
-      {/* For operator-action rows: show base ref/sha instead of workflow badge. */}
-      {isOperatorAction ? (
-        baseRefLabel ? (
-          <span
-            data-testid={`feed-row-baseref-${event.runId}`}
-            className="col-start-3 row-start-2 max-w-[10rem] truncate text-right font-mono text-sw-xs text-sw-muted justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto"
-          >
-            {baseRefLabel}
-          </span>
-        ) : (
-          <span aria-hidden className="hidden sm:inline" />
-        )
-      ) : wf ? (
-        <WorkflowLink
-          name={wf}
-          variant="badge"
-          className="col-start-3 row-start-2 max-w-[10rem] justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto"
-        />
+      {/* Git ref/sha badge in place of workflow badge — shown for all rows. */}
+      {baseRefLabel ? (
+        <span
+          data-testid={`feed-row-baseref-${event.runId}`}
+          className="col-start-3 row-start-2 max-w-[10rem] truncate text-right font-mono text-sw-xs text-sw-muted justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto"
+        >
+          {baseRefLabel}
+        </span>
       ) : (
         <span aria-hidden className="hidden sm:inline" />
       )}
     </motion.li>
   );
 });
-
-/** Time leaf — the only thing in a row that re-renders on the 1 Hz
- * tick. Subscribes to the external `useNowSeconds` store directly so
- * neither the parent `GlobalFeed` nor the memo'd `FeedRow` re-renders
- * when wall-clock advances. */
-function FeedRowTime({ ts, className }: { ts: number; className?: string }): JSX.Element {
-  const now = useNowSeconds();
-  return (
-    <span
-      className={cn("shrink-0 min-w-[7rem] text-right text-sw-xs text-sw-muted tabular-nums", className)}
-      title={new Date(ts).toISOString()}
-    >
-      {formatRelative(ts, { now: new Date(now) })}
-    </span>
-  );
-}
 
 /** Same priority order as RunRow's `displayTitle`, applied to a
  * partial RunDetail (the row's data may not have arrived yet, in
