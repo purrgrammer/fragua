@@ -243,15 +243,18 @@ function formatRelative(ts: number, now: number): string {
 }
 
 export function scheduleHelp(): number {
-  console.log(chalk.bold("swarm schedules \u2014 manage recurring workflow runs\n"));
+  console.log(chalk.bold("swarm schedule \u2014 manage recurring workflow runs\n"));
   console.log("Subcommands:");
+  console.log(`  ${chalk.cyan("add <workflow>")}   Create a schedule (--every required)`);
   console.log(`  ${chalk.cyan("list")}             List schedules (--cwd to filter)`);
   console.log(`  ${chalk.cyan("rm <id>")}          Delete a schedule`);
   console.log(`  ${chalk.cyan("pause <id>")}       Pause a schedule`);
   console.log(`  ${chalk.cyan("resume <id>")}      Resume a paused schedule`);
-  console.log("\nTo create a schedule:");
-  console.log(
-    "  swarm run <workflow> --every <30m|1h|6h|24h|3d|7d> [--on-overlap skip|queue|concurrent] [--no-fire-on-create]",
-  );
+  console.log("\nOptions on add:");
+  console.log("  --every <30m|1h|6h|24h|3d|7d>  Interval shorthand (required)");
+  console.log("  --cwd <dir>                   Project root (default cwd)");
+  console.log("  --input <text>                Free-form description for every fire");
+  console.log("  --on-overlap <skip|queue|concurrent>  Default skip");
+  console.log("  --no-fire-on-create           Wait one full interval before first fire");
   return 0;
 }

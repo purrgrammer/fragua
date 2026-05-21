@@ -10,8 +10,6 @@ import * as handler from "@swarm/core/handler";
 import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@swarm/daemon";
 import { createServer } from "@swarm/server";
 import { SqliteStore } from "@swarm/store";
-import { Hono } from "hono";
-import { createScheduleRoutes, type ScheduleRoutesDeps } from "../../server/src/store/schedule-routes.ts";
 import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
 
 interface Rig {
@@ -156,68 +154,6 @@ describe("swarm run", () => {
       globalThis.fetch = originalFetch;
       await r.close();
     }
-  });
-});
-
-describe("swarm run --every (schedule creation)", () => {
-  test("creates a schedule instead of a one-shot run and does not stream", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    const app = new Hono();
-    const deps: ScheduleRoutesDeps = { store };
-    app.route("/", createScheduleRoutes(deps));
-    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
-    const url = `http://127.0.0.1:${server.port}`;
-
-    const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
-    tmps.push(workflowDir);
-    const yamlPath = join(workflowDir, "echo.yaml");
-    writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
-
-    const logs: string[] = [];
-    const origLog = console.log;
-    console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
-
-    let streamOpened = false;
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      const u = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-      if (u.includes("/stream")) streamOpened = true;
-      return origFetch(input, init);
-    }) as typeof fetch;
-
-    try {
-      const code = await runCommand({
-        workflow: yamlPath,
-        url,
-        every: "1h",
-        cwd: workflowDir,
-      });
-      expect(code).toBe(0);
-      expect(streamOpened).toBe(false);
-      const rows = store.listSchedules();
-      expect(rows.length).toBe(1);
-      expect(rows[0]!.intervalText).toBe("1h");
-      expect(logs.some((l) => l.includes("schedule created"))).toBe(true);
-    } finally {
-      globalThis.fetch = origFetch;
-      console.log = origLog;
-      server.stop(true);
-      store.close();
-    }
-  });
-
-  test("rejects unknown --every interval before hitting the server", async () => {
-    const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
-    tmps.push(workflowDir);
-    const yamlPath = join(workflowDir, "echo.yaml");
-    writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
-
-    const code = await runCommand({
-      workflow: yamlPath,
-      url: "http://127.0.0.1:1",
-      every: "99m",
-    });
-    expect(code).toBe(1);
   });
 });
 

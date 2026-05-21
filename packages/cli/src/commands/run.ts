@@ -21,7 +21,6 @@ import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
-import { scheduleAddCommand } from "./schedule.ts";
 
 /** Parse repeated `--input name=value` args into a resolved map. A value
  * of `@<path>` reads the file verbatim; `@-` reads stdin (once, cached for
@@ -104,13 +103,6 @@ export interface RunCommandOptions {
   /** Store path. When set, discovers the server URL at `<dirname(db)>/serve.json`
    * instead of `<cwd>/.swarm/serve.json`. Pairs with `swarm serve --db`. */
   dbPath?: string;
-  /** When set, create a schedule instead of a one-shot run. Accepts the
-   * same interval shorthands as `scheduleAddCommand` (30m|1h|6h|24h|3d|7d). */
-  every?: string;
-  /** Overlap policy for schedule creation (skip|queue|concurrent). */
-  onOverlap?: string;
-  /** When true, the schedule waits one full interval before its first fire. */
-  noFireOnCreate?: boolean;
 }
 
 const TERMINAL_TYPES = new Set<string>([
@@ -122,18 +114,6 @@ const TERMINAL_TYPES = new Set<string>([
 ]);
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
-  if (opts.every !== undefined) {
-    return scheduleAddCommand({
-      workflow: opts.workflow,
-      every: opts.every,
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      ...(opts.url !== undefined ? { url: opts.url } : {}),
-      ...(opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {}),
-      ...(opts.inputs !== undefined ? { input: JSON.stringify(opts.inputs) } : {}),
-      ...(opts.onOverlap !== undefined ? { overlap: opts.onOverlap } : {}),
-      ...(opts.noFireOnCreate !== undefined ? { noFireOnCreate: opts.noFireOnCreate } : {}),
-    });
-  }
   const cwd = opts.cwd ?? process.cwd();
   // Discovery cascade:
   //   1. --url flag (explicit)
