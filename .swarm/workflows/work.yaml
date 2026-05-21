@@ -124,14 +124,17 @@ steps:
     run: bun run format
     next: gate
 
-  gate:                                # pure classifier — isolated, diff-only, cheap
+  gate:                                # pure classifier — isolated, diff-only
     type: llm
-    model: claude-haiku-4-5
+    model: claude-sonnet-4-6
     allowed-tools: [bash, read]
     prompt: |
-      Read `git diff HEAD` only. Route with the `route` tool (once, on its own response):
+      Read `git diff HEAD`, then classify it by calling the `route` tool.
         auto  — contained change, no contract surface.
         human — touches shared contracts (HandlerContext, executor internals, store schema, event envelope), security-sensitive, or breaks a public API.
+
+      You MUST end by calling `route` exactly once. Do not reply with prose or
+      end your turn without routing — a turn with no `route` call fails the run.
     routes:
       auto:  {to: ci,      label: "Auto-promote"}
       human: {to: signoff, label: "Needs review"}
