@@ -1,11 +1,11 @@
 ---
 name: operate
-description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), the two equivalent entry points (`fragua run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a fragua checkout.
+description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "land/accept this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is the `fragua` CLI; an HTTP/SQLite escape hatch is at the end for scripting and observability endpoints with no CLI verb. Assumes Claude Code with Bash / Read on a fragua checkout.
 ---
 
 # operate — enqueue, watch, and control a live run
 
-The goal is to go from a workflow (a name resolvable under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run that you can steer safely. Prefer the CLI for interactive runs; reach for the HTTP surface when you need priority / routing / no-follow / scripting.
+Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — entirely through the `fragua` CLI. The CLI is a thin client over the HTTP intent routes; reach for raw HTTP only for scripting or the read-only observability endpoints that have no CLI verb (see the escape hatch at the end).
 
 Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §7 (web server), `AGENTS.md` (commands).
 
@@ -14,19 +14,18 @@ Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs
 ## Fast path
 
 ```sh
-# Pre-flight — both must be true.
-sqlite3 -readonly ~/.fragua/fragua.db \
-  "SELECT pid, http_url, (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS age_s
-     FROM daemon_lock;"      # row present + http_url non-null + age < 30s
-bun run fragua providers ls   # at least one provider shows ✓
+fragua runs ls          # harness up if this returns (errors if no daemon to discover)
+fragua providers ls     # at least one provider shows ✓
 
-# Run. Trailing args become $ARGUMENTS; --input name=value (repeatable)
-# binds typed inputs declared in the workflow's `inputs:` block.
-bun run fragua run change "rename foo() to bar() in packages/core"
-bun run fragua run deploy --input ticket=BUG-1 --input env=prod
+# Run. Trailing args become the run's free-form input; --input name=value
+# (repeatable) binds the typed inputs declared in the workflow's `inputs:` block.
+fragua run change "rename foo() to bar() in packages/core"
+fragua run deploy --input ticket=BUG-1 --input env=prod
 ```
 
-The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
+`fragua run` uploads the workflow, enqueues, and streams events until terminal. Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. It exits non-zero on halt/cancel; `paused_*` is suspensive (exits 0; the run resumes on its own via retry timer or your HITL response).
+
+> `fragua` and `bun run fragua <args…>` are interchangeable on a checkout; this doc uses the bare binary.
 
 If the fast path works, nothing else here matters.
 
@@ -34,193 +33,97 @@ If the fast path works, nothing else here matters.
 
 ## 1. Pre-flight
 
-The harness owns the daemon + HTTP server in one foreground process. Discovery rides on `daemon_lock` in the DB — no JSON files in the default install.
+The harness owns the daemon + HTTP server in one foreground process; the CLI discovers it automatically (via `daemon_lock` in the store, or `<cwd>/.fragua/serve.json` on the CI-primitive path).
 
 ```sh
-# Default DB (harness layout)
-sqlite3 -readonly ~/.fragua/fragua.db <<'SQL'
-.mode column
-SELECT pid, hostname, http_url, http_port,
-       datetime(heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
-       (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS seconds_ago
-FROM daemon_lock;
-SQL
-
-# `http_url` populated → harness running. Hit /health to confirm.
-URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
-[ -n "$URL" ] && curl -fsS --max-time 2 "$URL/health" | jq .
-
-# Provider credential
-bun run fragua providers ls
+fragua runs ls          # succeeds → harness reachable; errors → no daemon to discover
+fragua providers ls     # configured providers; ✓ = credentialed
 ```
 
 Common failures:
 
-- **No `daemon_lock` row** — no daemon running. Start: `bun run fragua harness` (default) or `bun run fragua daemon start --db <path>` (CI primitive).
-- **Heartbeat > 30s old** — daemon dead. Runs stay `queued` until a new one claims the lock. Restart the harness.
-- **`http_url` NULL** — the daemon is up but the harness hasn't published the HTTP URL. Either the harness is mid-startup, or the user is on the CI-primitive path (`fragua daemon` + `fragua serve` separately) — in that case, fall back to `<cwd>/.fragua/serve.json` for discovery.
-- **Provider not credentialed** — `POST /runs` 400s with `code="provider_unavailable"`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`.
-- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model or switch the workflow's `model=` attr. For a *new* provider use the full wizard (`fragua providers add --custom`); when the provider already exists and you just want one more model, skip the wizard with `fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`. Both write to `~/.fragua/fragua.db`'s `provider_config` table; the per-model verbs (`ls-models` / `add-model` / `rm-model` / `edit-model`) Ajv-validate on read and write so a typo refuses cleanly instead of poisoning the row.
-
-The user should run `fragua harness` themselves — don't start it on their behalf without asking; the harness attaches to the current shell.
+- **`fragua runs ls` errors / can't discover a server** — no harness running. Start it: `fragua harness` (default) or `fragua daemon start --db <path>` + `fragua serve --db <path>` (CI primitive). The user should run `fragua harness` themselves — don't start it on their behalf without asking; it attaches to the current shell.
+- **Runs stuck `queued`** — daemon dead/heartbeat stale. Restart the harness.
+- **Provider not credentialed** — enqueue fails `provider_unavailable`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`.
+- **Model not registered** — enqueue fails `model_unresolved`. Register it (`fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`, or the full `fragua providers add --custom` wizard for a new provider) or switch the workflow's `model:`.
 
 ---
 
-## 2. Entry points
-
-Two equivalent surfaces. Use the CLI unless the task requires scripting.
-
-### CLI (`fragua run`)
+## 2. Enqueue — `fragua run`
 
 ```sh
-bun run fragua run <workflow> [trailing positional args]  \
+fragua run <workflow> [trailing positional args…]  \
   [--input name=value]   # typed input; repeat for several (gh-style)
+  [--title "…"]          # set the run title now (suppresses the auto-titler)
   [--priority 10]        # higher runs first (queue tie-breaker)
   [--no-follow]          # enqueue and exit; print only the run id
-  [--url http://…]       # override DB-based discovery
+  [--url http://…]       # override auto-discovery
   [--db path/to/db]      # pairs with `fragua serve --db` for parallel fraguas
 ```
 
-`<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`. Anything containing `/` or ending `.yaml` resolves as a literal path.
-
-Trailing positional args are joined with spaces into `$ARGUMENTS`. `--input name=value` (repeatable) binds the typed inputs declared in the workflow's `inputs:` block, substituted as `${{ inputs.name }}`; a missing required input or an out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts print colorised as they stream.
-
-### HTTP (`POST /workflows`, then `POST /runs`)
-
-The CLI is a thin client over this. Use directly when you need arbitrary `routing`, scripted enqueue, or multiple runs in flight.
-
-```sh
-URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
-
-# 1. Upload (idempotent; sha is content-addressed).
-SHA=$(curl -fsS -X POST "$URL/workflows" \
-  -H 'content-type: application/json' \
-  -d "$(jq -n --arg n change --rawfile s path/to/workflow.yaml \
-        '{name:$n, source:$s}')" | jq -r .sha)
-
-# 2. Enqueue. `input` lands in routing.input → $ARGUMENTS; `inputs` lands
-#    in routing.inputs → ${{ inputs.x }} (validated against the inputs: block).
-RUN=$(curl -fsS -X POST "$URL/runs" \
-  -H 'content-type: application/json' \
-  -d "$(jq -n --arg sha "$SHA" --arg in "rename foo() to bar()" --arg cwd "$PWD" \
-        '{workflowSha:$sha, priority:5, input:$in, inputs:{ticket:"BUG-1"}, cwd:$cwd}')" | jq -r .runId)
-
-# 3. Tail. Last-Event-ID resumes on reconnect.
-curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
-```
-
-`workflowSha` is sha256 of the workflow source — same source twice → same sha → cheap re-enqueue. `runId` is a ULID when omitted. `cwd` becomes the run's project root (worktree base, project listing key); omit for ephemeral CI runs. `title` (optional string) sets the run title immediately at enqueue and suppresses the auto-titler; omit to let the daemon generate a title from `input`.
+`<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or ending `.yaml` is a literal path. Trailing positional args join into the run's free-form input (description / auto-title seed). `--input name=value` binds typed inputs (`${{ inputs.name }}`); a missing required input or out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts stream colorised.
 
 ---
 
 ## 3. Watch a run
 
-| Surface | Use when |
-|---|---|
-| `GET /runs/:id/stream` (SSE) | Live progress. Terminates on disconnect. |
-| `GET /runs/:id/events.json` | Point-in-time snapshot; scripting; diffing. |
-| `GET /runs/:id/steps` | Per-LLM-call snapshots (prompt, model, tokens, cost; rows for parallel branches carry `parentNodeId` + `parallelIndex`). |
-| `GET /runs/:id` | Projection summary (runStatus, status, current node, totals). Cheap status poll. |
-| `GET /runs/:id/snapshots` | Ordered Diff-scrubber feed: `Array<{eventIdx,nodeId,label,commitSha,treeSha,committed,uncommitted}>`. One entry per `snapshot.captured` (per-step/HITL) and the terminal `fact.snapshot_recorded`. Empty for non-worktree runs. |
-| `GET /runs/:id/snapshots/:eventIdx/tree` | `git ls-tree` against the resolved commit → `{entries:[{path,mode,size,type}]}`. |
-| `GET /runs/:id/snapshots/:eventIdx/file?path=<rel>` | `git show <sha>:<path>` → text/plain or application/octet-stream. |
-| `GET /runs/:id/snapshots/:eventIdx/diff?against=base\|previous\|<eventIdx>&path=<opt>` | `git diff` between two snapshot commits → text/x-diff. `base` = `diff_base_sha`; `previous` = prior snapshot (or base for the first); `<int>` = that snapshot's commit. |
-
-**Two status fields, don't conflate them.** `GET /runs/:id` returns BOTH `runStatus` (lifecycle: `queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) AND `status` (the run's final *outcome*: `success | fail`, or `null` while not yet terminal). For "is the run still going?" checks use `runStatus`; for "did it succeed?" once terminal use `status`. The cheat sheet and the lifecycle table below use `runStatus` consistently.
-
 ```sh
-curl -fsS "$URL/runs/$RUN" | jq '{runStatus, status, currentNode, costUsd, totalTokens: ((.inputTokens // 0) + (.outputTokens // 0))}'
-curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-20:] | map({seq, type, payload})'
-curl -fsS "$URL/runs/$RUN/steps" | jq '.[] | {stepIdx, nodeId, model, durationMs, tokens, costUsd}'
-
-# Polling pattern — watch runStatus, not status.
-until curl -fsS "$URL/runs/$RUN" | jq -e '.runStatus | IN("completed","halted","cancelled","paused_human","paused","quarantined")' >/dev/null; do
-  sleep 30
-done
+fragua runs ls [--status queued,running,…] [--limit N]   # one line per run: id · status · title
+fragua runs inbox                                        # runs awaiting an operator decision (2 sections)
+fragua runs diff <id> [--against base|previous|<eventIdx>] [--snap <eventIdx>]   # review the change
 ```
 
-For running-but-silent runs: if the last event is `fact.node_started` with no follow-up after the node's `maxMs`, the supervisor watchdog should have fired — if it hasn't, the daemon is wedged. Jump to fragua-debug.
+`fragua run` tails the run it enqueues; to watch a run you *didn't* just start, poll `fragua runs ls` (no separate live-tail verb). `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
 
-**`runStatus` lifecycle states beyond `running` / `completed`:**
+**Two status words, don't conflate.** Lifecycle (`queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) answers "still going?"; outcome (`success | fail | null`) answers "did it succeed?" once terminal. `fragua runs ls` shows the lifecycle status.
 
-- `queued` — waiting for a daemon dispatch slot.
-- `paused_human` — `human` node yielded. Resume with `POST /runs/:id/human`.
-- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` (operator paused), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
-- `paused_auto` — daemon owes a clock tick. Reason on `fact.run_paused.payload.reason`: `handler_retry` (node returned `outcome=retry`, engine scheduled a backoff), or `provider_retry` (auto-retryable provider transport error — 408/429/5xx/529/network). The run *frees its concurrency slot* during the wait. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_auto" }` followed by the same node re-dispatched. No operator action unless the timer never fires (then check daemon heartbeat); operators can short-circuit with `POST /runs/:id/resume`.
-- `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
-- `halted` / `cancelled` — terminal. fragua-debug §8 has the `reason` codes.
+```sh
+# Poll to terminal (lifecycle status, not outcome):
+until fragua runs ls --limit 50 | grep "$RID" \
+      | grep -qE 'completed|halted|cancelled|paused_human|paused|quarantined'; do sleep 30; done
+```
+
+**Lifecycle states beyond `running`/`completed`:**
+
+- `queued` — waiting for a dispatch slot. Not broken; no daemon = no dispatch.
+- `paused_human` — a `human` node yielded. Answer with `fragua runs respond` (§5).
+- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`).
+- `paused_auto` — daemon owes a clock tick (`handler_retry` or `provider_retry`); frees its slot and re-queues itself when the backoff passes. No action unless the timer never fires (check the harness). Short-circuit with `fragua runs resume`.
+- `quarantined` — orphan side effect; resolve with `fragua runs unquarantine` (§6).
+- `halted` / `cancelled` — terminal. For `reason` codes, switch to the postmortem skill.
+
+If the last event is `fact.node_started` with no follow-up past the node's `maxMs` and the watchdog hasn't fired, the daemon is wedged — switch to postmortem.
 
 ---
 
-## 4. Control plane — the intent vocabulary
+## 4. Control plane — `fragua runs <verb>`
 
-Every operator action is an HTTP POST that appends an `intent.*` event. No OCC: intents are **always appendable** (SPEC §3.5). Daemon picks them up on the next supervisor tick (~50ms).
+Each verb appends an `intent.*` event the daemon folds on its next tick (~50ms); intents are **always appendable** (no OCC), so a verb succeeds even if the daemon hasn't acted yet. Each prints the intent `seq` — quote it so the user can find the action in the stream.
 
-All endpoints return `{ seq }` — quote it in any follow-up so the user can find the action in the event stream.
-
-| POST | Body | Written intent | Post-condition |
-|---|---|---|---|
-| `/runs/:id/steer` | `{text}` | `intent.steering_requested` | Handler aborts (`cause:"steer"`); next dispatch sees the steering text in the thread. |
-| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); `runStatus` → `paused` (`reason:"operator"`). |
-| `/runs/:id/cancel` | `{reason?}` | `intent.cancel_requested` | Handler aborts (`cause:"cancel"`); terminal `fact.run_cancelled`. |
-| `/runs/:id/human` | `{route, note?}` | `intent.human_input` | For `kind=human` nodes: routes to the outgoing edge whose `route=` attribute equals the posted `route`. 400 if `route` is not in the node's declared `routes=` enum. |
-| `/runs/:id/resume` | `{note?}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued`. |
-| `/runs/:id/unquarantine` | `{resolution, note?}` | `intent.unquarantine` | Resolves the orphan side effect per `resolution` ∈ `treat_as_done | retry | cancel`. |
-| `/runs/:id/priority` | `{newPriority, note?}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. |
-| `/runs/:id/budget` | `{scope, metric, newLimit, note?}` | `intent.budget_adjusted` | Override stored at `routing.budget_override.<scope>.<metric>`; next turn-boundary check uses the new ceiling. Doesn't wake on its own — pair with `/resume`. |
-
-### Post-run primitives (worktree inbox)
-
-A terminal run that left recoverable agent work sits in the inbox (`run_state.inbox_status='pending'`). Land or drop it with one of two **post-terminal** actions. The action runs **synchronously in the request** — the handler executes the git, returns the result, and on success appends `intent.{accept,discard}_run` (carrying the result) which the daemon folds into `fact.run_*` (the `inbox_status` projection). A conflict / dirty tree returns 4xx and writes nothing.
-
-| POST | Body | Returns (200) | Post-condition |
-|---|---|---|---|
-| `/runs/:id/accept` | `{}` | `{seq, sha, replayed, tailStaged}` | Replays the run's commits onto the operator's current branch (HEAD in the run's cwd) + stages the uncommitted tail to commit. 409 `conflict` (doesn't merge cleanly) / `dirty_tree` (uncommitted local changes) / `no_work` → resolve via revive. Inbox `pending → acted`. |
-| `/runs/:id/discard` | `{}` | `{seq, refs}` | Delete the run's `refs/fragua/{snapshots,heads}/<id>`. `pending → discarded` (terminal-terminal — later actions 409 `discarded`). |
-
-Shared gate for all four: 404 unknown run · 409 `not_terminal` / `not_in_inbox` (clean run) / `discarded` / `no_worktree` (bare-cwd). `branch`/`commit`/`merge` compose freely (branch then later merge); `discard` is final.
+| Command | Intent | Post-condition |
+|---|---|---|
+| `fragua runs steer <id> "<text>"` | `intent.steering_requested` | Handler aborts (`cause:"steer"`); next dispatch sees the text in the thread. |
+| `fragua runs pause <id>` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); → `paused` (`reason:"operator"`). |
+| `fragua runs cancel <id> [--reason <t>]` | `intent.cancel_requested` | Handler aborts; terminal `fact.run_cancelled`. No resume path. |
+| `fragua runs resume <id> [--note <t>]` | `intent.resume` | Any `paused_*` run → `queued`. |
+| `fragua runs respond <id> [route] [--note <t>]` | `intent.human_input` | Answers a `paused_human` gate; route must be in the gate's enum (§5). |
+| `fragua runs unquarantine <id> --resolution treat_as_done\|retry\|cancel` | `intent.unquarantine` | Resolves an orphan side effect (§6). |
+| `fragua runs priority <id> <n> [--note <t>]` | `intent.priority_adjusted` | Re-orders the queue; running runs unaffected. |
+| `fragua runs budget <id> --scope <s> --metric <m> --new-limit <n> [--note <t>]` | `intent.budget_adjusted` | Raises a cap; doesn't wake on its own — pair with `resume`. |
 
 ### Steering
 
-Steering injects text into the next LLM call's prior-messages thread. The current handler aborts (lossless — pi-agent-core keeps what it had) and re-dispatches. Use small, specific nudges. Long essays are usually the wrong tool; prefer `cancel` + a fresh run with better `$ARGUMENTS`.
+Injects text into the next LLM call's thread; the current handler aborts losslessly and re-dispatches. Use small, specific nudges. After `fragua runs steer`, expect `fact.node_aborted { cause:"steer", intentSeq: <seq> }` → `fact.node_started` for the same node with `iteration` bumped. Long essays are the wrong tool — prefer `cancel` + a fresh run with a better prompt.
 
-```sh
-curl -fsS -X POST "$URL/runs/$RUN/steer" \
-  -H 'content-type: application/json' \
-  -d '{"text":"skip the migration step; the schema is already at head"}' | jq .seq
-```
+### Pause / cancel
 
-Wait for `fact.node_aborted { cause:"steer", intentSeq: <returned seq> }` → `fact.node_started` for the same node (same `nodeId`, `iteration` bumped).
-
-### Pause + resume
-
-Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/human` is for `type: human` nodes only; sending it to an operator-paused run is the wrong shape.
-
-### Cancel
-
-Final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` + decide later if unsure.
-
-### Human inputs
-
-For `type: human` gates. `route` must match one of `fact.run_paused_human.payload.routes`. See §5 + workflows §14.
-
-### Priority + budget
-
-`priority` re-orders the queue (running runs unaffected). `budget` raises a cap on a `paused{reason:"budget"}` run; the web UI bundles `/budget` + `/resume` in one click.
+`pause` is steer-without-text (resume later); `cancel` is terminal (no resume). When unsure, `pause` and decide later.
 
 ---
 
 ## 5. Human resume protocol
 
-Runs sit in `paused_human` until you feed them. Read what they want:
-
-```sh
-curl -fsS "$URL/runs/$RUN/events.json" \
-  | jq '[.[] | select(.type=="fact.run_paused_human")] | last'
-# { seq, type, payload: { nodeId, text, routes: ["apply", "output_only", "reject"] }, … }
-```
-
-`route` must equal one of the strings in `payload.routes`. The server validates against the declared enum (400 on off-list); the handler re-checks as defense-in-depth.
+A `paused_human` run waits for input. `fragua runs respond <id>` (no route) prints the gate prompt + numbered routes and reads a choice from stdin; `fragua runs respond <id> <route>` posts directly (scriptable). The route must be one of the gate's declared options — the CLI rejects an off-list route before posting, and the server re-validates.
 
 Present the decision to the user — don't answer on their behalf unless they've explicitly delegated it.
 
@@ -228,110 +131,77 @@ Present the decision to the user — don't answer on their behalf unless they've
 
 ## 6. Quarantine resolution
 
-A run lands in `quarantined` when the startup sweep finds `fact.side_effect_intent` without a matching `_done`/`_failed`. The external effect may have succeeded, failed, or never reached the provider — fragua can't tell. Operator decides.
+A run lands in `quarantined` when the startup sweep finds a side-effect intent with no matching done/failed. The external effect may have succeeded, failed, or never landed — fragua can't tell, so the operator decides:
 
 ```sh
-# The orphans:
-curl -fsS "$URL/runs/$RUN/events.json" \
-  | jq '[.[] | select(.type=="fact.run_quarantined")] | last | .payload.orphanedIntents'
-
-# Resolutions:
-#   treat_as_done — assume effect completed (use when provider idempotency is strong)
-#   retry         — replay (use when verified external state matches a re-try)
-#   cancel        — stop the run (use when blast radius is unclear)
-curl -fsS -X POST "$URL/runs/$RUN/unquarantine" \
-  -H 'content-type: application/json' \
-  -d '{"resolution":"cancel","note":"verified the external effect via <evidence>"}'
+fragua runs unquarantine <id> --resolution treat_as_done|retry|cancel --note "<evidence>"
+#   treat_as_done — assume it completed (strong provider idempotency)
+#   retry         — replay (verified external state matches a re-try)
+#   cancel        — stop the run (blast radius unclear)
 ```
 
-Present options + evidence to the user. Never auto-choose.
+Inspect the orphaned intents first (escape hatch below) and present options + evidence to the user. Never auto-choose.
 
 ---
 
-## 6.5 Schedules — recurring runs
+## 7. Landing work — the inbox
 
-A schedule fires a workflow on a fixed shorthand interval (`30m` / `1h` / `6h` / `24h` only — cron is out of scope). Each fire enqueues a normal run with `run_state.schedule_id` carrying lineage. Skip-on-overlap is the default; one coalesced catch-up after daemon downtime.
+A terminal run that left recoverable agent work sits in `fragua runs inbox` under **READY TO LAND**. Land or drop it:
 
 ```sh
-# Add
-bun run fragua schedule add analyze --every 1h
-bun run fragua schedule add introspect --every 6h --on-overlap skip
-bun run fragua schedule add change --every 24h --input "sweep deps" --no-fire-on-create
-
-# Inspect
-bun run fragua schedule list
-bun run fragua schedule list --cwd "$PWD"
-
-# Operate
-bun run fragua schedule pause sch_xxxxxx
-bun run fragua schedule resume sch_xxxxxx       # no catch-up; next_fire_at = now + interval
-bun run fragua schedule rm sch_xxxxxx
+fragua runs accept <id>    # replay the run's commits onto your current branch (HEAD in the run's cwd)
+                           # + stage the uncommitted tail → `git commit` when ready
+fragua runs discard <id>   # drop the run's refs/fragua/{snapshots,heads}/<id> (final)
 ```
 
-HTTP equivalents (mirrors the CLI 1:1):
+`accept` runs synchronously and prints `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` 409s `discarded`.
+
+---
+
+## 8. Schedules — recurring runs
+
+A schedule fires a workflow on a fixed interval (`30m` / `1h` / `6h` / `24h`; cron is out of scope). Each fire enqueues a normal run carrying `schedule_id` lineage. Skip-on-overlap is the default; one coalesced catch-up after downtime.
+
+```sh
+fragua schedule add <workflow> --every 1h                 # create + fire immediately
+fragua schedule add change --every 24h --input "sweep deps" --no-fire-on-create
+fragua schedule list [--cwd <dir>]                         # tabular health view
+fragua schedule pause | resume | rm <sch_id>               # resume: no catch-up; next fire = now + interval
+```
+
+If a schedule's workflow goes missing/unparseable at fire time, the dispatcher records `fact.schedule_invalid_workflow` and auto-pauses it — fix the file and `fragua schedule resume`. Transient run failures don't pause the schedule (maintenance workflows are idempotent).
+
+---
+
+## 9. Anti-patterns
+
+- **Don't spam steer.** 5 aborts without progress halts the run with `reason:"abort_loop"`; usually `cancel` + re-enqueue with a better prompt is right.
+- **Don't write intents the user didn't ask for.** Steer / pause / cancel / unquarantine can lose work or change external state. Present evidence, let the user decide.
+- **Don't `accept` over a dirty tree.** Commit/stash local changes first, or it 409s `dirty_tree`.
+- **Don't assume one daemon.** Parallel fraguas (different `--db`) coexist; pass `--db`/`--url` to target one.
+- **Don't treat `queued` as broken.** No daemon = no dispatch. Check the harness first.
+
+---
+
+## 10. HTTP / SQLite escape hatch
+
+Everything above is the CLI. Drop to raw HTTP only for scripting many runs or for the read-only observability endpoints with no CLI verb. Discover the URL once:
 
 ```sh
 URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
-
-curl -fsS -X POST   "$URL/schedules"               -H 'content-type: application/json' \
-   -d '{"workflow":"analyze","cwd":"'"$PWD"'","every":"1h"}'
-curl -fsS            "$URL/schedules?cwd=$PWD"     | jq .
-curl -fsS -X DELETE "$URL/schedules/sch_xxxxxx"
-curl -fsS -X POST   "$URL/schedules/sch_xxxxxx/pause"  -H 'content-type: application/json' -d '{}'
-curl -fsS -X POST   "$URL/schedules/sch_xxxxxx/resume" -H 'content-type: application/json' -d '{}'
+curl -fsS "$URL/health" | jq .            # liveness + .storePath (which store you're hitting)
 ```
 
-When a schedule's workflow file is missing or fails to parse at fire time, the dispatcher records `fact.schedule_invalid_workflow` on `daemon_events` and auto-pauses the schedule. Fix the file and `schedule resume` to bring it back. Transient run failures (provider error, halted run) do NOT pause the schedule — maintenance workflows are idempotent; one bad fire isn't a reason to disable the cadence.
-
----
-
-## 7. Anti-patterns
-
-- **Don't spam steer.** 5 steering intents in 30s usually means `cancel` + re-enqueue with a better prompt. The runtime halts with `reason:"abort_loop"` after 5 consecutive aborts without progress anyway.
-- **Don't tail SSE forever.** Open streams keep the server's goroutine budget busy; the CLI terminates on terminal facts.
-- **Don't write intents the user didn't ask for.** Steering / pausing / cancelling / unquarantining without explicit go-ahead risks losing work or changing external state. Present evidence, let the user decide.
-- **Don't assume one daemon.** Parallel fraguas (different `--db`) coexist. `curl -fsS "$URL/health" | jq .storePath` echoes the path you're hitting.
-- **Don't treat `queued` as broken.** No daemon = no dispatch. Check the heartbeat first.
-
----
-
-## Cheat sheet
+CLI-less reads worth knowing:
 
 ```sh
-# Discover
-URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
-curl -fsS "$URL/health" | jq .
-
-# Enqueue + watch
-bun run fragua run change --input="…"
-
-# Manual enqueue
-SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
-   -d "$(jq -n --arg n change --rawfile s path/to/workflow.yaml '{name:$n, source:$s}')" | jq -r .sha)
-RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
-   -d "$(jq -n --arg sha "$SHA" --arg in "…" --arg cwd "$PWD" '{workflowSha:$sha, input:$in, cwd:$cwd}')" | jq -r .runId)
-
-# Status — runStatus is lifecycle (queued|running|completed|halted|…), status is outcome (success|fail|null).
-curl -fsS "$URL/runs/$RUN" | jq '{runStatus, status, currentNode, costUsd}'
-
-# Intents (each returns {seq})
-curl -fsS -X POST "$URL/runs/$RUN/steer"        -d '{"text":"…"}'                                  -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/pause"        -d '{}'                                            -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/cancel"       -d '{"reason":"…"}'                                -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/human"        -d '{"route":"A"}'                                 -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/resume"       -d '{}'                                            -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/unquarantine" -d '{"resolution":"cancel","note":"…"}'            -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/priority"     -d '{"newPriority":10}'                            -H 'content-type: application/json'
-
-# Post-run primitives (worktree inbox; terminal runs only) — synchronous: the
-# response carries the result (accept → {sha, replayed, tailStaged}); 409 on conflict.
-curl -fsS -X POST "$URL/runs/$RUN/accept"       -d '{}'                                            -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/discard"      -d '{}'                                            -H 'content-type: application/json'
-
-# Schedules
-bun run fragua schedule add <workflow> --every 1h          # create + fire immediately
-bun run fragua schedule list [--cwd <dir>]                  # tabular health view
-bun run fragua schedule pause | resume | rm <sch_id>
+curl -fsS "$URL/runs/$RID/events.json" | jq '.[-20:]'                 # raw event tail (scripting/diffing)
+curl -fsS "$URL/runs/$RID/steps"       | jq '.[] | {nodeId,model,costUsd}'   # per-LLM-call snapshots
+curl -fsS "$URL/runs/$RID" | jq '{runStatus,status,currentNode,costUsd}'     # projection summary
+# orphaned intents for a quarantined run:
+curl -fsS "$URL/runs/$RID/events.json" | jq '[.[]|select(.type=="fact.run_quarantined")]|last|.payload.orphanedIntents'
 ```
 
-For diagnosis after terminal state, switch to fragua-debug. This skill drives runs forward; that one looks backward.
+Scripted enqueue (when `fragua run` won't do): `POST /workflows {name, source}` → `sha`, then `POST /runs {workflowSha, input, inputs, cwd, priority, title}` → `runId`. Every operate verb in §4/§7 is a `POST /runs/:id/<verb>` with the same body the CLI sends.
+
+For diagnosis after a run settles, switch to the postmortem skill. This skill drives runs forward; that one looks backward.

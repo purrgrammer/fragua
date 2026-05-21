@@ -275,6 +275,70 @@ export function unquarantineCommand(opts: UnquarantineOptions): Promise<number> 
   return postAction("unquarantine", opts.runId, body, opts);
 }
 
+export interface SteerOptions extends DiscoveryOpts {
+  runId: string;
+  text: string;
+}
+
+/** Inject a steering nudge: aborts the current handler and re-dispatches the
+ * node with the text prepended to the next LLM call's thread. */
+export function steerCommand(opts: SteerOptions): Promise<number> {
+  if (opts.text.trim().length === 0) {
+    console.error(chalk.red("steer: <text> required"));
+    return Promise.resolve(1);
+  }
+  return postAction("steer", opts.runId, { text: opts.text }, opts);
+}
+
+export interface PauseOptions extends DiscoveryOpts {
+  runId: string;
+}
+
+/** Pause a running run (operator). Aborts the current handler; resume with `resume`. */
+export function pauseCommand(opts: PauseOptions): Promise<number> {
+  return postAction("pause", opts.runId, {}, opts);
+}
+
+export interface PriorityOptions extends DiscoveryOpts {
+  runId: string;
+  newPriority: number;
+  note?: string;
+}
+
+/** Re-order a queued run (higher runs first). Already-running runs unaffected. */
+export function priorityCommand(opts: PriorityOptions): Promise<number> {
+  if (!Number.isFinite(opts.newPriority)) {
+    console.error(chalk.red("priority: <newPriority> integer required"));
+    return Promise.resolve(1);
+  }
+  const body: { newPriority: number; note?: string } = { newPriority: opts.newPriority };
+  if (opts.note != null && opts.note.length > 0) body.note = opts.note;
+  return postAction("priority", opts.runId, body, opts);
+}
+
+export interface BudgetOptions extends DiscoveryOpts {
+  runId: string;
+  scope?: string;
+  metric?: string;
+  newLimit?: number;
+  note?: string;
+}
+
+/** Raise a cap on a `paused{reason:"budget"}` run, then `resume` to continue. */
+export function budgetCommand(opts: BudgetOptions): Promise<number> {
+  if (opts.scope == null || opts.metric == null || opts.newLimit == null || !Number.isFinite(opts.newLimit)) {
+    console.error(chalk.red("budget: --scope <s> --metric <m> --new-limit <n> required"));
+    return Promise.resolve(1);
+  }
+  const body: { scope: string; metric: string; newLimit: number; note?: string } = {
+    scope: opts.scope,
+    metric: opts.metric,
+    newLimit: opts.newLimit,
+  };
+  if (opts.note != null && opts.note.length > 0) body.note = opts.note;
+  return postAction("budget", opts.runId, body, opts);
+}
+
 export interface LsOptions extends DiscoveryOpts {
   status?: string;
   limit?: number;

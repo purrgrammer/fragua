@@ -10,11 +10,15 @@ import { createServer } from "@fragua/server";
 import { type IEventStore, SqliteStore } from "@fragua/store";
 import {
   acceptCommand,
+  budgetCommand,
   cancelCommand,
   discardCommand,
   inboxCommand,
+  pauseCommand,
+  priorityCommand,
   respondCommand,
   resumeCommand,
+  steerCommand,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
 
@@ -157,6 +161,49 @@ describe("fragua operator verbs", () => {
 
   test("unquarantine: missing --resolution → exit 1, no network", async () => {
     const code = await unquarantineCommand({ runId: "rq", url: "http://127.0.0.1:1" });
+    expect(code).toBe(1);
+  });
+
+  test("steer: exit 0, appends intent.steering_requested", async () => {
+    seedCommitted(r.store, "rs");
+    const code = await steerCommand({ runId: "rs", text: "skip the migration", url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rs")).toBe("intent.steering_requested");
+  });
+
+  test("steer: empty text → exit 1, no network", async () => {
+    const code = await steerCommand({ runId: "rs", text: "  ", url: "http://127.0.0.1:1" });
+    expect(code).toBe(1);
+  });
+
+  test("pause: exit 0, appends intent.pause_requested", async () => {
+    seedCommitted(r.store, "rp");
+    const code = await pauseCommand({ runId: "rp", url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rp")).toBe("intent.pause_requested");
+  });
+
+  test("priority: exit 0, appends intent.priority_adjusted", async () => {
+    seedCommitted(r.store, "rpr");
+    const code = await priorityCommand({ runId: "rpr", newPriority: 10, url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rpr")).toBe("intent.priority_adjusted");
+  });
+
+  test("priority: non-numeric → exit 1, no network", async () => {
+    const code = await priorityCommand({ runId: "rpr", newPriority: Number.NaN, url: "http://127.0.0.1:1" });
+    expect(code).toBe(1);
+  });
+
+  test("budget: exit 0, appends intent.budget_adjusted", async () => {
+    seedCommitted(r.store, "rb");
+    const code = await budgetCommand({ runId: "rb", scope: "run", metric: "cost", newLimit: 5, url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rb")).toBe("intent.budget_adjusted");
+  });
+
+  test("budget: missing flags → exit 1, no network", async () => {
+    const code = await budgetCommand({ runId: "rb", url: "http://127.0.0.1:1" });
     expect(code).toBe(1);
   });
 

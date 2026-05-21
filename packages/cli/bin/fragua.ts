@@ -1,10 +1,9 @@
 #!/usr/bin/env bun
 // fragua CLI entry — dispatches subcommands.
 //
-// Commands that depended on the legacy fs-based control plane (run, daemon,
-// pause, cancel, steer, resume, list, dashboard) were removed in the
-// rearchitecture. They will be reintroduced in M5 as thin shells over the
-// HTTP intent routes once the store-backed runtime is the default.
+// Run control (`fragua runs <verb>`) is a thin client over the HTTP intent
+// routes: disposition (accept/discard/diff), lifecycle (respond/resume/
+// unquarantine/cancel), and control (steer/pause/priority/budget).
 
 import cac from "cac";
 import chalk from "chalk";
@@ -15,13 +14,17 @@ import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
   acceptCommand,
+  budgetCommand,
   cancelCommand,
   diffCommand,
   discardCommand,
   inboxCommand,
   lsCommand,
+  pauseCommand,
+  priorityCommand,
   respondCommand,
   resumeCommand,
+  steerCommand,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
 import {
@@ -443,6 +446,12 @@ function runsHelp(): void {
     unquarantine <id> --resolution treat_as_done|retry|cancel
     cancel  <id> [--reason <t>]
 
+  Control (live runs):
+    steer    <id> <text>             nudge the next LLM call; aborts + re-dispatches
+    pause    <id>                    pause a running run (resume to continue)
+    priority <id> <n>                re-order a queued run (higher first)
+    budget   <id> --scope <s> --metric <m> --new-limit <n>   raise a cap, then resume
+
   Listing:
     inbox                             runs needing attention (2 sections)
     ls [--status a,b] [--limit N]     list runs`);
@@ -456,6 +465,9 @@ cli
   .option("--note <text>", "respond/resume/unquarantine: optional note")
   .option("--reason <text>", "cancel: optional reason")
   .option("--resolution <r>", "unquarantine: treat_as_done | retry | cancel")
+  .option("--scope <s>", "budget: scope (e.g. run)")
+  .option("--metric <m>", "budget: metric (e.g. cost | tokens)")
+  .option("--new-limit <n>", "budget: the raised ceiling")
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
   .option("--limit <n>", "ls/inbox: cap results")
   .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
@@ -564,6 +576,36 @@ cli
             }),
           );
           break;
+        case "steer":
+          process.exit(await steerCommand({ runId: needId(), text: arg ?? "", ...discovery(options) }));
+          break;
+        case "pause":
+          process.exit(await pauseCommand({ runId: needId(), ...discovery(options) }));
+          break;
+        case "priority":
+          process.exit(
+            await priorityCommand({
+              runId: needId(),
+              newPriority: Number.parseInt(arg ?? "", 10),
+              ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        case "budget": {
+          const nl = pickStr(options, "newLimit");
+          process.exit(
+            await budgetCommand({
+              runId: needId(),
+              ...(pickStr(options, "scope") !== undefined ? { scope: pickStr(options, "scope")! } : {}),
+              ...(pickStr(options, "metric") !== undefined ? { metric: pickStr(options, "metric")! } : {}),
+              ...(nl !== undefined ? { newLimit: Number.parseFloat(nl) } : {}),
+              ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        }
         default:
           console.error(chalk.red(`unknown runs action: ${action}`));
           runsHelp();

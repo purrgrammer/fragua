@@ -20,7 +20,7 @@
 #   - `gate` decides human review from the DIFF, never from how triage classified.
 #   - `feedback` (signoff) and REJECT (review) are revision LOOPS to implement.
 #
-#   bun run fragua run work --input task="add a touch tool to @fragua/workspace"
+#   bun run fragua run work --input task="add a --json flag to the list command"
 #   bun run fragua run work --input task="fix: bash tool hangs when a command writes to stdin"
 
 name: work
@@ -44,7 +44,7 @@ steps:
       Task: ${{ inputs.task }}.
 
       Classify with the `route` tool (once, on its own response):
-        small   — ≤3 packages, no shared-contract changes (HandlerContext, executor internals, store schema, event envelope), ≤500 non-test lines
+        small   — ≤3 packages, no shared-contract changes (public APIs, persisted schemas, cross-package boundaries), ≤500 non-test lines
         feature — multi-package OR shared contracts OR proposal-backed
         bugfix  — a reported defect to reproduce, then fix
 
@@ -78,7 +78,7 @@ steps:
     prompt: |
       Bug: ${{ inputs.task }}.
 
-      SANDBOX (hard rule): never open the global store `~/.fragua/fragua.db` — no `fragua harness`/`daemon`/`serve`/`run`. Reproduce against throwaway temp DBs only; pass `--db "$(mktemp -u).db"` to any fragua command.
+      SANDBOX (hard rule): never start the orchestrator's long-running services or write to its live global state store; reproduce against throwaway/temporary resources only.
 
       Localise the scope, write a FAILING test in the repo's existing framework and conventional location, and confirm it fails for the stated reason (not a setup error).
       Output: source + test paths, the test identifier, the failing assertion in one sentence.
@@ -93,13 +93,13 @@ steps:
     prompt: |
       Implement ${{ inputs.task }}.
 
-      SANDBOX (hard rule): NEVER run `fragua harness` / `fragua daemon` / `fragua serve` / `fragua run` or any command that opens the global store `~/.fragua/fragua.db`. It is the live coordination DB; a schema migration or stray write corrupts it and wedges the operator's running harness. Verify schema/migration/store changes ONLY via unit tests against throwaway DBs (`bun test`, temp paths); if you must invoke a fragua command at runtime, pass `--db "$(mktemp -u).db"`. Never boot a daemon to "check" your change.
+      SANDBOX (hard rule): you run INSIDE an agent orchestrator. NEVER start its long-running daemon/server processes or run any command that opens its live global state store — a schema migration or stray write corrupts the operator's running instance. Verify schema/migration/store changes ONLY via the test suite against throwaway/temporary resources (e.g. `bun test` with temp paths). Never boot a daemon or server just to "check" your change.
 
       Plan in this thread → realise it exactly, only the package(s) it names.
       Failing test in this thread → make it pass without weakening it.
       Neither → triaged small; scope it yourself.
 
-      Per modified package: `bun run --filter='@fragua/<pkg>' typecheck`; cap fixes at 5 cycles, then `abort` with `typecheck blocked: <top error>`.
+      Per modified package: run that package's typecheck (in a workspace, e.g. `bun run --filter='<pkg>' typecheck`); cap fixes at 5 cycles, then `abort` with `typecheck blocked: <top error>`.
       Realise every test the plan promised.
       End with PLAN_REALISED: files / tests / exports / doc_updates / skipped (status each).
 
@@ -131,7 +131,7 @@ steps:
     prompt: |
       Read `git diff HEAD`, then classify it by calling the `route` tool.
         auto  — contained change, no contract surface.
-        human — touches shared contracts (HandlerContext, executor internals, store schema, event envelope), security-sensitive, or breaks a public API.
+        human — touches shared contracts (public APIs, persisted schemas, cross-package boundaries), security-sensitive, or breaks a public API.
 
       You MUST end by calling `route` exactly once. Do not reply with prose or
       end your turn without routing — a turn with no `route` call fails the run.
@@ -161,5 +161,5 @@ steps:
     max-tokens: 800000
     prompt: |
       CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
-      SANDBOX (hard rule): never open the global store `~/.fragua/fragua.db` (no `fragua harness`/`daemon`/`serve`/`run`); use `--db "$(mktemp -u).db"` for any fragua command.
+      SANDBOX (hard rule): never start the orchestrator's long-running services or write to its live global state store; verify against throwaway/temporary resources only.
     next: ci
