@@ -596,10 +596,10 @@ inbox:
 
 | Intent | CLI | Fact | Inbox transition |
 |---|---|---|---|
-| `intent.branch_run`  | `swarm branch <runId> <branch> [--force]` | `fact.run_branched`  | `pending → acted` |
-| `intent.commit_run`  | `swarm commit <runId> -m <msg> [--onto <branch>]` | `fact.run_committed` | `pending → acted` |
-| `intent.merge_run`   | `swarm merge  <runId> [--ff-only\|--no-ff\|--squash] [--into <branch>]` | `fact.run_merged`    | `pending → acted` |
-| `intent.discard_run` | `swarm discard <runId>` | `fact.run_discarded` | `pending → discarded` |
+| `intent.branch_run`  | `swarm runs branch <runId> <branch> [--force]` | `fact.run_branched`  | `pending → acted` |
+| `intent.commit_run`  | `swarm runs commit <runId> -m <msg> [--onto <branch>]` | `fact.run_committed` | `pending → acted` |
+| `intent.merge_run`   | `swarm runs merge <runId> [--no-ff\|--squash] [--into <branch>]` | `fact.run_merged`    | `pending → acted` |
+| `intent.discard_run` | `swarm runs discard <runId>` | `fact.run_discarded` | `pending → discarded` |
 
 **Invariant: no post-terminal primitive provisions or requires a
 worktree.** By terminal the worktree is gone (dispose removed it); the
@@ -654,10 +654,15 @@ can branch a run, then later merge it into main — `inbox_status` stays
 Read-only inspection:
 
 ```
-swarm diff  <runId> [--against base|previous|<eventIdx>] [-- <path>]
-swarm show  <runId>
-swarm inbox [--limit N]    # list runs with inbox_status='pending'
+swarm runs diff  <runId> [--against base|previous|<eventIdx>] [-- <path>]
+swarm runs ls    [--status …] [--limit N]
+swarm runs inbox [--limit N]    # two sections: NEEDS INPUT + READY TO LAND
 ```
+
+All run operations live under the `swarm runs <verb>` noun (singular
+`swarm run <workflow>` creates; plural `swarm runs` operates) so the
+top-level command set stays small. Lifecycle verbs — `respond` (HITL),
+`resume`, `unquarantine`, `cancel` — sit alongside the disposition verbs.
 
 ### GC
 

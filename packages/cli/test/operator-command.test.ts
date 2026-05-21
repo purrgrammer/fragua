@@ -5,9 +5,33 @@
 // (operator-actions.routes.test.ts) are covered in their own suites.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import type { RunSnapshotReader } from "@swarm/server";
 import { createServer } from "@swarm/server";
 import { type IEventStore, SqliteStore } from "@swarm/store";
-import { branchCommand, commitCommand, discardCommand, inboxCommand, mergeCommand } from "../src/commands/operator.ts";
+import {
+  branchCommand,
+  cancelCommand,
+  commitCommand,
+  discardCommand,
+  inboxCommand,
+  mergeCommand,
+  respondCommand,
+  resumeCommand,
+  unquarantineCommand,
+} from "../src/commands/operator.ts";
+
+// Permissive git reader — these tests exercise the CLI client against a fake
+// cwd (no real repo), so server-side git validation (target existence, ff)
+// is stubbed satisfiable. The real git checks live in the server route tests.
+const permissiveReader: RunSnapshotReader = {
+  lsTree: async () => null,
+  showFile: async () => ({ kind: "not_found" }),
+  diff: async () => "",
+  mergeability: async () => ({ resolved: true, ff: true, conflict: false }),
+  // The base branch exists (commit/merge target resolves); a fresh branch
+  // name does not (no false collision on `branch`).
+  refExists: async (_cwd, ref) => ref === "refs/heads/main",
+};
 
 const BASE = "a".repeat(40);
 const COMMIT = "b".repeat(40);
@@ -21,7 +45,7 @@ interface Rig {
 function rig(): Rig {
   const store = new SqliteStore({ path: ":memory:" });
   store.saveWorkflow("wf", "noop", "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n");
-  const app = createServer({ store });
+  const app = createServer({ store, ports: { runSnapshotReader: permissiveReader } });
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
   return {
     url: `http://127.0.0.1:${server.port}`,
@@ -137,6 +161,31 @@ describe("swarm operator verbs", () => {
 
   test("branch: unknown run → exit 1 (404 surfaced)", async () => {
     const code = await branchCommand({ runId: "nope", branch: "x", url: r.url });
+    expect(code).toBe(1);
+  });
+
+  test("resume: exit 0, appends intent.resume", async () => {
+    seedCommitted(r.store, "rr");
+    const code = await resumeCommand({ runId: "rr", url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rr")).toBe("intent.resume");
+  });
+
+  test("cancel: exit 0, appends intent.cancel_requested", async () => {
+    seedCommitted(r.store, "rc");
+    const code = await cancelCommand({ runId: "rc", reason: "qa", url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rc")).toBe("intent.cancel_requested");
+  });
+
+  test("unquarantine: missing --resolution → exit 1, no network", async () => {
+    const code = await unquarantineCommand({ runId: "rq", url: "http://127.0.0.1:1" });
+    expect(code).toBe(1);
+  });
+
+  test("respond: run not at a HITL gate → exit 1", async () => {
+    seedCommitted(r.store, "rh"); // terminal, not paused_human
+    const code = await respondCommand({ runId: "rh", route: "approve", url: r.url });
     expect(code).toBe(1);
   });
 

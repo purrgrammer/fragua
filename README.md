@@ -106,19 +106,30 @@ bun run swarm db backup --to backup.db   # snapshot via SQLite serialize()
 (CI primitive) → `~/.swarm/swarm.db` `daemon_lock.http_url` (harness) →
 `http://localhost:3000` last-resort default.
 
-### Post-run primitives
+### Operating on runs — `swarm runs <verb> <runId>`
 
-A finished run that left recoverable changes waits in an inbox. Promote
-or drop its work from the terminal — no checkout, nothing in your `git
-branch` until you ask for it:
+`swarm run <workflow>` (singular) *creates* a run; `swarm runs` (plural)
+*operates* on one — disposition, lifecycle, and listing all hang off it
+so the top-level stays small.
 
 ```sh
-bun run swarm inbox                                           # list runs awaiting a decision
-bun run swarm diff   <runId> [--against base|previous|<idx>]  # review what it changed
-bun run swarm branch <runId> <branch> [--force]               # committed history → a branch
-bun run swarm commit <runId> -m "msg" [--onto <branch>]       # full tree (incl. dirt) → one commit
-bun run swarm merge  <runId> [--no-ff|--squash] [--into <branch>]   # fast-forward by default
-bun run swarm discard <runId>                                 # drop the run's swarm refs
+# Listing
+bun run swarm runs inbox                                         # what needs me (2 sections)
+bun run swarm runs ls [--status running,paused_human] [--limit N]
+
+# Disposition — a finished run's recoverable work (nothing touches your
+# git branches until you ask): no checkout, nothing in `git branch` unbidden.
+bun run swarm runs diff    <runId> [--against base|previous|<idx>]
+bun run swarm runs branch  <runId> <branch> [--force]               # committed history → a branch
+bun run swarm runs commit  <runId> -m "msg" [--onto <branch>]       # full tree (incl. dirt) → one commit
+bun run swarm runs merge   <runId> [--no-ff|--squash] [--into <branch>]   # ff by default; target defaults to base ref
+bun run swarm runs discard <runId>                                  # drop the run's swarm refs
+
+# Lifecycle — unblock a stuck run
+bun run swarm runs respond <runId> [route] [--note "…"]             # answer a HITL gate (interactive without a route)
+bun run swarm runs resume  <runId>
+bun run swarm runs unquarantine <runId> --resolution treat_as_done|retry|cancel
+bun run swarm runs cancel  <runId> [--reason "…"]
 ```
 
 ## Status & docs
