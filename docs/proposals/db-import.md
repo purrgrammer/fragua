@@ -27,10 +27,12 @@ and `seq` is per-run** (`run_state.next_seq` is a per-run counter). There is no
 global sequence to reassign. Importing run `R` is a verbatim copy of:
 
 - its `run_state` row (preserving or remapping `cwd`, the only project identity —
-  no `projects` table to reconcile). **After the [pre-0.1.0 cleanup](cleanup-pre-0.1.0.md)
-  removes the sub-agent linkage columns (`parent_run_id`, …), a run is a single
-  self-contained row again** — the run-tree FK problem an adversarial pass
-  flagged disappears.
+  no `projects` table to reconcile). **The baseline `run_state` already has no
+  `parent_run_id` FK** — those parallel-sub-run columns were dropped at v13
+  (verified against `schema.sql:86–148`), so a run is a single self-contained row
+  and the run-tree FK problem an adversarial pass flagged is already moot. The
+  [pre-0.1.0 cleanup](cleanup-pre-0.1.0.md) removes the agent-tool *plumbing*, not
+  schema columns; it keeps things this way.
 - the content-addressed `workflows` row by `sha` (identical content ⇒ identical
   sha ⇒ idempotent, no duplication);
 - its `events` rows, unchanged (each `< 4096` bytes by column CHECK);
