@@ -15,9 +15,7 @@ import {
   firstCredentialedProvider,
   ModelRegistry,
   makeLlmHandler,
-  PiLlmBackend,
   PiSummariserBackend,
-  type SpawnSubagentParentCtx,
   SteeringRegistry,
 } from "@fragua/agent";
 import { parseDurationMs } from "@fragua/core";
@@ -26,13 +24,12 @@ import {
   AutoTitler,
   autoDispatcherResolver,
   Dispatcher,
-  makeSpawnSubagent,
   type Provisioner,
   startDaemon,
   WorktreeProvisioner,
 } from "@fragua/daemon";
 import { SqliteStore } from "@fragua/store";
-import { CORE_TOOLS, discoverAgents, discoverSkills, ToolRegistry } from "@fragua/workspace";
+import { CORE_TOOLS, discoverSkills, ToolRegistry } from "@fragua/workspace";
 import type { Model } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import { loadConfig, loadProjectConfig, resolveTimeouts } from "../config.ts";
@@ -218,31 +215,14 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     );
   }
 
-  // Discover named sub-agent profiles across the same project set.
-  // Catalogue lands on every llm call whose tool pool includes
-  // `agent`; per-run filter at dispatch picks the right slice.
-  const { agents: discoveredAgents, warnings: agentWarnings } = await discoverAgents({
-    projectCwds,
-    homeDir: homedir(),
-  });
-  for (const w of agentWarnings) console.warn(chalk.yellow(`agents: ${w}`));
-  if (discoveredAgents.length > 0) {
-    console.log(
-      chalk.dim(
-        `discovered ${discoveredAgents.length} agent${discoveredAgents.length === 1 ? "" : "s"} (${discoveredAgents.map((a) => a.name).join(", ")})`,
-      ),
-    );
-  }
-
-  // Auto-scan-on-first-sight. The catalogues above are a superset across
-  // every cwd known at boot. When the dispatcher prepares a llm call
-  // for a `run.cwd` that wasn't in `store.listCwds()` yet — typically the
-  // first run for a freshly-onboarded project — we incrementally scan
-  // that cwd and merge results into the live arrays before the backend
-  // reads them. The backend's `this.skills` / `this.agentDefinitions`
-  // are set once on construction, but they hold the same array
-  // references mutated here, so pushed records become visible on the
-  // next read.
+  // Auto-scan-on-first-sight. The skills catalogue above is a superset
+  // across every cwd known at boot. When the dispatcher prepares a llm
+  // call for a `run.cwd` that wasn't in `store.listCwds()` yet —
+  // typically the first run for a freshly-onboarded project — we
+  // incrementally scan that cwd and merge results into the live array
+  // before the backend reads it. The backend's `this.skills` is set once
+  // on construction, but it holds the same array reference mutated here,
+  // so pushed records become visible on the next read.
   const knownProjectCwds = new Set<string>(projectCwds);
   const inflightAutoScans = new Map<string, Promise<void>>();
   const ensureCatalogueForCwd = async (runCwd: string): Promise<void> => {
@@ -254,26 +234,18 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     }
     const promise = (async () => {
       const home = homedir();
-      const [skillsResult, agentsResult] = await Promise.all([
-        discoverSkills({
-          projectCwds: [runCwd],
-          homeDir: home,
-          ...(config.skills ? { config: config.skills } : {}),
-        }),
-        discoverAgents({ projectCwds: [runCwd], homeDir: home }),
-      ]);
+      const skillsResult = await discoverSkills({
+        projectCwds: [runCwd],
+        homeDir: home,
+        ...(config.skills ? { config: config.skills } : {}),
+      });
       // Merge by `location` — globally unique per record. Skip any
       // duplicate (e.g. user-scope records the second scan re-emits).
       const existingSkillLocs = new Set(discoveredSkills.map((s) => s.location));
       for (const s of skillsResult.skills) {
         if (!existingSkillLocs.has(s.location)) discoveredSkills.push(s);
       }
-      const existingAgentLocs = new Set(discoveredAgents.map((a) => a.location));
-      for (const a of agentsResult.agents) {
-        if (!existingAgentLocs.has(a.location)) discoveredAgents.push(a);
-      }
       for (const w of skillsResult.warnings) console.warn(chalk.yellow(`skills (auto-scan ${runCwd}): ${w}`));
-      for (const w of agentsResult.warnings) console.warn(chalk.yellow(`agents (auto-scan ${runCwd}): ${w}`));
       knownProjectCwds.add(runCwd);
     })();
     inflightAutoScans.set(runCwd, promise);
@@ -342,30 +314,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       // llm call, filtered per-node by `attrs.skills` /
       // `skills_disabled`. Empty array is a valid no-op.
       skills: discoveredSkills,
-      // Named sub-agent profiles. The backend renders the `## Available
-      // sub-agents` block into the system prompt only when the node's
-      // tool pool includes `agent`; otherwise the catalogue is silent.
-      agentDefinitions: discoveredAgents,
       ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
-      // Wire the per-call sub-agent spawner. The closure built by
-      // makeSpawnSubagent runs the sub-agent's llm call inline
-      // against the parent's event stream — no child run, no separate
-      // dispatcher path. Each spawn synthesises a one-off backend so
-      // the per-call factory has a `backend` reference that doesn't
-      // capture the parent's per-node backend (which carries
-      // node-scoped attrs irrelevant to the sub-agent).
-      spawnSubagentFactory: (parentCtx: SpawnSubagentParentCtx) => {
-        const subagentBackend = new PiLlmBackend(backendOpts);
-        return makeSpawnSubagent(
-          {
-            store,
-            registry,
-            backend: subagentBackend,
-            shutdownSignal: signalCtrl.signal,
-          },
-          parentCtx,
-        );
-      },
     };
     // `nextNode` is intentionally NOT forwarded to makeLlmHandler.
     // The factory receives the first outgoing edge as a legacy-compat
