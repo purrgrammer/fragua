@@ -44,6 +44,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
+import { HitlStepCard } from "@/components/run-conversation/HitlStepCard";
 import { RouteToolResult } from "@/components/run-conversation/RouteToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
@@ -86,6 +87,16 @@ export interface RunConversationProps {
    * streaming Terminal for any nodeId in this map that doesn't
    * already have a `tool_node` message in `messages`. */
   toolStreams?: ReadonlyMap<string, ToolStream>;
+  /** Active HITL gate. When present the run is `paused_human` and
+   * RunConversation renders an inline choice card at the tail of
+   * the paused node's section so the operator can respond without
+   * leaving the conversation view. */
+  hitl?: {
+    runId: string;
+    nodeId: string;
+    label: string | null;
+    options: string[];
+  } | null;
   className?: string;
 }
 
@@ -99,6 +110,7 @@ export function RunConversation({
   userInput,
   subagentByToolCallId,
   toolStreams,
+  hitl = null,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -235,7 +247,12 @@ export function RunConversation({
   }, [toolStreams, persistedToolNodeIds]);
 
   const empty =
-    !isLoading && !userInput && visibleSections.length === 0 && streaming == null && liveToolNodes.length === 0;
+    !isLoading &&
+    !userInput &&
+    visibleSections.length === 0 &&
+    streaming == null &&
+    liveToolNodes.length === 0 &&
+    hitl == null;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
@@ -255,6 +272,7 @@ export function RunConversation({
               const isTail = i === visibleSections.length - 1;
               const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
               const showStreamHere = appendStreamingToTail && isTail;
+              const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
               return (
                 <NodeSection
                   key={section.key}
@@ -277,6 +295,7 @@ export function RunConversation({
                     />
                   ))}
                   {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
+                  {showHitlHere && <HitlStepCard runId={hitl.runId} label={hitl.label} options={hitl.options} />}
                 </NodeSection>
               );
             })}
@@ -289,6 +308,16 @@ export function RunConversation({
                 subagentNameById={subagentNameById}
               >
                 <StreamingMessageRow streaming={streaming!} />
+              </NodeSection>
+            )}
+            {hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId) && (
+              <NodeSection
+                nodeId={hitl.nodeId}
+                state={stateByNodeId.get(hitl.nodeId)}
+                isLive={isLive}
+                isPaused={isPaused}
+              >
+                <HitlStepCard runId={hitl.runId} label={hitl.label} options={hitl.options} />
               </NodeSection>
             )}
             {liveToolNodes.map(({ nodeId, stream }) => (
