@@ -566,25 +566,37 @@ export async function sanitiseUnpairedToolCalls(
 
   type ToolCallBlock = { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> };
 
-  const knownToolUseIds = new Set<string>();
+  // Track only the tool-call IDs from the IMMEDIATELY PRECEDING assistant
+  // message. Anthropic requires each tool_result block to match a tool_use
+  // in the message directly before it — a historical match from an earlier
+  // turn is insufficient and produces:
+  //   "unexpected tool_use_id found in tool_result blocks"
+  // The set resets whenever a non-toolResult message is seen so that a
+  // stale toolResult appearing after a later assistant (with no toolCall)
+  // is correctly identified as orphaned.
+  let activeToolUseIds = new Set<string>();
   let cleaned: AgentMessage[] | null = null;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i] as AgentMessage;
     const role = (m as { role?: string }).role;
     if (role === "assistant" && Array.isArray((m as { content?: unknown }).content)) {
+      activeToolUseIds = new Set<string>();
       for (const block of (m as { content: Array<{ type?: string; id?: string }> }).content) {
-        if (block?.type === "toolCall" && typeof block.id === "string") knownToolUseIds.add(block.id);
+        if (block?.type === "toolCall" && typeof block.id === "string") activeToolUseIds.add(block.id);
       }
       if (cleaned !== null) cleaned.push(m);
     } else if (role === "toolResult") {
       const id = (m as { toolCallId?: string }).toolCallId;
-      if (typeof id === "string" && !knownToolUseIds.has(id)) {
+      if (typeof id === "string" && !activeToolUseIds.has(id)) {
         if (cleaned === null) cleaned = messages.slice(0, i);
-      } else if (cleaned !== null) {
-        cleaned.push(m);
+      } else {
+        if (cleaned !== null) cleaned.push(m);
       }
-    } else if (cleaned !== null) {
-      cleaned.push(m);
+    } else {
+      // Any non-toolResult message resets the active set: a toolResult
+      // after a user turn or after a gap has no valid preceding assistant.
+      activeToolUseIds = new Set<string>();
+      if (cleaned !== null) cleaned.push(m);
     }
   }
   const stripped = cleaned ?? messages;

@@ -340,4 +340,106 @@ describe("sanitiseUnpairedToolCalls", () => {
     expect(tail.isError).toBe(false);
     expect(tail.content[0]?.text).toContain("child completed");
   });
+
+  test("stale toolResult whose toolCallId is in knownToolUseIds but not the immediately-preceding assistant is dropped", async () => {
+    // Scenario: a long conversation where turn 1 has assistant{tc_1}+toolResult{tc_1}
+    // (a correctly paired turn), then later turns end with a stale toolResult{tc_1}
+    // appearing without a corresponding assistant{tc_1} immediately before it.
+    //
+    // The sanitiser's knownToolUseIds set contains tc_1 (from the first assistant
+    // message), so the orphan check does NOT drop the stale toolResult. But Anthropic
+    // requires each tool_result block to match a tool_use in the IMMEDIATELY PRECEDING
+    // assistant message — a historical match is not sufficient.
+    //
+    // This is the exact shape that produced:
+    //   messages.456.content.1: unexpected `tool_use_id` found in `tool_result` blocks
+    // in run 01ks4wnkmvdafxfvxe.
+    const assistantWithTool = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "toolu_01M9WDbrq1fsTwaPNnsbmN3u", name: "read", arguments: { path: "a.txt" } }],
+      stopReason: "toolUse",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      provider: "stub",
+      model: "stub",
+      api: "stub",
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const pairedResult = {
+      role: "toolResult",
+      toolCallId: "toolu_01M9WDbrq1fsTwaPNnsbmN3u",
+      toolName: "read",
+      content: [{ type: "text", text: "file contents" }],
+      isError: false,
+      timestamp: 2,
+    } as unknown as AgentMessage;
+
+    const laterAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "I read the file. Done." }],
+      stopReason: "stop",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      provider: "stub",
+      model: "stub",
+      api: "stub",
+      timestamp: 3,
+    } as unknown as AgentMessage;
+
+    // This stale toolResult re-uses an old toolCallId that IS in knownToolUseIds
+    // but does NOT follow its paired assistant message — it follows laterAssistant
+    // (which has no toolCall blocks). Anthropic will reject this with a 400.
+    const staleResult = {
+      role: "toolResult",
+      toolCallId: "toolu_01M9WDbrq1fsTwaPNnsbmN3u",
+      toolName: "read",
+      content: [{ type: "text", text: "stale duplicate" }],
+      isError: false,
+      timestamp: 4,
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      { role: "user", content: "read the file", timestamp: 0 } as AgentMessage,
+      assistantWithTool,
+      pairedResult,
+      { role: "user", content: "now what?", timestamp: 0 } as AgentMessage,
+      laterAssistant,
+      staleResult, // orphan: toolCallId known globally but not paired with immediately-preceding assistant
+    ];
+
+    const out = await sanitiseUnpairedToolCalls(messages, {
+      toolRegistry: freshRegistry(),
+      env: new LocalEnvironment({ cwd: "/tmp" }),
+      swarmContext: freshSwarmContext(),
+    });
+
+    // The stale toolResult must be removed so Anthropic doesn't reject with
+    // "unexpected tool_use_id found in tool_result blocks".
+    const { orphanToolResultIds } = findUnpairedToolIds(out);
+    // findUnpairedToolIds uses the same global-set logic as the old sanitiser
+    // and won't flag this — so we verify directly that the stale toolResult
+    // does not appear in the output.
+    const staleInOutput = out.some(
+      (m) =>
+        (m as { role?: string }).role === "toolResult" &&
+        (m as { toolCallId?: string }).toolCallId === "toolu_01M9WDbrq1fsTwaPNnsbmN3u" &&
+        (m as { content?: Array<{ text?: string }> }).content?.[0]?.text === "stale duplicate",
+    );
+    expect(staleInOutput).toBe(false);
+    // The clean turn (assistantWithTool + pairedResult) must be preserved.
+    expect(out.length).toBe(messages.length - 1);
+  });
 });
