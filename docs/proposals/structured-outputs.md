@@ -19,13 +19,13 @@ last-reviewed: 2026-05-21
 Everything below is in service of two sentences. If the design is cut to the
 bone, keep these:
 
-- **Why the substrate exists (P6).** Its job is to make correctness a property
+- **Why the substrate exists.** Its job is to make correctness a property
   of the *topology between an `llm` step and a `script` step*, not of trusting
   either half. A `script` produces evidence an `llm` consumes (it can't
   hallucinate the facts); an `llm` produces candidates a `script` executes (it
   can't be overconfident). Typed, dominance-guaranteed outputs are the edge
   that makes those compositions trustworthy instead of vibes-over-a-thread.
-- **Why the model stays small (P1).** *Predicates compute in steps; edges only
+- **Why the model stays small.** *Predicates compute in steps; edges only
   match values.* Conjunction, numeric thresholds, ranges, set-membership — all
   resolve by computing the predicate in the producing step and emitting a typed
   `bool`/`enum` the edge matches by equality. The edge language therefore never
@@ -66,26 +66,29 @@ context."
 Three step kinds, and the data model is kind-agnostic:
 
 - **`script`** — a deterministic shell node (`run:`); exit code → outcome.
-  *(Renamed from `tool` — see §10.)*
+  *(Renamed from `tool` — see §11.)*
 - **`llm`** — a probabilistic reasoner running its own bounded tool-use loop
   over its in-node tools (`bash`/`read`/`edit`/…).
 - **`human`** — an operator gate.
 
-Both `script` and `llm` steps **produce** `outputs:` and **consume**
-`${{ inputs.* }}` / `${{ steps.X.outputs.f }}` by interpolation (`script` in
-`run:`, `llm` in `prompt:`). A `human` step emits its chosen route as a typed
-enum output; it cannot read upstream. Data flows **forward only**, typed, gated
+All three kinds **consume** `${{ inputs.* }}` / `${{ steps.X.outputs.f }}` by
+interpolation — `script` in `run:`, `llm` in `prompt:`, and `human` in its
+operator-facing `text:` (the gate shows dominating context — PR number, blocking
+summary — at first paint, no scrolling the thread to find it). `script` and
+`llm` steps also **produce** `outputs:`; a `human` step's only output is the
+operator's chosen route (a typed enum). Data flows **forward only**, typed, gated
 by dominance.
 
 ```yaml
   scope:
     type: llm
-    outputs:
+    outputs:                                    # one emit_output call carries the whole struct…
       pr_number: { type: string }
       has_pr:    { type: boolean }
       paths:     { type: string }
       loc:       { type: number }
-    routes: { skip: …, quick: …, full: … }     # judgment via the route tool
+    routes: "skip,quick,full"                   # …sugar: adds a 5th field `route: enum[skip,quick,full]` (§4)
+    # ≡ outputs.route: { type: enum, values: [skip, quick, full] } + `when: route == …` out-edges
 
   merge:
     type: script
@@ -94,40 +97,73 @@ by dominance.
 
 ### Enforcement — two layers, both with precedent
 
-1. **Runtime — a forced `emit_output` tool.** Schema-validated, synthesised
-   per-node from the `outputs:` block, exactly like the `route` tool is
-   synthesised today (`llm-routing.md`; force-include per AGENTS.md ground rule
-   12). A node that declares `outputs:` must emit them; a missing/ill-typed
-   field is a node failure, not a silent `""`. For `script` nodes the outputs
-   are parsed from stdout (JSON, or a scalar via convention) — same schema, same
-   validation.
+1. **Runtime — emission is forced, by producer kind.** One contract, three
+   mechanisms:
+
+   - **`llm` → a single terminal `emit_output` tool.** Its schema is the node's
+     **entire `outputs:` struct** (the routing enum, if any, is just one field),
+     synthesised per-node and force-included (AGENTS.md ground rule 12). It
+     *replaces* the per-node `route` tool — the backend stops synthesising
+     `buildRouteTool` (`packages/agent/src/backend.ts`, SPEC §3.6) and always
+     synthesises `emit_output` from the (sugar-expanded, §4) outputs block.
+     **One call, validated as a unit, closes the turn** — today's
+     `route`-closes-the-turn semantics, generalised. Never partial: you cannot
+     emit some fields and route, or route before deciding a field. The discipline
+     that buys is gather-then-emit-once — the `llm` decides everything in its tool
+     loop, then emits; it cannot emit early and keep working (if it must act
+     irreversibly *after* deciding, that's a second node, and the dominance edge
+     between them is the typed hand-off this proposal is for).
+   - **`script` → a dedicated `$FRAGUA_OUTPUT` channel.** The runtime injects a
+     file path; the script writes `field=value` / JSON to it — **not** scraped
+     from stdout. This mirrors GHA's `$GITHUB_OUTPUT`, and the reason is
+     fragua-specific: `tool.ts` already conscripts stdout/stderr as the
+     operator-facing log surface (the `tool_node` message RunConversation
+     renders), so overloading stdout as the data contract would force every
+     output-emitting script to be silent on stdout. The dedicated channel keeps
+     the log pair human-facing and the output contract clean.
+   - **`human` → the operator's choice.** The chosen route arrives via
+     `intent.human_input` and is recorded as the node's enum output — no tool, no
+     file.
+
+   The contract is identical across all three: a node that declares `outputs:`
+   and ends without producing them — no `emit_output` call, an empty
+   `$FRAGUA_OUTPUT`, a missing or ill-typed field — is a node failure, not a
+   silent `""`. Same schema, same validation, regardless of kind.
 2. **Static — dominance + field-existence in the validator.** A reference
    `${{ steps.X.outputs.f }}` at node N is valid iff (a) X declares output `f`,
-   and (b) **X dominates N** — every entry→N path crosses X. New E-code,
-   composing with the existing `inputReferences()` → E030 machinery in
-   `substitution.ts`.
+   and (b) **X dominates N by successful completion** — every entry→N path
+   crosses X *and* reaches N only via X's success disposition. Plain dominance is
+   not enough: a node that fails (or a `script` that exits non-zero) emits no
+   outputs, so an `outcome=fail → … → N` edge that bypasses X's `emit_output`
+   leaves the field unpopulated despite X being topologically on the path. The
+   validator therefore rejects a reference whose only paths to N include a
+   non-success exit of X. New E-code, composing with the existing
+   `inputReferences()` → E030 machinery in `substitution.ts`.
 
-**Dominance is the populated-guarantee** and it is *total*, because the graph is
-fully static (§6). It self-selects the safe cases: `implement` can't reference
+**Dominance-by-success is the populated-guarantee** and it is *total*, because
+the graph is fully static (§6). It self-selects the safe cases: `implement`
+can't reference
 `${{ steps.plan.outputs… }}` because `triage`'s `small`/`bugfix` routes bypass
 `plan` — plan doesn't dominate implement. That's precisely why `implement`
 hand-handles "plan present / failing test present / neither" in prose today.
 
 ### Scalars interpolate; blobs go by path
 
-Scalar outputs interpolate into commands and prompts directly. **Blob outputs
-are materialised by the runtime to a temp file; you interpolate the `.path`**
-(`--body-file ${{ steps.synthesize.outputs.review_body.path }}`). This keeps
-shell lines scalar-only (no markdown-blob-into-a-shell-line injection) and
-sidesteps the 4 KB payload cap — GHA's `$GITHUB_OUTPUT`-vs-artifacts split.
-Blob storage reuses the tool-node artifact path (`docs/handler-contract.md`),
-keyed `${nodeId}:output:<field>`.
+Scalar outputs interpolate into commands and prompts directly and ride
+`fact.node_completed.payload.outputs` — which keeps them under the 5 KB
+event-payload cap (ARCH property P12), the reason scalars stay small and bulk
+goes elsewhere. **Blob outputs are materialised by the runtime to a temp file;
+you interpolate the `.path`** (`--body-file
+${{ steps.synthesize.outputs.review_body.path }}`). This keeps shell lines
+scalar-only (no markdown-blob-into-a-shell-line injection) and keeps the blob
+out of the event payload. Blob storage reuses the tool-node artifact path
+(`docs/handler-contract.md`), keyed `${nodeId}:output:<field>`; the fact payload
+carries the artifact ref, not the bytes.
 
-## 4. `when:` — equality-only fact-routing
+## 4. `when:` — equality-only routing, and `route` as sugar over it
 
-`route` (the tool) stays the mechanism for *judgments* (skip/quick/full,
-small/feature/bugfix). For *facts* — deterministic given a declared output or
-input — a node's edges carry a `when:` guard:
+A node's edges carry a `when:` guard that matches a declared **bool/enum**
+output or input by equality:
 
 ```yaml
   signoff:
@@ -144,22 +180,49 @@ input — a node's edges carry a `when:` guard:
 
 - `when:` takes **one** comparison: `field`, `field == lit`, or `field != lit`,
   over a declared **bool/enum** output or input. No `<`/`>`, no `&&`/`||`, no
-  `contains`. (P1: richer predicates compute in the producing step and surface
+  `contains`. (Richer predicates compute in the producing step and surface
   as a derived bool/enum.)
 - The read scope is **`inputs ∪ dominating-outputs ∪ outcome`** — `when:` reads
   the trigger event too (§9), not just upstream steps.
-- Selection is **first-match, top-to-bottom, mandatory default** (an edge with
-  no `when:`). Totality is a finite check because the domain is closed (two
-  bools, or N enum values). A validator pass warns on provably-overlapping
-  guards and errors on missing coverage.
-- A node is **`route`-tool-driven XOR `when`-driven**, never both; `human`
-  routes stay the named-map form. One mode per node, validator-enforced.
+- Selection over the *success* disposition is **first-match, top-to-bottom,
+  mandatory default** (an edge with no `when:`). Totality is a finite check
+  because the domain is closed (two bools, or N enum values). A validator pass
+  warns on provably-overlapping guards and errors on missing coverage. A node's
+  **fail disposition is a separate axis**: a node that can exit non-zero still
+  needs its own `on: {fail: …}` edge (§5) — the closed-domain totality check
+  covers the success branch, not the failure of the node itself.
 
-The full unification — collapse `route` into a single `output` mechanism that
-both emits and routes, removing the `route` tool — is **deferred**. It is
-elegant but re-opens routing surface `llm-routing.md` deliberately deleted, and
-no workflow needs it. Equality-only `when:` + the kept `route` tool covers every
-case in §8.
+### `route` is sugar over `emit_output` + `when:`
+
+`route` is **not a second mechanism** — it desugars to "emit one required enum
+output, then `when:` on the emitting node's own out-edges":
+
+```yaml
+  scope: { type: llm, routes: "small,feature,blocked" }   # surface sugar
+```
+
+≡ an `outputs: { route: { type: enum, values: [small, feature, blocked] } }`
+declaration plus three `when: route == …` edges. There is **no separate `route`
+tool** — the routing enum is just one field of the single terminal
+`emit_output` (§3.1). This is *why* the engine already needs no change (§7):
+the chosen value feeds the same `outcome.route`/field match in `selectEdge`.
+Keeping the `routes:` surface buys terseness and a node-level "this branch is a
+judgment" signal; it does **not** buy a separate routing language.
+
+Consequently there is **no `route`-XOR-`when` rule** — `route` *is* `when` over a
+required enum, so the validator has one routing model, not two. The
+judgment-vs-fact distinction survives in *what produces the matched field*: a
+`when:` over an `llm`-emitted enum is a judgment branch; over a `script`-emitted
+or `input` field, a fact branch. That also pins down determinism precisely: edge
+selection is always deterministic **at replay** (the field is a recorded fact);
+**at first run** it is deterministic iff the field's producer is a `script` or
+`input`, probabilistic iff an `llm`.
+
+The deeper unification — dropping the synthesised `route` tool entirely and
+authoring even judgment branches as a bare enum `output:` — is **deferred** for
+ergonomics only (the `routes:` shorthand is terser than an enum decl + N edges),
+not because it re-opens any routing surface: it stays strictly equality-only and
+re-introduces none of the deleted condition DSL.
 
 ## 5. The bare-`script` action path
 
@@ -213,9 +276,10 @@ Adoption is purely additive:
 
 23 workflows across plan → triage → implement → review → integrate → release →
 operate → maintain, six chosen to *break* the model. None needed a primitive it
-lacks. The recurring vocabulary is exactly: `inputs`(event) + `route`(judgment)
-+ `when`(fact, bool/enum) + bare-`script`(action) + `thread`(only the genuine
-conversations). Representative cases by composition:
+lacks. The recurring vocabulary is exactly: `inputs`(event) + `route`/`when`
+(judgment vs fact — one equality match, two authoring intents, §4) +
+bare-`script`(action) + `thread`(only the genuine conversations).
+Representative cases by composition:
 
 - **gather → judge (anti-hallucination).** `compliance-evidence`: a `script`
   gathers machine evidence (IAM/config/logs), an `llm` judges each control
@@ -224,10 +288,10 @@ conversations). Representative cases by composition:
 - **propose → adjudicate (anti-overconfidence).** `adversarial-red-team`: an
   `llm` generates novel attacks, a `script` executes them, the gate routes on
   `has_landed`. Creativity filtered by deterministic execution.
-- **predicates-in-steps (P1).** `coverage-gate`: the coverage `script` emits
+- **predicates-in-steps.** `coverage-gate`: the coverage `script` emits
   `band: low|warn|ok` (the threshold from `inputs`); edges match the band. The
   numeric comparison never reaches an edge.
-- **completeness gate (P7).** `fix-the-class`: a `script` search emits the
+- **completeness gate.** `fix-the-class`: a `script` search emits the
   instance set, `implement` emits the fixed set, a gate routes on
   `covered == complete` — a set comparison impossible over thread prose.
 - **near-term concrete pulls.** `review.yaml` (`scope.outputs` → quick/full/
@@ -263,19 +327,42 @@ sprawl. The one-sentence model: **`inputs` = the event, `outputs` = `needs`,
 `when` = `if`, dominance = the `needs` DAG; the differentiator is `llm` judgment
 steps + bare-`script` action steps in one replayable graph.**
 
+### `when:` reads inputs only when they are closed-domain — bucketing is explicit
+
+`when:` is equality-only over **bool/enum**, so it can route on an input *only if
+that input is already closed-domain at the trigger boundary*: `severity == high`
+works when the webhook delivers `severity` as a label, `is_breaking` when it
+delivers a bool. A **raw scalar** event field (`severity: 7`, `coverage_delta:
+-3.2`, a free-form `title`) is **not routable directly** — and there is no
+pre-entry exception to "predicates compute in steps," because inputs precede
+every step. Bucketing therefore has exactly one in-graph home: **an explicit
+step.** Two placements, by who owns the threshold:
+
+- **Structural enums the source already labels** (event type, action, a severity
+  *label*) — the trigger adapter delivers them typed; the graph reads them as-is.
+- **Any threshold the workflow wants to own** (`coverage < 80`, `severity ≥ 8`)
+  — an **entry normalizer node** reads the raw input and emits a typed
+  `band`/`bump` output; routing reads *that output*, not the raw input.
+  It dominates everything, so the reference is always valid.
+
+No magic, no threshold-mapping DSL in the `inputs:` block: a threshold the
+workflow cares about *is* a predicate, and predicates compute in steps —
+inputs included. (This is the input-boundary instance of the multi-threshold
+question in §12.)
+
 ## 10. Non-goals and boundaries
 
-- **The graph is static; multiplicity lives in-node or across runs (P8).** Fixed,
+- **The graph is static; multiplicity lives in-node or across runs.** Fixed,
   named fan (2-3 steps, e.g. dual-model adjudication) is structured-output
   territory and dominance holds. Dynamic multiplicity (N branches/lenses) is an
   `llm` node iterating internally, or re-triggering — never dynamic graph edges.
-- **Deep loops are `llm`-node-internal (P9).** A judgment↔evidence probe loop
+- **Deep loops are `llm`-node-internal.** A judgment↔evidence probe loop
   lives in the node's tool-use cycle; the graph captures entry evidence + exit
   verdict. Structured outputs are the *interface to* an `llm` loop, not a
   replacement.
-- **Runs are stateless; durable state is external + re-derived (P10).** Outputs
+- **Runs are stateless; durable state is external + re-derived.** Outputs
   are intra-run. "Loop until done" is an `llm` tool-loop or a re-trigger.
-- **No `llm` step, no substrate (P11).** A graph of only `script`/`human` is a
+- **No `llm` step, no substrate.** A graph of only `script`/`human` is a
   worse GHA; the substrate earns its keep on the `llm`↔`script` seam.
 - **Deferred:** ordered comparisons (`<`/`>`), boolean combinators, node-level
   `if`/`unless` skip, and the `output`-replaces-`route` unification.
@@ -283,8 +370,8 @@ steps + bare-`script` action steps in one replayable graph.**
 ## 11. What it changes
 
 This **evolves** AGENTS.md ground rule 13 (cross-node substitution allowed iff
-the producer dominates the consumer and the field is declared), and rewrites
-three teachings in the `workflows` SKILL:
+the producer dominates the consumer *by successful completion* and the field is
+declared), and rewrites three teachings in the `workflows` SKILL:
 
 - "No `$node.output`" → allowed under dominance.
 - "`tool` steps don't feed data forward — the exit code is the entire result"
@@ -312,15 +399,37 @@ here.
   across passes (correct, but state it).
 - **Multi-threshold reopen-signal.** The one strain on equality-only: many
   consumers wanting *different* thresholds on the same scalar (`coverage > 80`
-  here, `> 90` there). Resolvable by enum bucketing today. **If this becomes
-  common, that is the trigger to revisit numeric `when:` — not before.**
+  here, `> 90` there). Resolvable by explicit enum bucketing in the producing
+  step today — same shape as the input-boundary bucketing in §9 (a threshold is
+  a predicate; predicates compute in steps). **If this becomes common, that is
+  the trigger to revisit numeric `when:` — not before.**
+- **`route` overloaded across `llm` and `human`; `routes:` key shape-overloaded.**
+  Both an `llm` routing node and a `human` node currently surface a
+  `route`/`routes` enum, but they are different authoring concepts: an `llm`
+  *route* is a bare branch name the reasoner picks (no label — the prompt carries
+  the meaning); a `human` *choice* is operator-facing (rendered as buttons, wants
+  labels). Same `when:`-matching mechanism, different provenance and declaration
+  shape — and a downstream `when:` site sees only the field name, not the
+  producer kind, so the name is the only provenance signal there. Separately, the
+  `routes:` key is shape-overloaded (bare-name string vs name→target map vs
+  `{to, when}` edge list). Proposed split: **`routes:`** (`llm`, bare-name string)
+  → field `route`; **`choices:`** (`human`, name→label map) → field `choice`; the
+  bare `{to, when}` list becomes **`edges:`**. One key per concept, no
+  shape-overload; preserves §4's single *matching* model (equality on an enum
+  output) while making provenance legible at the consumer. Decide before pinning
+  the YAML surface.
 - **Blob materialisation API.** Confirm the artifact-store key + `.path` surface.
 
 ## Related
 
-- [`llm-routing.md`](./llm-routing.md) — established the `route` tool + the
-  two-case edge selector this builds on; this proposal is a *premise-changed*
-  extension (typed/dominated outputs), not a contradiction of its DSL deletion.
-- [`parallel-branch-outputs.md`](./parallel-branch-outputs.md) — archived; the
-  parallel runtime is gone, but its downstream-substitution shape is the same
-  idea.
+- **The `route` tool + two-case edge selector** (SPEC §3.6;
+  `packages/core/src/engine/edge-selection.ts`; route-tool synthesis in
+  `packages/agent/src/backend.ts`) — shipped; this proposal is a
+  *premise-changed* extension of it (typed/dominated outputs), not a
+  contradiction of the condition-DSL deletion that landed alongside it.
+  (The originating `llm-routing.md` proposal has been pruned now that it
+  ships — git history holds it.)
+- **The scrapped parallel/`fan_in` primitive** (removed in `faeb1f4d`; proposal
+  `parallel-branch-outputs.md` pruned with it) — its downstream-substitution
+  shape was the same idea, but the parallel runtime is gone; §10 keeps
+  multiplicity in-node or across runs instead.
