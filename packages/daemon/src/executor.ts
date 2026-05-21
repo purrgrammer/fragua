@@ -142,6 +142,11 @@ export interface ExecutorOpts {
    * measurements (`start = Date.now()` for duration accounting) bypass
    * this on purpose; they don't affect projection state. */
   clock?: () => number;
+  /** PRNG used for retry/provider-retry backoff jitter — the only
+   * non-deterministic input on the step path besides `clock`. Defaults to
+   * `Math.random`. Injected (alongside `clock`) so a fault-injecting /
+   * property-based harness can drive the executor fully deterministically. */
+  random?: () => number;
   /** Called when the per-process leaked-handler counter crosses
    * `maxLeakedHandlers`. Default: log to stderr (tests use this). The
    * production daemon entrypoint wires this to `ctrl.abort()` so the
@@ -273,6 +278,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
   const abortLoopCeiling = opts.abortLoopCeiling ?? DEFAULT_ABORT_LOOP_CEILING;
   const clock = opts.clock ?? Date.now;
+  const random = opts.random ?? Math.random;
   let consecutiveAborts = 0;
   let turns = 0;
   // Dispatches counted for the max_loops ceiling. Incremented just before
@@ -1374,6 +1380,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           status: "retry",
           backoff,
           allowPartial,
+          random,
         });
         if (action.kind === "retry") {
           const now = clock();
@@ -1453,6 +1460,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         priorAttempt: readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]),
         now: clock(),
         cumulativeDelayMs: 0,
+        random,
       });
       if (providerRetryDecision.kind === "exhausted") {
         providerExhausted = { attempt: providerRetryDecision.attempt, reason: providerRetryDecision.reason };

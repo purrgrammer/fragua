@@ -122,6 +122,15 @@ describe("retryStep — retry status", () => {
     expect(action.kind).toBe("retry");
     if (action.kind === "retry") expect(action.delayMs).toBe(0);
   });
+
+  test("forwards an injected `random` to the backoff jitter (deterministic)", () => {
+    // standard preset, attempt 1 → raw 200ms; jitter multiplies by 0.5 + random().
+    const cfg: BackoffConfig = { initialDelayMs: 200, backoffFactor: 2, maxDelayMs: 60_000, jitter: true };
+    const lo = retryStep({ state: { retries: 0, maxRetries: 3 }, status: "retry", backoff: cfg, random: () => 0 });
+    const hi = retryStep({ state: { retries: 0, maxRetries: 3 }, status: "retry", backoff: cfg, random: () => 1 });
+    expect(lo.kind === "retry" && lo.delayMs).toBe(100); // 200 * (0.5 + 0)
+    expect(hi.kind === "retry" && hi.delayMs).toBe(300); // 200 * (0.5 + 1)
+  });
 });
 
 describe("retryStep — termination invariant", () => {

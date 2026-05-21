@@ -246,4 +246,44 @@ describe("executor — retry-policy enforcement", () => {
     expect(payload.attempt).toBe(1);
     r.store.close();
   });
+
+  test("injected clock + random make the retry backoff fully deterministic", async () => {
+    const yaml = `name: t\nsteps:\n  flaky: {type: llm, prompt: x, max-retries: 3, retry-policy: standard, next: exit}\n`;
+    const r = rig({ yaml });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "flaky", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "flaky", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", outcomeStatus: "retry", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "rp-det", "start");
+    r.store.claimNextRun(1);
+    await runOne("rp-det", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+      // standard preset attempt 1: raw 200ms; jitter = 200 * (0.5 + random()).
+      clock: () => 1000,
+      random: () => 0,
+    });
+
+    const events = r.store.getEvents("rp-det");
+    const scheduled = events.find((e) => e.type === "node.retry_scheduled");
+    expect((scheduled?.payload as { delayMs: number }).delayMs).toBe(100); // 200 * 0.5
+    const paused = events.find((e) => e.type === "fact.run_paused");
+    expect((paused?.payload as { reason: string; resumeAt: number }).reason).toBe("handler_retry");
+    expect((paused?.payload as { resumeAt: number }).resumeAt).toBe(1100); // clock 1000 + 100
+    r.store.close();
+  });
 });

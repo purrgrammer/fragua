@@ -112,6 +112,9 @@ export interface RetryStepInput {
   /** Node's `allow_partial` attr — converts retry-counter exhaustion to
    * PARTIAL_SUCCESS advance instead of halt (attractor §3.5). */
   allowPartial?: boolean;
+  /** PRNG for backoff jitter — injectable for deterministic tests and the
+   * fault-injecting executor harness. Defaults to `Math.random`. */
+  random?: () => number;
 }
 
 export function retryStep(input: RetryStepInput): RetryAction {
@@ -133,12 +136,16 @@ export function retryStep(input: RetryStepInput): RetryAction {
     return { kind: "halt", reason: "max_retries_exceeded" };
   }
   const cfg = input.backoff ?? RETRY_PRESETS.none;
-  const delayMs = delayForAttempt(state.retries + 1, {
-    initialDelayMs: cfg.initialDelayMs,
-    backoffFactor: cfg.backoffFactor,
-    maxDelayMs: cfg.maxDelayMs,
-    jitter: cfg.jitter,
-  });
+  const delayMs = delayForAttempt(
+    state.retries + 1,
+    {
+      initialDelayMs: cfg.initialDelayMs,
+      backoffFactor: cfg.backoffFactor,
+      maxDelayMs: cfg.maxDelayMs,
+      jitter: cfg.jitter,
+    },
+    input.random ?? Math.random,
+  );
   return {
     kind: "retry",
     next: { retries: state.retries + 1, maxRetries: state.maxRetries },
