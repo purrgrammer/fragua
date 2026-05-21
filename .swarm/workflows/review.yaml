@@ -6,8 +6,8 @@
 # evidence), never inherited from how the change was authored.
 #
 #   skip  → no review pass (doc/typo/whitespace/generated) — scope LGTMs
-#   quick → one focused pass (small, single-concern change); no fan-out / synthesis / gate
-#   full  → parallel lenses (dispatch prunes to the relevant ones) → synthesize → verify gate
+#   quick → one focused pass (small, single-concern change); no gate
+#   full  → one deep pass applying the implicated lenses → verify gate
 #
 # All three tiers converge at the `signoff` HITL, where the operator decides
 # the PR action — approve, post the review as feedback (request-changes if it
@@ -17,8 +17,8 @@
 # + PR# from the thread.
 #
 # Two decisions: DEPTH is topology (skip/quick/full); within `full`, the LENS
-# SET is the dispatcher's call (orchestrator-workers) — correctness always,
-# security / performance / architecture only when the diff implicates them.
+# SET is the review step's own call — correctness always, security /
+# performance / architecture only when the diff implicates them.
 #
 # PRECONDITION for PR / branch inputs: clean working tree. `scope` checks out
 # the PR/branch so lenses read files on disk; `git checkout -` to return.
@@ -78,7 +78,7 @@ steps:
     routes:
       skip:  {to: signoff,      label: "Trivial"}
       quick: {to: review_quick, label: "Quick review"}
-      full:  {to: dispatch,     label: "Full review"}
+      full:  {to: review_full,  label: "Full review"}
 
   review_quick:                        # quick tier — one focused pass, no fan-out
     type: llm
@@ -97,51 +97,38 @@ steps:
       ## Next steps
       ≤2 concrete actions, or `No follow-up required.`
 
-  dispatch:                            # full tier — fan out ONLY the implicated lenses
-    type: llm
-    thread: review
-    allowed-tools: [agent]
-    max-cost: 1.20
-    next: synthesize
-    prompt: |
-      Dispatch review lenses against the scope above — only the lenses the diff actually implicates. Always include correctness. Add:
-        security     — iff trust boundaries / auth / input parsing / crypto / secrets are touched.
-        performance  — iff hot paths / data layer / loops / large payloads are touched.
-        architecture — iff cross-package coupling / public surface / abstraction boundaries change.
-
-      Issue the chosen `agent` toolcalls in parallel; pass the scope output (PATHS / FOCUS / CHECKOUT) verbatim as each lens's `prompt`:
-        agent({ agent: "lens-correctness",  prompt: "<scope output>" })
-        agent({ agent: "lens-security",     prompt: "<scope output>" })   # only if implicated
-        agent({ agent: "lens-performance",  prompt: "<scope output>" })   # only if implicated
-        agent({ agent: "lens-architecture", prompt: "<scope output>" })   # only if implicated
-
-      After they return, reply EXACTLY: `LENSES_DONE: <comma-sep lens names> (<count>)`.
-
-  synthesize:
+  review_full:                         # full tier — one deep pass over the implicated lenses
     type: llm
     model: claude-opus-4-7
     effort: high
     thread: review
-    allowed-tools: [read]
-    max-cost: 0.60
+    allowed-tools: [read, grep, bash]
+    max-cost: 1.80
     next: verify
     prompt: |
-      Integrate the lens results into one ranked review — emit verbatim. Headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
+      Deep review of the scoped change (PATHS / range / FOCUS above; read the files directly). Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
 
-      ## Scope: one paragraph naming the touched packages/areas and the change type (uncommitted diff, commit range, branch); note CHECKOUT if set. If every lens reported OK, name the surface anyway.
+        correctness — logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
+        security (iff trust boundaries / auth / input parsing / crypto / secrets touched) — injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF; check surrounding sanitisation before flagging.
+        performance (iff hot paths / data layer / loops / large payloads touched) — complexity surprises (O(n²) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads; confidence ∝ evidence; no cold-path constant-factor nits.
+        architecture (iff cross-package coupling / public surface / abstraction boundaries change) — coupling crossing boundaries, leaky abstractions, SRP violations, drift-inviting duplication, misleading naming, public surface exposing internals, half-finished work, scope creep.
 
-      Per finding: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence or short snippet. `Lens:` the lens(es), combined if dedup'd.
+      Then emit one ranked review verbatim. Headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
-      Rules: DEDUPE (one entry, combine Lens, take higher severity). PROMOTE a cross-flagged medium to high, note `(cross-flagged)`. DROP subjective Low with no evidence. NO INVENTION; justify any down-rank in `Why`.
+      ## Scope: one paragraph naming the touched packages/areas and the change type (uncommitted diff, commit range, branch); note CHECKOUT if set; name which lenses you applied and why.
 
-      If every lens reported OK, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what reviewers couldn't see, confidence).
+      Per finding: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence or short snippet. `Lens:` which lens flagged it.
+
+      Rules: NO INVENTION. DROP subjective low findings with no evidence. A concern flagged under two lenses is ONE entry at the higher severity, noted `(cross-flagged)`.
+
+      If everything is clean, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence).
 
       End with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
 
   verify:                              # full tier — automated evidence-quality gate
     type: llm
     thread: review
-    retry: synthesize                  # REJECT ⇒ re-synthesise (capped)
+    retry: review_full                 # REJECT ⇒ re-review (capped)
     max-retries: 2
     allowed-tools: [read, grep]
     max-cost: 0.30

@@ -66,7 +66,7 @@ steps:
         ## Layout overview
         One paragraph on the top-level shape.
         ## Areas
-        <each subagent's structured summary, verbatim>
+        <each area's structured summary, verbatim>
         ## Cross-cutting observations
         Things spanning areas; omit if nothing crosses.
 
