@@ -700,6 +700,19 @@ export function createRoutes(deps: ServerDeps): Hono {
     }
     const tgt = resolveTarget(gate.state, body.onto);
     if ("error" in tgt) return c.json({ error: `onto required: ${tgt.error}`, code: "onto_required" }, 400);
+    // The target branch must exist — commit advances it (parent = its tip).
+    // Without this the daemon silently no-ops a missing target (false success).
+    if (deps.runSnapshotReader != null && gate.state.cwd != null) {
+      if (!(await deps.runSnapshotReader.refExists(gate.state.cwd, `refs/heads/${tgt.target}`))) {
+        return c.json(
+          {
+            error: `onto branch "${tgt.target}" does not exist (use swarm branch to create it)`,
+            code: "target_not_found",
+          },
+          409,
+        );
+      }
+    }
     const payload: { message: string; onto?: string } = { message: body.message };
     if (typeof body.onto === "string" && body.onto.length > 0) payload.onto = body.onto;
     return appendIntentOr413(c, runId, { type: "intent.commit_run", payload });
@@ -721,13 +734,19 @@ export function createRoutes(deps: ServerDeps): Hono {
     if ("error" in tgt) return c.json({ error: `into required: ${tgt.error}`, code: "into_required" }, 400);
     if (deps.runSnapshotReader != null && gate.state.cwd != null) {
       const m = await deps.runSnapshotReader.mergeability(gate.state.cwd, tgt.target, `refs/swarm/heads/${runId}`);
-      if (m.resolved) {
-        if (mode === "ff" && !m.ff) {
-          return c.json({ error: "not fast-forwardable; use --no-ff or --squash", code: "not_fast_forward" }, 409);
-        }
-        if (mode !== "ff" && m.conflict) {
-          return c.json({ error: "merge conflict; revive the run to resolve", code: "merge_conflict" }, 409);
-        }
+      if (!m.resolved) {
+        // Target branch or the run's heads ref can't be resolved — the daemon
+        // would silently no-op, so refuse synchronously instead.
+        return c.json(
+          { error: `into branch "${tgt.target}" does not exist or has no work to merge`, code: "target_not_found" },
+          409,
+        );
+      }
+      if (mode === "ff" && !m.ff) {
+        return c.json({ error: "not fast-forwardable; use --no-ff or --squash", code: "not_fast_forward" }, 409);
+      }
+      if (mode !== "ff" && m.conflict) {
+        return c.json({ error: "merge conflict; revive the run to resolve", code: "merge_conflict" }, 409);
       }
     }
     const payload: { mode?: "ff" | "no-ff" | "squash"; into?: string } = {};

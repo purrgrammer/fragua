@@ -196,6 +196,30 @@ describe("operator post-run primitive endpoints", () => {
     expect(bad.status).toBe(400);
   });
 
+  test("commit: 409 target_not_found when --onto branch doesn't exist", async () => {
+    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }, false) });
+    seed(store, { runId: "r4nf" });
+    const res = await app.request("/runs/r4nf/commit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "m", onto: "no-such-branch" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { code?: string }).toMatchObject({ code: "target_not_found" });
+  });
+
+  test("merge: 409 target_not_found when the target/heads can't be resolved", async () => {
+    const app = createRoutes({ store, runSnapshotReader: fakeReader({ resolved: false }) });
+    seed(store, { runId: "r6nf" });
+    const res = await app.request("/runs/r6nf/merge", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ into: "no-such-branch" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { code?: string }).toMatchObject({ code: "target_not_found" });
+  });
+
   test("commit: 400 onto_required when provisioned detached and no --onto", async () => {
     const app = createRoutes({ store });
     seed(store, { runId: "r5", baseGitRef: null });
