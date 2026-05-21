@@ -806,8 +806,12 @@ function AssistantMessageRow({
       // Collapsible: as long as React keeps the same fiber for this
       // card (stable `key={ordinal-c<i>}`), a user-expanded pane
       // stays open as new sub-agent deltas stream in.
+      // Exception: `abort` is the terminal self-halt signal — its
+      // reason text is the primary diagnostic, so the card opens by
+      // default so the operator sees it without an extra click.
+      const defaultOpen = chunk.name === "abort";
       blocks.push(
-        <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
+        <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0" defaultOpen={defaultOpen}>
           <ToolHeader
             type={toolTypeFromName(chunk.name)}
             state={result ? (result.isError ? "output-error" : "output-available") : "input-available"}
