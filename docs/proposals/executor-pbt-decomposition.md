@@ -49,8 +49,22 @@ needs three properties the executor doesn't fully expose today:
 - `occ-append.ts` — `tryAppendFact` + `makeOccController` (the per-`runOne`
   conflict/backoff/exhaustion controller). Unit-tested.
 - `snapshot-service.ts` — `captureBoundarySnapshot` + `disposeTerminalWorktree`.
+- `invoke-handler.ts` (Phase 3a) — the handler-invocation **fault seam**:
+  abort-registry + leak-watchdog wrapper around `spec.handler(ctx)`, returning
+  a structured `HandlerInvocation` (`result | leak | thrown{abortByName}`).
+  Unit-tested. The harness substitutes this to model handler throw/hang/abort.
+- **Determinism (§4) cleared** — `clock` was already threaded; `random` is now
+  injectable too (`ExecutorOpts.random`, forwarded into `retryStep` +
+  `decideProviderRetry`; `RetryStepInput.random` reaches `delayForAttempt`).
+  The per-turn step path is now fully deterministic given `(clock, random)`.
 
-`executor.ts` stays the orchestration entry point + public facade.
+`executor.ts` stays the orchestration entry point + public facade
+(~1.78k lines, down from 2.17k).
+
+**Resume here →** Phase 4 (the pure transition planner) is the next and
+highest-leverage step. It's also the riskiest extraction (the coupled
+post-handler policy block), so it's worth a design pass before the surgery.
+All work to date is committed on `main` locally and not yet pushed.
 
 ## 3. Remaining phases (ordered by PBT value × tractability)
 
@@ -76,11 +90,11 @@ property over generated `TransitionInput`.
 
 ### Phase 3 — Handler-turn services. *Key fault seam.*
 
-- `buildDispatchContext(...)` → `{ ctx, recorder, flushObservability, accountingSnapshot }`.
-- `invokeHandler(...)` → a structured `HandlerOutcome` = `result | abort{cause} | timeoutLeak | thrown`.
-
-`invokeHandler` is the deterministic seam for "handler throws / hangs (leak) /
-aborts" — the harness picks the outcome instead of running a real handler.
+- ✅ `invokeHandler(...)` → structured `HandlerInvocation`
+  (`result | leak | thrown{abortByName}`). Shipped. The deterministic seam for
+  "handler throws / hangs (leak) / aborts" — the harness picks the outcome.
+- ☐ `buildDispatchContext(...)` → `{ ctx, recorder, flushObservability, accountingSnapshot }`
+  (the remaining half — still inline in `runOneInner`).
 
 ### Phase 5 — RunSession / RunDriver. *Single-step granularity.*
 
@@ -102,12 +116,13 @@ clock, asserting invariants after every step and every injected fault.
 
 ## 4. Determinism debt to clear along the way
 
-- Route all step-logic time through `opts.clock` (mostly done; audit
-  `sleep`/backoff sites).
-- Thread an injectable RNG for retry backoff jitter (provider-retry already
-  has `random`; the handler-retry path resolves jitter without one).
-- Make `sleep` virtualizable (or keep it strictly outside pure planning, which
-  Phase 4 already enforces).
+- ✅ Route all step-logic time through `opts.clock` — done; the remaining
+  `Date.now()` calls in the daemon are lifecycle/observability only, off the
+  fact-producing step path.
+- ✅ Thread an injectable RNG for retry backoff jitter — done
+  (`ExecutorOpts.random` → `retryStep` + `decideProviderRetry`).
+- ☐ Make `sleep` virtualizable — open, but Phase 4 already keeps `sleep`
+  strictly outside pure planning, so it's no longer on the step's decision path.
 
 ## 5. Invariants the harness will prove (tie to SPEC §4 I1–I10)
 
