@@ -203,12 +203,8 @@ export function createRoutes(deps: ServerDeps): Hono {
     ) {
       return c.json({ error: "name and source required" }, 400);
     }
-    let graph: ReturnType<typeof parseWorkflow>;
-    try {
-      graph = parseWorkflow(body.source);
-    } catch (err) {
-      return invalidWorkflowResponse(c, err);
-    }
+    const mint = plane.buildSaveWorkflow(body.source);
+    if (!mint.ok) return invalidWorkflowResponse(c, new Error(mint.detail));
     if (deps.validateWorkflowModels != null) {
       const check = deps.validateWorkflowModels(body.source);
       if (!check.ok) {
@@ -222,7 +218,7 @@ export function createRoutes(deps: ServerDeps): Hono {
         );
       }
     }
-    const timeoutOffender = findInvalidTimeoutAttr(graph);
+    const timeoutOffender = findInvalidTimeoutAttr(mint.graph);
     if (timeoutOffender != null) {
       return c.json(
         {
@@ -233,9 +229,14 @@ export function createRoutes(deps: ServerDeps): Hono {
         400,
       );
     }
-    const sha = sha256Hex(body.source);
-    deps.store.saveWorkflow(sha, body.name, body.source, serializeGraph(graph), CURRENT_IR_VERSION);
-    return c.json({ sha, name: body.name });
+    plane.commitSaveWorkflow({
+      sha: mint.sha,
+      name: body.name,
+      source: body.source,
+      ir: mint.ir,
+      irVersion: mint.irVersion,
+    });
+    return c.json({ sha: mint.sha, name: body.name });
   });
 
   // ─── Writes (intents) ───────────────────────────────────────

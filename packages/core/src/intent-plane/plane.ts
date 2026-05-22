@@ -16,12 +16,28 @@ import type { IEventStore } from "@fragua/store";
 import type { IntentEvent } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
+import { sha256Hex } from "../handler/sha256.ts";
+import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
+import { parseWorkflow } from "../parser/yaml.ts";
+import type { Graph } from "../types/graph.ts";
 import * as S from "./schemas.ts";
 
 export type BuildResult<T extends IntentEvent = IntentEvent> = { ok: true; intent: T } | { ok: false; error: string };
 
 /** The `IntentEvent` member with a given `type` discriminant. */
 type IntentOf<K extends IntentEvent["type"]> = Extract<IntentEvent, { type: K }>;
+
+/** Workflow-identity mint. `sha = sha256Hex(source)` (still source-hash;
+ * `workflow-ir.md` (B) swaps this for an IR-hash *inside this one function*),
+ * `ir = serializeGraph(parseWorkflow(source))`. The single chokepoint every
+ * mint site (server `POST /workflows`, the by-name resolver, the schedule
+ * dispatcher) routes through. Returns the parsed `graph` so callers can run
+ * their own additional validation (timeout attrs, model resolution); a parse
+ * failure is reported, never thrown — each adapter maps it to its own
+ * handling (HTTP 400 vs schedule auto-pause). */
+export type WorkflowMint =
+  | { ok: true; sha: string; ir: string; irVersion: number; graph: Graph }
+  | { ok: false; reason: "unparseable"; detail: string };
 
 function fail(schema: TSchema, body: unknown): { ok: false; error: string } {
   const first = [...Value.Errors(schema, body)][0];
@@ -44,8 +60,13 @@ export interface IntentPlane {
   buildMaxRetries(body: unknown): BuildResult<IntentOf<"intent.max_retries_adjusted">>;
   buildGoalGate(body: unknown): BuildResult<IntentOf<"intent.goal_gate_adjusted">>;
   buildMaxLoops(body: unknown): BuildResult<IntentOf<"intent.max_loops_adjusted">>;
+  /** Workflow-identity mint (parse + hash + serialize IR). Pure. */
+  buildSaveWorkflow(source: string): WorkflowMint;
   /** The single intent write. Adapters never call `store.appendIntent`. */
   commit(runId: string, intent: IntentEvent): { seq: number };
+  /** The single workflow write. Adapters never call `store.saveWorkflow`.
+   * Content-addressed and idempotent. */
+  commitSaveWorkflow(args: { sha: string; name: string; source: string; ir: string; irVersion: number }): void;
 }
 
 export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
@@ -121,9 +142,21 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       if (body.note !== undefined) payload.note = body.note;
       return { ok: true, intent: { type: "intent.max_loops_adjusted", payload } };
     },
+    buildSaveWorkflow(source) {
+      let graph: Graph;
+      try {
+        graph = parseWorkflow(source);
+      } catch (err) {
+        return { ok: false, reason: "unparseable", detail: err instanceof Error ? err.message : String(err) };
+      }
+      return { ok: true, sha: sha256Hex(source), ir: serializeGraph(graph), irVersion: CURRENT_IR_VERSION, graph };
+    },
     commit(runId, intent) {
       const { seq } = deps.store.appendIntent(runId, intent);
       return { seq };
+    },
+    commitSaveWorkflow(args) {
+      deps.store.saveWorkflow(args.sha, args.name, args.source, args.ir, args.irVersion);
     },
   };
 }

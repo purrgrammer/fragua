@@ -24,8 +24,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
-import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
-import { type IEventStore, isTerminal as isTerminalStatus, newRunId as mintRunId, sha256Hex } from "@fragua/store";
+import { makeIntentPlane } from "@fragua/core/intent-plane";
+import { type IEventStore, isTerminal as isTerminalStatus, newRunId as mintRunId } from "@fragua/store";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
 
@@ -80,6 +80,7 @@ export function startScheduleDispatcher(opts: ScheduleDispatcherOpts): { promise
 export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcome {
   const now = (opts.now ?? Date.now)();
   const newRunId = opts.newRunId ?? mintRunId;
+  const plane = makeIntentPlane({ store: opts.store });
   const due = opts.store.getDueSchedules(now);
   let fired = 0;
   let skipped = 0;
@@ -141,16 +142,14 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
       continue;
     }
 
-    let graph: ReturnType<typeof parseWorkflow>;
-    try {
-      graph = parseWorkflow(source);
-    } catch (err) {
+    const mint = plane.buildSaveWorkflow(source);
+    if (!mint.ok) {
       opts.store.pauseSchedule(row.id, now);
       opts.store.appendDaemonEvent({
         type: "fact.schedule_invalid_workflow",
         payload: {
           scheduleId: row.id,
-          error: `parse failed: ${(err as Error).message}`,
+          error: `parse failed: ${mint.detail}`,
         },
       });
       paused++;
@@ -172,8 +171,8 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
     }
 
     // Fire.
-    const sha = sha256Hex(source);
-    opts.store.saveWorkflow(sha, resolved.name, source, serializeGraph(graph), CURRENT_IR_VERSION);
+    const sha = mint.sha;
+    plane.commitSaveWorkflow({ sha, name: resolved.name, source, ir: mint.ir, irVersion: mint.irVersion });
     const runId = newRunId();
     const initialRouting: Record<string, unknown> = {};
     if (row.input != null && row.input.length > 0) initialRouting["input"] = row.input;

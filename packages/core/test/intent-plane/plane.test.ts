@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { IEventStore } from "@fragua/store";
 import type { IntentEvent } from "@fragua/types";
+import { sha256Hex } from "../../src/handler/sha256.ts";
 import { makeIntentPlane } from "../../src/intent-plane/index.ts";
+import { CURRENT_IR_VERSION, serializeGraph } from "../../src/ir.ts";
+import { parseWorkflow } from "../../src/parser/yaml.ts";
 
 // build* never touches the store, so a stub that records appendIntent is
 // enough for the whole suite. The pure build half is what we exhaustively
@@ -120,6 +123,41 @@ describe("intent plane — build* (validate + construct)", () => {
     for (const body of [null, undefined, 42, "x", []]) {
       expect(plane.buildSteer(body).ok).toBe(false);
     }
+  });
+});
+
+describe("intent plane — buildSaveWorkflow (workflow-identity mint)", () => {
+  const SOURCE = "name: solo\nsteps:\n  work: {type: llm, prompt: do it}\n";
+
+  test("valid source → sha + ir + irVersion match the canonical mint exactly", () => {
+    const { plane } = rig();
+    const mint = plane.buildSaveWorkflow(SOURCE);
+    if (!mint.ok) throw new Error("expected ok");
+    // The chokepoint MUST produce the same identity the three sites computed
+    // independently before consolidation — sha is FK-referenced.
+    expect(mint.sha).toBe(sha256Hex(SOURCE));
+    expect(mint.ir).toBe(serializeGraph(parseWorkflow(SOURCE)));
+    expect(mint.irVersion).toBe(CURRENT_IR_VERSION);
+    expect(mint.graph.nodes["work"]).toBeDefined();
+  });
+
+  test("unparseable source → { ok: false, reason: 'unparseable' }, never throws", () => {
+    const { plane } = rig();
+    const mint = plane.buildSaveWorkflow("this: is: not: a: workflow: {{{");
+    expect(mint.ok).toBe(false);
+    if (mint.ok) throw new Error("expected failure");
+    expect(mint.reason).toBe("unparseable");
+    expect(mint.detail.length).toBeGreaterThan(0);
+  });
+
+  test("commitSaveWorkflow forwards to store.saveWorkflow", () => {
+    const saved: unknown[] = [];
+    const store = {
+      saveWorkflow: (...args: unknown[]) => saved.push(args),
+    } as unknown as IEventStore;
+    const plane = makeIntentPlane({ store });
+    plane.commitSaveWorkflow({ sha: "abc", name: "solo", source: SOURCE, ir: "{}", irVersion: 1 });
+    expect(saved).toEqual([["abc", "solo", SOURCE, "{}", 1]]);
   });
 });
 
