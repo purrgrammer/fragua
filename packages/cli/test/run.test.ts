@@ -104,6 +104,30 @@ describe("fragua run", () => {
     expect(code).toBe(1);
   });
 
+  test("unreachable server → exit 1 with actionable guidance, not a raw ConnectionRefused", async () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+    tmps.push(workflowDir);
+    const yamlPath = join(workflowDir, "echo.yaml");
+    writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
+
+    const errs: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errs.push(args.map(String).join(" "));
+    };
+    try {
+      // Port 1 has no listener: postJson rejects with ConnectionRefused.
+      // The command must catch it and return 1 rather than throwing.
+      const code = await runCommand({ workflow: yamlPath, url: "http://127.0.0.1:1" });
+      expect(code).toBe(1);
+    } finally {
+      console.error = originalError;
+    }
+    const joined = errs.join("\n");
+    expect(joined).toContain("could not reach a fragua server");
+    expect(joined).toContain("fragua harness");
+  });
+
   test("--no-follow exits immediately after enqueue", async () => {
     const r = await rig();
     try {

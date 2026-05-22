@@ -591,6 +591,42 @@ describe("SqliteStore — daemon lock", () => {
     expect(unchanged).toBe(after);
     store.close();
   });
+
+  test("setDaemonLockHttp publishes discovery onto the row; UPDATE no-ops with no row", () => {
+    const store = freshStore();
+
+    // No lock row yet: the UPDATE-by-id silently affects 0 rows, so the
+    // harness's one-shot publish before the daemon's INSERT would be lost.
+    store.setDaemonLockHttp({ url: "http://localhost:6767/api", port: 6767, version: "0.0.0" });
+    expect(store.currentDaemonLock()).toBeNull();
+
+    store.acquireDaemonLock(1, "h");
+    store.setDaemonLockHttp({ url: "http://localhost:6767/api", port: 6767, version: "0.0.0" });
+    const published = store.currentDaemonLock()!;
+    expect(published.httpUrl).toBe("http://localhost:6767/api");
+    expect(published.httpPort).toBe(6767);
+    expect(published.harnessVersion).toBe("0.0.0");
+    store.close();
+  });
+
+  test("re-asserting discovery restores it after lock-row churn nulls the http columns", () => {
+    const store = freshStore();
+    store.acquireDaemonLock(1, "h");
+    const discovery = { url: "http://localhost:6767/api", port: 6767, version: "0.0.0" };
+    store.setDaemonLockHttp(discovery);
+    expect(store.currentDaemonLock()!.httpUrl).toBe(discovery.url);
+
+    // A daemon restart (release + fresh acquire) re-INSERTs the row with
+    // NULL http columns — a one-shot publish would now be stranded.
+    store.releaseDaemonLock(1);
+    store.acquireDaemonLock(2, "h");
+    expect(store.currentDaemonLock()!.httpUrl).toBeNull();
+
+    // The harness's periodic re-assert recovers discovery.
+    store.setDaemonLockHttp(discovery);
+    expect(store.currentDaemonLock()!.httpUrl).toBe(discovery.url);
+    store.close();
+  });
 });
 
 describe("SqliteStore — messages", () => {

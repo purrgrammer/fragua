@@ -83,8 +83,9 @@ function discoverHarnessUrl(dbPath: string): string | undefined {
 
 export interface RunCommandOptions {
   workflow: string;
-  /** Base URL of the running server. When omitted, reads `.fragua/serve.json`
-   * (written by `fragua serve`), then falls back to `http://localhost:3000`. */
+  /** Base URL of the running server. When omitted, the discovery cascade
+   * runs (`.fragua/serve.json` → daemon_lock.http_url → `http://localhost:3000`);
+   * an unreachable result fails with actionable guidance. */
   url?: string;
   /** Priority tie-breaker. Higher runs first. Default 0. */
   priority?: number;
@@ -125,11 +126,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
     : resolve(cwd, ".fragua/serve.json");
   const harnessDbPath = resolve(homedir(), ".fragua/fragua.db");
-  const resolvedUrl =
-    opts.url ??
-    (await discoverServerUrl(serveJsonPath)) ??
-    discoverHarnessUrl(harnessDbPath) ??
-    "http://localhost:3000";
+  const discoveredUrl = opts.url ?? (await discoverServerUrl(serveJsonPath)) ?? discoverHarnessUrl(harnessDbPath);
+  const resolvedUrl = discoveredUrl ?? "http://localhost:3000";
   const baseUrl = resolvedUrl.replace(/\/$/, "");
 
   const resolved = await resolveWorkflow(cwd, opts.workflow);
@@ -158,11 +156,30 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     return 1;
   }
 
-  // 1. Upload workflow
-  const uploadRes = await postJson(`${baseUrl}/workflows`, {
-    name,
-    source,
-  });
+  // 1. Upload workflow — first contact with the server, so a refused
+  //    connection here means no reachable harness/serve. Translate the
+  //    raw ConnectionRefused into actionable guidance instead of letting
+  //    it bubble up as an unhandled rejection.
+  let uploadRes: Response;
+  try {
+    uploadRes = await postJson(`${baseUrl}/workflows`, { name, source });
+  } catch (err) {
+    if (!isConnectionError(err)) throw err;
+    console.error(chalk.red(`run: could not reach a fragua server at ${baseUrl}`));
+    if (discoveredUrl === undefined) {
+      console.error(
+        chalk.dim(
+          `  no running harness found — no --url, no ${serveJsonPath}, no daemon_lock http_url in ${harnessDbPath}`,
+        ),
+      );
+      console.error(chalk.dim(`  start one with \`fragua harness\`, or pass --url http://host:port[/api]`));
+    } else {
+      console.error(
+        chalk.dim(`  the discovered server isn't responding — it may have stopped; restart with \`fragua harness\``),
+      );
+    }
+    return 1;
+  }
   if (!uploadRes.ok) {
     return fail(`upload failed (${uploadRes.status})`, uploadRes);
   }
@@ -270,6 +287,13 @@ function renderEvent(event: SSEEvent): void {
         ? chalk.blue
         : chalk.dim;
   console.log(`${chalk.dim(`[${seq}]`)} ${color(event.type)} ${JSON.stringify(payload.payload ?? {})}`);
+}
+
+/** A failed-to-connect `fetch` rejection (no listener / wrong port).
+ *  Bun surfaces `code: "ConnectionRefused"`; Node uses `ECONNREFUSED`. */
+function isConnectionError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "ConnectionRefused" || code === "ECONNREFUSED";
 }
 
 async function postJson(url: string, body: unknown): Promise<Response> {

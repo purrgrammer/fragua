@@ -17,10 +17,13 @@
 //      daemon_lock as part of its boot.
 //   3. Wait for the lock row to appear (poll up to LOCK_WAIT_MS).
 //   4. UPDATE daemon_lock SET http_url, http_port, harness_version. CLIs
-//      now discover us via the DB.
+//      now discover us via the DB. Re-assert on an interval so lock-row
+//      churn (a reaper takeover, a daemon restart re-inserting a fresh
+//      row, or a publish that raced ahead of the row's INSERT) can't
+//      strand a live harness with empty discovery columns.
 //   5. Block on SIGINT / SIGTERM / daemon-child exit.
-//   6. On shutdown: clear URL columns, SIGTERM the daemon, close the
-//      HTTP server.
+//   6. On shutdown: stop the re-assert, clear URL columns, SIGTERM the
+//      daemon, close the HTTP server.
 
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -35,6 +38,10 @@ const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
 
 const LOCK_WAIT_MS = 5_000;
 const LOCK_POLL_MS = 50;
+// Re-assert the discovery URL on the lock row at this cadence. Must stay
+// well under the daemon lock TTL so a transient row reset is corrected
+// long before any discovery client could read a stale/empty value.
+const URL_REPUBLISH_MS = 2_000;
 
 export interface HarnessCommandOptions {
   /** Store path. Default `~/.fragua/fragua.db`. */
@@ -96,16 +103,27 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     return 1;
   }
 
-  // 4. Publish URL. CLIs now discover the harness via the DB.
-  try {
-    lockStore.setDaemonLockHttp({
-      url: serverHandle.url,
-      port: serverHandle.port,
-      version: HARNESS_VERSION,
-    });
-  } finally {
-    lockStore.close();
-  }
+  // 4. Publish URL, then re-assert it periodically. The single UPDATE
+  //    no-ops if the row is briefly absent (TOCTOU vs the daemon's
+  //    INSERT/release) and is clobbered to NULL if the daemon re-inserts
+  //    the row, so a one-shot publish can leave a live harness
+  //    undiscoverable. The interval (well under the daemon lock TTL)
+  //    self-heals both. `lockStore` stays open for the harness's life;
+  //    `shutdown` clears the columns on a fresh connection.
+  const discovery = {
+    url: serverHandle.url,
+    port: serverHandle.port,
+    version: HARNESS_VERSION,
+  };
+  const republish = () => {
+    try {
+      lockStore.setDaemonLockHttp(discovery);
+    } catch (err) {
+      console.error(chalk.dim(`harness: re-assert URL failed — ${(err as Error).message}`));
+    }
+  };
+  republish();
+  const republishTimer = setInterval(republish, URL_REPUBLISH_MS);
 
   console.log("");
   console.log(chalk.green(`fragua harness ready — ${chalk.bold.underline(hyperlink(serverHandle.origin))}`));
@@ -118,6 +136,8 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     const stop = (label: string) => {
       if (stopping) return;
       stopping = true;
+      clearInterval(republishTimer);
+      lockStore.close();
       console.log(chalk.dim(`\n${label} — shutting down...`));
       shutdown(dbPath, daemonProc, serverHandle).finally(() => resolveShutdown());
     };
