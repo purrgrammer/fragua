@@ -52,7 +52,7 @@ The owner asked to *"clean up the schema — workflows, runs, etc — to point t
 project by id."* The honest answer for `workflows`: **nothing to change at the
 table level, and adding a `project_id` column there would be wrong.**
 
-- The `workflows` table (`schema.sql:14-19` — `sha, name, dot_source,
+- The `workflows` table (`schema.sql:14-19` — `sha, name, source,
   created_at`) is **content-addressed and global**: the primary key is the
   source `sha`. It has no cwd and needs **no** `project_id` — identical sources
   enqueued from different projects share one `sha` *by design*. Confirmed: a

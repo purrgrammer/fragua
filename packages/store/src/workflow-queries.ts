@@ -15,12 +15,12 @@ export function workflowExists(db: Database, sha: string): boolean {
 interface WorkflowFullRow {
   sha: string;
   name: string;
-  dot_source: string;
+  source: string;
   created_at: number;
 }
 
 const SELECT_WORKFLOW_SQL = `
-  SELECT sha, name, dot_source, created_at FROM workflows WHERE sha = ?
+  SELECT sha, name, source, created_at FROM workflows WHERE sha = ?
 `;
 
 export function selectWorkflow(db: Database, sha: string): WorkflowFullRow | null {
@@ -28,11 +28,11 @@ export function selectWorkflow(db: Database, sha: string): WorkflowFullRow | nul
 }
 
 const INSERT_WORKFLOW_SQL = `
-  INSERT INTO workflows (sha, name, dot_source, created_at)
+  INSERT INTO workflows (sha, name, source, created_at)
   VALUES (?, ?, ?, ?)
   ON CONFLICT(sha) DO NOTHING
 `;
 
-export function insertWorkflowIfAbsent(db: Database, sha: string, name: string, dotSource: string, now: number): void {
-  db.query(INSERT_WORKFLOW_SQL).run(sha, name, dotSource, now);
+export function insertWorkflowIfAbsent(db: Database, sha: string, name: string, source: string, now: number): void {
+  db.query(INSERT_WORKFLOW_SQL).run(sha, name, source, now);
 }

@@ -56,10 +56,10 @@ export function workflowsRoutes(opts: WorkflowsRouteOptions): Hono {
             name: row.name,
             path: "",
             sha: name,
-            source: row.dotSource,
+            source: row.source,
           };
           try {
-            const parsed = parseWorkflow(row.dotSource);
+            const parsed = parseWorkflow(row.source);
             if (parsed.attrs.inputs && parsed.attrs.inputs.length > 0) {
               detail.inputs = parsed.attrs.inputs;
             }

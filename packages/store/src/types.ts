@@ -388,7 +388,7 @@ export interface IntentAppendResult {
 export interface WorkflowRow {
   sha: string;
   name: string;
-  dotSource: string;
+  source: string;
   createdAt: number;
 }
 
@@ -681,7 +681,7 @@ export interface IEventWriter {
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
 
   // ─── Workflow catalog (write)
-  saveWorkflow(sha: string, name: string, dotSource: string): void;
+  saveWorkflow(sha: string, name: string, source: string): void;
 
   // ─── Maintenance
   vacuum(): void;

@@ -289,7 +289,7 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (typeof body.workflowSha === "string" && body.workflowSha.length > 0) {
       workflowSha = body.workflowSha;
       if (typeof body.workflowName === "string") resolvedWorkflowName = body.workflowName;
-      resolvedSource = deps.store.getWorkflow(workflowSha)?.dotSource;
+      resolvedSource = deps.store.getWorkflow(workflowSha)?.source;
     } else {
       if (typeof body.workflowName !== "string" || body.workflowName.length === 0) {
         return c.json({ error: "workflowName required when workflowSha is omitted" }, 400);

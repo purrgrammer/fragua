@@ -54,7 +54,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const events = store.getEvents(runId);
     const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
     const name = wf?.name;
-    const source = wf?.dotSource;
+    const source = wf?.source;
     const detail = runStateToDetail(state, events, name, source);
     detail.lastEventSeq = events.at(-1)?.seq ?? 0;
     return c.json(detail);

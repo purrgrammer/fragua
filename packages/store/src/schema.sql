@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 CREATE TABLE IF NOT EXISTS workflows (
   sha TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  dot_source TEXT NOT NULL,
+  source TEXT NOT NULL,
   created_at INTEGER NOT NULL
 ) STRICT;
 
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- only; the daemon contract still keys on `workflow_sha`.
   workflow_path TEXT,
   -- Git SHA of the worktree's HEAD at provision time. Replay reconstructs
-  -- the run's starting tree from this sha + the workflow's dot_source,
+  -- the run's starting tree from this sha + the workflow's source,
   -- independent of the worktree directory or `branch` survival. NULL for
   -- runs without a provisioner (LocalEnvironment, ephemeral stubs).
   base_git_sha TEXT,

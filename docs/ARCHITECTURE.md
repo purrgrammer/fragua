@@ -173,7 +173,7 @@ CREATE TABLE schema_version (
 CREATE TABLE workflows (
   sha TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  dot_source TEXT NOT NULL,
+  source TEXT NOT NULL,
   created_at INTEGER NOT NULL
 ) STRICT;
 
@@ -541,7 +541,7 @@ export interface IEventWriter {
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
 
   // Workflow catalog (write)
-  saveWorkflow(sha: string, name: string, dotSource: string): void;
+  saveWorkflow(sha: string, name: string, source: string): void;
 
   // Maintenance
   vacuum(): void;

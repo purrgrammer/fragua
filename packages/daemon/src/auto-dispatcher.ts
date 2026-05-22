@@ -85,7 +85,7 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
     if (specs == null) {
       const workflow = opts.store.getWorkflow(workflowSha);
       if (workflow == null) return null;
-      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs);
+      specs = specsForGraph(workflow.source, opts.codergenFactory, opts.defaultMaxMs);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;

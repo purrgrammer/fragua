@@ -309,7 +309,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const wf = opts.store.getWorkflow(workflowSha);
     if (wf == null) return null;
     try {
-      cachedGraph = parseWorkflow(wf.dotSource);
+      cachedGraph = parseWorkflow(wf.source);
       return cachedGraph;
     } catch {
       workflowUnparseable = true;

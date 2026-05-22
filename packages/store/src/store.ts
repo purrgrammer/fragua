@@ -1151,10 +1151,10 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Workflows ───────────────
 
-  saveWorkflow(sha: string, name: string, dotSource: string): void {
+  saveWorkflow(sha: string, name: string, source: string): void {
     const now = this.now();
     this.writeTxn(() => {
-      insertWorkflowIfAbsent(this.db, sha, name, dotSource, now);
+      insertWorkflowIfAbsent(this.db, sha, name, source, now);
     });
   }
 
@@ -1164,7 +1164,7 @@ export class SqliteStore implements IEventStore {
     return {
       sha: row.sha,
       name: row.name,
-      dotSource: row.dot_source,
+      source: row.source,
       createdAt: row.created_at,
     };
   }
