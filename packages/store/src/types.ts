@@ -230,10 +230,14 @@ export interface RunState {
   /** Tip of the operator's branch after the last `accept` (run → commit
    * traceability). Set by `fact.run_accepted`. */
   acceptedSha: string | null;
-  /** Absolute project root the run was enqueued from. Only project
-   * identifier in the harness-by-default model. `null` for runs
-   * enqueued without filesystem context (CI, tests). */
+  /** Per-machine LOCATION binding — the resolved project root on this box.
+   * `null` for runs enqueued without filesystem context (CI, tests). */
   cwd: string | null;
+  /** Project IDENTITY (the committed `id`) and its display label. Stable
+   * across clones / machines / imports; this — not `cwd` — is how a run
+   * attributes to a project. Always present (NOT NULL in the store). */
+  projectId: string;
+  projectName: string;
   /** Resolved workflow name when the caller passed a bare name; `null`
    * for path-based or ephemeral runs. */
   workflowName: string | null;

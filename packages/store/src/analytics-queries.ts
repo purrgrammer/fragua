@@ -39,8 +39,11 @@ export interface AnalyticsWindow {
   fromMs: number;
   /** Exclusive upper bound on `enqueued_at` (unix ms). */
   toMs: number;
-  /** Optional project filter — exact `run_state.cwd` match. Absent =
-   *  aggregate across every project. */
+  /** Optional project filter by IDENTITY — exact `run_state.project_id`
+   *  match (portable; folds clones/imports). Absent = aggregate across
+   *  every project. */
+  projectId?: string;
+  /** Optional project filter by LOCATION — exact `run_state.cwd` match. */
   cwd?: string;
   /** Optional workflow filter — predicate is `(workflow_scope, workflow_name)`
    *  so all shas of the same identity aggregate together. For
@@ -61,9 +64,14 @@ function windowPredicate(
   cwdCol: string,
   scopeCol: string = cwdCol === "rs.cwd" ? "rs.workflow_scope" : "workflow_scope",
   nameCol: string = cwdCol === "rs.cwd" ? "rs.workflow_name" : "workflow_name",
+  projectIdCol: string = cwdCol === "rs.cwd" ? "rs.project_id" : "project_id",
 ): { sql: string; params: (number | string)[] } {
   const clauses: string[] = ["enqueued_at >= ?", "enqueued_at < ?"];
   const params: (number | string)[] = [w.fromMs, w.toMs];
+  if (w.projectId !== undefined) {
+    clauses.push(`${projectIdCol} = ?`);
+    params.push(w.projectId);
+  }
   if (w.cwd !== undefined) {
     clauses.push(`${cwdCol} = ?`);
     params.push(w.cwd);

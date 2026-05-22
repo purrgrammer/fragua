@@ -65,6 +65,8 @@ export function runStateToSummary(
   const input = pickInput(state.routing);
   if (input !== undefined) summary.input = input;
   if (state.cwd != null) summary.cwd = state.cwd;
+  summary.projectId = state.projectId;
+  summary.projectName = state.projectName;
   return summary;
 }
 
@@ -102,6 +104,8 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
   const input = pickInput(routing);
   if (input !== undefined) summary.input = input;
   if (row.cwd != null) summary.cwd = row.cwd;
+  summary.projectId = row.projectId;
+  summary.projectName = row.projectName;
 
   if (row.inboxStatus === "pending" || row.inboxStatus === "acted" || row.inboxStatus === "discarded") {
     summary.inboxStatus = row.inboxStatus;
@@ -163,6 +167,8 @@ export function runStateToDetail(
   };
   if (workflowSource !== undefined) detail.workflowSource = workflowSource;
 
+  detail.projectId = state.projectId;
+  detail.projectName = state.projectName;
   if (state.cwd != null) {
     const candidate = join(state.cwd, ".fragua", "worktrees", state.runId);
     if (existsSync(candidate)) detail.worktreePath = candidate;

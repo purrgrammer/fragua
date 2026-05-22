@@ -23,7 +23,9 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   app.get("/runs", (c) => {
     // Query params (all optional, all enforced server-side):
     //   ?status=a,b,c                 — narrow to specific lifecycle statuses.
-    //   ?cwd=<path>                   — narrow to a single project root.
+    //   ?project_id=<id>              — narrow to a project by IDENTITY
+    //                                   (portable; folds clones/imports).
+    //   ?cwd=<path>                   — narrow to a single project LOCATION.
     //   ?inbox=pending|acted|discarded — narrow to a worktree inbox status.
     //   ?order=oldest                 — surface longest-waiting first (Inbox).
     //   ?limit=N                      — cap the result, clamped to [1, 200].
@@ -32,12 +34,14 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const statusParam = c.req.query("status");
     const statuses = statusParam !== undefined ? parseStatusList(statusParam) : undefined;
     const cwdParam = c.req.query("cwd");
+    const projectIdParam = c.req.query("project_id");
     const order: "newest" | "oldest" = c.req.query("order") === "oldest" ? "oldest" : "newest";
     const limit = parseLimit(c.req.query("limit"));
     const inboxParam = c.req.query("inbox");
     const queryOpts: Parameters<typeof store.listRunSummaryRows>[0] = { order };
     if (statuses !== undefined) queryOpts.statuses = statuses;
     if (cwdParam !== undefined && cwdParam.length > 0) queryOpts.cwd = cwdParam;
+    if (projectIdParam !== undefined && projectIdParam.length > 0) queryOpts.projectId = projectIdParam;
     if (limit !== undefined) queryOpts.limit = limit;
     if (inboxParam === "pending" || inboxParam === "acted" || inboxParam === "discarded") {
       queryOpts.inbox = inboxParam;

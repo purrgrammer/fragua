@@ -1,17 +1,16 @@
 // GET /projects/:id/tree   \u2014 flat {path,type}[] for the Files pane.
 // GET /projects/:id/blob?path=\u2026  \u2014 raw text content of one file.
 //
-// `:id` is the base64url encoding of the absolute project root, matching
-// `packages/web/src/lib/projectId.ts` so the URL the web builds round-trips
-// without escaping. Both routes 404 unless the decoded cwd appears in
-// `store.listCwds()` \u2014 the same authoritative project enumeration `GET
-// /projects` uses (`store/routes.ts:539`). That keeps the wire identity
-// of "a project" consistent across every endpoint and refuses requests
-// against arbitrary paths on the host.
+// `:id` is the project IDENTITY (`run_state.project_id`). The routes
+// resolve it to a local cwd via `store.listProjects()` (the same
+// enumeration `GET /projects` uses) and then read files there. A project
+// that is known but has no local checkout (imported-only \u2014 NULL cwdHint)
+// degrades to `not_found`, which the web renders as "not checked out
+// here". Resolving by identity keeps the wire consistent across endpoints
+// and refuses requests against arbitrary host paths.
 //
 // All filesystem work happens in the injected `ProjectTreeReader`. The
-// routes only do decoding, store-lookup, and response shaping \u2014 same
-// pattern as `workflowsRoutes` (`routes/workflows.ts`).
+// routes only do lookup and response shaping.
 
 import type { IEventStore } from "@fragua/store";
 import { Hono } from "hono";
@@ -70,13 +69,14 @@ export function projectsRoutes(opts: ProjectsRouteOptions): Hono {
 
 type ProjectLookup = { kind: "ok"; cwd: string } | { kind: "invalid_id" } | { kind: "not_found" };
 
+/** Resolve a `project_id` to a local cwd via the project enumeration.
+ *  Unknown id → not_found; known but no local checkout (imported-only,
+ *  NULL cwdHint) → not_found so the web shows "not checked out here". */
 function resolveProjectCwd(store: IEventStore, id: string | undefined): ProjectLookup {
   if (typeof id !== "string" || id.length === 0) return { kind: "invalid_id" };
-  const cwd = decodeProjectId(id);
-  if (cwd === null) return { kind: "invalid_id" };
-  const known = store.listCwds().some((row) => row.cwd === cwd);
-  if (!known) return { kind: "not_found" };
-  return { kind: "ok", cwd };
+  const project = store.listProjects().find((row) => row.projectId === id);
+  if (project == null || project.cwdHint == null) return { kind: "not_found" };
+  return { kind: "ok", cwd: project.cwdHint };
 }
 
 function statusFor(kind: "invalid_id" | "not_found"): 400 | 404 {
@@ -94,26 +94,4 @@ function isPreflightSafe(p: string): boolean {
     if (seg === "..") return false;
   }
   return true;
-}
-
-/** Inverse of `web/src/lib/projectId.ts:encodeProjectId`. Base64url \u2192
- *  utf-8 string; returns `null` on malformed input so the route can map
- *  it to a 400 instead of crashing. */
-function decodeProjectId(segment: string): string | null {
-  try {
-    const padded = segment.padEnd(segment.length + ((4 - (segment.length % 4)) % 4), "=");
-    const b64 = padded.replace(/-/g, "+").replace(/_/g, "/");
-    // Buffer.from with 'base64' is lenient \u2014 it accepts the base64url
-    // alphabet after the `replace` above. Round-trip via utf-8.
-    const buf = Buffer.from(b64, "base64");
-    const decoded = buf.toString("utf8");
-    // Reject if the decode is lossy (non-utf8 bytes) by checking the
-    // re-encode round-trips. Buffer.toString won't throw on invalid
-    // utf-8; this catches the garbage-segment case.
-    if (Buffer.from(decoded, "utf8").length !== buf.length) return null;
-    if (decoded.length === 0) return null;
-    return decoded;
-  } catch {
-    return null;
-  }
 }

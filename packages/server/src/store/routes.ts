@@ -832,28 +832,29 @@ export function createRoutes(deps: ServerDeps): Hono {
     return c.json({ ...totals, breakdownByModel });
   });
 
-  // ─── Projects (cwd projection) ──────────────────────────────
+  // ─── Projects (identity projection) ─────────────────────────
   //
-  // One row per distinct `run_state.cwd`, ordered by most-recent activity.
-  // `name` is the basename of the path — purely a display convenience; the
-  // wire identity stays `cwd` (full absolute path) so two checkouts of the
-  // same repo at different paths don't collide. Runs without a cwd
-  // (CI primitives, ephemeral stubs) are unreachable from this surface.
+  // One row per distinct `run_state.project_id` (IDENTITY), ordered by
+  // most-recent activity, with the display `name` and a representative
+  // `cwd` hint (the most-recent local checkout, or null for an
+  // imported-only project). Folds multiple checkouts / imports of the same
+  // repo into one project. `cwd` is retained as the LOCATION hint for the
+  // file/tree views; it is no longer the wire identity.
   app.get("/projects", (c) => {
-    const rows = deps.store.listCwds();
-    return c.json(rows.map((r) => ({ ...r, name: basename(r.cwd) })));
+    const rows = deps.store.listProjects();
+    return c.json(
+      rows.map((r) => ({
+        projectId: r.projectId,
+        name: r.projectName,
+        cwd: r.cwdHint,
+        cwdHint: r.cwdHint,
+        runCount: r.runCount,
+        lastUpdatedAt: r.lastUpdatedAt,
+      })),
+    );
   });
 
   return app;
-}
-
-function basename(p: string): string {
-  // Trailing slash strip so "/foo/bar/" → "bar". Backslash handled too
-  // for runs enqueued from a Windows daemon — pure presentation; the
-  // identity is still the raw path.
-  const trimmed = p.replace(/[/\\]+$/, "");
-  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }
 
 async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promise<T | null> {

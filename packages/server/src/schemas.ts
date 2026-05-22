@@ -62,10 +62,13 @@ export const RunSummary = Type.Object({
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
   input: Type.Optional(Type.String()),
-  /** Project root the run was enqueued from. Mirrors `run_state.cwd` —
-   * the only project identifier in the harness-by-default model. Absent
-   * for ephemeral runs (CI primitives, tests). */
+  /** Per-machine LOCATION — the resolved project root. Mirrors
+   * `run_state.cwd`. Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
+  /** Project IDENTITY + display label — how a run attributes to a project,
+   * portable across clones / imports. Always present on real runs. */
+  projectId: Type.Optional(Type.String()),
+  projectName: Type.Optional(Type.String()),
   /** Worktree inbox status. Present only on terminal worktree runs;
    * `pending` = awaiting an operator primitive. */
   inboxStatus: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("acted"), Type.Literal("discarded")])),
@@ -135,9 +138,13 @@ export const RunDetail = Type.Object({
   /** Declared route names from the paused human node's `routes=` attr;
    *  one button rendered per route. */
   hitlOptions: Type.Optional(Type.Array(Type.String())),
-  /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
-   * Absent for ephemeral runs (CI primitives, tests). */
+  /** Per-machine LOCATION — the resolved project root. Mirrors
+   * `run_state.cwd`. Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
+  /** Project IDENTITY + display label (for the run-detail breadcrumb /
+   * project link). Always present on real runs. */
+  projectId: Type.Optional(Type.String()),
+  projectName: Type.Optional(Type.String()),
   /** Absolute path to the still-mounted worktree under
    * `<cwd>/.fragua/worktrees/<runId>`. Absent once the worktree has
    * been disposed (run terminal + provisioner cleanup) or for runs

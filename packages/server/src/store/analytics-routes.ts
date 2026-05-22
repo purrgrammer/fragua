@@ -86,6 +86,7 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     const haltCategory = c.req.query("halt");
     const model = c.req.query("model");
     const cwd = c.req.query("cwd");
+    const projectId = c.req.query("project_id");
     const workflowFilter = parseWorkflowFilter(c.req.query("workflowScope"), c.req.query("workflowName"));
     if (workflowFilter && !workflowFilter.ok) {
       return c.json({ error: workflowFilter.error, code: "bad_request" }, 400);
@@ -99,6 +100,7 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     if (haltCategory) filterArgs.haltCategory = haltCategory;
     if (model) filterArgs.model = model;
     if (cwd) filterArgs.cwd = cwd;
+    if (projectId) filterArgs.projectId = projectId;
     if (workflowFilter?.ok) {
       filterArgs.workflowScope = workflowFilter.scope;
       filterArgs.workflowName = workflowFilter.name;
@@ -211,10 +213,12 @@ function parseAnalyticsParams(q: Record<string, string>): AnalyticsParamsOk | Pa
   }
 
   const cwd = parseCwd(q["cwd"]);
+  const projectId = parseCwd(q["project_id"]);
   const workflowFilter = parseWorkflowFilter(q["workflowScope"], q["workflowName"]);
   if (workflowFilter && !workflowFilter.ok) return workflowFilter;
 
   const current: AnalyticsWindow = { fromMs, toMs };
+  if (projectId !== undefined) current.projectId = projectId;
   if (cwd !== undefined) current.cwd = cwd;
   if (workflowFilter?.ok) {
     current.workflowScope = workflowFilter.scope;
@@ -231,6 +235,7 @@ function parseAnalyticsParams(q: Record<string, string>): AnalyticsParamsOk | Pa
       return { ok: false, error: "compareFrom/compareTo malformed" };
     }
     previous = { fromMs: compareFromMs, toMs: compareToMs };
+    if (projectId !== undefined) previous.projectId = projectId;
     if (cwd !== undefined) previous.cwd = cwd;
     if (workflowFilter?.ok) {
       previous.workflowScope = workflowFilter.scope;

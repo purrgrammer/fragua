@@ -1487,38 +1487,56 @@ describe("global event feed (cross-run)", () => {
   });
 });
 
-describe("GET /projects + GET /runs?cwd= — project surface", () => {
-  test("/projects returns one row per distinct cwd, with basename + counts", async () => {
-    store.enqueueRun({ runId: "a1", workflowSha: "wf", cwd: "/repos/alpha" });
-    store.enqueueRun({ runId: "a2", workflowSha: "wf", cwd: "/repos/alpha" });
-    store.enqueueRun({ runId: "b1", workflowSha: "wf", cwd: "/repos/beta" });
-    store.enqueueRun({ runId: "n1", workflowSha: "wf" }); // no cwd → excluded
+describe("GET /projects + GET /runs?project_id= — project surface", () => {
+  test("/projects returns one row per project_id with name + cwd hint + counts", async () => {
+    // Same id from two cwds (clone/import) folds into one project; the hint
+    // is the most-recent cwd.
+    store.enqueueRun({
+      runId: "a1",
+      workflowSha: "wf",
+      cwd: "/box/alpha",
+      projectId: "proj-alpha",
+      projectName: "alpha",
+    });
+    store.enqueueRun({
+      runId: "a2",
+      workflowSha: "wf",
+      cwd: "/box2/alpha",
+      projectId: "proj-alpha",
+      projectName: "alpha",
+    });
+    store.enqueueRun({ runId: "b1", workflowSha: "wf", cwd: "/box/beta", projectId: "proj-beta", projectName: "beta" });
     const res = await req("GET", "/projects");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ cwd: string; name: string; runCount: number }>;
-    expect(body.map((r) => r.cwd).sort()).toEqual(["/repos/alpha", "/repos/beta"]);
-    const alpha = body.find((r) => r.cwd === "/repos/alpha");
+    const body = (await res.json()) as Array<{ projectId: string; name: string; cwd: string | null; runCount: number }>;
+    expect(body.map((r) => r.projectId).sort()).toEqual(["proj-alpha", "proj-beta"]);
+    const alpha = body.find((r) => r.projectId === "proj-alpha");
     expect(alpha?.name).toBe("alpha");
     expect(alpha?.runCount).toBe(2);
+    // cwd hint is a representative recent checkout; either folds-in cwd is valid
+    // (same-ms enqueues tie on updated_at).
+    expect(["/box/alpha", "/box2/alpha"]).toContain(alpha?.cwd);
   });
 
-  test("/projects strips trailing slash for the basename", async () => {
-    store.enqueueRun({ runId: "x1", workflowSha: "wf", cwd: "/repos/gamma/" });
+  test("/projects surfaces an imported-only project (no local cwd) with a null hint", async () => {
+    store.enqueueRun({ runId: "imp", workflowSha: "wf", projectId: "proj-imported", projectName: "web" });
     const res = await req("GET", "/projects");
-    const body = (await res.json()) as Array<{ name: string }>;
-    expect(body[0]?.name).toBe("gamma");
+    const body = (await res.json()) as Array<{ projectId: string; name: string; cwd: string | null }>;
+    const imp = body.find((r) => r.projectId === "proj-imported");
+    expect(imp?.name).toBe("web");
+    expect(imp?.cwd).toBeNull();
   });
 
-  test("/runs?cwd=… filters to that project root (served by storeRunsRoutes)", async () => {
+  test("/runs?project_id=… filters by identity (served by storeRunsRoutes)", async () => {
     const { createServer } = await import("../../src/index.ts");
     const app = createServer({ store });
-    store.enqueueRun({ runId: "a1", workflowSha: "wf", cwd: "/repos/alpha" });
-    store.enqueueRun({ runId: "a2", workflowSha: "wf", cwd: "/repos/alpha" });
-    store.enqueueRun({ runId: "b1", workflowSha: "wf", cwd: "/repos/beta" });
-    const res = await app.request("/runs?cwd=%2Frepos%2Falpha");
+    store.enqueueRun({ runId: "a1", workflowSha: "wf", cwd: "/box/alpha", projectId: "proj-alpha" });
+    store.enqueueRun({ runId: "a2", workflowSha: "wf", cwd: "/box2/alpha", projectId: "proj-alpha" });
+    store.enqueueRun({ runId: "b1", workflowSha: "wf", cwd: "/box/beta", projectId: "proj-beta" });
+    const res = await app.request("/runs?project_id=proj-alpha");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ runId: string; cwd?: string }>;
+    const body = (await res.json()) as Array<{ runId: string; projectId?: string }>;
     expect(body.map((r) => r.runId).sort()).toEqual(["a1", "a2"]);
-    expect(body.every((r) => r.cwd === "/repos/alpha")).toBe(true);
+    expect(body.every((r) => r.projectId === "proj-alpha")).toBe(true);
   });
 });

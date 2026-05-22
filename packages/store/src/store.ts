@@ -275,6 +275,8 @@ function rowToRunState(row: RunStateRow): RunState {
     inboxStatus: row.inbox_status as InboxStatus | null,
     acceptedSha: row.accepted_sha,
     cwd: row.cwd,
+    projectId: row.project_id,
+    projectName: row.project_name,
     workflowName: row.workflow_name,
     workflowScope: row.workflow_scope,
     workflowPath: row.workflow_path,

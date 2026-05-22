@@ -58,6 +58,8 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     inboxStatus: null,
     acceptedSha: null,
     cwd: null,
+    projectId: "proj-1",
+    projectName: "proj",
     workflowName: null,
     workflowScope: null,
     workflowPath: null,

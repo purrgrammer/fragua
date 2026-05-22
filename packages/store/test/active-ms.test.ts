@@ -33,6 +33,8 @@ function blankState(): RunState {
     inboxStatus: null,
     acceptedSha: null,
     cwd: null,
+    projectId: "p",
+    projectName: "p",
     workflowName: null,
     workflowScope: null,
     workflowPath: null,
