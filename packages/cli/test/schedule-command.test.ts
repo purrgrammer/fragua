@@ -3,6 +3,9 @@
 // command's URL discovery at it via the explicit `--url` override.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import { Hono } from "hono";
 import { createScheduleRoutes, type ScheduleRoutesDeps } from "../../server/src/store/schedule-routes.ts";
@@ -57,11 +60,23 @@ afterEach(() => {
 });
 
 describe("scheduleAddCommand", () => {
-  test("POSTs /schedules with the right body and reports the new id", async () => {
+  // A real project dir with a committed-style config so resolveProject reads
+  // its id (no auto-init) and records the project root as the schedule cwd.
+  let proj: string;
+  beforeEach(async () => {
+    proj = await realpath(await mkdtemp(join(tmpdir(), "fragua-sched-")));
+    await mkdir(join(proj, ".fragua"), { recursive: true });
+    await writeFile(join(proj, ".fragua/config.yaml"), "id: sched-proj-id\nname: schedrepo\n", "utf8");
+  });
+  afterEach(async () => {
+    await rm(proj, { recursive: true, force: true });
+  });
+
+  test("POSTs /schedules with the resolved project (id + root cwd) and reports the new id", async () => {
     const code = await scheduleAddCommand({
       workflow: "analyze",
       every: "1h",
-      cwd: "/repo",
+      cwd: proj,
       url: r.url,
     });
     expect(code).toBe(0);
@@ -70,7 +85,8 @@ describe("scheduleAddCommand", () => {
     expect(rows[0]!.workflowRef).toBe("analyze");
     expect(rows[0]!.intervalText).toBe("1h");
     expect(rows[0]!.overlapPolicy).toBe("skip");
-    expect(rows[0]!.cwd).toBe("/repo");
+    expect(rows[0]!.cwd).toBe(proj); // the resolved project root
+    expect(rows[0]!.projectId).toBe("sched-proj-id");
     // CLI announces the id.
     expect(logs.some((l) => l.includes("schedule created"))).toBe(true);
   });
@@ -89,7 +105,7 @@ describe("scheduleAddCommand", () => {
     const code = await scheduleAddCommand({
       workflow: "wf",
       every: "1h",
-      cwd: "/r",
+      cwd: proj,
       noFireOnCreate: true,
       url: r.url,
     });

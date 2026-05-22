@@ -2,6 +2,11 @@
 # Project-specific knobs only. Generic preferences live in
 # ~/.fragua/config.yaml and cascade under this file.
 
+# Stable project identity. Committed so every clone shares it and runs
+# stay attributable across machines — do not change it.
+id: 019e4f5b-b2c8-7d7b-b413-10896ad2d708
+name: fragua
+
 # Stack-agnostic bootstrap. Runs inside each fresh worktree before the
 # first node fires, after `git worktree add`. Non-zero exit fails the
 # run. Project-specific because the command depends on the project's

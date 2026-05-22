@@ -106,8 +106,15 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
       }
     }
 
+    // Resolve the spawn cwd at fire time (project-id §5 #7): prefer the
+    // project's most-recent run cwd so a moved checkout self-heals; fall
+    // back to the schedule's stored cwd (e.g. the very first fire, before
+    // any run exists for the project).
+    const recentCwd = opts.store.listRunSummaryRows({ projectId: row.projectId, order: "newest", limit: 1 })[0]?.cwd;
+    const spawnCwd = recentCwd ?? row.cwd;
+
     // Resolve workflow_ref; auto-pause + audit on failure.
-    const resolved = resolveSchedulingWorkflow(row.workflowRef, row.cwd, opts.homeDir);
+    const resolved = resolveSchedulingWorkflow(row.workflowRef, spawnCwd, opts.homeDir);
     if (resolved == null) {
       opts.store.pauseSchedule(row.id, now);
       opts.store.appendDaemonEvent({
@@ -173,7 +180,8 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
     opts.store.enqueueRun({
       runId,
       workflowSha: sha,
-      cwd: row.cwd,
+      cwd: spawnCwd,
+      projectId: row.projectId,
       ...(resolved.scope === "global" || resolved.scope === "local"
         ? { workflowName: resolved.name, workflowScope: resolved.scope }
         : { workflowScope: "path", workflowPath: resolved.dotPath }),

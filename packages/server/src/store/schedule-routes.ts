@@ -50,6 +50,7 @@ export function createScheduleRoutes(deps: ScheduleRoutesDeps): Hono {
       (await readJson<{
         workflow?: string;
         cwd?: string;
+        projectId?: string;
         every?: string;
         input?: string;
         overlap?: string;
@@ -85,6 +86,7 @@ export function createScheduleRoutes(deps: ScheduleRoutesDeps): Hono {
         id,
         workflowRef: body.workflow,
         cwd: body.cwd,
+        ...(typeof body.projectId === "string" && body.projectId.length > 0 ? { projectId: body.projectId } : {}),
         intervalMs: interval.ms,
         intervalText: interval.text,
         ...(typeof body.input === "string" ? { input: body.input } : {}),

@@ -248,6 +248,13 @@ export function createRoutes(deps: ServerDeps): Hono {
        * harness-by-default model. Required when `workflowSha` is
        * omitted (used to scope disk lookup). */
       cwd?: string;
+      /** Project IDENTITY — the committed `id` resolved at the client
+       *  boundary (CLI/web). Trusted as-supplied; when absent the store
+       *  falls back to `cwd`. */
+      projectId?: string;
+      /** Project display label captured at enqueue (defaults to the cwd
+       *  basename in the store when absent). */
+      projectName?: string;
       /** Workflow name to resolve from disk when `workflowSha` is
        *  omitted. Surfaced on `run_state.workflow_name`. */
       workflowName?: string;
@@ -401,6 +408,10 @@ export function createRoutes(deps: ServerDeps): Hono {
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
         ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
         ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
+        ...(typeof body.projectId === "string" && body.projectId.length > 0 ? { projectId: body.projectId } : {}),
+        ...(typeof body.projectName === "string" && body.projectName.length > 0
+          ? { projectName: body.projectName }
+          : {}),
         ...(resolvedWorkflowName !== undefined ? { workflowName: resolvedWorkflowName } : {}),
         ...(body.workflowScope === "global" ||
         body.workflowScope === "local" ||

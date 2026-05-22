@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
+import { resolveProject } from "../project.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
 /** Parse repeated `--input name=value` args into a resolved map. A value
@@ -115,7 +116,21 @@ const TERMINAL_TYPES = new Set<string>([
 ]);
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
-  const cwd = opts.cwd ?? process.cwd();
+  const invocationCwd = opts.cwd ?? process.cwd();
+  // Resolve project identity (walk up to the nearest .fragua/config.yaml,
+  // bounded by the git root; auto-init a real id when none is found). The
+  // resolved project root — not the invocation dir — is what the run records
+  // as its cwd, so all of .fragua/ stays in one place.
+  const project = await resolveProject(invocationCwd);
+  const cwd = project.projectRoot;
+  if (project.created) {
+    console.log(chalk.green(`✓ initialized project ${project.projectName} (${project.projectId.slice(0, 8)}…)`));
+    console.log(chalk.dim(`  wrote ${cwd}/.fragua/config.yaml — commit it to share this project across clones`));
+  } else if (!project.committed) {
+    console.error(
+      chalk.yellow("run: .fragua/config.yaml is not committed — this run won't be portable until you commit it"),
+    );
+  }
   // Discovery cascade:
   //   1. --url flag (explicit)
   //   2. <cwd>/.fragua/serve.json (or <db-dir>/serve.json when --db is set)
@@ -190,6 +205,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const enqueueBody: Record<string, unknown> = {
     workflowSha: sha,
     cwd: resolve(cwd),
+    projectId: project.projectId,
+    projectName: project.projectName,
     workflowScope: scope,
     workflowPath: dotPath,
   };

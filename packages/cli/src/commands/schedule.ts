@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
+import { resolveProject } from "../project.ts";
 
 const ALLOWED_INTERVALS = new Set(["30m", "1h", "6h", "24h", "3d", "7d"]);
 const ALLOWED_OVERLAP = new Set(["skip", "queue", "concurrent"]);
@@ -121,10 +122,15 @@ export async function scheduleAddCommand(opts: ScheduleAddOptions): Promise<numb
     return 1;
   }
   const baseUrl = await resolveBaseUrl(opts);
-  const cwd = resolve(opts.cwd ?? process.cwd());
+  // Resolve project identity at the boundary (walk-up + auto-init); the
+  // schedule records cwd as the project root and carries the project id so
+  // fired runs attribute correctly.
+  const project = await resolveProject(opts.cwd ?? process.cwd());
+  const cwd = project.projectRoot;
   const body: Record<string, unknown> = {
     workflow: opts.workflow,
     cwd,
+    projectId: project.projectId,
     every: opts.every,
     overlap,
     fireOnCreate: opts.noFireOnCreate !== true,
