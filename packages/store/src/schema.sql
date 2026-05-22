@@ -46,10 +46,18 @@ CREATE TABLE IF NOT EXISTS run_state (
   dispatch_started_at INTEGER,
   updated_at INTEGER NOT NULL,
   title TEXT,
-  -- Absolute project root the run was enqueued from. Only project
-  -- identifier in the harness-by-default model. NULL for runs without
-  -- a filesystem context (CI, integration tests).
+  -- Per-machine LOCATION binding: the resolved project root on this box
+  -- (the dir holding the matched .fragua/config.yaml). NULL for runs
+  -- without a filesystem context (CI stubs, integration tests).
   cwd TEXT,
+  -- Project IDENTITY + denormalized label. `project_id` is the stable,
+  -- committed `id` from .fragua/config.yaml (a UUIDv7), decoupled from cwd
+  -- so a run attributes to the same project across clones / machines /
+  -- imports. `project_name` is the display label captured at enqueue.
+  -- Both NOT NULL — every run carries an identity (the CLI auto-inits a
+  -- real id when none is found; imports carry theirs).
+  project_id TEXT NOT NULL,
+  project_name TEXT NOT NULL,
   -- Resolved workflow name when bare-name resolution succeeded; NULL
   -- when the caller passed a path.
   workflow_name TEXT,
@@ -97,6 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_run_state_status ON run_state(status);
 CREATE INDEX IF NOT EXISTS idx_run_state_workflow ON run_state(workflow_sha);
 CREATE INDEX IF NOT EXISTS idx_run_state_updated ON run_state(updated_at);
 CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
+CREATE INDEX IF NOT EXISTS idx_run_state_project_id ON run_state(project_id);
 CREATE INDEX IF NOT EXISTS idx_run_state_inbox
   ON run_state(updated_at DESC)
   WHERE inbox_status = 'pending';
@@ -226,6 +235,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   id              TEXT PRIMARY KEY,
   workflow_ref    TEXT NOT NULL,
   cwd             TEXT NOT NULL,
+  project_id      TEXT NOT NULL,
   interval_ms     INTEGER NOT NULL,
   interval_text   TEXT NOT NULL,
   input           TEXT,
@@ -242,6 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_schedules_due
   ON schedules(next_fire_at)
   WHERE paused_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_schedules_cwd ON schedules(cwd);
+CREATE INDEX IF NOT EXISTS idx_schedules_project_id ON schedules(project_id);
 
 -- Built-in provider credentials.
 -- One row per provider id; `payload` carries the full AuthCredential JSON

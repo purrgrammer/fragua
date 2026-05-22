@@ -509,6 +509,16 @@ export interface EnqueueRunParams {
    * harness-by-default model. Omitted for callers with no filesystem
    * context (CI, integration tests). */
   cwd?: string;
+  /** Project IDENTITY — the stable committed `id` from `.fragua/config.yaml`
+   * (a UUIDv7), resolved at the enqueue boundary (CLI/server). Portable
+   * across clones / machines / imports. When omitted, the store falls back
+   * to `cwd` (then `"local"`) so the NOT NULL column is always satisfied —
+   * production callers always pass a real resolved id. */
+  projectId?: string;
+  /** Denormalized display label for the project, captured at enqueue.
+   * Defaults to the cwd basename when omitted. Lets imported-only projects
+   * (no local config) show a real name instead of a bare id. */
+  projectName?: string;
   /** Resolved workflow name when the caller passed a bare name. Surfaced
    * on `run_state.workflow_name`. Omitted for path-based runs. */
   workflowName?: string;
@@ -846,6 +856,13 @@ export interface IEventReader {
    * model where projects are emergent paths. NULL `cwd` rows are
    * excluded. */
   listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }>;
+  listProjects(): Array<{
+    projectId: string;
+    projectName: string;
+    cwdHint: string | null;
+    lastUpdatedAt: number;
+    runCount: number;
+  }>;
 }
 
 export interface IAnalyticsReader {
@@ -915,6 +932,10 @@ export interface Schedule {
   id: string;
   workflowRef: string;
   cwd: string;
+  /** Project IDENTITY the schedule belongs to (see `EnqueueRunParams`).
+   * Fired runs inherit it; `cwd` is the spawn-location hint, resolved at
+   * fire time. */
+  projectId: string;
   intervalMs: number;
   intervalText: string;
   input: string | null;
@@ -930,6 +951,9 @@ export interface CreateScheduleParams {
   id: string;
   workflowRef: string;
   cwd: string;
+  /** Project IDENTITY. Resolved at the CLI/server boundary; falls back to
+   * `cwd` when omitted so the NOT NULL column is always satisfied. */
+  projectId?: string;
   intervalMs: number;
   intervalText: string;
   input?: string;

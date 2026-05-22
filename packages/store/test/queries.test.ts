@@ -468,6 +468,57 @@ describe("listRunIds + listCwds — cwd surface", () => {
   });
 });
 
+describe("project identity — project_id / project_name", () => {
+  test("listProjects groups by project_id with label + cwd hint, regardless of cwd", async () => {
+    const store = freshStore();
+    const wf = await seedWorkflow(store);
+    // Same project id enqueued from two different cwds (a repo cloned twice
+    // / imported) folds into ONE project; cwd hint is the most-recent.
+    store.enqueueRun({ runId: "p1", workflowSha: wf, cwd: "/box-a/api", projectId: "proj-1", projectName: "api" });
+    store.enqueueRun({ runId: "p2", workflowSha: wf, cwd: "/box-b/api", projectId: "proj-1", projectName: "api" });
+    // An imported-only run: no local cwd, but a real identity + label.
+    store.enqueueRun({ runId: "p3", workflowSha: wf, projectId: "proj-2", projectName: "web" });
+
+    const rows = store.listProjects();
+    expect(rows.map((r) => r.projectId).sort()).toEqual(["proj-1", "proj-2"]);
+    const p1 = rows.find((r) => r.projectId === "proj-1");
+    expect(p1?.projectName).toBe("api");
+    expect(p1?.runCount).toBe(2);
+    expect(p1?.cwdHint).toBe("/box-b/api");
+    const p2 = rows.find((r) => r.projectId === "proj-2");
+    expect(p2?.projectName).toBe("web");
+    expect(p2?.cwdHint).toBeNull(); // imported-only — no local checkout
+    store.close();
+  });
+
+  test("listRunIds({projectId}) narrows by identity, not location", async () => {
+    const store = freshStore();
+    const wf = await seedWorkflow(store);
+    store.enqueueRun({ runId: "a1", workflowSha: wf, cwd: "/box-a/api", projectId: "proj-1" });
+    store.enqueueRun({ runId: "a2", workflowSha: wf, cwd: "/box-b/api", projectId: "proj-1" });
+    store.enqueueRun({ runId: "b1", workflowSha: wf, cwd: "/box-a/web", projectId: "proj-2" });
+
+    expect(new Set(store.listRunIds({ projectId: "proj-1" }))).toEqual(new Set(["a1", "a2"]));
+    expect(store.listRunIds({ projectId: "proj-2" })).toEqual(["b1"]);
+    store.close();
+  });
+
+  test("explicit projectId/projectName flow onto the run row; cwd default applies otherwise", async () => {
+    const store = freshStore();
+    const wf = await seedWorkflow(store);
+    store.enqueueRun({ runId: "explicit", workflowSha: wf, cwd: "/x/y", projectId: "id-7", projectName: "seven" });
+    store.enqueueRun({ runId: "fallback", workflowSha: wf, cwd: "/repos/alpha" });
+
+    const explicit = store.listRunSummaryRows().find((r) => r.runId === "explicit");
+    expect(explicit?.projectId).toBe("id-7");
+    expect(explicit?.projectName).toBe("seven");
+    const fallback = store.listRunSummaryRows().find((r) => r.runId === "fallback");
+    expect(fallback?.projectId).toBe("/repos/alpha"); // cwd fallback
+    expect(fallback?.projectName).toBe("alpha"); // basename fallback
+    store.close();
+  });
+});
+
 describe("getSnapshotEvents", () => {
   test("empty array for run with no snapshots", async () => {
     const store = freshStore();

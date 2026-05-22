@@ -106,6 +106,7 @@ import {
   insertRunState,
   type ListRunIdsOpts,
   type ListRunSummaryRowsOpts,
+  type ProjectSummaryRow,
   // queryRunCostTotals renamed at import for symmetry with the other
   // `query*` imports below; original symbol used by tests directly.
   getRunCostTotals as queryRunCostTotals,
@@ -120,6 +121,7 @@ import {
   selectGlobalModelBreakdown,
   selectInboxActionCandidates,
   selectNextQueuedRun,
+  selectProjects,
   selectRunIds,
   selectRunStateRow,
   selectRunSummaryRows,
@@ -304,6 +306,7 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     id: row.id,
     workflowRef: row.workflow_ref,
     cwd: row.cwd,
+    projectId: row.project_id,
     intervalMs: row.interval_ms,
     intervalText: row.interval_text,
     input: row.input,
@@ -513,6 +516,16 @@ export class SqliteStore implements IEventStore {
     }
     const metrics = JSON.stringify(emptyMetrics());
 
+    // project_id / project_name are NOT NULL identity columns. Production
+    // callers (CLI run, server enqueue, schedule dispatcher) resolve a real
+    // committed id + label at the boundary and pass them explicitly. When a
+    // caller omits them (headless/test enqueues), fall back to the cwd as a
+    // stable per-store identity and its basename as the label — never NULL.
+    const cwd = params.cwd ?? null;
+    const projectId = params.projectId ?? cwd ?? "local";
+    const projectName =
+      params.projectName ?? (cwd != null ? (cwd.split("/").filter(Boolean).at(-1) ?? "local") : "local");
+
     this.writeTxn(() => {
       if (!workflowExists(this.db, params.workflowSha)) {
         throw new Error(`unknown workflow sha ${params.workflowSha}`);
@@ -528,7 +541,9 @@ export class SqliteStore implements IEventStore {
         enqueuedAt: now,
         readyAt: now,
         updatedAt: now,
-        cwd: params.cwd ?? null,
+        cwd,
+        projectId,
+        projectName,
         workflowName: params.workflowName ?? null,
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
@@ -1068,11 +1083,13 @@ export class SqliteStore implements IEventStore {
     const overlapPolicy = params.overlapPolicy ?? "skip";
     const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
     const input = params.input ?? null;
+    const projectId = params.projectId ?? params.cwd;
     this.writeTxn(() => {
       insertSchedule(this.db, {
         id: params.id,
         workflowRef: params.workflowRef,
         cwd: params.cwd,
+        projectId,
         intervalMs: params.intervalMs,
         intervalText: params.intervalText,
         input,
@@ -1085,6 +1102,7 @@ export class SqliteStore implements IEventStore {
       id: params.id,
       workflowRef: params.workflowRef,
       cwd: params.cwd,
+      projectId,
       intervalMs: params.intervalMs,
       intervalText: params.intervalText,
       input,
@@ -1173,6 +1191,10 @@ export class SqliteStore implements IEventStore {
 
   listCwds(): CwdSummaryRow[] {
     return selectCwds(this.db);
+  }
+
+  listProjects(): ProjectSummaryRow[] {
+    return selectProjects(this.db);
   }
 
   // ─────────────── Maintenance ───────────────

@@ -41,6 +41,8 @@ export interface RunStateRow {
   updated_at: number;
   title: string | null;
   cwd: string | null;
+  project_id: string;
+  project_name: string;
   workflow_name: string | null;
   workflow_scope: "global" | "local" | "path" | "ephemeral" | null;
   workflow_path: string | null;
@@ -74,7 +76,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          schema_version, routing, metrics, next_seq, last_applied_seq,
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
-         cwd, workflow_name, workflow_scope, workflow_path,
+         cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path,
          base_git_sha, base_git_ref,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
          inbox_status, accepted_sha, schedule_id
@@ -116,6 +118,11 @@ export interface ListRunIdsOpts {
    *  this filter — by design, since they're ephemeral runs without a
    *  filesystem context. Backed by `idx_run_state_cwd`. */
   cwd?: string;
+  /** Narrow to a single project by IDENTITY. Exact match against
+   *  `run_state.project_id`; backed by `idx_run_state_project_id`. This is
+   *  the portable project filter — unlike `cwd`, it survives clones and
+   *  imports. `undefined` returns every project. */
+  projectId?: string;
   /** "newest" → most-recently-updated first (archive view). "oldest" →
    *  smallest enqueued_at first (Inbox metaphor — neglect surfaces). */
   order?: "newest" | "oldest";
@@ -138,6 +145,8 @@ export interface RunSummaryRow {
   title: string | null;
   eventTitle: string | null;
   cwd: string | null;
+  projectId: string;
+  projectName: string;
   enqueuedAt: number;
   firstEventTs: number | null;
   lastEventTs: number | null;
@@ -156,7 +165,7 @@ export interface RunSummaryRow {
 /** Enumerate run ids with filtering, ordering, and limit pushed into SQL.
  *  Returns `[]` for `statuses: []` without hitting the DB. */
 export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] {
-  const { statuses, cwd, order = "newest", limit } = opts;
+  const { statuses, cwd, projectId, order = "newest", limit } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
   const clauses: string[] = [];
   const args: (RunStatus | string | number)[] = [];
@@ -167,6 +176,10 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
   if (cwd !== undefined) {
     clauses.push("cwd = ?");
     args.push(cwd);
+  }
+  if (projectId !== undefined) {
+    clauses.push("project_id = ?");
+    args.push(projectId);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
@@ -182,7 +195,7 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
 /** SQL-backed projection for `GET /runs`. Avoids hydrating full event
  *  logs just to derive count, duration, and title fallback. */
 export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts = {}): RunSummaryRow[] {
-  const { statuses, cwd, order = "newest", limit, inbox } = opts;
+  const { statuses, cwd, projectId, order = "newest", limit, inbox } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
 
   const clauses: string[] = [];
@@ -194,6 +207,10 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
   if (cwd !== undefined) {
     clauses.push("r.cwd = ?");
     args.push(cwd);
+  }
+  if (projectId !== undefined) {
+    clauses.push("r.project_id = ?");
+    args.push(projectId);
   }
   if (inbox !== undefined) {
     clauses.push("r.inbox_status = ?");
@@ -208,8 +225,8 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
   const sql = `
     WITH selected AS (
       SELECT r.run_id, r.workflow_sha, r.workflow_name, r.status, r.routing, r.metrics,
-             r.title, r.cwd, r.enqueued_at, r.updated_at, r.inbox_status, r.change_stat,
-             r.base_git_ref, r.base_git_sha
+             r.title, r.cwd, r.project_id, r.project_name, r.enqueued_at, r.updated_at,
+             r.inbox_status, r.change_stat, r.base_git_ref, r.base_git_sha
         FROM run_state r
         ${where}
        ORDER BY ${orderBy}, r.run_id ASC
@@ -239,6 +256,8 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
            s.title AS title,
            json_extract(title_event.payload, '$.title') AS eventTitle,
            s.cwd AS cwd,
+           s.project_id AS projectId,
+           s.project_name AS projectName,
            s.enqueued_at AS enqueuedAt,
            eb.firstEventTs AS firstEventTs,
            eb.lastEventTs AS lastEventTs,
@@ -283,10 +302,47 @@ const SELECT_CWDS_SQL = `
 
 /** Distinct `cwd` values across `run_state`, ordered by most-recent
  *  activity. NULL `cwd` rows are excluded — they're runs without a
- *  filesystem context (CI, integration tests) and have no project to
- *  belong to. */
+ *  filesystem context (CI, integration tests). This is a LOCATION view
+ *  (where runs physically happened); the IDENTITY view is
+ *  `selectProjects`. */
 export function selectCwds(db: Database): CwdSummaryRow[] {
   return db.query<CwdSummaryRow, []>(SELECT_CWDS_SQL).all();
+}
+
+export interface ProjectSummaryRow {
+  projectId: string;
+  /** Display label — the most-recent enqueue's `project_name` for this id. */
+  projectName: string;
+  /** Representative LOCATION hint — the most-recent non-NULL `cwd` seen for
+   *  this id, or NULL for an imported-only project never checked out here.
+   *  Used to resolve file/tree/blob views; not identity. */
+  cwdHint: string | null;
+  lastUpdatedAt: number;
+  runCount: number;
+}
+
+const SELECT_PROJECTS_SQL = `
+  SELECT project_id AS projectId,
+         (SELECT r2.project_name FROM run_state r2
+           WHERE r2.project_id = r.project_id
+           ORDER BY r2.updated_at DESC, r2.run_id ASC LIMIT 1) AS projectName,
+         (SELECT r3.cwd FROM run_state r3
+           WHERE r3.project_id = r.project_id AND r3.cwd IS NOT NULL
+           ORDER BY r3.updated_at DESC, r3.run_id ASC LIMIT 1) AS cwdHint,
+         MAX(updated_at) AS lastUpdatedAt,
+         COUNT(*) AS runCount
+    FROM run_state r
+   GROUP BY project_id
+   ORDER BY lastUpdatedAt DESC, project_id ASC
+`;
+
+/** Distinct projects by IDENTITY (`project_id`), ordered by most-recent
+ *  activity, with a display label and a representative cwd hint. Unlike
+ *  `selectCwds`, this groups imported runs and multiple checkouts of the
+ *  same repo into one project, and surfaces projects with no local
+ *  checkout. */
+export function selectProjects(db: Database): ProjectSummaryRow[] {
+  return db.query<ProjectSummaryRow, []>(SELECT_PROJECTS_SQL).all();
 }
 
 const SELECT_WAKE_CANDIDATES_BASE_SQL = `
@@ -377,8 +433,8 @@ const INSERT_RUN_STATE_SQL = `
     run_id, version, status, current_node, workflow_sha,
     schema_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
-    cwd, workflow_name, workflow_scope, workflow_path, schedule_id
-  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+    cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path, schedule_id
+  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -394,6 +450,8 @@ export function insertRunState(
     readyAt: number;
     updatedAt: number;
     cwd: string | null;
+    projectId: string;
+    projectName: string;
     workflowName: string | null;
     workflowScope: "global" | "local" | "path" | "ephemeral" | null;
     workflowPath: string | null;
@@ -411,6 +469,8 @@ export function insertRunState(
     args.readyAt,
     args.updatedAt,
     args.cwd,
+    args.projectId,
+    args.projectName,
     args.workflowName,
     args.workflowScope,
     args.workflowPath,

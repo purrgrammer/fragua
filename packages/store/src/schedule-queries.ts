@@ -12,6 +12,7 @@ export interface ScheduleRow {
   id: string;
   workflow_ref: string;
   cwd: string;
+  project_id: string;
   interval_ms: number;
   interval_text: string;
   input: string | null;
@@ -25,10 +26,10 @@ export interface ScheduleRow {
 
 const INSERT_SCHEDULE_SQL = `
   INSERT INTO schedules (
-    id, workflow_ref, cwd, interval_ms, interval_text, input,
+    id, workflow_ref, cwd, project_id, interval_ms, interval_text, input,
     overlap_policy, next_fire_at, last_fire_at, last_run_id,
     paused_at, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
 `;
 
 export function insertSchedule(
@@ -37,6 +38,7 @@ export function insertSchedule(
     id: string;
     workflowRef: string;
     cwd: string;
+    projectId: string;
     intervalMs: number;
     intervalText: string;
     input: string | null;
@@ -49,6 +51,7 @@ export function insertSchedule(
     args.id,
     args.workflowRef,
     args.cwd,
+    args.projectId,
     args.intervalMs,
     args.intervalText,
     args.input,
@@ -59,7 +62,7 @@ export function insertSchedule(
 }
 
 const SELECT_SCHEDULE_SQL = `
-  SELECT id, workflow_ref, cwd, interval_ms, interval_text, input,
+  SELECT id, workflow_ref, cwd, project_id, interval_ms, interval_text, input,
          overlap_policy, next_fire_at, last_fire_at, last_run_id,
          paused_at, created_at
     FROM schedules
@@ -71,7 +74,7 @@ export function selectSchedule(db: Database, id: string): ScheduleRow | null {
 }
 
 const SELECT_SCHEDULES_BY_CWD_SQL = `
-  SELECT id, workflow_ref, cwd, interval_ms, interval_text, input,
+  SELECT id, workflow_ref, cwd, project_id, interval_ms, interval_text, input,
          overlap_policy, next_fire_at, last_fire_at, last_run_id,
          paused_at, created_at
     FROM schedules
@@ -84,7 +87,7 @@ export function selectSchedulesByCwd(db: Database, cwd: string): ScheduleRow[] {
 }
 
 const SELECT_ALL_SCHEDULES_SQL = `
-  SELECT id, workflow_ref, cwd, interval_ms, interval_text, input,
+  SELECT id, workflow_ref, cwd, project_id, interval_ms, interval_text, input,
          overlap_policy, next_fire_at, last_fire_at, last_run_id,
          paused_at, created_at
     FROM schedules
@@ -96,7 +99,7 @@ export function selectAllSchedules(db: Database): ScheduleRow[] {
 }
 
 const SELECT_DUE_SCHEDULES_SQL = `
-  SELECT id, workflow_ref, cwd, interval_ms, interval_text, input,
+  SELECT id, workflow_ref, cwd, project_id, interval_ms, interval_text, input,
          overlap_policy, next_fire_at, last_fire_at, last_run_id,
          paused_at, created_at
     FROM schedules
