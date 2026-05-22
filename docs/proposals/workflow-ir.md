@@ -8,7 +8,7 @@ last-reviewed: 2026-05-22
 
 # Workflow IR
 
-> **Status: (C) done · (A) ready to build · (B) deferred post-feature-complete.**
+> **Status: (C) done · (A) DONE (`c6e32978`) · (B) deferred post-feature-complete.**
 > Three moves of escalating commitment: (C) the in-memory parse-once refactor —
 > **already landed** (`packages/daemon/src/graph-loader.ts`). (A) persist the
 > canonical IR (loc stripped — it's validator-only metadata) — low-risk,
@@ -51,7 +51,7 @@ forward; `sha` is a stable hash of the canonical IR, minted once.
 | | Move | Contract change? | When |
 |---|---|---|---|
 | **(C)** | Parse once at a `GraphLoader` boundary; dispatch consumes `Graph`. | none (in-memory only) | **DONE** (`graph-loader.ts`) |
-| **(A)** | Persist the canonical IR (`workflows.ir` + `ir_version`); `source` demoted to provenance. `sha` **unchanged** (still source-hash). | adds columns | **now** — low-risk |
+| **(A)** | Persist the canonical IR (`workflows.ir` + `ir_version`); `source` demoted to provenance. `sha` **unchanged** (still source-hash). | adds columns | **DONE** (`c6e32978`) |
 | **(B)** | `sha = hash(canonical IR core)` instead of `sha256(source)`. | changes a persisted, FK-referenced identity | **deferred** post-feature-complete (§8.0) |
 
 **(A) and (B) are separable — the original framing coupled them, wrongly.**
@@ -158,10 +158,17 @@ CREATE TABLE workflows (
 ) STRICT;
 ```
 
-Both `ir` columns land in the baseline now (additive, NOT NULL) — every stored
-workflow carries its IR. `run_state.workflow_sha` stays the FK; its *value* is
-source-hash under (A) and becomes IR-hash only if (B) ships at freeze. No
-migration walk; the dev store is recreated.
+Both `ir` columns landed in the baseline (additive). **Shipped nullable, not
+`NOT NULL`** (a deviation from the sketch above): the `@fragua/store` package
+can't compute IR (it doesn't depend on `@fragua/core`, where the parser lives),
+and ~50 test seeds call `saveWorkflow(sha, name, source)` directly. Making `ir`
+optional keeps those zero-churn and lets the loader fall back to parsing
+`source` when a row has no IR. Production mint sites (server `POST /workflows`,
+the by-name resolver, the schedule dispatcher) always serialize the
+already-parsed Graph and persist it, so real runs get the parse-once win.
+`run_state.workflow_sha` stays the FK; its *value* is source-hash under (A) and
+becomes IR-hash only when (B) lands. No migration walk; the dev store is
+recreated. (When (B) freezes the shape, `ir` can be tightened to `NOT NULL`.)
 
 **`ir_version` at 0.1.0 = 1, with no converters yet.** Don't pre-build the
 converter-chain machinery before there's a v2 to convert from: ship the column
