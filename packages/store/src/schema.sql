@@ -89,9 +89,8 @@ CREATE TABLE IF NOT EXISTS run_state (
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED,
-  -- Worktree snapshot + inbox projection. Added dormant in the foundation
-  -- migration (v15); populated by later steps (snapshotter wiring, dispose
-  -- rework, operator primitives). `base_git_ref` is the merge/commit target
+  -- Worktree snapshot + inbox projection, written by the terminal
+  -- `fact.snapshot_recorded`. `base_git_ref` is the merge/commit target
   -- default captured at provision; `diff_base_sha` is the honest diff base
   -- at terminal (== base_git_sha unless the workflow relocated HEAD);
   -- `change_stat` is JSON {committed, uncommitted}; `inbox_status` drives
