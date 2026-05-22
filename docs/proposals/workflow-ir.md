@@ -158,17 +158,19 @@ CREATE TABLE workflows (
 ) STRICT;
 ```
 
-Both `ir` columns landed in the baseline (additive). **Shipped nullable, not
-`NOT NULL`** (a deviation from the sketch above): the `@fragua/store` package
-can't compute IR (it doesn't depend on `@fragua/core`, where the parser lives),
-and ~50 test seeds call `saveWorkflow(sha, name, source)` directly. Making `ir`
-optional keeps those zero-churn and lets the loader fall back to parsing
-`source` when a row has no IR. Production mint sites (server `POST /workflows`,
-the by-name resolver, the schedule dispatcher) always serialize the
-already-parsed Graph and persist it, so real runs get the parse-once win.
+Both `ir` columns landed in the baseline as **`NOT NULL`** (`9359c0f7`): every
+workflow is parsed once at mint and carries its IR, so the GraphLoader *always*
+deserializes the stored IR — there is no source-parse fallback on the dispatch
+path (parsing happens only at mint: server `POST /workflows`, the by-name
+resolver, the schedule dispatcher, which each serialize the already-parsed
+Graph). `saveWorkflow(sha, name, source, ir, irVersion)` requires both. The
+churn this implied — ~50 test seeds — was absorbed: core-aware test packages
+build real IR from source (`serializeGraph(parseWorkflow(src))`), while
+`@fragua/store` tests (which can't depend on `@fragua/core`) pass a constant
+stub IR, since store-unit tests never execute the seeded workflow.
 `run_state.workflow_sha` stays the FK; its *value* is source-hash under (A) and
 becomes IR-hash only when (B) lands. No migration walk; the dev store is
-recreated. (When (B) freezes the shape, `ir` can be tightened to `NOT NULL`.)
+recreated.
 
 **`ir_version` at 0.1.0 = 1, with no converters yet.** Don't pre-build the
 converter-chain machinery before there's a v2 to convert from: ship the column
