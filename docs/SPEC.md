@@ -133,7 +133,7 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
   The concurrency slot is released during the wait so other queued runs can claim. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_auto" }` once `now >= resumeAt`; the run goes back to `queued` and re-dispatches.
 
 - **`completed`** / **`halted`** / **`cancelled`** — terminal.
-  - `fact.run_halted.payload.reason` is one of: `budget` (when `budget_policy="stop"`), `schema_drift`, `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`.
+  - `fact.run_halted.payload.reason` is one of: `budget` (when `budget_policy="stop"`), `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`. (A version mismatch is recoverable — `fact.run_paused{reason:"engine_incompatible"}` — not a halt; see §282.)
 - **`quarantined`** — startup sweep found an orphan `fact.side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel" }`.
 
 Adding a new operator-fixable failure mode is a new `PauseReason` literal — no new status, no schema migration.
@@ -279,7 +279,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 
 - **Multi-machine deployment.** Everything assumes one machine, one SQLite file. The `IEventStore` interface is synchronous (matching `bun:sqlite`); a Postgres backing would require async-ifying the interface and every callsite.
 - **Blob encryption.** Single-user local tool; DB read = full read anyway.
-- **Auto-migration of schema drift.** Runs pin a `schema_version`; mismatches halt rather than auto-upgrade.
+- **Auto-migration of schema drift.** Runs pin a `schema_version`; a mismatch **pauses** the run (recoverable — `fact.run_paused{reason:"engine_incompatible", pinnedVersion, supportedMin, supportedMax}`) rather than auto-upgrading. The payload's window tells the two arms apart: `pinnedVersion > supportedMax` (too new — a downgraded daemon / newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Neither is terminal. At the 0.1.0 baseline `MIN_COMPATIBLE = CURRENT = 1`, so the gate is latent. (Decoupling the gate from the DB-migration counter and capability-gated auto-wake are tracked in `docs/proposals/event-contract-version.md`.)
 - **Workflow hot-reload.** `workflow_sha` is pinned at enqueue time.
 
 **Not honored from attractor-spec:**

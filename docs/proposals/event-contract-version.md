@@ -1,9 +1,9 @@
 ---
 title: Event-contract version — decouple resume-gating from the DB migration counter, and make version mismatch recoverable
 summary: "The per-run schema_version gate conflates two things and over-punishes both. (1) It pins to the DB migration counter, which bumps on projection-only changes that never touch event/reducer semantics — so runs are gated on versions irrelevant to whether their events fold. (2) A mismatch produces fact.run_halted{schema_drift}, which is TERMINAL and unresumable — so a transient version skew (a momentarily-downgraded daemon, an imported run) kills a run permanently. Fix: gate on an event-contract version that bumps only on real fact/intent/reducer changes, and make the mismatch a recoverable pause, not a terminal halt."
-status: proposed
-maturity: sketch
-last-reviewed: 2026-05-22
+status: partially-shipped
+maturity: designed
+last-reviewed: 2026-05-23
 parent: cli-topology.md
 ---
 
@@ -55,18 +55,18 @@ their events are interpretable.
 > The cleanup buys a clean slate to land the right axis on — not a reason to skip
 > it.
 
-### 2.2 Wrong response — the trip is terminal, not recoverable
+### 2.2 Wrong response — the trip was terminal, not recoverable — FIXED (§3.2)
 
-`fact.run_halted{reason:"schema_drift"}` sets status `halted`, which is in
-`TERMINAL = {"completed","cancelled","halted"}` (`reducers.ts:22`).
-`intent.resume` only wakes the three non-terminal pause statuses
-(`wake-pending.ts:11`; `events.ts:154`); there is no "un-halt." So a halted run
-is **permanently dead** — re-running means re-enqueuing from scratch.
+The defect: a version mismatch set status `halted` (terminal,
+`TERMINAL = {"completed","cancelled","halted"}`, `reducers.ts:22`), and
+`intent.resume` only wakes non-terminal pause statuses — there is no "un-halt", so
+a mismatched run was **permanently dead**. Yet the condition that trips the gate is
+*recoverable*: a downgraded daemon gets upgraded; an imported run lands on a store
+that later catches up. The response outlived the cause.
 
-The condition that trips the gate, however, is *recoverable*: a downgraded daemon
-gets upgraded; an imported run lands on a store that later catches up; a retired
-migration gets restored. **The response outlives the cause.** A transient skew
-should not be a death sentence.
+§3.2 fixes this: the gate now emits a recoverable `fact.run_paused`
+(`engine_incompatible`, status `paused`) the operator can resume.
+The remaining defect (§2.1, wrong axis) is still open — §3.1.
 
 ## 3. The fix
 
@@ -89,30 +89,35 @@ actually change — a rare event. Runs pin *that*. The executor gates on it:
 The DB migration counter keeps doing its job (walk-forward `migrate()` for the
 projection/schema); it just stops being the run-resume gate.
 
-### 3.2 Make a mismatch a recoverable pause
+### 3.2 Make a mismatch a recoverable pause — SHIPPED
 
-When the contract gate *does* trip (genuine skew), park the run instead of
-killing it:
+When the gate trips (an out-of-range pin), the executor parks the run instead of
+killing it (`packages/daemon/src/executor.ts`):
 
-- Emit a recoverable pause — the `fact.run_paused` reason `incompatible_engine`
-  → a non-terminal `paused`-class status — not `fact.run_halted`.
-- **Two arms, two statuses — the reducer sets the status from which side of the
-  `[MIN_COMPATIBLE, CURRENT]` window the pin falls on** (the gate's axis: the
-  DB-counter in §3.2-alone, the contract version after §3.1). Same pause reason,
-  different wake behavior:
-  - *Pin > `CURRENT`* (too new — a downgraded daemon, or a newer-producer import
-    awaiting a binary upgrade): `paused_auto`. `wake-pending` retests compatibility
-    each tick, re-parks while still incompatible, and auto-resumes once a capable
-    daemon runs — **no operator action**.
-  - *Pin < `MIN_COMPATIBLE`* (too old — the floor ratcheted past it): `paused`,
-    **no auto-wake**. It can never heal by waiting (the floor only moves forward),
-    so it needs an explicit `intent.resume` after the operator rebuilds from source
-    or cancels.
-- This removes "permanent death from a transient mismatch" without weakening the
-  conservatism — an *incompatible* run still does not execute; it waits.
-- **`schema_drift` is dropped from the terminal `HaltReason` enum** in the same
-  change — `incompatible_engine` replaces it, it does not coexist (§5). Nothing
-  unrecoverable remains behind it: corruption is a different failure mode, and a
+- It emits a recoverable `fact.run_paused` — never `fact.run_halted`.
+- **One reason, both arms → `paused`.** A single `engine_incompatible` carries
+  `{ pinnedVersion, supportedMin, supportedMax }`, and the arm is inferred from the
+  window: `pinnedVersion > supportedMax` is too new (a downgraded daemon, or a
+  newer-producer import); `pinnedVersion < supportedMin` is too old (the floor
+  ratcheted past it). Both project to `paused` (operator-resumable). This removes
+  "permanent death from a transient mismatch" — an incompatible run waits instead of
+  dying. *Why one reason, not two:* the 1:1 reason→status invariant (the reducer
+  projects status from `payload.reason` alone) only forces a reason split when the
+  *statuses diverge*; here both arms share `paused`, so the payload window is enough.
+- **Deferred to §3.1: capability-gated auto-wake for the too-new arm.** The pinned
+  design wanted the too-new arm to project to `paused_auto` and auto-heal on a capable
+  daemon. But `paused_auto` here is *timer*-based (`auto_resume_at`); too-new is
+  *capability*-based, needing a new wake path in `wake-pending` — and at the 0.1.0
+  baseline `MIN = CURRENT = 1`, so the gate never trips and that path would be dead
+  code. That refinement *does* diverge the statuses (too-new → `paused_auto`,
+  too-old → `paused`), which is when the 1:1 invariant forces splitting
+  `engine_incompatible` into two reasons — and that split rides §3.1's
+  contract-version bump for free. So §3.2 ships the one reason; §3.1 splits it when
+  the divergence becomes real. (Until then, an operator resumes the too-new arm after
+  upgrading the daemon.)
+- **`schema_drift` is removed from the `HaltReason` enum** — the `engine_incompatible`
+  pause reason replaces it, they do not coexist (§5). Nothing unrecoverable remains
+  behind it: corruption is a different failure mode, and a
   version skew heals via upgrade/downgrade.
 
 ### 3.3 What forces an `EVENT_CONTRACT_VERSION` bump
@@ -230,17 +235,15 @@ the first future projection-only migration. Low priority.
 - **Wins independently:** yes — it strictly improves resume semantics for *every*
   long-paused or version-skewed run, not just imported ones.
 - **Sequence (a gated order, not a size menu):**
-  1. **§3.2 — precursor, ship now (alongside [`intent-plane.md`](intent-plane.md)).**
-     ~30 lines: flip the gate's *response* from a terminal `schema_drift` halt to a
-     recoverable `incompatible_engine` pause with auto-wake on a compatible daemon,
-     and drop `schema_drift` from the terminal enum. Keeps the existing DB-counter
-     gate (axis unchanged). Removes the "permanent death from a transient mismatch"
-     defect immediately **and** lets `cli-store-client`'s exit-code taxonomy land in
-     its final post-fix shape rather than being rewritten once the response changes.
-     The contract-surface hash (§3.3) does not exist yet at this step; its baseline
-     snapshot is taken from the **post-§3.2** surface (after `schema_drift` removal +
-     `incompatible_engine` addition) — nobody retroactively snapshots the pre-§3.2
-     state.
+  1. **§3.2 — SHIPPED (precursor).** The gate's *response* is a recoverable
+     `engine_incompatible` pause, and `schema_drift` is gone from the
+     terminal enum. The existing DB-counter gate (axis unchanged) still decides the
+     window. This removed the "permanent death from a transient mismatch" defect
+     **and** lets `cli-store-client`'s exit-code taxonomy land in its final post-fix
+     shape rather than being rewritten once the response changes. The contract-surface
+     hash (§3.3) does not exist yet; its baseline snapshot is taken from the
+     **post-§3.2** surface (the `engine_incompatible` reason present, `schema_drift` absent)
+     — nobody retroactively snapshots a pre-§3.2 state.
   2. **§3.1 + §3.3 + §3.4 — the axis split, before [`db-import.md`](db-import.md).**
      Introduce `EVENT_CONTRACT_VERSION`, the bump checklist + its mechanical
      enforcement (§3.3), and the backward-compat / ratchet discipline (§3.4) so the
@@ -262,7 +265,7 @@ the first future projection-only migration. Low priority.
   floor ratchets past them.
 - **`HaltReason` / `RunStatus`** — `schema_drift` is **removed** from the terminal
   `HaltReason` enum (not retained "for unrecoverable engine errors" — there is no
-  residual; §3.2); the `incompatible_engine` pause reason enters the non-terminal
+  residual; §3.2); the `engine_incompatible` pause reason enters the non-terminal
   set. Enum-consumer sweep per CLAUDE.md §1 (the `cli-store-client` exit-code map,
   `wake-pending` reason sets, humanize labels, `VALID_STATUSES`).
 - **Two discipline tests ship with the axis split (§3.1):** the contract-surface

@@ -340,16 +340,26 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
-    // Schema drift refusal. Versions in the compatibility range
+    // Version-mismatch refusal. Pins in the compatibility range
     // [MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION] resume
-    // cleanly; only out-of-range pins (older than MIN, or newer than
-    // CURRENT — i.e. the daemon was downgraded) halt. See
-    // packages/store/src/pragmas.ts for the bumping policy.
+    // cleanly. An out-of-range pin is RECOVERABLE, not terminal — park
+    // the run as `paused{engine_incompatible}` instead of killing it (a
+    // downgraded daemon gets upgraded; an imported run lands on a store
+    // that later catches up). The payload carries the window, so the
+    // operator/UI infers too-new (`pinnedVersion > supportedMax`) vs
+    // too-old (`< supportedMin`) without a second reason. Capability-gated
+    // auto-wake for the too-new arm is deferred to the contract-version
+    // axis split — see docs/proposals/event-contract-version.md §3.1.
     if (state.schemaVersion < MIN_COMPATIBLE_SCHEMA_VERSION || state.schemaVersion > CURRENT_SCHEMA_VERSION) {
       await tryAppendFact(opts.store, runId, state.version, [
         {
-          type: "fact.run_halted",
-          payload: { reason: "schema_drift" },
+          type: "fact.run_paused",
+          payload: {
+            reason: "engine_incompatible",
+            pinnedVersion: state.schemaVersion,
+            supportedMin: MIN_COMPATIBLE_SCHEMA_VERSION,
+            supportedMax: CURRENT_SCHEMA_VERSION,
+          },
         },
       ]);
       return { kind: "terminal" };

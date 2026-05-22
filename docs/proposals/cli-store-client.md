@@ -46,13 +46,15 @@ a daemon is running: it writes a durable intent and returns.
   is the CI log *and* the importable artifact in one format. No bespoke "CI log
   format" — render the event log; the `.db` is lossless.
 - **Exit-code taxonomy.** Today every halt → exit 1 (`run.ts:218`). Map
-  `HaltReason` (`packages/types/src/events.ts:235` — `budget`, `schema_drift`,
-  `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`,
-  `route_not_picked`, `route_call_not_isolated`, `edge_no_match`) to distinct
-  codes so pipelines branch — *retry* on `occ_exhausted`/`timeout_exhausted`,
-  *hard-fail* on `schema_drift`. A non-interactive HITL pause gets its own code
-  (distinct from a fail: "needed a human"). **Enum-consumer note (CLAUDE.md §1):**
-  the exit map is a new `HaltReason` literal consumer.
+  `HaltReason` (`packages/types/src/events.ts` — `budget`, `error`,
+  `aborted_exit`, `occ_exhausted`, `timeout_exhausted`, `route_not_picked`,
+  `route_call_not_isolated`, `edge_no_match`) to distinct codes so pipelines
+  branch — *retry* on `occ_exhausted`/`timeout_exhausted`. A version mismatch is
+  no longer a halt: it is the recoverable `engine_incompatible` pause,
+  so it shares the non-interactive-pause exit code (distinct from a fail:
+  "couldn't run / needed a human"), not a halt code. **Enum-consumer note
+  (CLAUDE.md §1):** the exit map is a new `HaltReason` *and* `PauseReason` literal
+  consumer.
 - **Rendering, not semantics, keys off the TTY.** `NO_COLOR` / `isTTY` / `CI`
   gate color and spinners only; enqueue-vs-tail behavior is mode-independent on
   purpose — "why did it behave differently in CI" is the scriptability bug we

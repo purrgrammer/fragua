@@ -130,10 +130,11 @@ return {
   detail?: string,
 };
 // Additional `fact.run_halted` reasons emitted directly by the executor (not constructible by handlers):
-// `"schema_drift"`, `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`,
+// `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`,
 // `"route_not_picked"`, `"route_call_not_isolated"`, `"edge_no_match"`.
 // `"abort_loop"` and `"provider_exhausted"` are executor-only and convert to
-// `fact.run_paused` (not halts) per Stage 3 of recoverable-budget-pause.md.
+// `fact.run_paused` (not halts). A version mismatch is likewise a recoverable
+// `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
 ```
 
 When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/fragua-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.

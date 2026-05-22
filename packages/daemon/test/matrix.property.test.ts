@@ -510,10 +510,10 @@ describe("P18 — reclaimed zombie daemon fails OCC on commit", () => {
 });
 
 // ─────────────── P17 ───────────────
-describe("P17 — schema drift refusal on resume", () => {
-  test("run pinned to a non-current schema_version → fact.run_halted { reason: 'schema_drift' }", async () => {
+describe("P17 — version-mismatch refusal on resume", () => {
+  test("run pinned newer than the daemon → RECOVERABLE fact.run_paused { reason: 'engine_incompatible' }", async () => {
     const r = rig();
-    // Handler would otherwise transition cleanly; the schema check runs
+    // Handler would otherwise transition cleanly; the version check runs
     // before dispatch so the body never fires.
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "noop",
@@ -524,8 +524,8 @@ describe("P17 — schema drift refusal on resume", () => {
     enqueue(r, "rp17", "start");
     const before = r.store.getState("rp17")!;
 
-    // Simulate a daemon starting against an older-pinned run: rewrite
-    // schema_version out from under the executor.
+    // Simulate a downgraded daemon starting against a newer-pinned run:
+    // rewrite schema_version out from under the executor.
     const db = (r.store as unknown as { db: Database }).db;
     db.query("UPDATE run_state SET schema_version = 999 WHERE run_id = ?").run("rp17");
 
@@ -543,9 +543,13 @@ describe("P17 — schema drift refusal on resume", () => {
     });
 
     const after = r.store.getState("rp17")!;
-    expect(after.status).toBe("halted");
-    const halt = r.store.getEvents("rp17").find((e) => e.type === "fact.run_halted")!;
-    expect((halt.payload as { reason: string }).reason).toBe("schema_drift");
+    // Recoverable park, NOT a terminal halt — the defect this fixes.
+    expect(after.status).toBe("paused");
+    expect(r.store.getEvents("rp17").some((e) => e.type === "fact.run_halted")).toBe(false);
+    const pause = r.store.getEvents("rp17").find((e) => e.type === "fact.run_paused")!;
+    const p = pause.payload as { reason: string; pinnedVersion: number; supportedMax: number };
+    expect(p.reason).toBe("engine_incompatible");
+    expect(p.pinnedVersion).toBeGreaterThan(p.supportedMax); // too-new arm, inferred from payload
     expect(after.version).toBeGreaterThan(before.version);
     r.store.close();
   });
@@ -580,7 +584,7 @@ describe("P17 — schema drift refusal on resume", () => {
     });
 
     const after = r.store.getState("rp17b")!;
-    // No schema_drift halt: run progressed normally to the terminal node.
+    // No version-mismatch refusal: run progressed normally to the terminal node.
     expect(after.status).toBe("completed");
     const types = r.store.getEvents("rp17b").map((e) => e.type);
     expect(types).not.toContain("fact.run_halted");

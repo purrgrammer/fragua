@@ -83,7 +83,8 @@ type PausePayload =
   | { reason: "goal_gate"; gateNodeId: string; currentLimit: number }
   | { reason: "max_loops"; currentLimit: number; dispatches: number }
   | { reason: "abort_loop"; nodeId: string; consecutiveAborts: number }
-  | { reason: "provider_exhausted"; nodeId: string; attempts: number; cumulativeMs: number };
+  | { reason: "provider_exhausted"; nodeId: string; attempts: number; cumulativeMs: number }
+  | { reason: "engine_incompatible"; pinnedVersion: number; supportedMin: number; supportedMax: number };
 
 interface FactRow {
   type?: unknown;
@@ -541,6 +542,28 @@ const RENDERERS: Renderers = {
     ),
     actions: <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} />,
   }),
+  engine_incompatible: ({ payload, ctx }) => {
+    const tooNew = payload.pinnedVersion > payload.supportedMax;
+    return {
+      title: tooNew ? "Engine too old — paused" : "Run too old — paused",
+      body: (
+        <span data-testid="run-paused-message">
+          {tooNew ? (
+            <>
+              This run is pinned to version {payload.pinnedVersion}, newer than this daemon folds (max{" "}
+              {payload.supportedMax}). Upgrade the daemon and resume, or cancel.
+            </>
+          ) : (
+            <>
+              This run is pinned to version {payload.pinnedVersion}, below this daemon's minimum ({payload.supportedMin}
+              ). It can't resume as-is — rebuild it from source, or cancel.
+            </>
+          )}
+        </span>
+      ),
+      actions: <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} />,
+    };
+  },
 };
 
 /** Dispatch a payload through the exhaustive renderer table. The

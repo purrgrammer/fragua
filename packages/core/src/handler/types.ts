@@ -278,9 +278,10 @@ export type HandlerResult =
   | {
       kind: "halt";
       // Executor-only HaltReason literals (drift-lint coverage):
-      // `"schema_drift"`, `"aborted_exit"`, `"occ_exhausted"`,
-      // `"timeout_exhausted"` are valid `fact.run_halted` reasons that
-      // the executor emits directly — not constructible by handlers.
+      // `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"` are
+      // valid `fact.run_halted` reasons that the executor emits directly
+      // — not constructible by handlers. (Version mismatch is no longer
+      // here: it is the recoverable `engine_incompatible` pause.)
       // The reasons in this union below (`"max_retries_exceeded"`,
       // `"goal_gate_unsatisfied"`, `"max_loops"`) are accepted on the
       // handler-side type but get translated by result-to-facts into

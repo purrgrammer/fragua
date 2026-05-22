@@ -782,8 +782,8 @@ steps:
   });
 });
 
-describe("executor — schema drift", () => {
-  test("run with mismatched schema_version halts with schema_drift", async () => {
+describe("executor — version mismatch", () => {
+  async function driveVersionMismatch(runId: string, pinnedVersion: number) {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "noop",
@@ -796,14 +796,14 @@ describe("executor — schema drift", () => {
         costUsd: 0,
       }),
     });
-    enqueue(r, "run5", "start");
-    // Forcibly rewrite schema_version on the row to simulate drift.
+    enqueue(r, runId, "start");
+    // Forcibly rewrite schema_version on the row to simulate skew.
     const db = (r.store as unknown as { db: import("bun:sqlite").Database }).db;
-    db.query("UPDATE run_state SET schema_version = 999 WHERE run_id = ?").run("run5");
+    db.query("UPDATE run_state SET schema_version = ? WHERE run_id = ?").run(pinnedVersion, runId);
 
     r.store.claimNextRun(1);
     const ac = new AbortController();
-    await runOne("run5", {
+    await runOne(runId, {
       store: r.store,
       dispatcher: r.dispatcher,
       registry: new AbortRegistry(),
@@ -813,10 +813,31 @@ describe("executor — schema drift", () => {
       maxTurnsForTesting: 5,
       shutdownSignal: ac.signal,
     });
+    return r;
+  }
+
+  test("pin newer than the daemon → recoverable paused{engine_incompatible}, too-new arm", async () => {
+    const r = await driveVersionMismatch("run5", 999);
     const state = r.store.getState("run5")!;
-    expect(state.status).toBe("halted");
-    const halt = r.store.getEvents("run5").find((e) => e.type === "fact.run_halted")!;
-    expect((halt.payload as { reason: string }).reason).toBe("schema_drift");
+    // Recoverable, NOT terminal — the run can resume once a capable daemon runs.
+    expect(state.status).toBe("paused");
+    expect(r.store.getEvents("run5").some((e) => e.type === "fact.run_halted")).toBe(false);
+    const pause = r.store.getEvents("run5").find((e) => e.type === "fact.run_paused")!;
+    const p = pause.payload as { reason: string; pinnedVersion: number; supportedMax: number };
+    expect(p.reason).toBe("engine_incompatible");
+    // Too-new arm is inferable from the payload — no second reason needed.
+    expect(p.pinnedVersion).toBeGreaterThan(p.supportedMax);
+    r.store.close();
+  });
+
+  test("pin below the daemon floor → recoverable paused{engine_incompatible}, too-old arm", async () => {
+    const r = await driveVersionMismatch("run6", 0);
+    const state = r.store.getState("run6")!;
+    expect(state.status).toBe("paused");
+    const pause = r.store.getEvents("run6").find((e) => e.type === "fact.run_paused")!;
+    const p = pause.payload as { reason: string; pinnedVersion: number; supportedMin: number };
+    expect(p.reason).toBe("engine_incompatible");
+    expect(p.pinnedVersion).toBeLessThan(p.supportedMin);
     r.store.close();
   });
 });

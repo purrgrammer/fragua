@@ -55,7 +55,6 @@ export const OutcomeSchema = Type.Object(
     halt_reason: Type.Optional(
       Type.Union([
         Type.Literal("budget"),
-        Type.Literal("schema_drift"),
         Type.Literal("error"),
         Type.Literal("aborted_exit"),
         Type.Literal("occ_exhausted"),

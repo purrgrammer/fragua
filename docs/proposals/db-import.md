@@ -134,18 +134,20 @@ never travel; inspection needs no credential).
 ## 5. Cross-version resume — the gate that bites
 
 Every run pins `run_state.schema_version` at enqueue; the executor refuses an
-out-of-range pin with a **terminal** `fact.run_halted { reason: "schema_drift" }`.
-At the 0.1.0 baseline `MIN_COMPATIBLE = CURRENT = 1`, so nothing is rejected and
-the gate is **latent** — it goes live only once a post-0.1.0 store bumps the
-counter. The danger for import: a run from a *newer* producer carries a pin
-above the target's `CURRENT` → permanent halt on resume.
+out-of-range pin with a **recoverable** `fact.run_paused{reason:"engine_incompatible",
+pinnedVersion, supportedMin, supportedMax}` — status `paused`, the payload window
+distinguishing too-new from too-old ([`event-contract-version.md`](event-contract-version.md)
+§3.2, shipped). At the 0.1.0 baseline `MIN_COMPATIBLE = CURRENT = 1`, so nothing
+is rejected and the gate is **latent** — it goes live only once a post-0.1.0
+store bumps the counter. The danger for import: a run from a *newer* producer
+carries a pin above the target's `CURRENT` → it parks (too-new) on resume (no
+longer a permanent death; it heals when the local binary catches up).
 
-[`event-contract-version.md`](event-contract-version.md) is the fix and a hard
-dependency for cross-version import: (1) gate resume on an **event-contract
-version** that bumps only when fact/intent payloads or reducer semantics change
-(rare) — decoupled from the DB migration counter, so the window almost never
-rejects; (2) make the drift trip a **recoverable park**, not a terminal halt, so
-a too-new import resumes once the local binary catches up instead of dying. The
+[`event-contract-version.md`](event-contract-version.md) §3.1 closes the rest and
+is a hard dependency for *routine* cross-version import: gate resume on an
+**event-contract version** that bumps only when fact/intent payloads or reducer
+semantics change (rare) — decoupled from the DB migration counter, so the window
+almost never rejects. The recoverable-park half (§3.2) is already in place. The
 manifest carries `fragua_version`, `schema_version`, the event-contract version,
 and `ir_version` so import validates compatibility up front (clear error / park,
 never a silent later halt).

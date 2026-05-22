@@ -169,6 +169,15 @@ export type RunStatus =
  *   off-ledger and resumes.
  * - `budget` — local cap (`graph.budget_*` / `node.max_*`) hit; operator
  *   raises the cap via `intent.budget_adjusted` and resumes.
+ * - `engine_incompatible` — the run's pinned version falls outside this
+ *   daemon's `[supportedMin, supportedMax]` fold window. `pinnedVersion >
+ *   supportedMax` is "too new" (a downgraded binary / newer-producer import,
+ *   heals when a capable daemon runs); `pinnedVersion < supportedMin` is
+ *   "too old" (floor ratcheted past it, needs an operator rebuild). Both
+ *   project to `paused`; the arm is inferred from the payload. (Splitting
+ *   this into a `paused_auto` auto-wake for the too-new arm is deferred to
+ *   `docs/proposals/event-contract-version.md` §3.1, where it rides the
+ *   contract-version bump.)
  *
  * **→ `paused_auto` (daemon owes a clock tick)**
  * - `provider_retry` — auto-retryable provider transport error
@@ -192,6 +201,7 @@ export type PauseReason =
   | "max_loops"
   | "abort_loop"
   | "provider_exhausted"
+  | "engine_incompatible"
   | "provider_retry"
   | "handler_retry"
   | "timeout_retry";
@@ -213,13 +223,14 @@ export type EventWriter = "daemon" | "web";
  * the previously-recoverable-class halts (`max_loops`, `abort_loop`,
  * `goal_gate_unsatisfied`, `max_retries_exceeded`, `provider_exhausted`)
  * have moved to {@link PauseReason} so operators can grant N more
- * attempts. What remains here is genuinely terminal: schema/engine
- * failures, the workflow author's `<abort>` sentinel, the opt-in
- * `budget_policy="stop"` path, and the watchdog-cap exhaustion that
- * paused-class `timeout_retry` escalates to. */
+ * attempts. Version/engine mismatch is likewise not here — it is the
+ * recoverable `engine_incompatible` pause, not a terminal halt
+ * (`docs/proposals/event-contract-version.md` §3.2). What remains
+ * here is genuinely terminal: the workflow author's `<abort>` sentinel,
+ * the opt-in `budget_policy="stop"` path, OCC exhaustion, and the
+ * watchdog-cap exhaustion that paused-class `timeout_retry` escalates to. */
 export type HaltReason =
   | "budget"
-  | "schema_drift"
   | "error"
   | "aborted_exit"
   | "occ_exhausted"
@@ -673,6 +684,19 @@ export type FactEvent =
             nodeId: string;
             attempts: number;
             cumulativeMs: number;
+          }
+        | {
+            /** Run pinned outside this daemon's `[supportedMin, supportedMax]`
+             * fold window. Recoverable: too-new (`pinnedVersion > supportedMax`)
+             * heals once a capable daemon runs; too-old (`pinnedVersion <
+             * supportedMin`) needs an operator rebuild-from-source or cancel.
+             * The arm is inferred from the payload — one reason, no status
+             * divergence (both → `paused`). Tripped at the executor's entry
+             * gate, before any node — no `nodeId`. */
+            reason: "engine_incompatible";
+            pinnedVersion: number;
+            supportedMin: number;
+            supportedMax: number;
           };
     }
   | {
