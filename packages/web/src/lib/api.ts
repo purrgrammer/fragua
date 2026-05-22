@@ -167,6 +167,10 @@ export interface RunDetail {
   /** Sparse route-name → button-text map from each outgoing edge's `label=`
    *  override (D6). Routes absent here fall back to `humanizeRouteName`. */
   hitlOptionLabels?: Record<string, string>;
+  /** Per-node record of the route (and optional note) the operator chose at
+   *  each answered human gate, derived from `intent.human_input`. Survives
+   *  resume so a running/terminal run still shows past decisions. */
+  hitlDecisions?: Record<string, { route: string; note?: string }>;
   /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
    * The wire key for `?project_id=` and `/projects/:id`. Optional only to
    * tolerate older/ephemeral payloads — present on every daemon run. */

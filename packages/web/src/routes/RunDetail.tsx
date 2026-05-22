@@ -254,6 +254,7 @@ export function RunDetail(): JSX.Element {
                       }
                     : null
                 }
+                hitlDecisions={detail?.hitlDecisions ?? null}
               />
             </TabsContent>
             <TabsContent value="graph" className="h-full">

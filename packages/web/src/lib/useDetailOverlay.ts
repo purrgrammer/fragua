@@ -51,6 +51,11 @@ export interface DetailOverlay {
    *  `routeLabels` arrives; routes absent from the map fall back to
    *  `humanizeRouteName`. */
   hitlOptionLabels: Record<string, string> | null;
+  /** Per-node route (+ optional note) the operator chose at each answered
+   *  human gate, accumulated from `intent.human_input` paired with the
+   *  open gate's `hitlNodeId`. Null until the first decision lands; never
+   *  cleared on resume so the decision banner persists. */
+  hitlDecisions: Record<string, { route: string; note?: string }> | null;
   /** Seq of the first run-terminal fact (halted/cancelled/quarantined).
    * Used to downgrade still-"running" nodes to "failed" on merge,
    * matching the server's terminal-halt patch. */
@@ -66,6 +71,7 @@ export const EMPTY_DETAIL_OVERLAY: DetailOverlay = {
   hitlLabel: null,
   hitlOptions: null,
   hitlOptionLabels: null,
+  hitlDecisions: null,
   haltSeq: undefined,
 };
 
@@ -90,6 +96,7 @@ const DETAIL_TYPES = new Set<string>([
   "fact.run_paused_human",
   "fact.run_paused",
   "fact.run_resumed",
+  "intent.human_input",
 ]);
 
 /** Add a single event onto an existing overlay. Pure — returns a new
@@ -166,6 +173,19 @@ export function foldDetailFrame(
         hitlOptionLabels: routeLabels,
       };
     }
+    case "intent.human_input": {
+      // The operator's answer to the currently-open gate. The intent
+      // carries `{ route, note? }` but not the node id — the gate it
+      // answers is whichever `fact.run_paused_human` is open, i.e.
+      // `prev.hitlNodeId`. Record it per-node; never cleared on resume so
+      // the decision banner outlives the gate.
+      const route = stringField(payload, "route");
+      const gateNode = prev.hitlNodeId;
+      if (route == null || gateNode == null) return prev;
+      const note = stringField(payload, "note");
+      const decision = note != null ? { route, note } : { route };
+      return { ...prev, hitlDecisions: { ...(prev.hitlDecisions ?? {}), [gateNode]: decision } };
+    }
     case "fact.run_paused": {
       // Reason carries on the payload; the reducer projects status to
       // `paused_auto` for AUTO_WAKE_PAUSE_REASONS (provider_retry /
@@ -239,6 +259,7 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     overlay.hitlLabel === null &&
     overlay.hitlOptions === null &&
     overlay.hitlOptionLabels === null &&
+    overlay.hitlDecisions === null &&
     overlay.haltSeq === undefined
   ) {
     return snapshot;
@@ -302,5 +323,10 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     hitlLabel: overlay.hitlLabel !== null ? overlay.hitlLabel : snapshot.hitlLabel,
     hitlOptions: overlay.hitlOptions !== null ? overlay.hitlOptions : snapshot.hitlOptions,
     hitlOptionLabels: overlay.hitlOptionLabels !== null ? overlay.hitlOptionLabels : snapshot.hitlOptionLabels,
+    // Live decisions layer over the snapshot's history, latest per node.
+    hitlDecisions:
+      overlay.hitlDecisions !== null
+        ? { ...(snapshot.hitlDecisions ?? {}), ...overlay.hitlDecisions }
+        : snapshot.hitlDecisions,
   };
 }

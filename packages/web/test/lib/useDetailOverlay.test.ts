@@ -204,6 +204,21 @@ describe("foldDetailFrame", () => {
       expect(s.hitlOptionLabels).toBeNull();
     });
 
+    test("intent.human_input records the decision against the open gate and survives resume", () => {
+      let s = fold(EMPTY_DETAIL_OVERLAY, "fact.run_paused_human", { nodeId: "review", text: "Approve?", routes }, 12);
+      s = fold(s, "intent.human_input", { route: "approve", note: "ship it" }, 13);
+      expect(s.hitlDecisions).toEqual({ review: { route: "approve", note: "ship it" } });
+      // The gate closes on resume, but the recorded decision persists.
+      s = fold(s, "fact.run_resumed", { fromStatus: "paused_human" }, 14);
+      expect(s.hitlNodeId).toBeNull();
+      expect(s.hitlDecisions).toEqual({ review: { route: "approve", note: "ship it" } });
+    });
+
+    test("intent.human_input with no open gate is ignored", () => {
+      const out = fold(EMPTY_DETAIL_OVERLAY, "intent.human_input", { route: "stray" }, 9);
+      expect(out.hitlDecisions).toBeNull();
+    });
+
     test("malformed paused_human (missing routes array) → hitlOptions stays null", () => {
       const out = fold(
         EMPTY_DETAIL_OVERLAY,
@@ -408,6 +423,22 @@ describe("mergeDetail", () => {
       const merged = mergeDetail(snap, overlay);
       expect(merged.status).toBe("running");
       expect(merged.runStatus).toBe("running");
+    });
+
+    test("live decisions layer over the snapshot's decision history, latest per node", () => {
+      // Snapshot already carries a decision for gateA (from the REST
+      // projection); a live answer for gateB arrives on the overlay. Both
+      // survive the merge; a re-answer of gateA would override per key.
+      const snap = snapshot({ status: "running", hitlDecisions: { gateA: { route: "yes" } } });
+      let overlay = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_human",
+        { nodeId: "gateB", text: "?", routes: opts },
+        30,
+      );
+      overlay = fold(overlay, "intent.human_input", { route: "no", note: "later" }, 31);
+      const merged = mergeDetail(snap, overlay);
+      expect(merged.hitlDecisions).toEqual({ gateA: { route: "yes" }, gateB: { route: "no", note: "later" } });
     });
   });
 });

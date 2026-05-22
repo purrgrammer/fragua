@@ -211,7 +211,34 @@ export function runStateToDetail(
     }
   }
 
+  // HITL decision history: pair each `intent.human_input` with the gate
+  // it answered (the most recent preceding `fact.run_paused_human`). Built
+  // for every run, not just paused ones, so a resumed/terminal run still
+  // shows what the operator chose. Latest write per node wins, so a loop
+  // that revisits the same human gate keeps only its final answer.
+  const decisions = collectHitlDecisions(events);
+  if (decisions !== undefined) detail.hitlDecisions = decisions;
+
   return detail;
+}
+
+function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: string; note?: string }> | undefined {
+  let gateNode: string | null = null;
+  let decisions: Record<string, { route: string; note?: string }> | undefined;
+  for (const ev of events) {
+    if (ev.type === "fact.run_paused_human") {
+      const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
+      gateNode = typeof nodeId === "string" ? nodeId : null;
+    } else if (ev.type === "intent.human_input" && gateNode != null) {
+      const p = ev.payload as { route?: unknown; note?: unknown };
+      if (typeof p.route === "string") {
+        decisions ??= {};
+        decisions[gateNode] = typeof p.note === "string" ? { route: p.route, note: p.note } : { route: p.route };
+      }
+      gateNode = null;
+    }
+  }
+  return decisions;
 }
 
 /**

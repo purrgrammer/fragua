@@ -44,6 +44,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
+import { HitlDecisionBanner } from "@/components/run-conversation/HitlDecisionBanner";
 import { HitlStepCard } from "@/components/run-conversation/HitlStepCard";
 import { RouteToolResult } from "@/components/run-conversation/RouteToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
@@ -93,6 +94,13 @@ export interface RunConversationProps {
      * Routes absent here fall back to `humanizeRouteName`. */
     optionLabels?: Record<string, string>;
   } | null;
+  /** Per-node record of the route (+ optional note) the operator chose at
+   * each answered human gate. Rendered as a "Responded" banner in the
+   * owning node section. Derived from the event log, so it persists across
+   * reload and is visible to any observer — not just the operator who
+   * answered. The currently-open gate (`hitl.nodeId`) is suppressed: its
+   * card takes precedence until the answer lands. */
+  hitlDecisions?: Record<string, { route: string; note?: string }> | null;
   className?: string;
 }
 
@@ -106,6 +114,7 @@ export function RunConversation({
   userInput,
   toolStreams,
   hitl = null,
+  hitlDecisions = null,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -166,13 +175,16 @@ export function RunConversation({
     return out;
   }, [toolStreams, persistedToolNodeIds]);
 
+  const decisionNodeIds = useMemo(() => (hitlDecisions ? Object.keys(hitlDecisions) : []), [hitlDecisions]);
+
   const empty =
     !isLoading &&
     !userInput &&
     visibleSections.length === 0 &&
     streaming == null &&
     liveToolNodes.length === 0 &&
-    hitl == null;
+    hitl == null &&
+    decisionNodeIds.length === 0;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
@@ -193,6 +205,9 @@ export function RunConversation({
               const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
               const showStreamHere = appendStreamingToTail && isTail;
               const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
+              // The open gate's card takes precedence over its own past
+              // decision (loop re-entry); suppress the banner there.
+              const decision = !showHitlHere && section.nodeId != null ? hitlDecisions?.[section.nodeId] : undefined;
               return (
                 <NodeSection
                   key={section.key}
@@ -213,6 +228,7 @@ export function RunConversation({
                       optionLabels={hitl.optionLabels}
                     />
                   )}
+                  {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
                 </NodeSection>
               );
             })}
@@ -252,6 +268,27 @@ export function RunConversation({
                 <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
               </NodeSection>
             ))}
+            {/* Decided human gates that produced no message rows (the
+                common case — human nodes emit none) get a synthesised
+                tail section. The open gate is excluded: it shows its card
+                via the orphan block above, not a banner. */}
+            {decisionNodeIds
+              .filter((nodeId) => nodeId !== hitl?.nodeId && !visibleSections.some((s) => s.nodeId === nodeId))
+              .map((nodeId) => {
+                const decision = hitlDecisions?.[nodeId];
+                if (!decision) return null;
+                return (
+                  <NodeSection
+                    key={`decision-${nodeId}`}
+                    nodeId={nodeId}
+                    state={stateByNodeId.get(nodeId)}
+                    isLive={isLive}
+                    isPaused={isPaused}
+                  >
+                    <HitlDecisionBanner route={decision.route} note={decision.note} />
+                  </NodeSection>
+                );
+              })}
           </ConversationContent>
         )}
         <ConversationScrollButton />

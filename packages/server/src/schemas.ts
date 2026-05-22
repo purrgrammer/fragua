@@ -141,6 +141,12 @@ export const RunDetail = Type.Object({
   /** Sparse route-name → button-text map from each outgoing edge's `label=`
    *  override (D6). Routes absent here fall back to `humanizeRouteName`. */
   hitlOptionLabels: Type.Optional(Type.Record(Type.String(), Type.String())),
+  /** Per-node record of the route (and optional note) the operator chose at
+   *  each answered human gate, derived from `intent.human_input`. Survives
+   *  resume so a running/terminal run still shows past decisions. */
+  hitlDecisions: Type.Optional(
+    Type.Record(Type.String(), Type.Object({ route: Type.String(), note: Type.Optional(Type.String()) })),
+  ),
   /** Per-machine LOCATION — the resolved project root. Mirrors
    * `run_state.cwd`. Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),

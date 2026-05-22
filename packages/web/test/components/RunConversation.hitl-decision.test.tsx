@@ -1,0 +1,133 @@
+// RunConversation — HITL decision banner rendering.
+//
+// After a human gate closes, RunConversation surfaces the operator's
+// recorded answer (route + optional note) as a "Responded" banner in the
+// owning node section. The decisions come from `hitlDecisions` (a per-node
+// map derived from the event log), so they render on reload and for any
+// observer — not just the operator who clicked.
+
+import { afterEach, describe, expect, it } from "bun:test";
+import { cleanup, within } from "@testing-library/react";
+import { RunConversation } from "../../src/components/RunConversation.tsx";
+import type { NodeState, RunMessageRow } from "../../src/lib/api.ts";
+import { renderWithClient } from "../helpers/with-query-client.tsx";
+import { useDom } from "../setup.ts";
+
+function userRow(ordinal: number, nodeId: string, text: string): RunMessageRow {
+  return {
+    ordinal,
+    nodeId,
+    content: { role: "user", content: text, timestamp: 0 },
+  };
+}
+
+describe("RunConversation — HITL decision banner", () => {
+  useDom();
+  afterEach(() => cleanup());
+
+  it("renders the decision banner inside the matching node section", () => {
+    const messages: RunMessageRow[] = [userRow(1, "review", "Please review the diff.")];
+    const nodeStates: NodeState[] = [{ nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 2 }];
+
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={messages}
+        nodeStates={nodeStates}
+        hitl={null}
+        hitlDecisions={{ review: { route: "approve" } }}
+      />,
+    );
+
+    const section = within(container).getByTestId("node-section-review");
+    const banner = within(section).getByTestId("hitl-decision-banner");
+    expect(within(banner).getByTestId("hitl-decision-route").textContent).toBe("Approve");
+  });
+
+  it("renders the note when present and humanizes the route name", () => {
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={[]}
+        hitl={null}
+        hitlDecisions={{ gate: { route: "needs_more_info", note: "Looks good to me" } }}
+      />,
+    );
+
+    const banner = within(container).getByTestId("hitl-decision-banner");
+    expect(within(banner).getByTestId("hitl-decision-route").textContent).toBe("Needs More Info");
+    expect(within(banner).getByTestId("hitl-decision-note").textContent).toBe("Looks good to me");
+  });
+
+  it("omits the note element when the decision has no note", () => {
+    const { container } = renderWithClient(
+      <RunConversation messages={[]} hitl={null} hitlDecisions={{ gate: { route: "continue" } }} />,
+    );
+
+    const banner = within(container).getByTestId("hitl-decision-banner");
+    expect(within(banner).queryByTestId("hitl-decision-note")).toBeNull();
+  });
+
+  it("synthesises an orphan section when the decided node produced no messages", () => {
+    const nodeStates: NodeState[] = [{ nodeId: "approve_step", iteration: 0, state: "completed", lastEventSeq: 3 }];
+
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={[]}
+        nodeStates={nodeStates}
+        hitl={null}
+        hitlDecisions={{ approve_step: { route: "approved" } }}
+      />,
+    );
+
+    const section = within(container).getByTestId("node-section-approve_step");
+    expect(within(section).getByTestId("hitl-decision-banner")).toBeTruthy();
+  });
+
+  it("does not render any banner when hitlDecisions is null", () => {
+    const { container } = renderWithClient(
+      <RunConversation messages={[userRow(1, "review", "Check this.")]} hitl={null} hitlDecisions={null} />,
+    );
+
+    expect(container.querySelector('[data-testid="hitl-decision-banner"]')).toBeNull();
+  });
+
+  it("suppresses the banner for the currently-open gate (card takes precedence)", () => {
+    // Loop re-entry: a stale decision exists for `review`, but the gate is
+    // open again at the same node. The card shows; the banner does not.
+    const messages: RunMessageRow[] = [userRow(1, "review", "Check again?")];
+
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={messages}
+        isPaused
+        hitl={{ runId: "run-1", nodeId: "review", label: "Approve?", options: ["approve", "reject"] }}
+        hitlDecisions={{ review: { route: "reject" } }}
+      />,
+    );
+
+    const section = within(container).getByTestId("node-section-review");
+    expect(within(section).getByTestId("hitl-step-card")).toBeTruthy();
+    expect(within(section).queryByTestId("hitl-decision-banner")).toBeNull();
+  });
+
+  it("places each decision banner in its own node section", () => {
+    const messages: RunMessageRow[] = [userRow(1, "fetch", "Fetching."), userRow(2, "review", "Here is the data.")];
+    const nodeStates: NodeState[] = [
+      { nodeId: "fetch", iteration: 0, state: "completed", lastEventSeq: 1 },
+      { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 3 },
+    ];
+
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={messages}
+        nodeStates={nodeStates}
+        hitl={null}
+        hitlDecisions={{ review: { route: "approve" } }}
+      />,
+    );
+
+    const fetchSection = within(container).getByTestId("node-section-fetch");
+    const reviewSection = within(container).getByTestId("node-section-review");
+    expect(within(reviewSection).getByTestId("hitl-decision-banner")).toBeTruthy();
+    expect(within(fetchSection).queryByTestId("hitl-decision-banner")).toBeNull();
+  });
+});

@@ -442,6 +442,56 @@ describe("runStateToDetail — HITL projection", () => {
     expect(detail.hitlLabel).toBeUndefined();
     expect(detail.hitlOptions).toBeUndefined();
   });
+
+  test("derives hitlDecisions by pairing intent.human_input with the open gate (incl. note)", () => {
+    const state = makeState({ status: "completed" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "Approve?", routes: ["approve", "revise"] }),
+      evWithSeq(2, "intent.human_input", { route: "approve", note: "ship it" }),
+      evWithSeq(3, "fact.run_resumed", { fromStatus: "paused_human" }),
+      evWithSeq(4, "fact.run_completed", {}),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlDecisions).toEqual({ review: { route: "approve", note: "ship it" } });
+  });
+
+  test("records each answered gate and omits an absent note", () => {
+    const state = makeState({ status: "running" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_paused_human", { nodeId: "gateA", text: "?", routes: ["yes", "no"] }),
+      evWithSeq(2, "intent.human_input", { route: "yes" }),
+      evWithSeq(3, "fact.run_resumed", { fromStatus: "paused_human" }),
+      evWithSeq(4, "fact.run_paused_human", { nodeId: "gateB", text: "?", routes: ["a", "b"] }),
+      evWithSeq(5, "intent.human_input", { route: "b", note: "because" }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlDecisions).toEqual({ gateA: { route: "yes" }, gateB: { route: "b", note: "because" } });
+  });
+
+  test("loop revisiting the same gate keeps the latest answer", () => {
+    const state = makeState({ status: "completed" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "?", routes: ["approve", "revise"] }),
+      evWithSeq(2, "intent.human_input", { route: "revise", note: "first pass" }),
+      evWithSeq(3, "fact.run_resumed", { fromStatus: "paused_human" }),
+      evWithSeq(4, "fact.run_paused_human", { nodeId: "review", text: "?", routes: ["approve", "revise"] }),
+      evWithSeq(5, "intent.human_input", { route: "approve" }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlDecisions).toEqual({ review: { route: "approve" } });
+  });
+
+  test("leaves hitlDecisions undefined when no human gate was answered", () => {
+    const state = makeState({ status: "completed" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "a" }),
+      // A human_input with no preceding open gate is ignored (defensive).
+      evWithSeq(2, "intent.human_input", { route: "stray" }),
+      evWithSeq(3, "fact.run_completed", {}),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlDecisions).toBeUndefined();
+  });
 });
 
 describe("runStateToDetail \u2014 lastEventSeq", () => {
