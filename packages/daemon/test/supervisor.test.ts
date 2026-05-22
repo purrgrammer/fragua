@@ -199,6 +199,100 @@ describe("supervisor — intent-aware abort policy", () => {
     }
   });
 
+  // Regression: a resume that woke a paused run is left UNAPPLIED by the
+  // wake-pending sweeper (so the next dispatch's fold can still process
+  // earlier hitched-along intents). It must NOT trip the resumed handler —
+  // that produced the production bug where every clean resume aborted the
+  // in-flight call (cause:"aborted", tokens=0) and respawned the node
+  // `resumeOf:"fresh"`. The run had no active handler when the resume was
+  // issued, so it can never be a mid-handler control.
+  test("wake-driver intent (resume) does not trip the controller", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r-resume", "sha");
+    const ctrl = new AbortController();
+    registry.register("r-resume", ctrl);
+    store.appendIntent("r-resume", { type: "intent.resume", payload: {} });
+
+    const onSteerCalls: Array<{ runId: string; text: string }> = [];
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      onSteer: (runId, text) => onSteerCalls.push({ runId, text }),
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(ctrl.signal.aborted).toBe(false);
+      expect(onSteerCalls).toEqual([]);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  // Same class as resume: wakeHuman leaves intent.human_input unapplied for
+  // the fold to consume as decision.humanInput. It must not trip either.
+  test("wake-driver intent (human_input) does not trip the controller", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r-human", "sha");
+    const ctrl = new AbortController();
+    registry.register("r-human", ctrl);
+    store.appendIntent("r-human", { type: "intent.human_input", payload: { route: "go" } });
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(ctrl.signal.aborted).toBe(false);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  // A resume that arrives in the SAME batch as a genuine mid-flight control
+  // (cancel) must still trip — the cancel is real and the run is going down.
+  // Guards against the filter swallowing a co-arriving abort.
+  test("resume + cancel batch still trips on the cancel", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r-mix", "sha");
+    const ctrl = new AbortController();
+    registry.register("r-mix", ctrl);
+    store.appendIntent("r-mix", { type: "intent.resume", payload: {} });
+    store.appendIntent("r-mix", { type: "intent.cancel_requested", payload: {} });
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(ctrl.signal.aborted).toBe(true);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
   // Mixed batch: a steer at seq N alongside a cancel at seq N+1 within the
   // same supervisor tick. The cancel wins (trips), and we don't bother
   // forwarding the steer — pi-agent-core would abort before draining the

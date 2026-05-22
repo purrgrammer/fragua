@@ -43,6 +43,16 @@ const DEFAULT_HEARTBEAT_MS = 5_000;
 // Matches the executor's grace.
 const DEFAULT_LEAK_GRACE_MS = 30_000;
 
+// Intent types the supervisor must never trip an in-flight handler on:
+// the synthetic queue marker plus the wake drivers that resume a paused /
+// quarantined run (see the filter in the tick loop for the full rationale).
+const NON_TRIPPING_INTENTS: ReadonlySet<string> = new Set([
+  "intent.run_enqueued",
+  "intent.resume",
+  "intent.human_input",
+  "intent.unquarantine",
+]);
+
 export function startSupervisor(opts: SupervisorOpts): {
   promise: Promise<void>;
 } {
@@ -79,14 +89,23 @@ export function startSupervisor(opts: SupervisorOpts): {
         const newest = unapplied[unapplied.length - 1]!.seq;
         if (newest <= prev) continue;
         const fresh = unapplied.filter((e) => e.seq > prev);
-        // `intent.run_enqueued` is the synthetic queue marker that
-        // caused the run to exist — never an operator action. Filter
-        // it out so the supervisor doesn't mistake it for a mid-flight
-        // cancel/pause/etc. when lastAppliedSeq hasn't advanced past
-        // it yet (e.g., a run whose first dispatched node is a
-        // long-running llm, with no fast noop start node to advance
-        // applied seq before the 50ms tick).
-        const operatorIntents = fresh.filter((e) => e.type !== "intent.run_enqueued");
+        // Drop intents that are never a mid-flight control. Two classes:
+        //
+        //  - `intent.run_enqueued` — the synthetic queue marker that caused
+        //    the run to exist, not an operator action.
+        //  - wake-driver intents (`intent.resume`, `intent.human_input`,
+        //    `intent.unquarantine`) — these bring a run OUT of a paused /
+        //    quarantined state, so the run had no active handler when they
+        //    were issued; they can't be a mid-handler abort. The wake-pending
+        //    sweeper (wake-pending.ts) deliberately leaves resume/human_input
+        //    UNAPPLIED so the next dispatch's fold can still process earlier
+        //    hitched-along intents (e.g. a budget_adjusted before a resume).
+        //    That leaves the wake-driver visible to getUnappliedIntents while
+        //    the resumed handler runs — without this filter the supervisor
+        //    trips the controller on it, killing the in-flight call (cause:
+        //    "aborted", tokens=0) and forcing a spurious `resumeOf:"fresh"`
+        //    respawn on every clean resume.
+        const operatorIntents = fresh.filter((e) => !NON_TRIPPING_INTENTS.has(e.type));
         const hasNonSteer = operatorIntents.some((e) => e.type !== "intent.steering_requested");
         lastIntentSeq.set(runId, newest);
         if (operatorIntents.length === 0) continue;
