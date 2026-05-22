@@ -120,7 +120,7 @@ never travel; inspection needs no credential).
 | Table | Class | On import |
 |---|---|---|
 | `workflows` | CONTENT-ADDRESSED | co-travels (FK target of `workflow_sha`); dedup by sha |
-| `run_state` | MIXED | metrics / routing / title / status portable; `cwd` rebound to local worktree; `inbox_status` → `pending` (you haven't acted locally); `accepted_sha` cleared (a local branch tip); `branch` / `base_git_ref` advisory; `schedule_id` dangles harmlessly (already non-FK); `workflow_scope` / `workflow_path` advisory (sha is the link); git-state SHAs portable but inert without the git objects (§3); `schema_version` is the resume gate (§5) |
+| `run_state` | MIXED | `project_id` + `project_name` are the portable IDENTITY/label — both `NOT NULL`, so the bundle **must** carry them (verbatim); same id ⇒ same project on any machine, and the name labels an imported-only project without a local checkout (`project-id.md`); metrics / routing / title / status portable; `cwd` rebound to local worktree; `inbox_status` → `pending` (you haven't acted locally); `accepted_sha` cleared (a local branch tip); `branch` / `base_git_ref` advisory; `schedule_id` dangles harmlessly (already non-FK); `workflow_scope` / `workflow_path` advisory (sha is the link); git-state SHAs portable but inert without the git objects (§3); `schema_version` is the resume gate (§5) |
 | `events` | PORTABLE | verbatim; per-run PK; merge by `(run_id, seq)`; some payloads reference blob shas → co-travel |
 | `messages` | PORTABLE | verbatim; large content spills to blobs → co-travel |
 | `blobs` | METADATA + bytes-on-disk | **bytes live under `blobsDir`, not in SQLite** — the bundle must carry the files; content-addressed → dedups |
@@ -182,10 +182,13 @@ machine-local field is nullable or excludable. The only pre-freeze items are
    git objects in the run's repo (`refs/fragua/snapshots/<runId>`); the store
    keeps only SHAs; we deliberately do **not** add a `snapshots` table — bundles
    carry the git objects as a blob.
-2. **Decide whether `project_id`** (and the workflow `ir` / `ir_version` columns)
-   land in the 0.1.0 `run_state` / `workflows` baseline or arrive as the first
-   post-0.1.0 migration — the one genuine freeze-window column question (see
-   [`project-id.md`](project-id.md), [`workflow-ir.md`](workflow-ir.md)).
+2. **`project_id` — DECIDED: lands in the 0.1.0 baseline, `NOT NULL`.**
+   [`project-id.md`](project-id.md) is settled: `run_state.project_id` and
+   `schedules.project_id` go into the baseline now (require-init guarantees a
+   value, so `NOT NULL`), making identity portable across import by construction —
+   the incoming `cwd` is advisory and rebound (§4). The **workflows `ir` /
+   `ir_version`** half of this freeze-window question remains the only open column
+   decision, pending [`workflow-ir.md`](workflow-ir.md).
 3. **Verify** (done — none found) that no `NOT NULL` local-binding column blocks
    importing a stripped run.
 

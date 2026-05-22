@@ -25,10 +25,14 @@ parent: cli-topology.md
 > **portability-complete without them** (tree state travels as git objects in a
 > bundle blob, not a column; identity is collision-safe; machine-local fields are
 > nullable). So these legs are *feature* scope, not a portability blocker: the
-> only freeze-window decision is whether their columns (`run_state.project_id`,
-> `workflows.ir` / `ir_version`) land in the baseline now (additive, inert) or as
-> the first post-0.1.0 migration. Land them in-place pre-freeze and the legs are
-> pure code; defer and each leg re-opens the migration chain.
+> only freeze-window decision is whether their columns land in the baseline now
+> (additive) or as the first post-0.1.0 migration. **`project-id` is now settled
+> ([`project-id.md`](project-id.md), `status: accepted`): its columns
+> (`run_state.project_id`, `schedules.project_id`, `NOT NULL`) land in the 0.1.0
+> baseline in-place — the leg is pure code, no migration chain.** The
+> `workflows.ir` / `ir_version` half awaits [`workflow-ir.md`](workflow-ir.md)
+> (next session). Land in-place pre-freeze and a leg is pure code; defer and it
+> re-opens the migration chain.
 
 ## 1. Nuke the `agent` tool and all sub-agent machinery
 

@@ -1,17 +1,18 @@
 ---
 title: Project identity off cwd — a stable, committed `id` as the project key
-summary: "Move project IDENTITY from the per-machine filesystem path (`run_state.cwd`) onto a stable `id` carried in the version-controlled `.fragua/config.yaml`. cwd survives only as a per-machine LOCATION binding (where worktrees/config/files physically live). Identity becomes portable: a run imported from another machine attributes to the same project even when its cwd differs or is absent."
-status: proposed
-maturity: sketch
+summary: "Move project IDENTITY from the per-machine filesystem path (`run_state.cwd`) onto a stable `id` carried in the version-controlled `.fragua/config.yaml`. cwd survives only as a per-machine LOCATION binding (where worktrees/config/files physically live). Identity becomes portable: a run imported from another machine attributes to the same project even when its cwd differs or is absent. Decided: `project_id` lands in the 0.1.0 baseline; resolution walks up to the nearest config; schedules resolve their spawn cwd at fire time."
+status: accepted
+maturity: decided
 last-reviewed: 2026-05-22
 ---
 
 # Project identity off cwd
 
-> **Sketch.** This is a surface map plus a target shape, not a scheduled
-> workstream. The owner is hand-waving the new leg; the value here is the
-> exhaustive identity-vs-location classification in §2, so the eventual
-> implementer knows exactly which call sites move and which stay.
+> **Decided.** Every open question in §5 is resolved; this is the settled
+> shape for the pre-0.1.0 cleanup, ready to implement. The value of the doc
+> is two-fold: the exhaustive identity-vs-location classification in §2 (so
+> the implementer knows exactly which call sites move and which stay), and
+> the decision record in §5 (so each frozen choice carries its rationale).
 
 ## 1. Goal / why
 
@@ -166,7 +167,7 @@ project with no local cwd (§3, §5 #5).
 
 | Site | file:line | Class | Becomes |
 |---|---|---|---|
-| `run.ts` enqueue `cwd: resolve(cwd)` (`= process.cwd()`) | `run.ts:118,192` | **both** | Resolve `project_id` from `<cwd>/.fragua/config.yaml` at enqueue; send both `project_id` + cwd. |
+| `run.ts` enqueue `cwd: resolve(cwd)` (`= process.cwd()`) | `run.ts:118,192` | **both** | Walk up from `process.cwd()` to the nearest config (git-root ceiling, §3); **refuse if no `id`** (§5 #3); send `project_id` + `project_name` + `cwd` = the *resolved project root* (§5 #11), not the invocation dir. |
 | `init.ts` mints `id` | `init.ts:43-44,66-77` | IDENTITY (source of truth) | Mints a UUIDv7 `id` + dir-name `name` (§5 #1, resolved). |
 | Config cascade `<cwd>/.fragua/config.yaml` | `config.ts:5,245-297` | LOCATION (file) / IDENTITY (`id` field) | The file is per-machine; the `id` field inside it is the identity source. `id` is in `FraguaConfigSchema` (`config.ts:88-92`); `init.ts:43` mints a UUIDv7 into it, matching the schema comment (§5 #1). |
 | `validate.ts`, `daemon.ts` store path, `schedule.ts` — `process.cwd()` for path resolution | `validate.ts:12`, `daemon.ts:56-127`, `schedule.ts:52` | LOCATION | Filesystem resolution → cwd. |
@@ -185,17 +186,52 @@ project with no local cwd (§3, §5 #5).
 
 - **Source of truth.** `<repo>/.fragua/config.yaml` `id`. Committed → shared by
   every clone.
-- **Resolution at enqueue.** `fragua run` (or the daemon, when dispatching a
-  schedule) reads `<cwd>/.fragua/config.yaml` → `id`. If present, that's the
-  run's `project_id`. The `cwd` is also sent, untouched, as the location.
-- **Fallback when `id` is absent** (config missing, or config without `id`):
-  proposal — fall back to a synthesized id `path:<cwd>`. This keeps the
-  one-project-per-path behavior we have today for un-`init`-ed dirs, is stable
-  per-machine, and is visibly distinct from a real minted id, so a later
-  `fragua init` can migrate the project's runs by rewriting `project_id` from
-  `path:<cwd>` to the new `id`.
-- **Projection.** `run_state` gains `project_id TEXT` (IDENTITY, indexed) while
-  `cwd TEXT` stays nullable (LOCATION). Schedules gain `project_id`.
+- **Resolution at enqueue — walk up to the nearest config, bounded by the git
+  root.** `fragua run` (or the daemon, when dispatching a schedule) walks up from
+  `cwd` to the **nearest** `.fragua/config.yaml`, **stopping at (and including)
+  the git repo root** (`git rev-parse --show-toplevel`). A root config gives the
+  whole repo one identity even when you run from `repo/packages/api`; a
+  subdirectory opts into being its own project by dropping its own
+  `.fragua/config.yaml` with its own `id` (the walk stops at the first one found,
+  deepest-first). The git-root ceiling is load-bearing, not just ergonomic: it
+  stops the climb before it escapes the repo into a parent directory's config —
+  in particular `~/.fragua/config.yaml`, which is the **global** config cascade
+  (defaults / blocklist / concurrency), *not* a project config, and must never be
+  read as a project's identity. **Outside a git repo there is no safe ceiling, so
+  resolution is exact-cwd only** (no walk-up). If an `id` is found, that's the
+  run's `project_id`; the `cwd` is sent untouched as the location. (The config
+  loader reads the exact cwd today — see §5 #8 for the resolution-rule change.)
+- **Init writes at the git root by default.** `fragua init` mints the config at
+  the git toplevel so a fresh repo gets one repo-wide identity that the walk-up
+  resolves from any subdirectory; `fragua init` run inside a subdirectory that
+  wants to be its own project writes there instead (an explicit opt-in).
+- **The resolved project root is the run's `cwd` — not the invocation dir.**
+  Walk-up lets you invoke from `repo/packages/api` while identity resolves to the
+  root config, so `process.cwd()` and the project root diverge. The run's stored
+  `cwd` is the **dir holding the matched config** (the project root), not the
+  invocation dir. This is load-bearing: it keeps all of `.fragua/` — config,
+  workflows, runtime (`worktrees/`, `blobs/`), and the gitignore coverage `init`
+  wrote — in **one** place per project, and keeps worktree provisioning
+  (`<cwd>/.fragua/worktrees/<run_id>`) anchored there rather than scattering an
+  un-gitignored second `.fragua/` into a subdir. The invocation subdir only seeds
+  the walk and is discarded after resolution. (A subdir that wants its own runtime
+  root becomes its own project by holding its own config — the walk stops there.)
+- **`init` is required — no `id`, no run.** When resolution finds no `id` (no
+  config in the walk-up, or a config without one), `fragua run` **refuses** with
+  *"run `fragua init` first"* rather than synthesizing a fallback. Every run
+  therefore carries a real minted identity by construction — there is no
+  second-class `path:<cwd>` run, and no later adopt-migration to write. The same
+  gate applies to web-initiated enqueue (the server resolves or rejects) and to
+  schedule creation. See §5 #3.
+- **Commit gate (gate 2).** fragua can enforce that the config *exists* but
+  cannot commit it for you, and portability requires the `id` to be committed to
+  git (so every clone shares it). So `fragua run` additionally **warns** when the
+  resolved config is present but uncommitted — *"commit `.fragua/config.yaml` to
+  make this run portable"* — without blocking. See §5 #4.
+- **Projection.** `run_state` gains `project_id TEXT NOT NULL` (IDENTITY,
+  indexed) — `NOT NULL` is now honest because the require-init gate guarantees a
+  value on every enqueue path (`fragua run`, schedule fire, import). `cwd TEXT`
+  stays nullable (LOCATION). Schedules gain `project_id TEXT NOT NULL`.
 - **Projects list** keys on `project_id` (`SELECT DISTINCT project_id` or a
   `projects` table — §4). Display `name` from config `name`, not
   `basename(cwd)`.
@@ -220,91 +256,147 @@ arrives only post-0.1.0.
 Add to the baseline shape directly (inline columns + indexes, not `ALTER`):
 
 ```sql
--- run_state: project_id is IDENTITY, indexed; cwd stays as the LOCATION binding
-project_id TEXT,                    -- alongside the existing `cwd TEXT`
+-- run_state: project_id is IDENTITY (indexed); project_name is a denormalized
+-- display label; cwd stays as the LOCATION binding (the resolved project root)
+project_id   TEXT NOT NULL,         -- alongside the existing `cwd TEXT`
+project_name TEXT NOT NULL,         -- display label, value at enqueue
 CREATE INDEX IF NOT EXISTS idx_run_state_project_id ON run_state(project_id);
 -- schedules: same split
-project_id TEXT,
+project_id TEXT NOT NULL,
 CREATE INDEX IF NOT EXISTS idx_schedules_project_id ON schedules(project_id);
 ```
 
-No row backfill (the store is recreated). The `path:<cwd>` form is purely a
-**runtime** enqueue fallback (§3) for a config with no `id` — not a migration
-artifact.
+`project_id` is `NOT NULL`: the require-init gate (§3, §5 #3) guarantees a minted
+`id` on every enqueue path, so the invariant "every run has a project identity"
+holds at the schema level — no `path:<cwd>` fallback value, no nullable column to
+defend against. `project_name` is `NOT NULL` for the same reason (§5 #11) and is
+resolved at enqueue from the config `name`, falling back to the project-root
+basename. No row backfill (the store is recreated).
 
-**`projects` table — warranted?** Probably not yet, **if** the display `name`
-travels with the run. The naming gap: the list reads `name` from the project's
-`.fragua/config.yaml` — but an **imported-only project has no local checkout**,
-so there's no config to read and the list would show a bare UUID. Fix without a
-table: **denormalize `project_name` onto `run_state` at enqueue** (and carry it
-in the bundle, §db-import). The name then rides every run, so `SELECT DISTINCT
-project_id, project_name` labels imported-only projects too. A `projects` table
-is still only an optimization (durable name for a zero-run project, canonical
-last-seen cwd); defer it. Note: the denormalized `project_name` is the *value at
-enqueue time* — a later rename in config won't retro-update old runs, which is
-acceptable (it's a label, and the per-run value is honest history).
+**`projects` table — deferred; `project_name` denormalized instead.** A
+`projects` table is **not** added for 0.1.0. The naming gap it would solve: the
+list would otherwise read `name` from the project's `.fragua/config.yaml`, but an
+**imported-only project has no local checkout** — no config to read — so the list
+would show a bare UUID. Fix without a table: the `project_name` baseline column
+(above) is written at enqueue and **carried in the bundle** (§db-import), so the
+label rides every run and `SELECT DISTINCT project_id, project_name` labels
+imported-only projects too. A `projects` table stays a later optimization (a
+durable name for a zero-run project, a canonical last-seen cwd); defer it. The
+denormalized `project_name` is the *value at enqueue time* — a later config
+rename won't retro-update old runs, which is acceptable (it's a label, and the
+per-run value is honest history).
 
-## 5. Open questions / risks
+## 5. Decisions
 
-1. **The `id` seed — RESOLVED.** `init.ts:43` now mints a UUIDv7 `id` (via
-   `@fragua/core`'s `uuidv7()`) and writes the directory name as the human
+Every item below is **decided** for the pre-0.1.0 freeze. Each carries the
+rationale so the frozen choice is auditable later.
+
+1. **The `id` seed — UUIDv7 minted by `init`.** `init.ts:43` mints a UUIDv7 `id`
+   (via `@fragua/core`'s `uuidv7()`) and writes the directory name as the human
    `name` (`init.ts:43-44,72-73`), aligning with the `config.ts:88` schema
-   comment that already documented it as UUIDv7. Rationale: a UUIDv7 is
-   collision-free across a store that aggregates many repos (two unrelated
-   repos both named `api` no longer fold into one project), time-sortable, and
-   opaque — identity is the id, the human label rides the separate `name`
-   field. The dir-name survives only as the default `name`.
-2. **Configs with no `id`.** A pre-existing project that never ran `init`, or a
-   config authored before the field — resolves to the `path:<cwd>` fallback
-   (§3). A first `fragua init` then mints an `id`; a one-shot
-   `fragua project adopt` (out of scope here) could rewrite historical
-   `project_id` from `path:<cwd>` to the minted id.
-3. **Portability precondition.** A run enqueued from a cwd whose
-   `.fragua/config.yaml` has no committed `id` falls back to the runtime
-   `path:<cwd>` form (§3) and is therefore **not portable** — on import to
-   another machine ([`db-import.md`](db-import.md)) `path:<cwd>` can't attribute
-   to a project that lives at a different path (or nowhere) locally. So
-   `fragua run` (and the daemon, when dispatching a schedule) should **warn
-   loudly** when enqueuing from a config with no committed `id` — *"this run
-   won't be portable; run `fragua init`"*. For the CI-bundle future this is a
-   hard setup precondition: CI must build from a repo that has a committed `id`,
-   else the exported runs orphan on import.
-4. **Collision / divergence.** If two checkouts on the same box have the same
-   committed `id` (legitimate — same repo cloned twice) they correctly fold into
-   one project. `cwd` remains a *secondary* key answering "where did this run
+   comment. Rationale: a UUIDv7 is collision-free across a store that aggregates
+   many repos (two unrelated repos both named `api` no longer fold into one
+   project), time-sortable, and opaque — identity is the id, the human label
+   rides the separate `name` field. The dir-name survives only as the default
+   `name`.
+2. **`project_id` lands in the 0.1.0 baseline — DECIDED.** The `run_state` and
+   `schedules` `project_id` columns + their indexes go into the baseline
+   `schema.sql` **now** (§4), edited in place under the clean-break policy — no
+   `schema_version` bump, no migration step, the dev store is recreated. The
+   columns are additive and inert until the resolver writes them. This is the
+   whole reason project-id is a pre-0.1.0 item: doing it now means **zero
+   identity-migration debt at launch**, vs. making the very first post-release
+   migration be identity plumbing. Resolves the lone freeze-window column
+   question that [`db-import.md`](db-import.md) §7 #2 flagged *for `project_id`*
+   (the `workflows.ir` / `ir_version` half of that question stays open — see
+   [`workflow-ir.md`](workflow-ir.md)).
+3. **`init` is required before a run — hard-fail, no fallback.** When resolution
+   (§3 walk-up) finds no `id`, `fragua run` **refuses** with *"run `fragua init`
+   first"*; the server rejects an id-less enqueue likewise; schedule creation
+   requires a resolved id. There is **no** `path:<cwd>` synthesized fallback and
+   **no** `fragua project adopt` migration — both are deleted. Rationale: every
+   run carries a real minted identity by construction, so `project_id` is
+   `NOT NULL` (§4) and portability is the default rather than a second-class
+   upgrade. The cost — `fragua run` in a never-init'd dir errors instead of just
+   working — is a one-time, one-command friction (`fragua init`), acceptable
+   pre-0.1.0 and worth the elimination of the entire fallback code path. (fragua
+   can enforce that the config *exists*; committing it is gate 2, #4.)
+4. **Commit gate — warn, don't block (gate 2).** The require-init gate (#3)
+   guarantees the config *exists*; it cannot guarantee the `id` is **committed**,
+   and portability needs it committed so every clone shares it. So `fragua run`
+   (and the daemon when dispatching a schedule) **warns** when the resolved config
+   is present but uncommitted — *"commit `.fragua/config.yaml` to make this run
+   portable"* — without blocking, since a local-only run is still valid. For the
+   CI-bundle future this is the real setup precondition: CI must build from a repo
+   whose `.fragua/config.yaml` is committed, else its exported runs carry an `id`
+   no other clone recognizes.
+5. **Same `id` on one box → one project, by design.** Two checkouts on the same
+   box with the same committed `id` (a repo cloned twice) correctly fold into one
+   project. `cwd` stays a *secondary* key answering "where did this run
    physically happen" — both checkouts' runs share identity but keep distinct
    cwds.
-5. **cwd is irreducible as LOCATION.** Worktrees, file-tree reads, git diff,
+6. **cwd is irreducible as LOCATION.** Worktrees, file-tree reads, git diff,
    bootstrap config, local-workflow resolution, and skills scans all need a real
-   path. Identity moves; LOCATION cwd does not go away. A purely imported
-   project (no local checkout) has a `project_id` but no usable cwd — file-backed
-   views must tolerate that.
-6. **Schedules.** A schedule carries identity (`project_id`) and a spawn cwd. If
-   the box's checkout moves, the schedule's cwd goes stale while its identity is
-   still correct — needs a re-bind path, or the schedule resolves cwd from the
-   project's most-recent run at fire time.
-7. **Trust boundary on enqueue.** The server can either trust a client-supplied
-   `project_id` or re-resolve it from the enqueued cwd's config. For imported
-   runs the id must be trusted (the cwd may not exist); for live `fragua run`
-   either works. Pick "trust the client, default to resolve-from-cwd when
-   absent" to keep both paths simple.
-8. **Monorepo / id resolution — UNRESOLVED, decide before building.** `id` lives
-   in `<cwd>/.fragua/config.yaml`. Does resolution read that *exact* path, or
-   **walk up to the nearest** `.fragua/config.yaml`? Exact-cwd means running from
-   `repo/packages/api` with only a root config gets no id (→ `path:<cwd>`
-   fallback), fragmenting a single project. Walk-up means a root config gives the
-   whole repo one identity, while a subdir that wants to be its *own* project
-   drops its own `.fragua/config.yaml` with its own `id`. **Recommend walk-up to
-   the nearest config** (repo-root identity by default; sub-projects opt in by
-   placing a config) — it matches how people think about a repo and avoids
-   accidental fragmentation. The config loader today reads the exact cwd; this
-   needs a resolution rule.
-9. **Fork divergence.** A fork inherits the parent's committed `id` (it's in the
-   cloned config), so the fork's runs attribute to the *parent* project. That's
-   correct for "a clone of the same project" but wrong for "a hard fork that is
-   now its own thing" — and two independent forks running fragua would fold into
-   one project in a shared store. `id` is immutable *by convention* (the config
-   comment says so; nothing enforces it — editing it forks the project's
-   history). Provide an explicit escape: `fragua init` detects an existing `id`
-   and, when the user confirms a true fork, re-mints; or a `fragua project
-   reset-id`. Don't auto-re-mint (that would silently fork every clone).
+   path. Identity moves; LOCATION cwd does not go away. A purely imported project
+   (no local checkout) has a `project_id` but no usable cwd — file-backed views
+   must tolerate that and degrade to "not checked out here".
+7. **Schedule spawn cwd — resolve at fire time.** A schedule carries identity
+   (`project_id`) plus a spawn `cwd` *hint*. At fire time the dispatcher resolves
+   the spawn cwd from the **project's most-recent run cwd**, falling back to the
+   schedule's stored cwd. This is self-healing: when a checkout moves, the next
+   fire lands in the current location with no operator action. The stored cwd is
+   advisory, never authoritative — no `fragua schedule rebind` command is needed.
+8. **Trust boundary on enqueue — trust the client, resolve-from-cwd when absent.**
+   The server trusts a client-supplied `project_id`, and re-resolves it from the
+   enqueued cwd's config (§3 walk-up) only when none is supplied. Imported runs
+   *must* be trusted (their cwd may not exist locally); live `fragua run` works
+   either way. This keeps both paths simple.
+9. **Monorepo / id resolution — walk up to the nearest config, bounded by the git
+   root.** Resolution walks up from `cwd` to the nearest `.fragua/config.yaml`,
+   stopping at (and including) the git toplevel (§3). Rationale: a root config
+   gives the whole repo one identity (running from `repo/packages/api` resolves to
+   it), while a subdirectory opts into its own identity by placing its own config
+   (walk stops deepest-first). The git-root ceiling is **load-bearing**: it stops
+   the climb before it reads `~/.fragua/config.yaml` — the *global* config
+   cascade, not a project config — as identity. Outside a git repo there is no
+   safe ceiling, so resolution is **exact-cwd only**. The config loader reads the
+   exact cwd today; this is the one resolution-rule change the implementer adds.
+10. **Fork divergence — inherit by default, re-mint by explicit confirmation.** A
+    fork inherits the parent's committed `id` (it's in the cloned config), so the
+    fork's runs attribute to the parent project — correct for "a clone of the same
+    project", wrong for "a hard fork that is now its own thing". `id` is immutable
+    *by convention* (the config comment says so; nothing enforces it — editing it
+    forks the project's history). The escape is explicit: `fragua init` detects an
+    existing `id` and re-mints **only on confirmed fork** (or a future `fragua
+    project reset-id`). **Never auto-re-mint** — that would silently fork every
+    clone.
+11. **`cwd` is the resolved project root, not the invocation dir.** A direct
+    consequence of walk-up (#9): the run's stored `cwd` is the dir holding the
+    matched config, so all of `.fragua/` (config, workflows, `worktrees/`,
+    `blobs/`, gitignore coverage) lives in one place per project and worktree
+    provisioning stays anchored there (§3). Storing the literal `process.cwd()`
+    instead would scatter an un-gitignored second `.fragua/` into whatever subdir
+    you happened to invoke from. The invocation dir only seeds the walk.
+12. **`project_name` is a denormalized baseline column, `NOT NULL`.** Added to the
+    0.1.0 baseline in the same window as `project_id` (§4), written at enqueue
+    from the config `name` (fallback: project-root basename) and carried in the
+    bundle. This is what lets an **imported-only project show a real label, not a
+    bare UUID**, without a `projects` table. It's a display value-at-enqueue, not
+    identity — a later rename doesn't retro-update old runs (honest history).
+
+**Consequences to carry into implementation** (not contradictions — fallout of
+the above):
+
+- **First-run UX & docs.** Require-init (#3) means `fragua run` in a never-init'd
+  dir errors — including running a *global* workflow from an un-init'd cwd. SPEC,
+  the quickstart, and the harness onboarding must state "init first."
+- **Every `enqueueRun` call site gains `project_id` + `project_name`.** Both are
+  `NOT NULL`; the store insert, the schedule-fire path, the server enqueue, and
+  **all test fixtures** must supply them. Mechanical but broad — grep
+  `enqueueRun(` across `packages/`.
+- **Enqueue now shells `git rev-parse --show-toplevel`** for the walk ceiling
+  (#9). Cheap (enqueue is not hot), degrades to exact-cwd when git is absent.
+- **Non-git projects** resolve exact-cwd, init warns-and-proceeds, and the commit
+  gate (#4) *always* warns (nothing to commit to) — acceptable, just noisy.
+- **Schedule first fire before any run** has no most-recent-run cwd to resolve
+  from (#7), so it uses the stored cwd — the intended fallback, no gap.
