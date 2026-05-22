@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { uuidv7 } from "@fragua/core";
 import chalk from "chalk";
 
 const GITIGNORE_BLOCK = `# fragua runtime — never commit these
@@ -35,9 +36,12 @@ export interface InitCommandOptions {
 
 export async function initCommand(opts: InitCommandOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  // Project id seeds from the directory name; trailing slashes and the
-  // filesystem root degrade to a stable fallback.
-  const id = cwd.split("/").filter(Boolean).at(-1) ?? "project";
+  // Stable, collision-free project identity, committed to the repo so
+  // every clone — and any run imported from another machine — attributes
+  // to the same project regardless of where it physically lives. The
+  // directory name is only the human-facing display `name`.
+  const id = uuidv7();
+  const name = cwd.split("/").filter(Boolean).at(-1) ?? "project";
   const configPath = resolve(cwd, ".fragua/config.yaml");
 
   if (!(await isGitRepo(cwd))) {
@@ -51,7 +55,7 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
   }
 
   await mkdir(resolve(cwd, ".fragua/workflows"), { recursive: true });
-  await writeFile(configPath, renderConfig(id), "utf8");
+  await writeFile(configPath, renderConfig(id, name), "utf8");
   await mergeGitignore(cwd);
 
   console.log(chalk.green(`✓ wrote ${configPath}`));
@@ -59,10 +63,14 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
   return 0;
 }
 
-function renderConfig(id: string): string {
+function renderConfig(id: string, name: string): string {
   return `# fragua project config — project-specific knobs only.
 # Generic preferences live in ~/.fragua/config.yaml.
+
+# Stable project identity. Committed so every clone shares it and runs
+# stay attributable across machines — do not change it.
 id: ${id}
+name: ${name}
 
 # Uncomment if the project needs a per-worktree bootstrap command:
 # bootstrap: "bun install --frozen-lockfile"

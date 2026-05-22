@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isUuidv7 } from "@fragua/core";
 import { initCommand } from "../src/commands/init.ts";
 import { loadProjectConfig } from "../src/config.ts";
 
@@ -42,13 +43,15 @@ describe("initCommand", () => {
     }
   }
 
-  test("writes .fragua/config.yaml with an id seeded from the dir name", async () => {
+  test("writes .fragua/config.yaml with a UUIDv7 id and a dir-name name", async () => {
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(0);
     expect(await exists(".fragua/config.yaml")).toBe(true);
     const cfg = await loadProjectConfig(scratch);
-    const expectedId = scratch.split("/").filter(Boolean).at(-1)!;
-    expect(cfg.id).toBe(expectedId);
+    expect(typeof cfg.id).toBe("string");
+    expect(isUuidv7(cfg.id!)).toBe(true);
+    const expectedName = scratch.split("/").filter(Boolean).at(-1)!;
+    expect(cfg.name).toBe(expectedName);
   });
 
   test(".gitignore allowlists .fragua/config.yaml", async () => {
