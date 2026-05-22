@@ -318,17 +318,9 @@ function strAt(data: Record<string, unknown>, key: string): string | undefined {
  * step output, not conversational; pi-ai's `Message` union has no
  * such role) are stripped.
  *
- * Sub-agent messages (node_id `__subagent:<id>`) are always excluded:
- * sub-agents have their own conversation namespace per §8.2 and are
- * never part of a parent-level thread. Letting them through the
- * fallback path silently splices a sub-agent's internal `tool_use`
- * blocks into the parent's API call without their paired assistant
- * turns, which Anthropic rejects with `unexpected tool_use_id found
- * in tool_result blocks`.
- *
  * Returns `undefined` when nothing is persisted. */
 function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly AgentMessage[] | undefined {
-  const graphLevel = ctx.messages.since(0).filter((m) => !m.nodeId?.startsWith("__subagent:"));
+  const graphLevel = ctx.messages.since(0);
   const byNode = graphLevel.filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : graphLevel;
   if (rows.length === 0) return undefined;

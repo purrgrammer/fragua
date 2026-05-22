@@ -4,20 +4,10 @@ import { createHash } from "node:crypto";
 import type { EventType, LlmBackend, LlmInput, Outcome, SummariserBackend } from "@fragua/core";
 import { fail, failHalt, failProvider, ok } from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
-import type {
-  AgentDefinition,
-  ExecutionEnvironment,
-  FraguaToolContext,
-  Skill,
-  SubagentResult,
-  SubagentSpec,
-  ToolRegistry,
-} from "@fragua/workspace";
+import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
 import {
-  filterAgentsCatalogueForRun,
   filterCatalogueForRun,
   filterSkillsForNode,
-  renderAgentsCatalog,
   renderSkillsCatalog,
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
@@ -86,71 +76,6 @@ export interface PiLlmBackendOptions {
    * the same `runId` finds the live-agent slot it expects. Omit in
    * tests/one-shots that don't need cross-backend steering. */
   steering?: SteeringRegistry;
-  /** Factory that builds a per-call sub-agent spawner for the `agent`
-   * tool. Called once per `backend.run()` with the parent's resolved
-   * persona + skills + pool, and returns the `spawnSubagent` closure
-   * that lands on `fraguaContext.spawnSubagent`. The daemon wires this
-   * to its store + tool registry; tests / one-shots can omit it (the
-   * tool then surfaces `is_error` to the LLM rather than silently
-   * stalling). */
-  spawnSubagentFactory?: (parentCtx: SpawnSubagentParentCtx) => (spec: SubagentSpec) => Promise<SubagentResult>;
-  /** Named sub-agent profiles discovered by the CLI at startup (see
-   * `@fragua/workspace`'s `discoverAgents`). When the run's tool pool
-   * includes the `agent` tool and this list is non-empty, the backend
-   * appends an `## Available sub-agents` catalogue block to the
-   * system prompt and exposes the catalogue on
-   * `fraguaContext.agentCatalog` so the `agent` tool can resolve
-   * `agent: <name>` calls. */
-  agentDefinitions?: readonly AgentDefinition[];
-}
-
-/** Parent-context snapshot the spawn factory needs to materialise a
- *  child run. Captured per `backend.run()` and frozen — the same
- *  closure runs against every `agent` tool call inside that turn.
- *  Field names mirror the daemon's `SpawnSubagentParentCtx` so the
- *  factory wired by the CLI can forward this object verbatim. */
-export interface SpawnSubagentParentCtx {
-  parentRunId: string;
-  parentNodeId: string;
-  parentIteration: number;
-  /** The fully-built parent system prompt (post-merge with protocol /
-   *  skills / context-files / environment). Kept for callers that want
-   *  to inspect the parent's full prompt; sub-agent assembly itself
-   *  uses `parentContextBlock` + `parentRunEnv` so the child sees the
-   *  same framework framing without inheriting the parent's persona. */
-  parentSystemPrompt: string;
-  /** Pre-rendered `<project-conventions>` block from the parent's
-   *  `loadContextFiles` pass. Reused verbatim by the sub-agent so the
-   *  child sees the same project primer (AGENTS.md and friends). */
-  parentContextBlock: string;
-  /** Per-run isolation facts (cwd, bootstrap, runId) the parent saw.
-   *  Sub-agents inherit verbatim — same worktree, same bootstrap. */
-  parentRunEnv?: RunEnvironment;
-  /** Skills the parent llm call had visible. Sub-agents intersect
-   *  `spec.skills` against this set. */
-  parentSkills: readonly Skill[];
-  /** Parent's `allowed_tools` attribute (or undefined when the node
-   *  used the catch-all). Becomes the default for the child's pool
-   *  unless `spec.allowed_tools` is set. */
-  parentAllowedTools?: readonly string[];
-  /** Parent's `denied_tools`. */
-  parentDeniedTools?: readonly string[];
-  /** Provider the parent llm call resolved to. The child inherits
-   *  by default — no per-call model selection from the LLM. */
-  parentProvider: string;
-  /** Model id the parent llm call resolved to. */
-  parentModel: string;
-  /** Execution environment from the parent llm call. Sub-agents
-   *  inherit verbatim — no per-call worktree isolation, the
-   *  sub-agent's read/write/edit/bash see the same filesystem the
-   *  parent did. */
-  parentEnv: ExecutionEnvironment;
-  /** Forwards every observability event the sub-agent emits onto the
-   *  parent's stream. The factory layers a `subagent_id` discriminator
-   *  on top before invoking this. The host typically wraps
-   *  `appendObservabilityEvents(parentRunId, …)` here — same channel
-   *  the parent's own `input.emit` writes through. */
-  parentEmit: (type: EventType, data: Record<string, unknown>) => Promise<void>;
 }
 
 export class PiLlmBackend implements LlmBackend {
@@ -188,10 +113,6 @@ export class PiLlmBackend implements LlmBackend {
    * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
-  private readonly spawnSubagentFactory:
-    | ((parentCtx: SpawnSubagentParentCtx) => (spec: SubagentSpec) => Promise<SubagentResult>)
-    | undefined;
-  private readonly agentDefinitions: readonly AgentDefinition[];
 
   constructor(opts: PiLlmBackendOptions) {
     this.registry = opts.registry;
@@ -207,8 +128,6 @@ export class PiLlmBackend implements LlmBackend {
     this.runEnv = opts.runEnv;
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
-    this.spawnSubagentFactory = opts.spawnSubagentFactory;
-    this.agentDefinitions = opts.agentDefinitions ?? [];
   }
 
   /** True when we've already persisted `threadId` for `runId` during
@@ -315,7 +234,6 @@ export class PiLlmBackend implements LlmBackend {
     // would see project B's project-scope skills.
     const runProjectCwd = effectiveEnv.projectCwd();
     const runCwdSkills = filterCatalogueForRun(this.skills, runProjectCwd);
-    const runCwdAgents = filterAgentsCatalogueForRun(this.agentDefinitions, runProjectCwd);
 
     // Resolve the skill catalog for this call. Filter by node attrs, render
     // the catalog block for the system prompt. The catalog drives both
@@ -326,30 +244,19 @@ export class PiLlmBackend implements LlmBackend {
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
     const effectiveSkills = filterSkillsForNode(runCwdSkills, skillFilter);
     const skillsCatalog = renderSkillsCatalog(effectiveSkills);
-    // Render the named-sub-agent catalogue only when (a) the node's
-    // tool pool actually includes `agent` and (b) at least one profile
-    // was discovered. Cost-control: a node that doesn't allow `agent`
-    // also doesn't pay for the catalogue's tokens (~1 KB per profile).
-    const wantsAgentTool = selectedTools.some((t) => t.name === "agent");
-    const agentsCatalog = wantsAgentTool && runCwdAgents.length > 0 ? renderAgentsCatalog(runCwdAgents) : "";
     // Per-run fragua context. Built-in I/O tools ignore this field; the
-    // `agent` tool reads `spawnSubagent` + `skillCatalog` + `agentCatalog`
-    // to drive sub-agent runs. Captured by closure on each `toAgentTool`
-    // call — a fresh `Agent({tools})` is built per `backend.run()`,
-    // so closure values are correct for that run.
+    // `skill` tool reads `skillCatalog` for its name lookup. Captured by
+    // closure on each `toAgentTool` call — a fresh `Agent({tools})` is
+    // built per `backend.run()`, so closure values are correct for that
+    // run.
     const fraguaEmit = input.emit;
     const summariser = this.summariser;
-    // The `agent` tool needs the resolved parent system prompt + skills
-    // to seed sub-agent runs, but `systemPrompt` isn't built until
-    // after context-file loading below. Stage fraguaContext as a
-    // `let` and patch in `spawnSubagent` + `skillCatalog` once those
-    // resources are ready. Tools captured by `toAgentTool` close over
-    // the SAME object reference, so the patches are visible to every
-    // tool call without re-mapping.
+    // `skillCatalog` isn't ready until after context-file loading below.
+    // Stage fraguaContext as a `let` and patch it in once resolved.
+    // Tools captured by `toAgentTool` close over the SAME object
+    // reference, so the patch is visible to every tool call.
     const fraguaContext: FraguaToolContext & {
-      spawnSubagent?: FraguaToolContext["spawnSubagent"];
       skillCatalog?: readonly Skill[];
-      agentCatalog?: readonly AgentDefinition[];
     } = {
       runId: input.run_id,
       nodeId: input.node.id,
@@ -416,45 +323,12 @@ export class PiLlmBackend implements LlmBackend {
           perNode: perNodeSystemPrompt,
           contextBlock,
           skillsCatalog,
-          agentsCatalog,
           runEnv: effectiveRunEnv,
         });
 
-    // Now that the parent's system prompt is fully resolved, wire the
-    // `agent` tool. Sub-agents inherit this exact string verbatim when
-    // their spec leaves `system_prompt` undefined (see
-    // `materialiseForChild`). `skillCatalog` makes the parent's
-    // resolved skill set available so `spec.skills` can be intersected
-    // against it on each spawn.
-    Object.assign(fraguaContext, { skillCatalog: effectiveSkills, agentCatalog: runCwdAgents });
-    if (this.spawnSubagentFactory !== undefined) {
-      // The sub-agent's emit channel: same `input.emit` the parent's
-      // llm call uses, so sub-agent observability lands on the
-      // parent's stream as a slice. The factory stamps `subagent_id`
-      // on every payload before calling this. When the parent has no
-      // emit (tests), sub-agents become a no-op stream.
-      const parentEmit = input.emit
-        ? async (type: EventType, data: Record<string, unknown>) => {
-            await input.emit!(type, data);
-          }
-        : async () => {};
-      const parentCtx: SpawnSubagentParentCtx = {
-        parentRunId: input.run_id,
-        parentNodeId: input.node.id,
-        parentIteration: input.iteration?.n ?? 0,
-        parentSystemPrompt: systemPrompt,
-        parentContextBlock: contextBlock,
-        parentSkills: effectiveSkills,
-        parentProvider: provider,
-        parentModel: modelId,
-        parentEnv: effectiveEnv,
-        parentEmit,
-        parentRunEnv: effectiveRunEnv,
-        ...(allow !== undefined ? { parentAllowedTools: allow } : {}),
-        ...(deny !== undefined ? { parentDeniedTools: deny } : {}),
-      };
-      Object.assign(fraguaContext, { spawnSubagent: this.spawnSubagentFactory(parentCtx) });
-    }
+    // Now that the system prompt is resolved, expose the run's skill
+    // catalogue so the `skill` tool can resolve names against it.
+    Object.assign(fraguaContext, { skillCatalog: effectiveSkills });
 
     // Thread policy gates. A node with a resolved thread_id participates
     // in the shared transcript: hydrate prior turns on dispatch, persist

@@ -2,8 +2,7 @@
 // Pulled into a separate module so it can be unit-tested without pi-agent-core.
 
 import { createHash } from "node:crypto";
-import type { ExecutionEnvironment, Skill } from "@fragua/workspace";
-import { renderSkillsCatalog } from "@fragua/workspace";
+import type { ExecutionEnvironment } from "@fragua/workspace";
 
 /** Hard cap on the total bytes of project-conventions content prepended to the
  * system prompt. A single oversized AGENTS.md should not blow the context
@@ -136,8 +135,8 @@ export interface BuildSystemPromptInput {
    * node-level override is set. */
   global: string;
   /** Optional per-node override from `node.attrs.system_prompt`. When set,
-   * this replaces `global` — a reviewer subagent or a planner node can
-   * therefore swap the whole persona without hacking `context_files`. */
+   * this replaces `global` — a reviewer or planner node can therefore
+   * swap the whole persona without hacking `context_files`. */
   perNode: string | undefined;
   /** Context-files block returned by `loadContextFiles`. Prepended so
    * repo conventions frame whatever the base prompt says. */
@@ -146,11 +145,6 @@ export interface BuildSystemPromptInput {
    * before `contextBlock` so skill advertisements frame the whole call —
    * order: skills → project-conventions → base. */
   skillsCatalog?: string;
-  /** Tier-1 sub-agent catalogue block (empty when the `agent` tool isn't
-   * in the pool or no profiles are discovered). Prepended after skills
-   * and before the protocol block so spawn affordances sit alongside
-   * the tool advertisements that frame them. */
-  agentsCatalog?: string;
   /** Per-run isolation facts (cwd, bootstrap status). Rendered as an
    * `<environment>` block at the top so agents know where they are
    * before reading anything else. */
@@ -158,37 +152,24 @@ export interface BuildSystemPromptInput {
 }
 
 /** Inputs for the framework-blocks-only assembly (everything except the
- *  persona). Shared between the full `buildSystemPrompt` and the
- *  sub-agent assembly in `materialiseForChild`. */
+ *  persona). */
 export interface BuildFrameworkBlocksInput {
   contextBlock: string;
   skillsCatalog?: string;
-  agentsCatalog?: string;
   runEnv?: RunEnvironment | undefined;
 }
 
-/** Assemble everything that frames a persona — env / protocol / agents
- *  catalogue / skills catalogue / project conventions — without the
- *  persona itself. The persona is appended by callers (`buildSystemPrompt`
- *  for llm nodes, `materialiseForChild` for sub-agents). Order is
- *  identical to the full assembly so the framework parts compose
- *  identically whether the consumer is a parent or a child. */
-export function buildFrameworkBlocks({
-  contextBlock,
-  skillsCatalog,
-  agentsCatalog,
-  runEnv,
-}: BuildFrameworkBlocksInput): string {
+/** Assemble everything that frames a persona — env / skills catalogue /
+ *  project conventions — without the persona itself. The persona is
+ *  appended by `buildSystemPrompt`. */
+export function buildFrameworkBlocks({ contextBlock, skillsCatalog, runEnv }: BuildFrameworkBlocksInput): string {
   const skillsBlock = skillsCatalog ?? "";
-  const agentsBlock = agentsCatalog ?? "";
   // Prepend order (top → bottom of the assembled framework block):
   //   <environment>   — where the agent is running
-  //   agents catalog  — named sub-agents the LLM can spawn (when `agent` tool present)
   //   skills catalog  — what tools / skills are available
   //   project conv.   — AGENTS.md and friends
   let out = contextBlock;
   out = mergeSystemPrompt(out, skillsBlock);
-  out = mergeSystemPrompt(out, agentsBlock);
   if (runEnv !== undefined) {
     out = mergeSystemPrompt(out, renderRunEnvironment(runEnv));
   }
@@ -204,14 +185,12 @@ export function buildSystemPrompt({
   perNode,
   contextBlock,
   skillsCatalog,
-  agentsCatalog,
   runEnv,
 }: BuildSystemPromptInput): string {
   const base = perNode !== undefined && perNode.length > 0 ? perNode : global;
   const framework = buildFrameworkBlocks({
     contextBlock,
     ...(skillsCatalog !== undefined ? { skillsCatalog } : {}),
-    ...(agentsCatalog !== undefined ? { agentsCatalog } : {}),
     runEnv,
   });
   return mergeSystemPrompt(base, framework);
@@ -253,89 +232,4 @@ function escapeAttr(value: string): string {
 
 function sha256Hex(contents: string): string {
   return createHash("sha256").update(contents, "utf8").digest("hex");
-}
-
-/** Spec subset `materialiseForChild` consumes. The full `SubagentSpec`
- *  in @fragua/workspace carries a few runtime-only fields (signal,
- *  allowed_tools, etc.) we don't need here — the prompt builder
- *  cares only about persona override + skill name filter. Kept local
- *  so this module doesn't pull the workspace types graph. */
-export interface MaterialiseChildSpec {
-  system_prompt?: string;
-  skills?: readonly string[];
-}
-
-export interface MaterialiseChildResult {
-  /** Final system prompt fed into the child Agent. */
-  systemPrompt: string;
-  /** The skill subset projected into the child's catalog. Empty when
-   *  the spec didn't name any — sub-agents do not inherit the parent's
-   *  loaded skills implicitly. */
-  effectiveSkills: Skill[];
-}
-
-/** Project-conventions + run-env framing the parent assembled from
- *  `loadContextFiles` + `deriveRunEnv`. Sub-agents reuse these verbatim
- *  so they see the same project primer (AGENTS.md and friends) and
- *  worktree facts (cwd, bootstrap status) the parent saw. Optional —
- *  hand-rolled test specs may pass `{ contextBlock: "" }` and skip
- *  the env block. */
-export interface ParentFrameworkInput {
-  /** Pre-rendered `<project-conventions>` block. Empty when no
-   *  context_files were declared on the parent node. */
-  contextBlock: string;
-  /** Pre-built RunEnvironment (cwd, bootstrap, runId). Omitted in
-   *  tests without a worktree. */
-  runEnv?: RunEnvironment;
-}
-
-/** Build the system prompt + skill catalog for a sub-agent run.
- *
- *  Order (top → bottom of the assembled child prompt):
- *    <environment>   — same cwd/bootstrap the parent had
- *    skills catalog  — child's filtered subset of the parent's catalog
- *    project conv.   — same AGENTS.md the parent saw
- *    persona         — `spec.system_prompt` (the agent definition body
- *                      or inline `system_prompt` argument), LAST so it
- *                      reads as the immediate task framing for the LLM.
- *
- *  No agents catalogue — sub-agents can't spawn grand-children (the
- *  `agent` tool is stripped from the child pool).
- *
- *  - `spec.system_prompt` is the persona / role brief. The framework
- *    blocks above frame it; this string is appended at the bottom.
- *  - `spec.skills` is intersected with the parent's loaded catalog
- *    (unknown names silently dropped). The child sees ONLY the
- *    intersected subset rendered as `<available_skills>` — never the
- *    parent's full catalog.
- *  - When the spec carries no persona AND no skills, the child still
- *    runs with the framework blocks (env + project conv) so project
- *    context survives.
- */
-export function materialiseForChild(
-  spec: MaterialiseChildSpec,
-  parentFramework: ParentFrameworkInput,
-  parentSkills: readonly Skill[],
-): MaterialiseChildResult {
-  const requested = spec.skills;
-  const effectiveSkills: Skill[] =
-    requested == null
-      ? []
-      : (() => {
-          const allow = new Set(requested);
-          return parentSkills.filter((s) => allow.has(s.name) && !s.disabled_reason);
-        })();
-
-  const persona = spec.system_prompt ?? "";
-  const childSkillsCatalog = effectiveSkills.length > 0 ? renderSkillsCatalog(effectiveSkills) : "";
-  const framework = buildFrameworkBlocks({
-    contextBlock: parentFramework.contextBlock,
-    skillsCatalog: childSkillsCatalog,
-    agentsCatalog: "",
-    ...(parentFramework.runEnv !== undefined ? { runEnv: parentFramework.runEnv } : {}),
-  });
-  // Persona last: framework blocks frame the task, the persona is the
-  // last thing the model reads before the user prompt.
-  const systemPrompt = framework.length > 0 ? mergeSystemPrompt(persona, framework) : persona;
-  return { systemPrompt, effectiveSkills };
 }
