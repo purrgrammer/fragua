@@ -20,8 +20,6 @@ const GITIGNORE_BLOCK = `# fragua runtime — never commit these
 .fragua/blobs/
 .fragua/fragua.db*
 .fragua/daemon/
-.fragua/credentials.jsonc
-.fragua/serve.json
 
 # fragua — always commit these (negative patterns for clarity)
 !.fragua/config.yaml
