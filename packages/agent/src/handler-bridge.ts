@@ -11,6 +11,7 @@ import type * as handler from "@fragua/core/handler";
 import { MessageTooLargeError } from "@fragua/store";
 import type { AgentMessage } from "@fragua/types";
 import { PiLlmBackend, type PiLlmBackendOptions } from "./backend.ts";
+import { syntheticThreadId } from "./thread.ts";
 
 export interface MakeLlmHandlerOpts {
   /**
@@ -102,33 +103,47 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       }
     };
 
-    const threadId = strAt(node.attrs as Record<string, unknown>, "thread_id");
-    // Resume hydration: load any prior messages for this (run, thread)
-    // that are already in the messages table. This is the daemon-
-    // restart path — in-process MessageStore is empty but the DB has
-    // the pre-crash transcript. The backend compares the size of this
-    // load against its `inProcessWrites` set to decide whether the
-    // dispatch is a post-restart resume.
-    const priorMessages = threadId ? loadPriorMessagesForThread(ctx, threadId) : undefined;
+    const explicitThreadId = strAt(node.attrs as Record<string, unknown>, "thread_id");
+    // A node with no explicit `thread:` still gets a thread — a synthetic
+    // one keyed by (nodeId, iteration). Without it an unthreaded node
+    // re-dispatches against an empty agent and silently drops its
+    // mid-flight transcript on every resume (budget, provider_retry,
+    // timeout, daemon restart). The synthetic id reuses the same
+    // persist/hydrate machinery as a real thread; keyed by iteration so a
+    // fresh loop pass starts clean while a resume of the SAME entry
+    // rehydrates — preserving unthreaded "fresh each entry" semantics.
+    const isSyntheticThread = explicitThreadId === undefined;
+    const threadId = explicitThreadId ?? syntheticThreadId(ctx.nodeId, ctx.iteration);
+    // Resume hydration: load any prior messages for this dispatch that are
+    // already in the messages table. This is the daemon-restart path —
+    // in-process MessageStore is empty but the DB has the pre-crash
+    // transcript. The backend compares the size of this load against its
+    // `inProcessWrites` set to decide whether the dispatch is a resume.
+    // An explicit thread loads its shared transcript (matched by node_id,
+    // with a graph-level fallback); a synthetic thread loads only this
+    // node's own rows for the current iteration.
+    const priorMessages = isSyntheticThread ? loadPriorMessagesForNode(ctx) : loadPriorMessagesForThread(ctx, threadId);
 
     // Seed dedup memo from the LAST persisted system + user row for
-    // this (run, nodeId). Re-dispatching the same node on resume
-    // (operator pause + resume, raise & resume, provider-error
+    // this (run, nodeId, iteration). Re-dispatching the same node on
+    // resume (operator pause + resume, raise & resume, provider-error
     // auto-resume) produces a byte-identical system prompt
     // (deterministic from node attrs) and re-passes the same input
     // prompt to `agent.prompt(effectivePrompt)`, which pi-agent
     // emits as a fresh user message_start/end. Without this memo
     // the messages table grows N × {system, user} rows per N
     // resume cycles, the conversation view shows visible
-    // duplicates, and downstream LLM rehydration carries the
-    // bloat. Walking the messages tail (limit 50 — practical
-    // bound for "most recent of each role") is cheaper than the
-    // unbounded `ctx.messages.since(0)` already used by
-    // `loadPriorMessagesForThread`.
+    // duplicates, and downstream LLM rehydration carries the bloat.
+    // The walk must be length-INDEPENDENT: the system + seed-user are
+    // the FIRST rows of the dispatch, so any bound on the tail (an
+    // earlier version capped at 50) silently defeats dedup once a node
+    // runs more turns than the bound before pausing. Scoped to the
+    // current iteration so a fresh loop pass still seeds its own
+    // system/user — only a resume of the same entry is deduped.
     let lastPersistedSystem: string | undefined;
     let lastPersistedUser: string | undefined;
-    const nodeRows = ctx.messages.since(0).filter((m) => m.nodeId === ctx.nodeId);
-    for (let i = nodeRows.length - 1; i >= 0 && i >= nodeRows.length - 50; i--) {
+    const nodeRows = ctx.messages.since(0).filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration);
+    for (let i = nodeRows.length - 1; i >= 0; i--) {
       const row = nodeRows[i];
       if (row == null) continue;
       const m = row.content as { role: string; content: unknown };
@@ -323,6 +338,19 @@ function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): read
   const graphLevel = ctx.messages.since(0);
   const byNode = graphLevel.filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : graphLevel;
+  if (rows.length === 0) return undefined;
+  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
+  return messages.length > 0 ? messages : undefined;
+}
+
+// Hydration source for a synthetic per-node thread: this node's own rows
+// for the current iteration. Iteration-scoped so a resumed dispatch restores
+// exactly the entry it's resuming and a fresh loop pass starts clean. The
+// `system` row is re-seeded each dispatch (and deduped on persist), and
+// `tool_node` rows are side-effect captures, not LLM-visible turns — both
+// are dropped, matching `loadPriorMessagesForThread`.
+function loadPriorMessagesForNode(ctx: HandlerContext): readonly AgentMessage[] | undefined {
+  const rows = ctx.messages.since(0).filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration);
   if (rows.length === 0) return undefined;
   const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
   return messages.length > 0 ? messages : undefined;

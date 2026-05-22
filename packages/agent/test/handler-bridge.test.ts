@@ -361,6 +361,70 @@ describe("makeLlmHandler", () => {
     expect(rows).toEqual(["system", "user", "system"]);
     store.close();
   });
+
+  test("dedup is length-independent: a >50-turn transcript before resume still dedups system + user", async () => {
+    // The system + seed-user are the FIRST rows of a dispatch. An earlier
+    // tail-bounded memo (last 50 rows only) missed them once a node ran
+    // more than 50 turns before pausing, so the resume re-seeded a
+    // duplicate system + user mid-transcript. Regression: the memo must
+    // find the head rows regardless of how long the transcript grew.
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.enqueueRun({ runId: "run-long", workflowSha: "sha" });
+    const ac = new AbortController();
+    const buildCtx = (): handler.HandlerContext =>
+      handler.buildHandlerContext({
+        runId: "run-long",
+        nodeId: "analyze",
+        iteration: 0,
+        signal: ac.signal,
+        routing: {},
+        store,
+        llm: handler.makeLlmClient({
+          signal: ac.signal,
+          call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
+        }),
+        http: handler.makeHttpClient({ signal: ac.signal }),
+        tools: new handler.InMemoryToolRegistry(),
+        args: {},
+        recorder: { recordIntent: () => {}, recordDone: () => {}, recordFailed: () => {} },
+      });
+
+    const SYS = "you are an analyst";
+    const USR = "analyze the repo";
+    const FILLER = 60;
+    let dispatch = 0;
+    const backend: LlmBackend = {
+      async run(input) {
+        dispatch += 1;
+        input.persistMessage?.({ role: "system", content: SYS, timestamp: Date.now() });
+        input.persistMessage?.({ role: "user", content: USR, timestamp: Date.now() });
+        if (dispatch === 1) {
+          for (let i = 0; i < FILLER; i++) {
+            input.persistMessage?.({
+              role: "toolResult",
+              toolCallId: `f${i}`,
+              toolName: "stub",
+              content: [{ type: "text", text: `filler ${i}` }],
+              isError: false,
+              timestamp: i,
+            });
+          }
+        }
+        return ok({});
+      },
+    };
+
+    const spec = makeLlmHandler({ node: node({ id: "analyze" }), nextNode: "__end__", backend });
+    await spec.handler(buildCtx()); // dispatch 1: system + user + 60 filler rows
+    await spec.handler(buildCtx()); // dispatch 2 (resume): same system + user → must dedup
+
+    const roles = store.getMessages("run-long", { nodeId: "analyze" }).map((r) => r.content.role);
+    expect(roles.filter((r) => r === "system")).toHaveLength(1);
+    expect(roles.filter((r) => r === "user")).toHaveLength(1);
+    expect(roles.filter((r) => r === "toolResult")).toHaveLength(FILLER);
+    store.close();
+  });
 });
 
 // Regression / property suite for "llm routing belongs to the edge
@@ -591,6 +655,69 @@ describe("makeLlmHandler — priorMessages thread loading", () => {
     expect(prior).toHaveLength(1);
     expect(JSON.stringify(prior)).toContain("PLAN_REALISED");
     expect(JSON.stringify(prior)).not.toContain("should not appear");
+    store.close();
+  });
+
+  test("unthreaded node rehydrates its own (nodeId, iteration) transcript on resume; a new iteration starts fresh", async () => {
+    // A node with no explicit `thread:` gets a synthetic per-(nodeId,
+    // iteration) thread, so a resumed dispatch of the same entry sees its
+    // mid-flight transcript instead of an empty agent — while a fresh loop
+    // pass (next iteration) still starts clean.
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.enqueueRun({ runId: "r-syn", workflowSha: "sha" });
+    const calls: Array<readonly unknown[]> = [];
+    const ac = new AbortController();
+    const buildCtx = (iteration: number): handler.HandlerContext =>
+      handler.buildHandlerContext({
+        runId: "r-syn",
+        nodeId: "work",
+        iteration,
+        signal: ac.signal,
+        routing: {},
+        store,
+        llm: handler.makeLlmClient({
+          signal: ac.signal,
+          call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
+        }),
+        http: handler.makeHttpClient({ signal: ac.signal }),
+        tools: new handler.InMemoryToolRegistry(),
+        args: {},
+        recorder: { recordIntent: () => {}, recordDone: () => {}, recordFailed: () => {} },
+      });
+
+    const backend: LlmBackend = {
+      async run(input) {
+        calls.push(input.priorMessages ?? []);
+        input.persistMessage?.({
+          role: "assistant",
+          content: [{ type: "text", text: "PARTIAL_WORK" }],
+          api: "anthropic" as never,
+          provider: "anthropic" as never,
+          model: "stub",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        });
+        return ok({});
+      },
+    };
+    const spec = makeLlmHandler({ node: node({ id: "work" }), nextNode: "__end__", backend });
+
+    await spec.handler(buildCtx(0)); // dispatch 1, iter 0: fresh
+    await spec.handler(buildCtx(0)); // dispatch 2, iter 0: resume → rehydrates iter-0 transcript
+    await spec.handler(buildCtx(1)); // iter 1: a new loop pass → fresh again
+
+    expect(calls[0]).toEqual([]); // first dispatch has nothing prior
+    expect(JSON.stringify(calls[1])).toContain("PARTIAL_WORK"); // resume sees its own transcript
+    expect(calls[2]).toEqual([]); // a new iteration starts clean
     store.close();
   });
 });
