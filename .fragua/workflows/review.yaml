@@ -80,14 +80,14 @@ steps:
       quick: {to: review_quick, label: "Quick review"}
       full:  {to: review_full,  label: "Full review"}
 
-  review_quick:                        # quick tier — one focused pass, no fan-out
+  review_quick:                        # quick tier — one focused pass
     type: llm
     thread: review
     allowed-tools: [read, grep, bash]
     max-cost: 0.40
     next: signoff
     prompt: |
-      Quick review of the scoped change (PATHS / range above; read the files directly). One focused pass over correctness and any obvious security or clarity issue — don't fan out, this is a small change. Emit verbatim:
+      Quick review of the scoped change (PATHS / range above; read the files directly). One focused pass over correctness and any obvious security or clarity issue — it's a small change, keep it to a single pass. Emit verbatim:
 
       # Code Review
 

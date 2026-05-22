@@ -6,7 +6,7 @@
 
 ## What this is
 
-**fragua** is a universal AI agent orchestrator. YAML workflows → deterministic state machine → LLM-based agents across any provider → replayable event log on top of a single SQLite store.
+**fragua** is a durable AI workflow execution engine. YAML workflows → deterministic state machine → LLM-based agents across any provider → replayable event log on top of a single SQLite store.
 
 Authoritative docs:
 
@@ -56,6 +56,8 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
 
 Runtime state: `~/.fragua/fragua.db` (the global store the harness binds to by default; `daemon_lock.{http_url, http_port, harness_version}` carry the running URL — that's how `fragua run` discovers the harness, no JSON file). The CI primitive (`fragua daemon --db <path>` + `fragua serve --db <path>`) writes its serve URL to `<cwd>/.fragua/serve.json`; `fragua run` falls back to that when no harness lock is present. `cwd` on `run_state` is the only project identifier — there is no `projects` table; the UI lists projects via `SELECT DISTINCT cwd`. Worktrees live under each run's `cwd` at `.fragua/worktrees/<run_id>/`.
+
+**Never run `fragua` commands against the live store while developing.** The `daemon` / `serve` / `run` commands all take `--db <path>` (default `~/.fragua/fragua.db`) — when you need to exercise a CLI command to test a change, point it at an ephemeral DB (e.g. `--db "$(mktemp -d)/t.db"`) so a stray write or schema migration can't corrupt the operator's running instance. Prefer the test suite over booting a daemon/server at all.
 
 Config cascade: `~/.fragua/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.fragua/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. YAML only.
 

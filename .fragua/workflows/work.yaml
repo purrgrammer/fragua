@@ -78,8 +78,6 @@ steps:
     prompt: |
       Bug: ${{ inputs.task }}.
 
-      SANDBOX (hard rule): never start the orchestrator's long-running services or write to its live global state store; reproduce against throwaway/temporary resources only.
-
       Localise the scope, write a FAILING test in the repo's existing framework and conventional location, and confirm it fails for the stated reason (not a setup error).
       Output: source + test paths, the test identifier, the failing assertion in one sentence.
       Cannot localise after a reasonable read → `abort` with `cannot reproduce: <why>`.
@@ -92,8 +90,6 @@ steps:
     allowed-tools: [read, write, edit, grep, bash]
     prompt: |
       Implement ${{ inputs.task }}.
-
-      SANDBOX (hard rule): you run INSIDE an agent orchestrator. NEVER start its long-running daemon/server processes or run any command that opens its live global state store — a schema migration or stray write corrupts the operator's running instance. Verify schema/migration/store changes ONLY via the test suite against throwaway/temporary resources (e.g. `bun test` with temp paths). Never boot a daemon or server just to "check" your change.
 
       Plan in this thread → realise it exactly, only the package(s) it names.
       Failing test in this thread → make it pass without weakening it.
@@ -161,5 +157,4 @@ steps:
     max-tokens: 800000
     prompt: |
       CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
-      SANDBOX (hard rule): never start the orchestrator's long-running services or write to its live global state store; verify against throwaway/temporary resources only.
     next: ci
