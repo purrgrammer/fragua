@@ -232,13 +232,17 @@ No row backfill (the store is recreated). The `path:<cwd>` form is purely a
 **runtime** enqueue fallback (§3) for a config with no `id` — not a migration
 artifact.
 
-**`projects` table — warranted?** Probably not yet. `SELECT DISTINCT
-project_id` plus a representative cwd hint covers the list. A table buys: a
-durable display `name` decoupled from any run, and a canonical "last-seen cwd"
-per id. But config already holds `name`, and the daemon re-reads config on
-discovery — so a table is an optimization, not a correctness need. Recommend
-deferring it; revisit if the projects list needs metadata that outlives all
-runs (e.g. a project with zero runs that should still appear).
+**`projects` table — warranted?** Probably not yet, **if** the display `name`
+travels with the run. The naming gap: the list reads `name` from the project's
+`.fragua/config.yaml` — but an **imported-only project has no local checkout**,
+so there's no config to read and the list would show a bare UUID. Fix without a
+table: **denormalize `project_name` onto `run_state` at enqueue** (and carry it
+in the bundle, §db-import). The name then rides every run, so `SELECT DISTINCT
+project_id, project_name` labels imported-only projects too. A `projects` table
+is still only an optimization (durable name for a zero-run project, canonical
+last-seen cwd); defer it. Note: the denormalized `project_name` is the *value at
+enqueue time* — a later rename in config won't retro-update old runs, which is
+acceptable (it's a label, and the per-run value is honest history).
 
 ## 5. Open questions / risks
 
@@ -284,3 +288,23 @@ runs (e.g. a project with zero runs that should still appear).
    runs the id must be trusted (the cwd may not exist); for live `fragua run`
    either works. Pick "trust the client, default to resolve-from-cwd when
    absent" to keep both paths simple.
+8. **Monorepo / id resolution — UNRESOLVED, decide before building.** `id` lives
+   in `<cwd>/.fragua/config.yaml`. Does resolution read that *exact* path, or
+   **walk up to the nearest** `.fragua/config.yaml`? Exact-cwd means running from
+   `repo/packages/api` with only a root config gets no id (→ `path:<cwd>`
+   fallback), fragmenting a single project. Walk-up means a root config gives the
+   whole repo one identity, while a subdir that wants to be its *own* project
+   drops its own `.fragua/config.yaml` with its own `id`. **Recommend walk-up to
+   the nearest config** (repo-root identity by default; sub-projects opt in by
+   placing a config) — it matches how people think about a repo and avoids
+   accidental fragmentation. The config loader today reads the exact cwd; this
+   needs a resolution rule.
+9. **Fork divergence.** A fork inherits the parent's committed `id` (it's in the
+   cloned config), so the fork's runs attribute to the *parent* project. That's
+   correct for "a clone of the same project" but wrong for "a hard fork that is
+   now its own thing" — and two independent forks running fragua would fold into
+   one project in a shared store. `id` is immutable *by convention* (the config
+   comment says so; nothing enforces it — editing it forks the project's
+   history). Provide an explicit escape: `fragua init` detects an existing `id`
+   and, when the user confirms a true fork, re-mints; or a `fragua project
+   reset-id`. Don't auto-re-mint (that would silently fork every clone).

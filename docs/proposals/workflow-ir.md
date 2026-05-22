@@ -141,21 +141,41 @@ is now an IR-hash. No migration walk; the dev store is recreated.
 
 ## 8. Open questions / risks
 
-1. **Canonicalization correctness.** The hash is only as stable as the canonical
-   serializer. Every IR field must serialize deterministically; the projection
-   must be frozen and tested (round-trip + "reformatted source → same sha"). Get
-   it right once; it's a forever contract.
-2. **What `sha` covers.** Recommend hashing only execution-load-bearing fields
-   (nodes, edges, attrs that affect dispatch/routing), so a future
-   non-semantic IR field doesn't change identity for new uploads. Document the
-   exact field set.
-3. **Three version axes.** `schema_version` (store), `ir_version` (IR contract),
+1. **Canonicalization correctness — and the 0.1.0 freeze fork.** The hash is only
+   as stable as the canonical serializer; every field it covers must serialize
+   deterministically (pin it to a spec — JCS / RFC 8785 or a documented subset:
+   key order, number form, unicode). It is a **forever contract**: because `sha`
+   is frozen at mint and FK-referenced (`run_state.workflow_sha`), changing
+   canonicalization later means the same workflow mints a *different* `sha` on
+   re-upload — silent duplicate identity, not corruption, but it breaks the
+   "reformatting doesn't fork" promise. **So shipping IR-hash at 0.1.0 *requires*
+   the canonicalization specified, frozen, and tested before the schema freezes.**
+   If it can't be nailed in time, the honest fallback is: **ship source-hash
+   (`sha256(source)`) at 0.1.0 and accept a one-time post-0.1.0 migration to
+   IR-hash** — the lesser evil versus freezing a wrong canonicalization forever.
+   This is the gating decision for the (A)+(B) leg.
+2. **`sha` covers the semantic core only — which decouples it from `ir_version`.**
+   Hash only execution-load-bearing fields (nodes, edges, dispatch/routing
+   attrs), not the full IR struct. Consequence: a future `ir_version` bump that
+   adds a non-semantic field does **not** change the hash, so **canonicalization
+   is frozen ONCE over the core — it is NOT itself versioned per `ir_version`.**
+   That answers "do we need every historical canonicalizer to verify old shas?"
+   — no; the one frozen core-projection verifies any `ir_version`. Document the
+   exact core field set.
+3. **`sha` is never recomputed after mint — make it an invariant.** Computed once
+   at upload from the source-parsed IR; never re-derived from a loaded or
+   up-converted IR. No code path may rehash-and-compare on read (a tempting
+   future "validation" that would reject every up-converted or imported
+   workflow). Import **trusts the carried `sha`**; optional verification recomputes
+   the *core* hash (frozen, `ir_version`-independent per #2) and compares — never
+   the full struct.
+4. **Three version axes.** `schema_version` (store), `ir_version` (IR contract),
    `sha` (content identity). The proposal's whole value is keeping them separate;
    any implementation must not collapse them.
-4. **Source provenance fidelity.** With IR-hash, the stored `source` for a `sha`
+5. **Source provenance fidelity.** With IR-hash, the stored `source` for a `sha`
    is whichever upload won; it's not guaranteed byte-equal to every author's
    input. Fine for execution; note it for any "show original" UI.
-5. **Sequencing.** (C) now (in-memory, no contract). (A)+(B)+versioning together,
+6. **Sequencing.** (C) now (in-memory, no contract). (A)+(B)+versioning together,
    pre-0.1.0, landing with or just before [`db-import.md`](db-import.md) (the
    bundle carries IR + ir_version) and reusing the versioning pattern from
    [`event-contract-version.md`](event-contract-version.md).
