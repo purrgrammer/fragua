@@ -73,7 +73,7 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
         ) : diffQuery.data === "" ? (
           <EmptyState data-testid="snapshot-diff-empty" title="No changes vs base" density="compact" />
         ) : diffQuery.data !== undefined ? (
-          <CodeBlock code={diffQuery.data} language="diff" />
+          <CodeBlock code={diffQuery.data} language="diff" wrap />
         ) : null}
       </div>
     </section>

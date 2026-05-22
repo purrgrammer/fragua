@@ -103,6 +103,8 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
   language: BundledLanguage;
   showLineNumbers?: boolean;
+  /** Wrap long lines instead of scrolling horizontally. */
+  wrap?: boolean;
 };
 
 interface TokenizedCode {
@@ -235,10 +237,12 @@ const CodeBlockBody = memo(
   ({
     tokenized,
     showLineNumbers,
+    wrap,
     className,
   }: {
     tokenized: TokenizedCode;
     showLineNumbers: boolean;
+    wrap: boolean;
     className?: string;
   }) => {
     const preStyle = useMemo(
@@ -256,6 +260,7 @@ const CodeBlockBody = memo(
         className={cn(
           "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",
           "m-0 p-[var(--sw-space-3)] text-[length:var(--sw-text-sm)] leading-[1.4]",
+          wrap && "whitespace-pre-wrap break-words",
           className,
         )}
         style={preStyle}
@@ -276,6 +281,7 @@ const CodeBlockBody = memo(
   (prevProps, nextProps) =>
     prevProps.tokenized === nextProps.tokenized &&
     prevProps.showLineNumbers === nextProps.showLineNumbers &&
+    prevProps.wrap === nextProps.wrap &&
     prevProps.className === nextProps.className,
 );
 
@@ -343,10 +349,12 @@ export const CodeBlockContent = ({
   code,
   language,
   showLineNumbers = false,
+  wrap = false,
 }: {
   code: string;
   language: BundledLanguage;
   showLineNumbers?: boolean;
+  wrap?: boolean;
 }) => {
   // Memoized raw tokens for immediate display
   const rawTokens = useMemo(() => createRawTokens(code), [code]);
@@ -382,7 +390,7 @@ export const CodeBlockContent = ({
 
   return (
     <div className="relative overflow-auto">
-      <CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} />
+      <CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} wrap={wrap} />
     </div>
   );
 };
@@ -391,6 +399,7 @@ export const CodeBlock = ({
   code,
   language,
   showLineNumbers = false,
+  wrap = false,
   className,
   children,
   ...props
@@ -401,7 +410,7 @@ export const CodeBlock = ({
     <CodeBlockContext.Provider value={contextValue}>
       <CodeBlockContainer className={className} language={language} {...props}>
         {children}
-        <CodeBlockContent code={code} language={language} showLineNumbers={showLineNumbers} />
+        <CodeBlockContent code={code} language={language} showLineNumbers={showLineNumbers} wrap={wrap} />
       </CodeBlockContainer>
     </CodeBlockContext.Provider>
   );
