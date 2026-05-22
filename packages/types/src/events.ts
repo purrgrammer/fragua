@@ -76,19 +76,7 @@ export type EventType =
   // Worktree tree snapshot at a step / HITL boundary (observability).
   // The Diff scrubber's feed. Terminal snapshots are the
   // `fact.snapshot_recorded` fact, not this.
-  | "snapshot.captured"
-  // Sub-agent boundaries (observability-only). Bracket the slice of
-  // events produced by an inline `agent`-tool spawn on the parent's
-  // stream; every event in between carries `subagent_id` on its
-  // payload. `subagent.resumed` fires when the daemon respawns a
-  // sub-agent under a deterministic subagent_id after a crash — it
-  // either announces transcript hydration (`reason:
-  // "transcript_hydrated"`) or short-circuits to `subagent.end` when
-  // the persisted transcript was already complete
-  // (`reason: "already_completed"`).
-  | "subagent.start"
-  | "subagent.end"
-  | "subagent.resumed";
+  | "snapshot.captured";
 
 /** Every EventType value as a const array, suitable for iteration.
  * Consumers like `EventSource.addEventListener(<type>, ...)` register
@@ -144,9 +132,6 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "budget.stop",
   "cost.recorded",
   "snapshot.captured",
-  "subagent.start",
-  "subagent.end",
-  "subagent.resumed",
 ];
 
 // ─────────────── Status / pause / halt / quarantine enums ───────────────
@@ -785,20 +770,6 @@ export type FactEvent =
       type: "fact.run_discarded";
       payload: { refs: string[] };
     };
-
-// Note: there are no dedicated `fact.subagent.*` events. Sub-agents
-// are a tool implementation, not a run — they have no `run_state` row
-// and no separate event stream. The two observability event types
-// `subagent.start` / `subagent.end` (see EventType union above)
-// bracket the slice; every event the sub-agent emits in between
-// (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`)
-// carries `subagent_id` on its payload as a discriminator. Cost rolls
-// into the parent's `metrics` through the existing accumulation path;
-// the reducer doesn't filter on `subagent_id`. The bidirectional
-// handle the parent LLM sees is `tool_name="agent"` plus the
-// toolcall result's `data.subagent_id` — see SubagentStartData /
-// SubagentEndData in @fragua/core/types/events for the bracket
-// payloads.
 
 export type FactType = FactEvent["type"];
 
