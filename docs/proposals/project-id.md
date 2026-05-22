@@ -167,7 +167,7 @@ project with no local cwd (§3, §5 #5).
 
 | Site | file:line | Class | Becomes |
 |---|---|---|---|
-| `run.ts` enqueue `cwd: resolve(cwd)` (`= process.cwd()`) | `run.ts:118,192` | **both** | Walk up from `process.cwd()` to the nearest config (git-root ceiling, §3); **refuse if no `id`** (§5 #3); send `project_id` + `project_name` + `cwd` = the *resolved project root* (§5 #11), not the invocation dir. |
+| `run.ts` enqueue `cwd: resolve(cwd)` (`= process.cwd()`) | `run.ts:118,192` | **both** | Walk up from `process.cwd()` to the nearest config (git-root ceiling, §3); **auto-init if none found** (mint id, write config at the project root, §5 #3); send `project_id` + `project_name` + `cwd` = the *resolved project root* (§5 #11), not the invocation dir. |
 | `init.ts` mints `id` | `init.ts:43-44,66-77` | IDENTITY (source of truth) | Mints a UUIDv7 `id` + dir-name `name` (§5 #1, resolved). |
 | Config cascade `<cwd>/.fragua/config.yaml` | `config.ts:5,245-297` | LOCATION (file) / IDENTITY (`id` field) | The file is per-machine; the `id` field inside it is the identity source. `id` is in `FraguaConfigSchema` (`config.ts:88-92`); `init.ts:43` mints a UUIDv7 into it, matching the schema comment (§5 #1). |
 | `validate.ts`, `daemon.ts` store path, `schedule.ts` — `process.cwd()` for path resolution | `validate.ts:12`, `daemon.ts:56-127`, `schedule.ts:52` | LOCATION | Filesystem resolution → cwd. |
@@ -216,21 +216,26 @@ project with no local cwd (§3, §5 #5).
   un-gitignored second `.fragua/` into a subdir. The invocation subdir only seeds
   the walk and is discarded after resolution. (A subdir that wants its own runtime
   root becomes its own project by holding its own config — the walk stops there.)
-- **`init` is required — no `id`, no run.** When resolution finds no `id` (no
-  config in the walk-up, or a config without one), `fragua run` **refuses** with
-  *"run `fragua init` first"* rather than synthesizing a fallback. Every run
-  therefore carries a real minted identity by construction — there is no
-  second-class `path:<cwd>` run, and no later adopt-migration to write. The same
-  gate applies to web-initiated enqueue (the server resolves or rejects) and to
-  schedule creation. See §5 #3.
+- **Auto-init when no config is found — no hard-fail, no fallback id.** When
+  resolution finds no `id` (no config in the walk-up), `fragua run` runs the
+  equivalent of `fragua init` on the spot: mint a UUIDv7 `id` + dir-name `name`,
+  write `<project-root>/.fragua/config.yaml` (git root if in a repo, else cwd),
+  merge the runtime `.gitignore` block, announce what it created, then proceed
+  with the run. Because it mints a **real** id (never a throwaway `path:<cwd>`),
+  every run still carries a genuine identity (`project_id NOT NULL`), there is no
+  second-class run and no later adopt-migration — but the first run in a fresh dir
+  *just works* instead of erroring. Web-initiated enqueue and schedule creation
+  target an already-resolved project and do **not** auto-init (a server writing
+  files into a project dir is the surprising case); they resolve or reject. See
+  §5 #3.
 - **Commit gate (gate 2).** fragua can enforce that the config *exists* but
   cannot commit it for you, and portability requires the `id` to be committed to
   git (so every clone shares it). So `fragua run` additionally **warns** when the
   resolved config is present but uncommitted — *"commit `.fragua/config.yaml` to
   make this run portable"* — without blocking. See §5 #4.
 - **Projection.** `run_state` gains `project_id TEXT NOT NULL` (IDENTITY,
-  indexed) — `NOT NULL` is now honest because the require-init gate guarantees a
-  value on every enqueue path (`fragua run`, schedule fire, import). `cwd TEXT`
+  indexed) — `NOT NULL` is now honest because auto-init (§5 #3) mints a real id on
+  every enqueue path (`fragua run`, schedule fire, import). `cwd TEXT`
   stays nullable (LOCATION). Schedules gain `project_id TEXT NOT NULL`.
 - **Projects list** keys on `project_id` (`SELECT DISTINCT project_id` or a
   `projects` table — §4). Display `name` from config `name`, not
@@ -266,10 +271,10 @@ project_id TEXT NOT NULL,
 CREATE INDEX IF NOT EXISTS idx_schedules_project_id ON schedules(project_id);
 ```
 
-`project_id` is `NOT NULL`: the require-init gate (§3, §5 #3) guarantees a minted
-`id` on every enqueue path, so the invariant "every run has a project identity"
-holds at the schema level — no `path:<cwd>` fallback value, no nullable column to
-defend against. `project_name` is `NOT NULL` for the same reason (§5 #11) and is
+`project_id` is `NOT NULL`: auto-init (§3, §5 #3) mints a real `id` on every
+enqueue path, so the invariant "every run has a project identity" holds at the
+schema level — no `path:<cwd>` fallback value, no nullable column to defend
+against. `project_name` is `NOT NULL` for the same reason (§5 #11) and is
 resolved at enqueue from the config `name`, falling back to the project-root
 basename. No row backfill (the store is recreated).
 
@@ -310,19 +315,21 @@ rationale so the frozen choice is auditable later.
    question that [`db-import.md`](db-import.md) §7 #2 flagged *for `project_id`*
    (the `workflows.ir` / `ir_version` half of that question stays open — see
    [`workflow-ir.md`](workflow-ir.md)).
-3. **`init` is required before a run — hard-fail, no fallback.** When resolution
-   (§3 walk-up) finds no `id`, `fragua run` **refuses** with *"run `fragua init`
-   first"*; the server rejects an id-less enqueue likewise; schedule creation
-   requires a resolved id. There is **no** `path:<cwd>` synthesized fallback and
-   **no** `fragua project adopt` migration — both are deleted. Rationale: every
-   run carries a real minted identity by construction, so `project_id` is
-   `NOT NULL` (§4) and portability is the default rather than a second-class
-   upgrade. The cost — `fragua run` in a never-init'd dir errors instead of just
-   working — is a one-time, one-command friction (`fragua init`), acceptable
-   pre-0.1.0 and worth the elimination of the entire fallback code path. (fragua
-   can enforce that the config *exists*; committing it is gate 2, #4.)
-4. **Commit gate — warn, don't block (gate 2).** The require-init gate (#3)
-   guarantees the config *exists*; it cannot guarantee the `id` is **committed**,
+3. **No `id` → auto-init, not hard-fail.** When resolution (§3 walk-up) finds no
+   `id`, `fragua run` creates the project on the spot — the equivalent of `fragua
+   init`: mint a UUIDv7 `id` + dir-name `name`, write the config at the project
+   root (git root if in a repo, else cwd), merge the runtime `.gitignore` block,
+   announce it, and proceed. There is **no** `path:<cwd>` synthesized fallback and
+   **no** `fragua project adopt` migration — both are deleted — because auto-init
+   mints a *real* id, so `project_id` is still `NOT NULL` (§4) and portability is
+   the default, while the first run in a fresh dir just works. The server rejects
+   an id-less *web* enqueue and schedule creation requires a resolved id (only the
+   CLI `run` auto-inits). Tradeoff: `fragua run` will create a config and edit
+   `.gitignore` in a repo with no fragua project yet — additive, gitignored, and
+   announced, but a repo mutation the user didn't explicitly request; acceptable
+   for a dev tool. (fragua creates the config; committing it is gate 2, #4.)
+4. **Commit gate — warn, don't block (gate 2).** Auto-init (#3) guarantees the
+   config *exists*; it cannot guarantee the `id` is **committed**,
    and portability needs it committed so every clone shares it. So `fragua run`
    (and the daemon when dispatching a schedule) **warns** when the resolved config
    is present but uncommitted — *"commit `.fragua/config.yaml` to make this run
@@ -387,9 +394,11 @@ rationale so the frozen choice is auditable later.
 **Consequences to carry into implementation** (not contradictions — fallout of
 the above):
 
-- **First-run UX & docs.** Require-init (#3) means `fragua run` in a never-init'd
-  dir errors — including running a *global* workflow from an un-init'd cwd. SPEC,
-  the quickstart, and the harness onboarding must state "init first."
+- **First-run UX & docs.** Auto-init (#3) means `fragua run` in a never-init'd dir
+  *creates* the project (config + a `.gitignore` edit at the git root) and
+  proceeds, printing what it made — it does not error. SPEC, the quickstart, and
+  the harness onboarding should document that the first run in a fresh repo writes
+  `.fragua/config.yaml` and nudges you to commit it.
 - **Every `enqueueRun` call site gains `project_id` + `project_name`.** Both are
   `NOT NULL`; the store insert, the schedule-fire path, the server enqueue, and
   **all test fixtures** must supply them. Mechanical but broad — grep

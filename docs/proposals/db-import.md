@@ -184,8 +184,9 @@ machine-local field is nullable or excludable. The only pre-freeze items are
    carry the git objects as a blob.
 2. **`project_id` — DECIDED: lands in the 0.1.0 baseline, `NOT NULL`.**
    [`project-id.md`](project-id.md) is settled: `run_state.project_id` and
-   `schedules.project_id` go into the baseline now (require-init guarantees a
-   value, so `NOT NULL`), making identity portable across import by construction —
+   `schedules.project_id` go into the baseline now (auto-init mints a real id on
+   every enqueue path, so `NOT NULL`), making identity portable across import by
+   construction —
    the incoming `cwd` is advisory and rebound (§4). The **workflows `ir` /
    `ir_version`** half of this freeze-window question remains the only open column
    decision, pending [`workflow-ir.md`](workflow-ir.md).
