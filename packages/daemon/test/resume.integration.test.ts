@@ -18,6 +18,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
@@ -39,7 +40,7 @@ function makeRig(yaml: string, sha = "wf"): Rig {
   const dir = mkdtempSync(join(tmpdir(), "fragua-resume-"));
   const dbPath = join(dir, "fragua.db");
   const store = new SqliteStore({ path: dbPath });
-  store.saveWorkflow(sha, "wf", yaml);
+  store.saveWorkflow(sha, "wf", yaml, serializeGraph(parseWorkflow(yaml)), CURRENT_IR_VERSION);
   return {
     store,
     dispatcher: new Dispatcher(),

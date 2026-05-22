@@ -7,6 +7,7 @@
 //   - P19: SSE replay via Last-Event-ID
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore, sha256Hex } from "@fragua/store";
 import { FEED_EVENT_KINDS } from "@fragua/types";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../../src/ports.ts";
@@ -54,7 +55,13 @@ function createTestWorkflowReader(): TestWorkflowReader {
 
 beforeEach(() => {
   store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf",
+    "t",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   workflowReader = createTestWorkflowReader();
   server = createRoutes({ store, workflowReader });
 });
@@ -278,7 +285,8 @@ describe("POST /runs — enqueue", () => {
   test("rejects enqueue against a stored but unparseable workflow sha", async () => {
     const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x}\n";
     const sha = sha256Hex(source);
-    store.saveWorkflow(sha, "bad", source);
+    const validIr = serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n"));
+    store.saveWorkflow(sha, "bad", source, validIr, CURRENT_IR_VERSION);
     const res = await req("POST", "/runs", { workflowSha: sha });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { code: string; error: string };
@@ -536,7 +544,13 @@ steps:
   test("preflightProviders returning ok:false rejects with code=provider_unavailable", async () => {
     const { createRoutes: fresh } = await import("../../src/store/routes.ts");
     const s = new SqliteStore({ path: ":memory:" });
-    s.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    s.saveWorkflow(
+      "wf",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     const app = fresh({
       store: s,
       preflightProviders: () => ({ ok: false, detail: "no keys set" }),
@@ -558,7 +572,13 @@ steps:
   test("preflightProviders returning ok:true allows the enqueue through", async () => {
     const { createRoutes: fresh } = await import("../../src/store/routes.ts");
     const s = new SqliteStore({ path: ":memory:" });
-    s.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    s.saveWorkflow(
+      "wf",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     const app = fresh({
       store: s,
       preflightProviders: () => ({ ok: true }),
@@ -1289,7 +1309,13 @@ describe("global event feed (cross-run)", () => {
     let nowVal = 1_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+      tStore.saveWorkflow(
+        "wf",
+        "t",
+        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        CURRENT_IR_VERSION,
+      );
       // Window 1 @ ts=1_000_000
       enqueueWithStart(tStore, "r1", "wf");
       // Window 2 @ ts=1_000_500 (500 ms later)
@@ -1325,7 +1351,13 @@ describe("global event feed (cross-run)", () => {
     let nowVal = 2_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+      tStore.saveWorkflow(
+        "wf",
+        "t",
+        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        CURRENT_IR_VERSION,
+      );
       // ts windows: 2_000_000, 2_000_100, 2_000_200
       enqueueWithStart(tStore, "r1", "wf");
       nowVal = 2_000_100;
@@ -1367,7 +1399,13 @@ describe("global event feed (cross-run)", () => {
     const nowVal = 5_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+      tStore.saveWorkflow(
+        "wf",
+        "t",
+        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        CURRENT_IR_VERSION,
+      );
       // Seed run "z" first, then take its last delivered event as the cursor.
       enqueueWithStart(tStore, "z", "wf");
       const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
@@ -1402,7 +1440,13 @@ describe("global event feed (cross-run)", () => {
     const nowVal = 12_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
-      tStore.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+      tStore.saveWorkflow(
+        "wf",
+        "t",
+        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        CURRENT_IR_VERSION,
+      );
       const runIds = ["r01", "r02", "r03", "r04", "r05", "r06", "r07", "r08"];
       for (const rid of runIds) enqueueWithStart(tStore, rid, "wf");
 

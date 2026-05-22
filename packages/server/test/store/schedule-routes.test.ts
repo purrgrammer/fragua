@@ -1,6 +1,7 @@
 // HTTP route coverage for the schedules surface
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { createScheduleRoutes } from "../../src/store/schedule-routes.ts";
 
@@ -121,7 +122,13 @@ describe("GET /schedules?cwd=...", () => {
   test("embeds recentRuns health stripe data in GET /schedules response", async () => {
     // Seed a schedule and manually associate a completed + a halted run.
     const sha = "wf_sha_stripe";
-    store.saveWorkflow(sha, "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      sha,
+      "wf",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     const created = (await (await req("POST", "/schedules", { workflow: "wf", cwd: "/r", every: "1h" })).json()) as {
       id: string;
     };

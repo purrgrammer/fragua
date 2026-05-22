@@ -491,7 +491,7 @@ steps:
   });
 
   test("unparseable workflow graph halts instead of silently completing through __end__", async () => {
-    const r = rig({ yaml: "name: [unterminated\nsteps:\n  start: {type: llm, prompt: x}\n" });
+    const r = rig({ yaml: "name: [unterminated\nsteps:\n  start: {type: llm, prompt: x}\n", ir: "not-valid-ir-json" });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "llm",
       sideEffect: "none",

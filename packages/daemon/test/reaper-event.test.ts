@@ -3,6 +3,7 @@
 // same surface used by P9; here we assert the audit trail.
 
 import { describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { Dispatcher } from "../src/dispatch.ts";
@@ -15,7 +16,13 @@ function rig(): {
   llmCall: handler.LlmCallFn;
 } {
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf",
+    "t",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   return {
     store,
     dispatcher: new Dispatcher(),

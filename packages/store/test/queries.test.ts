@@ -10,6 +10,8 @@ import { describe, expect, test } from "bun:test";
 import type { ObservabilityEvent } from "../src/index.ts";
 import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
 
+const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
+
 function startEv(nodeId: string, extras: Record<string, unknown> = {}): ObservabilityEvent {
   return { type: "llm.start", payload: { nodeId, iteration: 0, prompt: "p", ...extras } };
 }
@@ -234,7 +236,7 @@ describe("getGlobalEventsForward", () => {
   test('first-connect sentinel `("", -1)` includes all events at floorTs', async () => {
     const t = 5_000_000;
     const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
-    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "a", workflowSha: "wf" });
     store.enqueueRun({ runId: "z", workflowSha: "wf" });
 
@@ -252,7 +254,7 @@ describe("getGlobalEventsForward", () => {
   test("strict-tuple cursor: `> (ts, runId, seq)` excludes the cursor row", async () => {
     const t = 6_000_000;
     const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
-    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "a", workflowSha: "wf" });
     store.enqueueRun({ runId: "m", workflowSha: "wf" });
     store.enqueueRun({ runId: "z", workflowSha: "wf" });
@@ -276,7 +278,7 @@ describe("getGlobalEventsForward", () => {
     // returning the same first row forever).
     const t = 7_000_000;
     const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
-    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "r1", workflowSha: "wf" });
     store.enqueueRun({ runId: "r2", workflowSha: "wf" });
     store.enqueueRun({ runId: "r3", workflowSha: "wf" });
@@ -304,7 +306,7 @@ describe("getGlobalEventsForward", () => {
   test("kindIn filter excludes non-matching event types", async () => {
     const t = 8_000_000;
     const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
-    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "r1", workflowSha: "wf" });
 
     // intent.run_enqueued is in KINDS; querying with an empty allow-list
@@ -329,7 +331,7 @@ describe("getGlobalEventsAtFloor", () => {
     // returns all three; advancing the cursor narrows the window.
     const t = 9_000_000;
     const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
-    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "a", workflowSha: "wf" });
     store.enqueueRun({ runId: "m", workflowSha: "wf" });
     store.enqueueRun({ runId: "z", workflowSha: "wf" });
@@ -359,7 +361,7 @@ describe("getGlobalEventsAtFloor", () => {
     // t2's events, even though t1's is lex-smaller in `(run_id, seq)`.
     let t = 10_000_000;
     const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
-    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "a", workflowSha: "wf" });
     t = 10_000_001;
     store.enqueueRun({ runId: "b", workflowSha: "wf" });
@@ -379,7 +381,7 @@ describe("getGlobalEventsAtFloor", () => {
   test("kindIn filter excludes non-matching event types", async () => {
     const t = 11_000_000;
     const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
-    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "a", workflowSha: "wf" });
     store.enqueueRun({ runId: "z", workflowSha: "wf" });
 

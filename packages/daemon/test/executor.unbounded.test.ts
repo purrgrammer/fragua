@@ -8,6 +8,7 @@
 // And the supervisor's stuck-node watchdog must not trip the controller.
 
 import { describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
@@ -76,7 +77,13 @@ describe("unbounded llm — no AbortSignal.timeout fires", () => {
 
   test("end-to-end — max_ms=0 propagates through dispatcher to spec.maxMs undefined", () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 0}\n`);
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 0}\n`,
+      serializeGraph(parseWorkflow(`name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 0}\n`)),
+      CURRENT_IR_VERSION,
+    );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(
       autoDispatcherResolver({

@@ -16,15 +16,15 @@ CREATE TABLE IF NOT EXISTS workflows (
   name TEXT NOT NULL,
   source TEXT NOT NULL,
   -- Canonical IR: the parsed Graph serialized as JSON with `loc` (validator-
-  -- only metadata) stripped. The dispatch GraphLoader deserializes this
-  -- instead of re-parsing `source`; `source` stays the human/provenance
-  -- artifact (and the loader's fallback when `ir` is absent). `ir_version` is
-  -- the IR contract version (a third axis, distinct from schema_version and
-  -- the workflow sha). Nullable: rows written without IR fall back to parse.
-  -- `sha` is still sha256(source) — IR-hash identity (proposal move B) is
-  -- deferred until the graph shape is feature-complete.
-  ir TEXT,
-  ir_version INTEGER,
+  -- only metadata) stripped. The dispatch GraphLoader deserializes this — it
+  -- is the executable artifact; `source` stays the human/provenance artifact.
+  -- `ir_version` is the IR contract version (a third axis, distinct from
+  -- schema_version and the workflow sha). Both NOT NULL — every workflow is
+  -- parsed once at mint and carries its IR. `sha` is still sha256(source);
+  -- IR-hash identity (proposal move B) is deferred until the graph shape is
+  -- feature-complete.
+  ir TEXT NOT NULL,
+  ir_version INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 ) STRICT;
 

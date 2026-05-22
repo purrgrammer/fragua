@@ -1,5 +1,7 @@
 import { SqliteStore } from "../src/index.ts";
 
+const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
+
 let seq = 0;
 
 export function freshStore(nowStart = 1_700_000_000_000): SqliteStore {
@@ -15,7 +17,7 @@ export function nextId(prefix = "run"): string {
 }
 
 export async function seedWorkflow(store: SqliteStore, sha = "wf_sha_1"): Promise<string> {
-  store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
   return sha;
 }
 

@@ -16,11 +16,10 @@ interface WorkflowFullRow {
   sha: string;
   name: string;
   source: string;
-  /** Persisted canonical IR (loc-stripped Graph JSON), or NULL for rows
-   *  written without it (test seeds; the loader falls back to parsing
-   *  `source`). */
-  ir: string | null;
-  ir_version: number | null;
+  /** Persisted canonical IR (loc-stripped Graph JSON) + its contract version.
+   *  NOT NULL — every workflow is parsed once at mint and carries its IR. */
+  ir: string;
+  ir_version: number;
   created_at: number;
 }
 
@@ -43,8 +42,8 @@ export function insertWorkflowIfAbsent(
   sha: string,
   name: string,
   source: string,
-  ir: string | null,
-  irVersion: number | null,
+  ir: string,
+  irVersion: number,
   now: number,
 ): void {
   db.query(INSERT_WORKFLOW_SQL).run(sha, name, source, ir, irVersion, now);

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { Hono } from "hono";
 import { createScheduleRoutes, type ScheduleRoutesDeps } from "../../server/src/store/schedule-routes.ts";
@@ -119,7 +120,13 @@ describe("scheduleAddCommand", () => {
 describe("scheduleListCommand", () => {
   test("renders one row per schedule with workflow / cwd / interval / status / health-stripe columns", async () => {
     const sha = "wf_sha_list";
-    r.store.saveWorkflow(sha, "wf-a", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    r.store.saveWorkflow(
+      sha,
+      "wf-a",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     r.store.createSchedule(
       { id: "sch_a", workflowRef: "wf-a", cwd: "/p", intervalMs: 3_600_000, intervalText: "1h" },
       Date.now(),
@@ -144,7 +151,13 @@ describe("scheduleListCommand", () => {
 
   test("renders health stripe with ✅/❌/⏳ derived from terminal status of the last 10 runs", async () => {
     const sha = "wf_stripe";
-    r.store.saveWorkflow(sha, "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    r.store.saveWorkflow(
+      sha,
+      "wf",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     r.store.createSchedule(
       { id: "sch_stripe", workflowRef: "wf", cwd: "/p", intervalMs: 3_600_000, intervalText: "1h" },
       Date.now(),

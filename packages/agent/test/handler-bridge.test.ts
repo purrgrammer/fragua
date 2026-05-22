@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { LlmBackend, Node, OutcomeStatus } from "@fragua/core";
-import { failProvider, ok } from "@fragua/core";
+import { CURRENT_IR_VERSION, failProvider, ok, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@fragua/store";
 import fc from "fast-check";
@@ -79,7 +79,13 @@ async function ctxFor(
   nodeId: string,
   args: Readonly<{ inputs?: Record<string, string> }> = {},
 ): Promise<handler.HandlerContext> {
-  store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "sha",
+    "t",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId, workflowSha: "sha" });
   const ac = new AbortController();
   const tools = new handler.InMemoryToolRegistry();
@@ -298,7 +304,13 @@ describe("makeLlmHandler", () => {
     // have been duplicates the next priorMessages load already
     // covers via the prior bracket's row.
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     store.enqueueRun({ runId: "run-dedup", workflowSha: "sha" });
     const ac = new AbortController();
     const buildCtx = (): handler.HandlerContext =>
@@ -369,7 +381,13 @@ describe("makeLlmHandler", () => {
     // duplicate system + user mid-transcript. Regression: the memo must
     // find the head rows regardless of how long the transcript grew.
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     store.enqueueRun({ runId: "run-long", workflowSha: "sha" });
     const ac = new AbortController();
     const buildCtx = (): handler.HandlerContext =>
@@ -664,7 +682,13 @@ describe("makeLlmHandler — priorMessages thread loading", () => {
     // mid-flight transcript instead of an empty agent — while a fresh loop
     // pass (next iteration) still starts clean.
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     store.enqueueRun({ runId: "r-syn", workflowSha: "sha" });
     const calls: Array<readonly unknown[]> = [];
     const ac = new AbortController();

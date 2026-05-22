@@ -1171,10 +1171,10 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Workflows ───────────────
 
-  saveWorkflow(sha: string, name: string, source: string, ir?: string, irVersion?: number): void {
+  saveWorkflow(sha: string, name: string, source: string, ir: string, irVersion: number): void {
     const now = this.now();
     this.writeTxn(() => {
-      insertWorkflowIfAbsent(this.db, sha, name, source, ir ?? null, irVersion ?? null, now);
+      insertWorkflowIfAbsent(this.db, sha, name, source, ir, irVersion, now);
     });
   }
 

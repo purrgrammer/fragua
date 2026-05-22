@@ -8,6 +8,7 @@
 //     expects (totals + bucket arrays present).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { Hono } from "hono";
 import { analyticsRoutes } from "../../src/store/analytics-routes.ts";
@@ -20,7 +21,13 @@ const NOW_MS = Date.UTC(2026, 3, 28, 12, 0, 0);
 beforeEach(() => {
   nextRunId = 0;
   store = new SqliteStore({ path: ":memory:", now: () => NOW_MS });
-  store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf",
+    "t",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   app = new Hono();
   app.route("/", analyticsRoutes({ store }));
 });

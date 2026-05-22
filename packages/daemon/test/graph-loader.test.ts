@@ -16,25 +16,25 @@ function fakeStore(rows: Record<string, WorkflowRow>): { getWorkflow(sha: string
 }
 
 function row(over: Partial<WorkflowRow>): WorkflowRow {
-  return { sha: "s", name: "t", source: SOURCE, ir: null, irVersion: null, createdAt: 0, ...over };
+  return {
+    sha: "s",
+    name: "t",
+    source: SOURCE,
+    ir: serializeGraph(parseWorkflow(SOURCE)),
+    irVersion: CURRENT_IR_VERSION,
+    createdAt: 0,
+    ...over,
+  };
 }
 
-describe("makeGraphLoader — IR-first", () => {
-  test("deserializes the stored IR and does NOT re-parse source", () => {
-    const ir = serializeGraph(parseWorkflow(SOURCE));
+describe("makeGraphLoader — deserialize stored IR", () => {
+  test("deserializes the stored IR and never touches source", () => {
     // Source is deliberately un-parseable: if the loader used it, this fails.
-    const loader = makeGraphLoader(fakeStore({ s: row({ ir, irVersion: CURRENT_IR_VERSION, source: "}{ not yaml" }) }));
+    const loader = makeGraphLoader(fakeStore({ s: row({ source: "}{ not yaml" }) }));
     const res = loader.load("s");
     expect(res.ok).toBe(true);
     // IR is the loc-stripped parse output — executor-equivalent.
     if (res.ok) expect(res.graph).toEqual(stripLoc(parseWorkflow(SOURCE)));
-  });
-
-  test("falls back to parsing source when ir is absent (null)", () => {
-    const loader = makeGraphLoader(fakeStore({ s: row({ ir: null }) }));
-    const res = loader.load("s");
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.graph).toEqual(parseWorkflow(SOURCE));
   });
 
   test("missing workflow → reason 'missing'", () => {

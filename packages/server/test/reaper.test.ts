@@ -5,6 +5,7 @@
 //   - stale + orphan run    → run requeued, sweep result returned
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { reapStaleDaemon } from "../src/reaper.ts";
 
@@ -51,7 +52,13 @@ describe("reapStaleDaemon", () => {
 
   test("stale heartbeat + a running orphan → run is requeued by the sweep", () => {
     const s = fresh();
-    s.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    s.saveWorkflow(
+      "wf",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     s.enqueueRun({ runId: "orphan-run", workflowSha: "wf" });
     s.claimNextRun(1); // flips status → running
     s.forceAcquireDaemonLock(4242, "host-1");

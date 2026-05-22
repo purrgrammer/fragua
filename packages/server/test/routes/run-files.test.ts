@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import type { ProjectTreeEntry, ProjectTreeReader, ReadBlobResult } from "../../src/ports.ts";
 import { runFilesRoutes } from "../../src/routes/run-files.ts";
@@ -49,7 +50,13 @@ async function setup(opts: { withWorktreeDir?: boolean } = {}): Promise<Fixture>
   }
 
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf_run_files", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf_run_files",
+    "noop",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId, workflowSha: "wf_run_files", cwd });
 
   const reader = stubReader();
@@ -174,7 +181,13 @@ async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string
   }
 
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf_changes", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf_changes",
+    "noop",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId, workflowSha: "wf_changes", cwd });
   const enqueued = store.getState(runId);
   if (enqueued == null) throw new Error("run not enqueued");

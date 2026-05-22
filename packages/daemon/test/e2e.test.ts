@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { createServer } from "@fragua/server";
 import { SqliteStore } from "@fragua/store";
@@ -21,7 +22,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const dir = mkdtempSync(join(tmpdir(), "fragua-e2e-"));
     const store = new SqliteStore({ path: join(dir, "fragua.db") });
     const echoSource = "name: echo-wf\nsteps:\n  work: {type: llm, prompt: x}\n";
-    store.saveWorkflow("wf-sha", "echo-wf", echoSource);
+    store.saveWorkflow("wf-sha", "echo-wf", echoSource, serializeGraph(parseWorkflow(echoSource)), CURRENT_IR_VERSION);
 
     const dispatcher = new Dispatcher();
     dispatcher.register("wf-sha", "start", {
@@ -119,6 +120,10 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
       "wf-sha",
       "hitl-wf",
       "name: hitl-wf\nsteps:\n  ask:\n    type: human\n    text: ok?\n    routes: {A: exit}\n",
+      serializeGraph(
+        parseWorkflow("name: hitl-wf\nsteps:\n  ask:\n    type: human\n    text: ok?\n    routes: {A: exit}\n"),
+      ),
+      CURRENT_IR_VERSION,
     );
     const dispatcher = new Dispatcher();
     dispatcher.register(

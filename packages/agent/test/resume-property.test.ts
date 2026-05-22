@@ -13,6 +13,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Node } from "@fragua/core";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
@@ -37,7 +38,13 @@ function nodeOn(threadId: string): Node {
 
 async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
   try {
-    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
   } catch {
     // already saved — same-in-memory-store loop
   }

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { createMultiSourceWorkflowReader } from "../src/adapters/multi-source-workflow-reader.ts";
 
@@ -47,7 +48,13 @@ async function setup(): Promise<Fixture> {
   );
 
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf_sha_test", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf_sha_test",
+    "noop",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId: "r1", workflowSha: "wf_sha_test", cwd: projectAlpha });
   store.enqueueRun({ runId: "r2", workflowSha: "wf_sha_test", cwd: projectBeta });
 

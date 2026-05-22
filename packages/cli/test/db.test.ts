@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { dbCommand } from "../src/commands/db.ts";
 
@@ -21,7 +22,13 @@ function makeStore(): string {
   workdirs.push(cwd);
   mkdirSync(join(cwd, ".fragua"), { recursive: true });
   const store = new SqliteStore({ path: join(cwd, ".fragua/fragua.db") });
-  store.saveWorkflow("sha", "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "sha",
+    "wf",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId: "r", workflowSha: "sha" });
   store.close();
   return cwd;

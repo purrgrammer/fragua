@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import {
   ConcurrencyError,
   type FactEvent,
@@ -121,7 +122,7 @@ describe("schedule-dispatcher", () => {
     f.writeWorkflow("wf", TRIVIAL_YAML);
     // Manually seed a non-terminal prior run via the store API.
     const sha = "wf_sha_seed";
-    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML);
+    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML, serializeGraph(parseWorkflow(TRIVIAL_YAML)), CURRENT_IR_VERSION);
     const priorRun = "run_prior";
     f.store.enqueueRun({ runId: priorRun, workflowSha: sha, scheduleId: "sch_o" });
     expect(isTerminalStatus(f.store.getState(priorRun)!.status)).toBe(false);
@@ -155,7 +156,7 @@ describe("schedule-dispatcher", () => {
   test("queue overlap policy fires regardless of in-flight last run", () => {
     f.writeWorkflow("wf", TRIVIAL_YAML);
     const sha = "wf_sha_q";
-    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML);
+    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML, serializeGraph(parseWorkflow(TRIVIAL_YAML)), CURRENT_IR_VERSION);
     const priorRun = "run_prior_q";
     f.store.enqueueRun({ runId: priorRun, workflowSha: sha });
 

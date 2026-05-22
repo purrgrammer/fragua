@@ -3,6 +3,7 @@
 // (operator-actions.test.ts) folds it into the git mutation + fact.
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { type IEventStore, SqliteStore } from "@fragua/store";
 import type { RunActionExec } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
@@ -100,7 +101,13 @@ describe("operator post-run primitive endpoints", () => {
 
   beforeEach(() => {
     store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("wf", "noop", "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      "wf",
+      "noop",
+      "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  n1: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
   });
 
   test("accept: 200 with the sync result + intent.accept_run on a recoverable run", async () => {

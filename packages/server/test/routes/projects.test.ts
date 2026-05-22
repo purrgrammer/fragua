@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import type { ProjectTreeEntry, ProjectTreeReader, ReadBlobResult } from "../../src/ports.ts";
 import { projectsRoutes } from "../../src/routes/projects.ts";
@@ -31,7 +32,13 @@ async function setup(): Promise<Fixture> {
   // Register the project by routing a run through it so listProjects() returns
   // it. The run carries an explicit project_id (the resolution route keys on
   // identity, and resolves it to this cwd via the cwdHint).
-  store.saveWorkflow("wf_for_proj", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf_for_proj",
+    "noop",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId: "r-proj", workflowSha: "wf_for_proj", cwd, projectId: PROJECT_ID, projectName: "p" });
 
   // Use the real adapter so the route + adapter integration is exercised

@@ -393,11 +393,11 @@ export interface WorkflowRow {
   sha: string;
   name: string;
   source: string;
-  /** Persisted canonical IR (loc-stripped Graph JSON) + its contract version,
-   * or `null` when the row was written without it (the GraphLoader falls back
-   * to parsing `source`). */
-  ir: string | null;
-  irVersion: number | null;
+  /** Persisted canonical IR (loc-stripped Graph JSON) + its contract version.
+   * NOT NULL — every workflow is parsed once at mint and carries its IR; the
+   * GraphLoader deserializes this rather than re-parsing `source`. */
+  ir: string;
+  irVersion: number;
   createdAt: number;
 }
 
@@ -700,7 +700,7 @@ export interface IEventWriter {
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
 
   // ─── Workflow catalog (write)
-  saveWorkflow(sha: string, name: string, source: string, ir?: string, irVersion?: number): void;
+  saveWorkflow(sha: string, name: string, source: string, ir: string, irVersion: number): void;
 
   // ─── Maintenance
   vacuum(): void;

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 
@@ -49,7 +50,13 @@ function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?:
 
   const dbPath = join(cwd, ".fragua/fragua.db");
   const store = new SqliteStore({ path: dbPath });
-  store.saveWorkflow("sha", "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "sha",
+    "wf",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId: opts.runId, workflowSha: "sha", cwd });
   const s0 = store.getState(opts.runId)!;
   store.appendFact(

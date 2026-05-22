@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { ConcurrencyError, SqliteStore } from "../src/index.ts";
 
+const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
+
 function rig(): SqliteStore {
   const s = new SqliteStore({ path: ":memory:" });
-  s.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  s.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
   return s;
 }
 

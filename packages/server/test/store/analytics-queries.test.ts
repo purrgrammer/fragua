@@ -7,6 +7,7 @@
 // depending on wall-clock.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { decodeCursor, encodeCursor, SqliteStore } from "@fragua/store";
 
 let store: SqliteStore;
@@ -22,8 +23,20 @@ beforeEach(() => {
     path: ":memory:",
     now: () => nowMs,
   });
-  store.saveWorkflow("wf1", "build-feature", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
-  store.saveWorkflow("wf2", "smoke", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf1",
+    "build-feature",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
+  store.saveWorkflow(
+    "wf2",
+    "smoke",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
 });
 
 afterEach(() => {

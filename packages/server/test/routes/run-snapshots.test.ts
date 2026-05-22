@@ -17,6 +17,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import { createRunSnapshotReader } from "../../src/adapters/run-snapshot-reader.ts";
 import { runSnapshotsRoutes } from "../../src/routes/run-snapshots.ts";
@@ -77,7 +78,13 @@ async function setupFixture(): Promise<SnapFixture> {
 
   // Build the store
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf1", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf1",
+    "noop",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId, workflowSha: "wf1", cwd });
 
   // Stamp base sha via fact.run_started
@@ -182,7 +189,13 @@ describe("GET /runs/:id/snapshots", () => {
 
   test("empty array when run exists but has no snapshots", async () => {
     // Fresh run with no snapshot events
-    fx.store.saveWorkflow("wf_empty", "noop2", "name: t\nsteps:\n  w: {type: llm, prompt: x}\n");
+    fx.store.saveWorkflow(
+      "wf_empty",
+      "noop2",
+      "name: t\nsteps:\n  w: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  w: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     fx.store.enqueueRun({ runId: "empty-run", workflowSha: "wf_empty", cwd: fx.cwd });
     const res = await fx.app.fetch(new Request("http://test/runs/empty-run/snapshots"));
     expect(res.status).toBe(200);

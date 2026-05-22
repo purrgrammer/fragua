@@ -5,6 +5,7 @@
 // (operator-actions.routes.test.ts) are covered in their own suites.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import type { RunActionExec, RunSnapshotReader } from "@fragua/server";
 import { createServer } from "@fragua/server";
 import { type IEventStore, SqliteStore } from "@fragua/store";
@@ -49,7 +50,13 @@ interface Rig {
 
 function rig(): Rig {
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf", "noop", "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "wf",
+    "noop",
+    "name: t\nsteps:\n  n1: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  n1: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   const app = createServer({ store, ports: { runSnapshotReader: permissiveReader, runActions: okActions } });
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
   return {

@@ -1,3 +1,4 @@
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
@@ -15,11 +16,12 @@ export interface TestRig {
  * graph topology, only the executor / store wiring. */
 const TRIVIAL_YAML = "name: t\nsteps:\n  start: {type: llm, prompt: hi}\n";
 
-export function rig(workflow: { sha?: string; name?: string; yaml?: string } = {}): TestRig {
+export function rig(workflow: { sha?: string; name?: string; yaml?: string; ir?: string } = {}): TestRig {
   const store = new SqliteStore({ path: ":memory:" });
   const sha = workflow.sha ?? "wf";
   const source = workflow.yaml ?? TRIVIAL_YAML;
-  store.saveWorkflow(sha, workflow.name ?? "t", source);
+  const ir = workflow.ir ?? serializeGraph(parseWorkflow(source));
+  store.saveWorkflow(sha, workflow.name ?? "t", source, ir, CURRENT_IR_VERSION);
   const dispatcher = new Dispatcher();
   // Install the auto-dispatcher so synthesized start/exit nodes get default
   // handlers when tests don't explicitly register one. Manual registrations

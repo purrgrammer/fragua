@@ -11,6 +11,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import fc from "fast-check";
@@ -199,7 +200,13 @@ describe("P11 — HITL durability across simulated crash", () => {
 
     // Phase 1: open, pause at HITL.
     const s1 = new SqliteStore({ path: dbPath });
-    s1.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    s1.saveWorkflow(
+      "wf",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     const dispatcher = new Dispatcher();
     dispatcher.register(
       "wf",

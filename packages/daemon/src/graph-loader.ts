@@ -1,18 +1,17 @@
-// Parse-once boundary for dispatch.
+// Graph-load boundary for dispatch.
 //
-// A workflow sha is content-addressed: its source is immutable, so the
-// parsed `Graph` is too. That justifies a daemon-wide cache keyed by sha
-// that never invalidates — every run on the same workflow reuses one
-// parse. The auto-dispatcher and the executor both consume the typed
-// `Graph` it returns instead of re-parsing source.
+// A workflow sha is content-addressed: its source — and the IR minted from it
+// — are immutable, so the loaded `Graph` is too. That justifies a daemon-wide
+// cache keyed by sha that never invalidates. The auto-dispatcher and the
+// executor both consume the typed `Graph` it returns.
 //
-// Source of the Graph (proposal workflow-ir, move A): prefer the persisted
-// canonical IR (`workflow.ir`) — deserialize it, no parse — and fall back to
-// parsing `source` only when a row carries no IR (test seeds, or rows written
-// before IR persistence). Both yield an executor-equivalent Graph (the IR is
-// the parse output with `loc` stripped).
+// The Graph comes from the persisted canonical IR (proposal workflow-ir,
+// move A): parsing happens ONCE at mint (upload / schedule fire), and the
+// loader only DESERIALIZES `workflow.ir` — it never parses source. The IR is
+// the parse output with `loc` (validator-only) stripped, so it's
+// executor-equivalent.
 
-import { CURRENT_IR_VERSION, deserializeGraph, type Graph, parseWorkflow } from "@fragua/core";
+import { CURRENT_IR_VERSION, deserializeGraph, type Graph } from "@fragua/core";
 import type { IEventStore, WorkflowRow } from "@fragua/store";
 
 export type GraphLoadResult = { ok: true; graph: Graph } | { ok: false; reason: "missing" | "unparseable" };
@@ -53,15 +52,11 @@ export function makeGraphLoader(store: Pick<IEventStore, "getWorkflow">): GraphL
   };
 }
 
-/** Deserialize the persisted IR when present and at a known version;
- *  otherwise parse `source`. A future `ir_version` ahead of this runtime is
- *  treated as unparseable (no down-conversion) rather than mis-executed. */
+/** Deserialize the persisted IR. A future `ir_version` ahead of this runtime
+ *  is treated as unparseable (no down-conversion) rather than mis-executed. */
 function graphFromRow(workflow: WorkflowRow): Graph {
-  if (workflow.ir != null) {
-    if (workflow.irVersion != null && workflow.irVersion > CURRENT_IR_VERSION) {
-      throw new Error(`workflow ir_version ${workflow.irVersion} > supported ${CURRENT_IR_VERSION}`);
-    }
-    return deserializeGraph(workflow.ir);
+  if (workflow.irVersion > CURRENT_IR_VERSION) {
+    throw new Error(`workflow ir_version ${workflow.irVersion} > supported ${CURRENT_IR_VERSION}`);
   }
-  return parseWorkflow(workflow.source);
+  return deserializeGraph(workflow.ir);
 }

@@ -4,6 +4,7 @@
 // process was down.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
@@ -17,7 +18,13 @@ afterEach(() => {
 function makeRunningStore(runId: string, workflowSha: string): SqliteStore {
   const store = new SqliteStore({ path: ":memory:" });
   closers.push(() => store.close());
-  store.saveWorkflow(workflowSha, "t", `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`);
+  store.saveWorkflow(
+    workflowSha,
+    "t",
+    `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`,
+    serializeGraph(parseWorkflow(`name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`)),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId, workflowSha, initialRouting: { start_node: "start" } });
   store.claimNextRun(1);
   const facts = [

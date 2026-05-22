@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
 import fc from "fast-check";
 import { autoDispatcherResolver, resolveMaxMs } from "../src/auto-dispatcher.ts";
@@ -7,7 +8,13 @@ import { Dispatcher } from "../src/dispatch.ts";
 describe("autoDispatcherResolver", () => {
   test("parses YAML once and caches per-node specs", () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  mid: {type: llm, prompt: hi, next: exit}\n`);
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `name: t\nsteps:\n  mid: {type: llm, prompt: hi, next: exit}\n`,
+      serializeGraph(parseWorkflow(`name: t\nsteps:\n  mid: {type: llm, prompt: hi, next: exit}\n`)),
+      CURRENT_IR_VERSION,
+    );
 
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
@@ -32,6 +39,17 @@ steps:
     routes:
       yes: exit
 `,
+      serializeGraph(
+        parseWorkflow(`name: t
+steps:
+  ask:
+    type: human
+    text: "ok?"
+    routes:
+      yes: exit
+`),
+      ),
+      CURRENT_IR_VERSION,
     );
 
     const dispatcher = new Dispatcher();
@@ -53,6 +71,16 @@ steps:
     text: "From text"
     routes: {go: exit}
 `,
+      serializeGraph(
+        parseWorkflow(`name: t
+steps:
+  g1:
+    type: human
+    text: "From text"
+    routes: {go: exit}
+`),
+      ),
+      CURRENT_IR_VERSION,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
@@ -79,6 +107,20 @@ steps:
   publish: {type: llm, prompt: p}
   revise: {type: llm, prompt: r}
 `,
+      serializeGraph(
+        parseWorkflow(`name: t
+steps:
+  review:
+    type: human
+    text: "Approve?"
+    routes:
+      approve: {to: publish, label: "Approve"}
+      revise:  {to: revise, label: "Revise"}
+  publish: {type: llm, prompt: p}
+  revise: {type: llm, prompt: r}
+`),
+      ),
+      CURRENT_IR_VERSION,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
@@ -102,7 +144,13 @@ steps:
 
   test("per-kind default maxMs flows to tool nodes without override", () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", `name: t\nsteps:\n  build: {type: tool, run: "echo hi"}\n`);
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `name: t\nsteps:\n  build: {type: tool, run: "echo hi"}\n`,
+      serializeGraph(parseWorkflow(`name: t\nsteps:\n  build: {type: tool, run: "echo hi"}\n`)),
+      CURRENT_IR_VERSION,
+    );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store, defaultMaxMs: { tool: 12_345 } }));
     expect(dispatcher.get("sha", "build").maxMs).toBe(12_345);
@@ -118,6 +166,10 @@ steps:
       "sha",
       "t",
       `name: t\nsteps:\n  build:\n    type: tool\n    run: "echo hi"\n    timeout-minutes: 0.1166\n`,
+      serializeGraph(
+        parseWorkflow(`name: t\nsteps:\n  build:\n    type: tool\n    run: "echo hi"\n    timeout-minutes: 0.1166\n`),
+      ),
+      CURRENT_IR_VERSION,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store, defaultMaxMs: { tool: 12_345 } }));
@@ -220,7 +272,7 @@ describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
     nodeId: string,
   ): { recordedMaxMs: number | "unbounded" | undefined; specMaxMs: number | undefined } {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", yaml);
+    store.saveWorkflow("sha", "t", yaml, serializeGraph(parseWorkflow(yaml)), CURRENT_IR_VERSION);
     let recorded: number | "unbounded" | undefined;
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(

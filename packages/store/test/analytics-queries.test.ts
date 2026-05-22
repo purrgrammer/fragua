@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { freshStore } from "./helpers.ts";
 
+const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
+
 const FAR_FUTURE = 9_999_999_999_999;
 
 describe("getFirstRunAt", () => {
@@ -15,7 +17,7 @@ describe("getFirstRunAt", () => {
     // freshStore starts its clock at 1_700_000_000_000 and increments
     // by 1 on each call. The first enqueueRun captures that timestamp.
     const store = freshStore(1_700_000_000_000);
-    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "run1", workflowSha: "wf1" });
     const result = store.getFirstRunAt({ fromMs: 0, toMs: FAR_FUTURE });
     expect(typeof result).toBe("number");
@@ -25,7 +27,7 @@ describe("getFirstRunAt", () => {
 
   test("multiple runs returns the minimum enqueued_at", () => {
     const store = freshStore(1_000);
-    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     // Three runs enqueued in order — clock increments each call, so
     // run1 gets the earliest timestamp.
     store.enqueueRun({ runId: "run1", workflowSha: "wf1" });
@@ -46,7 +48,7 @@ describe("getFirstRunAt", () => {
   test("cwd filter scopes the minimum to that project", () => {
     // Two runs in cwd /project-a (older), one run in cwd /project-b.
     const store = freshStore(1_000);
-    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "a1", workflowSha: "wf1", cwd: "/project-a" });
     store.enqueueRun({ runId: "a2", workflowSha: "wf1", cwd: "/project-a" });
     store.enqueueRun({ runId: "b1", workflowSha: "wf1", cwd: "/project-b" });
@@ -66,8 +68,8 @@ describe("getFirstRunAt", () => {
 
   test("workflowScope+name filter scopes the minimum to that workflow identity", () => {
     const store = freshStore(5_000);
-    store.saveWorkflow("wf_global", "global-flow", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
-    store.saveWorkflow("wf_local", "local-flow", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf_global", "global-flow", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
+    store.saveWorkflow("wf_local", "local-flow", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
 
     // Enqueue: global-flow first, local-flow second (later timestamp)
     store.enqueueRun({
@@ -106,7 +108,7 @@ describe("getFirstRunAt", () => {
 
   test("window time bounds are applied — runs outside the window are excluded", () => {
     const store = freshStore(1_000);
-    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     store.enqueueRun({ runId: "early", workflowSha: "wf1" }); // t=1000
     store.enqueueRun({ runId: "late", workflowSha: "wf1" }); // t=1001
 

@@ -16,7 +16,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { LlmBackend, LlmInput, Node } from "@fragua/core";
-import { ok } from "@fragua/core";
+import { CURRENT_IR_VERSION, ok, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
@@ -37,7 +37,13 @@ function node(overrides: Partial<Node> = {}): Node {
 }
 
 async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
-  store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "sha",
+    "t",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   try {
     store.enqueueRun({ runId, workflowSha: "sha" });
   } catch {
@@ -159,7 +165,13 @@ describe("messages table populates on persistMessage", () => {
 describe("handler-bridge priorMessages hydration", () => {
   test("loads rows from messages table into input.priorMessages", async () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     store.enqueueRun({ runId: "r1", workflowSha: "sha" });
 
     store.appendMessage("r1", {
@@ -272,7 +284,13 @@ describe("PiLlmBackend — shared inProcessWrites across nodes", () => {
 describe("daemon-boot inProcessWrites reconstruction", () => {
   test("seeded Set from listThreadsWithMessages() prevents resume=true on known threads", async () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
     store.enqueueRun({ runId: "r1", workflowSha: "sha" });
     store.appendMessage("r1", {
       content: assistantMsg("prior turn"),

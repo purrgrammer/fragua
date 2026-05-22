@@ -5,10 +5,17 @@ import { makeHttpClient } from "../../src/handler/http-client.ts";
 import { makeLlmClient } from "../../src/handler/llm-client.ts";
 import { InMemoryToolRegistry } from "../../src/handler/tool-registry.ts";
 import type { SideEffectRecorder } from "../../src/handler/types.ts";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "../../src/index.ts";
 
 function seedStore() {
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow(
+    "sha",
+    "t",
+    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    CURRENT_IR_VERSION,
+  );
   store.enqueueRun({ runId: "r1", workflowSha: "sha" });
   return store;
 }
