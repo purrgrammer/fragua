@@ -46,7 +46,7 @@ the intent to the store directly.
 
 | Proposal | What | Maturity |
 |---|---|---|
-| [`cleanup-pre-0.1.0.md`](cleanup-pre-0.1.0.md) | nuke the `agent` tool + sub-agent machinery; collapse migrations to a fresh baseline; widen `run_id` | designed |
+| pre-0.1.0 cleanup — **shipped** | nuked the `agent` tool + sub-agent machinery; collapsed migrations to a fresh baseline; widened `run_id` to a ULID | ✅ done |
 | [`executor-pbt-decomposition.md`](executor-pbt-decomposition.md) | untangle the executor; **Phase 8** extracts the assembly into a factory with injectable tool/credentials registries — what `fragua ci` stands on | designed |
 
 **Children:**

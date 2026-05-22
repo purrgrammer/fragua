@@ -137,9 +137,9 @@ Extract the executor assembly out of `daemonCommand`
 Today credentials are resolved from the store's `provider_credentials` /
 `provider_config` rows (`daemon.ts:145`); making the cred *source* a port lets
 the PBT harness pass fakes and lets `fragua ci` pass an env-sourced adapter
-without the daemon's wiring. The pre-0.1.0 cleanup
-(`docs/proposals/cleanup-pre-0.1.0.md`) removes the sub-agent backend first, so
-there is less to extract. This phase is orthogonal to the per-turn-loop phases
+without the daemon's wiring. The pre-0.1.0 cleanup (shipped) removed the
+sub-agent backend first, so there is less to extract. This phase is orthogonal
+to the per-turn-loop phases
 (4–6) — it is about the executor's *construction*, not its *step logic* — but it
 is the prerequisite the `fragua ci` deliverable stands on, so it is likely
 sequenced earlier in practice than its number suggests.

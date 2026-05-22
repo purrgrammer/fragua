@@ -47,7 +47,7 @@ run's events fold identically before and after such a bump. Yet the pin advances
 and the gate widens regardless, gating runs on a number unrelated to whether
 their events are interpretable.
 
-> The [pre-0.1.0 cleanup](cleanup-pre-0.1.0.md) collapses the historical v1→v17
+> The pre-0.1.0 cleanup (shipped) collapsed the historical v1→v17
 > chain into a **single baseline at version 1**, so there is no legacy
 > projection-bump history and no stranded-old-run population to reason about at
 > 0.1.0. This defect is therefore about *future* migrations: without the axis

@@ -14,7 +14,7 @@ parent: cli-topology.md
 > prerequisites (executor-assembly extraction, env→creds bridge) and an
 > under-specified drive loop. Gated on [`intent-plane.md`](intent-plane.md),
 > the executor-assembly factory ([executor-pbt-decomposition.md Phase 8](executor-pbt-decomposition.md)),
-> and the [pre-0.1.0 cleanup](cleanup-pre-0.1.0.md).
+> and the pre-0.1.0 cleanup (shipped).
 
 ## 1. Why it is separate
 
@@ -79,7 +79,7 @@ fragua ci <wf> [--db <path>] [--input k=v] [--json]
   intent); **the executor-assembly factory** (executor
   [Phase 8](executor-pbt-decomposition.md) — `buildExecutorDeps` + injectable
   tool/credentials registries); the **env→creds bridge**; the
-  [pre-0.1.0 cleanup](cleanup-pre-0.1.0.md) (which removes the sub-agent backend,
+  pre-0.1.0 cleanup (shipped — which removed the sub-agent backend,
   shrinking the assembly to extract); a renderer (built here, shared into
   `cli-store-client`'s `watch`).
 - **Wins independently:** yes *once its prerequisites land* — but it is **not**

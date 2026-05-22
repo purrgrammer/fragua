@@ -11,7 +11,7 @@ parent: cli-topology.md
 
 > Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua db
 > export` / `fragua db import`); blocks nothing. Consumes the artifact a
-> CI run produces. Interlocks with [`project-id.md`](project-id.md) (cwd is
+> CI run produces. Interlocks with project identity (shipped — cwd is
 > a local binding, rebound on import), [`workflow-ir.md`](workflow-ir.md)
 > (the workflow link), and [`event-contract-version.md`](event-contract-version.md)
 > (the resume gate across versions).
@@ -105,8 +105,8 @@ opt-in for "I might delete the checkout but still want to resume."
 3. **Recreate `refs/fragua/{snapshots,heads}/<runId>` locally** so the snapshot
    readers / Diff scrubber work against the local repo.
 4. **Rewrite the imported `run_state.cwd`** to the new local worktree path — the
-   source cwd is a foreign path. cwd is a local binding (see
-   [`project-id.md`](project-id.md)); identity travels in `project_id`.
+   source cwd is a foreign path. cwd is a local binding (project identity,
+   shipped); identity travels in `project_id`.
 
 The `git add -A` snapshot folds committed + uncommitted into one tree, so a
 checkout is byte-identical to the paused working state. The worktree is the
@@ -120,7 +120,7 @@ never travel; inspection needs no credential).
 | Table | Class | On import |
 |---|---|---|
 | `workflows` | CONTENT-ADDRESSED | co-travels (FK target of `workflow_sha`); dedup by sha |
-| `run_state` | MIXED | `project_id` + `project_name` are the portable IDENTITY/label — both `NOT NULL`, so the bundle **must** carry them (verbatim); same id ⇒ same project on any machine, and the name labels an imported-only project without a local checkout (`project-id.md`); metrics / routing / title / status portable; `cwd` rebound to local worktree; `inbox_status` → `pending` (you haven't acted locally); `accepted_sha` cleared (a local branch tip); `branch` / `base_git_ref` advisory; `schedule_id` dangles harmlessly (already non-FK); `workflow_scope` / `workflow_path` advisory (sha is the link); git-state SHAs portable but inert without the git objects (§3); `schema_version` is the resume gate (§5) |
+| `run_state` | MIXED | `project_id` + `project_name` are the portable IDENTITY/label — both `NOT NULL`, so the bundle **must** carry them (verbatim); same id ⇒ same project on any machine, and the name labels an imported-only project without a local checkout (project identity); metrics / routing / title / status portable; `cwd` rebound to local worktree; `inbox_status` → `pending` (you haven't acted locally); `accepted_sha` cleared (a local branch tip); `branch` / `base_git_ref` advisory; `schedule_id` dangles harmlessly (already non-FK); `workflow_scope` / `workflow_path` advisory (sha is the link); git-state SHAs portable but inert without the git objects (§3); `schema_version` is the resume gate (§5) |
 | `events` | PORTABLE | verbatim; per-run PK; merge by `(run_id, seq)`; some payloads reference blob shas → co-travel |
 | `messages` | PORTABLE | verbatim; large content spills to blobs → co-travel |
 | `blobs` | METADATA + bytes-on-disk | **bytes live under `blobsDir`, not in SQLite** — the bundle must carry the files; content-addressed → dedups |
@@ -182,9 +182,9 @@ machine-local field is nullable or excludable. The only pre-freeze items are
    git objects in the run's repo (`refs/fragua/snapshots/<runId>`); the store
    keeps only SHAs; we deliberately do **not** add a `snapshots` table — bundles
    carry the git objects as a blob.
-2. **`project_id` — DECIDED: lands in the 0.1.0 baseline, `NOT NULL`.**
-   [`project-id.md`](project-id.md) is settled: `run_state.project_id` and
-   `schedules.project_id` go into the baseline now (auto-init mints a real id on
+2. **`project_id` — SHIPPED: in the 0.1.0 baseline, `NOT NULL`.**
+   Project identity is implemented: `run_state.project_id` /
+   `schedules.project_id` are in the baseline (auto-init mints a real id on
    every enqueue path, so `NOT NULL`), making identity portable across import by
    construction —
    the incoming `cwd` is advisory and rebound (§4). The **workflows `ir` /

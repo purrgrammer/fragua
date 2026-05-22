@@ -21,7 +21,7 @@ last-reviewed: 2026-05-22
 > changes the FK identity.
 > Interlocks with [`event-contract-version.md`](event-contract-version.md)
 > (the sibling versioning pattern), [`db-import.md`](db-import.md) (what a
-> bundle carries), and [`project-id.md`](project-id.md).
+> bundle carries), and project identity (shipped).
 
 ## 1. Goal / why
 

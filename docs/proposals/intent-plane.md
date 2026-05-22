@@ -61,10 +61,9 @@ A shared application service between the request/argv boundary and the store:
 - **`newRunId` moves onto the plane.** It is server-only today; the CLI mints
   ids when it writes the enqueue intent directly, so generation cannot stay
   behind the HTTP boundary.
-- **Widen `run_id`** (cli-topology §5.3). The actual widening lands in the
-  [pre-0.1.0 cleanup](cleanup-pre-0.1.0.md) (free while the schema is reset);
-  this proposal just hosts the relocated generator. Coordinate so the moved
-  `newRunId` is already the wide form, not the legacy `% 32` one.
+- **Widen `run_id`** (cli-topology §5.3) — **shipped**. The widening landed in
+  the pre-0.1.0 cleanup; the ULID `newRunId` now lives in `@fragua/store` so
+  every fact-writer (server route + daemon dispatcher) mints the same wide form.
 - **`writer` rename** (`'web'` → `'client'`, cli-topology §5.2) surfaces here:
   the plane sets the writer on constructed intents. Coordinate the schema CHECK
   migration with this change.
