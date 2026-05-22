@@ -537,6 +537,13 @@ export interface SanitiseUnpairedCtx {
  *        → a `toolResult` with no matching upstream `toolCall.id`.
  *        These orphans cannot be "paired" — there's no tool_use to
  *        attach to — so we drop them.
+ *    (c) An assistant turn was interrupted mid-flight (abort / timeout /
+ *        cancel) and persisted with `stopReason: "aborted" | "error"`.
+ *        pi-ai's `transformMessages` drops such turns before they reach
+ *        the provider; if we leave the turn (and pair its trailing
+ *        calls), pi-ai removes the assistant but keeps the toolResults →
+ *        orphaned tool_use ids. We drop the turn here too, demoting any
+ *        results it produced to orphans handled by (b).
  *
  *  Returns the input array reference unchanged when no pairing or
  *  dropping is needed. */
@@ -554,6 +561,20 @@ export async function sanitiseUnpairedToolCalls(
     const m = messages[i] as AgentMessage;
     const role = (m as { role?: string }).role;
     if (role === "assistant" && Array.isArray((m as { content?: unknown }).content)) {
+      // pi-ai's transformMessages drops assistant turns whose stopReason
+      // is "error" | "aborted" (incomplete turns it refuses to replay).
+      // Mirror that drop HERE so the turn's toolCall ids never enter
+      // knownToolUseIds — any toolResult that landed for them then falls
+      // through the orphan branch below and is stripped too. Without this
+      // the results survive into the request while pi-ai removes the turn,
+      // leaving tool_result blocks with no matching tool_use: the Anthropic
+      // "unexpected tool_use_id" 400 seen on resume of an abort / timeout /
+      // cancel that hit mid-tool-execution.
+      const stopReason = (m as { stopReason?: string }).stopReason;
+      if (stopReason === "error" || stopReason === "aborted") {
+        if (cleaned === null) cleaned = messages.slice(0, i);
+        continue;
+      }
       for (const block of (m as { content: Array<{ type?: string; id?: string }> }).content) {
         if (block?.type === "toolCall" && typeof block.id === "string") knownToolUseIds.add(block.id);
       }
