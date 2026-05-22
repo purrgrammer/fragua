@@ -18,7 +18,6 @@ import {
   type Graph,
   goalGateOutcomeKey,
   goalGateStep,
-  parseWorkflow,
   readGateOutcomes,
   readGoalGateRetries,
   resolveFailRetarget,
@@ -52,6 +51,7 @@ import {
   routingString,
   sleep,
 } from "./executor-helpers.ts";
+import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 
 // Compatibility re-exports: these helpers moved to executor-helpers.ts but
 // are imported from executor.ts by tests and other call sites.
@@ -110,6 +110,11 @@ export interface ExecutorOpts {
    * status. When unset, handlers fall back to their construction-time
    * env (tests, bare-bones daemons). */
   provisioner?: Provisioner;
+  /** Optional shared parse-once boundary. When omitted, each runOne
+   * builds its own loader from `opts.store` (existing tests pass no
+   * loader). The daemon passes one shared loader so a workflow's source
+   * parses once across every run rather than once per run. */
+  graphLoader?: GraphLoader;
   /** Max time to wait for in-flight runs to drain on shutdown. Past
    * this, the executor returns anyway — the shutdown signal has
    * already tripped handler aborts. Defaults to 30s. */
@@ -297,7 +302,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   const onOccResolved = occ.onResolved;
 
   let runEnv: ExecutionEnvironment | undefined;
-  // Lazy per-run graph cache. Parsed once on first edge-selection need.
+  const loader = opts.graphLoader ?? makeGraphLoader(opts.store);
+  // Lazy per-run graph cache. Parsed once (in the loader) on first
+  // edge-selection need; held here so repeated graphFor calls within a
+  // run skip even the loader's map lookup.
   let cachedGraph: Graph | null = null;
   // Distinguishes "no graph available" (workflow row missing — bare test
   // fixtures) from "the workflow row exists but won't parse". Only the
@@ -306,15 +314,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   const graphFor = (workflowSha: string | null): Graph | null => {
     if (workflowSha == null) return null;
     if (cachedGraph != null) return cachedGraph;
-    const wf = opts.store.getWorkflow(workflowSha);
-    if (wf == null) return null;
-    try {
-      cachedGraph = parseWorkflow(wf.source);
+    const result = loader.load(workflowSha);
+    if (result.ok) {
+      cachedGraph = result.graph;
       return cachedGraph;
-    } catch {
-      workflowUnparseable = true;
-      return null;
     }
+    if (result.reason === "unparseable") workflowUnparseable = true;
+    return null;
   };
 
   const dispatchOne = async (): Promise<DispatchOutcome> => {

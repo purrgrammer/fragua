@@ -24,6 +24,7 @@ import {
   AutoTitler,
   autoDispatcherResolver,
   Dispatcher,
+  makeGraphLoader,
   type Provisioner,
   startDaemon,
   WorktreeProvisioner,
@@ -129,6 +130,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   const store = new SqliteStore({ path: storePath });
   const dispatcher = new Dispatcher();
+  // One shared parse-once boundary for the whole daemon: the
+  // auto-dispatcher and the executor both consume it so each workflow sha
+  // parses once across every run.
+  const graphLoader = makeGraphLoader(store);
 
   const tools = new handler.InMemoryToolRegistry();
   const llmCall: handler.LlmCallFn = async () => ({
@@ -349,6 +354,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   dispatcher.setResolver(
     autoDispatcherResolver({
       store,
+      graphLoader,
       ...(codergenFactory ? { codergenFactory } : {}),
       ...(Object.keys(defaultMaxMs).length > 0 ? { defaultMaxMs } : {}),
     }),
@@ -447,6 +453,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       maxConcurrentRuns: concurrency,
       shutdownSignal: signalCtrl.signal,
       provisioner,
+      graphLoader,
     };
     if (autoTitler.titler) daemonOpts.autoTitler = autoTitler.titler;
     if (timeouts.leakGrace !== undefined) daemonOpts.leakGraceMs = timeouts.leakGrace;

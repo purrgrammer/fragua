@@ -13,6 +13,7 @@ import type { AutoTitler } from "./auto-titler.ts";
 import { type BlobGcOpts, DEFAULT_BLOB_GC_INTERVAL_MS, DEFAULT_BLOB_GC_MAX_ROWS, startBlobGc } from "./blob-gc.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { runExecutor } from "./executor.ts";
+import type { GraphLoader } from "./graph-loader.ts";
 import { DEFAULT_SCHEDULE_TICK_MS, startScheduleDispatcher } from "./schedule-dispatcher.ts";
 import { startSupervisor } from "./supervisor.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
@@ -39,6 +40,11 @@ export interface DaemonMainOpts {
    * terminal status. Omit to run every handler inside the daemon's
    * process cwd (legacy / test behaviour). */
   provisioner?: Provisioner;
+  /** Optional shared parse-once boundary, forwarded into the executor so
+   * the daemon parses each workflow sha once across all runs. The CLI
+   * builds one loader and hands the same instance here and to the
+   * auto-dispatcher. */
+  graphLoader?: GraphLoader;
   /** Supervisor's leak watchdog fallback when the dispatcher cannot
    * resolve a spec for the run's current node. Defaults to the
    * llm budget (30m) so the watchdog never trips a legitimate
@@ -209,6 +215,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       };
       if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;
       if (opts.provisioner) executorOpts.provisioner = opts.provisioner;
+      if (opts.graphLoader) executorOpts.graphLoader = opts.graphLoader;
       if (opts.leakGraceMs !== undefined) executorOpts.leakGraceMs = opts.leakGraceMs;
       if (opts.shutdownDrainMs !== undefined) executorOpts.shutdownDrainMs = opts.shutdownDrainMs;
       if (opts.defaultHttpTimeoutMs !== undefined) executorOpts.defaultHttpTimeoutMs = opts.defaultHttpTimeoutMs;

@@ -4,16 +4,24 @@
 // after daemon start get their nodes registered on first dispatch. Each
 // node's spec is derived from its shape / `type` attribute.
 
-import type { Node, NodeAttrs } from "@fragua/core";
-import { InvalidDurationError, parseDurationMs, parseWorkflow } from "@fragua/core";
+import type { Graph, Node, NodeAttrs } from "@fragua/core";
+import { InvalidDurationError, parseDurationMs } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import type { IEventStore } from "@fragua/store";
 import type { DispatcherResolver } from "./dispatch.ts";
+import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 
 type HandlerSpec = handler.HandlerSpec;
 
 export interface AutoDispatcherOpts {
   store: IEventStore;
+  /**
+   * Optional shared parse-once boundary. When omitted, the resolver
+   * builds one from `opts.store` so a caller that only passes `{ store }`
+   * keeps working. The daemon passes a single shared loader so every run
+   * across all workflows parses each sha once.
+   */
+  graphLoader?: GraphLoader;
   /**
    * Optional factory that builds a real llm handler for `llm`
    * nodes. When provided, the auto-dispatcher uses it instead of the
@@ -79,13 +87,14 @@ function explicitlyUnbounded(attrs: NodeAttrs): boolean {
  */
 export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherResolver {
   const perWorkflow = new Map<string, Map<string, HandlerSpec>>();
+  const loader = opts.graphLoader ?? makeGraphLoader(opts.store);
 
   return (workflowSha, nodeId) => {
     let specs = perWorkflow.get(workflowSha);
     if (specs == null) {
-      const workflow = opts.store.getWorkflow(workflowSha);
-      if (workflow == null) return null;
-      specs = specsForGraph(workflow.source, opts.codergenFactory, opts.defaultMaxMs);
+      const result = loader.load(workflowSha);
+      if (!result.ok) return null;
+      specs = specsForGraph(result.graph, opts.codergenFactory, opts.defaultMaxMs);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;
@@ -93,11 +102,10 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
 }
 
 function specsForGraph(
-  source: string,
+  graph: Graph,
   codergenFactory?: AutoDispatcherOpts["codergenFactory"],
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
 ): Map<string, HandlerSpec> {
-  const graph = parseWorkflow(source);
   const outgoing = new Map<string, Array<{ to: string; label?: string; route?: string }>>();
   for (const edge of graph.edges) {
     const list = outgoing.get(edge.from) ?? [];
