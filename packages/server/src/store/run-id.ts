@@ -1,28 +1,44 @@
-// Run id generator. ULID-like monotonic ordering via base-32 timestamp +
-// random suffix. Not cryptographically unique, just unique-enough for a
-// single-machine deployment and lexically sortable by creation time.
+// Run id generator. A ULID: 48-bit millisecond timestamp + 80 bits of
+// randomness, Crockford base-32, lowercased. Lexically sortable by
+// creation time and collision-safe across machines — the full 80 random
+// bits are encoded without loss (no modulo-32 truncation), so two ids
+// minted in the same millisecond on different machines won't collide
+// when stores are merged.
 
 import { randomBytes } from "node:crypto";
 
 const ALPH = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford's base-32
 
 export function newRunId(): string {
-  const ms = BigInt(Date.now());
-  const tsBits = encodeBase32(ms, 10);
-  const rand = randomBytes(8);
-  let suffix = "";
-  for (let i = 0; i < rand.length; i++) {
-    suffix += ALPH[rand[i]! % 32];
-  }
-  return `${tsBits}${suffix}`.toLowerCase();
+  const ts = encodeTime(Date.now());
+  const rand = encodeRandom();
+  return `${ts}${rand}`.toLowerCase();
 }
 
-function encodeBase32(value: bigint, len: number): string {
-  let v = value;
+/** Encode a 48-bit millisecond timestamp as 10 base-32 chars (the ULID
+ * time component). */
+function encodeTime(ms: number): string {
+  let v = BigInt(ms);
   const out: string[] = [];
-  for (let i = 0; i < len; i++) {
+  for (let i = 0; i < 10; i++) {
     out.unshift(ALPH[Number(v % 32n)]!);
     v /= 32n;
+  }
+  return out.join("");
+}
+
+/** Encode 80 random bits as 16 base-32 chars (the ULID entropy
+ * component). The bitstream is consumed 5 bits at a time so every
+ * random bit reaches the output — unlike a per-byte `% 32`, which
+ * would discard 3 bits of each byte. */
+function encodeRandom(): string {
+  const bytes = randomBytes(10); // 80 bits
+  let acc = 0n;
+  for (const b of bytes) acc = (acc << 8n) | BigInt(b);
+  const out: string[] = [];
+  for (let i = 0; i < 16; i++) {
+    out.unshift(ALPH[Number(acc & 31n)]!);
+    acc >>= 5n;
   }
   return out.join("");
 }

@@ -1,68 +1,10 @@
--- fragua event store schema — Revision 17
+-- fragua event store schema — Revision 1 (0.1.0 baseline)
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
--- This file is the canonical shape every new DB starts at; the migration
--- map in `migrations.ts` walks older DBs forward to the same shape.
--- v1 → v2: pause unification. `paused_provider_error` collapses into the
--- generic `paused` status; reason lives on `fact.run_paused.payload.reason`.
--- v2 → v3: harness-by-default. `run_state.project_id` and the `projects`
--- table are gone — `cwd` is the only project identifier. `daemon_lock`
--- gains URL columns so CLIs discover the harness via the DB. `run_state`
--- gains `workflow_name` / `_scope` / `_path` so resolution metadata
--- survives the daemon contract.
--- v3 → v4: `workflow_scope` enum widens to include 'local' so bare-name
--- resolution can fall back to <cwd>/.fragua/workflows/<name>.yaml when
--- the global directory misses.
--- v4 → v5: conversation runs as a kind (since abandoned, see v7).
--- v5 → v6: scheduled runs. New `schedules` table holds the recurring
--- (workflow_ref, cwd, interval) triples; `run_state.schedule_id` carries
--- lineage from each fired run back to the schedule that produced it.
--- Schedule deletion is hard DELETE while runs persist —
--- `run_state.schedule_id` is informational, not a FK cascade target.
--- v6 → v7: drop the v5 conversation scaffolding. Sub-agents are a tool
--- implementation that runs inline against the parent's stream, not a
--- separate run kind, so `kind` and the parent-linkage columns
--- (`parent_run_id` / `parent_node_id` / `parent_iteration`) are
--- removed and `workflow_sha` returns to `NOT NULL`. See
--- v7 → v8: pause unification — auto-wake family.
--- `paused_provider_retry` and `paused_retry` collapse into one
--- `paused_auto` status. `fact.run_paused_retry` retires; handler
--- retries fold into `fact.run_paused{reason:"handler_retry"}`.
--- Provider auto-retry promotes to its own reason `provider_retry`
--- (was: `provider_error` + `policy:"auto-retry"`). Migration deletes
--- in-flight runs in the legacy auto-wake states (pre-release, no
--- prior-state compat — AGENTS.md ground rule #11). See
--- v8 → v9: parallel sub-runs (P1.1).
--- `run_state` gains the additive linkage columns `parent_run_id`,
--- `parent_node_id`, `parallel_index`, `subgraph_root_node_id`,
--- `subgraph_terminal_node_id`. All NULLable; top-level runs keep them
--- NULL. `idx_run_state_parent` covers `parent_run_id` lookups (cancel
--- propagation, cost rollup, sweep). `parent_run_id` is FK to
--- `run_state(run_id)` with ON DELETE SET NULL so a parent GC leaves the
--- sub-run as a free-standing row whose own GC is independent.
--- v9 → v10: `running_children` status (P1.2).
--- Adds `running_children` to `run_state.status` CHECK. Parent runs that
--- fanned out into sub-runs sit in this status until every sub-run
--- reaches a terminal status; the wake-pending sweep
--- transitions the parent back to `queued` (collect phase).
--- v10 → v11: provider credentials in the store. New
--- `provider_credentials` table holds built-in pi-ai provider keys +
--- OAuth tokens, replacing `~/.fragua/auth.json`. `kind` is denormalised
--- from `payload.type` so postmortem can SELECT the shape without
--- JSON-parsing. Pure additive; no row migrations.
--- v11 → v12: custom-provider config in the store. New `provider_config`
--- table holds the per-provider definition blob (baseUrl, headers,
--- compat, models, modelOverrides) that previously lived in
--- `~/.fragua/models.json`. Per-row Ajv validation lives in the agent
--- layer (`ModelRegistry.loadCustomModels`); one broken row no longer
--- poisons the entire registry. No `apiKey` field — credentials always
--- come from `provider_credentials`. Pure additive; no row migrations.
--- v12 → v13: drop graph-level parallel/fan_in primitive. Parent linkage
--- columns (`parent_run_id`, `parent_node_id`, `parallel_index`,
--- `subgraph_root_node_id`, `subgraph_terminal_node_id`) and the
--- `idx_run_state_parent` index are removed. `running_children` is
--- dropped from the status CHECK. Sub-agents remain an inline tool
--- (no child `run_state` row); only the sub-RUN machinery is gone.
+-- This file is the canonical shape every DB starts at. There is no
+-- walk-forward migration chain yet; `migrate()` creates this shape and
+-- pins `schema_version` to 1. The first post-0.1.0 schema change bumps
+-- the version and registers a step-delta in `migrations.ts`.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),

@@ -1,13 +1,13 @@
 import type { Database } from "bun:sqlite";
 
-/** Schema version this code emits for new DBs and pins on new runs. */
-export const CURRENT_SCHEMA_VERSION = 17;
+/** Schema version this code emits for new DBs and pins on new runs.
+ * 0.1.0 baseline — there is no walk-forward migration chain yet; the
+ * first post-0.1.0 schema change bumps this and registers a step-delta
+ * in `migrations.ts`. */
+export const CURRENT_SCHEMA_VERSION = 1;
 
-/**
- * Lowest schema version `migrate()` knows how to walk forward from.
- * Step-deltas live in `migrations.ts` keyed by target version. Bump
- * this only if older versions are dropped from the migration map.
- */
+/** Lowest schema version `migrate()` accepts. Equal to the baseline
+ * until the first migration lands. */
 export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
 
 /**

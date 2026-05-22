@@ -145,12 +145,7 @@ const SELECT_SNAPSHOT_EVENTS_SQL = `
 `;
 
 /** Every event of `type` for `runId` in seq order. Cheap (covered by
- *  the `events(run_id, seq)` primary key with a type filter scan).
- *  Currently the only caller is `spawn-subagent.ts`, seeding the
- *  cumulative cost rollup on a resumed `subagent.end` from prior
- *  brackets carrying the same `subagent_id`. The result set is
- *  bounded by the per-(run, subagent_id) bracket count — typically 1
- *  pre-crash + 1 resumed bracket. */
+ *  the `events(run_id, seq)` primary key with a type filter scan). */
 export function selectEventsByType(db: Database, runId: string, type: string): EventRow[] {
   return db.query<EventRow, [string, string]>(SELECT_EVENTS_BY_TYPE_SQL).all(runId, type);
 }

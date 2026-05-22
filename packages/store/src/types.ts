@@ -707,10 +707,7 @@ export interface IEventReader {
   getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
   /**
    * Every event of `type` for `runId` in seq order. SQL filter — the
-   * caller would otherwise have to scan `getEvents` and re-filter in
-   * JS. Currently used by `spawn-subagent.ts` to seed the cumulative
-   * cost rollup on a resumed `subagent.end` bracket from prior
-   * brackets sharing the same `subagent_id`.
+   * caller would otherwise have to scan `getEvents` and re-filter in JS.
    */
   getEventsByType(runId: string, type: string): StoredEvent[];
   /**
