@@ -1,6 +1,6 @@
 ---
 name: postmortem
-description: Post-mortem a fragua run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches fragua-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), schedule and sub-agent post-mortems, and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
+description: Post-mortem a fragua run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches fragua-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), schedule post-mortems, and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
 ---
 
 # postmortem — run post-mortem procedure
@@ -389,60 +389,6 @@ sqlite3 -readonly "$DB" \
 
 ---
 
-## 8.2 Subagent post-mortem
-
-Sub-agents (the `agent` tool) have no `run_state` row and no separate event stream. Every event the sub-agent emits rides the **parent's** event stream with `subagent_id` on the payload as a discriminator. Three observability events bracket each spawn:
-
-- `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def?, tool_call_id?, args_hash? }`
-- `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`
-- `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` — fires on either a daemon-crash respawn OR a content-addressed FIFO pop (see below).
-
-`subagent_id` is picked at spawn time via two paths:
-
-1. **Content-addressed FIFO queue (default when `subagent.start.args_hash` is present).** A cancelled sub-agent enters a queue keyed by `(parent_run, parent_node_id, iteration, args_hash)` where `args_hash` is sha256 over the spec's canonical args (prompt, system_prompt, allowed_tools, disallowed_tools, skills, max_iterations, agent_def, model, provider). The NEXT spawn with matching args pops the oldest pending entry (oldest = lowest seq), reuses its `subagent_id`, and emits `subagent.resumed{reason:"transcript_hydrated"}` to consume it. Lets a parent retry that uses byte-identical agent-tool args automatically resume the sub-agent's work-so-far across a budget pause / provider error / operator pause — no `resume_subagent_id` parameter, no LLM cooperation. "Pending" = latest terminal is `subagent.end{status:"cancelled"}` AND no subsequent `subagent.resumed` for the id. To audit which brackets are still pending for a run:
-   ```sh
-   sqlite3 -readonly "$DB" "
-     SELECT json_extract(s.payload, '\$.subagent_id'),
-            json_extract(s.payload, '\$.args_hash'),
-            json_extract(s.payload, '\$.parent_node_id')
-     FROM events s
-     WHERE s.run_id='$RUN' AND s.type='subagent.start'
-       AND EXISTS (SELECT 1 FROM events e WHERE e.run_id=s.run_id AND e.type='subagent.end'
-                    AND json_extract(e.payload,'\$.subagent_id')=json_extract(s.payload,'\$.subagent_id')
-                    AND json_extract(e.payload,'\$.status')='cancelled')
-       AND NOT EXISTS (SELECT 1 FROM events r WHERE r.run_id=s.run_id AND r.type='subagent.resumed'
-                       AND json_extract(r.payload,'\$.subagent_id')=json_extract(s.payload,'\$.subagent_id'));
-   "
-   ```
-
-2. **Fresh deterministic id (fallback).** `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars. Survives a daemon crash because pi-ai preserves `tool_call_id` byte-identically on the wire. Used when `args_hash` isn't set (older spawns, hand-rolled test events) or when no pending-resume candidate matches.
-
-```sh
-# Bracket events for one parent run, ordered.
-sqlite3 -readonly "$DB" \
-  "SELECT seq, type, datetime(ts/1000,'unixepoch','localtime') AS at, payload
-   FROM events WHERE run_id='$RUN' AND type LIKE 'subagent.%' ORDER BY seq;"
-
-# All events emitted by one specific sub-agent (start, end, plus everything the child emitted in between).
-sqlite3 -readonly "$DB" \
-  "SELECT seq, type, payload FROM events
-   WHERE run_id='$RUN'
-     AND json_extract(payload, '\$.subagent_id') = '<subagent_id>'
-   ORDER BY seq;"
-
-# Sub-agent transcript (parent + all children share the messages table; children sit under the __subagent:<id> namespace).
-sqlite3 -readonly "$DB" \
-  "SELECT ordinal, role, node_id, length(content) AS bytes
-   FROM messages WHERE run_id='$RUN' AND node_id LIKE '__subagent:%'
-   ORDER BY ordinal;"
-```
-
-The bidirectional handle the parent LLM sees back is the `agent` tool's result: `{ subagent_id, status, total_tool_calls, halt_reason? }`. UIs prefer `subagent.start.name` (caller-supplied label from `agent({ name: <label> })`) when present; fall back to `agent_def` (the resolved profile name from `agent({ agent: <def-name> })` matched against `.agents/agents/`).
-
-**Cost accounting trap.** `subagent.end.costUsd` and the token fields are **cumulative across every spawn of the same `subagent_id`** (the daemon seeds the rollup from prior `subagent.end` rows for that id when respawning). Consumers summing across a run's `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket — naive summation over-counts on resumed brackets. The parent's `total_cost_usd` projection is unaffected; it folds each `fact.node_completed.costUsd` once.
-
----
-
 ## 9. Known-incomplete
 
 Per `docs/ARCHITECTURE.md` §12.1, these surfaces parse/serialize but aren't wired:
@@ -520,11 +466,6 @@ sqlite3 -readonly "$DB" \
    FROM daemon_events
    WHERE type LIKE 'fact.schedule_%' OR type LIKE 'intent.schedule_%'
    ORDER BY seq DESC LIMIT 20;"
-
-# Subagent brackets for one parent run (§8.2)
-sqlite3 -readonly "$DB" \
-  "SELECT seq, type, payload FROM events
-   WHERE run_id='$RUN' AND type LIKE 'subagent.%' ORDER BY seq;"
 ```
 
 Intent writes (steer/pause/cancel/human/unquarantine/priority) change state — they're not debugging tools. Present evidence; let the user decide whether to write one.

@@ -49,7 +49,7 @@ Emit an observability event — `agent.*`, `llm.*`, `tool.*`, `cost.recorded`, `
 
 ### `ctx.env?: ExecutionEnvironment`
 
-Per-run shell + filesystem environment. Set by the executor when a `WorktreeProvisioner` is wired — `ctx.env` then points at the run's isolated `git worktree`. Required for every production dispatch: the `tool` graph-step handler (`packages/core/src/handler/handlers/tool.ts`) halts immediately when invoked with `ctx.env === undefined` and no explicit `cfg.spawner`. Silently falling back to `process.cwd()` was the worktree-isolation leak vector under a same-cwd daemon (`bun run fragua harness` from a project root would write tool-node edits straight into the main checkout). The only legitimate env-less path is test code that injects `cfg.spawner` to bypass cwd entirely. Handlers that spawn subprocesses or read files MUST prefer `ctx.env` over `process.cwd()` so concurrent runs don't step on each other. The agent-tools section below covers how `ctx.env` is wrapped in a read-only proxy when the node's narrowed toolset carries no mutator.
+Per-run shell + filesystem environment. Set by the executor when a `WorktreeProvisioner` is wired — `ctx.env` then points at the run's isolated `git worktree`. Required for every production dispatch: the `tool` graph-step handler (`packages/core/src/handler/handlers/tool.ts`) halts immediately when invoked with `ctx.env === undefined` and no explicit `cfg.spawner`. Silently falling back to `process.cwd()` was the worktree-isolation leak vector under a same-cwd daemon (`bun run fragua harness` from a project root would write tool-node edits straight into the main checkout). The only legitimate env-less path is test code that injects `cfg.spawner` to bypass cwd entirely. Handlers that spawn subprocesses or read files MUST prefer `ctx.env` over `process.cwd()` so concurrent runs don't step on each other. The agent-callable tools section below covers how `ctx.env` is wrapped in a read-only proxy when the node's narrowed toolset carries no mutator.
 
 ### `ctx.budgetSnapshot?: BudgetSnapshotInput`
 
@@ -66,13 +66,13 @@ interface BudgetSnapshotInput {
 
 ### `ctx.withScope(override): HandlerContext`
 
-Return a new `HandlerContext` with the same run-level resources but rebuilt scope-sensitive surfaces. The llm `agent` tool uses this to hand each inline sub-agent spawn a context that carries its own `(nodeId, iteration)` instead of leaking the parent's via closure capture.
+Return a new `HandlerContext` with the same run-level resources but rebuilt scope-sensitive surfaces, each carrying its own `(nodeId, iteration)` instead of leaking the parent's via closure capture.
 
 Six surfaces are rebuilt against the new scope:
 
 - **`artifacts`** — `put` / `get` / `ref` write and read under `(runId, scope.nodeId, scope.iteration, key)`.
 - **`messages.append`** — rows are attributed with the new `nodeId` / `iteration`.
-- **`externalCall`** — the idempotency key is keyed off `(runId, scope.nodeId, scope.iteration, argsHash, attempt)`, so repeated retries of the same provider call don't collide across sub-agent spawns.
+- **`externalCall`** — the idempotency key is keyed off `(runId, scope.nodeId, scope.iteration, argsHash, attempt)`, so repeated retries of the same provider call don't collide across scopes.
 - **`emit`** — observability payloads stamp the new `nodeId` / `iteration`, overriding the parent stamp via spread-last.
 - **`tools`** — re-narrowed by `scope.allowedTools` / `scope.deniedTools` (a hard filter; `tools.get(name)` for an excluded tool throws `unknown tool: …`).
 - **`env`** — re-wrapped read-only when the new toolset has no mutator (`bash` / `write` / `edit`); a handler that loses its write tools also loses raw filesystem access.
@@ -262,7 +262,7 @@ The agent-callable tool surface is deliberately minimal:
 Tool names are bare identifiers — no `local:` prefix, no namespace.
 The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
 
-Less common operations (`git_read` / `apply_patch` / `web_fetch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. For sub-agent spawns see the `agent` tool section below. The seven tools are deliberately powerful — streaming output,
+Less common operations (`git_read` / `apply_patch` / `web_fetch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. The tools are deliberately powerful — streaming output,
 image content, rich diffs, fuzzy edits, atomic writes, native walks —
 so an agent never has to pick between a dozen tools that all do
 variants of the same thing.
@@ -300,45 +300,13 @@ no mutator (`bash` / `write` / `edit`), `ctx.env` is wrapped so
 `writeFile` and `exec` throw `ReadOnlyEnvError`. That way a handler
 that loses its *tools* to the allowed_tools filter also loses the raw
 env path that would otherwise bypass them — relevant when the llm
-backend's agent tools sit on top of `ctx.env` (write → `env.writeFile`,
+backend's agent-callable tools sit on top of `ctx.env` (write → `env.writeFile`,
 bash → `env.exec`). Read-only methods (`readFile`, `exists`, `listDir`,
 `glob`) pass through.
 
 Custom tools can be added later by `ToolRegistry.register()`-ing an
 additional `Tool` at daemon startup. They share the same bare-identifier
-rule and slot in alongside the four builtins.
-
-## The `agent` tool (LLM-callable subagent spawn)
-
-The `agent` tool lets an LLM running inside an llm turn spawn a sub-agent **inline against the parent's event stream**. The sub-agent is not a run — it has no `run_state` row, cannot be enqueued, paused, or resumed independently. It is a tool implementation that uses a separate LLM context window. Every observability event the sub-agent emits (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) is forwarded to the parent's stream with a `subagent_id` discriminator and `nodeId` overridden to `__subagent:<id>`, so `getStepAggregates` keeps the sub-agent spend under its own step row rather than folding it into the calling node's totals. Cost still rolls up into the parent's `run_state.metrics` because the handler-bridge accumulates every `cost.recorded` it sees regardless of `subagent_id`.
-
-The `agent` tool is subject to the same `allowed_tools`/`denied_tools` narrowing as every other tool — it must be present in the node's resolved pool for the LLM to see it. (The backend force-includes `skill`, not `agent`; see `packages/agent/src/backend.ts`.) The named-sub-agent catalogue is only rendered into the system prompt when `agent` is in the resolved pool, so a node that omits it also omits the catalogue tokens. Once the LLM calls `agent`, the spawner builds the child's tool pool from the parent's resolved pool, narrowed further by `spec.allowed_tools`/`spec.disallowed_tools` and then stripped of `agent` itself — so an empty post-strip pool surfaces `halt_reason: "empty_tool_pool"` immediately rather than burning LLM tokens on an impossible task.
-
-### Bracketing observability events
-
-Three event types bracket each sub-agent slice on the parent's stream (declared in `packages/types/src/events.ts` and noted at `packages/types/src/fragua-events.ts:429-438`):
-
-- **`subagent.start`** — emitted before the first LLM call. Payload: `{ subagent_id, parent_node_id, iteration, provider, model, tool_call_id, name?, agent_def? }`. `name` is the caller-supplied free-form label from `agent({ name: … })`; `agent_def` is the resolved profile name from `agent({ agent: "<def-name>" })`; both, either, or neither may be present.
-- **`subagent.end`** — emitted after the last LLM call or on abort. Payload: `{ subagent_id, status: "completed" | "halted" | "cancelled", summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`. The cost/token fields are **cumulative across respawns** for this `subagent_id` — on a fresh run they equal the single bracket's totals; after a daemon crash-and-restart they include all prior brackets' seeds so the terminal `subagent.end` always represents the full end-to-end spend.
-- **`subagent.resumed`** — fires when the daemon respawns under the deterministic id after a crash. Payload: `{ subagent_id, reason: "transcript_hydrated" | "already_completed" }`. `"transcript_hydrated"` means the prior transcript was loaded and the LLM call will proceed from where it left off; `"already_completed"` means the persisted transcript was already finished (last assistant message has `stopReason === "stop"` and no pending tool calls), so the spawn short-circuits to a synthesised `subagent.end` without burning another LLM call.
-
-### Deterministic `subagent_id`
-
-The id is `sha256(parentRunId ‖ parentNodeId ‖ parentIteration ‖ tool_call_id)` truncated to 32 hex chars (`packages/daemon/src/spawn-subagent.ts`, `makeSpawnSubagent`). The four inputs are all stable across daemon restarts: `tool_call_id` is preserved byte-identically by pi-ai on the wire, and the run/node/iteration triple is fixed for the lifetime of that dispatch. Two parallel siblings on the same assistant message share `parentIteration` but receive distinct `tool_call_id`s from pi-ai, so they hash to distinct ids without any collision-handling.
-
-### Crash-resilience
-
-On respawn the daemon hydrates `priorMessages` from the `messages` table keyed under `__subagent:<id>`, and sums any prior `subagent.end` cost/token fields as rollup seeds so the terminal bracket's totals are always cumulative. Consumers that aggregate cost across `subagent.end` events **must deduplicate by `subagent_id`** and take the terminal non-cancelled bracket; summing all brackets for the same id double-counts the earlier slices. The logic lives in `packages/daemon/src/spawn-subagent.ts` (`priorEnds` reduction, `isTranscriptComplete`, and the `subagent.resumed` short-circuit).
-
-### Named profiles from `.agents/agents/`
-
-The daemon scans agent-definition profiles from two layers at boot: `<project>/.agents/agents/*.md` (project-scope, beats user on collisions) and `~/.agents/agents/*.md` (user-scope, with `~/.claude/agents/` as a cross-client fallback). Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, plus optional `model`, `provider`, `allowed_tools`) and a body that becomes the sub-agent's system prompt verbatim. Discovery and parsing live in `packages/workspace/src/agents/` (`discover.ts`, `parse.ts`, `catalog.ts`).
-
-The catalogue lands on every llm call whose resolved tool pool includes `agent`, so the LLM selects a profile by passing `agent({ agent: "<def-name>", … })`. Frontmatter `model`, `provider`, and `allowed_tools` flow onto `SubagentSpec` as overrides; absent fields inherit from the parent call verbatim. A bare `agent({ prompt: "…" })` spawn with no `agent:` key uses no profile — it gets an empty system prompt unless `system_prompt` is also provided.
-
-### Tool-pool inheritance and recursion guard
-
-The child tool pool defaults to the parent's, narrowed by `spec.allowed_tools` / `spec.disallowed_tools`, then `stripAgentTool` removes `agent` so children **cannot recursively spawn**. Passing an explicit `spec.allowed_tools` opts out of the parent default (useful when an llm node carries a write-heavy tool pool but the sub-agent should be read-only). A pool that is empty after narrowing and strip surfaces `halt_reason: "empty_tool_pool"` immediately with a diagnostic — no LLM call is made (`packages/daemon/src/spawn-subagent.ts`, `stripAgentTool(deps.registry.select(…))`).
+rule and slot in alongside the builtins.
 
 ## Tool nodes (graph-level shell)
 

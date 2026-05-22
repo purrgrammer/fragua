@@ -41,7 +41,6 @@ A node that decides *which* branch to take (a `routes:` step, or any triage) is 
 - **Augmented LLM** — one `llm` step, broad tool pool, the agent loop lives in its tool-use cycle. `merge`.
 - **Prompt chaining** — linear `A → B → C`. `analyze`, `drift`.
 - **Routing** — a step declares `routes:` and exits via the `route` tool; edges fan out per route. `work::triage`.
-- **Orchestrator-workers** — one step with `agent` in its tools fans out sub-agents dynamically. (Being retired — no live example.)
 - **Evaluator-optimizer** — a step generates, the next judges, rejection retargets the generator (`retry:`). The daily-driver pattern. `work::review`, `review::verify`.
 
 A real workflow usually **mixes** these — the patterns name the *shape of an edge or step*, not the whole graph. `work` is routing (`triage`) → prompt chaining (`plan → implement → review`) → evaluator-optimizer (`review` retargets `implement`) → tool steps (`format`, `ci`). `review` is routing (`scope`) → a deep review pass (`review_full`) → evaluator-optimizer (`verify` retargets `review_full`). Reach for whichever pattern fits each seam; don't force one over the whole run.
@@ -239,12 +238,9 @@ Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-p
 | `grep` | content search | |
 | `find` | filename search | |
 | `ls` | list a directory | |
-| `web_fetch` | fetch a URL | |
-| `agent` | spawn sub-agents (orchestrator-workers, §1) | opt-in; see the gotcha below |
+| `web_fetch` | fetch a URL | opt-in |
 
 Three tools are **force-included** and need not be listed — they're available even if `allowed-tools` omits them (and survive `denied-tools`): `skill` (load a skill), `abort` (fail the step with a reason, §4), and `route` (synthesised per-call on a node that declares `routes:`).
-
-> **`agent` gotcha — orchestrator steps must grant the workers' tools.** A sub-agent's tool pool **defaults to the *parent step's* `allowed-tools`** (minus `agent` — children can't recurse). So a dispatcher with `allowed-tools: [agent]` spawns **tool-less** sub-agents — they can't read, write, or run anything and abort immediately. Grant the workers' tools on the orchestrator step itself: `allowed-tools: [agent, bash, read, write, edit, grep]`. (Setting `allowed_tools` in the spawn spec only *narrows* within that inherited pool — it can't add tools the parent lacks.) The exception is a **named agent definition** (`.agents/agents/<name>.md`): its frontmatter `allowed_tools` are granted independently, which is why `review::dispatch` works with bare `[agent]` — its `lens-*` workers are defs, not inline specs.
 
 ### Tool steps
 
@@ -351,7 +347,7 @@ Full table, including removed codes: `references/validator-codes.md`.
 - **Synthesizing a fail path.** There's no implicit `fail → exit`. A step with no fail route halts — that's the point. Add `on: {fail: …}` only to recover or land gracefully.
 - **A `loop` step.** Loops are back-edges (`on: {fail: <upstream>}` + `max-retries`) or goal-gate retargets (`retry:`).
 - **Two jobs in one step.** One prompt, one thread, one model, one tool pool.
-- **An orchestrator with `allowed-tools: [agent]` only.** Sub-agents inherit the parent step's tool pool — bare `[agent]` spawns tool-less workers that abort. Grant the workers' tools on the dispatcher (`[agent, bash, read, …]`), or use named agent defs (§7 toolset gotcha).
+- **Reaching for fan-out.** There's no concurrent-dispatch primitive — steps run one at a time. Compose concurrent work as separate runs sharing artifacts, not as parallel branches inside one run.
 - **A global thread.** Scope threads to the conversation that needs them; keep classifiers and mechanical steps stateless.
 - **Re-reading a classification from a thread.** Encode it in the topology, or re-derive fresh evidence at the point of decision.
 - **A `collect → analyze` tool→llm chain.** Tool steps don't feed data forward; run the collector inside the analyser's `bash` tool, or split it into a dedicated `llm` collector sharing the thread.

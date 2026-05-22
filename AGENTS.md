@@ -43,12 +43,12 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 
 | Package | Entry points | What lives here |
 |---|---|---|
-| `@fragua/types` | `src/index.ts`, `src/events.ts`, `src/agents.ts`, `src/skills.ts` | Shared `AgentMessage` + fragua-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
+| `@fragua/types` | `src/index.ts`, `src/events.ts`, `src/skills.ts` | Shared `AgentMessage` + fragua-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
 | `@fragua/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
 | `@fragua/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy,thread}.ts`, `src/parser/yaml.ts` | Pure types; YAML parser; handler contract; engine reducers |
 | `@fragua/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
 | `@fragua/agent` | `src/{backend,handler-bridge,system-prompt,thread,event-bridge,tool-adapter}.ts` | `PiLlmBackend`; pi-ai → handler bridge; per-run system-prompt builder |
-| `@fragua/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/`, `src/agents/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills + agent-definition discovery |
+| `@fragua/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery |
 | `@fragua/server` | `src/index.ts`, `src/store/{routes,runs-routes,runs-adapter,steps,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
 | `@fragua/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Fragua primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
 | `@fragua/cli` | `bin/fragua.ts`, `src/commands/` | `harness` (default) / `daemon` / `serve` / `run` / `validate` / `init` / `providers` / `db` / `gc` |
@@ -57,11 +57,9 @@ Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs
 
 Runtime state: `~/.fragua/fragua.db` (the global store the harness binds to by default; `daemon_lock.{http_url, http_port, harness_version}` carry the running URL — that's how `fragua run` discovers the harness, no JSON file). The CI primitive (`fragua daemon --db <path>` + `fragua serve --db <path>`) writes its serve URL to `<cwd>/.fragua/serve.json`; `fragua run` falls back to that when no harness lock is present. `cwd` on `run_state` is the only project identifier — there is no `projects` table; the UI lists projects via `SELECT DISTINCT cwd`. Worktrees live under each run's `cwd` at `.fragua/worktrees/<run_id>/`.
 
-Config cascade: `~/.fragua/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.fragua/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. Legacy `config.jsonc` is read with a deprecation warning for one release; rename to `config.yaml` to silence it.
+Config cascade: `~/.fragua/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.fragua/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. YAML only.
 
 Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `postmortem`, `operate`). The daemon scans both at boot. Load before touching any file in a skill's domain.
-
-Named sub-agent profiles live alongside skills under `.agents/agents/` (project) and `~/.agents/agents/` (user); `.claude/agents/` is scanned as a cross-client fallback. Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, optional `model` / `provider` / `allowed_tools`); the body becomes the sub-agent's system prompt. Project beats user on collisions. The daemon scans them at boot and the catalogue lands on every llm call whose tool pool includes `agent`.
 
 ## Commit conventions
 
