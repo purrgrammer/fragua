@@ -948,6 +948,73 @@ steps:
         mock.restore();
       }
     });
+
+    it("invalidates snapshots + snapshotDiff when fact.node_completed arrives via SSE", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-node-inv",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "running",
+        lastEventSeq: 5,
+        nodes: [{ nodeId: "build", iteration: 0, state: "running", lastEventSeq: 5 }],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cwd: "/home/user/project",
+      };
+      const { client, mock } = prepareWithDiff("run-diff-node-inv", detail);
+      const fakeEs = installFakeEventSource();
+      try {
+        mount(client, "/runs/run-diff-node-inv");
+        // Wait for the SSE connection to open.
+        await waitFor(() => expect(fakeEs.getEs()).toBeTruthy());
+        const callsBefore = mock.calls.filter((c) => c.url.includes("/snapshots")).length;
+        await act(async () => {
+          fakeEs
+            .getEs()!
+            .dispatch("fact.node_completed", { nodeId: "build", iteration: 0, outcomeStatus: "success" }, 6);
+        });
+        await waitFor(() => {
+          const snapshotCalls = mock.calls.filter((c) => c.url.includes("/snapshots"));
+          expect(snapshotCalls.length).toBeGreaterThan(callsBefore);
+        });
+      } finally {
+        mock.restore();
+        fakeEs.restore();
+      }
+    });
+
+    it("invalidates snapshots + snapshotDiff when fact.run_completed arrives via SSE", async () => {
+      const detail: RunDetailT = {
+        runId: "run-diff-run-inv",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "running",
+        lastEventSeq: 5,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cwd: "/home/user/project",
+      };
+      const { client, mock } = prepareWithDiff("run-diff-run-inv", detail);
+      const fakeEs = installFakeEventSource();
+      try {
+        mount(client, "/runs/run-diff-run-inv");
+        await waitFor(() => expect(fakeEs.getEs()).toBeTruthy());
+        const callsBefore = mock.calls.filter((c) => c.url.includes("/snapshots")).length;
+        await act(async () => {
+          fakeEs.getEs()!.dispatch("fact.run_completed", { runId: "run-diff-run-inv" }, 6);
+        });
+        await waitFor(() => {
+          const snapshotCalls = mock.calls.filter((c) => c.url.includes("/snapshots"));
+          expect(snapshotCalls.length).toBeGreaterThan(callsBefore);
+        });
+      } finally {
+        mock.restore();
+        fakeEs.restore();
+      }
+    });
   });
 
   describe("RunDetail header — git base", () => {

@@ -14,9 +14,9 @@
 // a run's essentials: status, duration, cost, tokens, current node.
 
 import { parseWorkflow } from "@fragua/core";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
@@ -124,6 +124,39 @@ export function RunDetail(): JSX.Element {
   // Reads the overlay-merged status so the badge flips the moment a
   // pause / resume / cancel fact lands, without waiting for a refetch.
   const isLive = (liveStatus === "live" || liveStatus === "loading") && detail?.status === "running";
+
+  const qc = useQueryClient();
+  const prevNodeStatesRef = useRef<typeof detailOverlay.nodeStates>(detailOverlay.nodeStates);
+  const prevOverlayStatusRef = useRef<typeof detailOverlay.status>(detailOverlay.status);
+  useEffect(() => {
+    const prevNodeStates = prevNodeStatesRef.current;
+    const prevStatus = prevOverlayStatusRef.current;
+    prevNodeStatesRef.current = detailOverlay.nodeStates;
+    prevOverlayStatusRef.current = detailOverlay.status;
+
+    const runTerminated =
+      detailOverlay.status !== null &&
+      detailOverlay.status !== prevStatus &&
+      (detailOverlay.status === "success" || detailOverlay.status === "fail" || detailOverlay.status === "canceled");
+
+    let nodeFinished = false;
+    for (const [key, entry] of detailOverlay.nodeStates) {
+      const prev = prevNodeStates.get(key);
+      if (
+        (entry.state === "completed" || entry.state === "failed") &&
+        (prev === undefined || prev.state !== entry.state)
+      ) {
+        nodeFinished = true;
+        break;
+      }
+    }
+
+    if (!runTerminated && !nodeFinished) return;
+    if (!id) return;
+
+    void qc.invalidateQueries({ queryKey: [...queries.runs.all(), id, "snapshots"] });
+    void qc.invalidateQueries({ queryKey: [...queries.runs.all(), id, "snapshot-diff"] });
+  }, [detailOverlay.nodeStates, detailOverlay.status, id, qc]);
 
   const handleNodeClick = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
