@@ -7,22 +7,26 @@
 >
 > — Camarón de la Isla
 
-a local dark software forge
+durable, portable execution for engineering workflows. drive LLM agents with a deterministic control plane, humans in the loop, full event-log audit, and a live operator dashboard. runs on your laptop and on CI.
 
-- provider-agnostic (15+ inference backends via [`pi-ai`](https://github.com/badlogic/pi-mono))
+- declarative YAML workflows
+- survives crashes, provider outages, and transient errors
+- provider-agnostic
 - models à la carte per step
 - cost-control
 - superb observability
+- a run is a portable artifact
 
 built on the assumption that the **control plane** is worth being deterministic even when the LLM bodies are not.
 
-## why you might care
+## what you get
 
-- **survives crashes & provider hiccups.** intent/fact split with OCC; transient errors (408/429/5xx/network) auto-retry; recoverable failures (budget caps, loop/goal ceilings, watchdog timeouts) pause instead of dying. raise the cap, resume. daemon restart picks up mid-flight runs.
+- **workflows are text.** plain YAML. diff them, version them, code-review them. no DSL.
+- **survives crashes & provider hiccups.** intent/fact split with OCC; transient errors (408/429/5xx/network) auto-retry; recoverable failures (budget caps, loop/goal ceilings, watchdog timeouts, engine incompatibility) pause instead of dying. raise the cap, resume. daemon restart picks up mid-flight runs.
 - **same workflow, any provider.** per-step `provider` / `model` overrides, pre-flighted against pi-ai's registry — bad combos fail in milliseconds, not after 30 retries.
 - **operator surface, not an afterthought.** live web UI on `:6767`: per-run + global SSE, run-scoped file tree + git-aware diff, transcripts, cost panels, steering + HITL — all driven by intents on the event log.
 - **schedules built in.** fire on a fixed interval (`30m`…`7d`) with skip / queue / concurrent overlap, late-fire catch-up, per-schedule run history.
-- **workflows are text.** plain YAML. diff them, version them, code-review them. no DSL.
+- **a run is a portable artifact.** the event log, messages, canonical workflow IR and a git-bundle of the worktree snapshots together are self-contained and portable. share them, replay them, debug them on another machine.
 
 ## quickstart
 
