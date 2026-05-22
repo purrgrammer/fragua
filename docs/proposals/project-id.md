@@ -40,6 +40,58 @@ path), never identity.
 Each site is classified **IDENTITY** (must key on `project_id`) or **LOCATION**
 (legitimately stays cwd). file:line from grep at `last-reviewed`.
 
+> **Exhaustiveness contract.** The inventory below is meant to be *provably
+> complete*: every cwd-bearing or project-identifying site is either a row in
+> the per-package tables, or covered by §2bis (workflows) / §2ter (run-scoped
+> tables) — both of which carry NO cwd and inherit identity transitively, so
+> they have no rows to migrate.
+
+### §2bis Workflows — already project-agnostic
+
+The owner asked to *"clean up the schema — workflows, runs, etc — to point to
+project by id."* The honest answer for `workflows`: **nothing to change at the
+table level, and adding a `project_id` column there would be wrong.**
+
+- The `workflows` table (`schema.sql:14-19` — `sha, name, dot_source,
+  created_at`) is **content-addressed and global**: the primary key is the
+  source `sha`. It has no cwd and needs **no** `project_id` — identical sources
+  enqueued from different projects share one `sha` *by design*. Confirmed: a
+  grep over `packages/store/src` finds no cwd/project key on the table or in
+  `workflow-queries.ts` (the only SQL touching it).
+- A run's link to its workflow is **`run_state.workflow_sha`** (`schema.sql:36`,
+  `NOT NULL REFERENCES workflows(sha)`) — already cwd-free and **portable**: the
+  source travels in the `workflows` table (and would ride an import bundle).
+  That is the identity link.
+- `run_state.workflow_scope` (`'global'|'local'|'path'|'ephemeral'`,
+  `schema.sql:56`) + `run_state.workflow_path` (`schema.sql:57-59`) are
+  **LOCATION** metadata — where the `.yaml` was found on disk for a
+  `local`/`path` workflow. Advisory like cwd; possibly absent or stale on
+  import. Written at enqueue by `run.ts:191-196` (`workflowScope`,
+  `workflowPath`) and resolved by the multi-source reader
+  (`packages/server/src/adapters/multi-source-workflow-reader.ts:40-90`), which
+  reads `.yaml` off disk and is therefore irreducibly cwd-keyed.
+- The per-project workflow **LIST** (WorkflowSelector / `GET /workflows?cwd=`)
+  is a filesystem scan under `<cwd>/.fragua/workflows/`
+  (`multi-source-workflow-reader.ts:40-49`, `projectCwds()`) → stays
+  **LOCATION** (cwd), attributed to a project only via `project_id → cwd`
+  resolution.
+
+**Net:** workflows point to a project **only transitively** — through the run's
+`project_id`. The `workflows` table itself stays global and content-addressed.
+No `project_id` column is added to it.
+
+### §2ter Run-scoped tables — inherit identity through `run_state`
+
+The append-mostly per-run tables — `events` (`schema.sql:107-115`), `messages`
+(`schema.sql:135-150`), `artifacts` (`schema.sql:163-172`) — are keyed by
+`run_id` (`FK → run_state(run_id) ON DELETE CASCADE`) and carry **NO** cwd.
+`blobs` (`schema.sql:157-161`) is content-addressed by `sha256` with no run or
+cwd reference at all. They inherit project identity **transitively** through
+`run_state.project_id`; **no direct `project_id` column is needed** on any of
+them. Confirmed: a grep finds no cwd column on `events` / `messages` / `blobs` /
+`artifacts`. Stating this makes the inventory exhaustive — every cwd site is
+either a row in §2's per-package tables or covered here.
+
 ### `@fragua/store`
 
 | Site | file:line | Class | Becomes |
@@ -75,14 +127,31 @@ Each site is classified **IDENTITY** (must key on `project_id`) or **LOCATION**
 
 | Site | file:line | Class | Becomes |
 |---|---|---|---|
-| `projectId.ts` — `encode/decodeProjectId(cwd)` = base64url(cwd) | `lib/projectId.ts:1-32` | IDENTITY | Deleted as identity. Route param becomes the literal `project_id` (already URL-safe if minted as UUIDv7). |
-| `ProjectDetail` route `:cwdEnc` → `decodeProjectId` | `routes/ProjectDetail.tsx:1-78`, `lib/router.tsx:35` | IDENTITY | Route `projects/:projectId`; tree/blob/config queries resolve cwd server-side from `project_id`. |
-| `ProjectLink` (`encodeProjectId(cwd)`, `basename(cwd)`) | `components/ProjectLink.tsx:2-22` | IDENTITY | Links to `/projects/:projectId`; label from project `name`. |
-| `Projects` list / `ProjectSelector` (cwd as select value) | `components/analytics/ProjectSelector.tsx:19-47` | IDENTITY | Values become `project_id`. |
-| `RunComposer` scope-of-cwd + enqueue `cwd` | `components/RunComposer.tsx:9-11,47-69,104,131` | **both** | Scope (local/global) still compares the workflow's owning cwd to the project's local cwd; enqueue carries cwd (location) and the server attaches identity. |
-| Analytics `cwd` filter threading | `types/analytics.ts:96,133,144` | IDENTITY | `project_id`. |
-| Skills list `project_cwd` filter / column | `components/skills/skills-list.tsx:20-106` | LOCATION | Skills are filesystem-anchored → cwd column stays (could show project name resolved from id). |
-| `WorkflowLink` / `WorkflowSelector` `?cwd=` for local-workflow scoping | `components/WorkflowLink.tsx:6-25`, `components/analytics/WorkflowSelector.tsx:44-88` | LOCATION | Local workflow identity is genuinely `(scope, name, cwd-of-the-yaml)` → cwd. |
+| `projectId.ts` — `encode/decodeProjectId(cwd)` = base64url(cwd) | `lib/projectId.ts:1-32` | IDENTITY | Deleted as identity. Route param becomes the literal `project_id` (already URL-safe as a UUIDv7). |
+| `ProjectDetail` route `:cwdEnc` → `decodeProjectId`; tree/blob/config queries pass `cwdEnc` | `routes/ProjectDetail.tsx:1-8,30,38-39,46-47,59-78,148`, `lib/router.tsx:35` | IDENTITY | Route `projects/:projectId`; runs filter + tree/blob/config queries pass `project_id`, server resolves cwd. Title `name` from project `name` not `basename(cwd)`. |
+| `ProjectLink` (`encodeProjectId(cwd)`, `basename(cwd)`) | `components/ProjectLink.tsx:2,21-22` | IDENTITY | Links to `/projects/:projectId`; label from project `name`. Callers: `Projects.tsx:71`, `Workflows.tsx:91`, `RunDetail.tsx:306`. |
+| `Projects` list route (one row per `run_state.cwd`, `row.cwd` as key + `ProjectLink cwd=`) | `routes/Projects.tsx:1-9,69-82` | IDENTITY | Rows key on `project_id`; `name` from config, `cwd` shown only as a location hint column. |
+| `ProjectSelector` (cwd as select value; `cwdToProjectSelectValue` / `projectSelectValueToCwd` / `ALL_PROJECTS_VALUE`; `p.cwd` item value) | `components/analytics/ProjectSelector.tsx:14,19-25,38,47` | IDENTITY | Select values become `project_id`; helpers map `project_id ↔ ALL`. |
+| Query factories keyed on cwd — `queries.runs.list(filter.cwd)`, `queries.projects.tree/blob(id=cwdEnc)`, `queries.analytics.workflows(cwd)`, `queries.skills.list(projectCwd)` | `lib/queries.ts:23,130-135,181-199,247-252` | mixed | Run/project/analytics keys split on `project_id`; skills key stays `projectCwd` (LOCATION). `projects.tree/blob` already take an opaque `id` arg — becomes `project_id`. |
+| API client cwd plumbing — `getProjectTree/Blob(projectId)` (already opaque), `listRuns({cwd})`, enqueue `{cwd}`, `getWorkflows(?cwd=)`, skills `project_cwd=`, run/project response `cwd` fields | `lib/api.ts:193,240,487,505-517,636,642,791,804,911,1038` | mixed | IDENTITY plumbing sends `project_id`; LOCATION fields (skills, workflow source) keep cwd; response rows gain `project_id` alongside cwd. |
+| `RunComposer` scope-of-cwd + enqueue `cwd` | `components/RunComposer.tsx:9-11,33,47-69,104,131` | **both** | Scope (local/global) still compares the workflow's owning cwd to the project's local cwd; enqueue carries cwd (location) and the server attaches identity. |
+| `RunDetail` project breadcrumb (`ProjectLink cwd={detail.cwd}`, `projectBasename`) | `routes/RunDetail.tsx:24,303-308` | IDENTITY | Link by `detail.project_id`; label from project `name`. (RunRow itself renders no project link — `components/RunRow.tsx`.) |
+| Analytics `cwd` filter threading (`effectiveCwd`, `summaryReq.cwd`, `slice.cwd`, `DrillDownDrawer` `requestArgs.cwd`) | `routes/Analytics.tsx:49-69,123,134,152`, `types/analytics.ts:96,133,144`, `components/analytics/DrillDownDrawer.tsx:106` | IDENTITY | `project_id`. (Effective filter still *derived* from the local workflow's owning cwd — a LOCATION→IDENTITY resolution.) |
+| Skills list `project_cwd` filter / column | `components/skills/skills-list.tsx:20-106`, `routes/Skills.tsx:7-29` | LOCATION | Skills are filesystem-anchored → cwd column stays (could show project name resolved from id). |
+| `WorkflowLink` / `WorkflowSelector` / `WorkflowDetail` `?cwd=` for local-workflow scoping | `components/WorkflowLink.tsx:6-25`, `components/analytics/WorkflowSelector.tsx:44-88`, `routes/WorkflowDetail.tsx:45-48,154-155`, `routes/Workflows.tsx:73-91` | LOCATION | Local workflow identity is genuinely `(scope, name, cwd-of-the-yaml)` → cwd. |
+
+**Web cutover checklist.** (1) Router: rename the param from `:cwdEnc` to
+`:projectId` (`lib/router.tsx:35`, `ProjectDetail.tsx:38`). (2) Delete
+`lib/projectId.ts` *as an identity codec* — the route param is now the literal
+`project_id`, no base64url(cwd) round-trip. (3) Query factories: re-key the
+IDENTITY caches on `project_id` (`queries.runs.list`, `queries.projects.*`,
+`queries.analytics.*`); leave the skills/workflow-source caches on cwd
+(LOCATION). (4) Link + select *values*: `ProjectLink`, the `Projects` list, and
+`ProjectSelector` emit `project_id`; their *labels* come from the project
+`name`, not `basename(cwd)`. (5) Server resolves `project_id → cwd` for the
+file/tree/blob/config views (`getProjectTree/Blob` and the config-yaml read in
+`ProjectDetail.tsx`), degrading to "not checked out here" for an imported-only
+project with no local cwd (§3, §5 #5).
 
 ### `@fragua/daemon`
 
@@ -98,8 +167,8 @@ Each site is classified **IDENTITY** (must key on `project_id`) or **LOCATION**
 | Site | file:line | Class | Becomes |
 |---|---|---|---|
 | `run.ts` enqueue `cwd: resolve(cwd)` (`= process.cwd()`) | `run.ts:118,192` | **both** | Resolve `project_id` from `<cwd>/.fragua/config.yaml` at enqueue; send both `project_id` + cwd. |
-| `init.ts` seeds `id` | `init.ts:38-40,62-69` | IDENTITY (source of truth) | The seed strategy is the open question (§5). |
-| Config cascade `<cwd>/.fragua/config.yaml` | `config.ts:5,245-297` | LOCATION (file) / IDENTITY (`id` field) | The file is per-machine; the `id` field inside it is the identity source. `id` is already in `FraguaConfigSchema` (`config.ts:88-92`) — but the schema comment says "UUIDv7", while `init.ts` writes the dir-name. Reconcile (§5). |
+| `init.ts` mints `id` | `init.ts:43-44,66-77` | IDENTITY (source of truth) | Mints a UUIDv7 `id` + dir-name `name` (§5 #1, resolved). |
+| Config cascade `<cwd>/.fragua/config.yaml` | `config.ts:5,245-297` | LOCATION (file) / IDENTITY (`id` field) | The file is per-machine; the `id` field inside it is the identity source. `id` is in `FraguaConfigSchema` (`config.ts:88-92`); `init.ts:43` mints a UUIDv7 into it, matching the schema comment (§5 #1). |
 | `validate.ts`, `daemon.ts` store path, `schedule.ts` — `process.cwd()` for path resolution | `validate.ts:12`, `daemon.ts:56-127`, `schedule.ts:52` | LOCATION | Filesystem resolution → cwd. |
 
 ### `@fragua/core` / `@fragua/types`
@@ -173,39 +242,44 @@ runs (e.g. a project with zero runs that should still appear).
 
 ## 5. Open questions / risks
 
-1. **The `id` seed — the big one.** `init.ts:40` seeds `id: <dir-name>`, but
-   `config.ts:88` already documents it as UUIDv7. These disagree today.
-   - *dir-name:* readable, but two unrelated repos both named `api` collide
-     into one project across machines. Bad for a shared/central store.
-   - *UUIDv7:* collision-free and time-sortable, but opaque (the `name` field
-     carries the human label). Matches the existing schema comment.
-   - *git-remote-derived* (e.g. hash of `origin` URL): stable across clones of
-     the *same* repo automatically, but breaks for repos with no remote or
-     after a remote rename, and forks would share an id.
-   - **Recommendation:** mint a UUIDv7 at `init` (reconciling `init.ts` with the
-     existing schema comment); keep `name` for humans. Collisions become
-     impossible-by-construction; the dir-name lives on only as the default
-     `name`.
+1. **The `id` seed — RESOLVED.** `init.ts:43` now mints a UUIDv7 `id` (via
+   `@fragua/core`'s `uuidv7()`) and writes the directory name as the human
+   `name` (`init.ts:43-44,72-73`), aligning with the `config.ts:88` schema
+   comment that already documented it as UUIDv7. Rationale: a UUIDv7 is
+   collision-free across a store that aggregates many repos (two unrelated
+   repos both named `api` no longer fold into one project), time-sortable, and
+   opaque — identity is the id, the human label rides the separate `name`
+   field. The dir-name survives only as the default `name`.
 2. **Configs with no `id`.** A pre-existing project that never ran `init`, or a
    config authored before the field — resolves to the `path:<cwd>` fallback
    (§3). A first `fragua init` then mints an `id`; a one-shot
    `fragua project adopt` (out of scope here) could rewrite historical
    `project_id` from `path:<cwd>` to the minted id.
-3. **Collision / divergence.** If two checkouts on the same box have the same
+3. **Portability precondition.** A run enqueued from a cwd whose
+   `.fragua/config.yaml` has no committed `id` falls back to the runtime
+   `path:<cwd>` form (§3) and is therefore **not portable** — on import to
+   another machine ([`db-import.md`](db-import.md)) `path:<cwd>` can't attribute
+   to a project that lives at a different path (or nowhere) locally. So
+   `fragua run` (and the daemon, when dispatching a schedule) should **warn
+   loudly** when enqueuing from a config with no committed `id` — *"this run
+   won't be portable; run `fragua init`"*. For the CI-bundle future this is a
+   hard setup precondition: CI must build from a repo that has a committed `id`,
+   else the exported runs orphan on import.
+4. **Collision / divergence.** If two checkouts on the same box have the same
    committed `id` (legitimate — same repo cloned twice) they correctly fold into
    one project. `cwd` remains a *secondary* key answering "where did this run
    physically happen" — both checkouts' runs share identity but keep distinct
    cwds.
-4. **cwd is irreducible as LOCATION.** Worktrees, file-tree reads, git diff,
+5. **cwd is irreducible as LOCATION.** Worktrees, file-tree reads, git diff,
    bootstrap config, local-workflow resolution, and skills scans all need a real
    path. Identity moves; LOCATION cwd does not go away. A purely imported
    project (no local checkout) has a `project_id` but no usable cwd — file-backed
    views must tolerate that.
-5. **Schedules.** A schedule carries identity (`project_id`) and a spawn cwd. If
+6. **Schedules.** A schedule carries identity (`project_id`) and a spawn cwd. If
    the box's checkout moves, the schedule's cwd goes stale while its identity is
    still correct — needs a re-bind path, or the schedule resolves cwd from the
    project's most-recent run at fire time.
-6. **Trust boundary on enqueue.** The server can either trust a client-supplied
+7. **Trust boundary on enqueue.** The server can either trust a client-supplied
    `project_id` or re-resolve it from the enqueued cwd's config. For imported
    runs the id must be trusted (the cwd may not exist); for live `fragua run`
    either works. Pick "trust the client, default to resolve-from-cwd when
