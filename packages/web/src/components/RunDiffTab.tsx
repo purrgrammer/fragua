@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, type RunDetail } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { CodeBlock } from "./ai-elements/code-block.tsx";
+import { ChangeStat } from "./ChangeStat.tsx";
 import { RunActions } from "./RunActions.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 
@@ -48,16 +49,13 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
     <section className="flex min-h-0 flex-col gap-3 p-3" data-testid="run-diff-section">
       <div className="flex min-w-0 items-center gap-3">
         {stat && (
-          <p className="flex-1 font-mono text-sw-sm text-sw-muted" data-testid="run-diff-stat">
-            {stat.filesChanged} {stat.filesChanged === 1 ? "file" : "files"} changed,{" "}
-            <span className="text-sw-accent-success" data-testid="run-diff-insertions">
-              +{stat.insertions}
-            </span>{" "}
-            /{" "}
-            <span className="text-sw-accent-error" data-testid="run-diff-deletions">
-              −{stat.deletions}
-            </span>
-          </p>
+          <ChangeStat
+            className="flex-1 text-sw-sm"
+            stat={stat}
+            data-testid="run-diff-stat"
+            insertionsTestId="run-diff-insertions"
+            deletionsTestId="run-diff-deletions"
+          />
         )}
         {run && <RunActions row={run} />}
       </div>

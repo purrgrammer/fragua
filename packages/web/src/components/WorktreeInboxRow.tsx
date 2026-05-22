@@ -7,6 +7,7 @@
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
 import { summarizeChangeStat } from "../lib/changeStat.ts";
+import { ChangeStat } from "./ChangeStat.tsx";
 import { RunActions } from "./RunActions.tsx";
 import { displayTitle, displayTooltip } from "./RunRow.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -29,13 +30,8 @@ export function WorktreeInboxRow({ row }: { row: RunSummary }): JSX.Element {
       </Link>
 
       {stat && (
-        <Badge
-          variant="muted"
-          className="shrink-0 font-mono tabular-nums"
-          data-testid={`worktree-inbox-stat-${row.runId}`}
-        >
-          {stat.filesChanged} changed <span className="text-[var(--sw-accent-success)]">+{stat.insertions}</span>{" "}
-          <span className="text-[var(--sw-accent-error)]">−{stat.deletions}</span>
+        <Badge variant="muted" className="shrink-0" data-testid={`worktree-inbox-stat-${row.runId}`}>
+          <ChangeStat stat={stat} />
         </Badge>
       )}
 
