@@ -35,12 +35,14 @@ export interface InitCommandOptions {
 
 export async function initCommand(opts: InitCommandOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
+  // Project id seeds from the directory name; trailing slashes and the
+  // filesystem root degrade to a stable fallback.
+  const id = cwd.split("/").filter(Boolean).at(-1) ?? "project";
   const configPath = resolve(cwd, ".fragua/config.yaml");
 
   if (!(await isGitRepo(cwd))) {
-    console.error(chalk.red("init: not a git repository"));
-    console.error(chalk.dim("  run `git init` first, then re-run `fragua init`."));
-    return 1;
+    console.error(chalk.dim("init: not a git repository, worktree isolation not available"));
+    console.error(chalk.dim("  run `git init` to initialize a repository"));
   }
 
   if (await pathExists(configPath)) {
@@ -49,7 +51,7 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
   }
 
   await mkdir(resolve(cwd, ".fragua/workflows"), { recursive: true });
-  await writeFile(configPath, renderConfig(), "utf8");
+  await writeFile(configPath, renderConfig(id), "utf8");
   await mergeGitignore(cwd);
 
   console.log(chalk.green(`✓ wrote ${configPath}`));
@@ -57,9 +59,10 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
   return 0;
 }
 
-function renderConfig(): string {
+function renderConfig(id: string): string {
   return `# fragua project config — project-specific knobs only.
 # Generic preferences live in ~/.fragua/config.yaml.
+id: ${id}
 
 # Uncomment if the project needs a per-worktree bootstrap command:
 # bootstrap: "bun install --frozen-lockfile"

@@ -42,13 +42,13 @@ describe("initCommand", () => {
     }
   }
 
-  test("writes .fragua/config.yaml", async () => {
+  test("writes .fragua/config.yaml with an id seeded from the dir name", async () => {
     const code = await initCommand({ cwd: scratch });
     expect(code).toBe(0);
     expect(await exists(".fragua/config.yaml")).toBe(true);
-    // The default template is comments-only — loads as an empty config.
     const cfg = await loadProjectConfig(scratch);
-    expect(cfg).toEqual({});
+    const expectedId = scratch.split("/").filter(Boolean).at(-1)!;
+    expect(cfg.id).toBe(expectedId);
   });
 
   test(".gitignore allowlists .fragua/config.yaml", async () => {
@@ -67,11 +67,12 @@ describe("initCommand", () => {
     expect(content).toBe(`auto-title: false\n`);
   });
 
-  test("fails on non-git directory", async () => {
+  test("non-git directory: warns but still initialises (worktree isolation unavailable)", async () => {
     const nonGit = await mkdtemp(join(tmpdir(), "fragua-nongit-"));
     try {
       const code = await initCommand({ cwd: nonGit });
-      expect(code).toBe(1);
+      expect(code).toBe(0);
+      await access(join(nonGit, ".fragua/config.yaml")); // throws if absent
     } finally {
       await rm(nonGit, { recursive: true, force: true });
     }
