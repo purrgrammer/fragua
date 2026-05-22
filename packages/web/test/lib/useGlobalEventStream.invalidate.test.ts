@@ -22,10 +22,16 @@ describe("useGlobalEventStream — RUN_INVALIDATE_KINDS membership", () => {
     expect(__invalidateKinds.has("intent.run_enqueued")).toBe(true);
   });
 
-  // Operator-action facts — the bug fix: inbox rows must clear in all tabs
-  test("includes the post-terminal operator-action facts (bug fix: inbox rows clear)", () => {
+  // Operator-action facts — inbox rows must clear in all tabs
+  test("includes the post-terminal operator-action facts (inbox rows clear)", () => {
     expect(__invalidateKinds.has("fact.run_accepted")).toBe(true);
     expect(__invalidateKinds.has("fact.run_discarded")).toBe(true);
+  });
+
+  // Terminal snapshot: written AFTER fact.run_completed in the dispose path;
+  // sets inbox_status=pending, so the inbox=pending list must refetch on this fact.
+  test("includes fact.snapshot_recorded so inbox=pending list refetches after the snapshot writes inbox_status", () => {
+    expect(__invalidateKinds.has("fact.snapshot_recorded")).toBe(true);
   });
 
   // Auto-titler: run card title updates live after enqueue

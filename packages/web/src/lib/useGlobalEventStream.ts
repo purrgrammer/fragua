@@ -39,6 +39,11 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
   // must clear the WorktreeInbox row in any open tab, not just the tab that fired the action.
   "fact.run_accepted",
   "fact.run_discarded",
+  // Terminal worktree snapshot: written AFTER fact.run_completed in the executor's
+  // finally-block dispose path. It sets inbox_status=pending on run_state, so the
+  // inbox=pending list query must refetch when this fact arrives — fact.run_completed
+  // alone races the snapshot write and the list may return before inbox_status is set.
+  "fact.snapshot_recorded",
   // Auto-titler: run card title stays stale after enqueue until the title lands.
   "run.title_generated",
 ]);

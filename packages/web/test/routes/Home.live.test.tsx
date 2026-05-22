@@ -10,6 +10,7 @@
 //   - basic: paused_human arrives → row appears in Inbox
 //   - basic: run_started → row appears in Running
 //   - basic: run_completed → row leaves Running, Activity gets the row
+//   - basic: fact.snapshot_recorded with inbox_status=pending → row appears in Inbox
 //   - navigation: leave Home, return, SSE still drives updates
 //   - reconnect: EventSource permanent-close + auto-reconnect, events
 //     emitted on the new connection still propagate to invalidations
@@ -85,6 +86,8 @@ interface FakeRun {
   durationMs?: number;
   title?: string;
   input?: string;
+  inboxStatus?: "pending" | "acted" | "discarded";
+  changeStat?: { committed: { filesChanged: number; insertions: number; deletions: number } | null; uncommitted: null };
 }
 
 const baseRun = (over: Partial<FakeRun> & Pick<FakeRun, "runId" | "status" | "runStatus">): FakeRun => ({
@@ -107,8 +110,15 @@ function homeFetchMock(state: { runs: FakeRun[] }) {
       // Filter `runs` by query params so each section sees its slice.
       const u = new URL(url, "http://test");
       const statusFilter = u.searchParams.get("status");
-      const wanted = statusFilter ? new Set(statusFilter.split(",")) : null;
-      const out = wanted ? state.runs.filter((r) => wanted.has(r.runStatus)) : state.runs;
+      const inboxFilter = u.searchParams.get("inbox");
+      let out = state.runs;
+      if (statusFilter) {
+        const wanted = new Set(statusFilter.split(","));
+        out = out.filter((r) => wanted.has(r.runStatus));
+      }
+      if (inboxFilter) {
+        out = out.filter((r) => r.inboxStatus === inboxFilter);
+      }
       return json(out);
     }
     return new Response("not found", { status: 404 });
@@ -257,6 +267,71 @@ describe("Control Center live updates", () => {
       expect(container.textContent).toContain("Nothing running");
     });
     expect(container.textContent).toContain("completed");
+  });
+
+  it("fact.snapshot_recorded pushes a completed run into the Inbox (Ready-to-land) section without a reload", async () => {
+    // The daemon writes fact.snapshot_recorded AFTER fact.run_completed in
+    // the dispose path (finally block in executor). fact.run_completed
+    // invalidates runs.lists() but the inbox=pending refetch races the
+    // snapshot fact — the run has no inboxStatus yet at that point.
+    // fact.snapshot_recorded must therefore also be in RUN_INVALIDATE_KINDS
+    // so the inbox list refetches once the inbox_status is persisted.
+    state.runs = [
+      baseRun({
+        runId: "01rsnap001",
+        status: "running",
+        runStatus: "running",
+        workflow: "smoke-sleep",
+        title: "Build widget",
+      }),
+    ];
+    const { container } = mount();
+    const es = await ensureSseOpen();
+    await waitFor(() => {
+      expect(container.textContent).not.toContain("Nothing running");
+    });
+    expect(container.textContent).toContain("All clear");
+
+    // fact.run_completed fires first — run leaves Running, no inbox_status yet.
+    state.runs = [baseRun({ runId: "01rsnap001", status: "success", runStatus: "completed", title: "Build widget" })];
+    emit(es, { runId: "01rsnap001", seq: 18, type: "fact.run_completed", payload: { finalNode: "done" } });
+    await waitFor(() => {
+      expect(container.textContent).toContain("Nothing running");
+    });
+
+    // fact.snapshot_recorded arrives after dispose — now inbox_status=pending.
+    state.runs = [
+      baseRun({
+        runId: "01rsnap001",
+        status: "success",
+        runStatus: "completed",
+        title: "Build widget",
+        inboxStatus: "pending",
+        changeStat: { committed: { filesChanged: 3, insertions: 20, deletions: 2 }, uncommitted: null },
+      }),
+    ];
+    emit(es, {
+      runId: "01rsnap001",
+      seq: 19,
+      type: "fact.snapshot_recorded",
+      payload: {
+        eventIdx: 17,
+        treeSha: "abc",
+        commitSha: "def",
+        parentSnap: null,
+        headSha: "ghi",
+        headRef: null,
+        diffBaseSha: "jkl",
+        committed: { filesChanged: 3, insertions: 20, deletions: 2 },
+        uncommitted: null,
+      },
+    });
+
+    // The Inbox (Ready to land) section must now show the run without a reload.
+    await waitFor(() => {
+      expect(container.textContent).not.toContain("All clear");
+    });
+    expect(container.textContent).toContain("Build widget");
   });
 
   // ── Adversarial: navigation away + return ─────────────────────────
