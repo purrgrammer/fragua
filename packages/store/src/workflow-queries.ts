@@ -16,11 +16,16 @@ interface WorkflowFullRow {
   sha: string;
   name: string;
   source: string;
+  /** Persisted canonical IR (loc-stripped Graph JSON), or NULL for rows
+   *  written without it (test seeds; the loader falls back to parsing
+   *  `source`). */
+  ir: string | null;
+  ir_version: number | null;
   created_at: number;
 }
 
 const SELECT_WORKFLOW_SQL = `
-  SELECT sha, name, source, created_at FROM workflows WHERE sha = ?
+  SELECT sha, name, source, ir, ir_version, created_at FROM workflows WHERE sha = ?
 `;
 
 export function selectWorkflow(db: Database, sha: string): WorkflowFullRow | null {
@@ -28,11 +33,19 @@ export function selectWorkflow(db: Database, sha: string): WorkflowFullRow | nul
 }
 
 const INSERT_WORKFLOW_SQL = `
-  INSERT INTO workflows (sha, name, source, created_at)
-  VALUES (?, ?, ?, ?)
+  INSERT INTO workflows (sha, name, source, ir, ir_version, created_at)
+  VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT(sha) DO NOTHING
 `;
 
-export function insertWorkflowIfAbsent(db: Database, sha: string, name: string, source: string, now: number): void {
-  db.query(INSERT_WORKFLOW_SQL).run(sha, name, source, now);
+export function insertWorkflowIfAbsent(
+  db: Database,
+  sha: string,
+  name: string,
+  source: string,
+  ir: string | null,
+  irVersion: number | null,
+  now: number,
+): void {
+  db.query(INSERT_WORKFLOW_SQL).run(sha, name, source, ir, irVersion, now);
 }

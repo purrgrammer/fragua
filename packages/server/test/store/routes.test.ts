@@ -82,7 +82,15 @@ describe("POST /workflows — upload", () => {
     const body = (await res.json()) as { sha: string; name: string };
     expect(body.name).toBe("hello");
     expect(body.sha).toMatch(/^[0-9a-f]{64}$/);
-    expect(store.getWorkflow(body.sha)?.name).toBe("hello");
+    const wf = store.getWorkflow(body.sha);
+    expect(wf?.name).toBe("hello");
+    // (A): the upload persists the canonical IR (loc-stripped Graph JSON) +
+    // its version, so the dispatch loader deserializes instead of re-parsing.
+    expect(wf?.irVersion).toBe(1);
+    expect(wf?.ir).toBeTruthy();
+    const ir = JSON.parse(wf!.ir!) as { nodes: Record<string, unknown>; edges: unknown[] };
+    expect(Object.keys(ir.nodes)).toContain("work");
+    expect(wf!.ir!).not.toContain('"loc"');
   });
 
   test("rejects missing fields", async () => {

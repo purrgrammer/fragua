@@ -24,7 +24,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
-import { parseWorkflow } from "@fragua/core";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { type IEventStore, isTerminal as isTerminalStatus, sha256Hex } from "@fragua/store";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
@@ -141,8 +141,9 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
       continue;
     }
 
+    let graph: ReturnType<typeof parseWorkflow>;
     try {
-      parseWorkflow(source);
+      graph = parseWorkflow(source);
     } catch (err) {
       opts.store.pauseSchedule(row.id, now);
       opts.store.appendDaemonEvent({
@@ -172,7 +173,7 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
 
     // Fire.
     const sha = sha256Hex(source);
-    opts.store.saveWorkflow(sha, resolved.name, source);
+    opts.store.saveWorkflow(sha, resolved.name, source, serializeGraph(graph), CURRENT_IR_VERSION);
     const runId = newRunId();
     const initialRouting: Record<string, unknown> = {};
     if (row.input != null && row.input.length > 0) initialRouting["input"] = row.input;

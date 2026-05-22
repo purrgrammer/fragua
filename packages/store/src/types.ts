@@ -393,6 +393,11 @@ export interface WorkflowRow {
   sha: string;
   name: string;
   source: string;
+  /** Persisted canonical IR (loc-stripped Graph JSON) + its contract version,
+   * or `null` when the row was written without it (the GraphLoader falls back
+   * to parsing `source`). */
+  ir: string | null;
+  irVersion: number | null;
   createdAt: number;
 }
 
@@ -695,7 +700,7 @@ export interface IEventWriter {
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
 
   // ─── Workflow catalog (write)
-  saveWorkflow(sha: string, name: string, source: string): void;
+  saveWorkflow(sha: string, name: string, source: string, ir?: string, irVersion?: number): void;
 
   // ─── Maintenance
   vacuum(): void;

@@ -4,7 +4,14 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import { InvalidDurationError, parseDurationMs, parseWorkflow, validateInputBindings } from "@fragua/core";
+import {
+  CURRENT_IR_VERSION,
+  InvalidDurationError,
+  parseDurationMs,
+  parseWorkflow,
+  serializeGraph,
+  validateInputBindings,
+} from "@fragua/core";
 import {
   FEED_EVENT_KINDS,
   type IEventStore,
@@ -219,7 +226,7 @@ export function createRoutes(deps: ServerDeps): Hono {
       );
     }
     const sha = sha256Hex(body.source);
-    deps.store.saveWorkflow(sha, body.name, body.source);
+    deps.store.saveWorkflow(sha, body.name, body.source, serializeGraph(graph), CURRENT_IR_VERSION);
     return c.json({ sha, name: body.name });
   });
 
@@ -351,7 +358,13 @@ export function createRoutes(deps: ServerDeps): Hono {
         );
       }
       if (deps.store.getWorkflow(workflowSha) == null) {
-        deps.store.saveWorkflow(workflowSha, resolvedWorkflowName ?? body.workflowName ?? workflowSha, resolvedSource);
+        deps.store.saveWorkflow(
+          workflowSha,
+          resolvedWorkflowName ?? body.workflowName ?? workflowSha,
+          resolvedSource,
+          serializeGraph(resolvedGraph),
+          CURRENT_IR_VERSION,
+        );
       }
     }
 
