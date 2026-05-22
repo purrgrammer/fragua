@@ -12,6 +12,7 @@ import {
   serializeGraph,
   validateInputBindings,
 } from "@fragua/core";
+import { type BuildResult, makeIntentPlane } from "@fragua/core/intent-plane";
 import {
   FEED_EVENT_KINDS,
   type IEventStore,
@@ -181,6 +182,13 @@ export function createRoutes(deps: ServerDeps): Hono {
     accept: (cwd, runId, baseGitSha) => applyAccept(defaultGitExec, { cwd, runId, baseGitSha }),
     discard: (cwd, runId) => applyDiscard(defaultGitExec, cwd, runId),
   };
+  // The intent plane: the one validate/construct/commit surface. Control
+  // routes deserialize the body, hand it to `plane.build*`, and commit via
+  // `commitBuilt` — no route validates an intent body or calls
+  // `store.appendIntent` itself (enforced by `discipline.test.ts`).
+  const plane = makeIntentPlane({ store: deps.store });
+  const commitBuilt = (c: Context, runId: string, built: BuildResult): Response =>
+    built.ok ? appendIntentOr413(c, runId, built.intent) : c.json({ error: built.error }, 400);
 
   // ─── Workflow upload ────────────────────────────────────────
 
@@ -454,7 +462,7 @@ export function createRoutes(deps: ServerDeps): Hono {
    */
   function appendIntentOr413(c: Context, runId: string, intent: IntentEvent): Response {
     try {
-      const { seq } = deps.store.appendIntent(runId, intent);
+      const { seq } = plane.commit(runId, intent);
       return c.json({ seq });
     } catch (err) {
       if (err instanceof PayloadTooLargeError) {
@@ -472,46 +480,26 @@ export function createRoutes(deps: ServerDeps): Hono {
     }
   }
 
-  app.post("/runs/:id/steer", async (c) => {
-    const body = await readJson<{ text?: string }>(c);
-    if (!body || typeof body.text !== "string" || body.text.length === 0) {
-      return c.json({ error: "text required" }, 400);
-    }
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.steering_requested",
-      payload: { text: body.text },
-    });
-  });
+  app.post("/runs/:id/steer", async (c) => commitBuilt(c, c.req.param("id"), plane.buildSteer(await readJson(c))));
 
-  app.post("/runs/:id/pause", (c) =>
-    appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.pause_requested",
-      payload: {},
-    }),
+  app.post("/runs/:id/pause", (c) => commitBuilt(c, c.req.param("id"), plane.buildPause({})));
+
+  app.post("/runs/:id/cancel", async (c) =>
+    commitBuilt(c, c.req.param("id"), plane.buildCancel((await readJson(c)) ?? {})),
   );
-
-  app.post("/runs/:id/cancel", async (c) => {
-    const body = (await readJson<{ reason?: string }>(c)) ?? {};
-    const payload: { reason?: string } = {};
-    if (typeof body.reason === "string") payload.reason = body.reason;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.cancel_requested",
-      payload,
-    });
-  });
 
   app.post("/runs/:id/human", async (c) => {
     const runId = c.req.param("id");
-    const body = await readJson<{ route?: string; note?: string }>(c);
-    if (!body || typeof body.route !== "string" || body.route.length === 0) {
-      return c.json({ error: "route required" }, 400);
-    }
-    // Server-side enum check: read the paused-node descriptor from the
-    // latest fact.run_paused_human and reject off-list routes with 400.
-    // The handler validates the same enum (defense-in-depth — a
-    // hand-crafted intent could bypass this check), but the operator-
-    // facing path should fail loudly here so the UI surfaces the
-    // error instead of letting the daemon halt the run on resume.
+    const built = plane.buildHuman(await readJson(c));
+    if (!built.ok) return c.json({ error: built.error }, 400);
+    const route = built.intent.payload.route;
+    // Stateful route-enum check: read the paused-node descriptor from the
+    // latest fact.run_paused_human and reject off-list routes with 400. This
+    // is I/O (reads run state), so it stays adapter-side (intent-plane §3.6) —
+    // the plane only validated the body shape. The handler re-validates the
+    // same enum (defense-in-depth — a hand-crafted intent could bypass this);
+    // the operator-facing path fails loudly here so the UI surfaces it instead
+    // of letting the daemon halt the run on resume.
     const state = deps.store.getState(runId);
     if (state == null) return c.json({ error: "run not found" }, 404);
     if (state.status !== "paused_human") {
@@ -529,92 +517,30 @@ export function createRoutes(deps: ServerDeps): Hono {
         break;
       }
     }
-    if (declaredRoutes.length > 0 && !declaredRoutes.includes(body.route)) {
-      return c.json({ error: `unknown route "${body.route}" (expected one of: ${declaredRoutes.join(", ")})` }, 400);
+    if (declaredRoutes.length > 0 && !declaredRoutes.includes(route)) {
+      return c.json({ error: `unknown route "${route}" (expected one of: ${declaredRoutes.join(", ")})` }, 400);
     }
-    const payload: { route: string; note?: string } = { route: body.route };
-    if (typeof body.note === "string" && body.note.length > 0) payload.note = body.note;
-    return appendIntentOr413(c, runId, {
-      type: "intent.human_input",
-      payload,
-    });
+    return appendIntentOr413(c, runId, built.intent);
   });
 
-  app.post("/runs/:id/resume", async (c) => {
-    const body = (await readJson<{ note?: string }>(c)) ?? {};
-    const payload: { note?: string } = {};
-    if (typeof body.note === "string") payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.resume",
-      payload,
-    });
-  });
+  app.post("/runs/:id/resume", async (c) =>
+    commitBuilt(c, c.req.param("id"), plane.buildResume((await readJson(c)) ?? {})),
+  );
 
-  app.post("/runs/:id/unquarantine", async (c) => {
-    const body = await readJson<{
-      resolution?: "treat_as_done" | "retry" | "cancel";
-      note?: string;
-    }>(c);
-    if (!body || (body.resolution !== "treat_as_done" && body.resolution !== "retry" && body.resolution !== "cancel")) {
-      return c.json({ error: "resolution required" }, 400);
-    }
-    const payload: { resolution: "treat_as_done" | "retry" | "cancel"; note?: string } = {
-      resolution: body.resolution,
-    };
-    if (typeof body.note === "string") payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.unquarantine",
-      payload,
-    });
-  });
+  app.post("/runs/:id/unquarantine", async (c) =>
+    commitBuilt(c, c.req.param("id"), plane.buildUnquarantine(await readJson(c))),
+  );
 
-  app.post("/runs/:id/priority", async (c) => {
-    const body = await readJson<{ newPriority?: number; note?: string }>(c);
-    if (!body || typeof body.newPriority !== "number") {
-      return c.json({ error: "newPriority required" }, 400);
-    }
-    const payload: { newPriority: number; note?: string } = { newPriority: body.newPriority };
-    if (typeof body.note === "string") payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.priority_adjusted",
-      payload,
-    });
-  });
+  app.post("/runs/:id/priority", async (c) =>
+    commitBuilt(c, c.req.param("id"), plane.buildPriority(await readJson(c))),
+  );
 
   // Operator raises a budget ceiling on a `paused{reason:"budget"}` run.
   // Folded into `routing.budget_override.<scope>.<metric>` so the next
   // turn-boundary check uses the new ceiling. Web bundles a follow-up
   // `intent.resume` (the "Raise & Resume" click); intents stay separate
   // at the protocol level so resume is naked across all pause reasons.
-  app.post("/runs/:id/budget", async (c) => {
-    const body = await readJson<{
-      scope?: "node" | "run";
-      metric?: "cost" | "tokens";
-      newLimit?: number;
-      note?: string;
-    }>(c);
-    if (
-      !body ||
-      (body.scope !== "node" && body.scope !== "run") ||
-      (body.metric !== "cost" && body.metric !== "tokens") ||
-      typeof body.newLimit !== "number" ||
-      !Number.isFinite(body.newLimit) ||
-      body.newLimit <= 0
-    ) {
-      return c.json({ error: "scope ∈ {node,run}, metric ∈ {cost,tokens}, newLimit > 0 required" }, 400);
-    }
-    const payload: {
-      scope: "node" | "run";
-      metric: "cost" | "tokens";
-      newLimit: number;
-      note?: string;
-    } = { scope: body.scope, metric: body.metric, newLimit: body.newLimit };
-    if (typeof body.note === "string") payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.budget_adjusted",
-      payload,
-    });
-  });
+  app.post("/runs/:id/budget", async (c) => commitBuilt(c, c.req.param("id"), plane.buildBudget(await readJson(c))));
 
   // Cap-adjustment intents for sibling-halt-converted pauses
   // (recoverable-budget-pause.md Stage 3). All three follow the same
@@ -622,54 +548,17 @@ export function createRoutes(deps: ServerDeps): Hono {
   // next turn-boundary check sees the higher cap. Web bundles a
   // follow-up `intent.resume` (the "Raise & Resume" click).
 
-  app.post("/runs/:id/max_retries", async (c) => {
-    const body = await readJson<{ nodeId?: string; newLimit?: number; note?: string }>(c);
-    if (
-      !body ||
-      typeof body.nodeId !== "string" ||
-      body.nodeId.length === 0 ||
-      typeof body.newLimit !== "number" ||
-      !Number.isFinite(body.newLimit) ||
-      body.newLimit <= 0
-    ) {
-      return c.json({ error: "nodeId (non-empty) and newLimit > 0 required" }, 400);
-    }
-    const payload: { nodeId: string; newLimit: number; note?: string } = {
-      nodeId: body.nodeId,
-      newLimit: body.newLimit,
-    };
-    if (typeof body.note === "string") payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.max_retries_adjusted",
-      payload,
-    });
-  });
+  app.post("/runs/:id/max_retries", async (c) =>
+    commitBuilt(c, c.req.param("id"), plane.buildMaxRetries(await readJson(c))),
+  );
 
-  app.post("/runs/:id/goal_gate", async (c) => {
-    const body = await readJson<{ newLimit?: number; note?: string }>(c);
-    if (!body || typeof body.newLimit !== "number" || !Number.isFinite(body.newLimit) || body.newLimit <= 0) {
-      return c.json({ error: "newLimit > 0 required" }, 400);
-    }
-    const payload: { newLimit: number; note?: string } = { newLimit: body.newLimit };
-    if (typeof body.note === "string") payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.goal_gate_adjusted",
-      payload,
-    });
-  });
+  app.post("/runs/:id/goal_gate", async (c) =>
+    commitBuilt(c, c.req.param("id"), plane.buildGoalGate(await readJson(c))),
+  );
 
-  app.post("/runs/:id/max_loops", async (c) => {
-    const body = await readJson<{ newLimit?: number; note?: string }>(c);
-    if (!body || typeof body.newLimit !== "number" || !Number.isFinite(body.newLimit) || body.newLimit <= 0) {
-      return c.json({ error: "newLimit > 0 required" }, 400);
-    }
-    const payload: { newLimit: number; note?: string } = { newLimit: body.newLimit };
-    if (typeof body.note === "string") payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.max_loops_adjusted",
-      payload,
-    });
-  });
+  app.post("/runs/:id/max_loops", async (c) =>
+    commitBuilt(c, c.req.param("id"), plane.buildMaxLoops(await readJson(c))),
+  );
 
   // ─── Operator post-run primitives ───────────────────────────────────────────────
   //

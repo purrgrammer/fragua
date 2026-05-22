@@ -190,6 +190,42 @@ Note this does *not* trade purity for non-duplication: applying defaults is pure
 the plane is I/O (CLI project resolution) — which is resolution, not a default, and
 appears in one adapter.
 
+### 3.7 Local-action verbs (`accept` / `discard`) — not pure store-clients
+
+Not every verb fits "deserialize → build → commit." `accept` and `discard` operate
+on a **terminal run's local git worktree** — `accept` replays the run's commits onto
+HEAD + stages the tail; `discard` drops its refs. Two properties make them a distinct
+category, and force a deliberate decision:
+
+- **They must stay local + synchronous.** Their most valuable feedback is a
+  *synchronous* conflict / dirty-tree refusal — the operator is driving git against
+  their own checkout. Routing them through the daemon (append `intent.accept_run` →
+  daemon folds → git → fact) would impose a **running-daemon dependency** on an
+  operation that needs no orchestration (the run is *done*) and **lose the synchronous
+  refusal**. Every other store-client verb tolerates "no daemon" because its work is
+  *future*; accept/discard's work is *now* and *local*. So the daemon is **not** the
+  actor.
+- **The smell to remove is the inline stateful gate + dual-actor drift.** Today the
+  HTTP route hand-rolls a state gate (`operatorActionGate`: terminal / inbox / cwd →
+  409) *and* does the git, then writes an intent describing the completed effect. When
+  the CLI becomes a direct store-client it would need the same git — and reimplementing
+  it drifts.
+
+**Decision — same "one place per domain", different place than the plane.** The git
+action lives in `@fragua/workspace` (`applyAccept`/`applyDiscard`, already returning a
+discriminated `{ ok, reason }`); **fold the state gate into it** so the precondition
+checks (`not_terminal` / `not_in_inbox` / `no_worktree`) become part of that one
+result. The adapter then has **no gate** — it calls the single workspace action and
+maps the discriminated result to its transport (HTTP 409 / CLI exit code); server
+route and future CLI call the *same* function, so no drift, no daemon required,
+synchronous refusal kept. The **intent write still goes through the plane** —
+`buildAcceptRun(result) → commit` records `intent.accept_run`; the daemon folds it to
+`fact.run_accepted` for the **inbox projection** (legitimately async — that's the
+inbox catching up, not the git). So `accept`/`discard` are **local-action verbs**:
+they *embed git replay* the way [`fragua-ci.md`](fragua-ci.md) embeds the executor —
+"run the shared local action → record its result as an intent via the plane" — not
+pure store-clients.
+
 ## 4. Scope / dependencies / MVP
 
 - **Depends on:** nothing.
