@@ -25,7 +25,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
-import { type IEventStore, isTerminal as isTerminalStatus, sha256Hex } from "@fragua/store";
+import { type IEventStore, isTerminal as isTerminalStatus, newRunId as mintRunId, sha256Hex } from "@fragua/store";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
 
@@ -79,7 +79,7 @@ export function startScheduleDispatcher(opts: ScheduleDispatcherOpts): { promise
  */
 export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcome {
   const now = (opts.now ?? Date.now)();
-  const newRunId = opts.newRunId ?? defaultRunId;
+  const newRunId = opts.newRunId ?? mintRunId;
   const due = opts.store.getDueSchedules(now);
   let fired = 0;
   let skipped = 0;
@@ -242,13 +242,6 @@ function resolveSchedulingWorkflow(
     return { dotPath: path, name, scope: "path" };
   }
   return null;
-}
-
-const ID_ALPH = "0123456789abcdefghjkmnpqrstvwxyz";
-function defaultRunId(): string {
-  let s = "run_";
-  for (let i = 0; i < 12; i++) s += ID_ALPH[Math.floor(Math.random() * ID_ALPH.length)];
-  return s;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

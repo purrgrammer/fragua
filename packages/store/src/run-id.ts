@@ -4,6 +4,11 @@
 // bits are encoded without loss (no modulo-32 truncation), so two ids
 // minted in the same millisecond on different machines won't collide
 // when stores are merged.
+//
+// Lives in @fragua/store (not @fragua/server) so EVERY fact-writer mints
+// the same id shape: the server route AND the daemon's schedule dispatcher
+// both depend on the store. A run id is portable identity (db-import), so
+// it must not vary by which path enqueued the run.
 
 import { randomBytes } from "node:crypto";
 

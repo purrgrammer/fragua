@@ -2,6 +2,7 @@ export type { MetricsSnapshot } from "./metrics.ts";
 export { Metrics } from "./metrics.ts";
 export { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION } from "./pragmas.ts";
 export { applyFact, emptyMetrics, foldFacts, isTerminal } from "./reducers.ts";
+export { newRunId } from "./run-id.ts";
 export { sha256Hex } from "./sha256.ts";
 export { SqliteStore } from "./store.ts";
 export { startupSweep } from "./sweep.ts";

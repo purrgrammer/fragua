@@ -17,6 +17,7 @@ import {
   type IEventStore,
   type IntentEvent,
   isTerminal as isTerminalStatus,
+  newRunId,
   PayloadTooLargeError,
   type RunState,
   sha256Hex,
@@ -26,7 +27,6 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { RunActionExec, RunSnapshotReader, WorkflowReader } from "../ports.ts";
-import { newRunId } from "./run-id.ts";
 import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
