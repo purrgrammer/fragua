@@ -1,18 +1,25 @@
 ---
 title: Workflow IR — store the canonical graph, hash the IR, version it for conversion
-summary: "Stop treating raw YAML as the unit of execution. Parse once at a boundary into a typed Graph (the in-memory refactor, landing now); persist that Graph as a canonical, versioned IR; make a workflow's identity (`workflows.sha`) a stable hash of the canonical IR rather than of the source bytes; and version the IR so the loader can up-convert older stored/imported IR to the current Graph shape. `source` stays as human provenance. Decided before 0.1.0 because the hash-basis change is free pre-release and a migration after."
-status: proposed
-maturity: sketch
+summary: "Stop treating raw YAML as the unit of execution. (C) Parse once at a boundary into a typed Graph — DONE. (A) Persist that Graph as a canonical, versioned IR (`ir` + `ir_version`), loc stripped (validator-only), `source` demoted to provenance — ships at 0.1.0, sha stays source-hash. (B) Make `workflows.sha` a stable hash of the canonical IR core — DEFERRED until the IR has had a full cleanup pass AND the graph feature set is complete (you don't hash a shape you're still growing); the resulting FK migration is the accepted cost."
+status: accepted
+maturity: designed
 last-reviewed: 2026-05-22
 ---
 
 # Workflow IR
 
-> **Sketch.** Three moves of escalating commitment: (C) the in-memory
-> parse-once refactor (no contract change, landing now); (A) persist the
-> canonical IR; (B) make `sha` a hash of that IR. (A)+(B) are one
-> pre-release decision because they change a persisted, FK-referenced
-> identity. Interlocks with [`event-contract-version.md`](event-contract-version.md)
+> **Status: (C) done · (A) ready to build · (B) deferred post-feature-complete.**
+> Three moves of escalating commitment: (C) the in-memory parse-once refactor —
+> **already landed** (`packages/daemon/src/graph-loader.ts`). (A) persist the
+> canonical IR (loc stripped — it's validator-only metadata) — low-risk,
+> testable, ships now; **`sha` stays source-hash**. (B) make `sha` a hash of the
+> IR core — the *only* move that touches the persisted, FK-referenced identity,
+> and a **forever contract**; **deferred until the IR has had a full cleanup
+> pass AND the graph feature set is complete** (§8.0) — you don't hash a shape
+> you're still growing — with the FK migration accepted as the cost. The key
+> correction to the original framing: **(A) and (B) are separable** — only (B)
+> changes the FK identity.
+> Interlocks with [`event-contract-version.md`](event-contract-version.md)
 > (the sibling versioning pattern), [`db-import.md`](db-import.md) (what a
 > bundle carries), and [`project-id.md`](project-id.md).
 
@@ -43,14 +50,24 @@ forward; `sha` is a stable hash of the canonical IR, minted once.
 
 | | Move | Contract change? | When |
 |---|---|---|---|
-| **(C)** | Parse once at a `GraphLoader` boundary; dispatch consumes `Graph`. | none (in-memory only) | **now** — stands alone, removes the smell |
-| **(A)** | Persist the canonical IR (`workflows.ir` + `ir_version`); `source` demoted to provenance. | adds columns | pre-0.1.0 |
-| **(B)** | `sha = hash(canonical IR)` instead of `sha256(source)`. | changes a persisted, FK-referenced identity | **pre-0.1.0 or never-cheaply** |
+| **(C)** | Parse once at a `GraphLoader` boundary; dispatch consumes `Graph`. | none (in-memory only) | **DONE** (`graph-loader.ts`) |
+| **(A)** | Persist the canonical IR (`workflows.ir` + `ir_version`); `source` demoted to provenance. `sha` **unchanged** (still source-hash). | adds columns | **now** — low-risk |
+| **(B)** | `sha = hash(canonical IR core)` instead of `sha256(source)`. | changes a persisted, FK-referenced identity | **deferred** post-feature-complete (§8.0) |
 
-(B) is the load-bearing reason to decide before release: `run_state.workflow_sha`
-is a persisted FK; switching the hash basis after ship means rehashing every
-workflow and rewriting every run's FK. Pre-0.1.0, under the clean-break policy,
-it's a no-op. Same logic as the run_id widening.
+**(A) and (B) are separable — the original framing coupled them, wrongly.**
+Only (B) touches `run_state.workflow_sha` (the FK). (A) adds the `ir` /
+`ir_version` columns and a `Graph ↔ canonical-JSON` codec while `sha` stays
+`sha256(source)`; nothing about identity changes, and faithfulness is testable
+(`deserialize(serialize(parse(src))) ≡ parse(src)` modulo `loc`). That makes (A)
+shippable now with no freeze risk.
+
+The original proposal argued (B) must happen pre-0.1.0 because the FK rewrite is
+"free" before release. **That's been overridden by a deliberate risk call**
+(§8.0): freezing an identity hash over a graph shape that's still gaining
+features is a forever-contract over a moving target. So (B) is *deferred* until
+the IR has had a cleanup pass and the graph feature set is complete; the FK
+rewrite (rehash every workflow, rewrite every run's `workflow_sha`) is the
+accepted, one-time migration cost of waiting until the shape has settled.
 
 ## 3. (C) — the parse-once boundary (landing now)
 
@@ -67,7 +84,12 @@ swaps its body from "parse YAML source" to "deserialize stored IR + up-convert"
 
 The IR is the **normalized `Graph`**: defaults materialized, the synthesized
 `start` node present, optional fields resolved — i.e. exactly what the executor
-consumes today, made explicit and serialised. Persist it as canonical JSON.
+consumes today, made explicit and serialised. Persist it as canonical JSON,
+**with `loc` (line/col) stripped**: `loc` is validator-only metadata (consumed
+at upload, when the freshly-parsed Graph still carries it), useless to the
+executor, and source-formatting-dependent. It does not belong in the persisted
+IR. The `Graph` type keeps `loc?` for the transient parse→validate phase; the
+serializer drops it.
 
 `source` stays: it's the human artifact (comments, formatting, "what the author
 typed") for display and re-edit. It is **no longer identity** and no longer the
@@ -123,59 +145,123 @@ bundle future (where the importer would otherwise re-parse to run).
 ## 7. Schema sketch (edit the baseline in place — no store version bump)
 
 Pre-0.1.0 policy: edit the baseline `schema.sql` directly, recreate the dev
-store, `schema_version` stays `1`. The `workflows` table:
+store, `schema_version` stays `1`. The `workflows` table after **(A)**:
 
 ```sql
 CREATE TABLE workflows (
-  sha        TEXT PRIMARY KEY,   -- now hash(canonical IR), minted once
+  sha        TEXT PRIMARY KEY,   -- (A): still sha256(source). (B): hash(IR core).
   name       TEXT NOT NULL,
-  source     TEXT NOT NULL,      -- human provenance (was identity)
-  ir         TEXT NOT NULL,      -- canonical JSON of the normalized Graph
-  ir_version INTEGER NOT NULL,   -- IR contract version (NOT schema_version)
+  source     TEXT NOT NULL,      -- human provenance (identity only until (B))
+  ir         TEXT NOT NULL,      -- canonical JSON of the normalized Graph (loc-stripped)
+  ir_version INTEGER NOT NULL,   -- IR contract version (NOT schema_version), starts at 1
   created_at INTEGER NOT NULL
 ) STRICT;
 ```
 
-`run_state.workflow_sha` semantics are unchanged (still the FK), but the value
-is now an IR-hash. No migration walk; the dev store is recreated.
+Both `ir` columns land in the baseline now (additive, NOT NULL) — every stored
+workflow carries its IR. `run_state.workflow_sha` stays the FK; its *value* is
+source-hash under (A) and becomes IR-hash only if (B) ships at freeze. No
+migration walk; the dev store is recreated.
 
-## 8. Open questions / risks
+**`ir_version` at 0.1.0 = 1, with no converters yet.** Don't pre-build the
+converter-chain machinery before there's a v2 to convert from: ship the column
++ a loader guard (`ir_version > CURRENT` → refuse; `< CURRENT` → run the chain,
+which is empty today). The registry pattern (from
+[`event-contract-version.md`](event-contract-version.md)) arrives with the first
+real bump. The `Graph ↔ JSON` codec (serialize at mint, deserialize on load)
+*is* needed now and must round-trip faithfully (modulo `loc`).
 
-1. **Canonicalization correctness — and the 0.1.0 freeze fork.** The hash is only
-   as stable as the canonical serializer; every field it covers must serialize
-   deterministically (pin it to a spec — JCS / RFC 8785 or a documented subset:
-   key order, number form, unicode). It is a **forever contract**: because `sha`
-   is frozen at mint and FK-referenced (`run_state.workflow_sha`), changing
-   canonicalization later means the same workflow mints a *different* `sha` on
-   re-upload — silent duplicate identity, not corruption, but it breaks the
-   "reformatting doesn't fork" promise. **So shipping IR-hash at 0.1.0 *requires*
-   the canonicalization specified, frozen, and tested before the schema freezes.**
-   If it can't be nailed in time, the honest fallback is: **ship source-hash
-   (`sha256(source)`) at 0.1.0 and accept a one-time post-0.1.0 migration to
-   IR-hash** — the lesser evil versus freezing a wrong canonicalization forever.
-   This is the gating decision for the (A)+(B) leg.
-2. **`sha` covers the semantic core only — which decouples it from `ir_version`.**
-   Hash only execution-load-bearing fields (nodes, edges, dispatch/routing
-   attrs), not the full IR struct. Consequence: a future `ir_version` bump that
-   adds a non-semantic field does **not** change the hash, so **canonicalization
-   is frozen ONCE over the core — it is NOT itself versioned per `ir_version`.**
-   That answers "do we need every historical canonicalizer to verify old shas?"
-   — no; the one frozen core-projection verifies any `ir_version`. Document the
-   exact core field set.
-3. **`sha` is never recomputed after mint — make it an invariant.** Computed once
-   at upload from the source-parsed IR; never re-derived from a loaded or
-   up-converted IR. No code path may rehash-and-compare on read (a tempting
-   future "validation" that would reject every up-converted or imported
-   workflow). Import **trusts the carried `sha`**; optional verification recomputes
-   the *core* hash (frozen, `ir_version`-independent per #2) and compares — never
-   the full struct.
-4. **Three version axes.** `schema_version` (store), `ir_version` (IR contract),
-   `sha` (content identity). The proposal's whole value is keeping them separate;
-   any implementation must not collapse them.
-5. **Source provenance fidelity.** With IR-hash, the stored `source` for a `sha`
-   is whichever upload won; it's not guaranteed byte-equal to every author's
-   input. Fine for execution; note it for any "show original" UI.
-6. **Sequencing.** (C) now (in-memory, no contract). (A)+(B)+versioning together,
-   pre-0.1.0, landing with or just before [`db-import.md`](db-import.md) (the
-   bundle carries IR + ir_version) and reusing the versioning pattern from
-   [`event-contract-version.md`](event-contract-version.md).
+## 8. Decisions, the (B) gate, and the canonicalization spec
+
+### 8.0 The (B) gate — DECIDED: defer to post-feature-complete
+
+**Ship (A) now (sha stays `sha256(source)`). Do NOT attempt to freeze (B) at
+0.1.0. (B) lands only after (1) a full cleanup pass of the canonical IR shape
+and (2) the graph feature set is complete — i.e. once the IR core is *solid and
+stable*. The resulting FK migration is the deliberately-accepted cost.**
+
+Rationale (the explicit risk call): `sha` is frozen at mint and FK-referenced
+(`run_state.workflow_sha`); a canonicalization frozen *before the graph is
+feature-complete* is a forever contract over a still-moving target — every new
+semantic node type / attr is another chance to have frozen it wrong, re-minting
+a different `sha` for the same workflow on re-upload (silent duplicate identity).
+**You don't hash a shape you're still growing.** This overrides the proposal's
+original "freeze pre-0.1.0 because the migration is free" framing: a wrong
+forever-freeze is worse than a planned, one-time migration done when the shape
+has settled. (A) carries none of this risk — it changes no identity — so it
+ships at 0.1.0 regardless.
+
+Readiness bar for (B), when the time comes: §8.1's core field-set enumerated +
+a canonical-JSON serializer pinned (JCS / RFC 8785 subset) + a property test
+that semantically-equal sources collapse and semantically-different ones don't.
+§8.1 is the **checklist for that future cleanup pass**, not a 0.1.0 deliverable.
+
+### 8.1 The canonicalization spec — the forever-freeze surface
+
+Grounded in the real types (`packages/core/src/types/graph.ts`). The IR is the
+parsed `Graph` (`{ id, directed, attrs, nodes: Record<id,Node>, edges: Edge[] }`),
+which is already plain-JSON (no Maps/functions). The hash covers the **semantic
+core** — a frozen projection, NOT the full struct (this is what decouples the
+hash from `ir_version`: a future non-semantic field never changes the hash, so
+the one frozen core-projection verifies any `ir_version`; no historical
+canonicalizers needed). The core rules, each a forever contract:
+
+- **`loc` (line/col) is already out** (§4): it's validator-only metadata, never
+  persisted in the IR — so the hash never sees it. Called out here because it's
+  the cleanest proof that the IR must be the *executable* projection, not a
+  faithful dump of the parse tree.
+- **Exclude `label` (graph / node / edge `attrs.label`)** — cosmetic; a label
+  edit must not fork identity.
+- **`graph.id` IS in the core.** `graph.id` = the workflow `name` (parser:
+  `yaml.ts`). Including it means renaming forks identity — *intended* (a
+  "deploy" workflow ≠ a "test" with the same shape). State it; don't assume it.
+- **Array ordering is per-field, not uniform** — the subtle trap:
+  - `edges` and `inputs[]`: canonical *sort* (a graph is order-independent; sort
+    edges by `(from, to, outcome, route)`, inputs by `name`).
+  - Set-like attrs — `allowed_tools`, `denied_tools`, `routes`, `skills`: sort
+    (order-independent sets).
+  - **`context_files`: do NOT sort** — files prepend to the system prompt in
+    declared order, so order is semantic. Same for any future ordered list.
+- **Number form**: float attrs exist (`budget_usd`, `max_cost_usd`,
+  `retry_backoff_factor`, `retry_*_delay_ms`) → pin a canonical number
+  representation (`2` ≡ `2.0`). Note `timeout: "30s"` (string) and `max_ms`
+  (number) are *distinct fields* — the hash will not collapse equivalent
+  durations expressed two ways. Acceptable; document it.
+- **Optional-field normalization**: absent ≡ absent; never emit `null`/`undefined`
+  keys. Sort object keys.
+
+### 8.2 Implementation findings (apply to both (A) and (B))
+
+- **"IR is the executable" is qualified — runtime config still overlays it.**
+  `retry_policy` resolves node → `graph.default_retry_policy` → `"none"`, and
+  `timeout` resolves node → `.fragua/config.yaml` `timeouts.*` *at execution*.
+  So the IR is the **declared** graph; local config still applies at run time.
+  Correct for identity (hash only what the author declared) and consistent with
+  the cwd/location model for import — but the "no parser needed on import" win
+  must not be over-read as "no config needed."
+- **Centralize minting; one path currently assumes `sha == sha256(source)`.**
+  `sha` is minted at the server `POST /workflows`, the server's *by-name*
+  resolution path (`workflowSha = sha256Hex(detail.source)`, used to dedup), and
+  the daemon schedule-dispatcher. (B) must route all three through a single
+  `workflowIdentity(source) → { sha, ir, ir_version }`; the by-name dedup path in
+  particular would mis-key (source-hash vs IR-hash) if left as-is. Minting also
+  now **requires a valid parse** — every write path must reject unparseable
+  source (already done at upload, `fd4cd59a`; confirm the dispatcher path).
+- **`sha` is never recomputed after mint — make it an invariant.** Computed once
+  at mint; never re-derived on read from a loaded/up-converted IR. No
+  rehash-and-compare-on-read (a tempting future "validation" that would reject
+  every up-converted or imported workflow). Import trusts the carried `sha`;
+  optional verification recomputes the *core* hash (frozen, `ir_version`-
+  independent) and compares — never the full struct.
+
+### 8.3 Residual notes
+
+- **Three version axes stay separate**: `schema_version` (store), `ir_version`
+  (IR contract), `sha` (content identity). The proposal's whole value is not
+  collapsing them.
+- **Source provenance fidelity** (only bites under (B)): the stored `source` for
+  a `sha` is whichever upload won; not byte-equal to every author's input. Fine
+  for execution; note it for any "show original" UI.
+- **Sequencing**: (C) done. (A) + the `ir_version` scaffold ship now. (B) lands
+  at freeze iff §8.1 is ready, ideally alongside [`db-import.md`](db-import.md)
+  (the bundle carries `{ ir, ir_version, source, sha }`).
