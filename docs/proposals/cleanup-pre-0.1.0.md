@@ -15,6 +15,21 @@ parent: cli-topology.md
 > imminent — this is the last cheap moment to cut cruft and reset the schema
 > with no migration debt.
 
+> **Scope note (post-implementation).** The subtractive cleanup landed; but
+> because it *reset the schema*, the cleanup opened the one cheap window to
+> shape the 0.1.0 baseline with no migration debt. So "cleanup done" extends to
+> the schema-shaping legs that ride the same frozen-schema window —
+> [`project-id.md`](project-id.md) (identity off cwd) and
+> [`workflow-ir.md`](workflow-ir.md) (canonical, versioned, IR-hash). The
+> [`db-import.md`](db-import.md) adversarial audit found the schema is
+> **portability-complete without them** (tree state travels as git objects in a
+> bundle blob, not a column; identity is collision-safe; machine-local fields are
+> nullable). So these legs are *feature* scope, not a portability blocker: the
+> only freeze-window decision is whether their columns (`run_state.project_id`,
+> `workflows.ir` / `ir_version`) land in the baseline now (additive, inert) or as
+> the first post-0.1.0 migration. Land them in-place pre-freeze and the legs are
+> pure code; defer and each leg re-opens the migration chain.
+
 ## 1. Nuke the `agent` tool and all sub-agent machinery
 
 Distinct from `@fragua/agent` (the `PiLlmBackend` that powers **every** `llm`
