@@ -53,7 +53,7 @@ the intent to the store directly.
 
 | # | Proposal | What | Maturity |
 |---|---|---|---|
-| 1 | [`intent-plane.md`](intent-plane.md) | shared validate/construct/mint surface, two ports | designed |
+| 1 | [`intent-plane.md`](intent-plane.md) | shared validate/construct/mint surface, many ports | designed |
 | 2 | [`fragua-ci.md`](fragua-ci.md) | embedded executor over an ephemeral, portable store | sketch |
 | 3 | [`cli-store-client.md`](cli-store-client.md) | CLI as a direct store-client; `run` enqueues, `watch` tails; log UX; `db migrate` | sketch |
 | 4 | [`hitl-channel.md`](hitl-channel.md) | pluggable HITL — the interviewer pattern over pause-fact/answer-intent | sketch |

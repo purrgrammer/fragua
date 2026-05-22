@@ -3,7 +3,7 @@ title: Workflow IR — store the canonical graph, hash the IR, version it for co
 summary: "Stop treating raw YAML as the unit of execution. (C) Parse once at a boundary into a typed Graph — DONE. (A) Persist that Graph as a canonical, versioned IR (`ir` + `ir_version`), loc stripped (validator-only), `source` demoted to provenance — ships at 0.1.0, sha stays source-hash. (B) Make `workflows.sha` a stable hash of the canonical IR core — DEFERRED until the IR has had a full cleanup pass AND the graph feature set is complete (you don't hash a shape you're still growing); the resulting FK migration is the accepted cost."
 status: accepted
 maturity: designed
-last-reviewed: 2026-05-22
+last-reviewed: 2026-05-23
 ---
 
 # Workflow IR
@@ -253,9 +253,16 @@ canonicalizers needed). The core rules, each a forever contract:
   resolution path (`workflowSha = sha256Hex(detail.source)`, used to dedup), and
   the daemon schedule-dispatcher. (B) must route all three through a single
   `workflowIdentity(source) → { sha, ir, ir_version }`; the by-name dedup path in
-  particular would mis-key (source-hash vs IR-hash) if left as-is. Minting also
-  now **requires a valid parse** — every write path must reject unparseable
-  source (already done at upload, `fd4cd59a`; confirm the dispatcher path).
+  particular would mis-key (source-hash vs IR-hash) if left as-is. **That single
+  function's home is `plane.buildSaveWorkflow`** ([`intent-plane.md`](intent-plane.md)
+  §3.1): the intent plane already consolidates the three mint sites into one
+  save op for its own reasons (one audit surface, no CLI/server drift), so (B)
+  becomes a one-line source-hash → IR-hash swap *inside that function*, not a
+  three-site sweep. The plane refactor is therefore the natural carrier for (B),
+  and the schedule-dispatcher's fire-time mint routes through the same op (a
+  save-then-enqueue driven by the fiber). Minting also now **requires a valid
+  parse** — every write path must reject unparseable source (already done at
+  upload, `fd4cd59a`; confirm the dispatcher path).
 - **`sha` is never recomputed after mint — make it an invariant.** Computed once
   at mint; never re-derived on read from a loaded/up-converted IR. No
   rehash-and-compare-on-read (a tempting future "validation" that would reject

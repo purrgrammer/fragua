@@ -27,11 +27,12 @@ a daemon is running: it writes a durable intent and returns.
 ## 2. Verbs
 
 - **`fragua run <wf>`** — resolve the workflow file (bare names → `~/.fragua/
-  workflows/` then `<cwd>/.fragua/workflows/`), **upload the blob** (content-
-  addressed `sha` into the `workflows` table — enqueue is *two* store writes, not
-  one append), then `plane.build(enqueue) → store.enqueueRun`; print the run id
-  to **stdout**, exit `0` = *recorded* (not succeeded). No daemon ⇒ *queued*, not
-  failed. `--watch` is sugar for `run` + `watch`; the default never blocks.
+  workflows/` then `<cwd>/.fragua/workflows/`), then **two plane ops the command
+  sequences** (intent-plane §3.1): `buildSaveWorkflow(source) → commit` (content-
+  addressed `sha` into the `workflows` table) **then** `buildEnqueue → commit` by
+  that sha. Print the run id to **stdout**, exit `0` = *recorded* (not succeeded).
+  No daemon ⇒ *queued*, not failed. `--watch` is sugar for `run` + `watch`; the
+  default never blocks.
 - **`fragua watch <id>`** — tail the store via poll-on-seq (the exact mechanism
   `sse.ts` already uses), render, exit with the run's terminal status.
 - **`steer` / `pause` / `cancel` / `respond`** — `plane.build(intent) →

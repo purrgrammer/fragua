@@ -3,7 +3,7 @@ title: fragua ci — embedded executor over an ephemeral, portable store
 summary: "A one-shot CI command that embeds the executor in-process over an ephemeral SQLite store: env-discovered credentials, write the routing intent, run to terminal, exit with the outcome, render the event log as JSONL. The .db is a portable artifact. Not symmetric with the store-client CLI — it is the one command that writes facts — so it is its own entity, not a flag on `run`."
 status: proposed
 maturity: sketch
-last-reviewed: 2026-05-21
+last-reviewed: 2026-05-23
 parent: cli-topology.md
 ---
 
@@ -36,7 +36,10 @@ fragua ci <wf> [--db <path>] [--input k=v] [--json]
   1. open ephemeral store (temp, or --db-pinned), created at baseline version
   2. bridge credentials from env → the store's provider_credentials rows
   3. buildExecutorDeps(env) → { store, dispatcher, tools, llmCall, ... }   (assembly factory)
-  4. plane.build(enqueue intent) → store.enqueueRun                        (via intent-plane)
+  4. buildSaveWorkflow(source) → commit  (ALWAYS — a CI store starts fresh, so the
+     workflow is never already present), THEN buildEnqueue → commit by the just-minted
+     sha. Two ops sequenced by the command, same save-then-enqueue as every other
+     caller (intent-plane §3.1).
   5. drive to terminal:  claimNextRun → runOne(deps) → check status → repeat   [fiber A]
      tailer: poll store seq → render to stdout                                 [fiber B]
   6. exit code = outcome (cli-store-client exit map); pause ⇒ fail (MVP)
