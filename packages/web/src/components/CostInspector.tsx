@@ -105,11 +105,10 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // Merge multi-turn / pause+resume duplicates: each `llm.start`
   // becomes its own StepSnapshot, so a llm handler that takes
   // multiple turns produces N rows for one nodeId; raise+resume
-  // produces another N. Collapse them into ONE row per
-  // (originRunId, nodeId) — summed cost/tokens, earliest startedAt,
-  // latest durationMs end, with `turns` carrying the count. The
-  // underlying per-call detail is still available via /steps for any
-  // future drill-in surface.
+  // produces another N. Collapse them into ONE row per nodeId —
+  // summed cost/tokens, earliest startedAt, latest durationMs end,
+  // with `turns` carrying the count. The underlying per-call detail
+  // is still available via /steps for any future drill-in surface.
   const mergedSteps = mergeStepsByNode(steps);
 
   // Outer grid defines the column tracks once; each row uses
@@ -121,7 +120,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
     <div data-testid="cost-inspector" className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3">
       {mergedSteps.map((step, i) => (
         <StepCostRow
-          key={stepIdentityKey(step, runId)}
+          key={stepIdentityKey(step)}
           step={step}
           nextStartedAt={mergedSteps[i + 1]?.startedAt}
           isLive={isLive}
@@ -132,12 +131,11 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
 }
 
 /** Merge CONSECUTIVE steps that share the same logical "node window":
- *  same originRunId, same nodeId. Each `llm.start` in the server's
- *  stream produces one StepSnapshot; llm multi-turn and pause-resume
- *  both yield several within the same node window. Operators care
- *  about the node's TOTAL spend, not the per-turn rows, so we sum
- *  here. `turns` carries the merge count for the UI to surface as
- *  "lens · 7 turns".
+ *  same nodeId. Each `llm.start` in the server's stream produces one
+ *  StepSnapshot; llm multi-turn and pause-resume both yield several
+ *  within the same node window. Operators care about the node's TOTAL
+ *  spend, not the per-turn rows, so we sum here. `turns` carries the
+ *  merge count for the UI to surface as "lens · 7 turns".
  *
  *  Why consecutive-only: a goal-gate retarget runs the SAME node a
  *  second time after other steps push between. Those legitimately
@@ -147,7 +145,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
  *  same node window, so the consecutive bound captures them while
  *  keeping goal-gate retargets distinct. */
 export function mergeStepsByNode(steps: readonly StepSnapshot[]): StepSnapshot[] {
-  const groupKey = (s: StepSnapshot): string => [s.originRunId ?? "", s.nodeId].join("|");
+  const groupKey = (s: StepSnapshot): string => s.nodeId;
   const out: StepSnapshot[] = [];
   let runStart = 0;
   while (runStart < steps.length) {
@@ -207,8 +205,8 @@ function collapseTurns(rows: readonly StepSnapshot[]): StepSnapshot {
   return merged;
 }
 
-function stepIdentityKey(step: StepSnapshot, fallbackRunId: string): string {
-  return `${step.originRunId ?? fallbackRunId}:${step.startSeq}`;
+function stepIdentityKey(step: StepSnapshot): string {
+  return String(step.startSeq);
 }
 
 /**
@@ -315,7 +313,7 @@ function StepCostRow({
   );
 
   return (
-    <div data-testid={`step-${step.stepIdx}`} data-origin-run-id={step.originRunId} className={rowGridClass}>
+    <div data-testid={`step-${step.stepIdx}`} className={rowGridClass}>
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
         <span className="truncate">{step.nodeId}</span>
         {step.iteration && (

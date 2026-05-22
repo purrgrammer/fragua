@@ -44,7 +44,6 @@ export interface StepEvent {
   payload: unknown;
   ts: number;
   runId?: string;
-  originRunId?: string;
   /** Stream sequence number of the event. Used to key SQL aggregates back
    * onto these snapshots; required on `llm.start` events. */
   seq?: number;
@@ -56,9 +55,6 @@ export interface StepSnapshot {
   /** Stream seq of the originating `llm.start`. Joins with the SQL
    * aggregate row for this step (`getStepAggregates(runId)`). */
   startSeq: number;
-  /** Run that wrote the step, so UI keys never collide across per-run
-   * `seq` spaces. */
-  originRunId?: string;
   /** Additional `llm.start` seqs that fold into this same step — used
    *  when a node is paused (operator / HITL / provider-error / budget /
    *  payment) and resumes without an intervening `fact.node_completed`.
@@ -195,8 +191,6 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
             nodeId,
             startedAt: new Date(pending.startTs).toISOString(),
           };
-          const originRunId = ev.originRunId ?? ev.runId;
-          if (originRunId) step.originRunId = originRunId;
           if (Number.isFinite(dur) && dur >= 0) step.durationMs = dur;
           steps.push(step);
           lastStepIdxForNode.set(nodeId, steps.length - 1);
@@ -254,8 +248,6 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         nodeId: nodeId || "__unknown",
         startedAt: new Date(startTs).toISOString(),
       };
-      const originRunId = ev.originRunId ?? ev.runId;
-      if (originRunId) step.originRunId = originRunId;
       assignOptional(step, data);
       steps.push(step);
       if (nodeId) {

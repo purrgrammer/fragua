@@ -277,9 +277,6 @@ export interface StepSnapshot {
   /** Stream seq of the originating `llm.start`. Joins this snapshot to
    * the SQL cost-aggregate row produced by the server. Stable React key. */
   startSeq: number;
-  /** Run that wrote the step. Present on merged parent+descendant views;
-   * combine with `startSeq` for stable keys because seq is per-run. */
-  originRunId?: string;
   nodeId: string;
   iteration?: { n: number; max: number };
   /** ISO timestamp of the originating `llm.start`. The UI ticks
@@ -441,12 +438,6 @@ export function getRunEventsUrl(id: string, sinceSeq?: number): string {
   // frames on initial connect.
   const base = `/runs/${encodeURIComponent(id)}/stream`;
   return url(typeof sinceSeq === "number" && sinceSeq > 0 ? `${base}?sinceSeq=${sinceSeq}` : base);
-}
-
-/** SSE URL for a run's event feed. The server route is unfiltered —
- * RunDetail consumes the full firehose as a token-bump signal. */
-export function getRunDescendantEventsUrl(id: string): string {
-  return url(`/runs/${encodeURIComponent(id)}/events/stream?include=descendants`);
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────

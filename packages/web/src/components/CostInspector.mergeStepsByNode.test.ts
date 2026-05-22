@@ -28,15 +28,15 @@ function withCost(s: StepSnapshot, costUsd: number, tokens: number): StepSnapsho
 
 describe("mergeStepsByNode", () => {
   test("single-step group → returned verbatim, no turns field", () => {
-    const a = withCost(step({ startSeq: 1, nodeId: "lens", originRunId: "r" }), 0.05, 100);
+    const a = withCost(step({ startSeq: 1, nodeId: "lens" }), 0.05, 100);
     const out = mergeStepsByNode([a]);
     expect(out).toHaveLength(1);
     expect(out[0]?.turns).toBeUndefined();
     expect(out[0]?.cost?.cost_usd).toBeCloseTo(0.05);
   });
 
-  test("multi-turn llm (3 llm.starts, same node, same run) → 1 row; cost summed; turns=3", () => {
-    const base = { nodeId: "lens", originRunId: "r" } as const;
+  test("multi-turn llm (3 llm.starts, same node) → 1 row; cost summed; turns=3", () => {
+    const base = { nodeId: "lens" } as const;
     const rows = [
       withCost(step({ ...base, startSeq: 4 }), 0.05, 100),
       withCost(step({ ...base, startSeq: 17 }), 0.05, 100),
@@ -51,31 +51,14 @@ describe("mergeStepsByNode", () => {
     expect(out[0]?.startSeq).toBe(4);
   });
 
-  test("different originRunId → separate rows", () => {
-    const a = withCost(step({ startSeq: 1, nodeId: "lens", originRunId: "run_a" }), 0.05, 100);
-    const b = withCost(step({ startSeq: 1, nodeId: "lens", originRunId: "run_b" }), 0.05, 100);
-    const out = mergeStepsByNode([a, b]);
-    expect(out).toHaveLength(2);
-    expect(out[0]?.originRunId).toBe("run_a");
-    expect(out[1]?.originRunId).toBe("run_b");
-  });
-
   test("durationMs spans from earliest start to latest end across merged turns", () => {
     const t0 = 1_700_000_000_000;
     const a: StepSnapshot = {
-      ...withCost(
-        step({ startSeq: 1, nodeId: "n", originRunId: "r", startedAt: new Date(t0).toISOString() }),
-        0.01,
-        10,
-      ),
+      ...withCost(step({ startSeq: 1, nodeId: "n", startedAt: new Date(t0).toISOString() }), 0.01, 10),
       durationMs: 100,
     };
     const b: StepSnapshot = {
-      ...withCost(
-        step({ startSeq: 2, nodeId: "n", originRunId: "r", startedAt: new Date(t0 + 200).toISOString() }),
-        0.01,
-        10,
-      ),
+      ...withCost(step({ startSeq: 2, nodeId: "n", startedAt: new Date(t0 + 200).toISOString() }), 0.01, 10),
       durationMs: 50,
     };
     const out = mergeStepsByNode([a, b]);
@@ -88,9 +71,9 @@ describe("mergeStepsByNode", () => {
     // A goal-gate retarget runs the same `audit` node a second time
     // after an intervening step. Each invocation must stay its own
     // row — merging them would collapse a retry loop's spend.
-    const auditA = withCost(step({ startSeq: 10, nodeId: "audit", originRunId: "r" }), 0.01, 10);
-    const other = withCost(step({ startSeq: 11, nodeId: "fix", originRunId: "r" }), 0.02, 20);
-    const auditB = withCost(step({ startSeq: 20, nodeId: "audit", originRunId: "r" }), 0.04, 40);
+    const auditA = withCost(step({ startSeq: 10, nodeId: "audit" }), 0.01, 10);
+    const other = withCost(step({ startSeq: 11, nodeId: "fix" }), 0.02, 20);
+    const auditB = withCost(step({ startSeq: 20, nodeId: "audit" }), 0.04, 40);
     const out = mergeStepsByNode([auditA, other, auditB]);
     // 3 distinct rows: two `audit` invocations + the intervening `fix`.
     expect(out).toHaveLength(3);

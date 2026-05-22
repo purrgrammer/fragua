@@ -312,18 +312,13 @@ export class PiLlmBackend implements LlmBackend {
     if (this.runEnv?.bootstrapCommand !== undefined && effectiveRunEnv.bootstrapCommand === undefined) {
       effectiveRunEnv.bootstrapCommand = this.runEnv.bootstrapCommand;
     }
-    // `skipFrameworkSystemPrompt` makes the perNode string the COMPLETE
-    // system prompt — no protocol wrap, no skills catalog, no
-    // context-files, no run-env block.
-    const systemPrompt = input.skipFrameworkSystemPrompt
-      ? (perNodeSystemPrompt ?? "")
-      : buildSystemPrompt({
-          global: this.systemPrompt,
-          perNode: perNodeSystemPrompt,
-          contextBlock,
-          skillsCatalog,
-          runEnv: effectiveRunEnv,
-        });
+    const systemPrompt = buildSystemPrompt({
+      global: this.systemPrompt,
+      perNode: perNodeSystemPrompt,
+      contextBlock,
+      skillsCatalog,
+      runEnv: effectiveRunEnv,
+    });
 
     // Now that the system prompt is resolved, expose the run's skill
     // catalogue so the `skill` tool can resolve names against it.
