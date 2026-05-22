@@ -368,6 +368,37 @@ describe("runStateToDetail — HITL projection", () => {
     expect(detail.hitlNodeId).toBe("review");
     expect(detail.hitlLabel).toBe("Review the draft");
     expect(detail.hitlOptions).toEqual(["approve", "revise"]);
+    // No edge declared a label= override, so the labels map stays absent.
+    expect(detail.hitlOptionLabels).toBeUndefined();
+  });
+
+  test("paused_human projects edge label= overrides into hitlOptionLabels", () => {
+    const state = makeState({ status: "paused_human", currentNode: "review" });
+    const events: StoredEvent[] = [
+      evWithSeq(3, "fact.run_paused_human", {
+        nodeId: "review",
+        text: "Review the draft",
+        routes: ["approve", "revise"],
+        routeLabels: { approve: "Ship it", revise: "Request changes" },
+      }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlOptions).toEqual(["approve", "revise"]);
+    expect(detail.hitlOptionLabels).toEqual({ approve: "Ship it", revise: "Request changes" });
+  });
+
+  test("paused_human drops non-string label entries and omits an empty labels map", () => {
+    const state = makeState({ status: "paused_human", currentNode: "review" });
+    const events: StoredEvent[] = [
+      evWithSeq(3, "fact.run_paused_human", {
+        nodeId: "review",
+        text: "Review the draft",
+        routes: ["approve", "revise"],
+        routeLabels: { approve: 42, revise: null },
+      }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlOptionLabels).toBeUndefined();
   });
 
   test("paused_human with multiple paused events picks the latest one (re-yield after revise)", () => {

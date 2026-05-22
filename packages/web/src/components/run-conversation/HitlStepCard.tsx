@@ -21,9 +21,12 @@ export interface HitlStepCardProps {
   label: string | null;
   /** Declared route names; one button rendered per entry. */
   options: string[];
+  /** Sparse route-name → button-text overrides (workflow edge `label=`).
+   * Routes absent here fall back to `humanizeRouteName`. */
+  optionLabels?: Record<string, string>;
 }
 
-export function HitlStepCard({ runId, label, options }: HitlStepCardProps): JSX.Element | null {
+export function HitlStepCard({ runId, label, options, optionLabels }: HitlStepCardProps): JSX.Element | null {
   const [note, setNote] = useState("");
   const qc = useQueryClient();
 
@@ -72,7 +75,7 @@ export function HitlStepCard({ runId, label, options }: HitlStepCardProps): JSX.
             onClick={() => mutation.mutate(route)}
             data-testid={`hitl-step-${route.toLowerCase()}`}
           >
-            {humanizeRouteName(route)}
+            {optionLabels?.[route] ?? humanizeRouteName(route)}
           </Button>
         ))}
       </div>

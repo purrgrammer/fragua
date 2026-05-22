@@ -89,6 +89,9 @@ export interface RunConversationProps {
     nodeId: string;
     label: string | null;
     options: string[];
+    /** Sparse route-name → button-text overrides (workflow edge `label=`).
+     * Routes absent here fall back to `humanizeRouteName`. */
+    optionLabels?: Record<string, string>;
   } | null;
   className?: string;
 }
@@ -202,7 +205,14 @@ export function RunConversation({
                     <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
                   ))}
                   {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
-                  {showHitlHere && <HitlStepCard runId={hitl.runId} label={hitl.label} options={hitl.options} />}
+                  {showHitlHere && (
+                    <HitlStepCard
+                      runId={hitl.runId}
+                      label={hitl.label}
+                      options={hitl.options}
+                      optionLabels={hitl.optionLabels}
+                    />
+                  )}
                 </NodeSection>
               );
             })}
@@ -223,7 +233,12 @@ export function RunConversation({
                 isLive={isLive}
                 isPaused={isPaused}
               >
-                <HitlStepCard runId={hitl.runId} label={hitl.label} options={hitl.options} />
+                <HitlStepCard
+                  runId={hitl.runId}
+                  label={hitl.label}
+                  options={hitl.options}
+                  optionLabels={hitl.optionLabels}
+                />
               </NodeSection>
             )}
             {liveToolNodes.map(({ nodeId, stream }) => (

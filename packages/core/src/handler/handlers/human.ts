@@ -27,6 +27,10 @@ export interface HumanHandlerEdge {
   route: string;
   /** Target node id for validation/error reporting. */
   to: string;
+  /** Per-edge `label=` override — pure-UX button text (D6). Surfaced to
+   * the operator UI via `fact.run_paused_human.payload.routeLabels`;
+   * never participates in selection. */
+  label?: string;
 }
 
 export interface HumanHandlerConfig {
@@ -46,10 +50,20 @@ export function makeHumanHandler(cfg: HumanHandlerConfig): HandlerSpec {
   const routeToTarget = validateAndBuildMap(nodeId, cfg.routes, cfg.edges);
   const text = cfg.text;
   const routes = cfg.routes;
+  const routeLabels: Record<string, string> = {};
+  for (const e of cfg.edges) {
+    if (e.label !== undefined) routeLabels[e.route] = e.label;
+  }
+  const hasLabels = Object.keys(routeLabels).length > 0;
 
   const handler: Handler = async (ctx) => {
     if (ctx.humanInput === undefined) {
-      return { kind: "yield_human", text, routes } satisfies HandlerResult;
+      return {
+        kind: "yield_human",
+        text,
+        routes,
+        ...(hasLabels ? { routeLabels } : {}),
+      } satisfies HandlerResult;
     }
 
     const route = normaliseRoute(ctx.humanInput);

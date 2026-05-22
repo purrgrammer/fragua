@@ -46,6 +46,11 @@ export interface DetailOverlay {
    *  with `RunDetail.hitlOptions` consumers; values are now plain route
    *  names per the §D6 payload shape. */
   hitlOptions: string[] | null;
+  /** Sparse route-name → button-text map from the paused human node's edge
+   *  `label=` overrides (D6). Null until a `fact.run_paused_human` carrying
+   *  `routeLabels` arrives; routes absent from the map fall back to
+   *  `humanizeRouteName`. */
+  hitlOptionLabels: Record<string, string> | null;
   /** Seq of the first run-terminal fact (halted/cancelled/quarantined).
    * Used to downgrade still-"running" nodes to "failed" on merge,
    * matching the server's terminal-halt patch. */
@@ -60,6 +65,7 @@ export const EMPTY_DETAIL_OVERLAY: DetailOverlay = {
   hitlNodeId: null,
   hitlLabel: null,
   hitlOptions: null,
+  hitlOptionLabels: null,
   haltSeq: undefined,
 };
 
@@ -135,6 +141,15 @@ export function foldDetailFrame(
       const rawRoutes = payload?.["routes"];
       const routes =
         Array.isArray(rawRoutes) && rawRoutes.every((r) => typeof r === "string") ? (rawRoutes as string[]) : null;
+      const rawLabels = payload?.["routeLabels"];
+      let routeLabels: Record<string, string> | null = null;
+      if (rawLabels != null && typeof rawLabels === "object" && !Array.isArray(rawLabels)) {
+        const labels: Record<string, string> = {};
+        for (const [route, label] of Object.entries(rawLabels as Record<string, unknown>)) {
+          if (typeof label === "string") labels[route] = label;
+        }
+        if (Object.keys(labels).length > 0) routeLabels = labels;
+      }
       // Reset the paused node back to "running" — the prior fact.node_aborted
       // (in the operator-pause path) optimistically flipped it to "failed",
       // but a paused node will re-dispatch on resume. Workflow-driven
@@ -148,6 +163,7 @@ export function foldDetailFrame(
         hitlNodeId: nodeId ?? null,
         hitlLabel: text ?? null,
         hitlOptions: routes,
+        hitlOptionLabels: routeLabels,
       };
     }
     case "fact.run_paused": {
@@ -162,7 +178,15 @@ export function foldDetailFrame(
       return { ...prev, status: "paused", runStatus: "paused" };
     }
     case "fact.run_resumed":
-      return { ...prev, status: "running", runStatus: "running", hitlNodeId: null, hitlLabel: null, hitlOptions: null };
+      return {
+        ...prev,
+        status: "running",
+        runStatus: "running",
+        hitlNodeId: null,
+        hitlLabel: null,
+        hitlOptions: null,
+        hitlOptionLabels: null,
+      };
     default:
       return prev;
   }
@@ -214,6 +238,7 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     overlay.hitlNodeId === null &&
     overlay.hitlLabel === null &&
     overlay.hitlOptions === null &&
+    overlay.hitlOptionLabels === null &&
     overlay.haltSeq === undefined
   ) {
     return snapshot;
@@ -276,5 +301,6 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     hitlNodeId: overlay.hitlNodeId !== null ? overlay.hitlNodeId : snapshot.hitlNodeId,
     hitlLabel: overlay.hitlLabel !== null ? overlay.hitlLabel : snapshot.hitlLabel,
     hitlOptions: overlay.hitlOptions !== null ? overlay.hitlOptions : snapshot.hitlOptions,
+    hitlOptionLabels: overlay.hitlOptionLabels !== null ? overlay.hitlOptionLabels : snapshot.hitlOptionLabels,
   };
 }

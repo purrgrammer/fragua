@@ -202,7 +202,9 @@ function specForNode(
       // through the validated path.
       const humanEdges = edges
         .filter((e): e is { to: string; label?: string; route: string } => typeof e.route === "string")
-        .map((e) => ({ route: e.route, to: e.to }));
+        .map((e) =>
+          e.label !== undefined ? { route: e.route, to: e.to, label: e.label } : { route: e.route, to: e.to },
+        );
       try {
         return handler.makeHumanHandler({
           nodeId,

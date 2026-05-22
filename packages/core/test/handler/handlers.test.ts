@@ -62,6 +62,34 @@ describe("human handler", () => {
     }
   });
 
+  test("first call carries edge label= overrides as a sparse routeLabels map", async () => {
+    const spec = makeHumanHandler({
+      nodeId: "signoff",
+      text: "?",
+      routes: ["apply", "reject"],
+      edges: [
+        { route: "apply", to: "after", label: "Apply the fix" },
+        { route: "reject", to: "draft" },
+      ],
+    });
+    const result = await spec.handler(stubCtx({ nodeId: "signoff" }));
+    expect(result.kind).toBe("yield_human");
+    if (result.kind === "yield_human") {
+      // Only the route with an explicit label appears; the other falls
+      // back to humanize(route) on the UI side.
+      expect(result.routeLabels).toEqual({ apply: "Apply the fix" });
+    }
+  });
+
+  test("first call omits routeLabels entirely when no edge declares a label", async () => {
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ nodeId: "signoff" }));
+    expect(result.kind).toBe("yield_human");
+    if (result.kind === "yield_human") {
+      expect(result.routeLabels).toBeUndefined();
+    }
+  });
+
   test("resume with humanInput.route sets transition.route for edge-selection", async () => {
     const spec = makeHumanHandler(cfg);
     const result = await spec.handler(stubCtx({ humanInput: { route: "apply" } }));

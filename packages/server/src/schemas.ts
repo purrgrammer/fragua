@@ -138,6 +138,9 @@ export const RunDetail = Type.Object({
   /** Declared route names from the paused human node's `routes=` attr;
    *  one button rendered per route. */
   hitlOptions: Type.Optional(Type.Array(Type.String())),
+  /** Sparse route-name → button-text map from each outgoing edge's `label=`
+   *  override (D6). Routes absent here fall back to `humanizeRouteName`. */
+  hitlOptionLabels: Type.Optional(Type.Record(Type.String(), Type.String())),
   /** Per-machine LOCATION — the resolved project root. Mirrors
    * `run_state.cwd`. Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),

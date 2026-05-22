@@ -181,7 +181,7 @@ export function runStateToDetail(
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
       if (ev.type === "fact.run_paused_human") {
-        const p = ev.payload as { nodeId?: unknown; text?: unknown; routes?: unknown };
+        const p = ev.payload as { nodeId?: unknown; text?: unknown; routes?: unknown; routeLabels?: unknown };
         if (typeof p.nodeId === "string") detail.hitlNodeId = p.nodeId;
         if (typeof p.text === "string") detail.hitlLabel = p.text;
         // Transitional projection: the new payload shape carries
@@ -194,6 +194,17 @@ export function runStateToDetail(
         // Only" for the button label.
         if (Array.isArray(p.routes)) {
           detail.hitlOptions = (p.routes as unknown[]).filter((r): r is string => typeof r === "string");
+        }
+        // Sparse per-route button-text overrides (D6 `label=`). Keep only
+        // string→string entries so a malformed payload can't poison the
+        // projection; the web falls back to `humanizeRouteName` for any
+        // route absent from the map.
+        if (p.routeLabels != null && typeof p.routeLabels === "object" && !Array.isArray(p.routeLabels)) {
+          const labels: Record<string, string> = {};
+          for (const [route, label] of Object.entries(p.routeLabels as Record<string, unknown>)) {
+            if (typeof label === "string") labels[route] = label;
+          }
+          if (Object.keys(labels).length > 0) detail.hitlOptionLabels = labels;
         }
         break;
       }

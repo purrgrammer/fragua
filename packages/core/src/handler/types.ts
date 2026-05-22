@@ -269,6 +269,11 @@ export type HandlerResult =
        * `/runs/:id/human` endpoint enforces the enum on inbound
        * intents. */
       routes: string[];
+      /** Sparse route-name → button-text map, sourced from each outgoing
+       * edge's `label=` override (D6). Only routes carrying an explicit
+       * label appear; the UI falls back to `humanize(route)` otherwise.
+       * Emitted into `fact.run_paused_human.payload.routeLabels`. */
+      routeLabels?: Record<string, string>;
     }
   | {
       kind: "halt";

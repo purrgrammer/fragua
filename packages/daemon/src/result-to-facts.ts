@@ -128,6 +128,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
           nodeId: ctx.state.currentNode ?? "",
           text: result.text,
           routes: result.routes,
+          ...(result.routeLabels ? { routeLabels: result.routeLabels } : {}),
         },
       });
       return facts;

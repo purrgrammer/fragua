@@ -135,9 +135,9 @@ describe("foldDetailFrame", () => {
   });
 
   describe("HITL — fact.run_paused_human / fact.run_resumed", () => {
-    // Human-node payload: `{ nodeId, text, routes }`. Route names are
-    // plain strings; per-edge `label=` overrides are applied UI-side
-    // from the graph descriptor.
+    // Human-node payload: `{ nodeId, text, routes, routeLabels? }`. Route
+    // names are plain strings; per-edge `label=` overrides ride the sparse
+    // `routeLabels` map on the fact payload.
     const routes = ["approve", "revise"];
 
     test("fact.run_paused_human populates structured fields and flips status", () => {
@@ -152,6 +152,18 @@ describe("foldDetailFrame", () => {
       expect(out.hitlNodeId).toBe("review");
       expect(out.hitlLabel).toBe("Approve?");
       expect(out.hitlOptions).toEqual(routes);
+      // No routeLabels on the payload → labels map stays null.
+      expect(out.hitlOptionLabels).toBeNull();
+    });
+
+    test("fact.run_paused_human captures routeLabels and drops non-string entries", () => {
+      const out = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_human",
+        { nodeId: "review", text: "Approve?", routes, routeLabels: { approve: "Ship it", revise: 7 } },
+        12,
+      );
+      expect(out.hitlOptionLabels).toEqual({ approve: "Ship it" });
     });
 
     test("fact.run_paused_provider_error flips status without touching HITL fields", () => {
@@ -177,13 +189,19 @@ describe("foldDetailFrame", () => {
     });
 
     test("fact.run_resumed clears HITL fields and re-flips status to running", () => {
-      let s = fold(EMPTY_DETAIL_OVERLAY, "fact.run_paused_human", { nodeId: "review", text: "Approve?", routes }, 12);
+      let s = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_human",
+        { nodeId: "review", text: "Approve?", routes, routeLabels: { approve: "Ship it" } },
+        12,
+      );
       s = fold(s, "fact.run_resumed", { fromStatus: "paused_human" }, 13);
       expect(s.status).toBe("running");
       expect(s.runStatus).toBe("running");
       expect(s.hitlNodeId).toBeNull();
       expect(s.hitlLabel).toBeNull();
       expect(s.hitlOptions).toBeNull();
+      expect(s.hitlOptionLabels).toBeNull();
     });
 
     test("malformed paused_human (missing routes array) → hitlOptions stays null", () => {

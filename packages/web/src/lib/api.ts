@@ -164,6 +164,9 @@ export interface RunDetail {
   /** Declared route names from the paused human node's `routes=` attr;
    *  one button rendered per route. */
   hitlOptions?: string[];
+  /** Sparse route-name → button-text map from each outgoing edge's `label=`
+   *  override (D6). Routes absent here fall back to `humanizeRouteName`. */
+  hitlOptionLabels?: Record<string, string>;
   /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
    * The wire key for `?project_id=` and `/projects/:id`. Optional only to
    * tolerate older/ephemeral payloads — present on every daemon run. */

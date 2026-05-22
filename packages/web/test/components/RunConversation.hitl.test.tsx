@@ -168,6 +168,31 @@ describe("RunConversation — HITL step card", () => {
     expect(text).toContain("Looks Good");
   });
 
+  it("prefers workflow optionLabels over the humanized fallback, per route", () => {
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={[]}
+        isPaused
+        hitl={{
+          runId: "run-1",
+          nodeId: "review",
+          label: null,
+          options: ["needs_changes", "looks_good"],
+          // Only one route carries an explicit label; the other falls back.
+          optionLabels: { needs_changes: "Request changes" },
+        }}
+      />,
+    );
+
+    const card = within(container).getByTestId("hitl-step-card");
+    const labeled = within(card).getByTestId("hitl-step-needs_changes");
+    const fallback = within(card).getByTestId("hitl-step-looks_good");
+    expect(labeled.textContent).toBe("Request changes");
+    expect(labeled.textContent).not.toContain("Needs Changes");
+    // Unlabeled route still uses the humanized route name.
+    expect(fallback.textContent).toBe("Looks Good");
+  });
+
   it("does not render label element when label is null", () => {
     const { container } = renderWithClient(
       <RunConversation

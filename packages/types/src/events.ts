@@ -519,8 +519,14 @@ export type FactEvent =
         text: string;
         /** Declared route names, in declared order. Each becomes one button;
          * button label resolves via the matching outgoing edge's
-         * `label=` override, falling back to `humanize(route)`. */
+         * `label=` override (see `routeLabels`), falling back to
+         * `humanize(route)`. */
         routes: string[];
+        /** Sparse route-name → button-text map carrying each outgoing edge's
+         * `label=` override (D6). Only routes with an explicit label appear;
+         * absent entirely when no edge declared one. Pure UX — never
+         * participates in resume-route selection. */
+        routeLabels?: Record<string, string>;
         /** Worktree snapshot at this pause, embedded for the operator's first
          * paint without a server roundtrip.
          * Absent for bare-cwd runs (no provisioner). */

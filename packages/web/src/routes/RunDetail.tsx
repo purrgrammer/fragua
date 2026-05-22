@@ -250,6 +250,7 @@ export function RunDetail(): JSX.Element {
                         nodeId: detail.hitlNodeId,
                         label: detail.hitlLabel ?? null,
                         options: detail.hitlOptions ?? [],
+                        ...(detail.hitlOptionLabels ? { optionLabels: detail.hitlOptionLabels } : {}),
                       }
                     : null
                 }
