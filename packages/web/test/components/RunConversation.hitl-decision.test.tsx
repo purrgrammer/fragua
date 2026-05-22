@@ -130,4 +130,38 @@ describe("RunConversation — HITL decision banner", () => {
     expect(within(reviewSection).getByTestId("hitl-decision-banner")).toBeTruthy();
     expect(within(fetchSection).queryByTestId("hitl-decision-banner")).toBeNull();
   });
+
+  it("places a message-less gate's banner in node-execution order, not at the tail", () => {
+    // Reproduces run 01ks7zv4…: verify → signoff (human, no messages) →
+    // apply. The signoff banner must land between verify and apply, not
+    // after apply (the tail), which is where the old orphan block dumped it.
+    const messages: RunMessageRow[] = [userRow(1, "verify", "Checks pass."), userRow(2, "apply", "Applying…")];
+    const nodeStates: NodeState[] = [
+      { nodeId: "verify", iteration: 0, state: "completed", lastEventSeq: 10 },
+      { nodeId: "signoff", iteration: 0, state: "completed", lastEventSeq: 20 },
+      { nodeId: "apply", iteration: 0, state: "completed", lastEventSeq: 30 },
+    ];
+
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={messages}
+        nodeStates={nodeStates}
+        hitl={null}
+        hitlDecisions={{ signoff: { route: "apply" } }}
+      />,
+    );
+
+    const order = Array.from(container.querySelectorAll('[data-testid^="node-section-"]')).map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    const iVerify = order.indexOf("node-section-verify");
+    const iSignoff = order.indexOf("node-section-signoff");
+    const iApply = order.indexOf("node-section-apply");
+    expect(iVerify).toBeGreaterThanOrEqual(0);
+    expect(iSignoff).toBeGreaterThan(iVerify);
+    expect(iSignoff).toBeLessThan(iApply);
+    // And the banner lives in that signoff section.
+    const signoffSection = within(container).getByTestId("node-section-signoff");
+    expect(within(signoffSection).getByTestId("hitl-decision-banner")).toBeTruthy();
+  });
 });

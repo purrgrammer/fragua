@@ -24,7 +24,7 @@
 //   - `conversation-empty`         — empty state
 
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
-import { type ReactNode, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -175,7 +175,42 @@ export function RunConversation({
     return out;
   }, [toolStreams, persistedToolNodeIds]);
 
-  const decisionNodeIds = useMemo(() => (hitlDecisions ? Object.keys(hitlDecisions) : []), [hitlDecisions]);
+  // Decided human gates with no message rows of their own (the common
+  // case — human nodes emit none) render as standalone banner sections.
+  // Slot them into node-EXECUTION order so a mid-flow signoff appears
+  // between the nodes it ran between, not dumped at the tail (which also
+  // stole the conversation's auto-scroll from a still-streaming node).
+  // `before` = decisions that precede the first visible section;
+  // `after.get(i)` = decisions rendered right after visible section `i`.
+  const decisionBuckets = useMemo(() => {
+    const before: DecisionEntry[] = [];
+    const after = new Map<number, DecisionEntry[]>();
+    if (!hitlDecisions) return { before, after };
+    const order = new Map<string, number>();
+    (nodeStates ?? []).forEach((n, i) => {
+      if (!order.has(n.nodeId)) order.set(n.nodeId, i);
+    });
+    const sectionOrder = visibleSections.map((s) =>
+      s.nodeId != null ? (order.get(s.nodeId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY,
+    );
+    for (const [nodeId, decision] of Object.entries(hitlDecisions)) {
+      // The open gate shows its card, not a banner; nodes that have their
+      // own message section render the banner in-section.
+      if (nodeId === hitl?.nodeId) continue;
+      if (visibleSections.some((s) => s.nodeId === nodeId)) continue;
+      const oi = order.get(nodeId) ?? Number.POSITIVE_INFINITY;
+      let k = -1;
+      for (let i = 0; i < sectionOrder.length; i++) {
+        if (sectionOrder[i]! <= oi) k = i;
+      }
+      if (k === -1) before.push({ nodeId, decision });
+      else (after.get(k) ?? after.set(k, []).get(k)!).push({ nodeId, decision });
+    }
+    return { before, after };
+  }, [hitlDecisions, nodeStates, visibleSections, hitl?.nodeId]);
+
+  const hasDecisions = decisionBuckets.before.length > 0 || decisionBuckets.after.size > 0;
+  const sectionChrome = { stateByNodeId, isLive, isPaused };
 
   const empty =
     !isLoading &&
@@ -184,7 +219,7 @@ export function RunConversation({
     streaming == null &&
     liveToolNodes.length === 0 &&
     hitl == null &&
-    decisionNodeIds.length === 0;
+    !hasDecisions;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
@@ -200,6 +235,9 @@ export function RunConversation({
         ) : (
           <ConversationContent>
             {userInput && <UserPromptMessage text={userInput} />}
+            {decisionBuckets.before.map((d) => (
+              <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+            ))}
             {visibleSections.map((section, i) => {
               const isTail = i === visibleSections.length - 1;
               const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
@@ -209,27 +247,26 @@ export function RunConversation({
               // decision (loop re-entry); suppress the banner there.
               const decision = !showHitlHere && section.nodeId != null ? hitlDecisions?.[section.nodeId] : undefined;
               return (
-                <NodeSection
-                  key={section.key}
-                  nodeId={section.nodeId}
-                  state={nodeState}
-                  isLive={isLive}
-                  isPaused={isPaused}
-                >
-                  {section.rows.map((row) => (
-                    <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
+                <Fragment key={section.key}>
+                  <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
+                    {section.rows.map((row) => (
+                      <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
+                    ))}
+                    {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
+                    {showHitlHere && (
+                      <HitlStepCard
+                        runId={hitl.runId}
+                        label={hitl.label}
+                        options={hitl.options}
+                        optionLabels={hitl.optionLabels}
+                      />
+                    )}
+                    {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
+                  </NodeSection>
+                  {decisionBuckets.after.get(i)?.map((d) => (
+                    <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
                   ))}
-                  {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
-                  {showHitlHere && (
-                    <HitlStepCard
-                      runId={hitl.runId}
-                      label={hitl.label}
-                      options={hitl.options}
-                      optionLabels={hitl.optionLabels}
-                    />
-                  )}
-                  {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
-                </NodeSection>
+                </Fragment>
               );
             })}
             {orphanStreaming && (
@@ -268,27 +305,6 @@ export function RunConversation({
                 <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
               </NodeSection>
             ))}
-            {/* Decided human gates that produced no message rows (the
-                common case — human nodes emit none) get a synthesised
-                tail section. The open gate is excluded: it shows its card
-                via the orphan block above, not a banner. */}
-            {decisionNodeIds
-              .filter((nodeId) => nodeId !== hitl?.nodeId && !visibleSections.some((s) => s.nodeId === nodeId))
-              .map((nodeId) => {
-                const decision = hitlDecisions?.[nodeId];
-                if (!decision) return null;
-                return (
-                  <NodeSection
-                    key={`decision-${nodeId}`}
-                    nodeId={nodeId}
-                    state={stateByNodeId.get(nodeId)}
-                    isLive={isLive}
-                    isPaused={isPaused}
-                  >
-                    <HitlDecisionBanner route={decision.route} note={decision.note} />
-                  </NodeSection>
-                );
-              })}
           </ConversationContent>
         )}
         <ConversationScrollButton />
@@ -303,6 +319,32 @@ interface Section {
   key: string;
   nodeId: string | null;
   rows: RunMessageRow[];
+}
+
+interface DecisionEntry {
+  nodeId: string;
+  decision: { route: string; note?: string };
+}
+
+/** A decided human gate that has no message rows of its own — rendered as
+ * a standalone "Responded" banner section, slotted into execution order by
+ * the caller. */
+function DecisionSection({
+  entry,
+  stateByNodeId,
+  isLive,
+  isPaused,
+}: {
+  entry: DecisionEntry;
+  stateByNodeId: Map<string, NodeState>;
+  isLive: boolean;
+  isPaused: boolean;
+}): JSX.Element {
+  return (
+    <NodeSection nodeId={entry.nodeId} state={stateByNodeId.get(entry.nodeId)} isLive={isLive} isPaused={isPaused}>
+      <HitlDecisionBanner route={entry.decision.route} note={entry.decision.note} />
+    </NodeSection>
+  );
 }
 
 function groupByNode(messages: RunMessageRow[]): Section[] {
