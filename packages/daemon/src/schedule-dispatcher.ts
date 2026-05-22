@@ -118,9 +118,9 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
       continue;
     }
 
-    let dotSource: string;
+    let source: string;
     try {
-      dotSource = readFileSync(resolved.dotPath, "utf8");
+      source = readFileSync(resolved.dotPath, "utf8");
     } catch (err) {
       opts.store.pauseSchedule(row.id, now);
       opts.store.appendDaemonEvent({
@@ -135,7 +135,7 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
     }
 
     try {
-      parseWorkflow(dotSource);
+      parseWorkflow(source);
     } catch (err) {
       opts.store.pauseSchedule(row.id, now);
       opts.store.appendDaemonEvent({
@@ -164,8 +164,8 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
     }
 
     // Fire.
-    const sha = sha256Hex(dotSource);
-    opts.store.saveWorkflow(sha, resolved.name, dotSource);
+    const sha = sha256Hex(source);
+    opts.store.saveWorkflow(sha, resolved.name, source);
     const runId = newRunId();
     const initialRouting: Record<string, unknown> = {};
     if (row.input != null && row.input.length > 0) initialRouting["input"] = row.input;

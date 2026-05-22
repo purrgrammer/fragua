@@ -93,11 +93,11 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
 }
 
 function specsForGraph(
-  dotSource: string,
+  source: string,
   codergenFactory?: AutoDispatcherOpts["codergenFactory"],
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
 ): Map<string, HandlerSpec> {
-  const graph = parseWorkflow(dotSource);
+  const graph = parseWorkflow(source);
   const outgoing = new Map<string, Array<{ to: string; label?: string; route?: string }>>();
   for (const edge of graph.edges) {
     const list = outgoing.get(edge.from) ?? [];

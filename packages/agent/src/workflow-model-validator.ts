@@ -58,12 +58,12 @@ function getDefaultRegistry(): ModelRegistry {
 
 /** Validate a workflow's llm-node model declarations. */
 export function validateWorkflowModels(
-  dotSource: string,
+  source: string,
   registry: ModelRegistry = getDefaultRegistry(),
 ): WorkflowModelValidationResult {
   let graph: ReturnType<typeof parseWorkflow>;
   try {
-    graph = parseWorkflow(dotSource);
+    graph = parseWorkflow(source);
   } catch {
     // If the workflow itself can't be parsed, let the downstream parse-time
     // error surface elsewhere — don't fake model offenders for it.

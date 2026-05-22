@@ -42,6 +42,28 @@ export function shouldPersistToStore(hasThread: boolean): boolean {
   return hasThread;
 }
 
+/** Reserved namespace for synthetic per-node threads. A node with no
+ * explicit `thread:` still needs the persist/hydrate machinery so its
+ * transcript survives a pause/resume of the same dispatch — without it the
+ * node re-dispatches against an empty agent and silently drops its
+ * mid-flight transcript on every resume (budget, provider_retry, timeout,
+ * daemon restart). The leading NUL can't appear in a YAML `thread:` scalar,
+ * so a synthetic id can never collide with a user-declared thread. */
+export const SYNTHETIC_THREAD_PREFIX = "\u0000node:";
+
+/** Deterministic synthetic thread id keyed by `(nodeId, iteration)`. A
+ * resume of the same `(nodeId, iteration)` recomputes the same id and so
+ * rehydrates the right transcript; a fresh loop pass (next iteration) gets a
+ * distinct id and starts clean, preserving unthreaded "fresh each entry"
+ * semantics. Readable on purpose — it surfaces in `llm.start.thread_id` and
+ * on `messages` rows, where a digest would be opaque during a post-mortem.
+ * The generator is injective over `(nodeId: string, iteration: ℕ)` and ids
+ * are only ever compared for equality, never parsed, so a `#` inside a
+ * nodeId is harmless. */
+export function syntheticThreadId(nodeId: string, iteration: number): string {
+  return `${SYNTHETIC_THREAD_PREFIX}${nodeId}#${iteration}`;
+}
+
 /** Pick a sessionId hint for provider-side prompt caching:
  *
  * | shape                               | sessionId                       | rationale |
