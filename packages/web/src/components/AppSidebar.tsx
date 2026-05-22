@@ -28,6 +28,7 @@ import { NavLink, useMatch } from "react-router-dom";
 import { useInboxCounts } from "../lib/useInboxCounts.ts";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
+import { AnimatedNumber } from "./ui/animated-number.tsx";
 import {
   Sidebar,
   SidebarContent,
@@ -120,7 +121,7 @@ function InboxPendingBadge(): JSX.Element | null {
       data-testid="nav-inbox-pending-count"
       className="ml-auto shrink-0 rounded-full bg-[color-mix(in_oklch,var(--sw-accent-warn)_15%,transparent)] px-1.5 py-0.5 text-[length:var(--sw-text-xs)] font-medium text-[var(--sw-accent-warn)] tabular-nums"
     >
-      {total}
+      <AnimatedNumber value={total} />
     </span>
   );
 }

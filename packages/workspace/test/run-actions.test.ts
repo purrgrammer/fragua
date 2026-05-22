@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function lines(): string {
-  return Array.from({ length: 12 }, (_, i) => `L${String(i + 1).padStart(2, "0")}`).join("\n") + "\n";
+  return `${Array.from({ length: 12 }, (_, i) => `L${String(i + 1).padStart(2, "0")}`).join("\n")}\n`;
 }
 async function must(cwd: string, args: string[]): Promise<string> {
   const r = await git(cwd, args);
