@@ -72,13 +72,10 @@ export function RunDetail(): JSX.Element {
   // All hooks before any conditional return — Rules of Hooks.
   // Snapshot is fetched ONCE at mount and never refetched: SSE events
   // are folded into `detailOverlay` and merged in-memory via
-  // `mergeDetail` for display. Previously this effect re-fired
-  // `qc.refetchQueries(detail)` on every SSE frame — on a 1k-events/sec
-  // run that was a thousand full-payload refetches per second.
+  // `mergeDetail` for display, avoiding a full-payload refetch on every
+  // SSE frame.
   const { data: snapshot, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
 
-  // (snapshot kept for the rest of the surface; sub-run redirects
-  // removed alongside the sub-run machinery).
   // Tri-state: `undefined` while the snapshot is loading; `true` only
   // when we've confirmed a terminal status. `useRunLive` defers opening
   // SSE until this lands as a boolean so we don't flash a transient
@@ -516,8 +513,7 @@ const RunGraphTab = memo(function RunGraphTab({
 
   const activeNodeId = detail?.nodes.find((n) => n.state === "running")?.nodeId ?? null;
   const hitlNodeId = detail?.runStatus === "paused_human" ? (detail.hitlNodeId ?? null) : null;
-  // Pass the multi-active-node Set through so parallel branches that
-  // are running (alongside their parent component) all glow.
+  // Pass the active-node Set through so every running node glows.
   const effectiveActiveNodeIds = activeNodeIds ?? (activeNodeId ? new Set([activeNodeId]) : undefined);
   const selected = selectedNodeId && graph ? (graph.nodes[selectedNodeId] ?? null) : null;
   const selectedState = selectedNodeId ? (detail?.nodes.find((n) => n.nodeId === selectedNodeId) ?? null) : null;

@@ -82,8 +82,8 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         {/* thread_id — shared LLM session marker. Identity rather than
          *  model-section because it's about *which conversation* this node
          *  joins, not what model handles it. Suppressed for non-LLM
-         *  handlers (tool / start / exit / heuristic fan-in) so the
-         *  cascade-resolved value doesn't mislead. */}
+         *  handlers (tool / start / exit) so the cascade-resolved
+         *  value doesn't mislead. */}
         {llmRelevant && attrs.thread_id && (
           <Field label="thread" value={<code className="text-sw-text">{attrs.thread_id}</code>} />
         )}
@@ -95,8 +95,8 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
 
       {/* Model & context. Gated on `showsLlm` so the section vanishes
        *  for handlers that never call an LLM (tool / start / exit /
-       *  conditional / heuristic parallel.fan_in) even when the
-       *  stylesheet cascade resolved a model. */}
+       *  conditional) even when the stylesheet cascade resolved a
+       *  model. */}
       {llmRelevant && (attrs.model || attrs.provider || attrs.summary || attrs.reasoning_effort) && (
         <Section title="model & context">
           {attrs.model && <Field label="model" value={<code className="text-sw-text">{attrs.model}</code>} />}

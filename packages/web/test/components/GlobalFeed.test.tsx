@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FeedEvent } from "@fragua/types";
-import { isFeedRowHidden, metaForEvent } from "../../src/components/GlobalFeed.tsx";
+import { metaForEvent } from "../../src/components/GlobalFeed.tsx";
 
 function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
   return { runId: "r", seq: 1, type, writer: "web", payload, ts: 0 } as unknown as FeedEvent;
@@ -96,28 +96,5 @@ describe("metaForEvent — operator-action git-centric verbs", () => {
   test("operator-action facts always return single-word verbs regardless of payload", () => {
     expect(metaForEvent(evt("fact.run_accepted", {})).verb).toBe("accepted");
     expect(metaForEvent(evt("fact.run_discarded", {})).verb).toBe("discarded");
-  });
-});
-
-describe("isFeedRowHidden", () => {
-  test("hides fact.subrun_completed as defense in depth", () => {
-    expect(isFeedRowHidden(evt("fact.subrun_completed", { runId: "child-1" }))).toBe(true);
-  });
-
-  test("does not hide fact.message_appended (server no longer ships it)", () => {
-    expect(isFeedRowHidden(evt("fact.message_appended", { ordinal: 0, role: "assistant" }))).toBe(false);
-  });
-
-  test("does not hide fact.run_accepted / fanout_started / fanout_completed", () => {
-    // fact.run_accepted is in FEED_EVENT_KINDS and ships through the feed.
-    expect(isFeedRowHidden(evt("fact.run_accepted", { sha: "tip1", replayed: 1, tailStaged: false }))).toBe(false);
-    expect(isFeedRowHidden(evt("fact.fanout_started", { fanoutId: "f1", count: 2 }))).toBe(false);
-    expect(isFeedRowHidden(evt("fact.fanout_completed", { fanoutId: "f1" }))).toBe(false);
-  });
-
-  test("keeps user-facing run lifecycle facts visible", () => {
-    expect(isFeedRowHidden(evt("fact.run_started"))).toBe(false);
-    expect(isFeedRowHidden(evt("fact.run_completed"))).toBe(false);
-    expect(isFeedRowHidden(evt("fact.run_paused_human"))).toBe(false);
   });
 });

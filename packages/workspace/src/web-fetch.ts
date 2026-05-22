@@ -212,7 +212,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
 
     if (isRawMode) {
       // No summariser call. Return the markdown verbatim, head-truncated
-      // to RAW_MAX_CHARS so a fanout of fetches doesn't blow downstream
+      // to RAW_MAX_CHARS so a burst of fetches doesn't blow downstream
       // context. The caller (workflow node, agent) sees the full content
       // up to the cap and decides what to do with it.
       const truncated = fullMarkdown.length > RAW_MAX_CHARS;

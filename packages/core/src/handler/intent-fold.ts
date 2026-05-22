@@ -11,12 +11,11 @@
 // **Purity contract:** `foldIntents`
 // is total over `RunStatus`, deterministic (same inputs → byte-identical
 // output), and free of side effects (no I/O, no clocks, no mutation of
-// the input array, no reads of ambient state). The function exists as
-// the same reducer for top-level runs and (post P2) sub-runs; both call
-// it with `(getUnappliedIntents(runId), state.status)` and consume the
-// returned `IntentDecision` the same way. Property tests in
-// `intent-fold.test.ts` enforce the contract; the executor in
-// `daemon/src/executor.ts` is the only top-level caller today.
+// the input array, no reads of ambient state). Callers invoke it with
+// `(getUnappliedIntents(runId), state.status)` and consume the returned
+// `IntentDecision`. Property tests in `intent-fold.test.ts` enforce the
+// contract; the executor in `daemon/src/executor.ts` is the only caller
+// today.
 //
 // Precedence summary:
 //

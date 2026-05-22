@@ -706,7 +706,7 @@ the corresponding source interface.
 
 ## 5. Handler contract
 
-Unchanged in substance from Revision 1; now with `iteration` visible, side-effect envelope carrying `idempotencyKey`, and `ctx.withScope` for rebuilt scope-sensitive sub-contexts (re-narrowed tools, scoped emit/messages/artifacts).
+A Handler is a pure async function: given an immutable `HandlerContext`, produce a `HandlerResult`. `iteration` is the per-node retry counter and the side-effect envelope carries `idempotencyKey`.
 
 ```typescript
 export type SideEffect = "none" | "idempotent" | "external";
@@ -745,21 +745,7 @@ export interface HandlerContext {
   readonly steering?: string;
   readonly env?: ExecutionEnvironment;                      // per-run worktree; falls back to process cwd when unset
   readonly budgetSnapshot?: BudgetSnapshotInput;            // cumulative cost / tokens vs configured ceilings
-  readonly withScope: (override: ScopeOverrides) => HandlerContext; // rebuilt scope-sensitive sub-contexts (re-narrowed tools, scoped emit/messages/artifacts)
   // No direct fetch, filesystem, DB, or process access.
-}
-
-export interface ScopeOverrides {
-  nodeId: string;                                           // required — sub-context identity for emit stamping + side-effect keys
-  iteration: number;                                        // required — per-context retry counter
-  allowedTools?: readonly string[];
-  deniedTools?: readonly string[];
-  humanInput?: { route: string; note?: string } | string;
-  steering?: string;
-  budgetSnapshot?: BudgetSnapshotInput;
-  // Run-level resources (store, llm, http, signal, routing, args,
-  // env) are deliberately omitted — captured once at top-level
-  // construction and reused across all withScope calls.
 }
 
 export type HandlerResult =

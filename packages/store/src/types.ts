@@ -807,12 +807,10 @@ export interface IEventReader {
    *  - distinct `json_extract(events.payload, '$.thread_id')` on `llm.start`
    *    rows (covers graph-level / edge-level thread ids that don't match
    *    any node id).
-   * Completed/cancelled/halted children are excluded. Quarantined children
-   * remain active because they block parent fan-in until the operator
-   * resolves them.
-   * — their threads will never be dispatched again. Non-terminal pause
-   * states (paused, paused_human) are included since they resume to the
-   * same thread on `intent.resume`/`intent.human_input`.
+   * Completed/cancelled/halted runs are excluded — their threads will
+   * never be dispatched again. Non-terminal pause states (paused,
+   * paused_human) are included since they resume to the same thread on
+   * `intent.resume`/`intent.human_input`.
    */
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 

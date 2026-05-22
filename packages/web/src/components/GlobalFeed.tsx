@@ -145,20 +145,6 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
 
-/** Defense-in-depth client filter. `FEED_EVENT_KINDS` in `@fragua/types`
- *  is the authoritative server-side allowlist; this set catches anything
- *  that slips through. Currently `fact.subrun_completed` is the only
- *  entry: it is not in `FEED_EVENT_KINDS` today, but the guard protects
- *  against operator noise if it is ever re-added. */
-const HIDDEN_FEED_TYPES: ReadonlySet<string> = new Set(["fact.subrun_completed"]);
-
-/** True for events that flow through `FEED_EVENT_KINDS` (so the server
- *  ships them) but shouldn't render as a visible row. Exported for unit
- *  tests; the `GlobalFeed` body filters `rows` through this. */
-export function isFeedRowHidden(event: FeedEvent): boolean {
-  return HIDDEN_FEED_TYPES.has(event.type);
-}
-
 /** Resolve the row's icon + verb. For most kinds the static
  *  {@link KIND_META} is enough; `fact.run_paused` peeks at
  *  `payload.reason` to differentiate operator-resumable (yellow) from
@@ -196,8 +182,7 @@ export function GlobalFeed(): JSX.Element {
   const reduce = useReducedMotion() ?? false;
 
   // Render newest-first — operators glance at the top of the list.
-  // Types in HIDDEN_FEED_TYPES are kept in the atom but suppressed here.
-  const rows = useMemo(() => events.filter((e) => !isFeedRowHidden(e)).reverse(), [events]);
+  const rows = useMemo(() => [...events].reverse(), [events]);
 
   return (
     <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">

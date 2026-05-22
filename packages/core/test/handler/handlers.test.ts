@@ -37,9 +37,6 @@ function stubCtx(
     externalCall: async (_, fn) => fn("stub-key"),
     args: {},
     emit: () => {},
-    withScope: () => {
-      throw new Error("stubCtx: withScope not implemented for this test");
-    },
   };
   return { ...base, ...overrides };
 }

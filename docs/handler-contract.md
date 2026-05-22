@@ -64,35 +64,6 @@ interface BudgetSnapshotInput {
 }
 ```
 
-### `ctx.withScope(override): HandlerContext`
-
-Return a new `HandlerContext` with the same run-level resources but rebuilt scope-sensitive surfaces, each carrying its own `(nodeId, iteration)` instead of leaking the parent's via closure capture.
-
-Six surfaces are rebuilt against the new scope:
-
-- **`artifacts`** — `put` / `get` / `ref` write and read under `(runId, scope.nodeId, scope.iteration, key)`.
-- **`messages.append`** — rows are attributed with the new `nodeId` / `iteration`.
-- **`externalCall`** — the idempotency key is keyed off `(runId, scope.nodeId, scope.iteration, argsHash, attempt)`, so repeated retries of the same provider call don't collide across scopes.
-- **`emit`** — observability payloads stamp the new `nodeId` / `iteration`, overriding the parent stamp via spread-last.
-- **`tools`** — re-narrowed by `scope.allowedTools` / `scope.deniedTools` (a hard filter; `tools.get(name)` for an excluded tool throws `unknown tool: …`).
-- **`env`** — re-wrapped read-only when the new toolset has no mutator (`bash` / `write` / `edit`); a handler that loses its write tools also loses raw filesystem access.
-
-Run-level resources — `store`, `llm`, `http`, `recorder`, `signal`, `routing`, `args`, `emitObservability`, raw `env` — are reused unchanged across every `withScope` call. They're captured once at top-level construction.
-
-```typescript
-interface ScopeOverrides {
-  nodeId: string;                       // required
-  iteration: number;                    // required
-  allowedTools?: readonly string[];
-  deniedTools?: readonly string[];
-  humanInput?: { route: string; note?: string } | string;
-  steering?: string;
-  budgetSnapshot?: BudgetSnapshotInput;
-}
-```
-
-Fields omitted from `override` fall through to the current scope's values, so `withScope` calls compose. Calling `withScope` with the same `nodeId` / `iteration` as the current ctx yields a fresh ctx with identical scope (cheap; no aliasing).
-
 ---
 
 ## The four return kinds

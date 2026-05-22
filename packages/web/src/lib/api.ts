@@ -443,10 +443,8 @@ export function getRunEventsUrl(id: string, sinceSeq?: number): string {
   return url(typeof sinceSeq === "number" && sinceSeq > 0 ? `${base}?sinceSeq=${sinceSeq}` : base);
 }
 
-/** SSE URL for the per-parent descendant event feed: parent + every
- * sub-run in its tree (recursive via `run_state.parent_run_id`). The
- * server route is unfiltered — RunDetail consumes the full firehose
- * for its own tree as a token-bump signal. */
+/** SSE URL for a run's event feed. The server route is unfiltered —
+ * RunDetail consumes the full firehose as a token-bump signal. */
 export function getRunDescendantEventsUrl(id: string): string {
   return url(`/runs/${encodeURIComponent(id)}/events/stream?include=descendants`);
 }
@@ -720,9 +718,7 @@ export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
  * graph node emitted the turn.
  *
  * `runId` is intentionally absent — the URL pins it for single-run
- * reads. `originRunId` is stamped when the parent fetched with
- * `?include=descendants`, including same-run rows, so `(originRunId,
- * ordinal)` is a stable identity. */
+ * reads, so `ordinal` alone is a stable identity. */
 export interface RunMessageRow {
   ordinal: number;
   content: AgentMessage;

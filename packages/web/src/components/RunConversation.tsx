@@ -143,8 +143,7 @@ export function RunConversation({
   // `toolStreams` whose nodeId doesn't already have a persisted
   // `tool_node` row in `messages`, render a synthesized tail section
   // with a streaming Terminal. Sections appear in the order the
-  // streams started — Map iteration order is insertion order, which
-  // is what we want for parallel branches.
+  // streams started — Map iteration order is insertion order.
   const persistedToolNodeIds = useMemo(() => {
     const ids = new Set<string>();
     for (const row of messages) {

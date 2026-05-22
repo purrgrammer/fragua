@@ -84,9 +84,6 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
     externalCall: async (_, fn) => fn("stub-key"),
     args: overrides.args ?? {},
     emit: (type, payload) => emitted.push({ type, payload }),
-    withScope: () => {
-      throw new Error("stubCtx: withScope not implemented for this test");
-    },
   };
   const merged = { ...base, ...overrides };
   return Object.assign(merged, {

@@ -51,13 +51,13 @@ describe("mergeStepsByNode", () => {
     expect(out[0]?.startSeq).toBe(4);
   });
 
-  test("different originRunId → separate rows (sub-run isolation)", () => {
-    const a = withCost(step({ startSeq: 1, nodeId: "lens", originRunId: "child_a" }), 0.05, 100);
-    const b = withCost(step({ startSeq: 1, nodeId: "lens", originRunId: "child_b" }), 0.05, 100);
+  test("different originRunId → separate rows", () => {
+    const a = withCost(step({ startSeq: 1, nodeId: "lens", originRunId: "run_a" }), 0.05, 100);
+    const b = withCost(step({ startSeq: 1, nodeId: "lens", originRunId: "run_b" }), 0.05, 100);
     const out = mergeStepsByNode([a, b]);
     expect(out).toHaveLength(2);
-    expect(out[0]?.originRunId).toBe("child_a");
-    expect(out[1]?.originRunId).toBe("child_b");
+    expect(out[0]?.originRunId).toBe("run_a");
+    expect(out[1]?.originRunId).toBe("run_b");
   });
 
   test("durationMs spans from earliest start to latest end across merged turns", () => {

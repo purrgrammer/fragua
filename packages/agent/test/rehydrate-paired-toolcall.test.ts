@@ -1,6 +1,6 @@
 // Probe for graceful-resume Option A precondition:
-// when sanitiseUnpairedToolCalls re-executes the `agent` tool on
-// rehydrate, the resulting hydrate transcript ends with
+// when sanitiseUnpairedToolCalls re-pairs a tool call on rehydrate,
+// the resulting hydrate transcript ends with
 // [user, assistant{toolCall}, toolResult]. The proposed silent-
 // rollback path produces this same shape by stripping cancelled
 // toolResults at pause-commit time and letting the sanitiser
@@ -57,13 +57,13 @@ describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () =
       });
 
       // Construct the paired tail by hand. Shape mirrors what
-      // sanitiseUnpairedToolCalls produces when the `agent` tool
-      // is re-executed on rehydrate — assistant with toolCall +
+      // sanitiseUnpairedToolCalls produces when a tool call is
+      // re-paired on rehydrate — assistant with toolCall +
       // user-role toolResult with isError:false.
       const priorUser = { role: "user", content: "kick off work", timestamp: 1 } as AgentMessage;
       const priorAssistant = {
         role: "assistant",
-        content: [{ type: "toolCall", id: "tc_resumed", name: "agent", arguments: { prompt: "lens 1" } }],
+        content: [{ type: "toolCall", id: "tc_resumed", name: "bash", arguments: { command: "echo work" } }],
         stopReason: "toolUse",
         usage: {
           input: 10,
@@ -81,8 +81,8 @@ describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () =
       const priorToolResult = {
         role: "toolResult",
         toolCallId: "tc_resumed",
-        toolName: "agent",
-        content: [{ type: "text", text: "(sub-agent completed via crash-resilience hydration)" }],
+        toolName: "bash",
+        content: [{ type: "text", text: "(tool completed via crash-resilience hydration)" }],
         isError: false,
         timestamp: 3,
       } as unknown as AgentMessage;
@@ -91,7 +91,7 @@ describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () =
         node: {
           id: "n_parent",
           type: "llm",
-          attrs: { allowed_tools: ["agent", "read"], thread_id: "t1" },
+          attrs: { allowed_tools: ["bash", "read"], thread_id: "t1" },
         },
         prompt: "what comes next?",
         thread_id: "t1",
@@ -110,7 +110,7 @@ describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () =
       // Inspect what pi-agent forwarded to the LLM. We expect the
       // request to include the prior user/assistant/toolResult
       // turns plus the new user prompt — no duplication of the
-      // prior assistant turn, no re-execution of the agent tool.
+      // prior assistant turn, no re-execution of the tool.
       const roles = observedMessages.map((m) => (m as { role: string }).role);
       // Roles after rehydrate + new user prompt:
       //   [user(prior), assistant(prior toolCall), toolResult, user(new)]

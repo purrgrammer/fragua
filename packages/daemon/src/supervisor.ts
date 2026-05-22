@@ -83,8 +83,8 @@ export function startSupervisor(opts: SupervisorOpts): {
         // caused the run to exist — never an operator action. Filter
         // it out so the supervisor doesn't mistake it for a mid-flight
         // cancel/pause/etc. when lastAppliedSeq hasn't advanced past
-        // it yet (e.g., sub-runs whose first dispatched node is a
-        // long-running llm, no fast noop start node to advance
+        // it yet (e.g., a run whose first dispatched node is a
+        // long-running llm, with no fast noop start node to advance
         // applied seq before the 50ms tick).
         const operatorIntents = fresh.filter((e) => e.type !== "intent.run_enqueued");
         const hasNonSteer = operatorIntents.some((e) => e.type !== "intent.steering_requested");

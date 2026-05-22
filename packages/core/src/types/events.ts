@@ -49,10 +49,10 @@ export interface NodeCompletedData {
  * because loop/retry nodes resolve a different prompt per iteration.
  *
  * Values are optional because handlers without templates / context / tools
- * (start, exit, conditional, fan_in) simply omit them.
+ * (start, exit, conditional) simply omit them.
  */
 export interface NodeStartedData {
-  /** Handler key — `llm`, `loop`, `human`, `parallel`, ... */
+  /** Handler key — `llm`, `loop`, `human`, `tool`, ... */
   node_type?: string;
   /** Raw `node.attrs.prompt` before any substitution. */
   prompt_template?: string;

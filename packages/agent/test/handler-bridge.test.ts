@@ -564,8 +564,7 @@ describe("makeLlmHandler — priorMessages thread loading", () => {
 
   test("thread_id matching a single node_id still scopes to that node only", async () => {
     // When thread_id equals an exact node_id, the loader takes the
-    // node-scoped branch (no fallback). Sub-agent exclusion must apply
-    // there too in case some future workflow names a sub-agent thread id.
+    // node-scoped branch (no fallback).
     const store = new SqliteStore({ path: ":memory:" });
     const { calls, backend } = capturingBackend();
     const ctx = await ctxFor("r2", store, "implement");

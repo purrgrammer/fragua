@@ -14,7 +14,6 @@ import type {
   HttpClient,
   LlmClient,
   MessagesApi,
-  ScopeOverrides,
   SideEffectRecorder,
   ToolRegistry,
 } from "./types.ts";
@@ -67,70 +66,11 @@ export interface BuildContextOpts {
   budgetSnapshot?: BudgetSnapshotInput;
 }
 
-/** Run-level resources captured once at top-level context construction
- * and reused across every `withScope` rescoping. Anything keyed off
- * `(nodeId, iteration)` or per-node policy lives on `ScopeOverrides`,
- * NOT here. */
-interface CtxUpstream {
-  runId: string;
-  signal: AbortSignal;
-  routing: Readonly<Record<string, unknown>>;
-  store: HandlerStore;
-  llm: LlmClient;
-  http: HttpClient;
-  /** Un-narrowed root registry. Per-scope `allowedTools` / `deniedTools`
-   * are applied via `tools.select(...)` inside `buildScopedContext`. */
-  tools: ToolRegistry;
-  recorder: SideEffectRecorder;
-  args: Readonly<SubstitutionArgs>;
-  emitObservability: (type: string, payload: Record<string, unknown>) => void;
-  /** Un-wrapped env. The read-only proxy is reapplied per scope based
-   * on the scope's tool narrowing. */
-  env?: ExecutionEnvironment;
-}
-
 /**
  * Wire a HandlerContext to a concrete store + runtime clients.
- *
- * Construction is two-layered: a `CtxUpstream` captures the run-level
- * resources once; `buildScopedContext` builds the six scope-sensitive
- * surfaces (artifacts / messages / externalCall / emit / tools / env)
- * for a given `(nodeId, iteration, allowedTools, deniedTools, ...)`.
- * The returned context exposes `withScope` so a parallel branch can
- * rebuild those six surfaces against its own scope without touching
- * upstream resources.
  */
 export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
-  const upstream: CtxUpstream = {
-    runId: opts.runId,
-    signal: opts.signal,
-    routing: opts.routing,
-    store: opts.store,
-    llm: opts.llm,
-    http: opts.http,
-    tools: opts.tools,
-    recorder: opts.recorder,
-    args: opts.args ?? {},
-    emitObservability: opts.emitObservability ?? (() => {}),
-    ...(opts.env !== undefined ? { env: opts.env } : {}),
-  };
-
-  const scope: ScopeOverrides = {
-    nodeId: opts.nodeId,
-    iteration: opts.iteration,
-    ...(opts.allowedTools !== undefined ? { allowedTools: opts.allowedTools } : {}),
-    ...(opts.deniedTools !== undefined ? { deniedTools: opts.deniedTools } : {}),
-    ...(opts.humanInput !== undefined ? { humanInput: opts.humanInput } : {}),
-    ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
-    ...(opts.budgetSnapshot !== undefined ? { budgetSnapshot: opts.budgetSnapshot } : {}),
-  };
-
-  return buildScopedContext(upstream, scope);
-}
-
-function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): HandlerContext {
-  const { runId, store } = upstream;
-  const { nodeId, iteration } = scope;
+  const { runId, nodeId, iteration, store } = opts;
 
   const messages: MessagesApi = {
     append(message: AgentMessage) {
@@ -176,76 +116,62 @@ function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): Handl
     runId,
     nodeId,
     iteration,
-    recorder: upstream.recorder,
+    recorder: opts.recorder,
   });
 
-  // Default-stamp the scope's nodeId / iteration onto observability
+  // Default-stamp the node's nodeId / iteration onto observability
   // payloads, but let handler-provided values override. Spread order:
-  // scope defaults FIRST, payload LAST. Two reasons:
-  //   1. The executor's own emitObservability also default-stamps
-  //      `currentNode` (the parent) and spreads payload last; this
-  //      wrapper has to defer to the same convention so a branch can
-  //      announce a sibling/child fact via the parent's emit (e.g.
-  //      `parallel.ts` emits per-branch fact.node_completed with an
-  //      explicit `nodeId: childId` — the explicit value MUST win or
-  //      run_state.nodes lumps every branch under the parent).
-  //   2. For ordinary handler emits (no nodeId in payload), the scope's
-  //      stamp flows through unchanged — so a branch's `llm.start`
-  //      still carries the branch nodeId rather than the parent's.
+  // defaults FIRST, payload LAST — matching the executor's own
+  // emitObservability convention so an explicit `nodeId` in a payload
+  // always wins.
+  const emitObservability = opts.emitObservability ?? (() => {});
   const emit = (type: string, payload: Record<string, unknown>): void => {
-    upstream.emitObservability(type, { nodeId, iteration, ...payload });
+    emitObservability(type, { nodeId, iteration, ...payload });
   };
 
   const narrowOpts: { allow?: readonly string[]; deny?: readonly string[] } = {};
-  if (scope.allowedTools !== undefined) narrowOpts.allow = scope.allowedTools;
-  if (scope.deniedTools !== undefined) narrowOpts.deny = scope.deniedTools;
+  if (opts.allowedTools !== undefined) narrowOpts.allow = opts.allowedTools;
+  if (opts.deniedTools !== undefined) narrowOpts.deny = opts.deniedTools;
   const scopedTools =
-    scope.allowedTools !== undefined || scope.deniedTools !== undefined
-      ? upstream.tools.select(narrowOpts)
-      : upstream.tools;
+    opts.allowedTools !== undefined || opts.deniedTools !== undefined ? opts.tools.select(narrowOpts) : opts.tools;
 
   // Align ExecutionEnvironment with the operator-declared toolset. If
-  // the scope's allowed_tools / denied_tools rules out every mutator
+  // the node's allowed_tools / denied_tools rules out every mutator
   // (bash / write / edit), wrap env so writeFile / exec throw — a handler
   // that loses its write *tools* also loses the raw env path that would
-  // otherwise bypass them. Parallel branches rely on this to guarantee
-  // read-only filesystem access. We read the rules directly from
+  // otherwise bypass them. We read the rules directly from
   // allowed_tools / denied_tools rather than `scopedTools.has(...)`: the
   // executor's registry is sometimes intentionally empty (e.g. fragua's
   // daemon hands llm its own registry; the executor's `tools` is a
   // sentinel) and querying an empty registry would falsely wrap every
   // node's env.
   const isMutatorAllowed = (name: string): boolean => {
-    if (scope.allowedTools !== undefined && !scope.allowedTools.includes(name)) return false;
-    if (scope.deniedTools?.includes(name)) return false;
+    if (opts.allowedTools !== undefined && !opts.allowedTools.includes(name)) return false;
+    if (opts.deniedTools?.includes(name)) return false;
     return true;
   };
-  const hasNarrowing = scope.allowedTools !== undefined || scope.deniedTools !== undefined;
+  const hasNarrowing = opts.allowedTools !== undefined || opts.deniedTools !== undefined;
   const envCanMutate = !hasNarrowing || ENV_MUTATOR_TOOLS.some(isMutatorAllowed);
-  const effectiveEnv = upstream.env !== undefined && !envCanMutate ? makeReadOnlyEnv(upstream.env) : upstream.env;
-
-  const withScope = (override: ScopeOverrides): HandlerContext =>
-    buildScopedContext(upstream, { ...scope, ...override });
+  const effectiveEnv = opts.env !== undefined && !envCanMutate ? makeReadOnlyEnv(opts.env) : opts.env;
 
   const ctx: HandlerContext = {
     runId,
     nodeId,
     iteration,
-    signal: upstream.signal,
-    routing: upstream.routing,
-    llm: upstream.llm,
-    http: upstream.http,
+    signal: opts.signal,
+    routing: opts.routing,
+    llm: opts.llm,
+    http: opts.http,
     tools: scopedTools,
     messages,
     artifacts,
     externalCall,
-    args: upstream.args,
+    args: opts.args ?? {},
     emit,
-    withScope,
-    ...(scope.humanInput !== undefined ? { humanInput: scope.humanInput } : {}),
-    ...(scope.steering !== undefined ? { steering: scope.steering } : {}),
+    ...(opts.humanInput !== undefined ? { humanInput: opts.humanInput } : {}),
+    ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
     ...(effectiveEnv !== undefined ? { env: effectiveEnv } : {}),
-    ...(scope.budgetSnapshot !== undefined ? { budgetSnapshot: scope.budgetSnapshot } : {}),
+    ...(opts.budgetSnapshot !== undefined ? { budgetSnapshot: opts.budgetSnapshot } : {}),
   };
   return ctx;
 }

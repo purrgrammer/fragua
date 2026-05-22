@@ -312,10 +312,9 @@ export class PiLlmBackend implements LlmBackend {
     if (this.runEnv?.bootstrapCommand !== undefined && effectiveRunEnv.bootstrapCommand === undefined) {
       effectiveRunEnv.bootstrapCommand = this.runEnv.bootstrapCommand;
     }
-    // Sub-agent path: `skipFrameworkSystemPrompt` makes the perNode
-    // string the COMPLETE system prompt — no protocol wrap, no skills
-    // catalog, no context-files, no run-env block. The calling LLM has
-    // full control over the sub-agent's context window.
+    // `skipFrameworkSystemPrompt` makes the perNode string the COMPLETE
+    // system prompt — no protocol wrap, no skills catalog, no
+    // context-files, no run-env block.
     const systemPrompt = input.skipFrameworkSystemPrompt
       ? (perNodeSystemPrompt ?? "")
       : buildSystemPrompt({
@@ -590,10 +589,9 @@ export class PiLlmBackend implements LlmBackend {
     // synchronous prologue hits the live controller. Without this
     // the stream runs for the full ABORT_TEARDOWN_GRACE_MS (2s)
     // window before the outer race rejects — real provider tokens
-    // get billed during those 2s. Hits the sub-agent fan-out case
-    // where the parent's abort already fired (executor's reactive
-    // budget gate) by the time spawn-subagent's child backend.run
-    // starts: the child's input.signal is aborted at entry.
+    // get billed during those 2s. Covers the case where the
+    // executor's reactive budget gate already fired the abort by the
+    // time backend.run starts: the input.signal is aborted at entry.
     if (input.signal?.aborted) {
       queueMicrotask(() => agent.abort());
     }

@@ -202,9 +202,8 @@ describe("eventsToSteps", () => {
   });
 
   // Tool nodes (tool type) never open an `llm.start`. Without
-  // synthesis they're invisible in the Cost breakdown — for parallel
-  // sections that mix llm + tool branches the tool branches just
-  // disappear from the panel.
+  // synthesis they're invisible in the Cost breakdown — tool nodes
+  // would just disappear from the panel.
   test("emits a synthetic step for a tool node — no llm.start, just fact.node_started + completed", () => {
     const events: StoredEvent[] = [
       ev("fact.node_started", 1_000, { nodeId: "plugin_validate", iteration: 0 }),

@@ -468,10 +468,6 @@ describe("listRunIds + listCwds — cwd surface", () => {
   });
 });
 
-// Sub-agents are not runs — `enqueueConversation` and the
-// `kind`/`parent_*` columns were removed in v7. The agent-tool seam
-// is exercised in `packages/daemon/test/subagent.test.ts`.
-
 describe("getSnapshotEvents", () => {
   test("empty array for run with no snapshots", async () => {
     const store = freshStore();

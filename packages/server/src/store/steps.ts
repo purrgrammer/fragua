@@ -56,8 +56,8 @@ export interface StepSnapshot {
   /** Stream seq of the originating `llm.start`. Joins with the SQL
    * aggregate row for this step (`getStepAggregates(runId)`). */
   startSeq: number;
-  /** Run that wrote the step. Set on parent+descendant views so UI keys
-   * never collide across per-run `seq` spaces. */
+  /** Run that wrote the step, so UI keys never collide across per-run
+   * `seq` spaces. */
   originRunId?: string;
   /** Additional `llm.start` seqs that fold into this same step — used
    *  when a node is paused (operator / HITL / provider-error / budget /
@@ -142,9 +142,9 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // the entry is cleared (it's a llm, the existing path handles
   // it). If `fact.node_completed` arrives with the entry still
   // present, we emit a synthetic tool step so tool nodes appear in
-  // the Cost breakdown alongside LLM steps — the tool
-  // branches in a fan-out are otherwise invisible there. Real
-  // duration is `completed.ts − started.ts`; cost stays absent.
+  // the Cost breakdown alongside LLM steps — tool nodes are
+  // otherwise invisible there. Real duration is
+  // `completed.ts − started.ts`; cost stays absent.
   const pendingToolNode = new Map<string, { startTs: number; startSeq: number }>();
 
   for (const ev of events) {

@@ -155,8 +155,6 @@ export function Inbox({ limit, viewAllHref, title, testId }: InboxProps): JSX.El
 }
 
 export function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.Element | null {
-  // Pick the most-actionable surface state, preferring sub-run
-  // attention when only the children need help. Order matches the
   const meta = row.runStatus ? REASON_META[row.runStatus] : undefined;
   if (!meta) return null;
   const { Icon, label, iconClass, borderVar } = meta;

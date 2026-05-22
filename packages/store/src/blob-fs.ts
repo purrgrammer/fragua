@@ -16,10 +16,10 @@
 //   del  → the caller DELETEs the row first, then calls `delete` here. A
 //          crash between the two leaves an orphan file (GC sweeps).
 //
-// The reason content doesn't live in SQLite anymore: every blob write on
+// Why content lives on disk rather than in SQLite: every blob write on
 // WAL SQLite frames the full BLOB into the write-ahead log. With live SSE
-// readers holding snapshots the WAL can't truncate, and a single fan-out
-// of multi-MB artifacts produces disk pressure that starves the daemon's
+// readers holding snapshots the WAL can't truncate, a burst of multi-MB
+// artifact writes produces disk pressure that starves the daemon's
 // coordination ticks. Files on disk are exactly as durable and entirely
 // out of the WAL's way.
 

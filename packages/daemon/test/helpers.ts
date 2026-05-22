@@ -72,13 +72,12 @@ export function enqueue(rig: TestRig, runId: string, startNode: string, priority
  *   - Honours `ctx.signal` between calls so cancel / budget-trip /
  *     timeout abort the handler at the next boundary.
  *   - Accumulates the cost + token split into the `HandlerResult`
- *     fields so the parent's reducer-driven rollup paths see realistic
+ *     fields so the run-level reducer-driven rollup paths see realistic
  *     numbers.
  *
  * Used by the test matrix that exercises budget caps, retries, cancel
- * mid-handler, first_success sibling cancellation, cost rollup across
- * sub-runs, etc. Keep this in `daemon/test/helpers.ts` rather than in
- * `core` — it's a test-time fixture, not a public stub.
+ * mid-handler, cost rollup, etc. Keep this in `daemon/test/helpers.ts`
+ * rather than in `core` — it's a test-time fixture, not a public stub.
  */
 export interface MockLlmOpts {
   /** USD per LLM call. Default 0.05 — typical small turn. */

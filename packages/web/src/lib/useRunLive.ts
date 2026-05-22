@@ -43,8 +43,8 @@ export type StreamingBlock =
 /** Live stdout/stderr from a tool (tool node) node, accumulated
  * from `tool.output_chunk` events. Cleared when the persisted
  * `tool_node` message lands for the same node — the message row is
- * the source of truth once it arrives. Keyed by nodeId so concurrent
- * tool nodes (parallel branches) each get their own buffer. */
+ * the source of truth once it arrives. Keyed by nodeId so each tool
+ * node gets its own buffer. */
 export interface ToolStream {
   stdout: string;
   stderr: string;
@@ -97,8 +97,8 @@ export interface UseRunLiveOptions {
    * runs that never need a stream — and the connection has to close +
    * reopen once the snapshot settles. */
   terminal?: boolean;
-  /** Changes when descendant sub-runs emit hidden global-feed events that
-   * should refresh the merged parent transcript. */
+  /** Changes when out-of-band events land that should refresh the
+   * merged transcript via a full re-fetch. */
   descendantRefreshToken?: string;
 }
 
@@ -164,7 +164,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        console.warn("[useRunLive] descendant messages fetch failed for", runId, "—", err);
+        console.warn("[useRunLive] messages refresh fetch failed for", runId, "—", err);
       });
     return () => {
       cancelled = true;

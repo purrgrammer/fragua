@@ -507,14 +507,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Advance lastAppliedSeq on run_started so the supervisor doesn't
       // mistake the synthetic `intent.run_enqueued` (the queue marker
       // that caused this run to exist) for a fresh operator intent
-      // mid-handler. Top-level runs survived this by accident — their
-      // `start` node is a fast noop whose fact.node_completed advances
-      // applied seq before supervisor's first 50ms tick. Sub-runs start
-      // directly at the heavy branch root (no noop buffer), so the
-      // supervisor's first tick lands mid-LLM-call and trips the
-      // controller (cause: "aborted", tokens=0), causing a spurious
-      // re-dispatch. Fold's `applied` already includes the
-      // run_enqueued seq; we just need to actually persist it.
+      // mid-handler. Without this, the supervisor's first tick can land
+      // mid-LLM-call and trip the controller (cause: "aborted",
+      // tokens=0), causing a spurious re-dispatch. Fold's `applied`
+      // already includes the run_enqueued seq; we just need to actually
+      // persist it.
       const startAdvanceTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
       const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
       if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
@@ -671,20 +668,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // pushes cumulative spend over a `budget_policy="stop"` ceiling,
     // we abort the in-flight handler and emit fact.run_halted{
     // reason:"budget"} alongside fact.node_aborted (which captures
-    // partial spend). Without this bound, sub-agent fan-out spends
-    // freely between parent-turn boundaries — a single orchestrator
-    // turn can overshoot the cap by 5×+ before the post-handler
-    // boundary check runs.
+    // partial spend). Without this bound, a handler that streams many
+    // `cost.recorded` events in a single turn can overshoot the cap
+    // several times over before the post-handler boundary check runs.
     let reactiveBudgetHaltDetail: string | undefined;
     // Symmetric to the halt path above, but for `budget_policy="pause"`
-    // (the default). Before this landed, pause-policy breaches waited
-    // for the post-handler boundary — which the llm agent loop
-    // routinely overshot by 10×+ in one dispatch (73 LLM calls, $3.29
-    // on a $0.30 cap on the original review.yaml lens regression). The
-    // reactive gate now aborts the handler mid-flight and the abort
-    // arm below emits `fact.run_paused{reason:"budget"}` so the
-    // operator can raise the cap and resume. Bounds peak overshoot to
-    // one in-flight LLM message.
+    // (the default). The reactive gate aborts the handler mid-flight
+    // and the abort arm below emits `fact.run_paused{reason:"budget"}`
+    // so the operator can raise the cap and resume. Bounds peak
+    // overshoot to one in-flight LLM message.
     let reactiveBudgetPauseBreach:
       | { scope: "run" | "node"; metric: "cost" | "tokens"; limit: number; actual: number }
       | undefined;
@@ -766,14 +758,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           if (typeof model === "string") lastModel = model;
 
           // Reactive budget gate. Bounds peak overshoot to one
-          // in-flight LLM message rather than the parent turn's full
-          // sub-agent fan-out. Fires once per dispatch — the halt /
-          // pause flags short-circuit subsequent events. Both stop AND
-          // pause policies abort mid-handler (pause was previously
-          // post-handler only, which the llm agent loop routinely
-          // overshot by 10×+; the post-handler arm still exists as a
-          // belt-and-suspenders catch for handlers that don't emit
-          // `cost.recorded`).
+          // in-flight LLM message rather than the turn's full spend.
+          // Fires once per dispatch — the halt / pause flags
+          // short-circuit subsequent events. Both stop AND pause
+          // policies abort mid-handler; the post-handler arm still
+          // exists as a belt-and-suspenders catch for handlers that
+          // don't emit `cost.recorded`.
           if (reactiveBudgetHaltDetail === undefined && reactiveBudgetPauseBreach === undefined) {
             const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
             const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };

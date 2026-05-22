@@ -1,8 +1,8 @@
 // handler-bridge — run a PiLlmBackend inside a HandlerContext.
 //
-// This is the integration point that turns the DB-backed rearchitecture
-// into a real LLM-driven orchestrator. Given a ctx + a parsed Node, we
-// build a LlmInput, run the backend, stream `emit` callbacks into
+// This is the integration point that drives an LLM-backed node. Given a
+// ctx + a parsed Node, we build a LlmInput, run the backend, stream
+// `emit` callbacks into
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 

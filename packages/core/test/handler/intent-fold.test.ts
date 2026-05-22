@@ -240,8 +240,7 @@ describe("foldIntents", () => {
 
 // ─── Purity contract ──────────────────────────────────────────────────────────────────────
 //
-// foldIntents is the same reducer for top-level runs and sub-runs (post
-// P2). Locking the purity contract here so the cutover can rely on it.
+// Locking foldIntents's purity contract here so callers can rely on it.
 
 describe("foldIntents — purity contract", () => {
   const ALL_STATUSES: RunStatus[] = [

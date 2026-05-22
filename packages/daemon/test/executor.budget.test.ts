@@ -329,34 +329,32 @@ steps:
   });
 
   test("reactive: cost.recorded mid-handler crosses stop ceiling → abort + halt with partial cost preserved", async () => {
-    // Models the orchestrate-with-sub-agents case: a single parent
-    // turn streams cost.recorded events as sub-agents return. Without
-    // the reactive check, the entire fan-out spends inside one turn
-    // before the post-handler boundary sees the breach (5×+ overshoot
-    // observed on real runs). The reactive gate trips the abort the
-    // first time cumulative spend crosses the ceiling, so overshoot
-    // is bounded by one in-flight LLM message rather than the whole
-    // sub-agent fan-out.
+    // Models a handler that streams several cost.recorded events within
+    // a single turn. Without the reactive check, the whole turn spends
+    // before the post-handler boundary sees the breach (several-fold
+    // overshoot observed on real runs). The reactive gate trips the
+    // abort the first time cumulative spend crosses the ceiling, so
+    // overshoot is bounded by one in-flight LLM message.
     const yaml = `name: t
 budget: 1.0
 budget-policy: stop
 steps:
-  orchestrate: {type: llm, prompt: o}
+  work: {type: llm, prompt: o}
 `;
     const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
       maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "orchestrate", tokens: 0, costUsd: 0 }),
+      handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     let returnedCleanly = false;
-    r.dispatcher.register(r.workflowSha, "orchestrate", {
+    r.dispatcher.register(r.workflowSha, "work", {
       kind: "llm",
       sideEffect: "external",
       maxMs: 1_000,
       handler: async (ctx) => {
-        // Three "sub-agent" cost slices. The third pushes the running
+        // Three cost slices. The third pushes the running
         // total past the ceiling (0.4 + 0.4 + 0.4 = 1.2 ≥ 1.0). The
         // reactive gate must abort BEFORE we get a chance to "complete"
         // the work and return.

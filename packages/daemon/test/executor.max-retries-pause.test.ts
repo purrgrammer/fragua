@@ -47,8 +47,8 @@ async function driveUntilSettled(r: ReturnType<typeof rig>, runId: string): Prom
       await dispatchOnce(r, runId);
       continue;
     }
-    // running / running_children: shouldn't happen in single-threaded
-    // test loop, but break to avoid spinning.
+    // running: shouldn't happen in single-threaded test loop, but
+    // break to avoid spinning.
     return;
   }
   throw new Error(`run ${runId} did not settle within 100 cycles`);
