@@ -82,6 +82,8 @@ return {
   costUsd: 0,                           // total dollars charged
   inputCostUsd?: 0,                     // USD split (pi-ai usage.cost.input / .output); optional for back-compat
   outputCostUsd?: 0,
+  cacheReadCostUsd?: 0,                 // cache-read / cache-write cost split; optional for back-compat
+  cacheWriteCostUsd?: 0,
   inputTokens?: 0,                      // input/output/cache split; reducer defaults missing fields to 0
   outputTokens?: 0,
   cacheReadTokens?: 0,
@@ -127,9 +129,11 @@ return {
   reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded",
   detail?: string,
 };
-// `abort_loop`, `schema_drift`, `aborted_exit`, `occ_exhausted`, and `provider_exhausted`
-// are also valid `fact.run_halted` reasons, but the executor emits those itself
-// (not via a handler return).
+// Additional `fact.run_halted` reasons emitted directly by the executor (not constructible by handlers):
+// `"schema_drift"`, `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`,
+// `"route_not_picked"`, `"route_call_not_isolated"`, `"edge_no_match"`.
+// `"abort_loop"` and `"provider_exhausted"` are executor-only and convert to
+// `fact.run_paused` (not halts) per Stage 3 of recoverable-budget-pause.md.
 ```
 
 When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/fragua-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
@@ -403,7 +407,7 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 
 ## Timeouts
 
-`maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (10s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
+`maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (30s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
 
 `HandlerSpec.maxMs` is typed `number | undefined`. LLM-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node via `max-ms: 0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor skips `AbortSignal.timeout` AND the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. 
 

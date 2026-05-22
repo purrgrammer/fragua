@@ -203,22 +203,18 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
   workflow_path TEXT,                             -- workflow file path at resolution time; diagnostic
   base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
-  branch TEXT,                                    -- preserved on dispose when working-copy delta exists; NULL otherwise
   schedule_id TEXT,                               -- schedule that fired this run; informational, not a FK cascade target
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED,
-  -- Worktree snapshot + inbox projection; added dormant in v15, populated
-  -- by later steps. branch -> final_branch rename lands with the dispose rework.
+  -- Worktree snapshot + inbox projection.
   base_git_ref TEXT,                              -- symbolic-ref --short HEAD of user-cwd at provision; merge/commit target default
   final_git_sha TEXT,                             -- worktree HEAD at last snapshot boundary; NULL pre-terminal
   final_head_ref TEXT,                            -- worktree's HEAD branch at terminal; NULL when detached
   diff_base_sha TEXT,                             -- honest terminal diff base; == base_git_sha unless HEAD relocated
   change_stat TEXT,                               -- JSON {committed, uncommitted}; NULL pre-terminal / clean
   inbox_status TEXT,                              -- pending|acted|discarded; NULL = not an inbox candidate
-  final_commit TEXT,                              -- projection: last commit_run sha
-  merged_into TEXT,                               -- projection: last merge_run target
   accepted_sha TEXT                               -- projection: operator's branch tip after the last accept_run
 ) STRICT;
 
@@ -412,9 +408,6 @@ CREATE TABLE provider_config (
 | `intent.max_retries_adjusted` | `nodeId: string`, `newLimit: number` (>0), `note?: string` | Operator raises a node's `max_retries` cap on a `paused{reason:'max_retries'}` run; folded into `routing.max_retries_override.<nodeId>`. Stage 3 of recoverable-budget-pause.md |
 | `intent.goal_gate_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the failing gate's retarget cap on a `paused{reason:'goal_gate'}` run; folded into `routing.max_goal_gate_retries_override` (takes precedence over the gate's `max_retries`) |
 | `intent.max_loops_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the per-run dispatch ceiling on a `paused{reason:'max_loops'}` run; folded into `routing.max_loops_override` |
-| `intent.branch_run` | `branch: string`, `force?: boolean` | Post-terminal: promote the run's committed history to porcelain `refs/heads/<branch>` at the `refs/fragua/heads/<runId>` sha. Daemon `update-ref`; inbox `pending → acted`. Worktree-free |
-| `intent.commit_run` | `message: string`, `onto?: string` | Post-terminal: `commit-tree` the run's full snapshot tree (incl. uncommitted dirt) onto `onto` (default `base_git_ref`) and advance that branch. Inbox `pending → acted` |
-| `intent.merge_run` | `mode?: 'ff'\|'no-ff'\|'squash'`, `into?: string` | Post-terminal: merge the run's `refs/fragua/heads/<runId>` into `into` (default `base_git_ref`); `ff` is the implicit default. Inbox `pending → acted` |
 | `intent.accept_run` | `sha`, `replayed: number`, `tailStaged: boolean` | Records a completed accept: the request path (server route / CLI) already replayed the run's commits onto the operator's HEAD + staged the tail **synchronously**; this intent carries the result and is folded into `fact.run_accepted`. Inbox `pending → acted` |
 | `intent.discard_run` | `refs: string[]` | Records a completed discard: the request path already deleted `refs/fragua/{snapshots,heads}/<runId>`; this intent carries the deleted refs and is folded into `fact.run_discarded`. Inbox `pending → discarded` (terminal-terminal) |
 
@@ -446,9 +439,6 @@ Post-terminal operator actions run **synchronously in the request path** (the `P
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep requeued. `lastAliveAt` is the dying daemon's last heartbeat — reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs` |
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Accounting truth |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
-| `fact.run_branched` | `branch`, `sha` | Operator post-run primitive (`intent.branch_run`): created `refs/heads/<branch>` at the run's heads-ref sha. Sets `run_state.branch`; inbox `pending → acted`. No longer dispose-emitted (step 6 removed branch-preservation). |
-| `fact.run_committed` | `targetBranch`, `sha`, `message`, `parentSha` | Operator (`intent.commit_run`): committed the run's snapshot tree onto `targetBranch`. Sets `run_state.final_commit`; inbox `pending → acted`. |
-| `fact.run_merged` | `targetBranch`, `mode: 'ff'\|'merge'\|'squash'`, `sha`, `parentShas: string[]` | Operator (`intent.merge_run`): merged the run's heads-ref into `targetBranch`. Sets `run_state.merged_into`; inbox `pending → acted`. |
 | `fact.run_accepted` | `sha`, `replayed: number`, `tailStaged: boolean` | Daemon-folded from `intent.accept_run`: replayed the run's commits onto the operator's current branch and staged the uncommitted tail. Sets `run_state.accepted_sha`; inbox `pending → acted`. |
 | `fact.run_discarded` | `refs: string[]` | Operator (`intent.discard_run`): deleted the run's `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded` (terminal-terminal). |
 
@@ -1195,7 +1185,7 @@ content. `MAX_BLOB_BYTES` is the only honest-bytes constant.
 | `HEARTBEAT_INTERVAL_MS` | 5000 | Supervisor fiber |
 | `SUPERVISOR_TICK_MS` | 50 | Supervisor fiber |
 | `SSE_POLL_MS` | 100 | Web SSE handler |
-| `LEAK_GRACE_MS` | 10000 | Hard timeout grace |
+| `LEAK_GRACE_MS` | 30000 | Hard timeout grace |
 | `ABORT_LOOP_CEILING` | 5 | Executor → `fact.run_paused{reason:"abort_loop"}` (operator-resumable per Stage 3) |
 | `MAX_LOOPS` | 1000 (configurable via `ExecutorOpts.maxLoops`; per-run override via `intent.max_loops_adjusted`) | Executor → `fact.run_paused{reason:"max_loops"}` (operator-resumable per Stage 3) |
 

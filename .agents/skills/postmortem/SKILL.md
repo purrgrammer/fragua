@@ -184,11 +184,8 @@ Authoritative source: `FactEvent` union in `packages/types/src/fragua-events.ts`
 | `fact.run_cancelled` | `intentSeq` | Operator cancelled. `intentSeq` resolves the originating `intent.cancel_requested`. |
 | `fact.run_quarantined` | `reason: QuarantineReason`, `orphanedIntents?: seq[]` | Awaiting `intent.unquarantine`. |
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep recovered a run that was `running` when the prior daemon died. The reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs`. |
-| `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without honoring `ctx.signal`. Handler bug per `docs/handler-contract.md` §4 rule 1. Per-process leak counter advances; daemon shuts down at `LEAK_LIMIT`. |
+| `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Handler exceeded `maxMs + LEAK_GRACE_MS` (30s) without honoring `ctx.signal`. Handler bug per `docs/handler-contract.md` §4 rule 1. Per-process leak counter advances; daemon shuts down at `LEAK_LIMIT`. |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Another daemon reclaimed a stale lock. Expect `fact.run_requeued_after_crash` rows on in-flight runs nearby. |
-| `fact.run_branched` | `branch`, `sha` | Operator post-run primitive (`intent.branch_run`): created `refs/heads/<branch>` at the run's heads-ref sha. Sets `run_state.branch`; inbox `pending → acted`. No longer dispose-emitted (worktrees.md step 6). Now in `FEED_EVENT_KINDS` — appears in the global feed (Home + `/inbox`). |
-| `fact.run_committed` | `targetBranch`, `sha`, `message`, `parentSha` | Operator (`intent.commit_run`): committed the run's snapshot tree onto `targetBranch`. Sets `final_commit`; inbox `pending → acted`. Now in `FEED_EVENT_KINDS`. |
-| `fact.run_merged` | `targetBranch`, `mode`, `sha`, `parentShas` | Operator (`intent.merge_run`): merged the run's heads-ref into `targetBranch`. Sets `merged_into`; inbox `pending → acted`. Now in `FEED_EVENT_KINDS`. |
 | `fact.run_discarded` | `refs[]` | Operator (`intent.discard_run`): deleted the run's `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded`. Now in `FEED_EVENT_KINDS`. |
 | `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (worktrees.md). Once per worktree-backed run, after the terminal status fact; projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event (no fact). |
 
@@ -342,7 +339,7 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.run_paused` | `reason: "max_loops"` | Per-run dispatch ceiling exceeded. Status: `paused`. `intent.max_loops_adjusted{newLimit}` raises the cap (writes `routing.max_loops_override`); naked resume re-enters with a fresh JS-local counter at the same effective cap. |
 | `fact.run_paused` | `reason: "abort_loop"` | `consecutiveAborts >= abortLoopCeiling` (default 5). Status: `paused`. No per-run knob — ceiling is daemon config. Naked `intent.resume` only. Usually a real bug; resume just to confirm or after fixing the underlying cause. |
 | `fact.run_paused` | `reason: "provider_exhausted"` | Provider auto-retry chain capped (5 attempts or 5 cumulative minutes). Status: `paused`. No per-run knob — chain config is daemon-wide. Naked `intent.resume` starts a fresh chain (operator may have fixed the underlying transport issue). |
-| `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without respecting `ctx.signal`. Handler bug. |
+| `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (30s) without respecting `ctx.signal`. Handler bug. |
 | Status `running`, no recent fact | — | Handler may be wedged. If `node_started_at` older than the node's `maxMs`, watchdog should have fired. If not, check daemon heartbeat (§1). |
 | Status `paused_auto`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Daemon heartbeat (§1). |
 

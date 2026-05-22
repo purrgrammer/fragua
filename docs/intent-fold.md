@@ -26,6 +26,11 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 | `intent.priority_adjusted` | fold: any (accepted unconditionally — the fold only runs while the executor dispatches a turn, so terminal runs never reach it; no explicit per-state filter) | merge `newPriority` into `routingDelta` (last-wins) | n/a |
 | `intent.budget_adjusted` | fold: any (accepted unconditionally) | merge `routing.budget_override.<scope>.<metric> = newLimit` into `routingDelta`; the next turn-boundary budget check reads this before the graph/node attr | malformed payload (bad `scope`/`metric` or `newLimit ≤ 0`) → drop `wrong_state` |
 | `intent.unquarantine` | `quarantined` | handled outside the fold by `wakeUnquarantine` (`packages/daemon/src/wake-pending.ts`); resolves `cancel` / `retry` / `treat_as_done` (see *Pending-intent driver* below) | non-quarantined → drop `wrong_state` |
+| `intent.resume` | `paused` / `paused_auto` / `paused_human` / `quarantined` | handled outside the fold by `wakePending`; emits `fact.run_resumed` and re-queues the run — no-op if it reaches the fold | terminal → no fold turn |
+| `intent.max_retries_adjusted` | fold: any (accepted unconditionally) | merge `routing.max_retries_override.<nodeId> = newLimit` into `routingDelta`; the next retry-policy check reads this before the node attr | malformed payload (bad `nodeId` or `newLimit ≤ 0`) → drop `wrong_state` |
+| `intent.goal_gate_adjusted` | fold: any (accepted unconditionally) | merge `routing.max_goal_gate_retries_override = newLimit` into `routingDelta` | malformed payload (`newLimit ≤ 0`) → drop `wrong_state` |
+| `intent.max_loops_adjusted` | fold: any (accepted unconditionally) | merge `routing.max_loops_override = newLimit` into `routingDelta` | malformed payload (`newLimit ≤ 0`) → drop `wrong_state` |
+| `intent.accept_run` / `intent.discard_run` | terminal + `inbox_status='pending'` | handled outside the fold by `processOperatorActions` sweep — no-op if it reaches the fold | n/a |
 
 ---
 
@@ -35,8 +40,8 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 |---|---|---|
 | **R1** | any `intent.cancel_requested` in the batch | terminal cancel; every other intent in the batch (and any later cancels) → `dropped` with `superseded_by_cancel` (or `later_input_won` for the later cancels) |
 | **R2** | multiple cancels | first-seq cancel wins for the recorded `reason`; the others drop with `later_input_won` |
-| **R3** | pause + (steer OR human) on a dispatching run | **specific wins, pause defers.** Steer and/or human apply to this turn's handler dispatch; on success the executor commits `fact.run_paused_human` instead of selecting the next edge. The pause IS effected (just on a different boundary), so it does NOT appear in `dropped` |
-| **R4** | pause-only (no specific intent) on a dispatching run | `shouldPause` this turn — executor commits `fact.run_paused_human` immediately, skips dispatch |
+| **R3** | pause + (steer OR human) on a dispatching run | **specific wins, pause defers.** Steer and/or human apply to this turn's handler dispatch; on success the executor commits `fact.run_paused{reason:"operator"}` instead of selecting the next edge. The pause IS effected (just on a different boundary), so it does NOT appear in `dropped` |
+| **R4** | pause-only (no specific intent) on a dispatching run | `shouldPause` this turn — executor commits `fact.run_paused{reason:"operator"}` immediately, skips dispatch |
 | **R5** | N steers (deduplicated within batch) | concat in seq-ascending order with `\n` separators; empty-text steers are a benign no-op (applied, not dropped) |
 | **R6** | multiple `human_input` | last-seq's `input` wins; earlier inputs drop with `later_input_won` |
 | **R7** | multiple `priority_adjusted` | last-seq's `newPriority` wins; earlier drop with `later_input_won` |
