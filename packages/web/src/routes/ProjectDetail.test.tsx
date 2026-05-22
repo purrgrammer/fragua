@@ -1,21 +1,24 @@
-// Tab strip on /projects/:cwdEnc — proves Workflows is a tab (not a
+// Tab strip on /projects/:projectId — proves Workflows is a tab (not a
 // sibling section), the URL ?tab= param round-trips, and project
-// workflow links carry the project cwd.
+// workflow links carry the project cwd (LOCATION, resolved from the
+// project identity).
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router-dom";
 import { useDom } from "../../test/setup.ts";
-import { encodeProjectId } from "../lib/projectId.ts";
 import { ProjectDetail } from "./ProjectDetail.tsx";
 
 const TEST_CWD = "/projects/alpha";
-const TEST_ENC = encodeProjectId(TEST_CWD);
+const TEST_PROJECT_ID = "019e4f5b-0000-7000-8000-0000000000aa";
 
 interface InstallOpts {
   workflows?: Array<{ name: string; label?: string; path: string; sha: string; cwd?: string }>;
   runs?: unknown[];
+  /** Override the resolved project row; defaults to a checked-out project
+   *  at TEST_CWD. Pass `null` to simulate a not-checked-out project. */
+  projectCwd?: string | null;
 }
 
 interface UrlCapture {
@@ -27,6 +30,7 @@ interface UrlCapture {
 function installFetch(opts: InstallOpts = {}, capture?: UrlCapture): void {
   const workflows = opts.workflows ?? [];
   const runs = opts.runs ?? [];
+  const projectCwd = opts.projectCwd === undefined ? TEST_CWD : opts.projectCwd;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url.includes("/projects/") && url.includes("/tree")) {
@@ -34,6 +38,23 @@ function installFetch(opts: InstallOpts = {}, capture?: UrlCapture): void {
     }
     if (url.includes("/projects/") && url.includes("/blob")) {
       return new Response("not found", { status: 404 });
+    }
+    // Bare project listing — used to resolve identity → name + local cwd.
+    if (/\/projects(\?|$)/.test(url)) {
+      const rows = [
+        {
+          projectId: TEST_PROJECT_ID,
+          name: "alpha",
+          cwd: projectCwd,
+          cwdHint: projectCwd,
+          lastUpdatedAt: 1,
+          runCount: runs.length,
+        },
+      ];
+      return new Response(JSON.stringify(rows), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     if (url.includes("/skills")) {
       if (capture) capture.skills = url;
@@ -70,7 +91,7 @@ function renderAt(initialEntry: string, probe?: { current: URLSearchParams | nul
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route
-            path="/projects/:cwdEnc"
+            path="/projects/:projectId"
             element={
               <>
                 <ProjectDetail />
@@ -90,7 +111,7 @@ describe("ProjectDetail · tabs", () => {
 
   test("renders Runs, Workflows, Files, Skills triggers in order", async () => {
     installFetch();
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}`);
     const tabs = await waitFor(() => within(container).getByTestId("project-tabs"));
     const triggers = within(tabs).getAllByRole("tab");
     expect(triggers.map((t) => t.textContent?.trim())).toEqual(["Runs", "Workflows", "Files", "Skills"]);
@@ -100,7 +121,7 @@ describe("ProjectDetail · tabs", () => {
     installFetch({
       workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
-    const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}?tab=workflows`);
     const wfSection = await waitFor(() => within(container).getByTestId("project-workflows-section"));
     expect(within(wfSection).getByTestId("project-workflows-table")).not.toBeNull();
     expect(within(container).queryByTestId("project-runs-table")).toBeNull();
@@ -111,7 +132,7 @@ describe("ProjectDetail · tabs", () => {
       workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
     const probe: { current: URLSearchParams | null } = { current: null };
-    const { container } = renderAt(`/projects/${TEST_ENC}?tab=runs`, probe);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}?tab=runs`, probe);
     const trigger = await waitFor(() => within(container).getByTestId("project-tab-workflows"));
     // Radix Tabs activates on pointerDown + click; happy-dom needs both fired
     // explicitly because synthetic `click` alone doesn't dispatch pointer events.
@@ -127,7 +148,7 @@ describe("ProjectDetail · tabs", () => {
     installFetch({
       workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}`);
     // Default tab is `runs` (no ?tab= param). The composer must live inside the
     // active runs panel, not the workflows section.
     const tabs = await waitFor(() => within(container).getByTestId("project-tabs"));
@@ -145,15 +166,15 @@ describe("ProjectDetail · tabs", () => {
     installFetch({
       workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
-    const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}?tab=workflows`);
     const wfSection = await waitFor(() => within(container).getByTestId("project-workflows-section"));
     expect(within(wfSection).queryByTestId("run-composer-form")).toBeNull();
   });
 
-  test("Skills tab requests project-only scope", async () => {
+  test("Skills tab requests project-only scope with the resolved local cwd", async () => {
     const capture: UrlCapture = {};
     installFetch({}, capture);
-    const { container } = renderAt(`/projects/${TEST_ENC}?tab=skills`, undefined);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}?tab=skills`, undefined);
     await waitFor(() => within(container).getByTestId("project-skills-section"));
     await waitFor(() => {
       expect(capture.skills).toBeDefined();
@@ -163,11 +184,18 @@ describe("ProjectDetail · tabs", () => {
     expect(url).toContain("scope=project_only");
   });
 
+  test("degrades to a not-checked-out state when the project has no local cwd", async () => {
+    installFetch({ projectCwd: null });
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}`);
+    await waitFor(() => within(container).getByTestId("project-composer-not-checked-out"));
+    expect(within(container).queryByTestId("run-composer-form")).toBeNull();
+  });
+
   test("links project workflows to /workflows/:name with the project cwd", async () => {
     installFetch({
       workflows: [{ name: "ci-gate", path: ".fragua/workflows/ci-gate.yaml", sha: "deadbeefcafe", cwd: TEST_CWD }],
     });
-    const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}?tab=workflows`);
     const link = (await waitFor(() =>
       within(container).getByTestId("project-workflow-link-ci-gate"),
     )) as HTMLAnchorElement;

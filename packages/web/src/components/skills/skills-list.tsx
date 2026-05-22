@@ -1,5 +1,5 @@
 // Shared skills table — used by /skills (global) and
-// /projects/:cwdEnc?tab=skills (per-project). The `projectCwd` prop
+// /projects/:projectId?tab=skills (per-project). The `projectCwd` prop
 // scopes the query; when set, the Project column is dropped because
 // every row anchors to the same cwd. `projectOnly` further tightens
 // the request to drop user-scope rows entirely — the project detail

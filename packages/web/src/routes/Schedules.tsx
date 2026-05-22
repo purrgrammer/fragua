@@ -8,7 +8,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock } from "lucide-react";
 import { useEffect } from "react";
-import { ProjectLink } from "../components/ProjectLink.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -134,7 +133,9 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
         />
       </TableCell>
       <TableCell className="max-w-0 truncate" title={row.cwd}>
-        <ProjectLink cwd={row.cwd} variant="mono" />
+        <code className="font-mono text-xs text-sw-muted" data-testid={`schedule-cwd-${row.id}`}>
+          {basename(row.cwd)}
+        </code>
       </TableCell>
       <TableCell>
         <code className="font-mono text-xs">{row.intervalText}</code>

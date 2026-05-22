@@ -32,7 +32,7 @@ export function createRoutes(): RouteObject[] {
         { path: "workflows", element: <Workflows /> },
         { path: "workflows/:name", element: <WorkflowDetail /> },
         { path: "projects", element: <Projects /> },
-        { path: "projects/:cwdEnc", element: <ProjectDetail /> },
+        { path: "projects/:projectId", element: <ProjectDetail /> },
         { path: "providers", element: <Providers /> },
         { path: "providers/:name", element: <ProviderDetail /> },
         { path: "skills", element: <Skills /> },

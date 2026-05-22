@@ -300,11 +300,17 @@ const DetailHeader = memo(function DetailHeader({
             <WorkflowLink name={detail.workflow} label={detail.workflowName} variant="text" title={detail.workflow} />
           </>
         )}
-        {detail?.cwd && (
+        {detail?.projectId && (
           <>
             <span className="text-xs text-sw-muted/40">·</span>
-            <ProjectLink cwd={detail.cwd} variant="text" title={detail.cwd} data-testid="detail-project-link">
-              {projectBasename(detail.cwd)}
+            <ProjectLink
+              projectId={detail.projectId}
+              name={detail.projectName}
+              variant="text"
+              title={detail.cwd ?? detail.projectName}
+              data-testid="detail-project-link"
+            >
+              {detail.projectName ?? (detail.cwd ? projectBasename(detail.cwd) : detail.projectId)}
             </ProjectLink>
           </>
         )}

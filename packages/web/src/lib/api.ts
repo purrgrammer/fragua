@@ -75,8 +75,14 @@ export interface RunSummary {
   durationMs?: number;
   title?: string;
   input?: string;
-  /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
-   * Absent for ephemeral runs (CI primitives, tests). */
+  /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
+   * The wire key for `?project_id=` and `/projects/:id`. Optional only to
+   * tolerate older/ephemeral payloads — present on every daemon run. */
+  projectId?: string;
+  /** Project display label captured at enqueue. */
+  projectName?: string;
+  /** Local checkout the run was enqueued from. Mirrors `run_state.cwd`.
+   * A per-machine LOCATION hint, not identity. Absent for ephemeral runs. */
   cwd?: string;
   /** Worktree inbox status. `pending` = a terminal run with recoverable
    * work awaiting an operator primitive. Absent on non-worktree runs. */
@@ -158,8 +164,14 @@ export interface RunDetail {
   /** Declared route names from the paused human node's `routes=` attr;
    *  one button rendered per route. */
   hitlOptions?: string[];
-  /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
-   * Absent for ephemeral runs (CI primitives, tests). */
+  /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
+   * The wire key for `?project_id=` and `/projects/:id`. Optional only to
+   * tolerate older/ephemeral payloads — present on every daemon run. */
+  projectId?: string;
+  /** Project display label captured at enqueue. */
+  projectName?: string;
+  /** Local checkout the run was enqueued from. Mirrors `run_state.cwd`.
+   * A per-machine LOCATION hint, not identity. Absent for ephemeral runs. */
   cwd?: string;
   /** Absolute path to the still-mounted worktree under
    * `<cwd>/.fragua/worktrees/<runId>`. Absent once the worktree was
@@ -458,7 +470,10 @@ export interface ListRunsFilter {
   order?: "newest" | "oldest";
   /** SQL `LIMIT`. Server clamps to a sane max. */
   limit?: number;
-  /** Narrow to a single project root (exact `run_state.cwd` match). */
+  /** Narrow to a project by IDENTITY (`run_state.project_id`). Portable
+   *  across checkouts; folds clones/imports of the same repo. */
+  projectId?: string;
+  /** Narrow to a single project LOCATION (exact `run_state.cwd` match). */
   cwd?: string;
   /** Filter by worktree inbox status.
    * `"pending"` surfaces terminal runs awaiting an operator primitive. */
@@ -473,6 +488,7 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
   }
   if (filter?.order && filter.order !== "newest") params.set("order", filter.order);
   if (filter?.limit !== undefined) params.set("limit", String(filter.limit));
+  if (filter?.projectId !== undefined && filter.projectId.length > 0) params.set("project_id", filter.projectId);
   if (filter?.cwd !== undefined && filter.cwd.length > 0) params.set("cwd", filter.cwd);
   if (filter?.inbox !== undefined) params.set("inbox", filter.inbox);
   const qs = params.toString();
@@ -480,12 +496,15 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
   return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
 }
 
-/** Project = distinct `run_state.cwd`. `name` is `basename(cwd)` (server
- * computes it so paths with mixed separators don't drift across clients).
- * The wire identity is `cwd`. */
+/** Project = distinct `run_state.project_id` (IDENTITY). `projectId` is the
+ * stable, URL-safe wire identity (UUIDv7) that folds clones/imports of the
+ * same repo. `cwd`/`cwdHint` is a per-machine LOCATION hint (the most-recent
+ * local checkout); either is null for an imported-only project. */
 export interface ProjectSummary {
-  cwd: string;
+  projectId: string;
   name: string;
+  cwd: string | null;
+  cwdHint: string | null;
   lastUpdatedAt: number;
   runCount: number;
 }
@@ -788,7 +807,12 @@ export async function enqueueJob(input: {
  * for the CLI and is not exposed here.
  */
 export interface CreateRunInput {
+  /** Local checkout the run targets (LOCATION). Always required — the
+   *  server attaches the project IDENTITY from it. */
   cwd: string;
+  /** Optional project IDENTITY when the caller already knows it (e.g. the
+   *  project page). The server still derives identity from `cwd` when absent. */
+  projectId?: string;
   workflowName: string;
   workflowScope?: "global" | "local" | "path" | "ephemeral";
   input?: string;
@@ -804,6 +828,7 @@ export async function createRun(args: CreateRunInput): Promise<{ runId: string }
     cwd: args.cwd,
     workflowName: args.workflowName,
   };
+  if (args.projectId !== undefined) body["projectId"] = args.projectId;
   if (args.workflowScope !== undefined) body["workflowScope"] = args.workflowScope;
   if (args.input !== undefined) body["input"] = args.input;
   if (args.inputs !== undefined) body["inputs"] = args.inputs;
@@ -962,9 +987,11 @@ export interface AnalyticsRequest {
   tzOffsetMinutes: number;
   compareFromMs?: number | null;
   compareToMs?: number | null;
-  /** Optional project filter — exact `run_state.cwd` match. Absent =
-   *  every project. The query-key includes this field so toggling the
+  /** Optional project filter by IDENTITY (`run_state.project_id`). Folds
+   *  clones/imports. The query-key includes this field so toggling the
    *  project selector re-fetches without a stale-cache flash. */
+  projectId?: string;
+  /** Optional project filter by LOCATION — exact `run_state.cwd` match. */
   cwd?: string;
   /** Optional workflow filter — predicate `(workflow_scope, workflow_name)`
    *  so all shas of one workflow identity aggregate together. Local
@@ -986,6 +1013,7 @@ export async function getAnalytics(req: AnalyticsRequest): Promise<AnalyticsPayl
     params.set("compareFrom", String(req.compareFromMs));
     params.set("compareTo", String(req.compareToMs));
   }
+  if (req.projectId) params.set("project_id", req.projectId);
   if (req.cwd) params.set("cwd", req.cwd);
   if (req.workflowScope && req.workflowName) {
     params.set("workflowScope", req.workflowScope);
@@ -1000,8 +1028,10 @@ export interface AnalyticsRunsRequest {
   workflowSha?: string | undefined;
   haltCategory?: string | undefined;
   model?: string | undefined;
-  /** Same shape + semantics as `AnalyticsRequest.cwd`; lets the
-   *  drill-down drawer stay scoped to the project the user picked. */
+  /** Same shape + semantics as `AnalyticsRequest.projectId`; lets the
+   *  drill-down drawer stay scoped to the project IDENTITY the user picked. */
+  projectId?: string | undefined;
+  /** Same shape + semantics as `AnalyticsRequest.cwd` (LOCATION). */
   cwd?: string | undefined;
   /** Same shape as `AnalyticsRequest.workflow{Scope,Name}` so the
    *  drawer inherits the workflow filter alongside cwd. */
@@ -1019,6 +1049,7 @@ export async function getAnalyticsRuns(req: AnalyticsRunsRequest): Promise<Analy
   if (req.workflowSha) params.set("workflow", req.workflowSha);
   if (req.haltCategory) params.set("halt", req.haltCategory);
   if (req.model) params.set("model", req.model);
+  if (req.projectId) params.set("project_id", req.projectId);
   if (req.cwd) params.set("cwd", req.cwd);
   if (req.workflowScope && req.workflowName) {
     params.set("workflowScope", req.workflowScope);
@@ -1204,12 +1235,16 @@ function isRunSummary(v: unknown): v is RunSummary {
     cacheWriteTokens?: unknown;
     durationMs?: unknown;
     cwd?: unknown;
+    projectId?: unknown;
+    projectName?: unknown;
   };
   return (
     typeof o.runId === "string" &&
     typeof o.startedAt === "string" &&
     typeof o.status === "string" &&
     typeof o.eventCount === "number" &&
+    (o.projectId === undefined || typeof o.projectId === "string") &&
+    (o.projectName === undefined || typeof o.projectName === "string") &&
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&
@@ -1237,12 +1272,16 @@ function isRunDetail(v: unknown): v is RunDetail {
     cacheWriteTokens?: unknown;
     durationMs?: unknown;
     cwd?: unknown;
+    projectId?: unknown;
+    projectName?: unknown;
   };
   return (
     typeof o.runId === "string" &&
     typeof o.startedAt === "string" &&
     typeof o.status === "string" &&
     typeof o.lastEventSeq === "number" &&
+    (o.projectId === undefined || typeof o.projectId === "string") &&
+    (o.projectName === undefined || typeof o.projectName === "string") &&
     Array.isArray(o.nodes) &&
     Array.isArray(o.selectedEdges) &&
     (o.workflowSource === undefined || typeof o.workflowSource === "string") &&
@@ -1277,10 +1316,19 @@ function isProjectTreeEntry(v: unknown): v is ProjectTreeEntry {
 
 function isProjectSummary(v: unknown): v is ProjectSummary {
   if (typeof v !== "object" || v === null) return false;
-  const o = v as { cwd?: unknown; name?: unknown; lastUpdatedAt?: unknown; runCount?: unknown };
+  const o = v as {
+    projectId?: unknown;
+    name?: unknown;
+    cwd?: unknown;
+    cwdHint?: unknown;
+    lastUpdatedAt?: unknown;
+    runCount?: unknown;
+  };
   return (
-    typeof o.cwd === "string" &&
+    typeof o.projectId === "string" &&
     typeof o.name === "string" &&
+    (o.cwd === null || typeof o.cwd === "string") &&
+    (o.cwdHint === null || o.cwdHint === undefined || typeof o.cwdHint === "string") &&
     typeof o.lastUpdatedAt === "number" &&
     typeof o.runCount === "number"
   );

@@ -66,10 +66,11 @@ export function Projects(): JSX.Element {
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <TableRow key={row.cwd} data-testid={`project-row-${row.name}`}>
+                <TableRow key={row.projectId} data-testid={`project-row-${row.name}`}>
                   <TableCell className="max-w-0 truncate font-medium" title={row.name}>
                     <ProjectLink
-                      cwd={row.cwd}
+                      projectId={row.projectId}
+                      name={row.name}
                       variant="plain"
                       className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
                       data-testid={`project-link-${row.name}`}
@@ -78,8 +79,11 @@ export function Projects(): JSX.Element {
                     </ProjectLink>
                   </TableCell>
                   <TableCell className="max-w-0">
-                    <code className="block truncate font-mono text-xs text-sw-muted" title={row.cwd}>
-                      {row.cwd}
+                    <code
+                      className="block truncate font-mono text-xs text-sw-muted"
+                      title={row.cwd ?? "Not checked out locally"}
+                    >
+                      {row.cwd ?? "—"}
                     </code>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{row.runCount}</TableCell>

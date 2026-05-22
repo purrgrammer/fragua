@@ -28,9 +28,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { WorkflowInputsForm } from "./WorkflowInputsForm.tsx";
 
 export interface RunComposerProps {
-  /** Project root the run will be enqueued against. Always sent on
-   *  POST /runs, regardless of the workflow source. */
+  /** Local checkout (LOCATION) the run will be enqueued against. Always
+   *  sent on POST /runs, regardless of the workflow source — the server
+   *  attaches the project IDENTITY from it. */
   cwd: string;
+  /** Project IDENTITY, when the caller already knows it. Forwarded to the
+   *  server alongside `cwd`; `cwd` remains required. */
+  projectId?: string;
   /** All workflows the harness knows about (the unfiltered listing).
    *  RunComposer partitions them into project-local + global. */
   workflows: WorkflowSummary[];
@@ -54,7 +58,7 @@ function optionId(scope: Scope, path: string): string {
   return `${scope}:${path}`;
 }
 
-export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
+export function RunComposer({ cwd, projectId, workflows }: RunComposerProps): JSX.Element {
   const qc = useQueryClient();
 
   const { local, global } = useMemo(() => {
@@ -132,6 +136,7 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
       workflowName: w.name,
       workflowScope: opt.scope,
     };
+    if (projectId !== undefined) vars.projectId = projectId;
     if (Object.keys(typedInputs).length > 0) {
       vars.inputs = typedInputs;
     }

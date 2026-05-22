@@ -7,11 +7,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { useDom } from "../../test/setup.ts";
-import { encodeProjectId } from "../lib/projectId.ts";
 import { ProjectDetail } from "./ProjectDetail.tsx";
 
 const TEST_CWD = "/projects/alpha";
-const TEST_ENC = encodeProjectId(TEST_CWD);
+const TEST_PROJECT_ID = "019e4f5b-0000-7000-8000-0000000000bb";
 
 function installFetchWithConfig(opts: { yamlConfig?: string | null }): void {
   const { yamlConfig } = opts;
@@ -28,6 +27,21 @@ function installFetchWithConfig(opts: { yamlConfig?: string | null }): void {
         return new Response("not found", { status: 404 });
       }
       return new Response("not found", { status: 404 });
+    }
+    if (/\/projects(\?|$)/.test(url)) {
+      return new Response(
+        JSON.stringify([
+          {
+            projectId: TEST_PROJECT_ID,
+            name: "alpha",
+            cwd: TEST_CWD,
+            cwdHint: TEST_CWD,
+            lastUpdatedAt: 1,
+            runCount: 0,
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     }
     if (url.includes("/skills")) {
       return new Response(JSON.stringify({ skills: [] }), {
@@ -51,7 +65,7 @@ function renderAt(path: string): ReturnType<typeof render> {
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/projects/:cwdEnc" element={<ProjectDetail />} />
+          <Route path="/projects/:projectId" element={<ProjectDetail />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -66,7 +80,7 @@ describe("ProjectDetail · Config tab", () => {
     installFetchWithConfig({
       yamlConfig: `bootstrap: "bun install --frozen-lockfile"\ndefaults:\n  provider: anthropic\n`,
     });
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}`);
     const section = await waitFor(() => within(container).getByTestId("project-config-section"));
     const bootstrapRow = await waitFor(() => within(section).getByTestId("project-config-bootstrap"));
     expect(bootstrapRow.textContent).toContain("bun install --frozen-lockfile");
@@ -78,13 +92,13 @@ describe("ProjectDetail · Config tab", () => {
     installFetchWithConfig({
       yamlConfig: `key: [unclosed bracket`,
     });
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}`);
     await waitFor(() => within(container).getByTestId("project-config-unparsable"));
   });
 
   test("shows empty state when the config file is absent", async () => {
     installFetchWithConfig({ yamlConfig: null });
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}`);
     await waitFor(() => within(container).getByTestId("project-config-empty"));
   });
 
@@ -92,7 +106,7 @@ describe("ProjectDetail · Config tab", () => {
     installFetchWithConfig({
       yamlConfig: `auto-title: false\nmax-loops: 7\nbootstrap-timeout-ms: 30000\n`,
     });
-    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    const { container } = renderAt(`/projects/${TEST_PROJECT_ID}`);
     const autoTitleRow = await waitFor(() => within(container).getByTestId("project-config-auto-title"));
     expect(autoTitleRow.textContent).toContain("Off");
     const maxLoopsRow = await waitFor(() => within(container).getByTestId("project-config-max-loops"));

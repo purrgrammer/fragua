@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { useDom } from "../../test/setup.ts";
-import { encodeProjectId } from "../lib/projectId.ts";
 import { Schedules } from "./Schedules.tsx";
 
 const successSpy = mock(() => "t1");
@@ -178,7 +177,7 @@ describe("Schedules", () => {
     expect(deletes.length).toBe(0);
   });
 
-  test("renders the workflow name as a link to /workflows/:ref?cwd=… and the project basename as a link to /projects/:cwdEnc", async () => {
+  test("renders the workflow name as a link to /workflows/:ref?cwd=… and the project basename as plain text (a schedule carries only a LOCATION cwd, not a project identity)", async () => {
     const sched = makeSchedule({ id: "sch_links", workflowRef: "ci-gate", cwd: "/Users/dev/repo" });
     installFetch({ schedules: [sched] });
 
@@ -193,9 +192,11 @@ describe("Schedules", () => {
     expect(wfHref).toContain("/workflows/ci-gate");
     expect(wfHref).toContain("?cwd=");
 
-    const projHref = hrefs.find((h) => h.startsWith("/projects/"));
-    expect(projHref).toBeTruthy();
-    expect(projHref).toBe(`/projects/${encodeProjectId("/Users/dev/repo")}`);
+    // No project link — a schedule has no project_id, so the cwd renders
+    // as a plain mono label (basename), not a /projects/ anchor.
+    expect(hrefs.some((h) => h.startsWith("/projects/"))).toBe(false);
+    const cwdCell = within(row).getByTestId("schedule-cwd-sch_links");
+    expect(cwdCell.textContent).toBe("repo");
   });
 
   // ── Toast feedback ────────────────────────────────────────────────

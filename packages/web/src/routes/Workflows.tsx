@@ -14,7 +14,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { FileCode2 } from "lucide-react";
 import { useEffect } from "react";
-import { ProjectLink } from "../components/ProjectLink.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import { WorkflowLink } from "../components/WorkflowLink.tsx";
@@ -87,13 +86,9 @@ export function Workflows(): JSX.Element {
                       </WorkflowLink>
                     </TableCell>
                     <TableCell className="max-w-0 truncate" title={sourceTitle}>
-                      {row.cwd ? (
-                        <ProjectLink cwd={row.cwd} variant="mono" data-testid={`workflow-source-link-${row.name}`}>
-                          {sourceLabel}
-                        </ProjectLink>
-                      ) : (
-                        <code className="font-mono text-xs text-sw-muted">{sourceLabel}</code>
-                      )}
+                      <code className="font-mono text-xs text-sw-muted" data-testid={`workflow-source-${row.name}`}>
+                        {sourceLabel}
+                      </code>
                     </TableCell>
                     <TableCell className="max-w-0">
                       <code className="block truncate font-mono text-xs text-sw-muted" title={row.path}>

@@ -20,6 +20,7 @@ function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null 
   if (filter.status?.length) out.status = [...filter.status].sort();
   if (filter.order && filter.order !== "newest") out.order = filter.order;
   if (filter.limit !== undefined) out.limit = filter.limit;
+  if (filter.projectId && filter.projectId.length > 0) out.projectId = filter.projectId;
   if (filter.cwd && filter.cwd.length > 0) out.cwd = filter.cwd;
   if (filter.inbox !== undefined) out.inbox = filter.inbox;
   return Object.keys(out).length === 0 ? null : out;
@@ -188,10 +189,13 @@ export const queries = {
         // SSE frames, which is what shifts a project's lastUpdatedAt /
         // runCount. Same SSE-driven freshness as the runs list.
       }),
+    // `id` is the project IDENTITY (`project_id`); the server resolves it
+    // to a local checkout. A known-but-not-checked-out project 404s.
     tree: (id: string) =>
       queryOptions({
         queryKey: [...queries.projects.all(), id, "tree"] as const,
         queryFn: () => api.getProjectTree(id),
+        enabled: id.length > 0,
         staleTime: 30_000,
       }),
     blob: (id: string, path: string) =>

@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
-import { encodeProjectId } from "../lib/projectId.ts";
 
 export interface ProjectLinkProps {
-  cwd: string;
+  /** Project IDENTITY (`project_id`) — the URL-safe wire identity. */
+  projectId: string;
+  /** Display label. Defaults to the project id when no `name`/children given. */
+  name?: string;
   variant?: "plain" | "text" | "mono";
   className?: string;
   "data-testid"?: string;
@@ -11,15 +13,16 @@ export interface ProjectLinkProps {
 }
 
 export function ProjectLink({
-  cwd,
+  projectId,
+  name,
   variant = "plain",
   className,
   "data-testid": testId,
   title,
   children,
 }: ProjectLinkProps): JSX.Element {
-  const to = `/projects/${encodeProjectId(cwd)}`;
-  const content = children ?? basename(cwd);
+  const to = `/projects/${projectId}`;
+  const content = children ?? name ?? projectId;
 
   const variantClass =
     variant === "text"
@@ -38,10 +41,4 @@ export function ProjectLink({
       {content}
     </Link>
   );
-}
-
-function basename(p: string): string {
-  const trimmed = p.replace(/[/\\]+$/, "");
-  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }

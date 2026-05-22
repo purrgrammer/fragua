@@ -1,18 +1,18 @@
-// /projects/:cwdEnc — runs + workflows filtered to one project root.
+// /projects/:projectId — runs + workflows for one project IDENTITY.
 //
-// `cwdEnc` is the base64url encoding of the absolute path (see
-// `lib/projectId.ts`) so paths with `/` survive as a single segment.
-// Decoded value is the wire identity sent back to `GET /runs?cwd=`; the
-// server does an exact match against `run_state.cwd`. The workflows
-// section reuses the global `/workflows` listing and filters
-// client-side on `w.cwd === cwd` — the multi-source reader already tags
-// each row with its owning project, so no per-project endpoint is
-// needed.
+// `projectId` is the literal `run_state.project_id` (URL-safe UUIDv7), the
+// wire identity sent to `GET /runs?project_id=` and `GET /projects/:id/{tree,blob}`.
+// The server resolves it to a local checkout (LOCATION) for the file views;
+// a known-but-not-checked-out project returns 404 and we degrade to an empty
+// state. The local `cwd` (resolved from the `/projects` listing) drives the
+// LOCATION-keyed surfaces — RunComposer, the workflows filter (`w.cwd === cwd`),
+// and project-only skills — since those are tied to the on-disk checkout, not
+// the portable identity.
 
 import { useQuery } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Play } from "lucide-react";
 import { useEffect, useMemo } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import YAML from "yaml";
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { FileTree } from "../components/ai-elements/file-tree.tsx";
@@ -27,7 +27,6 @@ import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import { ApiError } from "../lib/api.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
-import { decodeProjectId } from "../lib/projectId.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { formatDuration } from "../lib/time.ts";
@@ -35,20 +34,30 @@ import { formatDuration } from "../lib/time.ts";
 const CONFIG_PATH_YAML = ".fragua/config.yaml";
 
 export function ProjectDetail(): JSX.Element {
-  const { cwdEnc = "" } = useParams();
-  const cwd = useMemo(() => decodeProjectId(cwdEnc), [cwdEnc]);
+  const { projectId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedPath = searchParams.get("path") ?? "";
   const rawTab = searchParams.get("tab");
   const tab: "runs" | "workflows" | "files" | "skills" =
     rawTab === "workflows" || rawTab === "files" || rawTab === "skills" ? rawTab : "runs";
 
-  const filter = useMemo(() => (cwd ? { cwd } : undefined), [cwd]);
-  const { data: rows, isPending, isError, error } = useQuery({ ...queries.runs.list(filter), enabled: cwd !== null });
+  // Resolve the IDENTITY to its display name + local checkout (LOCATION).
+  // `cwd` is null for a known-but-not-checked-out project here.
+  const { data: projects } = useQuery(queries.projects.list());
+  const project = useMemo(() => projects?.find((p) => p.projectId === projectId), [projects, projectId]);
+  const cwd = project?.cwd ?? null;
+
+  const filter = useMemo(() => (projectId ? { projectId } : undefined), [projectId]);
+  const {
+    data: rows,
+    isPending,
+    isError,
+    error,
+  } = useQuery({ ...queries.runs.list(filter), enabled: projectId.length > 0 });
 
   const { data: allWorkflows, error: workflowsError } = useQuery({
     ...queries.workflows.list(),
-    enabled: cwd !== null,
+    enabled: projectId.length > 0,
   });
   const projectWorkflows = useMemo(
     () => (cwd && allWorkflows ? allWorkflows.filter((w) => w.cwd === cwd) : []),
@@ -56,8 +65,8 @@ export function ProjectDetail(): JSX.Element {
   );
 
   const { data: tree, error: treeError } = useQuery({
-    ...queries.projects.tree(cwdEnc),
-    enabled: cwd !== null && cwdEnc.length > 0,
+    ...queries.projects.tree(projectId),
+    enabled: projectId.length > 0,
   });
   const treeRoot = useMemo(() => buildTree(tree ?? []), [tree]);
 
@@ -66,7 +75,7 @@ export function ProjectDetail(): JSX.Element {
     isFetching: blobLoading,
     error: blobError,
   } = useQuery({
-    ...queries.projects.blob(cwdEnc, selectedPath),
+    ...queries.projects.blob(projectId, selectedPath),
   });
 
   const {
@@ -74,8 +83,8 @@ export function ProjectDetail(): JSX.Element {
     error: configYamlError,
     isFetching: configYamlLoading,
   } = useQuery({
-    ...queries.projects.blob(cwdEnc, CONFIG_PATH_YAML),
-    enabled: cwd !== null && cwdEnc.length > 0,
+    ...queries.projects.blob(projectId, CONFIG_PATH_YAML),
+    enabled: projectId.length > 0,
     retry: false,
   });
 
@@ -127,25 +136,7 @@ export function ProjectDetail(): JSX.Element {
     setSearchParams(next, { replace: true });
   };
 
-  if (cwd === null) {
-    return (
-      <EmptyState
-        data-testid="project-detail-bad-id"
-        title="Invalid project link"
-        description={
-          <span>
-            Couldn't decode that path.{" "}
-            <Link to="/projects" className="underline">
-              Back to projects
-            </Link>
-            .
-          </span>
-        }
-      />
-    );
-  }
-
-  const name = basename(cwd);
+  const name = project?.name ?? (cwd ? basename(cwd) : projectId);
   const configMissing = resolvedConfig.missing;
 
   return (
@@ -154,8 +145,12 @@ export function ProjectDetail(): JSX.Element {
         <h2 className="font-heading text-base font-semibold" data-testid="project-detail-name">
           {name}
         </h2>
-        <code className="block truncate font-mono text-xs text-sw-muted" title={cwd}>
-          {cwd}
+        <code
+          className="block truncate font-mono text-xs text-sw-muted"
+          title={cwd ?? "Not checked out on this machine"}
+          data-testid="project-detail-cwd"
+        >
+          {cwd ?? "Not checked out on this machine"}
         </code>
       </header>
 
@@ -222,7 +217,16 @@ export function ProjectDetail(): JSX.Element {
 
         <div className="min-w-0 overflow-auto rounded-md border bg-sw-bg">
           <TabsContent value="runs" className="flex w-full min-w-0 flex-col gap-2 p-3">
-            <RunComposer cwd={cwd} workflows={allWorkflows ?? []} />
+            {cwd != null ? (
+              <RunComposer cwd={cwd} projectId={projectId} workflows={allWorkflows ?? []} />
+            ) : (
+              <div
+                className="rounded-sw-card border border-sw-border bg-sw-surface p-3 text-sw-sm text-sw-muted"
+                data-testid="project-composer-not-checked-out"
+              >
+                Not checked out on this machine — enqueue runs from a local clone.
+              </div>
+            )}
             {isPending && (
               <p className="text-sw-muted text-sm" data-testid="project-runs-loading">
                 Loading…
@@ -241,7 +245,7 @@ export function ProjectDetail(): JSX.Element {
                 title="No runs in this project yet"
                 description={
                   <span>
-                    Runs enqueued from <code className="font-mono">{cwd}</code> show up here.
+                    Runs enqueued for <code className="font-mono">{name}</code> show up here.
                   </span>
                 }
               />
@@ -335,7 +339,15 @@ export function ProjectDetail(): JSX.Element {
             className="flex w-full min-w-0 flex-col gap-2 p-3"
             data-testid="project-skills-section"
           >
-            <SkillsList projectCwd={cwd} projectOnly testIdPrefix="project-skills" />
+            {cwd != null ? (
+              <SkillsList projectCwd={cwd} projectOnly testIdPrefix="project-skills" />
+            ) : (
+              <EmptyState
+                data-testid="project-skills-not-checked-out"
+                title="Not checked out on this machine"
+                description="Project-scoped skills resolve against a local checkout, which isn't present here."
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="files" className="flex w-full min-w-0 flex-col gap-2 p-3">

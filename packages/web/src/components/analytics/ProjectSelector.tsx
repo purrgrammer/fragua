@@ -1,8 +1,9 @@
-// Project (cwd) dropdown for /analytics. Sibling to WindowSelector;
-// pinned to the same Select shape so the two controls read as one
-// chrome row. `null` is the user-facing "All projects" sentinel —
-// translated to/from the `__all__` Select value at the boundary so the
-// parent gets a clean `string | null` (cwd or unfiltered).
+// Project dropdown for /analytics. Sibling to WindowSelector; pinned to
+// the same Select shape so the two controls read as one chrome row.
+// `null` is the user-facing "All projects" sentinel — translated to/from
+// the `__all__` Select value at the boundary so the parent gets a clean
+// `string | null` (project_id or unfiltered). The emitted value is the
+// project IDENTITY (`project_id`); labels come from the project `name`.
 
 import { useQuery } from "@tanstack/react-query";
 import { queries } from "@/lib/queries";
@@ -16,13 +17,13 @@ export const ALL_PROJECTS_VALUE = "__all__";
 /** Translate a Radix value back to the parent's `string | null`
  *  contract. Exported for unit testing the translation without driving
  *  the Radix portal in happy-dom (which doesn't render the listbox). */
-export function projectSelectValueToCwd(v: string): string | null {
+export function projectSelectValueToProjectId(v: string): string | null {
   return v === ALL_PROJECTS_VALUE ? null : v;
 }
 
-/** Translate a parent value into the Radix-side string. */
-export function cwdToProjectSelectValue(cwd: string | null): string {
-  return cwd ?? ALL_PROJECTS_VALUE;
+/** Translate a parent value (project_id) into the Radix-side string. */
+export function projectIdToSelectValue(projectId: string | null): string {
+  return projectId ?? ALL_PROJECTS_VALUE;
 }
 
 export interface ProjectSelectorProps {
@@ -35,7 +36,7 @@ export function ProjectSelector({ value, onChange }: ProjectSelectorProps): JSX.
   const projects = data ?? [];
 
   return (
-    <Select value={cwdToProjectSelectValue(value)} onValueChange={(v) => onChange(projectSelectValueToCwd(v))}>
+    <Select value={projectIdToSelectValue(value)} onValueChange={(v) => onChange(projectSelectValueToProjectId(v))}>
       <SelectTrigger className="w-[12rem]" aria-label="Project filter" data-testid="project-selector">
         <SelectValue placeholder="All projects" />
       </SelectTrigger>
@@ -44,7 +45,7 @@ export function ProjectSelector({ value, onChange }: ProjectSelectorProps): JSX.
           All projects
         </SelectItem>
         {projects.map((p) => (
-          <SelectItem key={p.cwd} value={p.cwd} data-testid={`project-${p.cwd}`}>
+          <SelectItem key={p.projectId} value={p.projectId} data-testid={`project-${p.projectId}`}>
             {p.name}
           </SelectItem>
         ))}

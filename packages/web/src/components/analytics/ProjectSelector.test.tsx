@@ -4,14 +4,24 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import { useDom } from "../../../test/setup.ts";
 import {
   ALL_PROJECTS_VALUE,
-  cwdToProjectSelectValue,
   ProjectSelector,
-  projectSelectValueToCwd,
+  projectIdToSelectValue,
+  projectSelectValueToProjectId,
 } from "./ProjectSelector.tsx";
 
-function installProjectsFetch(
-  projects: Array<{ cwd: string; name: string; lastUpdatedAt: number; runCount: number }>,
-): void {
+interface ProjectRow {
+  projectId: string;
+  name: string;
+  cwd: string | null;
+  cwdHint: string | null;
+  lastUpdatedAt: number;
+  runCount: number;
+}
+
+const PID_A = "019e4f5b-0000-7000-8000-00000000000a";
+const PID_B = "019e4f5b-0000-7000-8000-00000000000b";
+
+function installProjectsFetch(projects: ProjectRow[]): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url.includes("/projects")) {
@@ -34,7 +44,9 @@ describe("ProjectSelector", () => {
   afterEach(() => cleanup());
 
   test("renders 'All projects' as the default option and emits null on selecting it", async () => {
-    installProjectsFetch([{ cwd: "/proj/a", name: "alpha", lastUpdatedAt: 1, runCount: 1 }]);
+    installProjectsFetch([
+      { projectId: PID_A, name: "alpha", cwd: "/proj/a", cwdHint: "/proj/a", lastUpdatedAt: 1, runCount: 1 },
+    ]);
     const { container } = renderWithClient(<ProjectSelector value={null} onChange={() => {}} />);
 
     // The trigger is rendered up-front (no data dependency); we check
@@ -50,26 +62,26 @@ describe("ProjectSelector", () => {
     expect(trigger?.getAttribute("role")).toBe("combobox");
 
     // The translation that powers "selecting __all__ emits null":
-    expect(projectSelectValueToCwd(ALL_PROJECTS_VALUE)).toBeNull();
-    expect(cwdToProjectSelectValue(null)).toBe(ALL_PROJECTS_VALUE);
+    expect(projectSelectValueToProjectId(ALL_PROJECTS_VALUE)).toBeNull();
+    expect(projectIdToSelectValue(null)).toBe(ALL_PROJECTS_VALUE);
   });
 
-  test("emits the chosen cwd when a project is selected", async () => {
+  test("emits the chosen project_id when a project is selected", async () => {
     installProjectsFetch([
-      { cwd: "/proj/a", name: "alpha", lastUpdatedAt: 1, runCount: 1 },
-      { cwd: "/proj/b", name: "beta", lastUpdatedAt: 2, runCount: 1 },
+      { projectId: PID_A, name: "alpha", cwd: "/proj/a", cwdHint: "/proj/a", lastUpdatedAt: 1, runCount: 1 },
+      { projectId: PID_B, name: "beta", cwd: "/proj/b", cwdHint: "/proj/b", lastUpdatedAt: 2, runCount: 1 },
     ]);
-    const { container } = renderWithClient(<ProjectSelector value={"/proj/b"} onChange={() => {}} />);
+    const { container } = renderWithClient(<ProjectSelector value={PID_B} onChange={() => {}} />);
     const trigger = await waitFor(() => container.querySelector('[data-testid="project-selector"]'));
     expect(trigger).not.toBeNull();
 
-    // The cwd-side contract: when the user picks a project from the
-    // listbox, Radix calls `onValueChange("/abs/path")` and our
-    // wrapper passes it through unchanged. cwdToProjectSelectValue
+    // The identity-side contract: when the user picks a project from the
+    // listbox, Radix calls `onValueChange("<project_id>")` and our
+    // wrapper passes it through unchanged. projectIdToSelectValue
     // round-trips so a parent re-render with the new value lands on
     // the right Radix selection.
-    expect(projectSelectValueToCwd("/proj/a")).toBe("/proj/a");
-    expect(projectSelectValueToCwd("/proj/b")).toBe("/proj/b");
-    expect(cwdToProjectSelectValue("/proj/b")).toBe("/proj/b");
+    expect(projectSelectValueToProjectId(PID_A)).toBe(PID_A);
+    expect(projectSelectValueToProjectId(PID_B)).toBe(PID_B);
+    expect(projectIdToSelectValue(PID_B)).toBe(PID_B);
   });
 });
