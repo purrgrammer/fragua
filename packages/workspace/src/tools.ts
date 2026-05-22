@@ -43,7 +43,6 @@ import { join } from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import { agentTool } from "./agent.ts";
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -465,10 +464,10 @@ import { abortTool } from "./abort-tool.ts";
 import { skillTool } from "./skill-tool.ts";
 import { webFetchTool } from "./web-fetch.ts";
 
-// `web_fetch` and `agent` are included but `defaultDisabled: true`
-// keeps them out of any node's tool set unless `allowed_tools=` lists
-// them explicitly. Workflows that want public-web reading or sub-agents
-// opt in per node; everything else stays unaffected.
+// `web_fetch` is included but `defaultDisabled: true` keeps it out of
+// any node's tool set unless `allowed_tools=` lists it explicitly.
+// Workflows that want public-web reading opt in per node; everything
+// else stays unaffected.
 //
 // `skill` and `abort` are built-in: included here so they land in every
 // node's tool pool by default, AND force-included by the llm
@@ -483,18 +482,9 @@ export const CORE_TOOLS: AnyTool[] = [
   findTool,
   lsTool,
   webFetchTool,
-  agentTool,
   skillTool,
   abortTool,
 ];
-
-/** Structurally remove the `agent` tool from a pool. The `agent` tool
- *  spawns sub-agents; allowing a sub-agent to reach for `agent` itself
- *  would invite arbitrarily deep nesting. Belt-and-braces with the
- *  spec-time strip in spawnSubagent. */
-export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
-  return tools.filter((t) => t.name !== "agent");
-}
 
 // ─── helpers ───────────────────────────────────────────────────────
 
@@ -511,13 +501,6 @@ export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
 // PiLlmBackend.run.
 //
 // Per-block policy:
-//   - `name === "agent"`     re-execute via the registry. The agent
-//                            tool's deterministic-id resume path
-//                            handles the recursion: the child
-//                            rehydrates from __subagent:<id>,
-//                            detects already-completed, returns its
-//                            summary without burning another LLM
-//                            turn.
 //   - tool.idempotentOnReplay  re-execute. Pure reads (read / grep /
 //                              find / ls): same input, same output.
 //   - everything else        synthesise an error toolResult so the
@@ -601,7 +584,7 @@ export async function sanitiseUnpairedToolCalls(
   const synthesised: AgentMessage[] = [];
   for (const tc of toolCalls) {
     const tool = ctx.toolRegistry.get(tc.name);
-    const canReExecute = tool !== undefined && (tc.name === "agent" || tool.idempotentOnReplay === true);
+    const canReExecute = tool !== undefined && tool.idempotentOnReplay === true;
     if (canReExecute && tool !== undefined) {
       try {
         const out = await tool.execute(tc.arguments, ctx.env, {

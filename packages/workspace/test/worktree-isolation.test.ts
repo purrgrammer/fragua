@@ -22,9 +22,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentTool } from "../src/agent.ts";
 import { bashTool, editFileTool, readFileTool, writeFileTool } from "../src/tools.ts";
-import type { FraguaToolContext, SubagentResult, SubagentSpec } from "../src/types.ts";
 import { WorktreeEnvironment } from "../src/worktree-env.ts";
 
 function gitInitRepo(dir: string): void {
@@ -115,50 +113,5 @@ describe("worktree isolation under same-cwd daemon", () => {
     expect(out.is_error).toBeFalsy();
     expect(out.text).toContain("from-worktree");
     expect(out.text).not.toContain("from-main");
-  });
-
-  test("sub-agent (agent tool) inherits parent env: write inside spawned agent lands in worktree", async () => {
-    // The `agent` tool reads `fraguaContext.spawnSubagent` and hands it
-    // a SubagentSpec. The spawn factory in production threads
-    // `parentCtx.parentEnv` straight into the child llm call;
-    // tests simulate that contract by capturing the env the factory
-    // was given and running a sentinel write against it. The
-    // contract: whatever env this test's `spawnSubagent` receives,
-    // it MUST be the parent's `env` — `agentTool.execute` is called
-    // with `env` as its second argument and the spec must end up
-    // executing tools against that same env reference.
-    let capturedEnv: typeof env | undefined;
-    const fakeSpawn = async (_spec: SubagentSpec): Promise<SubagentResult> => {
-      // Sub-agents in production run their tools against
-      // `parentCtx.parentEnv`. We emulate the same coupling by
-      // writing through the env the parent tool execution carried.
-      capturedEnv = env;
-      const writeOut = await writeFileTool.execute({ path: "subagent-out.txt", content: "from-subagent\n" }, env);
-      expect(writeOut.is_error).toBeFalsy();
-      return {
-        summary: "wrote subagent-out.txt",
-        subagentId: "fake-sub",
-        status: "completed",
-        totalToolCalls: 1,
-      };
-    };
-
-    const ctx: FraguaToolContext = {
-      runId: "iso-test",
-      nodeId: "n1",
-      iteration: 0,
-      http: { fetch: () => Promise.reject(new Error("no http in this test")) } as unknown as FraguaToolContext["http"],
-      emit: () => {},
-      spawnSubagent: fakeSpawn,
-    };
-
-    const out = await agentTool.execute({ prompt: "write a file" }, env, { fraguaContext: ctx, tool_call_id: "tc-1" });
-    expect(out.is_error).toBeFalsy();
-    expect(capturedEnv).toBe(env);
-
-    // The sentinel: sub-agent's write lands in the worktree, not main.
-    expect(existsSync(join(repo, "subagent-out.txt"))).toBe(false);
-    expect(existsSync(join(env.cwd(), "subagent-out.txt"))).toBe(true);
-    expect(readFileSync(join(env.cwd(), "subagent-out.txt"), "utf8")).toBe("from-subagent\n");
   });
 });

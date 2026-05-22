@@ -10,16 +10,12 @@
 //      toolResult appended
 //   3. non-idempotent tool (bash)                → error toolResult
 //      synthesised, execute() never called
-//   4. agent tool                                → re-execute via the
-//      registry (deterministic-id resume path handles recursion).
 
 import { describe, expect, test } from "bun:test";
 import {
   CORE_TOOLS,
   type FraguaToolContext,
   LocalEnvironment,
-  type SubagentResult,
-  type SubagentSpec,
   sanitiseUnpairedToolCalls,
   ToolRegistry,
 } from "@fragua/workspace";
@@ -61,15 +57,14 @@ function freshRegistry(): ToolRegistry {
   return r;
 }
 
-function freshFraguaContext(spawnSubagent?: (spec: SubagentSpec) => Promise<SubagentResult>): FraguaToolContext {
-  const base = {
+function freshFraguaContext(): FraguaToolContext {
+  return {
     runId: "r",
     nodeId: "n",
     iteration: 0,
     http: {} as FraguaToolContext["http"],
     emit: () => {},
-  };
-  return spawnSubagent ? ({ ...base, spawnSubagent } as FraguaToolContext) : (base as FraguaToolContext);
+  } as FraguaToolContext;
 }
 
 describe("sanitiseUnpairedToolCalls", () => {
@@ -280,63 +275,5 @@ describe("sanitiseUnpairedToolCalls", () => {
     const { unpairedToolUseIds, orphanToolResultIds } = findUnpairedToolIds(out);
     expect(orphanToolResultIds).toEqual([]);
     expect(unpairedToolUseIds).toEqual([]);
-  });
-
-  test("agent tool round-trip resolves to a completed child via the deterministic-id resume path", async () => {
-    // The sanitiser re-executes the agent tool through the registry;
-    // its execute() reads tool_call_id from opts and forwards on the
-    // SubagentSpec. The mock spawnSubagent is the deterministic-id
-    // resume entry point in production; here we just verify the
-    // round-trip and that tool_call_id was plumbed end-to-end.
-    let observedSpec: SubagentSpec | undefined;
-    const spawnSubagent = async (spec: SubagentSpec): Promise<SubagentResult> => {
-      observedSpec = spec;
-      return {
-        summary: "child completed",
-        subagentId: "deadbeef0000000000000000deadbeef",
-        status: "completed",
-        totalToolCalls: 0,
-      };
-    };
-
-    const messages: AgentMessage[] = [
-      { role: "user", content: "delegate", timestamp: 0 } as AgentMessage,
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "toolu_z", name: "agent", arguments: { prompt: "do the thing" } }],
-        stopReason: "toolUse",
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        provider: "stub",
-        model: "stub",
-        api: "stub",
-        timestamp: 0,
-      } as unknown as AgentMessage,
-    ];
-    const out = await sanitiseUnpairedToolCalls(messages, {
-      toolRegistry: freshRegistry(),
-      env: new LocalEnvironment({ cwd: "/tmp" }),
-      fraguaContext: freshFraguaContext(spawnSubagent),
-    });
-    expect(observedSpec).toBeDefined();
-    expect(observedSpec!.tool_call_id).toBe("toolu_z");
-    expect(observedSpec!.prompt).toBe("do the thing");
-    expect(out.length).toBe(messages.length + 1);
-    const tail = out[out.length - 1] as AgentMessage & {
-      role: "toolResult";
-      toolCallId: string;
-      isError: boolean;
-      content: Array<{ type: string; text?: string }>;
-    };
-    expect(tail.role).toBe("toolResult");
-    expect(tail.toolCallId).toBe("toolu_z");
-    expect(tail.isError).toBe(false);
-    expect(tail.content[0]?.text).toContain("child completed");
   });
 });

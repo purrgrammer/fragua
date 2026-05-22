@@ -13,7 +13,7 @@ import type {
   SummariseOutput,
 } from "@fragua/core";
 import type { HttpClient } from "@fragua/core/handler";
-import type { AgentDefinition, Skill } from "@fragua/types";
+import type { Skill } from "@fragua/types";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { TSchema } from "@sinclair/typebox";
 
@@ -21,8 +21,8 @@ export type { DirEntry, ExecResult, ExecutionEnvironment };
 
 /** Per-call fragua context passed through `ToolExecuteOptions.fraguaContext`.
  *  Built-in I/O tools (read / write / edit / bash) ignore this field —
- *  they run off `env` alone. The `agent` tool reads `spawnSubagent`,
- *  `skillCatalog`, and `agentCatalog` to drive sub-agent runs. */
+ *  they run off `env` alone. The `skill` tool reads `skillCatalog` to
+ *  resolve a skill name to its loaded definition. */
 export interface FraguaToolContext {
   readonly runId: string;
   readonly nodeId: string;
@@ -30,114 +30,9 @@ export interface FraguaToolContext {
   readonly http: HttpClient;
   readonly emit: (type: string, payload: Record<string, unknown>) => void;
   readonly summarise?: (input: SummariseInput) => Promise<SummariseOutput>;
-  /** Spawn a sub-agent run from inside a llm turn. Wired by the
-   *  daemon (per call) when the parent node's tool pool includes
-   *  `agent`. Absent in tests that don't drive sub-agents. */
-  readonly spawnSubagent?: (spec: SubagentSpec) => Promise<SubagentResult>;
-  /** Parent's resolved skill catalog. The `agent` tool's `spec.skills`
-   *  is filtered against this set; sub-agents never see a skill the
-   *  parent didn't load. */
+  /** The run's resolved skill catalog. The `skill` tool resolves its
+   *  `name` argument against this set. */
   readonly skillCatalog?: readonly Skill[];
-  /** Parent's resolved agent-definition catalogue (project + user
-   *  scopes merged). The `agent` tool resolves its `agent: <name>`
-   *  argument against this set. Absent in tests that don't drive
-   *  sub-agents. */
-  readonly agentCatalog?: readonly AgentDefinition[];
-}
-
-/** Inputs the `agent` tool hands to `spawnSubagent`. Mirrors the
- *  tool's TypeBox schema, plus a per-call `signal` so cancellation
- *  propagates from the parent dispatch into the child run. */
-export interface SubagentSpec {
-  /** Optional short name for this sub-agent (e.g. "reviewer",
-   *  "haiku-poet"). Surfaced in the UI as `Agent · <name>` and on
-   *  the `subagent.start` payload for trace navigation. */
-  name?: string;
-  /** The only context the sub-agent sees — the LLM constructs it. */
-  prompt: string;
-  /** Optional per-call system prompt for the sub-agent. When omitted,
-   *  the llm backend builds a fresh minimal system prompt for
-   *  the sub-agent's own tool pool — the parent's *assembled* system
-   *  prompt is NOT inherited (it would carry tools the sub-agent
-   *  can't use and 10s of KB of irrelevant framing). The framework
-   *  protocol is always layered on automatically. */
-  system_prompt?: string;
-  /** Allowlist for the child's tool pool. Defaults to the parent's
-   *  effective pool minus `agent` (no nesting). */
-  allowed_tools?: readonly string[];
-  /** Denylist applied after the allowlist. */
-  disallowed_tools?: readonly string[];
-  /** Skill names; resolved against the parent's catalog. Sub-agents
-   *  never inherit the parent's loaded skills implicitly. */
-  skills?: readonly string[];
-  /** Hard cap on agent loop iterations; defaults to the parent's
-   *  remaining budget. */
-  max_iterations?: number;
-  /** Forwarded from the calling tool's `ToolExecuteOptions.signal` so
-   *  parent cancellation propagates as `intent.cancel_requested` on
-   *  the child run. */
-  signal?: AbortSignal;
-  /** Resolved profile name when the parent invoked
-   *  `agent({ agent: <name>, … })`. Stamped onto `subagent.start.name`
-   *  by the daemon so traces / UI can group spawns by profile.
-   *  Distinct from `name` (a free-form short label). */
-  agentName?: string;
-  /** Optional model override. When set (typically from a profile's
-   *  `model:` frontmatter), the synthesised child node carries this
-   *  as `model` instead of inheriting the parent's. */
-  model?: string;
-  /** Optional provider override. When set (typically from a profile's
-   *  `provider:` frontmatter), the synthesised child node carries this
-   *  as `provider` instead of inheriting the parent's. */
-  provider?: string;
-  /** Pi-agent-core tool-call id of the parent's `agent` invocation
-   *  (e.g. `toolu_01ABC…`). Required — feeds the deterministic
-   *  `subagent_id` hash (`sha256(parentRunId, parentNodeId,
-   *  parentIteration, tool_call_id)`) so a sub-agent respawned after a
-   *  daemon crash hashes to the same id and can rehydrate its
-   *  transcript. Pi-ai's anthropic provider preserves `block.id`
-   *  byte-identically on the wire, so this hash is stable across
-   *  restarts. Also stamped onto `subagent.start.tool_call_id` for the
-   *  web UI's parent-toolCall → in-flight-sub-agent link. */
-  tool_call_id: string;
-  /** Content-addressed hash of the spec's canonical args (prompt +
-   *  system_prompt + allowed_tools + disallowed_tools + skills +
-   *  max_iterations + agent_def + model + provider). Drives the
-   *  pending-resume FIFO queue: a cancelled sub-agent enters a queue
-   *  keyed by `(parent_run, parent_node, iteration, args_hash)`; the
-   *  next spawn with matching args pops the oldest pending entry
-   *  and resumes it (replays its transcript), so an LLM retry that
-   *  reuses the same prompt automatically picks up where the
-   *  cancelled bracket left off — no `resume_subagent_id` parameter,
-   *  no LLM cooperation. Computed by the `agent` tool's `execute`
-   *  from the spec. */
-  args_hash?: string;
-}
-
-/** What `spawnSubagent` returns to the `agent` tool. The tool packs
- *  this into its `ToolOutput.{text, data}` shape for the parent LLM.
- *  A sub-agent isn't a run — it has no `run_id` of its own. The
- *  `subagentId` is a per-spawn ULID/UUID stamped on every observability
- *  event the sub-agent emits onto the parent's stream (via the
- *  `subagent_id` payload field), so operators / UI / replay can fold
- *  the slice back together. */
-export interface SubagentResult {
-  /** Concatenated text of the sub-agent's final assistant message.
-   *  Empty string when it terminated without one. */
-  summary: string;
-  /** Per-spawn discriminator. Stamped on every observability event
-   *  the sub-agent emits onto the parent's stream (`subagent_id`
-   *  payload field) and bracketed by `subagent.start` / `subagent.end`
-   *  events carrying the same id. */
-  subagentId: string;
-  /** Terminal disposition of the sub-agent's llm call. */
-  status: "completed" | "halted" | "cancelled";
-  /** Set when `status === 'halted'`. Free-form short string so the
-   *  parent LLM can tell why the sub-agent failed without a separate
-   *  log dive. */
-  haltReason?: string;
-  /** Count of tool calls the sub-agent made across its loop. */
-  totalToolCalls: number;
 }
 
 /** Per-tool truncation policy (applied before the value goes to the LLM). */
@@ -152,11 +47,10 @@ export interface TruncationPolicy {
 
 /** Per-call options the host can pass to a tool. Fields are optional
  * so adapters that don't care can ignore them; tools that do
- * (long-running bash, abortable network calls, streaming progress,
- * `agent` driving sub-agents) read what they need off the third
- * argument. Mirrors `AgentTool.execute`'s signal/onUpdate plumbing in
- * pi-agent-core, plus a fragua-specific `fraguaContext` slot the `agent`
- * tool uses for sub-agent spawning. */
+ * (long-running bash, abortable network calls, streaming progress)
+ * read what they need off the third argument. Mirrors
+ * `AgentTool.execute`'s signal/onUpdate plumbing in pi-agent-core, plus
+ * a fragua-specific `fraguaContext` slot. */
 export interface ToolExecuteOptions<TResult = ContextValue> {
   /** Cancellation signal. Tools should clean up promptly when fired. */
   signal?: AbortSignal;
@@ -164,13 +58,12 @@ export interface ToolExecuteOptions<TResult = ContextValue> {
    * output (bash, long curls) call this with partial `ToolOutput`s
    * during execution; consumers can render a live preview. */
   onUpdate?: (partial: ToolOutput<TResult>) => void;
-  /** Fragua-side run context. Required by the `agent` tool to drive
-   * sub-agents; ignored by built-in I/O tools. */
+  /** Fragua-side run context. Read by the `skill` tool; ignored by
+   * built-in I/O tools. */
   fraguaContext?: FraguaToolContext;
-  /** Pi-agent-core tool-call id (e.g. `toolu_01ABC…`). The `agent` tool
-   * stamps this onto the resulting `subagent.start` event so the web
-   * UI can link a parent toolCall card to its in-flight sub-agent
-   * before the toolResult lands; other tools ignore it. */
+  /** Pi-agent-core tool-call id (e.g. `toolu_01ABC…`). Available to
+   * tools that need to correlate their result with the originating
+   * call; most ignore it. */
   tool_call_id?: string;
 }
 
