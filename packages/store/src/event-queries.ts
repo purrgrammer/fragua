@@ -4,7 +4,7 @@
 // thin function that takes a Database handle and returns shaped rows.
 // Inlined SQL elsewhere is a smell — `.agents/skills/backend`. The
 // `events` table is the central event log: facts (writer='daemon'),
-// intents (writer='web'), and observability (writer='daemon', no OCC)
+// intents (writer='client'), and observability (writer='daemon', no OCC)
 // all share the same physical table.
 
 import type { Database } from "bun:sqlite";
@@ -53,12 +53,12 @@ const INSERT_EVENT_DAEMON_SQL = `
 
 const INSERT_EVENT_WEB_SQL = `
   INSERT INTO events (run_id, seq, type, writer, payload, ts)
-  VALUES (?, ?, ?, 'web', ?, ?)
+  VALUES (?, ?, ?, 'client', ?, ?)
 `;
 
 const INSERT_EVENT_RUN_ENQUEUED_SQL = `
   INSERT INTO events (run_id, seq, type, writer, payload, ts)
-  VALUES (?, ?, 'intent.run_enqueued', 'web', ?, ?)
+  VALUES (?, ?, 'intent.run_enqueued', 'client', ?, ?)
 `;
 
 /** Append a fact / observability event (writer='daemon'). Called inside
@@ -75,7 +75,7 @@ export function insertEventDaemon(
   db.query(INSERT_EVENT_DAEMON_SQL).run(runId, seq, type, payload, ts);
 }
 
-/** Append an intent event (writer='web'). */
+/** Append an intent event (writer='client'). */
 export function insertEventWeb(
   db: Database,
   runId: string,
@@ -161,7 +161,7 @@ export function selectSnapshotEvents(db: Database, runId: string): EventRow[] {
 const SELECT_EVENTS_UNAPPLIED_INTENTS_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events
-   WHERE run_id = ? AND seq > ? AND writer = 'web'
+   WHERE run_id = ? AND seq > ? AND writer = 'client'
    ORDER BY seq ASC
 `;
 

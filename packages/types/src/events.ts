@@ -1,4 +1,4 @@
-// Typed unions for fragua's event log — intent events (writer: "web"),
+// Typed unions for fragua's event log — intent events (writer: "client"),
 // fact events (writer: "daemon"), daemon-scope events, and the wire
 // envelopes used by per-run and global SSE/REST endpoints.
 //
@@ -215,9 +215,9 @@ export const AUTO_WAKE_PAUSE_REASONS: ReadonlySet<PauseReason> = new Set<PauseRe
   "timeout_retry",
 ]);
 
-/** Who appended the event. Web writes intents (operator actions);
- * daemon writes facts (run lifecycle, observability). */
-export type EventWriter = "daemon" | "web";
+/** Who appended the event. Clients (web UI, CLI) write intents (operator
+ * actions); the daemon writes facts (run lifecycle, observability). */
+export type EventWriter = "daemon" | "client";
 
 /** Terminal halt reasons. After Stage 3 of recoverable-budget-pause.md
  * the previously-recoverable-class halts (`max_loops`, `abort_loop`,
@@ -250,7 +250,7 @@ export type QuarantineReason = "orphan_side_effect" | "other";
 /** pi-agent-core role passthrough, matching `AgentMessage["role"]`. */
 export type MessageRole = AgentMessage["role"];
 
-// ─────────────── Intent events (writer: "web", no OCC) ───────────────
+// ─────────────── Intent events (writer: "client", no OCC) ───────────────
 
 export type IntentEvent =
   | { type: "intent.run_enqueued"; payload: { workflowSha: string; priority?: number } }

@@ -302,7 +302,7 @@ describe("P27 — intent-fold truth table holds across random batches", () => {
           runId: "rp27",
           seq: seq(i),
           type: it.type as StoredEvent["type"],
-          writer: "web",
+          writer: "client",
           payload: it.payload as StoredEvent["payload"],
           ts: i,
         }));

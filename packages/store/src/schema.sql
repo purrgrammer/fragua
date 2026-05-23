@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   seq INTEGER NOT NULL,
   type TEXT NOT NULL,
-  writer TEXT NOT NULL CHECK (writer IN ('daemon','web')),
+  writer TEXT NOT NULL CHECK (writer IN ('daemon','client')),
   payload TEXT NOT NULL CHECK (length(payload) < 4096),
   ts INTEGER NOT NULL,
   PRIMARY KEY (run_id, seq)

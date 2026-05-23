@@ -1,6 +1,6 @@
 // DB-backed HTTP routes — ARCHITECTURE.md §7.
 //
-// All writes are intents (writer: "web"). Daemon-facing facts are never
+// All writes are intents (writer: "client"). Daemon-facing facts are never
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 

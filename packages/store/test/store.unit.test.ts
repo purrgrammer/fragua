@@ -33,7 +33,7 @@ describe("SqliteStore — lifecycle", () => {
     const events = store.getEvents(runId);
     expect(events).toHaveLength(1);
     expect(events[0]!.type).toBe("intent.run_enqueued");
-    expect(events[0]!.writer).toBe("web");
+    expect(events[0]!.writer).toBe("client");
 
     store.close();
   });

@@ -82,7 +82,9 @@ describe("P3 — intents never lost", () => {
             }
           }
 
-          const events = r.store.getEvents("rp3").filter((e) => e.writer === "web" && e.type !== "intent.run_enqueued");
+          const events = r.store
+            .getEvents("rp3")
+            .filter((e) => e.writer === "client" && e.type !== "intent.run_enqueued");
           expect(events).toHaveLength(kinds.length);
         },
       ),

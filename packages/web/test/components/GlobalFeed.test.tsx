@@ -5,7 +5,7 @@ import type { FeedEvent } from "@fragua/types";
 import { metaForEvent } from "../../src/components/GlobalFeed.tsx";
 
 function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
-  return { runId: "r", seq: 1, type, writer: "web", payload, ts: 0 } as unknown as FeedEvent;
+  return { runId: "r", seq: 1, type, writer: "client", payload, ts: 0 } as unknown as FeedEvent;
 }
 
 describe("metaForEvent", () => {
