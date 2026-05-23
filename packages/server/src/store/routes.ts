@@ -4,14 +4,7 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import {
-  CURRENT_IR_VERSION,
-  InvalidDurationError,
-  parseDurationMs,
-  parseWorkflow,
-  serializeGraph,
-  validateInputBindings,
-} from "@fragua/core";
+import { InvalidDurationError, parseDurationMs, type parseWorkflow } from "@fragua/core";
 import { type BuildResult, makeIntentPlane } from "@fragua/core/intent-plane";
 import {
   FEED_EVENT_KINDS,
@@ -21,7 +14,6 @@ import {
   newRunId,
   PayloadTooLargeError,
   type RunState,
-  sha256Hex,
 } from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec } from "@fragua/workspace";
 import type { Context } from "hono";
@@ -189,6 +181,22 @@ export function createRoutes(deps: ServerDeps): Hono {
   const plane = makeIntentPlane({ store: deps.store, newRunId });
   const commitBuilt = (c: Context, runId: string, built: BuildResult): Response =>
     built.ok ? appendIntentOr413(c, runId, built.intent) : c.json({ error: built.error }, 400);
+  // Mint a workflow's identity through the chokepoint, surfacing the parse /
+  // timeout-attr failures as the same 4xx the routes returned before. Returns
+  // the mint (with the graph, for input-binding validation) or a ready Response.
+  type MintOk = { ok: true; sha: string; ir: string; irVersion: number; graph: ReturnType<typeof parseWorkflow> };
+  const mintWorkflowOr400 = (c: Context, source: string): MintOk | { ok: false; res: Response } => {
+    const mint = plane.buildSaveWorkflow(source);
+    if (!mint.ok) return { ok: false, res: invalidWorkflowResponse(c, new Error(mint.detail)) };
+    const off = findInvalidTimeoutAttr(mint.graph);
+    if (off != null) {
+      return {
+        ok: false,
+        res: c.json({ error: `node "${off.nodeId}": ${off.detail}`, code: "invalid_timeout_attr", offender: off }, 400),
+      };
+    }
+    return { ok: true, sha: mint.sha, ir: mint.ir, irVersion: mint.irVersion, graph: mint.graph };
+  };
 
   // ─── Workflow upload ────────────────────────────────────────
 
@@ -307,12 +315,18 @@ export function createRoutes(deps: ServerDeps): Hono {
     //      or pin a sha.
     let workflowSha: string;
     let resolvedWorkflowName: string | undefined;
-    let resolvedSource: string | undefined;
     let resolvedGraph: ReturnType<typeof parseWorkflow> | undefined;
     if (typeof body.workflowSha === "string" && body.workflowSha.length > 0) {
       workflowSha = body.workflowSha;
       if (typeof body.workflowName === "string") resolvedWorkflowName = body.workflowName;
-      resolvedSource = deps.store.getWorkflow(workflowSha)?.source;
+      // Re-mint from the stored source (if present) to recover the graph for
+      // input-binding validation; already saved under this sha, so no commit.
+      const stored = deps.store.getWorkflow(workflowSha)?.source;
+      if (stored !== undefined) {
+        const mint = mintWorkflowOr400(c, stored);
+        if (!mint.ok) return mint.res;
+        resolvedGraph = mint.graph;
+      }
     } else {
       if (typeof body.workflowName !== "string" || body.workflowName.length === 0) {
         return c.json({ error: "workflowName required when workflowSha is omitted" }, 400);
@@ -344,55 +358,20 @@ export function createRoutes(deps: ServerDeps): Hono {
           400,
         );
       }
-      workflowSha = sha256Hex(detail.source);
       resolvedWorkflowName = body.workflowName;
-      resolvedSource = detail.source;
-    }
-
-    if (resolvedSource !== undefined) {
-      try {
-        resolvedGraph = parseWorkflow(resolvedSource);
-      } catch (err) {
-        return invalidWorkflowResponse(c, err);
-      }
-      const timeoutOffender = findInvalidTimeoutAttr(resolvedGraph);
-      if (timeoutOffender != null) {
-        return c.json(
-          {
-            error: `node "${timeoutOffender.nodeId}": ${timeoutOffender.detail}`,
-            code: "invalid_timeout_attr",
-            offender: timeoutOffender,
-          },
-          400,
-        );
-      }
+      // The third mint site: route the by-name identity through the chokepoint.
+      const mint = mintWorkflowOr400(c, detail.source);
+      if (!mint.ok) return mint.res;
+      workflowSha = mint.sha;
+      resolvedGraph = mint.graph;
       if (deps.store.getWorkflow(workflowSha) == null) {
-        deps.store.saveWorkflow(
-          workflowSha,
-          resolvedWorkflowName ?? body.workflowName ?? workflowSha,
-          resolvedSource,
-          serializeGraph(resolvedGraph),
-          CURRENT_IR_VERSION,
-        );
-      }
-    }
-
-    // Validate `--input name=value` bindings against the workflow's
-    // `inputs:` block before enqueue, so a missing required input or a
-    // bad choice value fails fast with operator-actionable feedback
-    // instead of collapsing to "" silently at dispatch.
-    if (resolvedGraph !== undefined) {
-      const inputDecls = resolvedGraph.attrs.inputs;
-      const inputErrors = validateInputBindings(inputDecls, body.inputs ?? {});
-      if (inputErrors.length > 0) {
-        return c.json(
-          {
-            error: inputErrors.map((e) => e.message).join("; "),
-            code: "invalid_inputs",
-            inputErrors,
-          },
-          400,
-        );
+        plane.commitSaveWorkflow({
+          sha: workflowSha,
+          name: resolvedWorkflowName ?? workflowSha,
+          source: detail.source,
+          ir: mint.ir,
+          irVersion: mint.irVersion,
+        });
       }
     }
 
@@ -415,41 +394,44 @@ export function createRoutes(deps: ServerDeps): Hono {
         );
       }
     }
-    const runId = body.runId ?? newRunId();
-    const initialRouting: Record<string, unknown> = { ...(body.routing ?? {}) };
-    if (typeof body.input === "string" && initialRouting["input"] === undefined) {
-      initialRouting["input"] = body.input;
-    }
-    if (body.inputs != null && initialRouting["inputs"] === undefined) {
-      initialRouting["inputs"] = body.inputs;
+    // Input-binding validation, routing assembly, run-id mint, and the
+    // enqueue params are the plane's; the adapter passes the resolved
+    // identity/location fields (§3.6). `inputDecls: …attrs.inputs ?? []` when
+    // the graph is known means a defined (possibly empty) array — so unknown
+    // inputs are rejected even for a no-`inputs:` workflow; `undefined` (graph
+    // unknown, by-sha not-yet-stored) skips validation, as before.
+    const enq = plane.buildEnqueue({
+      workflowSha,
+      ...(resolvedGraph !== undefined ? { inputDecls: resolvedGraph.attrs.inputs ?? [] } : {}),
+      ...(typeof body.input === "string" ? { input: body.input } : {}),
+      ...(body.inputs != null ? { inputs: body.inputs } : {}),
+      ...(body.routing != null ? { routing: body.routing } : {}),
+      ...(body.priority !== undefined ? { priority: body.priority } : {}),
+      ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
+      ...(typeof body.projectId === "string" ? { projectId: body.projectId } : {}),
+      ...(typeof body.projectName === "string" ? { projectName: body.projectName } : {}),
+      ...(resolvedWorkflowName !== undefined ? { workflowName: resolvedWorkflowName } : {}),
+      ...(body.workflowScope === "global" ||
+      body.workflowScope === "local" ||
+      body.workflowScope === "path" ||
+      body.workflowScope === "ephemeral"
+        ? { workflowScope: body.workflowScope }
+        : {}),
+      ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
+      ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+    });
+    if (!enq.ok) {
+      return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);
     }
     try {
-      deps.store.enqueueRun({
-        runId,
-        workflowSha,
-        ...(body.priority !== undefined ? { priority: body.priority } : {}),
-        ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
-        ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
-        ...(typeof body.projectId === "string" && body.projectId.length > 0 ? { projectId: body.projectId } : {}),
-        ...(typeof body.projectName === "string" && body.projectName.length > 0
-          ? { projectName: body.projectName }
-          : {}),
-        ...(resolvedWorkflowName !== undefined ? { workflowName: resolvedWorkflowName } : {}),
-        ...(body.workflowScope === "global" ||
-        body.workflowScope === "local" ||
-        body.workflowScope === "path" ||
-        body.workflowScope === "ephemeral"
-          ? { workflowScope: body.workflowScope }
-          : {}),
-        ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
-      });
+      plane.commitEnqueue(enq.params);
       if (typeof body.title === "string" && body.title.length > 0) {
-        deps.store.setRunTitle(runId, body.title);
+        deps.store.setRunTitle(enq.runId, body.title);
       }
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }
-    return c.json({ runId });
+    return c.json({ runId: enq.runId });
   });
 
   /**
