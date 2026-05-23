@@ -186,7 +186,7 @@ export function createRoutes(deps: ServerDeps): Hono {
   // routes deserialize the body, hand it to `plane.build*`, and commit via
   // `commitBuilt` — no route validates an intent body or calls
   // `store.appendIntent` itself (enforced by `discipline.test.ts`).
-  const plane = makeIntentPlane({ store: deps.store });
+  const plane = makeIntentPlane({ store: deps.store, newRunId });
   const commitBuilt = (c: Context, runId: string, built: BuildResult): Response =>
     built.ok ? appendIntentOr413(c, runId, built.intent) : c.json({ error: built.error }, 400);
 

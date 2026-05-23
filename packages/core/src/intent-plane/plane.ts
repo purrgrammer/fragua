@@ -12,14 +12,15 @@
 // Enqueue (the two-op `buildSaveWorkflow` + `buildEnqueue`) and the run-id
 // minter land in a follow-on increment; this is the control-intent surface.
 
-import type { IEventStore } from "@fragua/store";
+import type { EnqueueRunParams, IEventStore } from "@fragua/store";
 import type { IntentEvent } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
+import { type InputBindingError, validateInputBindings } from "../engine/inputs.ts";
 import { sha256Hex } from "../handler/sha256.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
-import type { Graph } from "../types/graph.ts";
+import type { Graph, InputDecl } from "../types/graph.ts";
 import * as S from "./schemas.ts";
 
 export type BuildResult<T extends IntentEvent = IntentEvent> = { ok: true; intent: T } | { ok: false; error: string };
@@ -39,6 +40,35 @@ export type WorkflowMint =
   | { ok: true; sha: string; ir: string; irVersion: number; graph: Graph }
   | { ok: false; reason: "unparseable"; detail: string };
 
+/** Resolved enqueue request. The adapter resolves location/identity + the
+ * workflow (§3.6) and passes them in; the plane validates the input
+ * bindings, assembles `initialRouting`, mints the run id, and builds the
+ * store params. `inputDecls` (the workflow's `inputs:` block) is supplied
+ * only when the caller wants typed-input validation — the server does;
+ * the schedule dispatcher omits it (schedules carry only the free-form
+ * `input`). */
+export interface EnqueueInput {
+  workflowSha: string;
+  inputDecls?: readonly InputDecl[] | undefined;
+  input?: string | undefined;
+  inputs?: Record<string, string> | undefined;
+  routing?: Record<string, unknown> | undefined;
+  priority?: number | undefined;
+  cwd?: string | undefined;
+  projectId?: string | undefined;
+  projectName?: string | undefined;
+  workflowName?: string | undefined;
+  workflowScope?: "global" | "local" | "path" | "ephemeral" | undefined;
+  workflowPath?: string | undefined;
+  /** Explicit run id (rare); otherwise minted via the injected minter. */
+  runId?: string | undefined;
+  scheduleId?: string | undefined;
+}
+
+export type EnqueueBuild =
+  | { ok: true; runId: string; params: EnqueueRunParams }
+  | { ok: false; error: string; inputErrors: InputBindingError[] };
+
 function fail(schema: TSchema, body: unknown): { ok: false; error: string } {
   const first = [...Value.Errors(schema, body)][0];
   return { ok: false, error: first ? `${first.path || "/"} ${first.message}`.trim() : "invalid request body" };
@@ -46,6 +76,10 @@ function fail(schema: TSchema, body: unknown): { ok: false; error: string } {
 
 export interface IntentPlaneDeps {
   store: IEventStore;
+  /** Run-id minter, injected (§3.3) — production passes `@fragua/store`'s
+   * full-entropy ULID `newRunId`; tests/PBT pass a deterministic counter.
+   * The uniqueness/import contract lives on the default, never the seam. */
+  newRunId: () => string;
 }
 
 export interface IntentPlane {
@@ -62,11 +96,16 @@ export interface IntentPlane {
   buildMaxLoops(body: unknown): BuildResult<IntentOf<"intent.max_loops_adjusted">>;
   /** Workflow-identity mint (parse + hash + serialize IR). Pure. */
   buildSaveWorkflow(source: string): WorkflowMint;
+  /** Validate input bindings, assemble routing, mint the run id, build the
+   * enqueue params. Deterministic given the injected minter. */
+  buildEnqueue(input: EnqueueInput): EnqueueBuild;
   /** The single intent write. Adapters never call `store.appendIntent`. */
   commit(runId: string, intent: IntentEvent): { seq: number };
   /** The single workflow write. Adapters never call `store.saveWorkflow`.
    * Content-addressed and idempotent. */
   commitSaveWorkflow(args: { sha: string; name: string; source: string; ir: string; irVersion: number }): void;
+  /** The single enqueue write. Adapters never call `store.enqueueRun`. */
+  commitEnqueue(params: EnqueueRunParams): void;
 }
 
 export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
@@ -151,12 +190,47 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       }
       return { ok: true, sha: sha256Hex(source), ir: serializeGraph(graph), irVersion: CURRENT_IR_VERSION, graph };
     },
+    buildEnqueue(input) {
+      if (input.inputDecls !== undefined) {
+        const errs = validateInputBindings(input.inputDecls, input.inputs ?? {});
+        if (errs.length > 0) {
+          return { ok: false, error: errs.map((e) => e.message).join("; "), inputErrors: errs };
+        }
+      }
+      const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
+      if (typeof input.input === "string" && initialRouting["input"] === undefined) {
+        initialRouting["input"] = input.input;
+      }
+      if (input.inputs != null && initialRouting["inputs"] === undefined) {
+        initialRouting["inputs"] = input.inputs;
+      }
+      const runId = input.runId ?? deps.newRunId();
+      const params: EnqueueRunParams = {
+        runId,
+        workflowSha: input.workflowSha,
+        ...(input.priority !== undefined ? { priority: input.priority } : {}),
+        ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
+        ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
+        ...(typeof input.projectId === "string" && input.projectId.length > 0 ? { projectId: input.projectId } : {}),
+        ...(typeof input.projectName === "string" && input.projectName.length > 0
+          ? { projectName: input.projectName }
+          : {}),
+        ...(input.workflowName !== undefined ? { workflowName: input.workflowName } : {}),
+        ...(input.workflowScope !== undefined ? { workflowScope: input.workflowScope } : {}),
+        ...(input.workflowPath !== undefined ? { workflowPath: input.workflowPath } : {}),
+        ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {}),
+      };
+      return { ok: true, runId, params };
+    },
     commit(runId, intent) {
       const { seq } = deps.store.appendIntent(runId, intent);
       return { seq };
     },
     commitSaveWorkflow(args) {
       deps.store.saveWorkflow(args.sha, args.name, args.source, args.ir, args.irVersion);
+    },
+    commitEnqueue(params) {
+      deps.store.enqueueRun(params);
     },
   };
 }

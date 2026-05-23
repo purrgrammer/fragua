@@ -17,7 +17,9 @@ function rig() {
       return { seq: appended.length, ts: 0 };
     },
   } as unknown as IEventStore;
-  return { plane: makeIntentPlane({ store }), appended };
+  let n = 0;
+  const newRunId = () => `run-${++n}`;
+  return { plane: makeIntentPlane({ store, newRunId }), appended };
 }
 
 describe("intent plane — build* (validate + construct)", () => {
@@ -155,9 +157,69 @@ describe("intent plane — buildSaveWorkflow (workflow-identity mint)", () => {
     const store = {
       saveWorkflow: (...args: unknown[]) => saved.push(args),
     } as unknown as IEventStore;
-    const plane = makeIntentPlane({ store });
+    const plane = makeIntentPlane({ store, newRunId: () => "run-x" });
     plane.commitSaveWorkflow({ sha: "abc", name: "solo", source: SOURCE, ir: "{}", irVersion: 1 });
     expect(saved).toEqual([["abc", "solo", SOURCE, "{}", 1]]);
+  });
+});
+
+describe("intent plane — buildEnqueue", () => {
+  const WITH_INPUTS =
+    "name: cfg\ninputs:\n  ticket: {type: string, required: true}\nsteps:\n  work: {type: llm, prompt: do}\n";
+  const inputDecls = parseWorkflow(WITH_INPUTS).attrs.inputs;
+
+  test("valid → params with minted runId + assembled routing", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", input: "fix the bug", cwd: "/repo", projectId: "p1" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.runId).toBe("run-1"); // injected counter minter
+    expect(r.params).toEqual({
+      runId: "run-1",
+      workflowSha: "sha1",
+      initialRouting: { input: "fix the bug" },
+      cwd: "/repo",
+      projectId: "p1",
+    });
+  });
+
+  test("missing required input → { ok: false } with inputErrors", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", inputDecls, inputs: {} });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.inputErrors.some((e) => e.code === "missing_required" && e.name === "ticket")).toBe(true);
+  });
+
+  test("required input provided → ok; inputs land on routing", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", inputDecls, inputs: { ticket: "BUG-1" } });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.initialRouting).toEqual({ inputs: { ticket: "BUG-1" } });
+  });
+
+  test("explicit runId is honored over the minter; scheduleId passes through", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", runId: "explicit", scheduleId: "sch-1" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.runId).toBe("explicit");
+    expect(r.params.scheduleId).toBe("sch-1");
+  });
+
+  test("no inputDecls → no input validation (dispatcher path)", () => {
+    const { plane } = rig();
+    // A workflow with required inputs but no decls passed: enqueue succeeds.
+    const r = plane.buildEnqueue({ workflowSha: "sha1", input: "scheduled run" });
+    expect(r.ok).toBe(true);
+  });
+
+  test("commitEnqueue forwards params to store.enqueueRun", () => {
+    const enqueued: unknown[] = [];
+    const store = { enqueueRun: (p: unknown) => enqueued.push(p) } as unknown as IEventStore;
+    const plane = makeIntentPlane({ store, newRunId: () => "run-z" });
+    const r = plane.buildEnqueue({ workflowSha: "sha1" });
+    if (!r.ok) throw new Error("build failed");
+    plane.commitEnqueue(r.params);
+    expect(enqueued).toEqual([{ runId: "run-z", workflowSha: "sha1" }]);
   });
 });
 

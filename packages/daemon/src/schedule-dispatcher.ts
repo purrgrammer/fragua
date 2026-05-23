@@ -80,7 +80,7 @@ export function startScheduleDispatcher(opts: ScheduleDispatcherOpts): { promise
 export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcome {
   const now = (opts.now ?? Date.now)();
   const newRunId = opts.newRunId ?? mintRunId;
-  const plane = makeIntentPlane({ store: opts.store });
+  const plane = makeIntentPlane({ store: opts.store, newRunId });
   const due = opts.store.getDueSchedules(now);
   let fired = 0;
   let skipped = 0;
