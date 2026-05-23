@@ -170,24 +170,23 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
       });
     }
 
-    // Fire.
-    const sha = mint.sha;
-    plane.commitSaveWorkflow({ sha, name: resolved.name, source, ir: mint.ir, irVersion: mint.irVersion });
-    const runId = newRunId();
-    const initialRouting: Record<string, unknown> = {};
-    if (row.input != null && row.input.length > 0) initialRouting["input"] = row.input;
-
-    opts.store.enqueueRun({
-      runId,
-      workflowSha: sha,
+    // Fire. The mint + enqueue both route through the plane; the dispatcher
+    // passes NO inputDecls, so schedules keep their no-typed-input-validation
+    // behavior (only the free-form `input` lands on routing).
+    plane.commitSaveWorkflow({ sha: mint.sha, name: resolved.name, source, ir: mint.ir, irVersion: mint.irVersion });
+    const enq = plane.buildEnqueue({
+      workflowSha: mint.sha,
       cwd: spawnCwd,
       projectId: row.projectId,
+      ...(row.input != null && row.input.length > 0 ? { input: row.input } : {}),
       ...(resolved.scope === "global" || resolved.scope === "local"
         ? { workflowName: resolved.name, workflowScope: resolved.scope }
-        : { workflowScope: "path", workflowPath: resolved.dotPath }),
-      ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
+        : { workflowScope: "path" as const, workflowPath: resolved.dotPath }),
       scheduleId: row.id,
     });
+    if (!enq.ok) continue; // unreachable: no inputDecls ⇒ no validation failure
+    plane.commitEnqueue(enq.params);
+    const runId = enq.runId;
     opts.store.recordScheduleFire(row.id, runId, now);
     opts.store.appendDaemonEvent(
       {
