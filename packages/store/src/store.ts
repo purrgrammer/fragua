@@ -76,7 +76,7 @@ import {
   selectMessagesNarrow,
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
-import { migrate } from "./migrations.ts";
+import { migrate, verifySchema } from "./migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
 import {
   type ProviderConfigDbRow,
@@ -328,6 +328,11 @@ export interface SqliteStoreOpts {
    * tmpdir is created and torn down on `close()`. */
   blobsDir?: string;
   now?: () => number;
+  /** When false, open in read-the-version-and-refuse-to-bump mode: validate
+   * `schema_version` against the binary and refuse to create or migrate. A
+   * store-client (no daemon up) uses this so a stray open can't mutate schema.
+   * Default true — the fact-writer owners (harness/daemon) auto-migrate. */
+  migrate?: boolean;
 }
 
 export class SqliteStore implements IEventStore {
@@ -345,10 +350,15 @@ export class SqliteStore implements IEventStore {
   constructor(opts: SqliteStoreOpts = {}) {
     const path = opts.path ?? ":memory:";
     const fresh = path === ":memory:" || !existsSync(path);
+    const shouldMigrate = opts.migrate ?? true;
+    if (!shouldMigrate && fresh) {
+      throw new Error(`no fragua store at ${path} — start the harness to create it`);
+    }
     this.db = new Database(path);
     if (fresh) applyCreationPragmas(this.db);
     applyPragmas(this.db);
-    migrate(this.db);
+    if (shouldMigrate) migrate(this.db);
+    else verifySchema(this.db);
     this.now = opts.now ?? (() => Date.now());
 
     if (opts.blobsDir != null) {

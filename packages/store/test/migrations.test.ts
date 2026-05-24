@@ -5,7 +5,7 @@
 
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { migrate } from "../src/migrations.ts";
+import { migrate, verifySchema } from "../src/migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "../src/pragmas.ts";
 
 function freshDb(): Database {
@@ -55,6 +55,50 @@ describe("migrate — schema version handling", () => {
     migrate(db);
     db.query("UPDATE schema_version SET version = ?").run(CURRENT_SCHEMA_VERSION + 100);
     expect(() => migrate(db)).toThrow(/downgrade refused/i);
+    db.close();
+  });
+});
+
+describe("verifySchema — read-the-version-and-refuse-to-bump", () => {
+  function indexExists(db: Database, name: string): boolean {
+    return db.query("SELECT name FROM sqlite_master WHERE type='index' AND name=?").get(name) != null;
+  }
+
+  test("uninitialized DB (no schema_version): refuses, points at the harness", () => {
+    const db = freshDb();
+    expect(() => verifySchema(db)).toThrow(/uninitialized.*harness/i);
+    db.close();
+  });
+
+  test("in-band version: does not throw and writes nothing", () => {
+    const db = freshDb();
+    migrate(db);
+    // A schema.sql index that `migrate` re-creates via IF NOT EXISTS but
+    // `verifySchema` must not touch.
+    db.query("DROP INDEX idx_events_type").run();
+    expect(indexExists(db, "idx_events_type")).toBe(false);
+
+    verifySchema(db);
+    expect(indexExists(db, "idx_events_type")).toBe(false); // verify left it dropped
+
+    migrate(db);
+    expect(indexExists(db, "idx_events_type")).toBe(true); // migrate re-created it
+    db.close();
+  });
+
+  test("below MIN: throws schema-drift", () => {
+    const db = freshDb();
+    migrate(db);
+    db.query("UPDATE schema_version SET version = 0").run();
+    expect(() => verifySchema(db)).toThrow(/schema drift/i);
+    db.close();
+  });
+
+  test("above CURRENT: throws downgrade-refused", () => {
+    const db = freshDb();
+    migrate(db);
+    db.query("UPDATE schema_version SET version = ?").run(CURRENT_SCHEMA_VERSION + 100);
+    expect(() => verifySchema(db)).toThrow(/downgrade refused/i);
     db.close();
   });
 });
