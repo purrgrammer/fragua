@@ -1,4 +1,4 @@
-import { AUTO_WAKE_PAUSE_REASONS, type FactEvent, type RunMetrics, type RunState, type RunStatus } from "./types.ts";
+import { AUTO_WAKE_PAUSE_REASONS, type FactEvent, type RunMetrics, type RunState } from "./types.ts";
 
 export function emptyMetrics(): RunMetrics {
   return {
@@ -17,12 +17,6 @@ export function emptyMetrics(): RunMetrics {
     nodeCosts: {},
     activeMs: 0,
   };
-}
-
-const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "cancelled", "halted"]);
-
-export function isTerminal(status: RunStatus): boolean {
-  return TERMINAL.has(status);
 }
 
 /**

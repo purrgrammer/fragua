@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyAccept, applyDiscard, defaultGitExec, type GitExec } from "../src/run-actions.ts";
+import { applyAccept, applyDiscard, defaultGitExec, type GitExec, type RunActionGate } from "../src/run-actions.ts";
 
 const git: GitExec = defaultGitExec;
 const RUN = "run";
@@ -83,11 +83,20 @@ const has = async (cwd: string, needle: string) => (await must(cwd, ["show", "HE
 const staged = async (cwd: string) => (await git(cwd, ["diff", "--cached", "--name-only"])).stdout.trim();
 const clean = async (cwd: string) => (await git(cwd, ["status", "--porcelain"])).stdout.trim() === "";
 
+/** A gate that passes every state precondition, isolating the git behaviour. */
+const gate = (cwd: string, baseGitSha: string): RunActionGate => ({
+  runId: RUN,
+  status: "completed",
+  inboxStatus: "pending",
+  cwd,
+  baseGitSha,
+});
+
 describe("applyAccept", () => {
   test("A. dirt-only, target==base → stages the tail, branch not advanced", async () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 0, true);
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r).toEqual({ ok: true, sha: base, replayed: 0, tailStaged: true });
     expect(await staged(cwd)).toBe("f.txt");
     expect((await must(cwd, ["show", ":f.txt"])).includes("L06-DIRT")).toBe(true); // staged content
@@ -98,7 +107,7 @@ describe("applyAccept", () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 0, true);
     await moveTarget(cwd, "L11");
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(true);
     const idx = await must(cwd, ["show", ":f.txt"]);
     expect(idx.includes("L06-DIRT")).toBe(true);
@@ -110,7 +119,7 @@ describe("applyAccept", () => {
     await makeRun(cwd, base, 0, true);
     await moveTarget(cwd, "L06"); // same line as the dirt
     const saved = await must(cwd, ["rev-parse", "HEAD"]);
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("conflict");
     expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(saved);
@@ -120,7 +129,7 @@ describe("applyAccept", () => {
   test("D. commits-only (2), target==base → replays, author preserved", async () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 2, false);
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r).toMatchObject({ ok: true, replayed: 2, tailStaged: false });
     expect(await has(cwd, "L02-RUN")).toBe(true);
     expect(await has(cwd, "L04-RUN")).toBe(true);
@@ -133,7 +142,7 @@ describe("applyAccept", () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 2, false);
     await moveTarget(cwd, "L11");
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(true);
     expect(await has(cwd, "L02-RUN")).toBe(true);
     expect(await has(cwd, "L11-USER")).toBe(true);
@@ -143,7 +152,7 @@ describe("applyAccept", () => {
   test("F. commits(1)+dirt → replays commit, stages tail", async () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 1, true);
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r).toMatchObject({ ok: true, replayed: 1, tailStaged: true });
     expect(await has(cwd, "L02-RUN")).toBe(true); // committed
     expect(await must(cwd, ["log", "-1", "--format=%ae"])).toBe("bot@fragua");
@@ -156,7 +165,7 @@ describe("applyAccept", () => {
     await makeRun(cwd, base, 1, false);
     await moveTarget(cwd, "L02"); // same line as the run commit
     const saved = await must(cwd, ["rev-parse", "HEAD"]);
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(false);
     expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(saved);
     expect(await clean(cwd)).toBe(true);
@@ -166,14 +175,14 @@ describe("applyAccept", () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 0, true);
     writeFileSync(join(cwd, "f.txt"), lines().replace("L01\n", "LOCAL\n")); // operator's own dirt
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("dirty_tree");
   });
 
   test("no_work when there is no snapshot ref", async () => {
     const { cwd, base } = await setupRepo();
-    const r = await applyAccept(git, { cwd, runId: RUN, baseGitSha: base });
+    const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("no_work");
   });
@@ -183,12 +192,52 @@ describe("applyDiscard", () => {
   test("deletes both refs; idempotent", async () => {
     const { cwd, base } = await setupRepo();
     await makeRun(cwd, base, 1, true);
-    const r = await applyDiscard(git, cwd, RUN);
+    const r = await applyDiscard(git, gate(cwd, base));
+    if (!r.ok) throw new Error(`expected ok, got ${r.reason}`);
     expect(r.refs.sort()).toEqual([`refs/fragua/heads/${RUN}`, `refs/fragua/snapshots/${RUN}`]);
     expect(await git(cwd, ["rev-parse", "--verify", "--quiet", `refs/fragua/snapshots/${RUN}`])).toMatchObject({
       exitCode: 1,
     });
     // second discard is a no-op
-    expect((await applyDiscard(git, cwd, RUN)).refs).toEqual([]);
+    const r2 = await applyDiscard(git, gate(cwd, base));
+    if (!r2.ok) throw new Error(`expected ok, got ${r2.reason}`);
+    expect(r2.refs).toEqual([]);
+  });
+});
+
+describe("run-action gate (folded into accept/discard)", () => {
+  test("not_terminal: a running run is refused before any git", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await applyAccept(git, { ...gate(cwd, base), status: "running" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("not_terminal");
+  });
+
+  test("not_in_inbox: a terminal run not in the inbox is refused", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await applyAccept(git, { ...gate(cwd, base), inboxStatus: null });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("not_in_inbox");
+  });
+
+  test("discarded: an already-discarded run is refused", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await applyAccept(git, { ...gate(cwd, base), inboxStatus: "discarded" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("discarded");
+  });
+
+  test("no_worktree: a bare-cwd run is refused", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await applyAccept(git, { ...gate(cwd, base), cwd: null });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("no_worktree");
+  });
+
+  test("discard is gated too", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await applyDiscard(git, { ...gate(cwd, base), status: "running" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("not_terminal");
   });
 });

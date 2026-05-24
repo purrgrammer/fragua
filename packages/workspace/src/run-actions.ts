@@ -11,6 +11,7 @@
 // operator's commit.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { type InboxStatus, isTerminal, type RunStatus } from "@fragua/types";
 
 const execFileP = promisify(execFile);
 
@@ -54,15 +55,37 @@ async function mustGit(git: GitExec, cwd: string, args: string[], stdin?: string
   return r.stdout.trim();
 }
 
-export type AcceptResult =
-  | { ok: true; sha: string; replayed: number; tailStaged: boolean }
-  | { ok: false; reason: "no_work" | "dirty_tree" | "conflict"; detail: string };
-
-export interface AcceptOpts {
-  cwd: string;
+/** State preconditions an operator action needs, read from `run_state` by the
+ * adapter and folded into the action so the adapter holds no gate of its own
+ * (intent-plane.md §3.7). The action returns every refusal — state and git —
+ * in one discriminated result. */
+export interface RunActionGate {
   runId: string;
+  status: RunStatus;
+  inboxStatus: InboxStatus | null;
+  cwd: string | null;
   baseGitSha: string;
 }
+
+/** Refusals from the state gate, shared by accept and discard. */
+export type RunActionRefusal = "not_terminal" | "not_in_inbox" | "discarded" | "no_worktree";
+
+/** Check the gate; on success narrow `cwd` to non-null for the git step. */
+function checkGate(
+  gate: RunActionGate,
+): { ok: true; cwd: string } | { ok: false; reason: RunActionRefusal; detail: string } {
+  if (!isTerminal(gate.status)) {
+    return { ok: false, reason: "not_terminal", detail: `run not terminal (status=${gate.status})` };
+  }
+  if (gate.inboxStatus == null) return { ok: false, reason: "not_in_inbox", detail: "run has no recoverable work" };
+  if (gate.inboxStatus === "discarded") return { ok: false, reason: "discarded", detail: "run already discarded" };
+  if (gate.cwd == null) return { ok: false, reason: "no_worktree", detail: "run has no worktree (bare-cwd)" };
+  return { ok: true, cwd: gate.cwd };
+}
+
+export type AcceptResult =
+  | { ok: true; sha: string; replayed: number; tailStaged: boolean }
+  | { ok: false; reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict"; detail: string };
 
 /**
  * Land a terminal run's work on the operator's current branch (HEAD in `cwd`).
@@ -73,8 +96,11 @@ export interface AcceptOpts {
  * the operator's branch and working tree untouched and returns
  * `{ ok:false, reason:"conflict" }` (resolve via revive).
  */
-export async function applyAccept(git: GitExec, opts: AcceptOpts): Promise<AcceptResult> {
-  const { cwd, runId, baseGitSha } = opts;
+export async function applyAccept(git: GitExec, gate: RunActionGate): Promise<AcceptResult> {
+  const g = checkGate(gate);
+  if (!g.ok) return g;
+  const { runId, baseGitSha } = gate;
+  const cwd = g.cwd;
   const snapRef = `refs/fragua/snapshots/${runId}`;
 
   const snapCommit = await revParse(git, cwd, snapRef);
@@ -137,11 +163,16 @@ export async function applyAccept(git: GitExec, opts: AcceptOpts): Promise<Accep
   return { ok: true, sha: replayedTip ?? target, replayed, tailStaged };
 }
 
-export type DiscardResult = { ok: true; refs: string[] };
+export type DiscardResult = { ok: true; refs: string[] } | { ok: false; reason: RunActionRefusal; detail: string };
 
 /** Drop a run's recoverable work — delete its `refs/fragua/{snapshots,heads}`.
- * Idempotent: a missing ref is tolerated. */
-export async function applyDiscard(git: GitExec, cwd: string, runId: string): Promise<DiscardResult> {
+ * Gated like accept (terminal + in-inbox + has-worktree); idempotent past the
+ * gate — a missing ref is tolerated. */
+export async function applyDiscard(git: GitExec, gate: RunActionGate): Promise<DiscardResult> {
+  const g = checkGate(gate);
+  if (!g.ok) return g;
+  const { runId } = gate;
+  const cwd = g.cwd;
   const refs = [`refs/fragua/snapshots/${runId}`, `refs/fragua/heads/${runId}`];
   const deleted: string[] = [];
   for (const ref of refs) {

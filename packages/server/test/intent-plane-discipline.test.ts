@@ -16,16 +16,6 @@ const WRITE_METHODS = ["appendIntent", "enqueueRun", "saveWorkflow"] as const;
 const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages/server/test
 const SCAN_DIRS = [join(ROOT, "packages/server/src"), join(ROOT, "packages/daemon/src")];
 
-// TRACKED ALLOWANCE — remove with the accept/discard de-smell (§3.7, "increment
-// 3"). `accept`/`discard` do synchronous local git then record
-// `intent.accept_run` / `intent.discard_run` directly. Folding the gate into
-// `@fragua/workspace` + routing the write through the plane drops these two; the
-// count assertion then fails and forces this allowance to be deleted (the scan
-// should find ZERO).
-const ALLOWED_FILE = "packages/server/src/store/routes.ts";
-const ALLOWED_METHOD = "appendIntent";
-const ALLOWED_COUNT = 2;
-
 function walkTs(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -51,15 +41,9 @@ for (const dir of SCAN_DIRS) {
 }
 
 describe("intent-plane discipline — store writes only inside the plane", () => {
-  test("no store-write call in an adapter (except the tracked accept/discard allowance)", () => {
-    const forbidden = hits.filter((h) => !(h.rel === ALLOWED_FILE && h.method === ALLOWED_METHOD));
+  test("no store-write call in any adapter (server routes, daemon dispatcher)", () => {
     // If this fails: route the write through plane.commit / commitEnqueue /
     // commitSaveWorkflow instead of calling the store method directly.
-    expect(forbidden).toEqual([]);
-  });
-
-  test("the accept/discard allowance is exactly the 2 known calls (ratchet for §3.7)", () => {
-    const allowed = hits.filter((h) => h.rel === ALLOWED_FILE && h.method === ALLOWED_METHOD);
-    expect(allowed.length).toBe(ALLOWED_COUNT);
+    expect(hits).toEqual([]);
   });
 });

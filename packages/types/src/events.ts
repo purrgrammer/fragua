@@ -157,6 +157,15 @@ export type RunStatus =
   | "halted"
   | "quarantined";
 
+const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "cancelled", "halted"]);
+
+/** True for the three terminal lifecycle states. Pure predicate over the
+ * `RunStatus` union — lives here (with the union) so any package can ask
+ * without depending on `@fragua/store`. */
+export function isTerminal(status: RunStatus): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
+
 /** Reason discriminator on `fact.run_paused`. Status follows reason —
  * the reducer reads `payload.reason` and projects without consulting
  * any other field. Partition:

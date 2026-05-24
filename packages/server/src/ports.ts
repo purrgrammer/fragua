@@ -3,18 +3,20 @@
 // Everything else reads directly from @fragua/store.
 
 import type { InputDecl } from "@fragua/core";
-import type { AcceptResult, DiscardResult } from "@fragua/workspace";
+import type { AcceptResult, DiscardResult, RunActionGate } from "@fragua/workspace";
 import type { HealthDaemonInfo } from "./routes/health.ts";
 
 export type { InputDecl };
 
 /** Runs post-terminal worktree actions **synchronously** in the request path
- *  so the operator (CLI/web) sees the real result. Injected so route tests can
- *  stub the git outcome without a real repo. The default wires the
+ *  so the operator (CLI/web) sees the real result. The state gate (terminal /
+ *  in-inbox / has-worktree) is folded into the action via `RunActionGate`, so
+ *  the route holds no gate of its own (intent-plane.md §3.7). Injected so route
+ *  tests can stub the git outcome without a real repo. The default wires the
  *  `@fragua/workspace` implementations over a real git exec. */
 export interface RunActionExec {
-  accept(cwd: string, runId: string, baseGitSha: string): Promise<AcceptResult>;
-  discard(cwd: string, runId: string): Promise<DiscardResult>;
+  accept(gate: RunActionGate): Promise<AcceptResult>;
+  discard(gate: RunActionGate): Promise<DiscardResult>;
 }
 
 export interface WorkflowSummary {

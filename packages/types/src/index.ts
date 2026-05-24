@@ -43,6 +43,7 @@ export {
   type InboxStatus,
   type IntentEvent,
   type IntentType,
+  isTerminal,
   type MessageRole,
   type PauseReason,
   type QuarantineReason,

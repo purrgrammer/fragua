@@ -94,6 +94,12 @@ export interface IntentPlane {
   buildMaxRetries(body: unknown): BuildResult<IntentOf<"intent.max_retries_adjusted">>;
   buildGoalGate(body: unknown): BuildResult<IntentOf<"intent.goal_gate_adjusted">>;
   buildMaxLoops(body: unknown): BuildResult<IntentOf<"intent.max_loops_adjusted">>;
+  /** Record a completed local accept (the git already ran in `@fragua/workspace`;
+   * this only constructs the intent the daemon folds into `fact.run_accepted`).
+   * Pure — no validation, the inputs come from a typed workspace result. */
+  buildAcceptRun(result: { sha: string; replayed: number; tailStaged: boolean }): IntentOf<"intent.accept_run">;
+  /** Record a completed local discard (refs already deleted). Pure. */
+  buildDiscardRun(result: { refs: string[] }): IntentOf<"intent.discard_run">;
   /** Workflow-identity mint (parse + hash + serialize IR). Pure. */
   buildSaveWorkflow(source: string): WorkflowMint;
   /** Validate input bindings, assemble routing, mint the run id, build the
@@ -180,6 +186,15 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       const payload: { newLimit: number; note?: string } = { newLimit: body.newLimit };
       if (body.note !== undefined) payload.note = body.note;
       return { ok: true, intent: { type: "intent.max_loops_adjusted", payload } };
+    },
+    buildAcceptRun(result) {
+      return {
+        type: "intent.accept_run",
+        payload: { sha: result.sha, replayed: result.replayed, tailStaged: result.tailStaged },
+      };
+    },
+    buildDiscardRun(result) {
+      return { type: "intent.discard_run", payload: { refs: result.refs } };
     },
     buildSaveWorkflow(source) {
       let graph: Graph;
