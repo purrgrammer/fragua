@@ -18,8 +18,11 @@ import {
   cancelCommand,
   diffCommand,
   discardCommand,
+  goalGateCommand,
   inboxCommand,
   lsCommand,
+  maxLoopsCommand,
+  maxRetriesCommand,
   pauseCommand,
   priorityCommand,
   respondCommand,
@@ -452,6 +455,11 @@ function runsHelp(): void {
     priority <id> <n>                re-order a queued run (higher first)
     budget   <id> --scope <s> --metric <m> --new-limit <n>   raise a cap, then resume
 
+  Ceiling raisers (paused runs — raise the cap, then resume):
+    max-retries <id> <n> --node <id> raise one node's handler-retry cap
+    goal-gate   <id> <n>             raise the goal-gate retry cap
+    max-loops   <id> <n>             raise the per-run dispatch ceiling
+
   Listing:
     inbox                             runs needing attention (2 sections)
     ls [--status a,b] [--limit N]     list runs`);
@@ -468,6 +476,7 @@ cli
   .option("--scope <s>", "budget: scope (e.g. run)")
   .option("--metric <m>", "budget: metric (e.g. cost | tokens)")
   .option("--new-limit <n>", "budget: the raised ceiling")
+  .option("--node <id>", "max-retries: the node whose retry cap to raise")
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
   .option("--limit <n>", "ls/inbox: cap results")
   .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
@@ -606,6 +615,37 @@ cli
           );
           break;
         }
+        case "max-retries":
+          process.exit(
+            await maxRetriesCommand({
+              runId: needId(),
+              newLimit: Number.parseInt(arg ?? "", 10),
+              ...(pickStr(options, "node") !== undefined ? { nodeId: pickStr(options, "node")! } : {}),
+              ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        case "goal-gate":
+          process.exit(
+            await goalGateCommand({
+              runId: needId(),
+              newLimit: Number.parseInt(arg ?? "", 10),
+              ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        case "max-loops":
+          process.exit(
+            await maxLoopsCommand({
+              runId: needId(),
+              newLimit: Number.parseInt(arg ?? "", 10),
+              ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
         default:
           console.error(chalk.red(`unknown runs action: ${action}`));
           runsHelp();

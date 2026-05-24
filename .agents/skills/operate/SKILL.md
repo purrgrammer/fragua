@@ -1,11 +1,11 @@
 ---
 name: operate
-description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "land/accept this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is the `fragua` CLI; an HTTP/SQLite escape hatch is at the end for scripting and observability endpoints with no CLI verb. Assumes Claude Code with Bash / Read on a fragua checkout.
+description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is the `fragua` CLI; for deep run reads (raw events, step snapshots) it points at the postmortem skill. Assumes Claude Code with Bash / Read on a fragua checkout.
 ---
 
 # operate — enqueue, watch, and control a live run
 
-Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — entirely through the `fragua` CLI. The CLI is a thin client over the HTTP intent routes; reach for raw HTTP only for scripting or the read-only observability endpoints that have no CLI verb (see the escape hatch at the end).
+Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — entirely through the `fragua` CLI. Every action below is a `fragua` subcommand; for deep run reads (raw events, step snapshots) switch to the postmortem skill.
 
 Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §7 (web server), `AGENTS.md` (commands).
 
@@ -33,7 +33,7 @@ If the fast path works, nothing else here matters.
 
 ## 1. Pre-flight
 
-The harness owns the daemon + HTTP server in one foreground process; the CLI discovers it automatically (via `daemon_lock` in the store, or `<cwd>/.fragua/serve.json` on the CI-primitive path).
+The harness runs the daemon in one foreground process; the CLI finds a running harness automatically (via `daemon_lock` in the store, or `<cwd>/.fragua/serve.json` on the CI-primitive path).
 
 ```sh
 fragua runs ls          # succeeds → harness reachable; errors → no daemon to discover
@@ -57,7 +57,6 @@ fragua run <workflow> [trailing positional args…]  \
   [--title "…"]          # set the run title now (suppresses the auto-titler)
   [--priority 10]        # higher runs first (queue tie-breaker)
   [--no-follow]          # enqueue and exit; print only the run id
-  [--url http://…]       # override auto-discovery
   [--db path/to/db]      # pairs with `fragua serve --db` for parallel fraguas
 ```
 
@@ -87,7 +86,7 @@ until fragua runs ls --limit 50 | grep "$RID" \
 
 - `queued` — waiting for a dispatch slot. Not broken; no daemon = no dispatch.
 - `paused_human` — a `human` node yielded. Answer with `fragua runs respond` (§5).
-- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`) / `max_retries` / `goal_gate` / `max_loops` (raise cap via `POST /runs/:id/max_retries|goal_gate|max_loops`, then `resume`) / `abort_loop` / `provider_exhausted` (naked `resume` only) / `engine_incompatible` (daemon version mismatch; heals when a capable daemon runs).
+- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`) / `max_retries` / `goal_gate` / `max_loops` (raise the cap via `fragua runs max-retries|goal-gate|max-loops`, then `resume` — §4) / `abort_loop` / `provider_exhausted` (naked `resume` only) / `engine_incompatible` (daemon version mismatch; heals when a capable daemon runs).
 - `paused_auto` — daemon owes a clock tick (`provider_retry`, `handler_retry`, or `timeout_retry`); frees its slot and re-queues itself when the backoff passes. No action unless the timer never fires (check the harness). Short-circuit with `fragua runs resume`.
 - `quarantined` — orphan side effect; resolve with `fragua runs unquarantine` (§6).
 - `halted` / `cancelled` — terminal. For `reason` codes, switch to the postmortem skill.
@@ -110,6 +109,11 @@ Each verb appends an `intent.*` event the daemon folds on its next tick (~50ms);
 | `fragua runs unquarantine <id> --resolution treat_as_done\|retry\|cancel` | `intent.unquarantine` | Resolves an orphan side effect (§6). |
 | `fragua runs priority <id> <n> [--note <t>]` | `intent.priority_adjusted` | Re-orders the queue; running runs unaffected. |
 | `fragua runs budget <id> --scope <s> --metric <m> --new-limit <n> [--note <t>]` | `intent.budget_adjusted` | Raises a cap; doesn't wake on its own — pair with `resume`. |
+| `fragua runs max-retries <id> <n> --node <nodeId> [--note <t>]` | `intent.max_retries_adjusted` | Raises one node's handler-retry cap on a `paused{reason:"max_retries"}` run; pair with `resume`. |
+| `fragua runs goal-gate <id> <n> [--note <t>]` | `intent.goal_gate_adjusted` | Raises the goal-gate retry cap on a `paused{reason:"goal_gate"}` run; pair with `resume`. |
+| `fragua runs max-loops <id> <n> [--note <t>]` | `intent.max_loops_adjusted` | Raises the per-run dispatch ceiling on a `paused{reason:"max_loops"}` run; pair with `resume`. |
+
+The last four (`budget` / `max-retries` / `goal-gate` / `max-loops`) only raise a ceiling — they never wake the run. Always follow with `fragua runs resume`.
 
 ### Steering
 
@@ -140,7 +144,7 @@ fragua runs unquarantine <id> --resolution treat_as_done|retry|cancel --note "<e
 #   cancel        — stop the run (blast radius unclear)
 ```
 
-Inspect the orphaned intents first (escape hatch below) and present options + evidence to the user. Never auto-choose.
+Inspect the orphaned intents first (the postmortem skill reads them off the quarantine fact) and present options + evidence to the user. Never auto-choose.
 
 ---
 
@@ -154,7 +158,7 @@ fragua runs accept <id>    # replay the run's commits onto your current branch (
 fragua runs discard <id>   # drop the run's refs/fragua/{snapshots,heads}/<id> (final)
 ```
 
-`accept` runs synchronously and prints `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` 409s `discarded`.
+`accept` runs synchronously and prints `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` on a discarded run exits non-zero with `discarded`.
 
 ---
 
@@ -177,31 +181,12 @@ If a schedule's workflow goes missing/unparseable at fire time, the dispatcher r
 
 - **Don't spam steer.** 5 aborts without progress halts the run with `reason:"abort_loop"`; usually `cancel` + re-enqueue with a better prompt is right.
 - **Don't write intents the user didn't ask for.** Steer / pause / cancel / unquarantine can lose work or change external state. Present evidence, let the user decide.
-- **Don't `accept` over a dirty tree.** Commit/stash local changes first, or it 409s `dirty_tree`.
-- **Don't assume one daemon.** Parallel fraguas (different `--db`) coexist; pass `--db`/`--url` to target one.
+- **Don't `accept` over a dirty tree.** Commit/stash local changes first, or it refuses with `dirty_tree`.
+- **Don't assume one daemon.** Parallel fraguas (different `--db`) coexist; pass `--db` to target one.
 - **Don't treat `queued` as broken.** No daemon = no dispatch. Check the harness first.
 
 ---
 
-## 10. HTTP / SQLite escape hatch
+## 10. Deep reads — switch to postmortem
 
-Everything above is the CLI. Drop to raw HTTP only for scripting many runs or for the read-only observability endpoints with no CLI verb. Discover the URL once:
-
-```sh
-URL=$(sqlite3 -readonly ~/.fragua/fragua.db "SELECT http_url FROM daemon_lock;")
-curl -fsS "$URL/health" | jq .            # liveness + .storePath (which store you're hitting)
-```
-
-CLI-less reads worth knowing:
-
-```sh
-curl -fsS "$URL/runs/$RID/events.json" | jq '.[-20:]'                 # raw event tail (scripting/diffing)
-curl -fsS "$URL/runs/$RID/steps"       | jq '.[] | {nodeId,model,costUsd}'   # per-LLM-call snapshots
-curl -fsS "$URL/runs/$RID" | jq '{runStatus,status,currentNode,costUsd}'     # projection summary
-# orphaned intents for a quarantined run:
-curl -fsS "$URL/runs/$RID/events.json" | jq '[.[]|select(.type=="fact.run_quarantined")]|last|.payload.orphanedIntents'
-```
-
-Scripted enqueue (when `fragua run` won't do): `POST /workflows {name, source}` → `sha`, then `POST /runs {workflowSha, input, inputs, cwd, priority, title}` → `runId`. Every operate verb in §4/§7 is a `POST /runs/:id/<verb>` with the same body the CLI sends.
-
-For diagnosis after a run settles, switch to the postmortem skill. This skill drives runs forward; that one looks backward.
+This skill drives runs **forward** through the CLI verbs above. For reads with no operate verb — the raw event tail, per-LLM-call step snapshots, the messages transcript, artifacts, orphaned-intent payloads, daemon liveness — switch to the **postmortem** skill, which reads them straight off the store. Rule of thumb: operate writes intents (drives the run); postmortem reads facts (explains it).

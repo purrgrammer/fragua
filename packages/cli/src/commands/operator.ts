@@ -339,6 +339,65 @@ export function budgetCommand(opts: BudgetOptions): Promise<number> {
   return postAction("budget", opts.runId, body, opts);
 }
 
+export interface MaxRetriesOptions extends DiscoveryOpts {
+  runId: string;
+  nodeId?: string;
+  newLimit: number;
+  note?: string;
+}
+
+/** Raise one node's handler-retry cap on a `paused{reason:"max_retries"}` run, then `resume`. */
+export function maxRetriesCommand(opts: MaxRetriesOptions): Promise<number> {
+  if (opts.nodeId == null || opts.nodeId.length === 0) {
+    console.error(chalk.red("max-retries: --node <nodeId> required"));
+    return Promise.resolve(1);
+  }
+  if (!Number.isFinite(opts.newLimit)) {
+    console.error(chalk.red("max-retries: <newLimit> integer required"));
+    return Promise.resolve(1);
+  }
+  const body: { nodeId: string; newLimit: number; note?: string } = {
+    nodeId: opts.nodeId,
+    newLimit: opts.newLimit,
+  };
+  if (opts.note != null && opts.note.length > 0) body.note = opts.note;
+  return postAction("max_retries", opts.runId, body, opts);
+}
+
+export interface GoalGateOptions extends DiscoveryOpts {
+  runId: string;
+  newLimit: number;
+  note?: string;
+}
+
+/** Raise the goal-gate retry cap on a `paused{reason:"goal_gate"}` run, then `resume`. */
+export function goalGateCommand(opts: GoalGateOptions): Promise<number> {
+  if (!Number.isFinite(opts.newLimit)) {
+    console.error(chalk.red("goal-gate: <newLimit> integer required"));
+    return Promise.resolve(1);
+  }
+  const body: { newLimit: number; note?: string } = { newLimit: opts.newLimit };
+  if (opts.note != null && opts.note.length > 0) body.note = opts.note;
+  return postAction("goal_gate", opts.runId, body, opts);
+}
+
+export interface MaxLoopsOptions extends DiscoveryOpts {
+  runId: string;
+  newLimit: number;
+  note?: string;
+}
+
+/** Raise the per-run dispatch ceiling on a `paused{reason:"max_loops"}` run, then `resume`. */
+export function maxLoopsCommand(opts: MaxLoopsOptions): Promise<number> {
+  if (!Number.isFinite(opts.newLimit)) {
+    console.error(chalk.red("max-loops: <newLimit> integer required"));
+    return Promise.resolve(1);
+  }
+  const body: { newLimit: number; note?: string } = { newLimit: opts.newLimit };
+  if (opts.note != null && opts.note.length > 0) body.note = opts.note;
+  return postAction("max_loops", opts.runId, body, opts);
+}
+
 export interface LsOptions extends DiscoveryOpts {
   status?: string;
   limit?: number;

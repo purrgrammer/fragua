@@ -14,7 +14,10 @@ import {
   budgetCommand,
   cancelCommand,
   discardCommand,
+  goalGateCommand,
   inboxCommand,
+  maxLoopsCommand,
+  maxRetriesCommand,
   pauseCommand,
   priorityCommand,
   respondCommand,
@@ -211,6 +214,42 @@ describe("fragua operator verbs", () => {
 
   test("budget: missing flags → exit 1, no network", async () => {
     const code = await budgetCommand({ runId: "rb", url: "http://127.0.0.1:1" });
+    expect(code).toBe(1);
+  });
+
+  test("max-retries: exit 0, appends intent.max_retries_adjusted", async () => {
+    seedCommitted(r.store, "rmr");
+    const code = await maxRetriesCommand({ runId: "rmr", nodeId: "n1", newLimit: 5, url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rmr")).toBe("intent.max_retries_adjusted");
+  });
+
+  test("max-retries: missing --node → exit 1, no network", async () => {
+    const code = await maxRetriesCommand({ runId: "rmr", newLimit: 5, url: "http://127.0.0.1:1" });
+    expect(code).toBe(1);
+  });
+
+  test("goal-gate: exit 0, appends intent.goal_gate_adjusted", async () => {
+    seedCommitted(r.store, "rgg");
+    const code = await goalGateCommand({ runId: "rgg", newLimit: 3, url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rgg")).toBe("intent.goal_gate_adjusted");
+  });
+
+  test("goal-gate: non-numeric → exit 1, no network", async () => {
+    const code = await goalGateCommand({ runId: "rgg", newLimit: Number.NaN, url: "http://127.0.0.1:1" });
+    expect(code).toBe(1);
+  });
+
+  test("max-loops: exit 0, appends intent.max_loops_adjusted", async () => {
+    seedCommitted(r.store, "rml");
+    const code = await maxLoopsCommand({ runId: "rml", newLimit: 20, url: r.url });
+    expect(code).toBe(0);
+    expect(lastIntent(r.store, "rml")).toBe("intent.max_loops_adjusted");
+  });
+
+  test("max-loops: non-numeric → exit 1, no network", async () => {
+    const code = await maxLoopsCommand({ runId: "rml", newLimit: Number.NaN, url: "http://127.0.0.1:1" });
     expect(code).toBe(1);
   });
 
