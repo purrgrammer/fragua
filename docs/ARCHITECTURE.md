@@ -174,6 +174,11 @@ CREATE TABLE workflows (
   sha TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   source TEXT NOT NULL,
+  -- Canonical IR: the parsed Graph serialised as JSON with `loc` stripped.
+  -- `ir_version` is the IR contract version (distinct from schema_version and
+  -- the workflow sha). Both NOT NULL — every workflow is parsed once at mint.
+  ir TEXT NOT NULL,
+  ir_version INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 ) STRICT;
 
@@ -199,6 +204,11 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   updated_at INTEGER NOT NULL,
   title TEXT,                                     -- auto-titler output; NULL until generated
   cwd TEXT,                                       -- absolute project root the run was enqueued from; NULL for ephemeral
+  -- Project identity: `project_id` is the stable id from .fragua/config.yaml (UUIDv7),
+  -- decoupled from cwd so a run attributes to the same project across clones/imports.
+  -- `project_name` is the display label captured at enqueue. Both NOT NULL.
+  project_id TEXT NOT NULL,
+  project_name TEXT NOT NULL,
   workflow_name TEXT,                             -- resolved name when caller passed a bare name; NULL for path runs
   workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
   workflow_path TEXT,                             -- workflow file path at resolution time; diagnostic
@@ -213,8 +223,8 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   final_git_sha TEXT,                             -- worktree HEAD at last snapshot boundary; NULL pre-terminal
   final_head_ref TEXT,                            -- worktree's HEAD branch at terminal; NULL when detached
   diff_base_sha TEXT,                             -- honest terminal diff base; == base_git_sha unless HEAD relocated
-  change_stat TEXT,                               -- JSON {committed, uncommitted}; NULL pre-terminal / clean
-  inbox_status TEXT,                              -- pending|acted|discarded; NULL = not an inbox candidate
+  change_stat TEXT CHECK (change_stat IS NULL OR length(change_stat) < 1024), -- JSON {committed, uncommitted}; NULL pre-terminal / clean
+  inbox_status TEXT CHECK (inbox_status IS NULL OR inbox_status IN ('pending','acted','discarded')), -- NULL = not an inbox candidate
   accepted_sha TEXT                               -- projection: operator's branch tip after the last accept_run
 ) STRICT;
 
@@ -223,10 +233,11 @@ CREATE INDEX idx_run_state_queue
   ON run_state(priority DESC, ready_at ASC)
   WHERE status = 'queued';
 
-CREATE INDEX idx_run_state_status   ON run_state(status);
-CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
-CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
-CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
+CREATE INDEX idx_run_state_status      ON run_state(status);
+CREATE INDEX idx_run_state_workflow    ON run_state(workflow_sha);
+CREATE INDEX idx_run_state_updated     ON run_state(updated_at);
+CREATE INDEX idx_run_state_cwd         ON run_state(cwd);
+CREATE INDEX idx_run_state_project_id  ON run_state(project_id);
 CREATE INDEX idx_runs_by_schedule
   ON run_state(schedule_id) WHERE schedule_id IS NOT NULL;
 CREATE INDEX idx_run_state_inbox                 -- inbox list: pending, terminal-time desc
@@ -236,7 +247,10 @@ CREATE TABLE events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   seq INTEGER NOT NULL,
   type TEXT NOT NULL,                             -- 'intent.*' | 'fact.*'
-  writer TEXT NOT NULL CHECK (writer IN ('daemon','web')),
+  -- Provenance tag, deliberately UNconstrained so the value space can evolve
+  -- without a table rebuild. Convention: 'daemon' for facts; 'client' for
+  -- intents (written by the web UI or CLI). See `EventWriter` in @fragua/types.
+  writer TEXT NOT NULL,
   payload TEXT NOT NULL CHECK (length(payload) < 4096),
   ts INTEGER NOT NULL,
   PRIMARY KEY (run_id, seq)
@@ -331,6 +345,7 @@ CREATE TABLE schedules (
   id              TEXT PRIMARY KEY,
   workflow_ref    TEXT NOT NULL,
   cwd             TEXT NOT NULL,
+  project_id      TEXT NOT NULL,
   interval_ms     INTEGER NOT NULL,
   interval_text   TEXT NOT NULL,                  -- "30m" / "1h" / "6h" / "24h"; display only
   input           TEXT,                           -- positional input piped to the run via routing.input
@@ -346,6 +361,7 @@ CREATE TABLE schedules (
 CREATE INDEX idx_schedules_due
   ON schedules(next_fire_at) WHERE paused_at IS NULL;
 CREATE INDEX idx_schedules_cwd ON schedules(cwd);
+CREATE INDEX idx_schedules_project_id ON schedules(project_id);
 
 -- Built-in provider credentials. One row per provider id; `payload` is
 -- the full AuthCredential JSON (api_key form or OAuthCredentials).
@@ -393,7 +409,7 @@ CREATE TABLE provider_config (
 
 ## 3. Event taxonomy
 
-### Intent events (writer: `web`, no OCC)
+### Intent events (writer: `client`, no OCC)
 | Type | Payload fields | Semantics |
 |---|---|---|
 | `intent.run_enqueued` | `workflowSha`, `priority?` | Queue a new run |
@@ -427,7 +443,7 @@ Post-terminal operator actions run **synchronously in the request path** (the `P
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId: string\|null`, `iteration` | Message metadata. `nodeId` is null for messages appended outside a node turn (e.g. seed messages) |
-| `fact.run_paused_human` | `nodeId`, `text`, `routes: string[]`, `snapshot?` | Yielded for human input on a workflow `kind=human` node; `routes` is the closed enum of route names declared on the source node (one button per route in the web UI; button label comes from the matching outgoing edge's `label=` or `humanize(route)`). `snapshot` embeds the worktree diff for the operator's first paint; absent for bare-cwd runs. |
+| `fact.run_paused_human` | `nodeId`, `text`, `routes: string[]`, `routeLabels?: Record<string, string>`, `snapshot?` | Yielded for human input on a workflow `kind=human` node; `routes` is the closed enum of route names declared on the source node (one button per route in the web UI; button label comes from the matching outgoing edge's `label=` override in `routeLabels`, falling back to `humanize(route)`). `snapshot` embeds the worktree diff for the operator's first paint; absent for bare-cwd runs. |
 | `fact.run_paused` | `reason: 'operator'\|'provider_error'\|'payment_required'\|'budget'\|'provider_retry'\|'handler_retry'\|'timeout_retry'\|'max_retries'\|'goal_gate'\|'max_loops'\|'abort_loop'\|'provider_exhausted'\|'engine_incompatible'`, plus reason-specific fields. Operator-resumable arms: `operator` (no extras), `provider_error` (`nodeId`, `httpStatus`, `provider`, `errorMessage`), `payment_required` (`nodeId`, `provider`, `errorMessage`), `budget` (`nodeId`, `scope`, `metric`, `limit`, `actual`), `max_retries` (`nodeId`, `currentLimit`, `attempts`), `goal_gate` (`gateNodeId`, `currentLimit`), `max_loops` (`currentLimit`, `dispatches`), `abort_loop` (`nodeId`, `consecutiveAborts`), `provider_exhausted` (`nodeId`, `attempts`, `cumulativeMs`), `engine_incompatible` (`pinnedVersion`, `supportedMin`, `supportedMax` — arm inferred: too-new if `pinnedVersion > supportedMax`, else too-old). Auto-wake arms (status `paused_auto`): `provider_retry` (`nodeId`, `httpStatus`, `provider`, `errorMessage`, `attempt`, `resumeAt`), `handler_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries`), `timeout_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs`). | Unified pause fact. Status follows reason 1:1: reasons in `AUTO_WAKE_PAUSE_REASONS` (`provider_retry`, `handler_retry`, `timeout_retry`) project to `paused_auto` (wake-pending sweep auto-resumes at `resumeAt`); everything else → `paused` (operator must `intent.resume`, optionally preceded by a cap-adjustment intent: `intent.budget_adjusted`, `intent.max_retries_adjusted`, `intent.goal_gate_adjusted`, `intent.max_loops_adjusted`). `timeout_retry` re-categorises a watchdog `maxMs` overrun as system-initiated pause-retry — partial-spend metrics still accrue via a paired `fact.node_aborted{cause:"timeout"}` |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
@@ -1045,20 +1061,18 @@ app.delete("/schedules/:id",          (c) => deleteSchedule(c));
 app.post("/schedules/:id/pause",      (c) => pauseSchedule(c));
 app.post("/schedules/:id/resume",     (c) => resumeSchedule(c));
 
-// Skills + agents discovery surface.
+// Skills discovery surface.
 // Read-only views over the live filesystem; each request re-walks
 // `cwd ∪ store.listCwds()` (frontmatter-only, ms-scale). Identity in
-// detail / tree / file URLs is `:locId = base64url(skill_dir)` for
-// skills and `base64url(location)` for agents — names aren't unique
-// across projects, so the absolute path is the canonical handle.
+// detail / tree / file URLs is `:locId = base64url(skill_dir)` — names
+// aren't unique across projects, so the absolute path is the canonical handle.
 // `?project_cwd=<cwd>` on list endpoints filters to globals + that one
 // project's project-scope records.
 app.get("/skills",                    (c) => listSkills(c));
 app.get("/skills/:locId",             (c) => skillDetail(c));     // metadata + frontmatter + SKILL.md body
 app.get("/skills/:locId/tree",        (c) => skillTree(c));        // recursive walk under skill_dir
 app.get("/skills/:locId/file",        (c) => skillFile(c));        // ?path=<rel>; sandboxed to skill_dir
-app.get("/agents",                    (c) => listAgents(c));
-app.get("/agents/:locId",             (c) => agentDetail(c));      // metadata + body (the prompt)
+// NOTE: /agents endpoints are not yet implemented.
 
 // Worktree snapshot read endpoints. Pure git object-database queries — no checkouts, no worktree
 // mutation. Snapshot commits are reachable via refs/fragua/snapshots/<runId>;

@@ -87,8 +87,8 @@ until fragua runs ls --limit 50 | grep "$RID" \
 
 - `queued` — waiting for a dispatch slot. Not broken; no daemon = no dispatch.
 - `paused_human` — a `human` node yielded. Answer with `fragua runs respond` (§5).
-- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`).
-- `paused_auto` — daemon owes a clock tick (`handler_retry` or `provider_retry`); frees its slot and re-queues itself when the backoff passes. No action unless the timer never fires (check the harness). Short-circuit with `fragua runs resume`.
+- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`) / `max_retries` / `goal_gate` / `max_loops` (raise cap via `POST /runs/:id/max_retries|goal_gate|max_loops`, then `resume`) / `abort_loop` / `provider_exhausted` (naked `resume` only) / `engine_incompatible` (daemon version mismatch; heals when a capable daemon runs).
+- `paused_auto` — daemon owes a clock tick (`provider_retry`, `handler_retry`, or `timeout_retry`); frees its slot and re-queues itself when the backoff passes. No action unless the timer never fires (check the harness). Short-circuit with `fragua runs resume`.
 - `quarantined` — orphan side effect; resolve with `fragua runs unquarantine` (§6).
 - `halted` / `cancelled` — terminal. For `reason` codes, switch to the postmortem skill.
 

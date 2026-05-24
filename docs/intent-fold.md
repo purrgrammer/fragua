@@ -20,7 +20,7 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 |---|---|---|---|
 | `intent.run_enqueued` | n/a | none — already projected at enqueue | n/a (never reaches the fold) |
 | `intent.cancel_requested` | non-terminal | terminal cancel; short-circuits the fold | n/a (terminal runs have no fold turn) |
-| `intent.pause_requested` | `queued` / `running` | `shouldPause = true` (or defers, see R3) | `paused_human` → drop `already_paused`; `quarantined` / terminal → drop `wrong_state` |
+| `intent.pause_requested` | `queued` / `running` | `shouldPause = true` (or defers, see R3) | `paused_human` / `paused` / `paused_auto` → drop `already_paused`; `quarantined` / terminal → drop `wrong_state` |
 | `intent.steering_requested` | `queued` / `running` / `paused_human` / `paused` / `paused_auto` | concat `text` into `steering` (commit-order, `\n`-separated) | `quarantined` / terminal → drop `wrong_state` |
 | `intent.human_input` | `queued` / `running` (post-wake) / `paused_human` / `paused` / `paused_auto` | set `humanInput` (last-wins on multiple) | `quarantined` / terminal → drop `wrong_state` |
 | `intent.priority_adjusted` | fold: any (accepted unconditionally — the fold only runs while the executor dispatches a turn, so terminal runs never reach it; no explicit per-state filter) | merge `newPriority` into `routingDelta` (last-wins) | n/a |

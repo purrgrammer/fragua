@@ -126,12 +126,12 @@ Terminal failure. Emits `fact.run_halted`.
 ```typescript
 return {
   kind: "halt",
-  reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded",
+  reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded"
+        | "route_not_picked" | "route_call_not_isolated" | "edge_no_match",
   detail?: string,
 };
 // Additional `fact.run_halted` reasons emitted directly by the executor (not constructible by handlers):
-// `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`,
-// `"route_not_picked"`, `"route_call_not_isolated"`, `"edge_no_match"`.
+// `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`.
 // `"abort_loop"` and `"provider_exhausted"` are executor-only and convert to
 // `fact.run_paused` (not halts). A version mismatch is likewise a recoverable
 // `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
@@ -431,14 +431,11 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
         model: "claude-haiku-4-5",
         messages: [{ role: "user", content: `Greet ${name} in one sentence.`, timestamp: sentAt }],
       });
-      ctx.messages.append({
-        role: "assistant",
-        content: res.content,
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-haiku-4-5",
-        timestamp: Date.now(),
-      });
+      // ctx.messages.append takes a pi-agent-core AgentMessage (assistant content
+      // is a block array, not a plain string). For handlers that need message
+      // persistence, use makeLlmHandler from @fragua/agent — it handles appending
+      // correctly. This low-level ctx.llm.call path is for single bare LLM calls
+      // where the agent surface is not needed.
       return {
         kind: "transition",
         nextNode,
