@@ -4,15 +4,15 @@
 // accept/discard POST the post-terminal operator-action intents the daemon
 // sweep folds into git mutations (accept replays the run's commits onto the
 // operator's current branch + stages the tail; discard drops the refs).
-// `diff` is a read over the snapshot endpoints. Harness discovery mirrors
+// `diff` is a read over the snapshot endpoints. Server discovery mirrors
 // `fragua run`:
-//   1. --url   2. <cwd>/.fragua/serve.json (or <db-dir>/serve.json with --db)
-//   3. ~/.fragua/fragua.db daemon_lock.http_url   4. http://localhost:3000
+//   1. --url   2. server_endpoint in the project store (--db, else
+//   <cwd>/.fragua/fragua.db)   3. server_endpoint in ~/.fragua/fragua.db
+//   (the harness)   4. http://localhost:3000
 
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
@@ -22,21 +22,14 @@ interface DiscoveryOpts {
   dbPath?: string;
 }
 
-async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
-  try {
-    const parsed = JSON.parse(await readFile(searchPath, "utf8")) as { url?: unknown };
-    return typeof parsed.url === "string" ? parsed.url : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function discoverHarnessUrl(dbPath: string): string | undefined {
+/** Read the published server URL from a store's `server_endpoint` row.
+ *  Tolerates a missing/locked DB by returning undefined. */
+function discoverEndpointUrl(dbPath: string): string | undefined {
   if (!existsSync(dbPath)) return undefined;
   try {
     const store = new SqliteStore({ path: dbPath });
     try {
-      return store.currentDaemonLock()?.httpUrl ?? undefined;
+      return store.currentServerEndpoint()?.url ?? undefined;
     } finally {
       store.close();
     }
@@ -45,22 +38,26 @@ function discoverHarnessUrl(dbPath: string): string | undefined {
   }
 }
 
-async function resolveBaseUrl(opts: DiscoveryOpts): Promise<string> {
+/** Resolve the server URL, or undefined when none is discoverable. No
+ *  localhost default — a missing server is an error the caller surfaces. */
+function resolveBaseUrl(opts: DiscoveryOpts): string | undefined {
   const cwd = opts.cwd ?? process.cwd();
-  const serveJsonPath = opts.dbPath
-    ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
-    : resolve(cwd, ".fragua/serve.json");
-  const harnessDbPath = resolve(homedir(), ".fragua/fragua.db");
-  const url =
-    opts.url ??
-    (await discoverServerUrl(serveJsonPath)) ??
-    discoverHarnessUrl(harnessDbPath) ??
-    "http://localhost:3000";
-  return url.replace(/\/$/, "");
+  const projectDb = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
+  const harnessDb = resolve(homedir(), ".fragua/fragua.db");
+  const url = opts.url ?? discoverEndpointUrl(projectDb) ?? discoverEndpointUrl(harnessDb);
+  return url?.replace(/\/$/, "");
+}
+
+/** Actionable error when no server is discoverable. Returns exit code 1. */
+function noServerFound(): number {
+  console.error(chalk.red("no running fragua server found"));
+  console.error(chalk.dim("  start one with `fragua harness`, or pass --url http://host:port[/api]"));
+  return 1;
 }
 
 async function postAction(verb: string, runId: string, body: unknown, opts: DiscoveryOpts): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const res = await fetch(`${baseUrl}/runs/${encodeURIComponent(runId)}/${verb}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -163,7 +160,8 @@ function blockedVerb(runStatus?: string): string {
  *                  (accept / discard).
  */
 export async function inboxCommand(opts: InboxOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const cwd = resolve(opts.cwd ?? process.cwd());
   const list = async (qs: Record<string, string>): Promise<InboxRunRow[]> => {
     const params = new URLSearchParams({ order: "oldest", cwd, ...qs });
@@ -207,7 +205,8 @@ export interface RespondOptions extends DiscoveryOpts {
  * (scriptable); without, it shows the gate prompt + routes and reads a choice
  * from stdin (interactive). */
 export async function respondCommand(opts: RespondOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const detailRes = await fetch(`${baseUrl}/runs/${encodeURIComponent(opts.runId)}`);
   if (!detailRes.ok) return failResponse("respond", detailRes);
   const detail = (await detailRes.json()) as { runStatus?: string; hitlLabel?: string; hitlOptions?: string[] };
@@ -405,7 +404,8 @@ export interface LsOptions extends DiscoveryOpts {
 
 /** List runs (optionally filtered by lifecycle status). */
 export async function lsCommand(opts: LsOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const cwd = resolve(opts.cwd ?? process.cwd());
   const params = new URLSearchParams({ cwd });
   if (opts.status != null && opts.status.length > 0) params.set("status", opts.status);
@@ -430,7 +430,8 @@ export interface DiffOptions extends DiscoveryOpts {
 }
 
 export async function diffCommand(opts: DiffOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const listRes = await fetch(`${baseUrl}/runs/${encodeURIComponent(opts.runId)}/snapshots`);
   if (!listRes.ok) return failResponse("diff", listRes);
   const snapshots = (await listRes.json()) as SnapshotRow[];

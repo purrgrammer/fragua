@@ -14,12 +14,12 @@ Authoritative references: `docs/SPEC.md` §3 (primitives + lifecycle), `docs/ARC
 ## Fast path
 
 1. **Locate the store.** Default is `~/.fragua/fragua.db` (harness). The CI primitive (`fragua daemon --db <path>`) writes elsewhere — ask the user if `~/.fragua/fragua.db` is missing.
-2. **Pick a read path.** If `daemon_lock.http_url` is populated and `/health` answers, use HTTP. Otherwise read SQLite directly. Both reveal the same projection.
+2. **Pick a read path.** If `server_endpoint.url` is populated and `/health` answers, use HTTP. Otherwise read SQLite directly. Both reveal the same projection.
 3. **Summarise the run.** Pull `run_state` + the tail of `events`. The last `fact.*` is usually the story.
 
 ```sh
 DB=~/.fragua/fragua.db                      # harness default; override with the user's --db
-URL=$(sqlite3 -readonly "$DB" "SELECT http_url FROM daemon_lock;")
+URL=$(sqlite3 -readonly "$DB" "SELECT url FROM server_endpoint;")
 RUN=<run-id>                              # or a prefix; resolve first (§2)
 
 # If HTTP is up:
@@ -59,17 +59,17 @@ Confirm liveness via the lock row:
 ```sh
 sqlite3 -readonly ~/.fragua/fragua.db <<'SQL'
 .mode column
-SELECT pid, hostname, http_url, http_port,
-       datetime(started_at/1000,'unixepoch','localtime') AS started,
-       datetime(heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
-       (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS seconds_since_beat
-FROM daemon_lock;
+SELECT d.pid, d.hostname, s.url AS server_url,
+       datetime(d.started_at/1000,'unixepoch','localtime') AS started,
+       datetime(d.heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
+       (strftime('%s','now')*1000 - d.heartbeat_at)/1000.0 AS seconds_since_beat
+FROM daemon_lock d LEFT JOIN server_endpoint s ON s.id = 1;
 SQL
 ```
 
 - `seconds_since_beat` > 30s → daemon presumed dead (`DEFAULT_LOCK_TTL_MS = 30_000` ms in `packages/daemon/src/entrypoint.ts:82`). `running` runs may be orphaned until the next daemon start sweeps them.
-- No rows → no daemon has ever claimed the lock, or shutdown released it cleanly. Runs sit `queued`.
-- `http_url` NULL → daemon up but no HTTP (the user is on the CI primitive: `fragua daemon` + `fragua serve` separately, or harness mid-startup). `<cwd>/.fragua/serve.json` is the fallback.
+- No `daemon_lock` row → no daemon has ever claimed the lock, or shutdown released it cleanly. Runs sit `queued`.
+- `server_url` NULL (no `server_endpoint` row) → daemon up but no HTTP server (the user is on the CI primitive `fragua daemon` without a paired `fragua serve`, or harness mid-startup). Read SQLite directly.
 - `ps -p <pid>` confirms the process actually exists.
 
 Server liveness doesn't block reads — web + intent writes work daemon-down.
@@ -399,7 +399,7 @@ When something looks broken, check §12.1 first.
 ## 10. Anti-patterns
 
 - **Don't guess from status alone.** `halted` needs the fact payload; `running` needs heartbeat + `node_started_at`.
-- **Don't trust `daemon_lock.http_url` without `/health`.** It's published once at harness boot; a crash leaves stale URL columns until the next harness clears them on shutdown or next start.
+- **Don't trust `server_endpoint.url` without `/health`.** It's written when the server binds and cleared on clean shutdown; a crash leaves a stale row until the next server start overwrites it.
 - **Don't read `events` without `ORDER BY seq`.** PK is `(run_id, seq)`, per-run monotonic. Other orderings produce gibberish.
 - **Don't dump full `messages.content` into your reply.** Previews first (`substr(content, 1, 600)`); fetch the whole body only when the preview proves the hypothesis.
 - **Don't unquarantine on the user's behalf.** `intent.unquarantine` is a decision with external-world consequences — present evidence, let the user pick.
@@ -411,7 +411,7 @@ When something looks broken, check §12.1 first.
 
 ```sh
 DB=~/.fragua/fragua.db
-URL=$(sqlite3 -readonly "$DB" "SELECT http_url FROM daemon_lock;")
+URL=$(sqlite3 -readonly "$DB" "SELECT url FROM server_endpoint;")
 [ -n "$URL" ] && curl -fsS "$URL/health" | jq .
 
 # Recent runs
@@ -451,11 +451,12 @@ sqlite3 -readonly "$DB" \
    FROM artifacts a JOIN blobs b ON a.blob_sha=b.sha256
    WHERE a.run_id='$RUN' ORDER BY a.created_at;"
 
-# Daemon liveness
+# Daemon liveness (+ server URL from the separate server_endpoint row)
 sqlite3 -readonly "$DB" \
-  "SELECT pid, http_url, datetime(heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
-          (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS seconds_ago
-   FROM daemon_lock;"
+  "SELECT d.pid, s.url AS server_url,
+          datetime(d.heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
+          (strftime('%s','now')*1000 - d.heartbeat_at)/1000.0 AS seconds_ago
+   FROM daemon_lock d LEFT JOIN server_endpoint s ON s.id = 1;"
 
 # Schedule activity (separate seq space; see §8.1)
 sqlite3 -readonly "$DB" \

@@ -125,7 +125,8 @@ never travel; inspection needs no credential).
 | `messages` | PORTABLE | verbatim; large content spills to blobs → co-travel |
 | `blobs` | METADATA + bytes-on-disk | **bytes live under `blobsDir`, not in SQLite** — the bundle must carry the files; content-addressed → dedups |
 | `artifacts` | PORTABLE | FK → blobs; co-travel |
-| `daemon_lock` | MACHINE-LOCAL | EXCLUDE (pid / hostname / http_url) |
+| `daemon_lock` | MACHINE-LOCAL | EXCLUDE (pid / hostname / heartbeat) |
+| `server_endpoint` | MACHINE-LOCAL | EXCLUDE (local listener URL / pid) |
 | `daemon_events` | MACHINE-LOCAL | EXCLUDE (autoincrement audit) |
 | `schedules` | LOCAL | EXCLUDE (a run carries `schedule_id` as informational lineage only) |
 | `provider_credentials` | SECRET | NEVER bundle; resume precondition: provider credentialed locally |

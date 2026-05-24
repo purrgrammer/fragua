@@ -17,7 +17,7 @@
 - **Content-addressed blobs on disk.** Tool outputs never inline in event payloads or the WAL. Handlers write raw content to `<blobsDir>/<first2>/<sha256>`; a metadata row in `blobs` points at it. Events carry a ref + bounded preview. File-then-row commit ordering: a crash can leave orphan files (GC sweeps), never dangling rows.
 - **Orphan-side-effect quarantine.** External tools use provider idempotency keys; on crash-replay, orphaned `SIDE_EFFECT_INTENT` without matching `DONE` quarantines the run for operator review. No blind retry.
 - **No IPC.** Daemon↔web coordination is SQLite polling (50ms daemon supervisor, 100ms SSE). No unix socket. No stale `.sock` cleanup. No `EADDRINUSE`.
-- **Singleton daemon via `daemon_lock` row with heartbeat.** Zombie detection on reclaim + startup sweep of mid-flight runs. The same row carries the harness's `http_url`/`http_port`/`harness_version` columns so CLIs discover the running URL by opening the DB read-only — one `open()` + one `SELECT` per invocation, no JSON rendezvous file.
+- **Singleton daemon via `daemon_lock` row with heartbeat.** Zombie detection on reclaim + startup sweep of mid-flight runs. Where to reach the HTTP server lives in a separate `server_endpoint` row (written by whoever binds the listener — the harness's in-process server or a standalone `fragua serve`), so CLIs discover the running URL by opening the DB read-only — one `open()` + one `SELECT` per invocation, no JSON rendezvous file.
 - **Web UI works daemon-down.** Reads hit SQLite directly; intents queue; SSE continues polling. No daemon required for observability or control-plane writes.
 
 ### Invariants (the contract)
@@ -300,15 +300,26 @@ CREATE TABLE artifacts (                          -- per-(run,node,iteration) na
 
 CREATE INDEX idx_artifacts_blob ON artifacts(blob_sha);
 
-CREATE TABLE daemon_lock (
+CREATE TABLE daemon_lock (                         -- pure liveness: one daemon per store
   id INTEGER PRIMARY KEY CHECK (id = 1),
   pid INTEGER NOT NULL,
   hostname TEXT NOT NULL,
   started_at INTEGER NOT NULL,
-  heartbeat_at INTEGER NOT NULL,
-  http_url TEXT,                                  -- harness/serve listener URL; NULL for `fragua daemon --db <path>` only
-  http_port INTEGER,
-  harness_version TEXT
+  heartbeat_at INTEGER NOT NULL
+) STRICT;
+
+-- Server discovery rendezvous — written by whoever binds the HTTP listener
+-- (the harness's in-process server OR a standalone `fragua serve`) after
+-- binding, cleared on shutdown. Separate from daemon_lock so "is the daemon
+-- alive" and "where is the server" stay distinct, and the daemon's lock
+-- insert/release can't clobber discovery. Replaces the old serve.json file.
+CREATE TABLE server_endpoint (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  url TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  pid INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  harness_version TEXT                             -- harness's version; NULL for standalone `fragua serve`
 ) STRICT;
 
 -- Daemon-level audit log: process lifecycle, sweep activity, reaper

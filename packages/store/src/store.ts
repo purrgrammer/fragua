@@ -39,14 +39,16 @@ import {
 import { BlobFS } from "./blob-fs.ts";
 import {
   deleteDaemonLock,
+  deleteServerEndpoint,
   insertDaemonEvent,
   insertDaemonLock,
   selectDaemonEvents,
   selectDaemonEventsByRun,
   selectDaemonLock,
+  selectServerEndpoint,
   updateDaemonLockHeartbeat,
-  updateDaemonLockHttp,
   upsertDaemonLock,
+  upsertServerEndpoint,
 } from "./daemon-queries.ts";
 import {
   insertEventDaemon,
@@ -186,6 +188,7 @@ import {
   type RunMetrics,
   type RunState,
   type Schedule,
+  type ServerEndpointRow,
   type StoredEvent,
   type SweepResult,
   type WorkflowRow,
@@ -950,15 +953,7 @@ export class SqliteStore implements IEventStore {
       insertDaemonLock(this.db, pid, hostname, now);
       result = {
         acquired: true,
-        current: {
-          pid,
-          hostname,
-          startedAt: now,
-          heartbeatAt: now,
-          httpUrl: null,
-          httpPort: null,
-          harnessVersion: null,
-        },
+        current: { pid, hostname, startedAt: now, heartbeatAt: now },
       };
     });
     return result!;
@@ -969,15 +964,7 @@ export class SqliteStore implements IEventStore {
     let current!: DaemonLockRow;
     this.writeTxn(() => {
       upsertDaemonLock(this.db, pid, hostname, now);
-      current = {
-        pid,
-        hostname,
-        startedAt: now,
-        heartbeatAt: now,
-        httpUrl: null,
-        httpPort: null,
-        harnessVersion: null,
-      };
+      current = { pid, hostname, startedAt: now, heartbeatAt: now };
     });
     return { acquired: true, current };
   }
@@ -1007,18 +994,34 @@ export class SqliteStore implements IEventStore {
       hostname: row.hostname,
       startedAt: row.started_at,
       heartbeatAt: row.heartbeat_at,
-      httpUrl: row.http_url,
-      httpPort: row.http_port,
+    };
+  }
+
+  currentServerEndpoint(): ServerEndpointRow | null {
+    const row = selectServerEndpoint(this.db);
+    if (row == null) return null;
+    return {
+      url: row.url,
+      port: row.port,
+      pid: row.pid,
+      startedAt: row.started_at,
       harnessVersion: row.harness_version,
     };
   }
 
-  /** Publish the harness HTTP discovery info onto the lock row. The
-   *  harness is the supervisor, so it owns the URL columns
-   *  regardless of which pid currently holds the daemon role. */
-  setDaemonLockHttp(args: { url: string | null; port: number | null; version: string | null }): void {
+  /** Publish where the HTTP server is reachable, after the listener binds.
+   *  Written by the harness's in-process server or a standalone `fragua serve`. */
+  setServerEndpoint(args: { url: string; port: number; pid: number; version: string | null }): void {
     this.writeTxn(() => {
-      updateDaemonLockHttp(this.db, args.url, args.port, args.version);
+      upsertServerEndpoint(this.db, args.url, args.port, args.pid, this.now(), args.version);
+    });
+  }
+
+  /** Clear the endpoint on clean shutdown. pid-scoped — a server that already
+   *  rebound under a new pid isn't erased by a late closer. */
+  clearServerEndpoint(pid: number): void {
+    this.writeTxn(() => {
+      deleteServerEndpoint(this.db, pid);
     });
   }
 

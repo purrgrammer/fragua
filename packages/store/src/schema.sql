@@ -196,19 +196,30 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_blob ON artifacts(blob_sha);
 
--- Daemon coordination. `http_url` / `http_port` / `harness_version` let
--- CLIs discover the running daemon (or harness) via the DB itself —
--- the only filesystem rendezvous is the DB path. NULL on rows written
--- by `fragua daemon --db <path>` directly (CI primitives don't expose
--- HTTP unless paired with `fragua serve`).
+-- Daemon coordination — pure liveness (single daemon per store; pid +
+-- heartbeat). Where to reach the HTTP server lives in `server_endpoint`,
+-- not here: the harness co-locates daemon + server, but the CI primitive
+-- runs them as separate processes, so "is the daemon alive" and "where is
+-- the server" are distinct facts.
 CREATE TABLE IF NOT EXISTS daemon_lock (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   pid INTEGER NOT NULL,
   hostname TEXT NOT NULL,
   started_at INTEGER NOT NULL,
-  heartbeat_at INTEGER NOT NULL,
-  http_url TEXT,
-  http_port INTEGER,
+  heartbeat_at INTEGER NOT NULL
+) STRICT;
+
+-- Server discovery rendezvous — the singleton row whoever binds the HTTP
+-- listener (the harness's in-process server OR a standalone `fragua serve`)
+-- writes after binding and clears on shutdown. CLIs discover the server via
+-- the DB itself; the only filesystem rendezvous is the DB path. Replaces the
+-- former `<db-dir>/serve.json` discovery file (one coordination surface).
+CREATE TABLE IF NOT EXISTS server_endpoint (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  url TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  pid INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
   harness_version TEXT
 ) STRICT;
 

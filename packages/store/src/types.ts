@@ -355,10 +355,16 @@ export interface DaemonLockRow {
   hostname: string;
   startedAt: number;
   heartbeatAt: number;
-  /** HTTP URL the harness or `fragua serve` is listening on. `null` for
-   * `fragua daemon --db <path>` runs that don't expose HTTP. */
-  httpUrl: string | null;
-  httpPort: number | null;
+}
+
+/** Where the HTTP server fronting this store is listening. Written by the
+ * harness's in-process server or a standalone `fragua serve` after binding;
+ * cleared on shutdown. The discovery surface CLIs read (replaces serve.json). */
+export interface ServerEndpointRow {
+  url: string;
+  port: number;
+  pid: number;
+  startedAt: number;
   harnessVersion: string | null;
 }
 
@@ -996,6 +1002,9 @@ export interface IDaemonCoordinator {
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
+  currentServerEndpoint(): ServerEndpointRow | null;
+  setServerEndpoint(args: { url: string; port: number; pid: number; version: string | null }): void;
+  clearServerEndpoint(pid: number): void;
 
   // ─── Schedules
   /**

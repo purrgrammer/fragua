@@ -1,10 +1,11 @@
 // `fragua harness` — supervise the executor daemon + HTTP server as a single
-// foreground process. Discovery via the DB itself: the harness publishes
-// its URL onto `daemon_lock` so CLI invocations from any cwd find it
-// without a JSON file.
+// foreground process. Discovery via the DB itself: `startServer` publishes the
+// URL onto the store's `server_endpoint` row so CLI invocations from any cwd
+// find it without a JSON file.
 //
 // Topology:
-//   - HTTP server runs in-process via `startServer` (cheap).
+//   - HTTP server runs in-process via `startServer` (cheap). It writes
+//     `server_endpoint` on bind and clears it on close.
 //   - Executor daemon runs as a `fragua daemon start --db <path>` subprocess
 //     so we don't have to re-implement its 200-line setup. The subprocess
 //     inherits stdio for visibility.
@@ -12,18 +13,15 @@
 //     handles concurrent connections.
 //
 // Lifecycle:
-//   1. Bind the HTTP server at port 0 (ephemeral) or --port <n>.
+//   1. Bind the HTTP server at port 0 (ephemeral) or --port <n>. startServer
+//      publishes `server_endpoint` — a row independent of the daemon lock, so
+//      the daemon's lock insert/release can never clobber it (no re-assert loop).
 //   2. Spawn `fragua daemon start --db <path>`. The daemon acquires
 //      daemon_lock as part of its boot.
-//   3. Wait for the lock row to appear (poll up to LOCK_WAIT_MS).
-//   4. UPDATE daemon_lock SET http_url, http_port, harness_version. CLIs
-//      now discover us via the DB. Re-assert on an interval so lock-row
-//      churn (a reaper takeover, a daemon restart re-inserting a fresh
-//      row, or a publish that raced ahead of the row's INSERT) can't
-//      strand a live harness with empty discovery columns.
-//   5. Block on SIGINT / SIGTERM / daemon-child exit.
-//   6. On shutdown: stop the re-assert, clear URL columns, SIGTERM the
-//      daemon, close the HTTP server.
+//   3. Wait for the lock row to appear (poll up to LOCK_WAIT_MS) for readiness.
+//   4. Block on SIGINT / SIGTERM / daemon-child exit.
+//   5. On shutdown: SIGTERM the daemon, then `serverHandle.close()` clears
+//      `server_endpoint` and stops the HTTP server.
 
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -41,7 +39,6 @@ const LOCK_POLL_MS = 50;
 // Re-assert the discovery URL on the lock row at this cadence. Must stay
 // well under the daemon lock TTL so a transient row reset is corrected
 // long before any discovery client could read a stale/empty value.
-const URL_REPUBLISH_MS = 2_000;
 
 export interface HarnessCommandOptions {
   /** Store path. Default `~/.fragua/fragua.db`. */
@@ -72,7 +69,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   //    `web.port` from ~/.fragua/config.yaml > DEFAULT_WEB_PORT (6767).
   let serverHandle: Awaited<ReturnType<typeof startServer>>;
   try {
-    const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir };
+    const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir, version: HARNESS_VERSION };
     if (opts.port !== undefined) startOpts.port = opts.port;
     serverHandle = await startServer(startOpts);
   } catch (err) {
@@ -103,27 +100,11 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     return 1;
   }
 
-  // 4. Publish URL, then re-assert it periodically. The single UPDATE
-  //    no-ops if the row is briefly absent (TOCTOU vs the daemon's
-  //    INSERT/release) and is clobbered to NULL if the daemon re-inserts
-  //    the row, so a one-shot publish can leave a live harness
-  //    undiscoverable. The interval (well under the daemon lock TTL)
-  //    self-heals both. `lockStore` stays open for the harness's life;
-  //    `shutdown` clears the columns on a fresh connection.
-  const discovery = {
-    url: serverHandle.url,
-    port: serverHandle.port,
-    version: HARNESS_VERSION,
-  };
-  const republish = () => {
-    try {
-      lockStore.setDaemonLockHttp(discovery);
-    } catch (err) {
-      console.error(chalk.dim(`harness: re-assert URL failed — ${(err as Error).message}`));
-    }
-  };
-  republish();
-  const republishTimer = setInterval(republish, URL_REPUBLISH_MS);
+  // 4. The server already published its `server_endpoint` row when it bound
+  //    (in `startServer`). That row is independent of the daemon lock, so the
+  //    daemon's lock insert/release can't clobber it — no re-assert loop, and
+  //    `serverHandle.close()` clears it on shutdown.
+  lockStore.close();
 
   console.log("");
   console.log(chalk.green(`fragua harness ready — ${chalk.bold.underline(hyperlink(serverHandle.origin))}`));
@@ -136,10 +117,8 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     const stop = (label: string) => {
       if (stopping) return;
       stopping = true;
-      clearInterval(republishTimer);
-      lockStore.close();
       console.log(chalk.dim(`\n${label} — shutting down...`));
-      shutdown(dbPath, daemonProc, serverHandle).finally(() => resolveShutdown());
+      shutdown(daemonProc, serverHandle).finally(() => resolveShutdown());
     };
     process.once("SIGINT", () => stop("SIGINT"));
     process.once("SIGTERM", () => stop("SIGTERM"));
@@ -168,24 +147,9 @@ async function waitForLock(store: SqliteStore): Promise<boolean> {
 }
 
 async function shutdown(
-  dbPath: string,
   daemonProc: ReturnType<typeof Bun.spawn>,
   serverHandle: Awaited<ReturnType<typeof startServer>>,
 ): Promise<void> {
-  // Clear URL columns before tearing down so a stale CLI invocation
-  // doesn't read a dead URL between our exit and the daemon's lock-row
-  // delete.
-  try {
-    const s = new SqliteStore({ path: dbPath });
-    try {
-      s.setDaemonLockHttp({ url: null, port: null, version: null });
-    } finally {
-      s.close();
-    }
-  } catch (err) {
-    console.error(chalk.dim(`harness: clear URL failed — ${(err as Error).message}`));
-  }
-
   // Stop daemon child. SIGTERM, then wait. The daemon's own SIGTERM
   // handler triggers its graceful shutdown (lock release, sweep state).
   if (!daemonProc.killed) {

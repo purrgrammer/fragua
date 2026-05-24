@@ -17,7 +17,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { resolveProject } from "../project.ts";
@@ -53,27 +53,15 @@ export async function resolveInputArgs(raw: string | string[] | undefined): Prom
   return out;
 }
 
-async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
-  try {
-    const raw = await readFile(searchPath, "utf8");
-    const parsed = JSON.parse(raw) as { url?: unknown };
-    return typeof parsed.url === "string" ? parsed.url : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Read the harness URL from `~/.fragua/fragua.db` daemon_lock. Returns
- * undefined if the file is missing, the lock row is absent, or the
- * URL hasn't been published yet. Opens read-only-by-convention: we
- * only SELECT, no writes. */
-function discoverHarnessUrl(dbPath: string): string | undefined {
+/** Read the published server URL from a store's `server_endpoint` row.
+ * Returns undefined if the DB is missing, the row is absent, or the server
+ * hasn't bound yet. SELECT-only, no writes. */
+function discoverEndpointUrl(dbPath: string): string | undefined {
   if (!existsSync(dbPath)) return undefined;
   try {
     const store = new SqliteStore({ path: dbPath });
     try {
-      const lock = store.currentDaemonLock();
-      return lock?.httpUrl ?? undefined;
+      return store.currentServerEndpoint()?.url ?? undefined;
     } finally {
       store.close();
     }
@@ -84,9 +72,9 @@ function discoverHarnessUrl(dbPath: string): string | undefined {
 
 export interface RunCommandOptions {
   workflow: string;
-  /** Base URL of the running server. When omitted, the discovery cascade
-   * runs (`.fragua/serve.json` → daemon_lock.http_url → `http://localhost:3000`);
-   * an unreachable result fails with actionable guidance. */
+  /** Base URL of the running server. When omitted, the discovery cascade runs
+   * (project store `server_endpoint` → harness store `server_endpoint`); no
+   * server found fails with actionable guidance — there is no localhost default. */
   url?: string;
   /** Priority tie-breaker. Higher runs first. Default 0. */
   priority?: number;
@@ -102,8 +90,9 @@ export interface RunCommandOptions {
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
   cwd?: string;
-  /** Store path. When set, discovers the server URL at `<dirname(db)>/serve.json`
-   * instead of `<cwd>/.fragua/serve.json`. Pairs with `fragua serve --db`. */
+  /** Store path. When set, discovers the server via that store's
+   * `server_endpoint` row instead of `<cwd>/.fragua/fragua.db`. Pairs with
+   * `fragua serve --db`. */
   dbPath?: string;
 }
 
@@ -131,19 +120,22 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       chalk.yellow("run: .fragua/config.yaml is not committed — this run won't be portable until you commit it"),
     );
   }
-  // Discovery cascade:
+  // Discovery cascade (no default — a missing server is an error, not a
+  // silent localhost guess):
   //   1. --url flag (explicit)
-  //   2. <cwd>/.fragua/serve.json (or <db-dir>/serve.json when --db is set)
+  //   2. server_endpoint in the project store (--db, else <cwd>/.fragua/fragua.db)
   //      — written by `fragua serve --db <path>` (CI primitive)
-  //   3. ~/.fragua/fragua.db daemon_lock.http_url — written by `fragua harness`
-  //   4. http://localhost:3000 (last-resort default)
-  const serveJsonPath = opts.dbPath
-    ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
-    : resolve(cwd, ".fragua/serve.json");
-  const harnessDbPath = resolve(homedir(), ".fragua/fragua.db");
-  const discoveredUrl = opts.url ?? (await discoverServerUrl(serveJsonPath)) ?? discoverHarnessUrl(harnessDbPath);
-  const resolvedUrl = discoveredUrl ?? "http://localhost:3000";
-  const baseUrl = resolvedUrl.replace(/\/$/, "");
+  //   3. server_endpoint in ~/.fragua/fragua.db — written by `fragua harness`
+  const projectDb = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
+  const harnessDb = resolve(homedir(), ".fragua/fragua.db");
+  const discoveredUrl = opts.url ?? discoverEndpointUrl(projectDb) ?? discoverEndpointUrl(harnessDb);
+  if (discoveredUrl === undefined) {
+    console.error(chalk.red("run: no running fragua server found"));
+    console.error(chalk.dim(`  no --url, no server_endpoint in ${projectDb} or ${harnessDb}`));
+    console.error(chalk.dim("  start one with `fragua harness`, or pass --url http://host:port[/api]"));
+    return 1;
+  }
+  const baseUrl = discoveredUrl.replace(/\/$/, "");
 
   const resolved = await resolveWorkflow(cwd, opts.workflow);
   if (resolved == null) {
@@ -181,18 +173,9 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   } catch (err) {
     if (!isConnectionError(err)) throw err;
     console.error(chalk.red(`run: could not reach a fragua server at ${baseUrl}`));
-    if (discoveredUrl === undefined) {
-      console.error(
-        chalk.dim(
-          `  no running harness found — no --url, no ${serveJsonPath}, no daemon_lock http_url in ${harnessDbPath}`,
-        ),
-      );
-      console.error(chalk.dim(`  start one with \`fragua harness\`, or pass --url http://host:port[/api]`));
-    } else {
-      console.error(
-        chalk.dim(`  the discovered server isn't responding — it may have stopped; restart with \`fragua harness\``),
-      );
-    }
+    console.error(
+      chalk.dim(`  the discovered server isn't responding — it may have stopped; restart with \`fragua harness\``),
+    );
     return 1;
   }
   if (!uploadRes.ok) {

@@ -1,16 +1,15 @@
 // `fragua schedule {add,list,rm,pause,resume}` \u2014 thin shells over the
 // HTTP /schedules surface.
 //
-// Discovers the harness URL the same way `fragua run` does:
+// Discovers the server URL the same way `fragua run` does (no localhost
+// default \u2014 a missing server is an error):
 //   1. --url override
-//   2. <cwd>/.fragua/serve.json (or <db-dir>/serve.json with --db)
-//   3. ~/.fragua/fragua.db daemon_lock.http_url
-//   4. http://localhost:3000
+//   2. server_endpoint in the project store (--db, else <cwd>/.fragua/fragua.db)
+//   3. server_endpoint in ~/.fragua/fragua.db (the harness)
 
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { resolveProject } from "../project.ts";
@@ -24,23 +23,13 @@ interface DiscoveryOpts {
   dbPath?: string;
 }
 
-async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
-  try {
-    const raw = await readFile(searchPath, "utf8");
-    const parsed = JSON.parse(raw) as { url?: unknown };
-    return typeof parsed.url === "string" ? parsed.url : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function discoverHarnessUrl(dbPath: string): string | undefined {
+/** Read the published server URL from a store's `server_endpoint` row. */
+function discoverEndpointUrl(dbPath: string): string | undefined {
   if (!existsSync(dbPath)) return undefined;
   try {
     const store = new SqliteStore({ path: dbPath });
     try {
-      const lock = store.currentDaemonLock();
-      return lock?.httpUrl ?? undefined;
+      return store.currentServerEndpoint()?.url ?? undefined;
     } finally {
       store.close();
     }
@@ -49,18 +38,20 @@ function discoverHarnessUrl(dbPath: string): string | undefined {
   }
 }
 
-async function resolveBaseUrl(opts: DiscoveryOpts): Promise<string> {
+/** Resolve the server URL, or undefined when none is discoverable. */
+function resolveBaseUrl(opts: DiscoveryOpts): string | undefined {
   const cwd = opts.cwd ?? process.cwd();
-  const serveJsonPath = opts.dbPath
-    ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
-    : resolve(cwd, ".fragua/serve.json");
-  const harnessDbPath = resolve(homedir(), ".fragua/fragua.db");
-  const url =
-    opts.url ??
-    (await discoverServerUrl(serveJsonPath)) ??
-    discoverHarnessUrl(harnessDbPath) ??
-    "http://localhost:3000";
-  return url.replace(/\/$/, "");
+  const projectDb = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
+  const harnessDb = resolve(homedir(), ".fragua/fragua.db");
+  const url = opts.url ?? discoverEndpointUrl(projectDb) ?? discoverEndpointUrl(harnessDb);
+  return url?.replace(/\/$/, "");
+}
+
+/** Actionable error when no server is discoverable. Returns exit code 1. */
+function noServerFound(): number {
+  console.error(chalk.red("no running fragua server found"));
+  console.error(chalk.dim("  start one with `fragua harness`, or pass --url http://host:port[/api]"));
+  return 1;
 }
 
 interface RecentRun {
@@ -121,7 +112,8 @@ export async function scheduleAddCommand(opts: ScheduleAddOptions): Promise<numb
     console.error(chalk.red(`schedule add: --on-overlap must be one of skip, queue, concurrent`));
     return 1;
   }
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   // Resolve project identity at the boundary (walk-up + auto-init); the
   // schedule records cwd as the project root and carries the project id so
   // fired runs attribute correctly.
@@ -155,7 +147,8 @@ export interface ScheduleListOptions extends DiscoveryOpts {
 }
 
 export async function scheduleListCommand(opts: ScheduleListOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const cwd = opts.cwd != null ? resolve(opts.cwd) : undefined;
   const url = cwd != null ? `${baseUrl}/schedules?cwd=${encodeURIComponent(cwd)}` : `${baseUrl}/schedules`;
   const res = await fetch(url);
@@ -183,7 +176,8 @@ export interface ScheduleIdOptions extends DiscoveryOpts {
 }
 
 export async function scheduleRmCommand(opts: ScheduleIdOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const res = await fetch(`${baseUrl}/schedules/${encodeURIComponent(opts.id)}`, { method: "DELETE" });
   if (res.status === 404) {
     console.error(chalk.red(`schedule rm: not found: ${opts.id}`));
@@ -195,7 +189,8 @@ export async function scheduleRmCommand(opts: ScheduleIdOptions): Promise<number
 }
 
 export async function schedulePauseCommand(opts: ScheduleIdOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const res = await postJson(`${baseUrl}/schedules/${encodeURIComponent(opts.id)}/pause`, {});
   if (res.status === 404) {
     console.error(chalk.red(`schedule pause: not found: ${opts.id}`));
@@ -207,7 +202,8 @@ export async function schedulePauseCommand(opts: ScheduleIdOptions): Promise<num
 }
 
 export async function scheduleResumeCommand(opts: ScheduleIdOptions): Promise<number> {
-  const baseUrl = await resolveBaseUrl(opts);
+  const baseUrl = resolveBaseUrl(opts);
+  if (baseUrl == null) return noServerFound();
   const res = await postJson(`${baseUrl}/schedules/${encodeURIComponent(opts.id)}/resume`, {});
   if (res.status === 404) {
     console.error(chalk.red(`schedule resume: not found: ${opts.id}`));

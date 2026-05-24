@@ -592,39 +592,45 @@ describe("SqliteStore — daemon lock", () => {
     store.close();
   });
 
-  test("setDaemonLockHttp publishes discovery onto the row; UPDATE no-ops with no row", () => {
+  test("setServerEndpoint publishes discovery, independent of the daemon lock", () => {
     const store = freshStore();
 
-    // No lock row yet: the UPDATE-by-id silently affects 0 rows, so the
-    // harness's one-shot publish before the daemon's INSERT would be lost.
-    store.setDaemonLockHttp({ url: "http://localhost:6767/api", port: 6767, version: "0.0.0" });
-    expect(store.currentDaemonLock()).toBeNull();
-
-    store.acquireDaemonLock(1, "h");
-    store.setDaemonLockHttp({ url: "http://localhost:6767/api", port: 6767, version: "0.0.0" });
-    const published = store.currentDaemonLock()!;
-    expect(published.httpUrl).toBe("http://localhost:6767/api");
-    expect(published.httpPort).toBe(6767);
+    // No daemon lock needed: the endpoint is its own row (the CI primitive's
+    // `serve` can publish before — or without — a daemon ever acquiring).
+    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 1, version: "0.0.0" });
+    const published = store.currentServerEndpoint()!;
+    expect(published.url).toBe("http://localhost:6767/api");
+    expect(published.port).toBe(6767);
+    expect(published.pid).toBe(1);
     expect(published.harnessVersion).toBe("0.0.0");
+    expect(store.currentDaemonLock()).toBeNull();
     store.close();
   });
 
-  test("re-asserting discovery restores it after lock-row churn nulls the http columns", () => {
+  test("daemon-lock churn never clobbers the endpoint (separate rows)", () => {
     const store = freshStore();
-    store.acquireDaemonLock(1, "h");
-    const discovery = { url: "http://localhost:6767/api", port: 6767, version: "0.0.0" };
-    store.setDaemonLockHttp(discovery);
-    expect(store.currentDaemonLock()!.httpUrl).toBe(discovery.url);
+    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 99, version: "0.0.0" });
 
-    // A daemon restart (release + fresh acquire) re-INSERTs the row with
-    // NULL http columns — a one-shot publish would now be stranded.
+    // A daemon restart (release + fresh acquire) churns daemon_lock, but the
+    // endpoint row is untouched — no re-assert loop needed.
+    store.acquireDaemonLock(1, "h");
     store.releaseDaemonLock(1);
     store.acquireDaemonLock(2, "h");
-    expect(store.currentDaemonLock()!.httpUrl).toBeNull();
+    expect(store.currentServerEndpoint()!.url).toBe("http://localhost:6767/api");
+    store.close();
+  });
 
-    // The harness's periodic re-assert recovers discovery.
-    store.setDaemonLockHttp(discovery);
-    expect(store.currentDaemonLock()!.httpUrl).toBe(discovery.url);
+  test("clearServerEndpoint is pid-scoped", () => {
+    const store = freshStore();
+    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 42, version: null });
+
+    // A late closer with a stale pid (a server that already rebound) must not
+    // erase the live endpoint.
+    store.clearServerEndpoint(7);
+    expect(store.currentServerEndpoint()).not.toBeNull();
+
+    store.clearServerEndpoint(42);
+    expect(store.currentServerEndpoint()).toBeNull();
     store.close();
   });
 });

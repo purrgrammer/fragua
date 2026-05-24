@@ -81,14 +81,10 @@ interface DaemonLockDbRow {
   hostname: string;
   started_at: number;
   heartbeat_at: number;
-  http_url: string | null;
-  http_port: number | null;
-  harness_version: string | null;
 }
 
 const SELECT_DAEMON_LOCK_SQL = `
-  SELECT pid, hostname, started_at, heartbeat_at,
-         http_url, http_port, harness_version
+  SELECT pid, hostname, started_at, heartbeat_at
     FROM daemon_lock WHERE id = 1
 `;
 
@@ -96,23 +92,56 @@ export function selectDaemonLock(db: Database): DaemonLockDbRow | null {
   return db.query<DaemonLockDbRow, []>(SELECT_DAEMON_LOCK_SQL).get() ?? null;
 }
 
-const UPDATE_DAEMON_LOCK_HTTP_SQL = `
-  UPDATE daemon_lock
-     SET http_url = ?, http_port = ?, harness_version = ?
-   WHERE id = 1
+export interface ServerEndpointDbRow {
+  url: string;
+  port: number;
+  pid: number;
+  started_at: number;
+  harness_version: string | null;
+}
+
+const SELECT_SERVER_ENDPOINT_SQL = `
+  SELECT url, port, pid, started_at, harness_version
+    FROM server_endpoint WHERE id = 1
 `;
 
-/** Publish the harness/serve HTTP discovery info onto the lock row.
- *  Called by `fragua harness` after the listener binds — the harness
- *  is the supervisor, so it owns the URL columns regardless of which
- *  pid currently holds the daemon role. */
-export function updateDaemonLockHttp(
+export function selectServerEndpoint(db: Database): ServerEndpointDbRow | null {
+  return db.query<ServerEndpointDbRow, []>(SELECT_SERVER_ENDPOINT_SQL).get() ?? null;
+}
+
+const UPSERT_SERVER_ENDPOINT_SQL = `
+  INSERT INTO server_endpoint (id, url, port, pid, started_at, harness_version)
+  VALUES (1, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    url            = excluded.url,
+    port           = excluded.port,
+    pid            = excluded.pid,
+    started_at     = excluded.started_at,
+    harness_version = excluded.harness_version
+`;
+
+/** Publish where the HTTP server can be reached. Written after the listener
+ *  binds by whoever owns it — the harness's in-process server or a standalone
+ *  `fragua serve`. Singleton: last binder wins (one server per store). */
+export function upsertServerEndpoint(
   db: Database,
-  url: string | null,
-  port: number | null,
+  url: string,
+  port: number,
+  pid: number,
+  startedAt: number,
   version: string | null,
 ): void {
-  db.query(UPDATE_DAEMON_LOCK_HTTP_SQL).run(url, port, version);
+  db.query(UPSERT_SERVER_ENDPOINT_SQL).run(url, port, pid, startedAt, version);
+}
+
+const DELETE_SERVER_ENDPOINT_SQL = `
+  DELETE FROM server_endpoint WHERE id = 1 AND pid = ?
+`;
+
+/** Clear the endpoint on clean shutdown. pid-scoped so a server that already
+ *  rebound (new pid took the singleton) isn't erased by a late closer. */
+export function deleteServerEndpoint(db: Database, pid: number): void {
+  db.query(DELETE_SERVER_ENDPOINT_SQL).run(pid);
 }
 
 const INSERT_DAEMON_LOCK_SQL = `

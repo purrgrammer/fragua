@@ -33,7 +33,7 @@ If the fast path works, nothing else here matters.
 
 ## 1. Pre-flight
 
-The harness runs the daemon in one foreground process; the CLI finds a running harness automatically (via `daemon_lock` in the store, or `<cwd>/.fragua/serve.json` on the CI-primitive path).
+The harness runs the daemon in one foreground process; the CLI finds a running server automatically by reading the store's `server_endpoint` row (the project store under `--db`/`<cwd>/.fragua/fragua.db`, then `~/.fragua/fragua.db`). No server found is an error — there's no localhost default.
 
 ```sh
 fragua runs ls          # succeeds → harness reachable; errors → no daemon to discover

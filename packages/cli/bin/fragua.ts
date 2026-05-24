@@ -227,7 +227,7 @@ cli
 
 cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
-  .option("--port <n>", "TCP port to bind (default 6767, configurable via web.port; writes <db-dir>/serve.json)")
+  .option("--port <n>", "TCP port to bind (default 6767, configurable via web.port)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db); enables parallel fraguas")
   .action(async (options: Record<string, unknown>) => {
@@ -242,7 +242,7 @@ cli
     const code = await serveCommand({
       // `port` left undefined when the user didn't pass `--port`, so
       // startServer resolves it via config.web.port → DEFAULT_WEB_PORT.
-      // The URL is also published to <db-dir>/serve.json for discovery.
+      // startServer publishes the URL into the store's server_endpoint row.
       ...(portExplicit ? { port: portNum! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
@@ -375,7 +375,7 @@ cli
       "Pass workflow inputs with --input name=value (repeatable); set an " +
       "explicit run title with --title (otherwise the title is auto-summarised).",
   )
-  .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
+  .option("--url <url>", "Server URL (default: discovered via the store's server_endpoint row)")
   .option(
     "-i, --input <name=value>",
     "Run input; repeat for multiple (one name=value each). Value @path reads a file, @- reads stdin (e.g. --input task=@spec.md)",
@@ -384,7 +384,7 @@ cli
   .option("--priority <n>", "Priority tie-breaker (default 0)")
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
-  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -479,9 +479,9 @@ cli
   .option("--node <id>", "max-retries: the node whose retry cap to raise")
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
   .option("--limit <n>", "ls/inbox: cap results")
-  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--url <url>", "Server URL (default: discovered via the store's server_endpoint row)")
   .option("--cwd <dir>", "Project root for server discovery")
-  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
   .action(
     async (
       action: string | undefined,
@@ -661,8 +661,8 @@ cli
   .option("--input <text>", "`add` only: free-form description for every fire (seeds the title)")
   .option("--on-overlap <policy>", "`add` only: skip | queue | concurrent (default skip)")
   .option("--no-fire-on-create", "`add` only: wait one full interval before the first fire")
-  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
-  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .option("--url <url>", "Server URL (default: discovered via the store's server_endpoint row)")
+  .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
   .action(async (action: string | undefined, target: string | undefined, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];

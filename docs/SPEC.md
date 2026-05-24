@@ -49,7 +49,7 @@ Single machine, one harness process, one SQLite database. The harness supervises
         └────────────────┘
 ```
 
-- **Harness** (`fragua harness`) is the default entry point: foreground process that spawns the daemon as a subprocess and runs the HTTP server in-process. Publishes its URL on `daemon_lock.{http_url, http_port, harness_version}` so CLIs discover it via the DB itself. SIGINT clears the URL columns on the way out.
+- **Harness** (`fragua harness`) is the default entry point: foreground process that spawns the daemon as a subprocess and runs the HTTP server in-process. The in-process server publishes its URL on the `server_endpoint` row so CLIs discover it via the DB itself. SIGINT clears that row on the way out.
 - **Daemon** runs the executor fiber + a 50ms supervisor fiber (heartbeat + intent detection + watchdog). Writes **facts** under OCC.
 - **Server** exposes a Hono HTTP surface. Writes **intents** (always appendable, no OCC). Reads go straight to the store's projection.
 - **CLI** wraps everything via `fragua harness` (default), `fragua run`, `fragua validate`, `fragua db`. `fragua daemon --db <path>` and `fragua serve --db <path>` are CI/power-user primitives.

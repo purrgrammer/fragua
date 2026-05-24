@@ -12,7 +12,7 @@
 // We use `Bun.serve` directly (Bun ≥ 1.2 is the primary runtime per AGENTS.md),
 // which avoids adding `@hono/node-server` as a dependency.
 
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuthStorage, ModelRegistry, validateWorkflowModels } from "@fragua/agent";
@@ -56,10 +56,13 @@ export interface ServeCommandOptions {
   port?: number;
   /** Working directory. Default `process.cwd()`. */
   cwd?: string;
-  /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. The discovery
-   * file (`serve.json`) is written alongside it so parallel fraguas with
-   * different DBs have isolated discovery. */
+  /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. Discovery is
+   * published into that store's `server_endpoint` row, so parallel fraguas
+   * with different DBs have isolated discovery. */
   dbPath?: string;
+  /** Provenance tag stamped onto `server_endpoint.harness_version`. The
+   * harness passes its version; a standalone `fragua serve` leaves it null. */
+  version?: string | null;
   /** Hostname to bind. Default `"::"` (dual-stack IPv4+IPv6). */
   hostname?: string;
   /** Optional port overrides forwarded to `createServer`. */
@@ -116,7 +119,6 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   const cwd = opts.cwd ?? process.cwd();
   const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
   mkdirSync(dirname(storePath), { recursive: true });
-  const discoveryPath = resolve(dirname(storePath), "serve.json");
   const store = new SqliteStore({ path: storePath });
   // Compiled binary: skip the on-disk walk entirely and serve from the
   // embedded asset map. The caller's `webDistDir` (even if explicitly
@@ -208,17 +210,11 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // ships the SPA embedded, so it's "web mode" with no distDir.
   const webMode = webDistDir !== undefined || COMPILED;
   const url = webMode ? `${origin}/api` : origin;
-  // For diagnostics: the on-disk dist path if available, otherwise a
-  // marker so the discovery file shows the SPA is embedded.
   const webSource = webDistDir ?? (COMPILED ? "(embedded)" : null);
-  try {
-    writeFileSync(
-      discoveryPath,
-      JSON.stringify({ url, origin, port, pid: process.pid, storePath, webDistDir: webSource }, null, 2),
-    );
-  } catch {
-    // Non-fatal: discovery file is a convenience, not a requirement.
-  }
+  // Publish discovery into the store. A separate `server_endpoint` row
+  // (not the daemon lock) means the daemon's lock insert/release can never
+  // clobber it — a one-shot write on bind suffices, no re-assert loop.
+  store.setServerEndpoint({ url, port, pid: process.pid, version: opts.version ?? null });
   return {
     origin,
     url,
@@ -227,7 +223,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     webDistDir: webSource ?? undefined,
     async close() {
       try {
-        unlinkSync(discoveryPath);
+        store.clearServerEndpoint(process.pid);
       } catch {}
       await server.stop(true);
       store.close();
