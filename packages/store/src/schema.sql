@@ -126,7 +126,12 @@ CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   seq INTEGER NOT NULL,
   type TEXT NOT NULL,
-  writer TEXT NOT NULL CHECK (writer IN ('daemon','client')),
+  -- Provenance tag, deliberately UNconstrained: the value space (daemon =
+  -- facts; client = intents, from the web UI or the CLI) is documented by
+  -- `EventWriter` in @fragua/types and set by a couple of hardcoded literals,
+  -- not user input. No CHECK so the set can evolve (a future direct-store CLI
+  -- writer, etc.) without a table rebuild — SQLite can't ALTER a CHECK.
+  writer TEXT NOT NULL,
   payload TEXT NOT NULL CHECK (length(payload) < 4096),
   ts INTEGER NOT NULL,
   PRIMARY KEY (run_id, seq)
