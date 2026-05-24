@@ -186,10 +186,13 @@ export function RunConversation({
     const before: DecisionEntry[] = [];
     const after = new Map<number, DecisionEntry[]>();
     if (!hitlDecisions) return { before, after };
+    // Key nodes by their first-seen lastEventSeq so ordering reflects
+    // temporal execution, not the alphabetical sort deriveNodeStates uses.
     const order = new Map<string, number>();
-    (nodeStates ?? []).forEach((n, i) => {
-      if (!order.has(n.nodeId)) order.set(n.nodeId, i);
-    });
+    for (const n of nodeStates ?? []) {
+      const prev = order.get(n.nodeId);
+      if (prev === undefined || n.lastEventSeq < prev) order.set(n.nodeId, n.lastEventSeq);
+    }
     const sectionOrder = visibleSections.map((s) =>
       s.nodeId != null ? (order.get(s.nodeId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY,
     );

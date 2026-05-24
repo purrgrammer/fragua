@@ -164,4 +164,43 @@ describe("RunConversation — HITL decision banner", () => {
     const signoffSection = within(container).getByTestId("node-section-signoff");
     expect(within(signoffSection).getByTestId("hitl-decision-banner")).toBeTruthy();
   });
+
+  it("places a message-less gate's banner in execution order when nodeStates arrive alphabetically (server sort)", () => {
+    // The server's deriveNodeStates sorts detail.nodes alphabetically by nodeId.
+    // Execution order was verify(seq=10) → signoff(seq=20) → apply(seq=30),
+    // but nodeStates arrives as apply < signoff < verify (alphabetical).
+    // decisionBuckets builds its `order` map from the array index position,
+    // so it sees apply=0, signoff=1, verify=2 — which is the opposite of
+    // execution order. This causes signoff's banner to be slotted after
+    // apply (last section), not between verify and apply.
+    const messages: RunMessageRow[] = [userRow(1, "verify", "Checks pass."), userRow(2, "apply", "Applying…")];
+    // Alphabetical order, exactly as deriveNodeStates returns it.
+    const nodeStates: NodeState[] = [
+      { nodeId: "apply", iteration: 0, state: "completed", lastEventSeq: 30 },
+      { nodeId: "signoff", iteration: 0, state: "completed", lastEventSeq: 20 },
+      { nodeId: "verify", iteration: 0, state: "completed", lastEventSeq: 10 },
+    ];
+
+    const { container } = renderWithClient(
+      <RunConversation
+        messages={messages}
+        nodeStates={nodeStates}
+        hitl={null}
+        hitlDecisions={{ signoff: { route: "apply" } }}
+      />,
+    );
+
+    const order = Array.from(container.querySelectorAll('[data-testid^="node-section-"]')).map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    const iVerify = order.indexOf("node-section-verify");
+    const iSignoff = order.indexOf("node-section-signoff");
+    const iApply = order.indexOf("node-section-apply");
+    expect(iVerify).toBeGreaterThanOrEqual(0);
+    // signoff ran between verify and apply — its banner must appear there.
+    expect(iSignoff).toBeGreaterThan(iVerify);
+    expect(iSignoff).toBeLessThan(iApply);
+    const signoffSection = within(container).getByTestId("node-section-signoff");
+    expect(within(signoffSection).getByTestId("hitl-decision-banner")).toBeTruthy();
+  });
 });
