@@ -382,8 +382,8 @@ describe("deriveNodeStates — active-pause patching", () => {
       { ...ev("fact.run_paused", { reason: "budget", nodeId: "implement" }), seq: 5 },
     ];
     const byId = Object.fromEntries(deriveNodeStates(events).map((n) => [n.nodeId, n.state]));
-    expect(byId.lint).toBe("failed");
-    expect(byId.implement).toBe("running");
+    expect(byId["lint"]).toBe("failed");
+    expect(byId["implement"]).toBe("running");
   });
 });
 
