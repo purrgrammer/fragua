@@ -1,6 +1,6 @@
 ---
 name: operate
-description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct queries; deep forensics on a finished run (transcript, per-call cost, artifacts) go to the postmortem skill. Assumes the `fragua` CLI (on PATH, or `bun run fragua` in a checkout).
+description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (provider credentials + a running harness so runs execute), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct queries; deep forensics on a finished run (transcript, per-call cost, artifacts) go to the postmortem skill. Assumes the `fragua` CLI (on PATH, or `bun run fragua` in a checkout).
 ---
 
 # operate — enqueue, watch, and control a live run
@@ -14,7 +14,7 @@ Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs
 ## Fast path
 
 ```sh
-fragua runs ls          # succeeds if the harness is running
+fragua runs ls          # lists runs (reads the local store; no harness needed)
 fragua providers ls     # at least one provider shows ✓
 
 # Run. --input name=value (repeatable) binds the typed inputs declared in the
@@ -36,14 +36,16 @@ If the fast path works, nothing else here matters.
 The harness is one foreground process that runs the daemon (which executes runs). CLI verbs act directly on the local store — `~/.fragua/fragua.db`, or `--db <path>` for another instance — so they work even with the harness down; but a queued run only *makes progress* while the harness is running.
 
 ```sh
-fragua runs ls          # succeeds → harness running; errors → not running (or wrong --db)
+fragua runs ls          # lists runs (store read; succeeds with or without a harness)
 fragua providers ls     # configured providers; ✓ = credentialed
 ```
 
+`fragua runs ls` is not a liveness check — it reads the store and succeeds whenever the store exists. The harness's only job is *executing* runs; you can't tell it's down by listing — the symptom is a run that never leaves `queued`.
+
 Common failures:
 
-- **`fragua runs ls` errors** — no harness running (or pointed at the wrong store). Start it: `fragua harness` (default), or `fragua daemon start --db <path>` for a headless store. The user should run `fragua harness` themselves — don't start it on their behalf without asking; it attaches to the current shell.
-- **Runs stuck `queued`** — daemon dead/heartbeat stale. Restart the harness.
+- **`fragua runs ls` errors** — no store at this path. `fragua harness` creates `~/.fragua/fragua.db` on first start; or check `--db`.
+- **Runs stuck `queued`** — no harness running (or its daemon died / heartbeat stale): nothing is executing the queue. Start/restart `fragua harness` — but the user should run it themselves (don't start it on their behalf without asking; it attaches to the current shell).
 - **Provider not credentialed** — enqueue fails `provider_unavailable`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`.
 - **Model not registered** — enqueue fails `model_unresolved`. Register it (`fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`, or the full `fragua providers add --custom` wizard for a new provider) or switch the workflow's `model:`.
 
