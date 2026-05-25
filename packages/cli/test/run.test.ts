@@ -1,6 +1,6 @@
-// fragua run: full round-trip — CLI uploads the workflow, enqueues a run, streams
-// events until terminal. Spins up a real server + a foreground daemon
-// fiber so the SSE stream actually progresses.
+// fragua run: full round-trip — the CLI saves the workflow + enqueues directly
+// on the store, then tails the event log to terminal. A foreground executor
+// fiber over the same file-backed store makes the run actually progress.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,12 +8,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as handler from "@fragua/core/handler";
 import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@fragua/daemon";
-import { createServer } from "@fragua/server";
 import { SqliteStore } from "@fragua/store";
 import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
 
 interface Rig {
-  url: string;
+  dbPath: string;
   store: SqliteStore;
   close: () => Promise<void>;
 }
@@ -29,29 +28,19 @@ afterEach(() => {
   }
 });
 
-async function rig(): Promise<Rig> {
+/** A file-backed store + a foreground executor fiber over it, so a followed
+ * run progresses to terminal. No server — the CLI is a store-client. */
+function rig(): Rig {
   const dir = mkdtempSync(join(tmpdir(), "fragua-run-"));
   tmps.push(dir);
   mkdirSync(join(dir, ".fragua"), { recursive: true });
-  const store = new SqliteStore({ path: join(dir, ".fragua/fragua.db") });
+  const dbPath = join(dir, ".fragua/fragua.db");
+  const store = new SqliteStore({ path: dbPath });
 
   const dispatcher = new Dispatcher();
   dispatcher.setResolver(autoDispatcherResolver({ store }));
   const tools = new handler.InMemoryToolRegistry();
-  const llmCall: handler.LlmCallFn = async () => ({
-    content: "",
-    tokens: 0,
-    costUsd: 0,
-    model: "stub",
-  });
-
-  const app = createServer({ store });
-  const server = Bun.serve({
-    port: 0,
-    hostname: "127.0.0.1",
-    fetch: app.fetch,
-  });
-  const url = `http://127.0.0.1:${server.port}`;
+  const llmCall: handler.LlmCallFn = async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" });
 
   const shutdown = new AbortController();
   const executorPromise = runExecutor({
@@ -66,116 +55,82 @@ async function rig(): Promise<Rig> {
   }).catch(() => {});
 
   return {
-    url,
+    dbPath,
     store,
     close: async () => {
       shutdown.abort();
       await executorPromise;
-      await server.stop(true);
       store.close();
     },
   };
 }
 
-describe("fragua run", () => {
-  test("round-trip: YAML file → upload → enqueue → stream → completed", async () => {
-    const r = await rig();
-    try {
-      const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
-      tmps.push(workflowDir);
-      const yamlPath = join(workflowDir, "echo.yaml");
-      writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
+function writeWorkflow(): string {
+  const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+  tmps.push(workflowDir);
+  const yamlPath = join(workflowDir, "echo.yaml");
+  writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
+  return yamlPath;
+}
 
-      const exitCode = await runCommand({
-        workflow: yamlPath,
-        url: r.url,
-      });
+describe("fragua run", () => {
+  test("round-trip: YAML file → save → enqueue → tail → completed", async () => {
+    const r = rig();
+    try {
+      const exitCode = await runCommand({ workflow: writeWorkflow(), dbPath: r.dbPath });
       expect(exitCode).toBe(0);
     } finally {
       await r.close();
     }
   });
 
-  test("cannot read workflow file → exit 1", async () => {
-    const code = await runCommand({
-      workflow: "/nonexistent/workflow.yaml",
-      url: "http://127.0.0.1:1",
-    });
+  test("cannot read workflow file → exit 1 (before opening the store)", async () => {
+    const code = await runCommand({ workflow: "/nonexistent/workflow.yaml", dbPath: "/nonexistent/x.db" });
     expect(code).toBe(1);
   });
 
-  test("unreachable server → exit 1 with actionable guidance, not a raw ConnectionRefused", async () => {
-    const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
-    tmps.push(workflowDir);
-    const yamlPath = join(workflowDir, "echo.yaml");
-    writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
-
+  test("missing store → exit 1 with actionable guidance", async () => {
     const errs: string[] = [];
     const originalError = console.error;
     console.error = (...args: unknown[]) => {
       errs.push(args.map(String).join(" "));
     };
     try {
-      // Port 1 has no listener: postJson rejects with ConnectionRefused.
-      // The command must catch it and return 1 rather than throwing.
-      const code = await runCommand({ workflow: yamlPath, url: "http://127.0.0.1:1" });
+      const code = await runCommand({ workflow: writeWorkflow(), dbPath: join(tmpdir(), "fragua-absent-xyz/none.db") });
       expect(code).toBe(1);
     } finally {
       console.error = originalError;
     }
     const joined = errs.join("\n");
-    expect(joined).toContain("could not reach a fragua server");
-    expect(joined).toContain("fragua harness");
+    expect(joined).toContain("no fragua store");
+    expect(joined).toContain("harness");
   });
 
   test("--no-follow exits immediately after enqueue", async () => {
-    const r = await rig();
+    const r = rig();
     try {
-      const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
-      tmps.push(workflowDir);
-      const yamlPath = join(workflowDir, "echo.yaml");
-      writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
-
-      const code = await runCommand({
-        workflow: yamlPath,
-        url: r.url,
-        follow: false,
-      });
+      const code = await runCommand({ workflow: writeWorkflow(), dbPath: r.dbPath, follow: false });
       expect(code).toBe(0);
     } finally {
       await r.close();
     }
   });
 
-  test("--title is sent on the enqueue body; the free-form input is no longer sent", async () => {
-    const r = await rig();
-    const originalFetch = globalThis.fetch;
-    let runsBody: Record<string, unknown> | undefined;
-    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-      if (url.endsWith("/runs") && init?.method === "POST" && typeof init.body === "string") {
-        runsBody = JSON.parse(init.body) as Record<string, unknown>;
-      }
-      return originalFetch(input, init);
-    }) as typeof fetch;
+  test("--title is recorded on the run; no free-form input is set", async () => {
+    const r = rig();
     try {
-      const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
-      tmps.push(workflowDir);
-      const yamlPath = join(workflowDir, "echo.yaml");
-      writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
-
       const code = await runCommand({
-        workflow: yamlPath,
-        url: r.url,
+        workflow: writeWorkflow(),
+        dbPath: r.dbPath,
         follow: false,
         title: "Rename foo to bar",
       });
       expect(code).toBe(0);
-      expect(runsBody).toBeDefined();
-      expect(runsBody!["title"]).toBe("Rename foo to bar");
-      expect("input" in runsBody!).toBe(false);
+      const runId = r.store.listRunIds()[0]!;
+      const state = r.store.getState(runId)!;
+      expect(state.title).toBe("Rename foo to bar");
+      expect(state.routing["input"]).toBeUndefined();
     } finally {
-      globalThis.fetch = originalFetch;
       await r.close();
     }
   });

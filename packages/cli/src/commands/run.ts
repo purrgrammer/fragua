@@ -1,4 +1,5 @@
-// `fragua run <workflow>` — enqueue a run via HTTP and stream events.
+// `fragua run <workflow>` — enqueue a run directly on the store, then tail
+// its event log (follow by default; `--no-follow` enqueues and exits).
 //
 // `<workflow>` resolves in two flavours:
 //   - bare name (no slash, no `.yaml` suffix): looks up
@@ -7,20 +8,20 @@
 //   - path (relative or absolute, with slash or `.yaml` suffix): read
 //     directly.
 //
-// Then:
+// Then (store-client — no HTTP, no running server required to enqueue):
 //   1. Read the YAML file.
-//   2. POST /workflows to register it and receive the sha.
-//   3. POST /runs with that sha + cwd + workflow metadata.
-//   4. Stream /runs/:id/stream (SSE) to stdout until the run reaches a
-//      terminal state or the user hits Ctrl-C.
+//   2. plane.buildSaveWorkflow(source) → commitSaveWorkflow (content-addressed).
+//   3. plane.buildEnqueue → commitEnqueue (mints the run id, validates inputs).
+//   4. Follow: poll readPlane.eventsSince in a loop, render each event, exit
+//      with the run's terminal status. A daemon must be running for the run to
+//      execute; with none, the run sits queued and the tail waits.
 
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { SqliteStore } from "@fragua/store";
+import type { StoredEvent } from "@fragua/store";
 import chalk from "chalk";
 import { resolveProject } from "../project.ts";
+import { type StoreClient, withStoreClient } from "../store-client.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
 /** Parse repeated `--input name=value` args into a resolved map. A value
@@ -53,29 +54,8 @@ export async function resolveInputArgs(raw: string | string[] | undefined): Prom
   return out;
 }
 
-/** Read the published server URL from a store's `server_endpoint` row.
- * Returns undefined if the DB is missing, the row is absent, or the server
- * hasn't bound yet. SELECT-only, no writes. */
-function discoverEndpointUrl(dbPath: string): string | undefined {
-  if (!existsSync(dbPath)) return undefined;
-  try {
-    const store = new SqliteStore({ path: dbPath });
-    try {
-      return store.currentServerEndpoint()?.url ?? undefined;
-    } finally {
-      store.close();
-    }
-  } catch {
-    return undefined;
-  }
-}
-
 export interface RunCommandOptions {
   workflow: string;
-  /** Base URL of the running server. When omitted, the discovery cascade runs
-   * (project store `server_endpoint` → harness store `server_endpoint`); no
-   * server found fails with actionable guidance — there is no localhost default. */
-  url?: string;
   /** Priority tie-breaker. Higher runs first. Default 0. */
   priority?: number;
   /** Starting routing entries injected into run_state.routing. */
@@ -90,9 +70,8 @@ export interface RunCommandOptions {
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
   cwd?: string;
-  /** Store path. When set, discovers the server via that store's
-   * `server_endpoint` row instead of `<cwd>/.fragua/fragua.db`. Pairs with
-   * `fragua serve --db`. */
+  /** Store path to enqueue + tail against. Default `~/.fragua/fragua.db`
+   * (the harness store). */
   dbPath?: string;
 }
 
@@ -120,23 +99,6 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       chalk.yellow("run: .fragua/config.yaml is not committed — this run won't be portable until you commit it"),
     );
   }
-  // Discovery cascade (no default — a missing server is an error, not a
-  // silent localhost guess):
-  //   1. --url flag (explicit)
-  //   2. server_endpoint in the project store (--db, else <cwd>/.fragua/fragua.db)
-  //      — written by `fragua serve --db <path>` (CI primitive)
-  //   3. server_endpoint in ~/.fragua/fragua.db — written by `fragua harness`
-  const projectDb = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
-  const harnessDb = resolve(homedir(), ".fragua/fragua.db");
-  const discoveredUrl = opts.url ?? discoverEndpointUrl(projectDb) ?? discoverEndpointUrl(harnessDb);
-  if (discoveredUrl === undefined) {
-    console.error(chalk.red("run: no running fragua server found"));
-    console.error(chalk.dim(`  no --url, no server_endpoint in ${projectDb} or ${harnessDb}`));
-    console.error(chalk.dim("  start one with `fragua harness`, or pass --url http://host:port[/api]"));
-    return 1;
-  }
-  const baseUrl = discoveredUrl.replace(/\/$/, "");
-
   const resolved = await resolveWorkflow(cwd, opts.workflow);
   if (resolved == null) {
     const looksLikePath = opts.workflow.includes("/") || opts.workflow.endsWith(".yaml");
@@ -163,151 +125,78 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     return 1;
   }
 
-  // 1. Upload workflow — first contact with the server, so a refused
-  //    connection here means no reachable harness/serve. Translate the
-  //    raw ConnectionRefused into actionable guidance instead of letting
-  //    it bubble up as an unhandled rejection.
-  let uploadRes: Response;
-  try {
-    uploadRes = await postJson(`${baseUrl}/workflows`, { name, source });
-  } catch (err) {
-    if (!isConnectionError(err)) throw err;
-    console.error(chalk.red(`run: could not reach a fragua server at ${baseUrl}`));
-    console.error(
-      chalk.dim(`  the discovered server isn't responding — it may have stopped; restart with \`fragua harness\``),
-    );
-    return 1;
-  }
-  if (!uploadRes.ok) {
-    return fail(`upload failed (${uploadRes.status})`, uploadRes);
-  }
-  const { sha } = (await uploadRes.json()) as { sha: string };
-  console.log(chalk.dim(`workflow ${name} -> ${sha.slice(0, 12)}`));
+  // Save (content-addressed) + enqueue + (optionally) follow — all on the
+  // local store. No server needed to record the run; a daemon executes it.
+  return withStoreClient(opts, async (client) => {
+    const mint = client.plane.buildSaveWorkflow(source);
+    if (!mint.ok) {
+      console.error(chalk.red(`run: ${opts.workflow} did not parse: ${mint.detail}`));
+      return 1;
+    }
+    client.plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
+    console.log(chalk.dim(`workflow ${name} -> ${mint.sha.slice(0, 12)}`));
 
-  // 2. Enqueue run
-  const enqueueBody: Record<string, unknown> = {
-    workflowSha: sha,
-    cwd: resolve(cwd),
-    projectId: project.projectId,
-    projectName: project.projectName,
-    workflowScope: scope,
-    workflowPath: dotPath,
-  };
-  if (scope === "global" || scope === "local") enqueueBody["workflowName"] = name;
-  if (opts.priority !== undefined) enqueueBody["priority"] = opts.priority;
-  if (opts.routing !== undefined) enqueueBody["routing"] = opts.routing;
-  if (opts.title !== undefined) enqueueBody["title"] = opts.title;
-  if (opts.inputs !== undefined && Object.keys(opts.inputs).length > 0) enqueueBody["inputs"] = opts.inputs;
-  const enqueueRes = await postJson(`${baseUrl}/runs`, enqueueBody);
-  if (!enqueueRes.ok) {
-    return fail(`enqueue failed (${enqueueRes.status})`, enqueueRes);
-  }
-  const { runId } = (await enqueueRes.json()) as { runId: string };
-  console.log(chalk.green(`run queued: ${runId}`));
+    const enq = client.plane.buildEnqueue({
+      workflowSha: mint.sha,
+      inputDecls: mint.graph.attrs.inputs ?? [],
+      cwd: resolve(cwd),
+      projectId: project.projectId,
+      projectName: project.projectName,
+      workflowScope: scope,
+      workflowPath: dotPath,
+      ...(scope === "global" || scope === "local" ? { workflowName: name } : {}),
+      ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
+      ...(opts.routing !== undefined ? { routing: opts.routing } : {}),
+      ...(opts.inputs !== undefined && Object.keys(opts.inputs).length > 0 ? { inputs: opts.inputs } : {}),
+    });
+    if (!enq.ok) {
+      console.error(chalk.red(`run: ${enq.error}`));
+      return 1;
+    }
+    client.plane.commitEnqueue(enq.params);
+    if (opts.title !== undefined && opts.title.length > 0) client.store.setRunTitle(enq.runId, opts.title);
+    console.log(chalk.green(`run queued: ${enq.runId}`));
 
-  if (opts.follow === false) return 0;
-
-  // 3. Stream events
-  const streamRes = await fetch(`${baseUrl}/runs/${runId}/stream`, {
-    headers: { Accept: "text/event-stream" },
+    if (opts.follow === false) return 0;
+    return followRun(client, enq.runId);
   });
-  if (!streamRes.ok || streamRes.body == null) {
-    console.error(chalk.red(`stream failed (${streamRes.status})`));
-    return 1;
-  }
+}
 
-  let exit = 0;
-  const reader = streamRes.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  outer: for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    while (true) {
-      const sep = buf.indexOf("\n\n");
-      if (sep < 0) break;
-      const frame = buf.slice(0, sep);
-      buf = buf.slice(sep + 2);
-      const parsed = parseSSE(frame);
-      if (parsed == null) continue;
-      renderEvent(parsed);
-      if (TERMINAL_TYPES.has(parsed.type)) {
-        if (parsed.type === "fact.run_halted") exit = 1;
-        if (parsed.type === "fact.run_cancelled") exit = 130;
-        if (parsed.type === "fact.run_paused_human") {
-          console.log(chalk.yellow("run paused for human input — exiting."));
-        }
-        break outer;
+const POLL_MS = 200;
+const BATCH = 500;
+
+/** Tail a run's event log to terminal: poll `readPlane.eventsSince`, render
+ * each new event, return the run's terminal exit code. A daemon must be running
+ * for events to appear — with none the run sits queued and this waits (Ctrl-C
+ * to stop), same as the old SSE follow. */
+async function followRun(client: StoreClient, runId: string): Promise<number> {
+  let cursor = 0;
+  for (;;) {
+    const batch = client.readPlane.eventsSince(runId, cursor, BATCH);
+    for (const ev of batch) {
+      renderEvent(ev);
+      cursor = ev.seq;
+      if (TERMINAL_TYPES.has(ev.type)) {
+        if (ev.type === "fact.run_paused_human") console.log(chalk.yellow("run paused for human input — exiting."));
+        return ev.type === "fact.run_halted" ? 1 : ev.type === "fact.run_cancelled" ? 130 : 0;
       }
     }
-  }
-  await reader.cancel().catch(() => {});
-  return exit;
-}
-
-interface SSEEvent {
-  id?: string;
-  type: string;
-  data: unknown;
-}
-
-function parseSSE(frame: string): SSEEvent | null {
-  const lines = frame.split("\n");
-  let id: string | undefined;
-  // The server emits frames without an `event:` field — every frame
-  // dispatches as a generic "message" and the actual event type lives
-  // inside the JSON payload (`type` field). Prefer that; fall back to
-  // the SSE `event:` field for legacy/forward compatibility.
-  let sseType = "message";
-  let data = "";
-  for (const line of lines) {
-    if (line.startsWith("id:")) id = line.slice(3).trim();
-    else if (line.startsWith("event:")) sseType = line.slice(6).trim();
-    else if (line.startsWith("data:")) data += line.slice(5).trimStart();
-  }
-  if (data.length === 0) return null;
-  try {
-    const parsed = JSON.parse(data) as { type?: unknown };
-    const type = typeof parsed.type === "string" ? parsed.type : sseType;
-    return id !== undefined ? { id, type, data: parsed } : { type, data: parsed };
-  } catch {
-    return { type: sseType, data };
+    // A non-full batch means we've caught up to the live tail — wait for more.
+    if (batch.length < BATCH) await sleep(POLL_MS);
   }
 }
 
-function renderEvent(event: SSEEvent): void {
-  const payload = event.data as { seq?: number; payload?: unknown };
-  const seq = payload.seq ?? event.id ?? "-";
-  const color = event.type.startsWith("fact.run_completed")
+function renderEvent(ev: StoredEvent): void {
+  const color = ev.type.startsWith("fact.run_completed")
     ? chalk.green
-    : event.type.startsWith("fact.run_halted") || event.type.startsWith("fact.run_cancelled")
+    : ev.type.startsWith("fact.run_halted") || ev.type.startsWith("fact.run_cancelled")
       ? chalk.red
-      : event.type.startsWith("intent.")
+      : ev.type.startsWith("intent.")
         ? chalk.blue
         : chalk.dim;
-  console.log(`${chalk.dim(`[${seq}]`)} ${color(event.type)} ${JSON.stringify(payload.payload ?? {})}`);
+  console.log(`${chalk.dim(`[${ev.seq}]`)} ${color(ev.type)} ${JSON.stringify(ev.payload ?? {})}`);
 }
 
-/** A failed-to-connect `fetch` rejection (no listener / wrong port).
- *  Bun surfaces `code: "ConnectionRefused"`; Node uses `ECONNREFUSED`. */
-function isConnectionError(err: unknown): boolean {
-  const code = (err as { code?: unknown } | null)?.code;
-  return code === "ConnectionRefused" || code === "ECONNREFUSED";
-}
-
-async function postJson(url: string, body: unknown): Promise<Response> {
-  return fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
-async function fail(msg: string, res: Response): Promise<number> {
-  console.error(chalk.red(`run: ${msg}`));
-  try {
-    console.error(chalk.dim(`  ${await res.text()}`));
-  } catch {}
-  return 1;
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }

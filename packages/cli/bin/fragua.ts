@@ -371,11 +371,10 @@ cli
 cli
   .command(
     "run <workflow>",
-    "Upload a workflow, enqueue a run, stream events to stdout. " +
+    "Enqueue a run on the local store and tail its event log to stdout. " +
       "Pass workflow inputs with --input name=value (repeatable); set an " +
       "explicit run title with --title (otherwise the title is auto-summarised).",
   )
-  .option("--url <url>", "Server URL (default: discovered via the store's server_endpoint row)")
   .option(
     "-i, --input <name=value>",
     "Run input; repeat for multiple (one name=value each). Value @path reads a file, @- reads stdin (e.g. --input task=@spec.md)",
@@ -409,7 +408,6 @@ cli
     }
     const code = await runCommand({
       workflow,
-      ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
       ...(priority !== undefined && Number.isFinite(priority) ? { priority } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
