@@ -35,7 +35,8 @@ describe("graph arbitrary — bootstrap", () => {
       fc.property(arbGraphWithCurrentNode, ({ graph, nodeId }) => {
         const node = graph.nodes[nodeId];
         expect(node).toBeDefined();
-        expect(node!.type === "llm" || node!.type === "tool").toBe(true);
+        // non-terminal: a dispatchable node (llm / tool / human), never start/exit.
+        expect(node!.type !== "start" && node!.type !== "exit").toBe(true);
       }),
       { numRuns: 500 },
     );

@@ -13,6 +13,7 @@
 //   F  yield_human → run_paused_human (the HITL pause)
 
 import { describe, expect, test } from "bun:test";
+import { type Edge, type Graph, type Node, type NodeAttrs, validate } from "@fragua/core";
 import type { HandlerResult } from "@fragua/core/handler";
 import type { RunState } from "@fragua/store";
 import fc from "fast-check";
@@ -129,6 +130,39 @@ const arbInput = inputArb(arbHandlerResult);
 
 const factTypes = (plan: { facts: { type: string }[] }): Set<string> => new Set(plan.facts.map((f) => f.type));
 
+// HITL answer / route-case: a routing-llm or human node `r` whose route
+// `r{chosen}` the re-dispatched handler picks (simulating the operator's
+// answer — the handler returns a transition carrying that route). r0 always
+// targets a downstream node `t` so t stays reachable + exit-reachable; the
+// rest target exit or t. Built directly (guaranteed route node + known target,
+// no filtering) and validated clean in the property body.
+const arbRouteCase = fc
+  .record({
+    nodeType: fc.constantFrom<"llm" | "human">("llm", "human"),
+    routeCount: fc.integer({ min: 1, max: 3 }),
+    chosen: fc.nat({ max: 2 }),
+    extraToExit: fc.array(fc.boolean(), { minLength: 2, maxLength: 2 }),
+  })
+  .map(({ nodeType, routeCount, chosen, extraToExit }) => {
+    const m = routeCount;
+    const targets = Array.from({ length: m }, (_, j) => (j === 0 ? "t" : extraToExit[j - 1] ? "exit" : "t"));
+    const routes = Array.from({ length: m }, (_, j) => `r${j}`);
+    const rAttrs: NodeAttrs = nodeType === "human" ? { label: "r", routes, text: "choose" } : { label: "r", routes };
+    const nodes: Record<string, Node> = {
+      start: { id: "start", type: "start", attrs: { label: "start" } },
+      r: { id: "r", type: nodeType === "human" ? "human" : "llm", attrs: rAttrs },
+      t: { id: "t", type: "llm", attrs: { label: "t" } },
+      exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
+    };
+    const edges: Edge[] = [
+      { from: "start", to: "r", attrs: {} },
+      ...routes.map((rt, j) => ({ from: "r", to: targets[j]!, attrs: { route: rt } })),
+      { from: "t", to: "exit", attrs: {} },
+    ];
+    const graph: Graph = { id: "g", directed: true, attrs: {}, nodes, edges };
+    return { graph, route: `r${chosen % m}`, expectedTarget: targets[chosen % m]! };
+  });
+
 describe("planTransition — properties", () => {
   test("A: pure — same input ⇒ equal plan, and handlerResult is never mutated", () => {
     fc.assert(
@@ -222,6 +256,49 @@ describe("planTransition — properties", () => {
         expect(t.has("fact.node_started")).toBe(false);
         expect(t.has("fact.run_completed")).toBe(false);
         expect(t.has("fact.run_halted")).toBe(false);
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  test("G: HITL answer — a transition's route selects the matching route edge", () => {
+    fc.assert(
+      fc.property(arbRouteCase, ({ graph, route, expectedTarget }) => {
+        expect(validate(graph)).toEqual([]); // the constructed route graph is clean
+        const input: TransitionInput = {
+          state: mkState("r"),
+          decision: {
+            kind: "proceed",
+            routingDelta: {},
+            shouldPause: false,
+            shouldPauseAfterDispatch: false,
+            appliedSeqs: [],
+            dropped: [],
+          } as TransitionInput["decision"],
+          graph,
+          handlerResult: { kind: "transition", outcomeStatus: "success", route, tokens: 0, costUsd: 0 },
+          accounting: {
+            turnBilled: 0,
+            totalCostUsd: 0,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            totalCacheReadTokens: 0,
+            totalCacheWriteTokens: 0,
+            lastModel: undefined,
+          },
+          effectiveRouting: {},
+          currentNode: "r",
+          iteration: 0,
+          now: 0,
+          random: () => 0.5,
+        };
+        const plan = planTransition(input);
+        const completed = plan.facts.find((f) => f.type === "fact.node_completed");
+        expect(completed).toBeDefined();
+        const payload = completed!.payload as { nextNode?: string; route?: string };
+        // selectEdge's route-case resolved nextNode to the chosen route's edge target.
+        expect(payload.nextNode).toBe(expectedTarget);
+        expect(payload.route).toBe(route);
       }),
       { numRuns: 500 },
     );
