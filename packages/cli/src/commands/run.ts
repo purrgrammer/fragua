@@ -21,6 +21,7 @@ import { resolve } from "node:path";
 import type { StoredEvent } from "@fragua/store";
 import chalk from "chalk";
 import { resolveProject } from "../project.ts";
+import { humanizeRoute, pickRoute } from "../route-picker.ts";
 import { type StoreClient, withStoreClient } from "../store-client.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
@@ -176,14 +177,46 @@ async function followRun(client: StoreClient, runId: string): Promise<number> {
     for (const ev of batch) {
       renderEvent(ev);
       cursor = ev.seq;
+      if (ev.type === "fact.run_paused_human") {
+        // Answer the gate inline (TTY) and keep following — the daemon folds
+        // the human_input and the run resumes. Off a TTY, exit so scripts
+        // don't block on a prompt.
+        if (await promptHumanGate(client, runId, ev)) continue;
+        return 0;
+      }
       if (TERMINAL_TYPES.has(ev.type)) {
-        if (ev.type === "fact.run_paused_human") console.log(chalk.yellow("run paused for human input — exiting."));
         return ev.type === "fact.run_halted" ? 1 : ev.type === "fact.run_cancelled" ? 130 : 0;
       }
     }
     // A non-full batch means we've caught up to the live tail — wait for more.
     if (batch.length < BATCH) await sleep(POLL_MS);
   }
+}
+
+/** Render the HITL gate as an arrow-key select menu, write the chosen route via
+ * the plane, and return true (keep following). Returns false — without writing —
+ * off a TTY, on an empty gate, or on a cancel, so the caller exits and the
+ * operator can answer later with `fragua runs respond`. */
+async function promptHumanGate(client: StoreClient, runId: string, ev: StoredEvent): Promise<boolean> {
+  const p = ev.payload as { text?: string; routes?: string[]; routeLabels?: Record<string, string> };
+  const routes = p.routes ?? [];
+  if (!process.stdin.isTTY || routes.length === 0) {
+    console.log(chalk.yellow("run paused for human input — exiting (answer with `fragua runs respond`)."));
+    return false;
+  }
+  const route = await pickRoute(routes, p.routeLabels ?? {}, p.text ?? "Choose how to proceed");
+  if (route === undefined) {
+    console.log(chalk.yellow("no choice made — exiting; answer later with `fragua runs respond`."));
+    return false;
+  }
+  const built = client.plane.buildHuman({ route });
+  if (!built.ok) {
+    console.error(chalk.red(`respond: ${built.error}`));
+    return false;
+  }
+  client.plane.commit(runId, built.intent);
+  console.log(chalk.dim(`→ ${p.routeLabels?.[route] ?? humanizeRoute(route)} (resuming)`));
+  return true;
 }
 
 function renderEvent(ev: StoredEvent): void {

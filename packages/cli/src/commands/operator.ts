@@ -16,6 +16,7 @@ import type { DiffRange } from "@fragua/core/read-plane";
 import type { RunStatus, SqliteStore } from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
+import { pickRoute } from "../route-picker.ts";
 import { withStoreClient } from "../store-client.ts";
 
 interface DiscoveryOpts {
@@ -200,7 +201,7 @@ export interface RespondOptions extends DiscoveryOpts {
  * (scriptable); without, it shows the gate prompt + routes and reads a choice
  * from stdin (interactive). */
 export async function respondCommand(opts: RespondOptions): Promise<number> {
-  return withStoreClient(opts, ({ store, plane }) => {
+  return withStoreClient(opts, async ({ store, plane }) => {
     const state = store.getState(opts.runId);
     if (state == null) {
       console.error(chalk.red("respond: run not found") + chalk.dim(` (${opts.runId})`));
@@ -210,34 +211,34 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
       console.error(chalk.red(`respond: run is not at a HITL gate (status=${state.status})`));
       return 1;
     }
-    // The gate's routes + prompt live on the last fact.run_paused_human.
+    // The gate's routes + prompt + label overrides live on the last
+    // fact.run_paused_human.
     let routes: string[] = [];
-    let label = "(needs input)";
+    let routeLabels: Record<string, string> = {};
+    let label = "Choose how to proceed";
     const events = store.getEvents(opts.runId);
     for (let i = events.length - 1; i >= 0; i--) {
       if (events[i]!.type === "fact.run_paused_human") {
-        const p = events[i]!.payload as { text?: string; routes?: string[] };
+        const p = events[i]!.payload as { text?: string; routes?: string[]; routeLabels?: Record<string, string> };
         routes = p.routes ?? [];
+        routeLabels = p.routeLabels ?? {};
         label = p.text ?? label;
         break;
       }
     }
     let route = opts.route;
     if (route == null) {
-      console.log(label);
-      for (let i = 0; i < routes.length; i++) console.log(`  [${i + 1}] ${routes[i]}`);
-      const ans = (globalThis.prompt?.(`Choose [1-${routes.length}]:`) ?? "").trim();
-      const idx = Number.parseInt(ans, 10) - 1;
-      if (!(idx >= 0 && idx < routes.length)) {
-        console.error(chalk.red("respond: invalid choice (pass --route to script it)"));
+      // Interactive: arrow-key select of human-readable route names.
+      route = await pickRoute(routes, routeLabels, label);
+      if (route === undefined) {
+        console.error(chalk.red("respond: no choice made (pass --route to script it)"));
         return 1;
       }
-      route = routes[idx];
     } else if (routes.length > 0 && !routes.includes(route)) {
       console.error(chalk.red(`respond: unknown route "${route}" (expected one of: ${routes.join(", ")})`));
       return 1;
     }
-    const body: { route: string; note?: string } = { route: route! };
+    const body: { route: string; note?: string } = { route };
     if (opts.note != null && opts.note.length > 0) body.note = opts.note;
     const built = plane.buildHuman(body);
     if (!built.ok) {
