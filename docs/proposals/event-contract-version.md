@@ -239,7 +239,7 @@ the first future projection-only migration. Low priority.
      `engine_incompatible` pause, and `schema_drift` is gone from the
      terminal enum. The existing DB-counter gate (axis unchanged) still decides the
      window. This removed the "permanent death from a transient mismatch" defect
-     **and** lets `cli-store-client`'s exit-code taxonomy land in its final post-fix
+     **and** lets the CLI exit-code taxonomy (`cliExitCode`) land in its final post-fix
      shape rather than being rewritten once the response changes. The contract-surface
      hash (§3.3) does not exist yet; its baseline snapshot is taken from the
      **post-§3.2** surface (the `engine_incompatible` reason present, `schema_drift` absent)
@@ -266,8 +266,9 @@ the first future projection-only migration. Low priority.
 - **`HaltReason` / `RunStatus`** — `schema_drift` is **removed** from the terminal
   `HaltReason` enum (not retained "for unrecoverable engine errors" — there is no
   residual; §3.2); the `engine_incompatible` pause reason enters the non-terminal
-  set. Enum-consumer sweep per CLAUDE.md §1 (the `cli-store-client` exit-code map,
-  `wake-pending` reason sets, humanize labels, `VALID_STATUSES`).
+  set. Enum-consumer sweep per CLAUDE.md §1 (the CLI exit-code map
+  (`packages/cli/src/cli-exit.ts`), `wake-pending` reason sets, humanize labels,
+  `VALID_STATUSES`).
 - **Two discipline tests ship with the axis split (§3.1):** the contract-surface
   hash snapshot (§3.3) and the `MIN_COMPATIBLE` value snapshot (§3.4) — both fail
   the build on an undecided change to what they pin.

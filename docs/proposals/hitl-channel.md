@@ -11,7 +11,7 @@ parent: cli-topology.md
 
 > Child of [`cli-topology.md`](cli-topology.md). An additive tail; blocks
 > nothing. The resolver seam + queue resolver can land alone; concrete channels
-> host on fragua ci (shipped) and [`cli-store-client.md`](cli-store-client.md).
+> host on fragua ci (shipped) and cli-store-client (shipped).
 
 ## 1. What already exists
 
