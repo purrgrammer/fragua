@@ -60,6 +60,14 @@ export interface DetailOverlay {
    * Used to downgrade still-"running" nodes to "failed" on merge,
    * matching the server's terminal-halt patch. */
   haltSeq: number | undefined;
+  /** Seq of the latest run-LEVEL status fact folded (run_started / paused /
+   * paused_human / resumed / completed / halted / cancelled / quarantined).
+   * `mergeDetail` gates the overlay's run-level fields (status, runStatus,
+   * hitl*) on this being newer than the snapshot — mirroring the per-node
+   * `lastEventSeq` gating. Without it a stale overlay (e.g. one that missed
+   * a `fact.run_resumed` SSE frame) would pin the page to `paused_human`
+   * even after the snapshot refetched and advanced past the pause. */
+  runStateSeq: number | undefined;
 }
 
 export const EMPTY_DETAIL_OVERLAY: DetailOverlay = {
@@ -73,6 +81,7 @@ export const EMPTY_DETAIL_OVERLAY: DetailOverlay = {
   hitlOptionLabels: null,
   hitlDecisions: null,
   haltSeq: undefined,
+  runStateSeq: undefined,
 };
 
 /** Returns true if the event type is one that affects detail-level
@@ -99,9 +108,34 @@ const DETAIL_TYPES = new Set<string>([
   "intent.human_input",
 ]);
 
+/** Run-LEVEL status facts — those that move `status` / `runStatus` / the
+ * hitl gate. The latest such seq is stamped onto `runStateSeq` so
+ * `mergeDetail` can tell whether the overlay's run-level view is fresher
+ * than a refetched snapshot. */
+const RUN_STATUS_FACTS = new Set<string>([
+  "fact.run_started",
+  "fact.run_completed",
+  "fact.run_halted",
+  "fact.run_cancelled",
+  "fact.run_quarantined",
+  "fact.run_paused",
+  "fact.run_paused_human",
+  "fact.run_resumed",
+]);
+
 /** Add a single event onto an existing overlay. Pure — returns a new
  * `DetailOverlay`. Unknown event types short-circuit to `prev`. */
 export function foldDetailFrame(
+  prev: DetailOverlay,
+  type: string,
+  payload: Record<string, unknown> | null,
+  seq: number,
+): DetailOverlay {
+  const next = foldDetailFrameInner(prev, type, payload, seq);
+  return RUN_STATUS_FACTS.has(type) ? { ...next, runStateSeq: seq } : next;
+}
+
+function foldDetailFrameInner(
   prev: DetailOverlay,
   type: string,
   payload: Record<string, unknown> | null,
@@ -311,6 +345,11 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     }
   }
 
+  // The overlay's run-level view is authoritative only while it reflects a
+  // fact newer than the snapshot's frontier (mirrors the per-node gating
+  // above). At/under the frontier the refetched snapshot wins.
+  const overlayRunFresh = overlay.runStateSeq !== undefined && overlay.runStateSeq > snapshot.lastEventSeq;
+
   return {
     ...snapshot,
     nodes: nodesChanged ? nodes : snapshot.nodes,
@@ -324,12 +363,18 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
       if (fresh.length === 0) return snapshot.selectedEdges;
       return [...snapshot.selectedEdges, ...fresh.map(({ from, to, iteration }) => ({ from, to, iteration }))];
     })(),
-    status: overlay.status ?? snapshot.status,
-    runStatus: overlay.runStatus !== null ? overlay.runStatus : snapshot.runStatus,
-    hitlNodeId: overlay.hitlNodeId !== null ? overlay.hitlNodeId : snapshot.hitlNodeId,
-    hitlLabel: overlay.hitlLabel !== null ? overlay.hitlLabel : snapshot.hitlLabel,
-    hitlOptions: overlay.hitlOptions !== null ? overlay.hitlOptions : snapshot.hitlOptions,
-    hitlOptionLabels: overlay.hitlOptionLabels !== null ? overlay.hitlOptionLabels : snapshot.hitlOptionLabels,
+    // Run-level fields win from the overlay ONLY while it's fresher than
+    // the snapshot. Once the snapshot refetches past the overlay's latest
+    // run-state fact, the snapshot is authoritative — so a stale overlay
+    // (e.g. one that missed a `fact.run_resumed` frame) can't pin the page
+    // to a pause the run has already left.
+    status: overlayRunFresh ? (overlay.status ?? snapshot.status) : snapshot.status,
+    runStatus: overlayRunFresh && overlay.runStatus !== null ? overlay.runStatus : snapshot.runStatus,
+    hitlNodeId: overlayRunFresh && overlay.hitlNodeId !== null ? overlay.hitlNodeId : snapshot.hitlNodeId,
+    hitlLabel: overlayRunFresh && overlay.hitlLabel !== null ? overlay.hitlLabel : snapshot.hitlLabel,
+    hitlOptions: overlayRunFresh && overlay.hitlOptions !== null ? overlay.hitlOptions : snapshot.hitlOptions,
+    hitlOptionLabels:
+      overlayRunFresh && overlay.hitlOptionLabels !== null ? overlay.hitlOptionLabels : snapshot.hitlOptionLabels,
     // Live decisions layer over the snapshot's history, latest per node.
     hitlDecisions:
       overlay.hitlDecisions !== null

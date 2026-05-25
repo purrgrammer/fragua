@@ -289,7 +289,7 @@ describe("mergeDetail", () => {
         { nodeId: "done-node", iteration: 0, state: "completed", lastEventSeq: 8 },
       ],
     });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", null, 42);
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", null, 142);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes.find((n) => n.nodeId === "running-node")?.state).toBe("failed");
     expect(merged.nodes.find((n) => n.nodeId === "done-node")?.state).toBe("completed");
@@ -338,11 +338,32 @@ describe("mergeDetail", () => {
     ]);
   });
 
-  test("status from overlay supersedes the snapshot status", () => {
+  test("status from a FRESHER overlay supersedes the snapshot status", () => {
+    // Overlay event (seq 150) is newer than the snapshot frontier (100), so
+    // the overlay's run-level view wins.
     const snap = snapshot({ status: "running" });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 50);
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 150);
     const merged = mergeDetail(snap, overlay);
     expect(merged.status).toBe("success");
+  });
+
+  test("a STALE overlay does not override a snapshot that advanced past it", () => {
+    // The regression behind the HITL-resume bug: the overlay folded a pause
+    // (seq 60) but missed the later resume/complete frames, while the
+    // snapshot refetched to lastEventSeq=100. The fresher snapshot must win,
+    // so a paused overlay can't pin the page after the run moved on.
+    const snap = snapshot({ status: "success", runStatus: "completed", lastEventSeq: 100 });
+    const overlay = fold(
+      EMPTY_DETAIL_OVERLAY,
+      "fact.run_paused_human",
+      { nodeId: "signoff", text: "Approve?", routes: ["apply"] },
+      60,
+    );
+    const merged = mergeDetail(snap, overlay);
+    expect(merged.status).toBe("success");
+    expect(merged.runStatus).toBe("completed");
+    // The stale overlay's gate node must NOT leak onto the completed run.
+    expect(merged.hitlNodeId ?? null).toBeNull();
   });
 
   test("preserves snapshot.nodes ref when the overlay carries no node-touching changes", () => {
@@ -358,7 +379,7 @@ describe("mergeDetail", () => {
         { nodeId: "n2", iteration: 0, state: "completed", lastEventSeq: 20 },
       ],
     });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 50);
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 150);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toBe(snap.nodes);
     expect(merged.status).toBe("success");
@@ -392,7 +413,7 @@ describe("mergeDetail", () => {
         EMPTY_DETAIL_OVERLAY,
         "fact.run_paused_human",
         { nodeId: "review", text: "Approve?", routes: opts },
-        12,
+        112,
       );
       const merged = mergeDetail(snap, overlay);
       expect(merged.status).toBe("paused");
@@ -430,7 +451,7 @@ describe("mergeDetail", () => {
       // The merge should flip runStatus and CLEAR the snapshot's HITL
       // fields. (Today the merge keeps snapshot fields when overlay is
       // null; this test documents the resume contract for future work.)
-      const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_resumed", { fromStatus: "paused_human" }, 50);
+      const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_resumed", { fromStatus: "paused_human" }, 150);
       const merged = mergeDetail(snap, overlay);
       expect(merged.status).toBe("running");
       expect(merged.runStatus).toBe("running");
