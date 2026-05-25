@@ -1,18 +1,18 @@
 name: PR review
 
-# Unattended review on every push to a PR. Runs the `pr_review` fragua workflow
-# (`.fragua/workflows/pr_review.yaml`) to completion via `fragua ci` and posts
+# Unattended review on every push to a PR. Installs the released fragua binary
+# via the setup-fragua action, then runs the `pr_review` fragua workflow
+# (`.fragua/workflows/pr_review.yaml`) to completion with `fragua ci` and posts
 # the result back to the PR: request-changes on a Critical/High finding,
-# comment otherwise. The job itself stays green either way — the review is
-# advisory; the PR's review state (not this check) is what gates a merge.
+# comment otherwise. The job stays green either way — the review is advisory;
+# the PR's review state (not this check) is what gates a merge.
 #
-# This in-repo job builds fragua from source so it reviews the PR's own code
-# without depending on a published release. A CONSUMER repo wires the same
-# thing against a release binary in two lines — see
-# .github/actions/setup-fragua/README.md:
-#
-#     - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.1.0
-#     - run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }}
+# Using setup-fragua here is deliberate: the in-repo job wires the reviewer
+# exactly as a CONSUMER repo would, which keeps the action itself under test.
+# `@v0.1.0` pins the action and the binary it installs (default: the smaller
+# headless build, fine for `fragua ci`) — bump as fragua releases. `fragua ci`
+# reads the workflow from `.fragua/workflows/pr_review.yaml` in the checkout and
+# the provider credential from the env below.
 
 on:
   pull_request:
@@ -41,16 +41,10 @@ jobs:
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.2.17"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.1.0
 
       - name: "Review PR #${{ github.event.pull_request.number }}"
-        run: bun run fragua ci pr_review --input pr=${{ github.event.pull_request.number }}
+        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }}
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).
