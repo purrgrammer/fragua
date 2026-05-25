@@ -14,10 +14,13 @@ export const OutcomeSchema = Type.Object(
     notes: Type.String(),
     failure_reason: Type.Optional(Type.String()),
     /**
-     * When true, an unrecovered failure must NOT trigger a goal-gate retry
-     * via `graph.attrs.retry_target`. Used for intentional aborts (e.g. a
-     * node can't proceed because the task target is missing) so we don't
-     * burn tokens re-running the run after an explicit stop.
+     * Forces the retry-policy to treat the outcome as a hard fail: `retryStep`
+     * (engine/retry-policy.ts) short-circuits a `retry`-status outcome to
+     * `fail` when this is set — for failures a retry can't fix (auth / 4xx /
+     * validation). It does NOT gate the §3.4 goal-gate retarget: a `goal_gate`
+     * node that fails still re-runs its `retry_target` (bounded by max-retries),
+     * which is exactly what lets a verify-style gate re-review on an
+     * `abort`/REJECT.
      */
     non_retryable: Type.Optional(Type.Boolean()),
     /**
@@ -120,9 +123,9 @@ export function failProvider(
  * (`route_not_picked`, `route_call_not_isolated`) so the handler-bridge
  * converts the outcome into `HandlerResult { kind: "halt", reason }`
  * instead of a transition. Status stays "fail" so any downstream code
- * that checks status alone still treats this as not-success;
- * `non_retryable: true` keeps the goal-gate retry machinery from
- * relaunching the run after a structural failure.
+ * that checks status alone still treats this as not-success. The outcome
+ * becomes a halt (never a transition), so `non_retryable` is inert here —
+ * set only for parity with the other failure factories.
  */
 export function failHalt(reason: HaltReason, message: string): Outcome {
   return {

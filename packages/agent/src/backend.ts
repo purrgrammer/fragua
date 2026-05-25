@@ -717,11 +717,12 @@ export class PiLlmBackend implements LlmBackend {
 
     // Self-abort: an agent may decide its task is unreachable (missing target,
     // contradictory constraints, external blocker) and call the built-in
-    // `abort` tool. Treating that as a `fail` outcome lets workflows wire an
-    // early-exit edge with `condition="outcome=fail"` instead of forwarding
-    // the whole run through a no-op plan → implement → verify chain. We also
-    // flag it `non_retryable` so the goal-gate retry machinery doesn't
-    // relaunch the run after an explicit stop.
+    // `abort` tool. It maps to a `fail` outcome (NOT a halt): an ordinary node
+    // with no fail-edge then halts (`aborted_exit`), while a `goal_gate` node
+    // drives its §3.4 retarget — this is the verify/review REJECT pattern,
+    // where `abort` re-runs the gate's `retry_target`, bounded by max-retries.
+    // `non_retryable` flags it for the retry-policy short-circuit (retryStep,
+    // for `retry`-status outcomes); it has no bearing on the goal-gate retarget.
     //
     // The `abort` tool sets `terminate: true`, so the loop stops after its
     // batch and the genuinely-last message is the tool result — `notes` is

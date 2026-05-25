@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { LlmBackend, Node, OutcomeStatus } from "@fragua/core";
-import { CURRENT_IR_VERSION, failProvider, ok, parseWorkflow, serializeGraph } from "@fragua/core";
+import { CURRENT_IR_VERSION, fail, failProvider, ok, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@fragua/store";
 import fc from "fast-check";
@@ -217,6 +217,36 @@ describe("makeLlmHandler", () => {
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
       expect(result.failureReason).toBeUndefined();
+    }
+    store.close();
+  });
+
+  test("non_retryable fail stays a transition (not a halt) — so a goal-gate can retarget on REJECT", async () => {
+    // Regression guard. The `abort` tool produces fail({ non_retryable: true })
+    // (backend.ts). `non_retryable` is a retry-policy hint — retryStep
+    // short-circuits a `retry`-status outcome on it — and must NOT downgrade a
+    // `fail` to a halt here. A `fail` transition is exactly what lets a
+    // goal_gate node drive its §3.4 retarget (re-review) on REJECT, per
+    // executor.goal-gate.test.ts. If this ever maps to kind:"halt",
+    // verify-style gates stop re-running. (See the event-contract-version
+    // investigation: a false "verify never retries" finding traced here.)
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r3-nonretryable", store, "n1");
+    const aborting: LlmBackend = {
+      async run() {
+        return fail("REJECT: weak evidence", { non_retryable: true });
+      },
+    };
+    const spec = makeLlmHandler({
+      node: node({ id: "n1" }),
+      nextNode: "__end__",
+      backend: aborting,
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.failureReason).toBe("REJECT: weak evidence");
     }
     store.close();
   });
