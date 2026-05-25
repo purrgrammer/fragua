@@ -24,7 +24,7 @@
 import { describe, expect, test } from "bun:test";
 import { CURRENT_IR_VERSION, type Graph, type Node, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
-import { SqliteStore, type StoredEvent } from "@fragua/store";
+import { type RunState, SqliteStore, type StoredEvent } from "@fragua/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
@@ -32,8 +32,8 @@ import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { makeArbGraph } from "./arbitraries/graph.ts";
+import { checkRunInvariants } from "./invariants.ts";
 
-const TERMINAL_FACTS = new Set(["fact.run_completed", "fact.run_halted", "fact.run_cancelled", "fact.run_quarantined"]);
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 const AUTO_PAUSE_REASONS = new Set(["provider_retry", "handler_retry", "timeout_retry"]);
 
@@ -91,6 +91,7 @@ function scriptedSpec(node: Node, script: NodeScript): handler.HandlerSpec {
 
 interface DriveResult {
   events: StoredEvent[];
+  state: RunState;
   status: string;
   /** Runs requeued by the simulated-crash startup sweep (0 = no crash). */
   requeued: number;
@@ -172,33 +173,11 @@ async function drive(
       }
       break; // operator pause (resting)
     }
-    return { events: store.getEvents(runId), status: store.getState(runId)?.status ?? "unknown", requeued };
+    const finalState = store.getState(runId);
+    if (finalState === null) throw new Error("run vanished from the store");
+    return { events: store.getEvents(runId), state: finalState, status: finalState.status, requeued };
   } finally {
     store.close();
-  }
-}
-
-function assertCoreInvariants(events: StoredEvent[]): void {
-  // B — at most one terminal fact, and if present it is the last event.
-  const terminals = events.filter((e) => TERMINAL_FACTS.has(e.type));
-  expect(terminals.length).toBeLessThanOrEqual(1);
-  if (terminals.length === 1) expect(TERMINAL_FACTS.has(events.at(-1)?.type ?? "")).toBe(true);
-
-  // C — per-run seq strictly increasing (the log is totally ordered).
-  for (let i = 1; i < events.length; i++) {
-    expect(events[i]!.seq).toBeGreaterThan(events[i - 1]!.seq);
-  }
-
-  // D — one node runs at a time: never two node_started without an intervening
-  // node_completed (holds across retries: each dispatch is started…completed).
-  let running = false;
-  for (const e of events) {
-    if (e.type === "fact.node_started") {
-      expect(running).toBe(false);
-      running = true;
-    } else if (e.type === "fact.node_completed") {
-      running = false;
-    }
   }
 }
 
@@ -206,10 +185,10 @@ describe("driven executor — tier-2", () => {
   test("slice 1: all-success over any human-free graph completes, no pauses/aborts", async () => {
     await fc.assert(
       fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
-        const { events, status } = await drive(graph, successSpec);
+        const { events, state, status } = await drive(graph, successSpec);
         expect(status).toBe("completed");
         expect(events.at(-1)?.type).toBe("fact.run_completed");
-        assertCoreInvariants(events);
+        checkRunInvariants(events, state);
         const types = new Set(events.map((e) => e.type));
         expect(types.has("fact.node_aborted")).toBe(false);
         expect(types.has("fact.run_paused")).toBe(false);
@@ -230,13 +209,13 @@ describe("driven executor — tier-2", () => {
         async (graph, scripts) => {
           const scriptFor = (node: Node): NodeScript =>
             scripts[Number(node.id.slice(1)) - 1] ?? { providerFails: 0, retries: 0 };
-          const { events, status } = await drive(graph, (node) => scriptedSpec(node, scriptFor(node)));
+          const { events, state, status } = await drive(graph, (node) => scriptedSpec(node, scriptFor(node)));
 
           // A — the run settled (never left parked in paused_auto: those are
           // all woken; remaining paused = an operator resting state).
           expect(["completed", "halted", "paused"]).toContain(status);
 
-          assertCoreInvariants(events);
+          checkRunInvariants(events, state);
 
           // E — every auto-wake pause was resumed (we woke each paused_auto).
           const autoPauses = events.filter(
@@ -269,7 +248,7 @@ describe("driven executor — tier-2", () => {
         { from: "n1", to: "exit", attrs: {} },
       ],
     };
-    const { events, status } = await drive(graph, (node) =>
+    const { events, state, status } = await drive(graph, (node) =>
       node.id === "n1" ? scriptedSpec(node, { providerFails: 2, retries: 0 }) : successSpec(node),
     );
     expect(status).toBe("completed");
@@ -278,7 +257,7 @@ describe("driven executor — tier-2", () => {
     ).length;
     expect(providerPauses).toBe(2);
     expect(events.filter((e) => e.type === "fact.run_resumed").length).toBe(2);
-    assertCoreInvariants(events);
+    checkRunInvariants(events, state);
   });
 
   test("slice 3: HITL — human pauses are answered (intent.human_input) and the run completes", async () => {
@@ -286,10 +265,10 @@ describe("driven executor — tier-2", () => {
       fc.asyncProperty(makeArbGraph(["llm", "tool", "routing", "human"]), async (graph) => {
         // Non-human nodes all succeed; each human gate is answered with its
         // forward route (r0). The run threads every pause and reaches exit.
-        const { events, status } = await drive(graph, successSpec);
+        const { events, state, status } = await drive(graph, successSpec);
         expect(status).toBe("completed");
         expect(events.at(-1)?.type).toBe("fact.run_completed");
-        assertCoreInvariants(events);
+        checkRunInvariants(events, state);
         // Every human pause was answered and resumed.
         const humanPauses = events.filter((e) => e.type === "fact.run_paused_human").length;
         const resumes = events.filter((e) => e.type === "fact.run_resumed").length;
@@ -316,11 +295,11 @@ describe("driven executor — tier-2", () => {
         { from: "h", to: "exit", attrs: { route: "go" } },
       ],
     };
-    const { events, status } = await drive(graph, successSpec);
+    const { events, state, status } = await drive(graph, successSpec);
     expect(status).toBe("completed");
     expect(events.filter((e) => e.type === "fact.run_paused_human").length).toBe(1);
     expect(events.filter((e) => e.type === "fact.run_resumed").length).toBeGreaterThanOrEqual(1);
-    assertCoreInvariants(events);
+    checkRunInvariants(events, state);
   });
 
   test("slice 4: crash mid-run + startup sweep recovers and completes", async () => {
@@ -329,12 +308,12 @@ describe("driven executor — tier-2", () => {
         makeArbGraph(["llm", "tool", "routing"]),
         fc.integer({ min: 1, max: 4 }),
         async (graph, crashTurns) => {
-          const { events, status, requeued } = await drive(graph, successSpec, { crashTurns });
+          const { events, state, status, requeued } = await drive(graph, successSpec, { crashTurns });
           // Recovery converges: the run still reaches a clean completion after
           // the simulated crash + requeue.
           expect(status).toBe("completed");
           expect(events.at(-1)?.type).toBe("fact.run_completed");
-          assertCoreInvariants(events);
+          checkRunInvariants(events, state);
           // When the crash actually fired (run was mid-flight), the sweep
           // requeued it and the recovery fact is in the log.
           if (requeued > 0) {
@@ -365,10 +344,10 @@ describe("driven executor — tier-2", () => {
         { from: "n2", to: "exit", attrs: {} },
       ],
     };
-    const { events, status, requeued } = await drive(graph, successSpec, { crashTurns: 1 });
+    const { events, state, status, requeued } = await drive(graph, successSpec, { crashTurns: 1 });
     expect(requeued).toBe(1);
     expect(events.filter((e) => e.type === "fact.run_requeued_after_crash").length).toBeGreaterThanOrEqual(1);
     expect(status).toBe("completed");
-    assertCoreInvariants(events);
+    checkRunInvariants(events, state);
   });
 });
