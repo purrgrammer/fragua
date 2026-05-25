@@ -198,22 +198,24 @@ export function RunConversation({
   }, [toolStreams, persistedToolNodeIds]);
 
   const lanes = useMemo<Lane[]>(() => {
-    const out: Lane[] = [];
-
-    for (let i = 0; i < visibleSections.length; i++) {
-      const section = visibleSections[i]!;
+    // Message sections keep their natural ordinal (append) order — the
+    // transcript backbone is NEVER reordered. `rankSeq` exists only to slot
+    // the message-less synthetic lanes (open HITL gate, orphan streaming,
+    // live tool nodes, decided-gate banners) between the right sections by
+    // execution order. Sorting the sections themselves is wrong: a node
+    // re-run by a retry loop (e.g. ci→fix→ci, all iteration 0) carries one
+    // collapsed nodeState whose `lastEventSeq` is its LAST event, which
+    // would drag the node's earlier section down next to its later one.
+    const sectionLanes = visibleSections.map((section, i) => {
       const isTail = i === visibleSections.length - 1;
       const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
       const showStreamHere = appendStreamingToTail && isTail;
       const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
       const decision =
         !showHitlHere && section.nodeId != null ? (hitlDecisions?.[section.nodeId] ?? undefined) : undefined;
-      const firstRowIteration = section.rows[0]?.iteration ?? 0;
-      const key = nodeStartSeq(section.nodeId, firstRowIteration);
-      out.push({
+      const rankSeq = nodeStartSeq(section.nodeId, section.rows[0]?.iteration ?? 0);
+      const lane: Lane = {
         key: section.key,
-        laneKey: key,
-        tiebreak: i,
         render: () => (
           <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
             {section.rows.map((row) => (
@@ -231,63 +233,66 @@ export function RunConversation({
             {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
           </NodeSection>
         ),
-      });
-    }
+      };
+      return { lane, rankSeq };
+    });
+
+    const synthetic: Array<{ seq: number; lane: Lane }> = [];
 
     if (orphanStreaming) {
-      const key = nodeStartSeq(streamingNodeId, 0);
-      out.push({
-        key: `stream-${streamingNodeId ?? "unscoped"}`,
-        laneKey: key,
-        tiebreak: visibleSections.length,
-        render: () => (
-          <NodeSection
-            nodeId={streamingNodeId}
-            state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
-            isLive={isLive}
-            isPaused={isPaused}
-          >
-            <StreamingMessageRow streaming={streaming!} />
-          </NodeSection>
-        ),
+      synthetic.push({
+        seq: nodeStartSeq(streamingNodeId, 0),
+        lane: {
+          key: `stream-${streamingNodeId ?? "unscoped"}`,
+          render: () => (
+            <NodeSection
+              nodeId={streamingNodeId}
+              state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
+              isLive={isLive}
+              isPaused={isPaused}
+            >
+              <StreamingMessageRow streaming={streaming!} />
+            </NodeSection>
+          ),
+        },
       });
     }
 
     if (hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId)) {
-      const key = nodeStartSeq(hitl.nodeId, 0);
-      out.push({
-        key: `hitl-${hitl.nodeId}`,
-        laneKey: key,
-        tiebreak: visibleSections.length + 1,
-        render: () => (
-          <NodeSection
-            nodeId={hitl!.nodeId}
-            state={stateByNodeId.get(hitl!.nodeId)}
-            isLive={isLive}
-            isPaused={isPaused}
-          >
-            <HitlStepCard
-              runId={hitl!.runId}
-              label={hitl!.label}
-              options={hitl!.options}
-              optionLabels={hitl!.optionLabels}
-            />
-          </NodeSection>
-        ),
+      synthetic.push({
+        seq: nodeStartSeq(hitl.nodeId, 0),
+        lane: {
+          key: `hitl-${hitl.nodeId}`,
+          render: () => (
+            <NodeSection
+              nodeId={hitl!.nodeId}
+              state={stateByNodeId.get(hitl!.nodeId)}
+              isLive={isLive}
+              isPaused={isPaused}
+            >
+              <HitlStepCard
+                runId={hitl!.runId}
+                label={hitl!.label}
+                options={hitl!.options}
+                optionLabels={hitl!.optionLabels}
+              />
+            </NodeSection>
+          ),
+        },
       });
     }
 
     for (const { nodeId, stream } of liveToolNodes) {
-      const key = nodeStartSeq(nodeId, 0);
-      out.push({
-        key: `tool-stream-${nodeId}`,
-        laneKey: key,
-        tiebreak: visibleSections.length + 2,
-        render: () => (
-          <NodeSection nodeId={nodeId} state={stateByNodeId.get(nodeId)} isLive={isLive} isPaused={isPaused}>
-            <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
-          </NodeSection>
-        ),
+      synthetic.push({
+        seq: nodeStartSeq(nodeId, 0),
+        lane: {
+          key: `tool-stream-${nodeId}`,
+          render: () => (
+            <NodeSection nodeId={nodeId} state={stateByNodeId.get(nodeId)} isLive={isLive} isPaused={isPaused}>
+              <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
+            </NodeSection>
+          ),
+        },
       });
     }
 
@@ -295,24 +300,49 @@ export function RunConversation({
       for (const [nodeId, decision] of Object.entries(hitlDecisions)) {
         if (nodeId === hitl?.nodeId) continue;
         if (visibleSections.some((s) => s.nodeId === nodeId)) continue;
-        const key = nodeStartSeq(nodeId, 0);
-        out.push({
-          key: `decision-${nodeId}`,
-          laneKey: key,
-          tiebreak: visibleSections.length + 3,
-          render: () => (
-            <DecisionSection
-              entry={{ nodeId, decision }}
-              stateByNodeId={stateByNodeId}
-              isLive={isLive}
-              isPaused={isPaused}
-            />
-          ),
+        synthetic.push({
+          seq: nodeStartSeq(nodeId, 0),
+          lane: {
+            key: `decision-${nodeId}`,
+            render: () => (
+              <DecisionSection
+                entry={{ nodeId, decision }}
+                stateByNodeId={stateByNodeId}
+                isLive={isLive}
+                isPaused={isPaused}
+              />
+            ),
+          },
         });
       }
     }
 
-    out.sort((a, b) => a.laneKey - b.laneKey || a.tiebreak - b.tiebreak);
+    // Order synthetic lanes among themselves by execution seq (stable, so
+    // equal-seq lanes keep push order) before slotting — without this, two
+    // synthetic lanes landing in the same bucket (e.g. all of them when
+    // there are no message sections to anchor against) would render in
+    // push order, not execution order.
+    synthetic.sort((a, b) => a.seq - b.seq);
+
+    // Slot each synthetic lane after the last section whose rank seq does
+    // not exceed it (−1 ⇒ before all sections). Sections never move.
+    const before: Lane[] = [];
+    const after = new Map<number, Lane[]>();
+    for (const { seq, lane } of synthetic) {
+      let k = -1;
+      for (let i = 0; i < sectionLanes.length; i++) {
+        if (sectionLanes[i]!.rankSeq <= seq) k = i;
+      }
+      if (k === -1) before.push(lane);
+      else (after.get(k) ?? after.set(k, []).get(k)!).push(lane);
+    }
+
+    const out: Lane[] = [...before];
+    for (let i = 0; i < sectionLanes.length; i++) {
+      out.push(sectionLanes[i]!.lane);
+      const trailing = after.get(i);
+      if (trailing) out.push(...trailing);
+    }
     return out;
   }, [
     visibleSections,
@@ -360,12 +390,9 @@ export function RunConversation({
 // ─── Types ──────────────────────────────────────────────────────────
 
 interface Lane {
-  /** React list key — stable and unique per lane regardless of sort
-   * position, so two lanes that tie on `laneKey` (e.g. both fall back to
-   * `+Infinity` for nodes absent from `nodeStates`) never collide. */
+  /** React list key — stable and unique per lane (the owning section's key,
+   * or a kind-prefixed nodeId for synthetic lanes). */
   key: string;
-  laneKey: number;
-  tiebreak: number;
   render: () => ReactNode;
 }
 

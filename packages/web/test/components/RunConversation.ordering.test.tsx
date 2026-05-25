@@ -186,5 +186,30 @@ describe("RunConversation — ordering", () => {
       expect(sections[0]?.textContent).toContain("Iteration 0 output.");
       expect(sections[2]?.textContent).toContain("Iteration 1 output.");
     });
+
+    it("keeps a retry-loop node's two runs in ordinal order when nodeState collapses them (ci→fix→ci)", () => {
+      const messages: RunMessageRow[] = [
+        userRow(1, "ci", "CI run 1 (failed)."),
+        userRow(2, "fix", "Applying fix."),
+        userRow(3, "ci", "CI run 2 (passed)."),
+      ];
+      // The ci↔fix retry loop reuses iteration 0, so nodeStates carries ONE
+      // collapsed `ci` entry whose lastEventSeq is its LAST event — AFTER
+      // fix. Ordering sections by that seq would drag the first ci run down
+      // next to the second ("two ci steps at the end"); ordinal order must win.
+      const nodeStates: NodeState[] = [
+        { nodeId: "ci", iteration: 0, state: "completed", lastEventSeq: 30 },
+        { nodeId: "fix", iteration: 0, state: "completed", lastEventSeq: 20 },
+      ];
+
+      const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
+
+      const testids = sectionOrder(container);
+      expect(testids).toEqual(["node-section-ci", "node-section-fix", "node-section-ci"]);
+
+      const sections = Array.from(container.querySelectorAll('[data-testid^="node-section-"]'));
+      expect(sections[0]?.textContent).toContain("CI run 1");
+      expect(sections[2]?.textContent).toContain("CI run 2");
+    });
   });
 });
