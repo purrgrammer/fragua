@@ -1227,6 +1227,31 @@ export class SqliteStore implements IEventStore {
     this.db.exec("VACUUM");
   }
 
+  /** Prune the store to the portable, replayable run record, dropping every
+   * other table — the secret-bearing (`provider_credentials`, `provider_config`)
+   * and instance-scoped (`daemon_lock`, `server_endpoint`, `daemon_events`,
+   * `schedules`) ones — then VACUUM + checkpoint so the dropped bytes are truly
+   * gone (no freelist or WAL residue). `fragua ci` calls this before leaving a
+   * `--db` artifact, so an exported store can never carry a credential.
+   *
+   * An ALLOWLIST, not a denylist: a table is dropped unless it's explicitly
+   * part of the portable record, so a future table can't silently ride along.
+   * Keep this in sync with schema.sql. */
+  retainPortableTables(): void {
+    const portable = new Set(["schema_version", "workflows", "run_state", "events", "messages", "artifacts", "blobs"]);
+    const tables = this.db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+      .all()
+      .map((r) => r.name);
+    this.db.exec("PRAGMA foreign_keys = OFF");
+    for (const t of tables) {
+      if (!portable.has(t)) this.db.exec(`DROP TABLE IF EXISTS "${t}"`);
+    }
+    this.db.exec("PRAGMA foreign_keys = ON");
+    this.db.exec("VACUUM");
+    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
   gcBlobs(maxRows?: number): { deleted: number } {
     const limit = maxRows ?? 1000;
     // Pass 1: drop `blobs` rows with no artifact referent. RETURNING feeds

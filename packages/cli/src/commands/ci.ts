@@ -301,6 +301,17 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         // already disposed, or never provisioned — nothing to clean up.
       }
     }
+    // A persisted `--db` store is left behind as a portable artifact, but the
+    // run seeded provider credentials into it — prune to the portable tables
+    // so the exported store is secret-free. (The temp store, `storeDir` set,
+    // is removed below, so there's nothing to scrub there.)
+    if (storeDir === undefined) {
+      try {
+        store.retainPortableTables();
+      } catch (e) {
+        console.error(chalk.yellow(`ci: could not prune store to portable tables: ${(e as Error).message}`));
+      }
+    }
     store.close();
     if (storeDir !== undefined) rmSync(storeDir, { recursive: true, force: true });
   }
