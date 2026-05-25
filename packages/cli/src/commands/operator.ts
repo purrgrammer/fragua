@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import { SqliteStore } from "@fragua/store";
+import { type RunStatus, SqliteStore } from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
 import { withStoreClient } from "../store-client.ts";
@@ -184,7 +184,7 @@ export interface InboxOptions extends DiscoveryOpts {
   limit?: number;
 }
 
-const BLOCKED_STATUSES = "paused_human,paused,paused_auto,quarantined";
+const BLOCKED_STATUSES: RunStatus[] = ["paused_human", "paused", "paused_auto", "quarantined"];
 
 function titleOf(r: InboxRunRow): string {
   return r.title != null && r.title.length > 0 ? r.title : chalk.dim("(untitled)");
@@ -210,19 +210,17 @@ function blockedVerb(runStatus?: string): string {
  *   READY TO LAND — terminal runs with recoverable work → land the output
  *                  (accept / discard).
  */
-export async function inboxCommand(opts: InboxOptions): Promise<number> {
-  const baseUrl = resolveBaseUrl(opts);
-  if (baseUrl == null) return noServerFound();
+export function inboxCommand(opts: InboxOptions): Promise<number> {
   const cwd = resolve(opts.cwd ?? process.cwd());
-  const list = async (qs: Record<string, string>): Promise<InboxRunRow[]> => {
-    const params = new URLSearchParams({ order: "oldest", cwd, ...qs });
-    if (opts.limit != null) params.set("limit", String(opts.limit));
-    const res = await fetch(`${baseUrl}/runs?${params.toString()}`);
-    return res.ok ? ((await res.json()) as InboxRunRow[]) : [];
-  };
+  return withStoreClient(opts, ({ readPlane }) => {
+    const common = { cwd, order: "oldest" as const, ...(opts.limit != null ? { limit: opts.limit } : {}) };
+    const blocked = readPlane.runSummaries({ ...common, statuses: BLOCKED_STATUSES });
+    const ready = readPlane.runSummaries({ ...common, inbox: "pending" });
+    return renderInbox(blocked, ready);
+  });
+}
 
-  const [blocked, ready] = await Promise.all([list({ status: BLOCKED_STATUSES }), list({ inbox: "pending" })]);
-
+function renderInbox(blocked: InboxRunRow[], ready: InboxRunRow[]): number {
   if (blocked.length === 0 && ready.length === 0) {
     console.log(chalk.dim("inbox: nothing awaiting an operator decision"));
     return 0;
@@ -474,24 +472,31 @@ export interface LsOptions extends DiscoveryOpts {
 }
 
 /** List runs (optionally filtered by lifecycle status). */
-export async function lsCommand(opts: LsOptions): Promise<number> {
-  const baseUrl = resolveBaseUrl(opts);
-  if (baseUrl == null) return noServerFound();
+export function lsCommand(opts: LsOptions): Promise<number> {
   const cwd = resolve(opts.cwd ?? process.cwd());
-  const params = new URLSearchParams({ cwd });
-  if (opts.status != null && opts.status.length > 0) params.set("status", opts.status);
-  params.set("limit", String(opts.limit ?? 30));
-  const res = await fetch(`${baseUrl}/runs?${params.toString()}`);
-  if (!res.ok) return failResponse("ls", res);
-  const rows = (await res.json()) as Array<InboxRunRow & { status?: string }>;
-  if (rows.length === 0) {
-    console.log(chalk.dim("ls: no runs"));
+  const statuses =
+    opts.status != null && opts.status.length > 0
+      ? (opts.status
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0) as RunStatus[])
+      : undefined;
+  return withStoreClient(opts, ({ readPlane }) => {
+    const rows = readPlane.runSummaries({
+      cwd,
+      order: "newest",
+      limit: opts.limit ?? 30,
+      ...(statuses !== undefined ? { statuses } : {}),
+    });
+    if (rows.length === 0) {
+      console.log(chalk.dim("ls: no runs"));
+      return 0;
+    }
+    for (const r of rows) {
+      console.log(`${chalk.cyan(r.runId)}  ${chalk.dim((r.runStatus ?? "?").padEnd(13))} ${titleOf(r)}`);
+    }
     return 0;
-  }
-  for (const r of rows) {
-    console.log(`${chalk.cyan(r.runId)}  ${chalk.dim((r.runStatus ?? r.status ?? "?").padEnd(13))} ${titleOf(r)}`);
-  }
-  return 0;
+  });
 }
 
 export interface DiffOptions extends DiscoveryOpts {

@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { type IntentPlane, makeIntentPlane } from "@fragua/core/intent-plane";
+import { makeReadPlane, type ReadPlane } from "@fragua/core/read-plane";
 import { newRunId, SqliteStore, type SqliteStore as SqliteStoreType } from "@fragua/store";
 import chalk from "chalk";
 
@@ -22,7 +23,10 @@ export interface StoreClientOpts {
 
 export interface StoreClient {
   store: SqliteStoreType;
+  /** Write surface — validate/construct/commit intents. */
   plane: IntentPlane;
+  /** Read surface — run summary / detail / step / message projections. */
+  readPlane: ReadPlane;
   close(): void;
 }
 
@@ -32,12 +36,14 @@ export function resolveStorePath(opts: StoreClientOpts): string {
 }
 
 /** Open the store read/write as a client (no schema migration) and build the
- * intent plane over it. Throws if the store is absent or schema-incompatible. */
+ * intent + read planes over it. Throws if the store is absent or
+ * schema-incompatible. */
 export function openStoreClient(opts: StoreClientOpts): StoreClient {
   const path = resolveStorePath(opts);
   const store = new SqliteStore({ path, migrate: false });
   const plane = makeIntentPlane({ store, newRunId });
-  return { store, plane, close: () => store.close() };
+  const readPlane = makeReadPlane({ store });
+  return { store, plane, readPlane, close: () => store.close() };
 }
 
 /** Run `fn` against an open store-client, mapping a failed open to an actionable

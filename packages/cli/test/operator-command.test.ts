@@ -324,7 +324,7 @@ describe("fragua operator verbs", () => {
     spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.join(" "));
     });
-    const code = await inboxCommand({ url: r.url, cwd: "/tmp/repo" });
+    const code = await inboxCommand({ dbPath: r.dbPath, cwd: "/tmp/repo" });
     expect(code).toBe(0);
     const out = logs.join("\n");
     expect(out).toContain("in-1");
