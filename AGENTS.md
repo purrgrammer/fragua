@@ -39,19 +39,19 @@ bun run dev:web                          # Vite dev server (:5173), proxies /api
 
 ## Codebase map
 
-Dependency direction: `web → server → store ← daemon → core ← agent`. `core`'s main entry is browser-safe (no `node:fs` / `node:child_process`); the `./handler` sub-entry pulls in `@fragua/store` for server-side use and is intentionally excluded from the browser bundle. `store` is the only coordination surface.
+Dependency direction: `web → server → store ← daemon → core ← agent`. `core`'s main entry is browser-safe (no `node:fs` / `node:child_process`); its store-pulling sub-entries — `./handler`, `./intent-plane` (write plane), `./read-plane` (read plane) — are server-side only and excluded from the browser bundle. `store` is the only coordination surface. **`@fragua/cli` is a direct store-client**: it opens the store and writes/reads through the two planes — it never talks to the HTTP server (only `@fragua/web` does). The planes are the shared surfaces both the server and the CLI route through, so the two clients can't disagree about a write or a read.
 
 | Package | Entry points | What lives here |
 |---|---|---|
 | `@fragua/types` | `src/index.ts`, `src/events.ts`, `src/skills.ts` | Shared `AgentMessage` + fragua-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
 | `@fragua/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
-| `@fragua/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy,thread}.ts`, `src/parser/yaml.ts` | Pure types; YAML parser; handler contract; engine reducers |
+| `@fragua/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy,thread}.ts`, `src/parser/yaml.ts`, `src/intent-plane/`, `src/read-plane/` | Pure types; YAML parser; handler contract; engine reducers; **intent plane** (validate/construct/commit writes) + **read plane** (run summary/detail/steps/messages/events/snapshots/diff/streaming projections) — the shared write/read surfaces |
 | `@fragua/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
 | `@fragua/agent` | `src/{backend,handler-bridge,system-prompt,thread,event-bridge,tool-adapter}.ts` | `PiLlmBackend`; pi-ai → handler bridge; per-run system-prompt builder |
-| `@fragua/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery |
-| `@fragua/server` | `src/index.ts`, `src/store/{routes,runs-routes,runs-adapter,steps,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
+| `@fragua/workspace` | `src/{worktree-env,local-env,tools,run-actions}.ts`, `src/skills/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery; `run-actions.ts` = shared git for accept/discard/diff (`applyAccept`/`applyDiscard` with the state gate folded in, `gitDiff`) called by both the server route and the CLI |
+| `@fragua/server` | `src/index.ts`, `src/store/{routes,runs-routes,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE **for the Web UI**; routes go through the intent plane (writes) + read plane (reads). `store/{runs-adapter,steps}.ts` are re-export shims → `@fragua/core/read-plane` |
 | `@fragua/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Fragua primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
-| `@fragua/cli` | `bin/fragua.ts`, `src/commands/` | `harness` (default) / `daemon` / `serve` / `run` / `validate` / `init` / `providers` / `db` / `gc` |
+| `@fragua/cli` | `bin/fragua.ts`, `src/{store-client,route-picker}.ts`, `src/commands/` | Direct store-client (no HTTP): `harness` (default) / `daemon` / `serve` / `run` / `runs <verb>` / `schedule` / `validate` / `init` / `providers` / `db` / `gc`. `store-client.ts` (`withStoreClient`: open `migrate:false` + build both planes) is the seam; `run`/`runs`/`schedule` write via the intent plane + read via the read plane |
 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
 

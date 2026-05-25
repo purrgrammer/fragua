@@ -127,7 +127,7 @@ Injects text into the next LLM call's thread; the current handler aborts lossles
 
 ## 5. Human resume protocol
 
-A `paused_human` run waits for input. `fragua runs respond <id>` (no route) prints the gate prompt + numbered routes and reads a choice from stdin; `fragua runs respond <id> <route>` posts directly (scriptable). The route must be one of the gate's declared options — the CLI rejects an off-list route before posting, and the server re-validates.
+A `paused_human` run waits for input. `fragua runs respond <id>` (no route) renders an arrow-key menu of the gate's routes (human-readable labels) and reads your choice; `fragua runs respond <id> <route>` answers directly (scriptable). The route must be one of the gate's declared options — the CLI rejects an off-list route. A followed `fragua run` shows the same picker inline when it reaches the gate, then keeps following.
 
 Present the decision to the user — don't answer on their behalf unless they've explicitly delegated it.
 

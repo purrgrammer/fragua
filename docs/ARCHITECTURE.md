@@ -438,7 +438,7 @@ CREATE TABLE provider_config (
 | `intent.accept_run` | `sha`, `replayed: number`, `tailStaged: boolean` | Records a completed accept: the request path (server route / CLI) already replayed the run's commits onto the operator's HEAD + staged the tail **synchronously**; this intent carries the result and is folded into `fact.run_accepted`. Inbox `pending → acted` |
 | `intent.discard_run` | `refs: string[]` | Records a completed discard: the request path already deleted `refs/fragua/{snapshots,heads}/<runId>`; this intent carries the deleted refs and is folded into `fact.run_discarded`. Inbox `pending → discarded` (terminal-terminal) |
 
-Post-terminal operator actions run **synchronously in the request path** (the `POST /runs/:id/{accept,discard}` handler executes the git via `@fragua/workspace`, returns the result, and on success appends the intent above carrying that result) — so the CLI/web see the outcome immediately, and a conflict / dirty tree returns 4xx and writes nothing. The daemon's `processOperatorActions` sweep then **projects** each intent into its `fact.run_*` (OCC lockstep with `inbox_status`) — no second git run. This keeps facts daemon-written while the operator's experience is synchronous.
+Post-terminal operator actions run **synchronously in the caller** (intent-plane §3.7): the git executes via `@fragua/workspace`'s shared `applyAccept`/`applyDiscard` — the CLI runs it directly (store-client), the Web UI via the `POST /runs/:id/{accept,discard}` route — with the state gate (terminal / in-inbox / has-worktree) folded into that one action, so a conflict / dirty tree / bad-state refusal surfaces immediately (CLI exit code, HTTP 4xx) and writes nothing. On success the result is recorded as the intent above **through the intent plane**; the daemon's `processOperatorActions` sweep then **projects** it into its `fact.run_*` (OCC lockstep with `inbox_status`) — no second git run. This keeps facts daemon-written while the operator's experience is synchronous.
 
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
@@ -1287,6 +1287,8 @@ packages/
         ...
       executor/
         types.ts                       ← LlmBackend, LlmInput
+      intent-plane/                    ← write plane (@fragua/core/intent-plane): validate/construct/commit every intent; the one write surface server + CLI share
+      read-plane/                      ← read plane (@fragua/core/read-plane): every run read — summary/detail/steps/messages/events/snapshots/diff/streaming projections
   daemon/
     src/
       executor.ts                      ← executor fiber
@@ -1312,19 +1314,26 @@ packages/
   server/
     src/
       index.ts                         ← createServer
+      adapters/run-snapshot-reader.ts  ← git ls-tree/show/diff (diff delegates to workspace gitDiff)
       store/
-        routes.ts                      ← intents (POST), SSE
-        runs-routes.ts                 ← runs/messages/events/steps reads
-        runs-adapter.ts                ← RunSummary / RunDetail projection
-        steps.ts                       ← llm.start fold → Step[]
+        routes.ts                      ← intents (POST) via intent plane, SSE via read plane (Web UI surface)
+        runs-routes.ts                 ← run reads via read plane
+        runs-adapter.ts                ← re-export shim → @fragua/core/read-plane
+        steps.ts                       ← re-export shim → @fragua/core/read-plane
   workspace/
     src/
       local-env.ts                     ← LocalEnvironment (process cwd)
       worktree-env.ts                  ← WorktreeEnvironment (git worktree per run)
+      run-actions.ts                   ← applyAccept / applyDiscard / gitDiff (shared git: server route + CLI)
       tools.ts                         ← read / write / edit / bash
       skills/                          ← SKILL.md discovery + catalog
-  web/                                 ← UI (React + Tanstack Router)
-  cli/                                 ← bin/fragua.ts + commands/*.ts
+  web/                                 ← UI (React + Tanstack Router) — the only HTTP client
+  cli/                                 ← direct store-client (no HTTP): intent plane writes, read plane reads
+    bin/fragua.ts                      ← subcommand dispatch
+    src/
+      store-client.ts                  ← openStoreClient / withStoreClient (migrate:false + both planes)
+      route-picker.ts                  ← HITL arrow-key route menu (run follow + runs respond)
+      commands/                        ← run / runs <verb> / schedule / providers / db / ...
 ```
 
 

@@ -28,31 +28,34 @@ Core values, in priority order:
 
 ## 2. System shape
 
-Single machine, one harness process, one SQLite database. The harness supervises a daemon subprocess and an in-process HTTP server against `~/.fragua/fragua.db`.
+Single machine, one harness process, one SQLite database. The harness supervises a daemon subprocess and an in-process HTTP server against `~/.fragua/fragua.db`. The **CLI is a direct store-client** — it never goes through the HTTP server; only the browser Web UI does.
 
 ```
+  Web UI (browser)
+      │  HTTP + SSE
+      ▼
 ┌──────────────────────────────────┐
 │            fragua harness         │      ┌───────────────┐
-│  ┌───────────────────────────┐   │      │               │
-│  │ daemon subprocess         │ ──┼─────▶│   SQLite      │
-│  │ (executor + supervisor)   │ ◀─┼──────│  ~/.fragua/    │
-│  └───────────────────────────┘   │      │  fragua.db     │
-│  ┌───────────────────────────┐   │      │               │
-│  │ HTTP + SSE (in-process)   │ ◀─┼──────│  WAL,         │
-│  │ default :6767             │ ──┼─────▶│  single coord │
-│  └───────────────────────────┘   │      │  surface      │
-└────────────────┬─────────────────┘      └───────────────┘
-                 │  HTTP + SSE
-                 ▼
-        ┌────────────────┐
-        │  Web UI / CLI  │
-        └────────────────┘
+│  ┌───────────────────────────┐   │      │   SQLite       │
+│  │ HTTP + SSE server          │ ◀─┼──────│  ~/.fragua/    │
+│  │ (in-process, :6767)        │ ──┼─────▶│  fragua.db     │
+│  └───────────────────────────┘   │      │               │
+│  ┌───────────────────────────┐   │      │  WAL — the one │
+│  │ daemon subprocess          │ ──┼─────▶│  coordination  │
+│  │ (executor + supervisor)    │ ◀─┼──────│  surface       │
+│  └───────────────────────────┘   │      │               │
+└──────────────────────────────────┘      │               │
+                                           │               │
+  fragua CLI  ── intents (write plane) ──▶ │               │
+  (store-client) ◀── reads (read plane) ── │               │
+                                           └───────────────┘
 ```
 
-- **Harness** (`fragua harness`) is the default entry point: foreground process that spawns the daemon as a subprocess and runs the HTTP server in-process. The in-process server publishes its URL on the `server_endpoint` row so CLIs discover it via the DB itself. SIGINT clears that row on the way out.
+- **Harness** (`fragua harness`) is the default entry point: foreground process that spawns the daemon as a subprocess and runs the HTTP server in-process. The in-process server publishes its URL on the `server_endpoint` row (the Web UI / a remote client discovers it via the DB). SIGINT clears that row on the way out.
 - **Daemon** runs the executor fiber + a 50ms supervisor fiber (heartbeat + intent detection + watchdog). Writes **facts** under OCC.
-- **Server** exposes a Hono HTTP surface. Writes **intents** (always appendable, no OCC). Reads go straight to the store's projection.
-- **CLI** wraps everything via `fragua harness` (default), `fragua run`, `fragua validate`, `fragua db`. `fragua daemon --db <path>` and `fragua serve --db <path>` are CI/power-user primitives.
+- **Server** exposes a Hono HTTP surface **for the Web UI**. Writes **intents** through the intent plane (always appendable, no OCC); reads through the read plane.
+- **CLI** is a **direct store-client**: it opens `~/.fragua/fragua.db` and writes intents through the **intent plane** and reads through the **read plane** — no HTTP, works daemon-down. `fragua harness` (default) supervises; `fragua daemon --db <path>` / `fragua serve --db <path>` are CI/power-user primitives.
+- **Planes** — the two shared surfaces both the server and the CLI route through, so no two clients can disagree: the **intent plane** (`@fragua/core/intent-plane`) validates + constructs + commits every write; the **read plane** (`@fragua/core/read-plane`) projects every run read (summary / detail / steps / messages / events / snapshots / diff / streaming).
 - **Store** (`@fragua/store`) is the only coordination surface. WAL-mode SQLite; harness, daemon, and any client read and write.
 
 ---
@@ -90,7 +93,7 @@ See [`handler-contract.md`](./handler-contract.md) for the full API.
 
 Per-run causality lives in the `events` table; daemon-process lifecycle lives in a sibling `daemon_events` table.
 
-- **Intents** (`intent.*`, table `events`) — written by the web server on behalf of operators. No OCC. Always appendable.
+- **Intents** (`intent.*`, table `events`) — operator-initiated, written through the intent plane: by the CLI directly (store-client) or by the HTTP server on behalf of the Web UI. No OCC. Always appendable.
 - **Facts** (`fact.*`, table `events`) — written by the daemon as state transitions. OCC-checked against `run_state.version`.
 - **Daemon events** (`daemon.*` and `intent.schedule_*` / `fact.schedule_*`, table `daemon_events`) — written by the daemon for process-level audit (start/stop, sweeps, blob GC, leak detection, worktree provisioning, schedules). Not run-scoped, not OCC-tracked. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) §3 for the full taxonomy.
 
