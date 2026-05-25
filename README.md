@@ -64,91 +64,37 @@ domain context loaded on demand by the agents a workflow runs. live under `.agen
 | skill | loaded when you're… |
 |---|---|
 | `workflows`  | authoring or editing a workflow YAML |
-| `operate`    | driving a live run — enqueue, watch, steer, pause, resume, HITL |
-| `postmortem` | debugging a finished or stuck run from the event log |
+| `operate`    | driving **or debugging** a run — enqueue, tail, steer, HITL, land, and the failure-mode forensics |
 | `backend`    | touching `packages/{server,store,core,agent}` |
 | `frontend`   | touching the React dashboard under `packages/web/src` |
 | `design`     | touching styles, theme tokens, or layout in `packages/web` |
 
-## command reference
+## commands
 
-**providers & models** — `fragua providers <action>`
-
-```sh
-fragua providers add [provider]          # add credentials; --custom for OpenAI-compatible
-fragua providers ls                      # configured providers + default models
-fragua providers rm | test | login | logout <provider>
-fragua providers {ls,add,rm,edit}-model  <provider> <id> [flags]
-```
-
-`add-model` / `edit-model` flags: `--name`, `--context-window`, `--max-tokens`, `--reasoning`, `--input text,image`, `--cost-input`, `--cost-output`, `-y`.
-
-**create runs** — `fragua run <workflow>`
+The essentials below; the **[full CLI reference](docs/cli.md)** has every verb, flag, and the exit-code taxonomy.
 
 ```sh
-fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--no-follow]
-                     [--url <url>] [--cwd <dir>] [--db <path>]
+fragua providers add            # add a provider credential (--custom for OpenAI-compatible)
+fragua harness                  # daemon + HTTP on :6767 (Ctrl-C to stop)
+
+fragua run <workflow> -i task="…"   # save + enqueue + follow (--no-follow to detach)
+fragua runs inbox                   # runs needing an operator decision
+fragua runs status <id>             # one run: lifecycle + outcome + the why
+fragua runs tail   <id>             # follow an existing run's event log
+fragua runs respond <id> [route]    # answer a HITL gate
+fragua runs accept  <id>            # land a finished run's commits onto your branch
+
+fragua ci <workflow>            # one-shot: run to terminal, exit code = outcome (CI)
+fragua schedule add <wf> --every 1h
+fragua validate <workflow.yaml>
 ```
 
-**operate on runs** — `fragua runs <verb> <runId>` (plural operates; singular creates)
-
-```sh
-fragua runs inbox                                   # runs needing attention
-fragua runs ls [--status running,paused_human] [--limit N]
-
-# disposition — nothing touches your git until you ask
-fragua runs diff    <runId> [--against base|previous|<idx>] [--snap <idx>]
-fragua runs accept  <runId>                         # replay commits onto your branch + stage the tail
-fragua runs discard <runId>                         # drop the run's fragua refs
-
-# lifecycle
-fragua runs respond <runId> [route] [--note "…"]    # answer a HITL gate
-fragua runs resume  <runId> [--note "…"]
-fragua runs unquarantine <runId> --resolution treat_as_done|retry|cancel
-fragua runs cancel  <runId> [--reason "…"]
-```
-
-**schedules** — `fragua schedule <action>`
-
-```sh
-fragua schedule add <workflow> --every 1h [--input "…"] [--on-overlap skip|queue|concurrent] [--no-fire-on-create]
-fragua schedule list | pause <id> | resume <id> | rm <id>
-```
-
-`--every` accepts `30m | 1h | 6h | 24h | 3d | 7d`.
-
-**server / daemon primitives**
-
-```sh
-fragua harness [--port <n>] [--db <path>]                 # daemon + HTTP under one supervisor (:6767)
-fragua serve   [--port <n>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only; writes <db-dir>/serve.json
-fragua daemon  start [--concurrency <n>] [--provider <name>] [--model <id>] [--cwd <dir>] [--db <path>]
-fragua daemon  stop                                       # SIGTERM the daemon holding the store lock
-```
-
-discovery cascade: `--url` → `<cwd>/.fragua/serve.json` → `~/.fragua/fragua.db` `daemon_lock.http_url` → `http://localhost:3000`.
-
-**maintenance & authoring**
-
-```sh
-fragua validate <workflow.yaml>          # parse + lint, no execution
-fragua init [--cwd <path>]               # write <cwd>/.fragua/config.yaml
-fragua gc --snapshots [--older-than 30d] [--dry-run]
-fragua db {vacuum, gc-blobs [--limit N], backup --to <path>}
-```
-
-**developing on the repo**
-
-```sh
-bun run {typecheck, lint, format, ci}   # ci = lint + typecheck + tests
-bun test                                # all package suites
-bun run dev:web                         # Vite dev server (:5173), proxies /api to a running harness
-bun run build:bin                       # compile dist/fragua
-```
+A followed run's exit code reflects its outcome — `0` completed, non-zero by halt / pause / quarantine reason (the [CLI reference](docs/cli.md#exit-codes) has the full map). The CLI is a direct store-client: these work from any directory against `~/.fragua/fragua.db`, daemon up or down.
 
 ## status & docs
 
 - **[STATUS.md](STATUS.md)** — what's working today, what's not yet
+- **[docs/cli.md](docs/cli.md)** — the full CLI reference + exit-code taxonomy
 - **[docs/SPEC.md](docs/SPEC.md)** — what fragua is
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — schema, invariants, property matrix
 - **[docs/handler-contract.md](docs/handler-contract.md)** — writing handlers

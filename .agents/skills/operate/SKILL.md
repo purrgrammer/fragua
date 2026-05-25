@@ -7,7 +7,7 @@ description: Drive AND diagnose a fragua run — enqueue, steer, land, and debug
 
 Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer, land, and debug — **entirely through the `fragua` CLI, no direct queries**. Every action below is a `fragua` subcommand. When a run fails or hangs and the summary isn't enough, read the forensics reference (§10) — the failure-mode playbook + deep `--json` reads — loaded on demand.
 
-Authoritative references: [`docs/SPEC.md`](../../../docs/SPEC.md) §3 (primitives + control plane), [`docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) §3 (event taxonomy), [`AGENTS.md`](../../../AGENTS.md) (commands).
+Authoritative references: [`docs/cli.md`](../../../docs/cli.md) (every verb + flag + exit codes), [`docs/SPEC.md`](../../../docs/SPEC.md) §3 (primitives + control plane), [`docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) §3 (event taxonomy).
 
 ---
 
@@ -23,7 +23,7 @@ fragua run change --input task="rename foo() to bar() in packages/core"
 fragua run deploy --input ticket=BUG-1 --input env=prod
 ```
 
-`fragua run` saves the workflow, enqueues, and tails its event log until terminal. Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. It exits non-zero on halt/cancel. A `paused_human` gate prompts you inline (on a TTY — answer and it keeps following) or exits for `fragua runs respond`; `paused_auto` resumes itself on the retry timer.
+`fragua run` saves the workflow, enqueues, and tails its event log until terminal. Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. Its exit code reflects the outcome — `0` completed, non-zero banded by halt / pause / quarantine reason (the same `cliExitCode` map `fragua ci` uses; full table in [`docs/cli.md`](../../../docs/cli.md#exit-codes)). A `paused_human` gate prompts you inline (on a TTY — answer and it keeps following) or exits `60` for `fragua runs respond`; `paused_auto` resumes itself on the retry timer.
 
 > `fragua` and `bun run fragua <args…>` are interchangeable on a checkout; this doc uses the bare binary.
 

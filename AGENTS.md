@@ -33,7 +33,7 @@ bun run fragua daemon --db <path>         # CI primitive: executor only against 
 bun run fragua serve  --db <path>         # CI primitive: standalone HTTP + SSE, default :3000
 bun run fragua run <workflow|name> [--input "…"]    # upload + enqueue + stream events; bare names resolve against ~/.fragua/workflows/, then <cwd>/.fragua/workflows/
 bun run fragua validate <workflow.yaml>   # parse + lint, no execution
-bun run fragua db {vacuum,gc-blobs,backup --to <path>}
+bun run fragua db {vacuum,gc-blobs,backup --to <path>,migrate [--dry-run]}
 bun run dev:web                          # Vite dev server (:5173), proxies /api/** to harness; run harness first
 ```
 
@@ -55,7 +55,7 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
 
-Runtime state: `~/.fragua/fragua.db` (the global store the harness binds to by default). Server discovery lives in the store's `server_endpoint` row — written by whoever binds the HTTP listener (the harness's in-process server, or a standalone `fragua serve --db <path>`), cleared on shutdown. That's how `fragua run` finds the URL, no JSON file: it reads `server_endpoint` from the project store (`--db`, else `<cwd>/.fragua/fragua.db`) then the harness store (`~/.fragua/fragua.db`); no server found is an error, not a localhost default. `daemon_lock` is pure liveness (pid + heartbeat). `cwd` on `run_state` is the only project identifier — there is no `projects` table; the UI lists projects via `SELECT DISTINCT cwd`. Worktrees live under each run's `cwd` at `.fragua/worktrees/<run_id>/`.
+Runtime state: `~/.fragua/fragua.db` (the global store the harness binds to by default). Server discovery lives in the store's `server_endpoint` row — written by whoever binds the HTTP listener (the harness's in-process server, or a standalone `fragua serve --db <path>`), cleared on shutdown. `fragua doctor` reads it for liveness and `@fragua/web` for its API origin; the `run`/`runs` verbs DON'T need it — they're store-clients that open the store directly (`--db`, else `~/.fragua/fragua.db`). No `serve.json`, no localhost default. `daemon_lock` is pure liveness (pid + heartbeat). `cwd` on `run_state` is the only project identifier — there is no `projects` table; the UI lists projects via `SELECT DISTINCT cwd`. Worktrees live under each run's `cwd` at `.fragua/worktrees/<run_id>/`.
 
 **Never run `fragua` commands against the live store while developing.** The `daemon` / `serve` / `run` commands all take `--db <path>` (default `~/.fragua/fragua.db`) — when you need to exercise a CLI command to test a change, point it at an ephemeral DB (e.g. `--db "$(mktemp -d)/t.db"`) so a stray write or schema migration can't corrupt the operator's running instance. Prefer the test suite over booting a daemon/server at all.
 
