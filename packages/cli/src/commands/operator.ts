@@ -21,7 +21,6 @@ import { followRun, renderEvent } from "../run-follow.ts";
 import { withStoreClient } from "../store-client.ts";
 
 interface DiscoveryOpts {
-  url?: string;
   cwd?: string;
   dbPath?: string;
 }

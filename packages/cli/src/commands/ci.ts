@@ -3,7 +3,7 @@
 // the executor in-process and writes `fact.*` itself: open an ephemeral store,
 // seed credentials from env, save + enqueue the workflow, drive the run to a
 // stop-state, render the event log, and exit with a code that reflects the
-// outcome (see `../ci-exit.ts` for the total status → exit-code map). The
+// outcome (see `../cli-exit.ts` for the total status → exit-code map). The
 // `.db` is a portable artifact.
 //
 // Pause policy: the drive loop CONTINUES the `paused_auto` arm — the
@@ -13,7 +13,7 @@
 // (operator action), `paused_human` (HITL), `quarantined`. CI has no responder
 // for those. Run in the checkout via a per-run worktree (git cwd) /
 // LocalEnvironment (non-git cwd). Pluggable HITL and cross-machine import are
-// deferred (docs/proposals/fragua-ci.md §3).
+// deferred (docs/proposals/hitl-channel.md, db-import.md).
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -27,7 +27,7 @@ import { type IEventStore, newRunId, SqliteStore, type StoredEvent } from "@frag
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
-import { CI_EXIT, type CiStopReason, ciExitCode } from "../ci-exit.ts";
+import { CLI_EXIT, type StopReason, cliExitCode } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 import { seedCredsFromEnv } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
@@ -97,7 +97,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         ),
       );
     }
-    return CI_EXIT.usage;
+    return CLI_EXIT.usage;
   }
   const { dotPath, name, scope } = resolved;
 
@@ -106,7 +106,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     source = await readFile(dotPath, "utf8");
   } catch (err) {
     console.error(chalk.red(`ci: cannot read ${dotPath}: ${(err as Error).message}`));
-    return CI_EXIT.usage;
+    return CLI_EXIT.usage;
   }
 
   // Ephemeral store: --db-pinned (portable artifact) or a temp dir. A fresh
@@ -137,7 +137,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       timeouts = resolveTimeouts(config);
     } catch (err) {
       console.error(chalk.red(`ci: ${(err as Error).message}`));
-      return CI_EXIT.usage;
+      return CLI_EXIT.usage;
     }
     const deps = await buildExecutorDeps({
       store,
@@ -161,7 +161,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     const mint = plane.buildSaveWorkflow(source);
     if (!mint.ok) {
       console.error(chalk.red(`ci: ${opts.workflow} did not parse: ${mint.detail}`));
-      return CI_EXIT.usage;
+      return CLI_EXIT.usage;
     }
     plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
     const enq = plane.buildEnqueue({
@@ -177,7 +177,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     });
     if (!enq.ok) {
       console.error(chalk.red(`ci: ${enq.error}`));
-      return CI_EXIT.usage;
+      return CLI_EXIT.usage;
     }
     plane.commitEnqueue(enq.params);
     runId = enq.runId;
@@ -222,8 +222,8 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
 
     // Capture the terminal reason as it streams past — it selects the
     // per-reason exit code for the stop-state (one code per HaltReason /
-    // PauseReason / QuarantineReason; see `../ci-exit.ts`).
-    const stopReason: CiStopReason = {};
+    // PauseReason / QuarantineReason; see `../cli-exit.ts`).
+    const stopReason: StopReason = {};
     const emit = (ev: StoredEvent) => {
       const r = (ev.payload as { reason?: string } | null)?.reason;
       if (r !== undefined) {
@@ -257,10 +257,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
 
     // A SIGINT/SIGTERM-interrupted drive is a cancellation regardless of the
     // status the run happened to be parked in when the signal fired.
-    if (shutdown.signal.aborted) return CI_EXIT.cancelled;
+    if (shutdown.signal.aborted) return CLI_EXIT.cancelled;
 
     const status = store.getState(rid)?.status ?? "halted";
-    const code = ciExitCode(status, stopReason);
+    const code = cliExitCode(status, stopReason);
     if (status === "halted") {
       console.error(chalk.red(`ci: run halted (${stopReason.halt ?? "error"}) — exit ${code}`));
     } else if (status === "paused") {
@@ -279,7 +279,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     return code;
   } catch (err) {
     console.error(chalk.red(`ci: ${(err as Error).message}`));
-    return CI_EXIT.usage;
+    return CLI_EXIT.usage;
   } finally {
     process.removeListener("SIGINT", onSig);
     process.removeListener("SIGTERM", onSig);

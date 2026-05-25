@@ -1,11 +1,15 @@
 // Shared run-follow/tail loop — used by `fragua run --follow` and
-// `fragua runs watch`. Polls `readPlane.eventsSince` in a loop, renders each
+// `fragua runs tail`. Polls `readPlane.eventsSince` in a loop, renders each
 // event, answers HITL gates inline (TTY), and returns the run's terminal exit
-// code. A daemon must be running for events to appear; with none the run sits
-// queued and this waits (Ctrl-C to stop).
+// code through the shared `cliExitCode` map — so a followed run carries the
+// same outcome detail as `fragua ci` (retry on occ_exhausted/timeout_exhausted,
+// distinct codes for pause-vs-fail). A daemon must be running for events to
+// appear; with none the run sits queued and this waits (Ctrl-C to stop).
 
 import type { StoredEvent } from "@fragua/store";
+import type { HaltReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
+import { cliExitCode } from "./cli-exit.ts";
 import { humanizeRoute, pickRoute } from "./route-picker.ts";
 import type { StoreClient } from "./store-client.ts";
 
@@ -19,6 +23,24 @@ const TERMINAL_TYPES = new Set<string>([
   "fact.run_paused_human",
   "fact.run_quarantined",
 ]);
+
+/** A terminal (or unanswered-HITL) event → process exit code, through the
+ * shared `cliExitCode` map. The reason rides on the fact's payload. */
+function followExitCode(ev: StoredEvent): number {
+  const reason = (ev.payload as { reason?: string }).reason;
+  switch (ev.type) {
+    case "fact.run_halted":
+      return cliExitCode("halted", reason ? { halt: reason as HaltReason } : {});
+    case "fact.run_cancelled":
+      return cliExitCode("cancelled");
+    case "fact.run_quarantined":
+      return cliExitCode("quarantined", reason ? { quarantine: reason as QuarantineReason } : {});
+    case "fact.run_paused_human":
+      return cliExitCode("paused_human");
+    default:
+      return cliExitCode("completed"); // fact.run_completed
+  }
+}
 
 /** Tail a run's event log to terminal: poll `readPlane.eventsSince`, render
  * each new event, return the run's terminal exit code. A daemon must be running
@@ -36,10 +58,12 @@ export async function followRun(client: StoreClient, runId: string): Promise<num
         // the human_input and the run resumes. Off a TTY, exit so scripts
         // don't block on a prompt.
         if (await promptHumanGate(client, runId, ev)) continue;
-        return 0;
+        // Unanswered (off a TTY / no choice): the run still needs a human —
+        // exit `needsHuman`, not 0, so a script doesn't read it as success.
+        return followExitCode(ev);
       }
       if (TERMINAL_TYPES.has(ev.type)) {
-        return ev.type === "fact.run_halted" ? 1 : ev.type === "fact.run_cancelled" ? 130 : 0;
+        return followExitCode(ev);
       }
     }
     // A non-full batch means we've caught up to the live tail — wait for more.

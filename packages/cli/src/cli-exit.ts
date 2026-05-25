@@ -1,7 +1,8 @@
-// Exit-code taxonomy for `fragua ci`. One code per terminal reason: a CI
-// pipeline can `case $?` on exactly why a run stopped. Codes are banded by
-// status-class for legibility (10s halt, 30s operator-pause, 50s quarantine),
-// leaving 0 for a clean exit and 130 for cancellation (the SIGINT convention).
+// Exit-code taxonomy for the fragua CLI — shared by `ci`, `run --follow`, and
+// `runs tail`. One code per terminal reason: a script can `case $?` on exactly
+// why a run stopped. Codes are banded by status-class for legibility (10s halt,
+// 30s operator-pause, 50s quarantine), leaving 0 for a clean exit and 130 for
+// cancellation (the SIGINT convention).
 //
 // The per-reason maps are `Record<Union, number>`, so the totality check is
 // the type system itself: adding a `HaltReason` / `PauseReason` /
@@ -10,16 +11,17 @@
 // now a public exit code, adding a reason is a CLI contract change — pick the
 // next code in the band and document it here.
 //
-// The drive loop CONTINUES the `paused_auto` arm (provider_retry /
-// handler_retry / timeout_retry), so it never STOPS on those — they map to
-// `internal` only to keep `PAUSE_EXIT` total; reaching a stop with one of them
-// is a `ci` driver bug.
+// `ci`'s drive loop CONTINUES the `paused_auto` arm (provider_retry /
+// handler_retry / timeout_retry), so it never STOPS on one — they map to
+// `internal` only to keep `PAUSE_EXIT` total; reaching a stop with one is a
+// driver bug. (`run`/`runs` only tail, so they never observe a `paused_auto`
+// as terminal either — the daemon resolves it.)
 
 import type { HaltReason, PauseReason, QuarantineReason, RunStatus } from "@fragua/types";
 
 /** Status-class singletons + the well-known codes. Per-reason codes live in
  * the maps below. */
-export const CI_EXIT = {
+export const CLI_EXIT = {
   /** `completed` — reached the `<exit>` sink cleanly. The only zero. */
   ok: 0,
   /** `ci` could not run the workflow at all: not found / unparseable / bad
@@ -62,9 +64,9 @@ export const PAUSE_EXIT: Record<PauseReason, number> = {
   abort_loop: 37,
   provider_exhausted: 38,
   engine_incompatible: 39,
-  provider_retry: CI_EXIT.internal,
-  handler_retry: CI_EXIT.internal,
-  timeout_retry: CI_EXIT.internal,
+  provider_retry: CLI_EXIT.internal,
+  handler_retry: CLI_EXIT.internal,
+  timeout_retry: CLI_EXIT.internal,
 };
 
 /** `quarantined` reason → exit code (band 50–59). */
@@ -75,7 +77,7 @@ export const QUARANTINE_EXIT: Record<QuarantineReason, number> = {
 
 /** The reason carried by a stop-state's terminal fact, by kind. Only the one
  * matching the final status is consulted; the others are ignored. */
-export interface CiStopReason {
+export interface StopReason {
   halt?: HaltReason;
   pause?: PauseReason;
   quarantine?: QuarantineReason;
@@ -85,24 +87,24 @@ export interface CiStopReason {
  * codes come from the maps above. A missing reason falls back to the band's
  * generic code (the reason should always be present on the terminal fact;
  * this is defensive). */
-export function ciExitCode(status: RunStatus, reason: CiStopReason = {}): number {
+export function cliExitCode(status: RunStatus, reason: StopReason = {}): number {
   switch (status) {
     case "completed":
-      return CI_EXIT.ok;
+      return CLI_EXIT.ok;
     case "cancelled":
-      return CI_EXIT.cancelled;
+      return CLI_EXIT.cancelled;
     case "halted":
       return HALT_EXIT[reason.halt ?? "error"];
     case "paused":
       return PAUSE_EXIT[reason.pause ?? "operator"];
     case "paused_human":
-      return CI_EXIT.needsHuman;
+      return CLI_EXIT.needsHuman;
     case "quarantined":
       return QUARANTINE_EXIT[reason.quarantine ?? "other"];
     case "queued":
     case "running":
     case "paused_auto":
-      return CI_EXIT.internal;
+      return CLI_EXIT.internal;
     default: {
       const _exhaustive: never = status;
       return _exhaustive;

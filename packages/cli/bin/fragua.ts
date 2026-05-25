@@ -67,6 +67,7 @@ import {
 } from "../src/commands/schedule.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
+import { FRAGUA_VERSION } from "../src/version.ts";
 
 const cli = cac("fragua");
 
@@ -485,8 +486,7 @@ const pickStr = (options: Record<string, unknown>, key: string): string | undefi
   const v = options[key];
   return typeof v === "string" ? v : undefined;
 };
-const discovery = (options: Record<string, unknown>): { url?: string; cwd?: string; dbPath?: string } => ({
-  ...(pickStr(options, "url") !== undefined ? { url: pickStr(options, "url")! } : {}),
+const discovery = (options: Record<string, unknown>): { cwd?: string; dbPath?: string } => ({
   ...(pickStr(options, "cwd") !== undefined ? { cwd: pickStr(options, "cwd")! } : {}),
   ...(pickStr(options, "db") !== undefined ? { dbPath: pickStr(options, "db")! } : {}),
 });
@@ -549,9 +549,8 @@ cli
   .option("--json", "events/steps/messages: emit full JSON instead of one-line render")
   .option("--key <k>", "artifact: the artifact key to fetch")
   .option("--iteration <n>", "artifact: node iteration (default 0)")
-  .option("--url <url>", "Server URL (default: discovered via the store's server_endpoint row)")
-  .option("--cwd <dir>", "Project root for server discovery")
-  .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
+  .option("--cwd <dir>", "Project root (scopes ls/inbox; resolves diff worktrees)")
+  .option("--db <path>", "Store path (default: the harness store ~/.fragua/fragua.db)")
   .action(
     async (
       action: string | undefined,
@@ -871,7 +870,7 @@ cli
   });
 
 cli.help();
-cli.version("0.0.0");
+cli.version(FRAGUA_VERSION);
 const parsed = cli.parse(process.argv, { run: false });
 
 if (!cli.matchedCommand && !parsed.options["help"] && !parsed.options["version"]) {
