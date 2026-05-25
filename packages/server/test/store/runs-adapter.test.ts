@@ -341,6 +341,52 @@ describe("deriveNodeStates — run-halt terminal patching", () => {
   });
 });
 
+describe("deriveNodeStates — active-pause patching", () => {
+  test("a node aborted for a budget pause shows 'running' (suspended), not 'failed'", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "implement", iteration: 0 }), seq: 1 },
+      { ...ev("fact.node_aborted", { nodeId: "implement", iteration: 0, cause: "budget_pause" }), seq: 2 },
+      {
+        ...ev("fact.run_paused", { reason: "budget", nodeId: "implement", scope: "run", metric: "cost" }),
+        seq: 3,
+      },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(nodes[0]?.nodeId).toBe("implement");
+    expect(nodes[0]?.state).toBe("running");
+    expect(nodes[0]?.lastEventSeq).toBe(3);
+  });
+
+  test("a node resumed after the pause (later dispatch) is not forced back to running by the patch", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "implement", iteration: 0 }), seq: 1 },
+      { ...ev("fact.node_aborted", { nodeId: "implement", iteration: 0, cause: "budget_pause" }), seq: 2 },
+      { ...ev("fact.run_paused", { reason: "budget", nodeId: "implement" }), seq: 3 },
+      { ...ev("fact.run_resumed", {}), seq: 4 },
+      {
+        ...ev("fact.node_completed", { nodeId: "implement", iteration: 0, outcomeStatus: "success", nextNode: "done" }),
+        seq: 5,
+      },
+    ];
+    // The pause is no longer the latest run-state fact, so the patch is inert;
+    // the node's real terminal state (completed) stands.
+    expect(deriveNodeStates(events)[0]?.state).toBe("completed");
+  });
+
+  test("a genuinely failed node is untouched when a later pause targets a different node", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "lint", iteration: 0 }), seq: 1 },
+      { ...ev("fact.node_aborted", { nodeId: "lint", iteration: 0, cause: "timeout" }), seq: 2 },
+      { ...ev("fact.node_started", { nodeId: "implement", iteration: 0 }), seq: 3 },
+      { ...ev("fact.node_aborted", { nodeId: "implement", iteration: 0, cause: "budget_pause" }), seq: 4 },
+      { ...ev("fact.run_paused", { reason: "budget", nodeId: "implement" }), seq: 5 },
+    ];
+    const byId = Object.fromEntries(deriveNodeStates(events).map((n) => [n.nodeId, n.state]));
+    expect(byId.lint).toBe("failed");
+    expect(byId.implement).toBe("running");
+  });
+});
+
 describe("runStateToDetail — HITL projection", () => {
   function evWithSeq(seq: number, type: string, payload: Record<string, unknown>): StoredEvent {
     return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };

@@ -188,6 +188,17 @@ describe("foldDetailFrame", () => {
       expect(out.hitlOptions).toBeNull();
     });
 
+    test("fact.run_paused resets the pause's node from failed (node_aborted) back to running", () => {
+      // The pause's node was flipped to failed by the preceding node_aborted;
+      // it re-dispatches on resume, so it must read as suspended (running),
+      // not failed — the UI renders running + paused as "paused".
+      let s = fold(EMPTY_DETAIL_OVERLAY, "fact.node_aborted", { nodeId: "implement", iteration: 0 }, 11);
+      expect(s.nodeStates.get("implement#0")?.state).toBe("failed");
+      s = fold(s, "fact.run_paused", { reason: "budget", nodeId: "implement", metric: "cost" }, 12);
+      expect(s.nodeStates.get("implement#0")?.state).toBe("running");
+      expect(s.runStatus).toBe("paused");
+    });
+
     test("fact.run_resumed clears HITL fields and re-flips status to running", () => {
       let s = fold(
         EMPTY_DETAIL_OVERLAY,

@@ -261,6 +261,13 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
  * `fact.run_cancelled`, or `fact.run_quarantined` and any entry is still
  * marked `running`, we downgrade to `failed` so the UI doesn't show a
  * stale "in progress" spinner on a halted run.
+ *
+ * Active-pause patch: a node aborted because the run paused (budget /
+ * operator / provider_error / …) lands as `failed` from its `node_aborted`,
+ * but it re-dispatches on resume — it's suspended, not failed. When the
+ * latest run-state fact is `fact.run_paused`, reset that pause's node back
+ * to `running` (the UI renders running + paused as "paused"). Mirrors the
+ * live overlay's `fact.run_paused` handling.
  */
 function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   const byKey = new Map<
@@ -318,12 +325,54 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
     }
   }
 
+  // Active-pause patch: when the latest run-state-changing fact is
+  // `fact.run_paused`, its node was flipped to `failed` by the preceding
+  // `node_aborted` but will re-dispatch on resume. Reset it to `running`
+  // (the UI renders running + paused as "paused") so a paused step doesn't
+  // read as a failure.
+  const activePause = latestRunPaused(events);
+  if (activePause != null) {
+    for (const [k, v] of byKey) {
+      if (v.nodeId === activePause.nodeId && v.state === "failed") {
+        byKey.set(k, { ...v, state: "running", lastEventSeq: activePause.seq });
+      }
+    }
+  }
+
   // Stable order: by `(nodeId, iteration)`. The UI groups by nodeId so
   // adjacent iterations land together, which makes "latest" lookups cheap.
   return Array.from(byKey.values()).sort((a, b) => {
     if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
     return a.iteration - b.iteration;
   });
+}
+
+/** Run-state-changing facts. A `fact.run_paused` is the *active* pause only
+ *  when it's the latest of these in the trail — a later resume/terminal/
+ *  human-pause supersedes it. */
+const RUN_STATE_FACT_TYPES = new Set<string>([
+  "fact.run_paused",
+  "fact.run_paused_human",
+  "fact.run_resumed",
+  "fact.run_completed",
+  "fact.run_halted",
+  "fact.run_cancelled",
+  "fact.run_quarantined",
+]);
+
+/** The currently-active `fact.run_paused` node + seq, or `null` when the
+ *  run isn't paused (no pause fact, or a later run-state fact superseded it).
+ *  Pauses without a `nodeId` (e.g. max_loops, engine_incompatible) return
+ *  `null` — there's no aborted node to reset. */
+function latestRunPaused(events: StoredEvent[]): { nodeId: string; seq: number } | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i]!;
+    if (!RUN_STATE_FACT_TYPES.has(ev.type)) continue;
+    if (ev.type !== "fact.run_paused") return null;
+    const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
+    return typeof nodeId === "string" ? { nodeId, seq: ev.seq } : null;
+  }
+  return null;
 }
 
 /** Project `edge.selected` events into the `(from, to, iteration)` triples

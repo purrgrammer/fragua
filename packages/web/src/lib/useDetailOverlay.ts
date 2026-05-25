@@ -195,7 +195,14 @@ export function foldDetailFrame(
       // operator-resumable: operator / provider_error / payment_required
       // / budget. Set runStatus to `paused`; banner reads the reason
       // from the latest fact payload.
-      return { ...prev, status: "paused", runStatus: "paused" };
+      //
+      // The pause's node was flipped to "failed" by the preceding
+      // fact.node_aborted, but a paused node re-dispatches on resume — it's
+      // suspended, not failed. Reset it to "running" (the UI renders
+      // running + paused as "paused"), mirroring the human-pause path above.
+      const nodeId = stringField(payload, "nodeId");
+      const nextOverlay = nodeId != null ? setNodeState(prev, { nodeId }, "running", seq) : prev;
+      return { ...nextOverlay, status: "paused", runStatus: "paused" };
     }
     case "fact.run_resumed":
       return {
