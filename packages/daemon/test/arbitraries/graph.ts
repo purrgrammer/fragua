@@ -36,7 +36,7 @@ import fc from "fast-check";
 
 const MAX_BODY = 6;
 
-type NodeKind = "llm" | "tool" | "routing" | "human";
+export type NodeKind = "llm" | "tool" | "routing" | "human";
 
 /** Per-body-node generation spec. Index-dependent fields (`retryTargetIdx`,
  * `failTarget`, route targets) are generated with bounds derived from the
@@ -93,11 +93,11 @@ function bodyId(i: number): string {
   return `n${i}`;
 }
 
-function nodeSpec(i: number, k: number): fc.Arbitrary<NodeSpec> {
+function nodeSpec(i: number, k: number, kinds: readonly NodeKind[]): fc.Arbitrary<NodeSpec> {
   const canGate = i >= 2;
   return fc.record({
-    // llm first so counterexamples shrink toward the simplest node kind.
-    kind: fc.constantFrom<NodeKind>("llm", "tool", "routing", "human"),
+    // constantFrom shrinks toward the first kind, so callers pass llm first.
+    kind: fc.constantFrom<NodeKind>(...kinds),
     gate: canGate ? fc.boolean() : fc.constant(false),
     retryTargetIdx: canGate ? fc.integer({ min: 1, max: i - 1 }) : fc.constant(1),
     maxRetries: fc.integer({ min: 1, max: 5 }),
@@ -197,15 +197,22 @@ const arbGraphSpec: fc.Arbitrary<GraphSpec> = fc.record({
   embedInputRef: fc.boolean(),
 });
 
-/** Whole-graph arbitrary (the tier-2 driven-executor harness consumes this). */
-export const arbGraph: fc.Arbitrary<Graph> = fc.integer({ min: 1, max: MAX_BODY }).chain((k) =>
-  fc
-    .record({
-      graphSpec: arbGraphSpec,
-      specs: fc.tuple(...Array.from({ length: k }, (_, idx) => nodeSpec(idx + 1, k))),
-    })
-    .map(({ graphSpec, specs }) => buildGraph(specs, graphSpec)),
-);
+/** Whole-graph arbitrary over the given node kinds (default: all). The tier-2
+ * driven harness passes a human-free set so a run reaches a terminal without a
+ * HITL intent to answer the pause. */
+export function makeArbGraph(kinds: readonly NodeKind[] = ["llm", "tool", "routing", "human"]): fc.Arbitrary<Graph> {
+  return fc.integer({ min: 1, max: MAX_BODY }).chain((k) =>
+    fc
+      .record({
+        graphSpec: arbGraphSpec,
+        specs: fc.tuple(...Array.from({ length: k }, (_, idx) => nodeSpec(idx + 1, k, kinds))),
+      })
+      .map(({ graphSpec, specs }) => buildGraph(specs, graphSpec)),
+  );
+}
+
+/** Whole-graph arbitrary over all node kinds (the tier-1 slice + bootstrap). */
+export const arbGraph: fc.Arbitrary<Graph> = makeArbGraph();
 
 /** Tier-1 slice for `planTransition`: a generated graph paired with one of its
  * non-terminal (llm/tool/human) nodes as the dispatch's `currentNode`. The
