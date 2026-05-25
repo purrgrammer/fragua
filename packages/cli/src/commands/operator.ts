@@ -121,6 +121,9 @@ function readGate(store: SqliteStore, runId: string): RunActionGate | null {
 interface InboxRunRow {
   runId: string;
   title?: string;
+  input?: string;
+  workflowName?: string;
+  workflow?: string;
   runStatus?: string;
   changeStat?: {
     committed: { filesChanged: number; insertions: number; deletions: number } | null;
@@ -134,8 +137,23 @@ export interface InboxOptions extends DiscoveryOpts {
 
 const BLOCKED_STATUSES: RunStatus[] = ["paused_human", "paused", "paused_auto", "quarantined"];
 
+/** Display label for a run, mirroring the web's `displayTitle` fallback
+ * (RunRow.tsx): generated title → raw `routing.input` (clamped) → workflow
+ * name. `run_state.title` is only materialised once the summariser runs, so
+ * a run with no auto-title (no summariser configured, blip, or `auto-title:
+ * false`) falls back to its input or workflow rather than reading
+ * "(untitled)". */
 function titleOf(r: InboxRunRow): string {
-  return r.title != null && r.title.length > 0 ? r.title : chalk.dim("(untitled)");
+  if (r.title != null && r.title.length > 0) return r.title;
+  if (r.input != null && r.input.length > 0) return clampInline(r.input, MAX_TITLE_FALLBACK_CHARS);
+  return r.workflowName ?? r.workflow ?? chalk.dim("(untitled)");
+}
+
+const MAX_TITLE_FALLBACK_CHARS = 80;
+
+function clampInline(s: string, max: number): string {
+  const collapsed = s.replace(/\s+/g, " ").trim();
+  return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max - 1).trimEnd()}…`;
 }
 
 function changeBadge(r: InboxRunRow): string {
@@ -214,7 +232,7 @@ export function statusCommand(opts: StatusOptions): Promise<number> {
 function renderStatus(d: RunDetail, events: StoredEvent[]): void {
   const statusColor = d.status === "success" ? chalk.green : d.status === "fail" ? chalk.red : chalk.yellow;
   console.log(chalk.bold(d.runId));
-  console.log(`  title:    ${d.title ?? chalk.dim("(untitled)")}`);
+  console.log(`  title:    ${titleOf(d)}`);
   console.log(`  status:   ${statusColor(d.runStatus)} ${chalk.dim(`(${d.status})`)}`);
   console.log(`  workflow: ${d.workflowName ?? d.workflow?.slice(0, 12) ?? chalk.dim("?")}`);
   if (d.cwd != null) console.log(`  cwd:      ${d.cwd}`);

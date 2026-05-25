@@ -28,6 +28,7 @@ import {
   eventsCommand,
   goalGateCommand,
   inboxCommand,
+  lsCommand,
   maxLoopsCommand,
   maxRetriesCommand,
   messagesCommand,
@@ -215,6 +216,43 @@ describe("fragua operator verbs", () => {
   test("status: unknown run → exit 1", async () => {
     const code = await statusCommand({ runId: "nope", dbPath: r.dbPath });
     expect(code).toBe(1);
+  });
+
+  // ─── title fallback: no auto-title → input → workflow name, never "(untitled)"
+
+  test("status: untitled run falls back to routing.input, then workflow name", async () => {
+    // No summariser ran → run_state.title is null. With an input we show it.
+    r.store.enqueueRun({
+      runId: "rwn",
+      workflowSha: "wf",
+      cwd: "/tmp/repo",
+      workflowName: "ship-it",
+      initialRouting: { input: "fix the flaky login test" },
+    });
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rwn", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("fix the flaky login test");
+    expect(out).not.toContain("(untitled)");
+  });
+
+  test("ls: run with no title and no input falls back to the workflow name", async () => {
+    r.store.enqueueRun({ runId: "rwf", workflowSha: "wf", cwd: "/tmp/repo", workflowName: "nightly-sweep" });
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await lsCommand({ dbPath: r.dbPath, cwd: "/tmp/repo" });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("nightly-sweep");
+    expect(out).not.toContain("(untitled)");
   });
 
   test("tail: unknown run → exit 1 (no live loop)", async () => {
