@@ -1,13 +1,13 @@
 ---
 name: operate
-description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (provider credentials + a running harness so runs execute), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct queries; deep forensics on a finished run (transcript, per-call cost, artifacts) go to the postmortem skill. Assumes the `fragua` CLI (on PATH, or `bun run fragua` in a checkout).
+description: Drive AND diagnose a fragua run — enqueue, steer, land, and debug. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", "why did run X fail/hang/halt/pause", "what happened to <run>", "debug/diagnose this run", "is it stuck", or otherwise asks to operate on or investigate a run. Teaches pre-flight (provider credentials + a running harness so runs execute), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct queries. Deep forensics on a failed/stuck run (the failure-mode playbook, transcript, per-call cost, artifacts) live in the load-on-demand reference `references/forensics.md`. Assumes the `fragua` CLI (on PATH, or `bun run fragua` in a checkout).
 ---
 
 # operate — enqueue, watch, and control a live run
 
-Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — **entirely through the `fragua` CLI, no direct queries**. Every action below is a `fragua` subcommand. Only *forensics* on a finished run — the full messages transcript, per-LLM-call cost/context, artifacts — go to the postmortem skill (§10).
+Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer, land, and debug — **entirely through the `fragua` CLI, no direct queries**. Every action below is a `fragua` subcommand. When a run fails or hangs and the summary isn't enough, read the forensics reference (§10) — the failure-mode playbook + deep `--json` reads — loaded on demand.
 
-Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy), `AGENTS.md` (commands).
+Authoritative references: [`docs/SPEC.md`](../../../docs/SPEC.md) §3 (primitives + control plane), [`docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) §3 (event taxonomy), [`AGENTS.md`](../../../AGENTS.md) (commands).
 
 ---
 
@@ -93,9 +93,9 @@ until fragua runs ls --limit 50 | grep "$RID" \
 - `paused` — operator-resumable. `fragua runs status <id>` surfaces the reason: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`) / `max_retries` / `goal_gate` / `max_loops` (raise the cap via `fragua runs max-retries|goal-gate|max-loops`, then `resume` — §4) / `abort_loop` / `provider_exhausted` (naked `resume` only) / `engine_incompatible` (daemon version mismatch; heals when a capable daemon runs).
 - `paused_auto` — daemon owes a clock tick (`provider_retry`, `handler_retry`, or `timeout_retry`); frees its slot and re-queues itself when the backoff passes. No action unless the timer never fires (check the harness). Short-circuit with `fragua runs resume`.
 - `quarantined` — orphan side effect; resolve with `fragua runs unquarantine` (§6).
-- `halted` / `cancelled` — terminal. `fragua runs status <id>` shows the halt `reason` + detail; for deep failure analysis (transcript, the failing step), the postmortem skill.
+- `halted` / `cancelled` — terminal. `fragua runs status <id>` shows the halt `reason` + detail; for deep failure analysis (transcript, the failing step), the forensics reference (§10).
 
-If the last event is `fact.node_started` with no follow-up past the node's `maxMs` and the watchdog hasn't fired, the daemon is wedged — switch to postmortem.
+If the last event is `fact.node_started` with no follow-up past the node's `maxMs` and the watchdog hasn't fired, the daemon is wedged — run `fragua doctor`, then the forensics reference (§10).
 
 ---
 
@@ -191,6 +191,6 @@ If a schedule's workflow goes missing/unparseable at fire time, the dispatcher r
 
 ---
 
-## 10. Forensics — switch to postmortem
+## 10. Forensics — `references/forensics.md`
 
-Everything operate needs is a `fragua` CLI verb above — **no direct queries** (status, tail, the event log, pause reasons, and quarantine orphans all have verbs). Drop to the **postmortem** skill only for deep *forensics* on a finished or stuck run: the full messages transcript, per-LLM-call cost / context / resolved prompts, artifacts, and replay/step analysis. Postmortem reads the store directly (by design). Rule of thumb: operate **drives + inspects live runs** through the CLI; postmortem **dissects completed ones**.
+`runs status` + `runs events` answer most "why" questions. When they don't — a run failed or hung and you need the deep evidence — **read [`references/forensics.md`](references/forensics.md)** (load it on demand). It's the diagnosis playbook on CLI verbs: the failure-mode table (every halt/pause `reason` → the fix), the fact-event taxonomy, and the deep reads — `fragua runs events --json`, `runs steps --json`, `runs messages --json`, `runs artifacts`/`artifact`, and `fragua doctor` for instance/daemon liveness. All `fragua` verbs; SQLite appears only for the two reads with no verb yet (schedule audit trail, raw provider creds).

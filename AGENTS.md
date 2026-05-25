@@ -61,7 +61,7 @@ Runtime state: `~/.fragua/fragua.db` (the global store the harness binds to by d
 
 Config cascade: `~/.fragua/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.fragua/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. YAML only.
 
-Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `postmortem`, `operate`). The daemon scans both at boot. Load before touching any file in a skill's domain.
+Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `operate`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 
 ## Commit conventions
 

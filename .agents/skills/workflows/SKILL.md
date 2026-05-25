@@ -430,4 +430,4 @@ bun run fragua validate path/to/my-thing.yaml
 bun run fragua run      my-thing --input task="…"
 ```
 
-When a workflow misbehaves at runtime, switch to `postmortem` (post-mortem) or `operate` (steer / pause / resume a live run).
+When a workflow misbehaves at runtime, switch to `operate` (steer / pause / resume a live run, or diagnose a failure via its forensics reference).
