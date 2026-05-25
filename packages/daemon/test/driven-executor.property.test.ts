@@ -92,11 +92,21 @@ function scriptedSpec(node: Node, script: NodeScript): handler.HandlerSpec {
 interface DriveResult {
   events: StoredEvent[];
   status: string;
+  /** Runs requeued by the simulated-crash startup sweep (0 = no crash). */
+  requeued: number;
 }
 
 /** Drive a run to a resting state: terminal, or an operator pause. paused_auto
- * is woken (clock advanced past the backoff) and re-run. */
-async function drive(graph: Graph, specFor: (node: Node) => handler.HandlerSpec, maxSteps = 100): Promise<DriveResult> {
+ * is woken (clock advanced past the backoff) and re-run; paused_human is
+ * answered. With `crashTurns`, the first dispatch pass is cut short (the run is
+ * left mid-flight `running`, simulating a daemon crash) and a startup sweep
+ * requeues it before the recovery pass — the §5 crash-recovery invariant. */
+async function drive(
+  graph: Graph,
+  specFor: (node: Node) => handler.HandlerSpec,
+  opts: { maxSteps?: number; crashTurns?: number } = {},
+): Promise<DriveResult> {
+  const maxSteps = opts.maxSteps ?? 100;
   const store = new SqliteStore({ path: ":memory:" });
   try {
     const sha = "g";
@@ -114,7 +124,7 @@ async function drive(graph: Graph, specFor: (node: Node) => handler.HandlerSpec,
 
     let nowMs = 1_700_000_000_000;
     const clock = () => nowMs;
-    const opts = {
+    const runOpts = {
       store,
       dispatcher,
       registry: new AbortRegistry(),
@@ -127,9 +137,21 @@ async function drive(graph: Graph, specFor: (node: Node) => handler.HandlerSpec,
       random: () => 0.5,
     };
 
+    // Crash phase: run a bounded number of turns, then "the daemon dies" — the
+    // run is left `running`. The next daemon's startup sweep requeues it
+    // (fact.run_requeued_after_crash); the recovery pass below drives it on.
+    let requeued = 0;
+    if (opts.crashTurns !== undefined) {
+      store.claimNextRun(1);
+      await runOne(runId, { ...runOpts, maxTurnsForTesting: opts.crashTurns });
+      if (store.getState(runId)?.status === "running") {
+        requeued = store.startupSweep().requeued.length;
+      }
+    }
+
     for (let step = 0; step < maxSteps; step++) {
       store.claimNextRun(1);
-      await runOne(runId, opts);
+      await runOne(runId, runOpts);
       const st = store.getState(runId);
       if (st === null || TERMINAL_STATUS.has(st.status)) break;
       if (st.status === "paused_auto") {
@@ -150,7 +172,7 @@ async function drive(graph: Graph, specFor: (node: Node) => handler.HandlerSpec,
       }
       break; // operator pause (resting)
     }
-    return { events: store.getEvents(runId), status: store.getState(runId)?.status ?? "unknown" };
+    return { events: store.getEvents(runId), status: store.getState(runId)?.status ?? "unknown", requeued };
   } finally {
     store.close();
   }
@@ -298,6 +320,55 @@ describe("driven executor — tier-2", () => {
     expect(status).toBe("completed");
     expect(events.filter((e) => e.type === "fact.run_paused_human").length).toBe(1);
     expect(events.filter((e) => e.type === "fact.run_resumed").length).toBeGreaterThanOrEqual(1);
+    assertCoreInvariants(events);
+  });
+
+  test("slice 4: crash mid-run + startup sweep recovers and completes", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        makeArbGraph(["llm", "tool", "routing"]),
+        fc.integer({ min: 1, max: 4 }),
+        async (graph, crashTurns) => {
+          const { events, status, requeued } = await drive(graph, successSpec, { crashTurns });
+          // Recovery converges: the run still reaches a clean completion after
+          // the simulated crash + requeue.
+          expect(status).toBe("completed");
+          expect(events.at(-1)?.type).toBe("fact.run_completed");
+          assertCoreInvariants(events);
+          // When the crash actually fired (run was mid-flight), the sweep
+          // requeued it and the recovery fact is in the log.
+          if (requeued > 0) {
+            expect(events.some((e) => e.type === "fact.run_requeued_after_crash")).toBe(true);
+          }
+        },
+      ),
+      { numRuns: 150 },
+    );
+  });
+
+  // Deterministic proof the crash/recovery path fires: cut the first pass to a
+  // single turn (the run is left `running`), sweep requeues it, recovery completes.
+  test("slice 4 (deterministic): crash after one turn requeues, then completes", async () => {
+    const graph: Graph = {
+      id: "g",
+      directed: true,
+      attrs: {},
+      nodes: {
+        start: { id: "start", type: "start", attrs: { label: "start" } },
+        n1: { id: "n1", type: "llm", attrs: { label: "n1" } },
+        n2: { id: "n2", type: "llm", attrs: { label: "n2" } },
+        exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
+      },
+      edges: [
+        { from: "start", to: "n1", attrs: {} },
+        { from: "n1", to: "n2", attrs: {} },
+        { from: "n2", to: "exit", attrs: {} },
+      ],
+    };
+    const { events, status, requeued } = await drive(graph, successSpec, { crashTurns: 1 });
+    expect(requeued).toBe(1);
+    expect(events.filter((e) => e.type === "fact.run_requeued_after_crash").length).toBeGreaterThanOrEqual(1);
+    expect(status).toBe("completed");
     assertCoreInvariants(events);
   });
 });
