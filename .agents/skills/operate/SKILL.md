@@ -1,20 +1,20 @@
 ---
 name: operate
-description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct DB/HTTP queries; deep forensics on a finished run (transcript, per-call cost, artifacts) go to the postmortem skill. Assumes Claude Code with Bash / Read on a fragua checkout.
+description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct queries; deep forensics on a finished run (transcript, per-call cost, artifacts) go to the postmortem skill. Assumes the `fragua` CLI (on PATH, or `bun run fragua` in a checkout).
 ---
 
 # operate — enqueue, watch, and control a live run
 
-Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — **entirely through the `fragua` CLI, no direct DB/HTTP queries**. Every action below is a `fragua` subcommand. Only *forensics* on a finished run — the full messages transcript, per-LLM-call cost/context, artifacts — go to the postmortem skill (§10).
+Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — **entirely through the `fragua` CLI, no direct queries**. Every action below is a `fragua` subcommand. Only *forensics* on a finished run — the full messages transcript, per-LLM-call cost/context, artifacts — go to the postmortem skill (§10).
 
-Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §7 (web server), `AGENTS.md` (commands).
+Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy), `AGENTS.md` (commands).
 
 ---
 
 ## Fast path
 
 ```sh
-fragua runs ls          # harness up if this returns (errors if no daemon to discover)
+fragua runs ls          # succeeds if the harness is running
 fragua providers ls     # at least one provider shows ✓
 
 # Run. --input name=value (repeatable) binds the typed inputs declared in the
@@ -33,16 +33,16 @@ If the fast path works, nothing else here matters.
 
 ## 1. Pre-flight
 
-The harness runs the daemon in one foreground process; the CLI finds a running server automatically by reading the store's `server_endpoint` row (the project store under `--db`/`<cwd>/.fragua/fragua.db`, then `~/.fragua/fragua.db`). No server found is an error — there's no localhost default.
+The harness is one foreground process that runs the daemon (which executes runs). CLI verbs act directly on the local store — `~/.fragua/fragua.db`, or `--db <path>` for another instance — so they work even with the harness down; but a queued run only *makes progress* while the harness is running.
 
 ```sh
-fragua runs ls          # succeeds → harness reachable; errors → no daemon to discover
+fragua runs ls          # succeeds → harness running; errors → not running (or wrong --db)
 fragua providers ls     # configured providers; ✓ = credentialed
 ```
 
 Common failures:
 
-- **`fragua runs ls` errors / can't discover a server** — no harness running. Start it: `fragua harness` (default) or `fragua daemon start --db <path>` + `fragua serve --db <path>` (CI primitive). The user should run `fragua harness` themselves — don't start it on their behalf without asking; it attaches to the current shell.
+- **`fragua runs ls` errors** — no harness running (or pointed at the wrong store). Start it: `fragua harness` (default), or `fragua daemon start --db <path>` for a headless store. The user should run `fragua harness` themselves — don't start it on their behalf without asking; it attaches to the current shell.
 - **Runs stuck `queued`** — daemon dead/heartbeat stale. Restart the harness.
 - **Provider not credentialed** — enqueue fails `provider_unavailable`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`.
 - **Model not registered** — enqueue fails `model_unresolved`. Register it (`fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`, or the full `fragua providers add --custom` wizard for a new provider) or switch the workflow's `model:`.
@@ -191,4 +191,4 @@ If a schedule's workflow goes missing/unparseable at fire time, the dispatcher r
 
 ## 10. Forensics — switch to postmortem
 
-Everything operate needs is a `fragua` CLI verb above — **no direct DB/HTTP queries** (status, tail, the event log, pause reasons, and quarantine orphans all have verbs). Drop to the **postmortem** skill only for deep *forensics* on a finished or stuck run: the full messages transcript, per-LLM-call cost / context / resolved prompts, artifacts, and replay/step analysis. Postmortem reads the store directly (by design). Rule of thumb: operate **drives + inspects live runs** through the CLI; postmortem **dissects completed ones**.
+Everything operate needs is a `fragua` CLI verb above — **no direct queries** (status, tail, the event log, pause reasons, and quarantine orphans all have verbs). Drop to the **postmortem** skill only for deep *forensics* on a finished or stuck run: the full messages transcript, per-LLM-call cost / context / resolved prompts, artifacts, and replay/step analysis. Postmortem reads the store directly (by design). Rule of thumb: operate **drives + inspects live runs** through the CLI; postmortem **dissects completed ones**.
