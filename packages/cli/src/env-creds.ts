@@ -19,8 +19,11 @@
 // only supply a bare access token (no refresh material), so `oauth`-typed
 // rows, which exist to drive token refresh, are never the right shape here.
 
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { AuthStorage } from "@fragua/agent";
-import type { IProviderCredentialStore } from "@fragua/store";
+import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
 import { findEnvKeys, getEnvApiKey, getProviders } from "@mariozechner/pi-ai";
 
 // pi-ai's github-copilot env fallback includes the generic GH_TOKEN /
@@ -53,4 +56,47 @@ export function seedCredsFromEnv(store: IProviderCredentialStore): string[] {
     seeded.push(provider);
   }
   return seeded;
+}
+
+/**
+ * Seed `target` from the GLOBAL store's configured providers — what `fragua
+ * providers add` wrote into `~/.fragua/fragua.db`. This is what makes local
+ * `fragua ci` "just work": without it, ci sees only env vars and ignores the
+ * creds you already configured. Copies `provider_credentials` verbatim — incl.
+ * OAuth rows with their refresh material, which an env token can't carry — and
+ * `provider_config` (custom providers). A no-op when there's no global store
+ * (a fresh CI machine), so ci falls back to env-only there.
+ *
+ * Layer `seedCredsFromEnv` AFTER this so an env/CI secret overrides a configured
+ * provider (env wins) — the standard env-overrides-config precedence. Returns
+ * the providers copied.
+ */
+export function seedCredsFromGlobalStore(
+  target: SqliteStore,
+  targetPath: string,
+  globalPath: string = resolve(homedir(), ".fragua/fragua.db"),
+): string[] {
+  // No global store (CI), or ci was pointed AT the global store (--db) so the
+  // creds are already present — nothing to copy.
+  if (!existsSync(globalPath) || resolve(targetPath) === resolve(globalPath)) return [];
+  const source = new SqliteStore({ path: globalPath, migrate: false });
+  try {
+    const from = AuthStorage.fromStore(source);
+    const to = AuthStorage.fromStore(target);
+    const seeded: string[] = [];
+    for (const [provider, cred] of Object.entries(from.getAll())) {
+      to.set(provider, cred);
+      seeded.push(provider);
+    }
+    // Custom-provider definitions (Ollama / vLLM / proxies) live in
+    // provider_config, separate from the credential rows. listProviderConfigs
+    // returns parsed JSON; upsert wants a serialised string (I1 — the
+    // stringify happens here, outside any write txn), so re-encode.
+    for (const row of source.listProviderConfigs()) {
+      target.upsertProviderConfig({ provider: row.provider, config: JSON.stringify(row.config) });
+    }
+    return seeded;
+  } finally {
+    source.close();
+  }
 }

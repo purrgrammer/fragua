@@ -5,9 +5,12 @@
 // GH_TOKEN doesn't masquerade as a Copilot credential.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AuthStorage } from "@fragua/agent";
 import { SqliteStore } from "@fragua/store";
-import { seedCredsFromEnv } from "../src/env-creds.ts";
+import { seedCredsFromEnv, seedCredsFromGlobalStore } from "../src/env-creds.ts";
 
 // Every env var the seed could read, scrubbed before each test so the
 // operator's own shell creds can't leak into assertions.
@@ -129,5 +132,53 @@ describe("seedCredsFromEnv", () => {
 
   test("empty env seeds nothing", () => {
     expect(seedCredsFromEnv(store)).toEqual([]);
+  });
+});
+
+describe("seedCredsFromGlobalStore", () => {
+  test("copies the global store's provider_credentials into the target", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-global-"));
+    const globalPath = join(dir, "global.db");
+    const targetPath = join(dir, "ci.db");
+    try {
+      // Seed a "global" store as `fragua providers add` would.
+      const global = new SqliteStore({ path: globalPath });
+      AuthStorage.fromStore(global).set("openai", { type: "api_key", key: "sk-global-openai" });
+      global.close();
+
+      const target = new SqliteStore({ path: targetPath });
+      try {
+        expect(seedCredsFromGlobalStore(target, targetPath, globalPath)).toContain("openai");
+        expect(await AuthStorage.fromStore(target).getApiKey("openai")).toBe("sk-global-openai");
+      } finally {
+        target.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("no global store → no-op", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-global-"));
+    const target = new SqliteStore({ path: ":memory:" });
+    try {
+      expect(seedCredsFromGlobalStore(target, join(dir, "ci.db"), join(dir, "absent.db"))).toEqual([]);
+    } finally {
+      target.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("target IS the global store → no self-copy", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-global-"));
+    const p = join(dir, "store.db");
+    const target = new SqliteStore({ path: p });
+    try {
+      AuthStorage.fromStore(target).set("openai", { type: "api_key", key: "k" });
+      expect(seedCredsFromGlobalStore(target, p, p)).toEqual([]);
+    } finally {
+      target.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

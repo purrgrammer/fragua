@@ -1,7 +1,8 @@
 // `fragua ci <workflow>` — the one-shot embedded executor. Unlike every other
 // CLI verb (pure store-clients that write an intent and return), `ci` embeds
 // the executor in-process and writes `fact.*` itself: open an ephemeral store,
-// seed credentials from env, save + enqueue the workflow, drive the run to a
+// seed credentials (the global store's configured providers + env, env wins),
+// save + enqueue the workflow, drive the run to a
 // stop-state, render the event log, and exit with a code that reflects the
 // outcome (see `../cli-exit.ts` for the total status → exit-code map). The
 // `.db` is a portable artifact.
@@ -27,9 +28,9 @@ import { type IEventStore, newRunId, SqliteStore, type StoredEvent } from "@frag
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
-import { CLI_EXIT, type StopReason, cliExitCode } from "../cli-exit.ts";
+import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
-import { seedCredsFromEnv } from "../env-creds.ts";
+import { seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
@@ -128,9 +129,14 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   let runId: string | undefined;
 
   try {
-    // Seed credentials from env (ANTHROPIC_API_KEY, …), then assemble the
-    // executor from the same factory the daemon uses.
-    const seeded = seedCredsFromEnv(store);
+    // Seed credentials: the global store's configured providers (what
+    // `fragua providers add` wrote) as the base, then env (ANTHROPIC_API_KEY, …)
+    // overlaid so a CI secret overrides. Both no-op gracefully — no global store
+    // on a CI machine, no matching env vars locally. The executor then resolves
+    // from this store's provider_credentials, the same path the daemon uses.
+    const seededGlobal = seedCredsFromGlobalStore(store, storePath);
+    const seededEnv = seedCredsFromEnv(store);
+    const seeded = [...new Set([...seededGlobal, ...seededEnv])];
     const config = await loadConfig(cwd);
     let timeouts: ReturnType<typeof resolveTimeouts>;
     try {
@@ -148,7 +154,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       ...(opts.model !== undefined ? { model: opts.model } : {}),
     });
     if (!deps.llm.useLlm) {
-      const hint = seeded.length > 0 ? `creds seeded for ${seeded.join(", ")}` : "no provider creds found in env";
+      const hint =
+        seeded.length > 0
+          ? `creds seeded for ${seeded.join(", ")}`
+          : "no provider creds in the global store (`fragua providers add`) or env";
       console.error(chalk.yellow(`ci: no llm provider resolved (${hint}); llm nodes will use the stub backend`));
     }
 
