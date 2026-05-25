@@ -590,7 +590,7 @@ function diffRefusalMessage(reason: DiffRefusal, against: string): string {
   }
 }
 
-// ─── Forensics (read-only): the postmortem skill's dissection verbs ─────────
+// ─── Forensics (read-only): the operate skill's dissection verbs ────────────
 
 export interface EventsOptions extends DiscoveryOpts {
   runId: string;
@@ -601,8 +601,9 @@ export interface EventsOptions extends DiscoveryOpts {
 
 /** Dump a run's event log. `--type <prefix>` filters by `type.startsWith`,
  * `--limit N` keeps the last N (default 50), printed oldest-first. `--json`
- * emits the raw `StoredEvent[]` with full payloads (the postmortem skill mines
- * these); the default render reuses the live-follow `[seq] type payload` line. */
+ * emits the raw `StoredEvent[]` with full payloads (the operate skill's
+ * forensics reference mines these); the default render reuses the live-follow
+ * `[seq] type payload` line. */
 export function eventsCommand(opts: EventsOptions): Promise<number> {
   return withStoreClient(opts, ({ readPlane }) => {
     const all = readPlane.events(opts.runId);

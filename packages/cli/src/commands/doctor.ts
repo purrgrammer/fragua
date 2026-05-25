@@ -1,8 +1,8 @@
 // `fragua doctor` — CLI liveness check. One screen of "is this fragua instance
 // healthy?": the store path, the daemon lock (alive vs stale heartbeat), the
 // HTTP server endpoint, and a one-line provider-credential summary. Read-only,
-// direct store-client — the postmortem skill's process-level checks without
-// raw SQL on `daemon_lock` / `server_endpoint`.
+// direct store-client — the operate skill's forensics process-level checks
+// without raw SQL on `daemon_lock` / `server_endpoint`.
 
 import chalk from "chalk";
 import { resolveStorePath, withStoreClient } from "../store-client.ts";
