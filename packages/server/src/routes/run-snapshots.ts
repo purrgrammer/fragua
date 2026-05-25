@@ -23,8 +23,8 @@
 // All git invocations go through the injected RunSnapshotReader — no
 // direct git calls here; pure request routing + error shaping.
 
-import type { IEventStore, StoredEvent } from "@fragua/store";
-import type { SnapshotCapturedData } from "@fragua/types";
+import { extractCommitSha, makeReadPlane, parseEventIdx } from "@fragua/core/read-plane";
+import type { IEventStore } from "@fragua/store";
 import { Hono } from "hono";
 import type { RunSnapshotReader } from "../ports.ts";
 
@@ -33,39 +33,17 @@ export interface RunSnapshotsRouteOptions {
   reader: RunSnapshotReader;
 }
 
-/** Wire shape of one item in the scrubber list. */
-export interface SnapshotItem {
-  eventIdx: number;
-  nodeId: string | null;
-  /** Human-readable label for this boundary.
-   *  "terminal" = fact.snapshot_recorded
-   *  "hitl"     = snapshot.captured with nodeId null (HITL pause)
-   *  "step"     = snapshot.captured with a nodeId (per-step) */
-  label: "terminal" | "hitl" | "step";
-  commitSha: string;
-  treeSha: string;
-  committed: SnapshotStat | null;
-  uncommitted: SnapshotStat | null;
-}
-
-interface SnapshotStat {
-  files: number;
-  additions: number;
-  deletions: number;
-}
-
 export function runSnapshotsRoutes(opts: RunSnapshotsRouteOptions): Hono {
   const app = new Hono();
   const { store, reader } = opts;
+  const readPlane = makeReadPlane({ store });
 
   // ── GET /runs/:id/snapshots ─────────────────────────────────────────
 
   app.get("/runs/:id/snapshots", (c) => {
-    const runId = c.req.param("id");
-    const state = store.getState(runId);
-    if (state == null) return c.json({ error: "not_found" }, 404);
-    const events = store.getSnapshotEvents(runId);
-    return c.json(events.map(toScrubberRow));
+    const snapshots = readPlane.snapshots(c.req.param("id"));
+    if (snapshots == null) return c.json({ error: "not_found" }, 404);
+    return c.json(snapshots);
   });
 
   // ── GET /runs/:id/snapshots/:eventIdx/tree ──────────────────────────
@@ -116,57 +94,29 @@ export function runSnapshotsRoutes(opts: RunSnapshotsRouteOptions): Hono {
   // ── GET /runs/:id/snapshots/:eventIdx/diff ──────────────────────────
 
   app.get("/runs/:id/snapshots/:eventIdx/diff", async (c) => {
-    const runId = c.req.param("id");
-    const state = store.getState(runId);
-    if (state == null) return c.json({ error: "not_found" }, 404);
-    if (state.cwd == null) return c.json({ error: "not_found" }, 404);
-
-    const snapshots = store.getSnapshotEvents(runId).map(toScrubberRow);
-
-    const idxParam = c.req.param("eventIdx");
-    const eventIdx = parseEventIdx(idxParam);
+    const eventIdx = parseEventIdx(c.req.param("eventIdx"));
     if (eventIdx == null) return c.json({ error: "invalid_event_idx" }, 400);
 
-    const snapshotPos = snapshots.findIndex((s) => s.eventIdx === eventIdx);
-    if (snapshotPos === -1) return c.json({ error: "not_found" }, 404);
-    const snapshot = snapshots[snapshotPos] as SnapshotItem;
-
     const against = c.req.query("against") ?? "base";
-    const pathFilter = c.req.query("path");
-
-    let fromSha: string;
-
-    if (against === "base") {
-      const base = state.diffBaseSha ?? state.baseGitSha;
-      if (base == null || base.length === 0) {
-        return c.json({ error: "base_missing" }, 410);
-      }
-      fromSha = base;
-    } else if (against === "previous") {
-      if (snapshotPos === 0) {
-        // First snapshot: diff against base (same behaviour as against=base)
-        const base = state.diffBaseSha ?? state.baseGitSha;
-        if (base == null || base.length === 0) {
+    const range = readPlane.diffRange(c.req.param("id"), eventIdx, against);
+    if (!range.ok) {
+      switch (range.reason) {
+        case "run_not_found":
+        case "no_worktree":
+        case "snapshot_not_found":
+          return c.json({ error: "not_found" }, 404);
+        case "invalid_against":
+          return c.json({ error: "invalid_against" }, 400);
+        case "base_missing":
           return c.json({ error: "base_missing" }, 410);
-        }
-        fromSha = base;
-      } else {
-        const prev = snapshots[snapshotPos - 1] as SnapshotItem;
-        fromSha = prev.commitSha;
       }
-    } else {
-      // Treat as an eventIdx number
-      const againstIdx = parseEventIdx(against);
-      if (againstIdx == null) return c.json({ error: "invalid_against" }, 400);
-      const againstSnap = snapshots.find((s) => s.eventIdx === againstIdx);
-      if (againstSnap == null) return c.json({ error: "not_found" }, 404);
-      fromSha = againstSnap.commitSha;
     }
 
+    const pathFilter = c.req.query("path");
     const diff = await reader.diff(
-      state.cwd,
-      fromSha,
-      snapshot.commitSha,
+      range.cwd,
+      range.fromSha,
+      range.toSha,
       pathFilter !== undefined && pathFilter.length > 0 ? pathFilter : undefined,
     );
     return new Response(diff, {
@@ -202,41 +152,6 @@ function resolveSnapshot(store: IEventStore, runId: string, idxParam: string): R
   if (commitSha == null) return { kind: "snapshot_not_found" };
 
   return { kind: "ok", cwd: state.cwd, commitSha };
-}
-
-function parseEventIdx(s: string): number | null {
-  if (s.length === 0) return null;
-  const n = Number(s);
-  if (!Number.isInteger(n) || n < 0) return null;
-  return n;
-}
-
-function extractCommitSha(ev: StoredEvent): string | null {
-  const p = ev.payload as Record<string, unknown>;
-  const sha = p["commitSha"];
-  return typeof sha === "string" && sha.length > 0 ? sha : null;
-}
-
-function toScrubberRow(ev: StoredEvent): SnapshotItem {
-  const p = ev.payload as Partial<SnapshotCapturedData> & {
-    // fact.snapshot_recorded has these as non-optional
-    committed?: { files: number; additions: number; deletions: number } | null;
-    uncommitted?: { files: number; additions: number; deletions: number } | null;
-  };
-
-  const nodeId = p.nodeId ?? null;
-  const label: SnapshotItem["label"] =
-    ev.type === "fact.snapshot_recorded" ? "terminal" : nodeId === null ? "hitl" : "step";
-
-  return {
-    eventIdx: ev.seq,
-    nodeId,
-    label,
-    commitSha: (p.commitSha as string) ?? "",
-    treeSha: (p.treeSha as string) ?? "",
-    committed: (p.committed as SnapshotStat | null | undefined) ?? null,
-    uncommitted: (p.uncommitted as SnapshotStat | null | undefined) ?? null,
-  };
 }
 
 /** Reject inputs that could escape the project root before any git

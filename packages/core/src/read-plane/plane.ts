@@ -21,6 +21,7 @@ import {
 } from "@fragua/store";
 import { runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
+import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnapshot } from "./steps.ts";
 
 export interface ReadPlaneDeps {
@@ -43,6 +44,13 @@ export interface ReadPlane {
   /** Raw store event log (`fact.*` + `intent.*`), or `null` when the run
    *  is absent. Mirrors `GET /runs/:id/events.json`. */
   events(runId: string): StoredEvent[] | null;
+  /** Ordered snapshot scrubber feed, or `null` when the run is absent.
+   *  Mirrors `GET /runs/:id/snapshots`. */
+  snapshots(runId: string): SnapshotItem[] | null;
+  /** Resolve a snapshot diff request into `(cwd, fromSha, toSha)`, or a
+   *  refusal. Pure — picks the commit shas; the git diff is the caller's.
+   *  Mirrors the resolution in `GET /runs/:id/snapshots/:eventIdx/diff`. */
+  diffRange(runId: string, eventIdx: number, against: string): DiffRange;
 }
 
 export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
@@ -89,6 +97,42 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     events(runId) {
       if (store.getState(runId) == null) return null;
       return store.getEvents(runId);
+    },
+    snapshots(runId) {
+      if (store.getState(runId) == null) return null;
+      return store.getSnapshotEvents(runId).map(toScrubberRow);
+    },
+    diffRange(runId, eventIdx, against) {
+      const state = store.getState(runId);
+      if (state == null) return { ok: false, reason: "run_not_found" };
+      if (state.cwd == null) return { ok: false, reason: "no_worktree" };
+
+      const snapshots = store.getSnapshotEvents(runId).map(toScrubberRow);
+      const snapshotPos = snapshots.findIndex((s) => s.eventIdx === eventIdx);
+      if (snapshotPos === -1) return { ok: false, reason: "snapshot_not_found" };
+      const snapshot = snapshots[snapshotPos] as SnapshotItem;
+
+      const base = state.diffBaseSha ?? state.baseGitSha;
+      let fromSha: string;
+      if (against === "base") {
+        if (base == null || base.length === 0) return { ok: false, reason: "base_missing" };
+        fromSha = base;
+      } else if (against === "previous") {
+        if (snapshotPos === 0) {
+          if (base == null || base.length === 0) return { ok: false, reason: "base_missing" };
+          fromSha = base;
+        } else {
+          fromSha = (snapshots[snapshotPos - 1] as SnapshotItem).commitSha;
+        }
+      } else {
+        const againstIdx = parseEventIdx(against);
+        if (againstIdx == null) return { ok: false, reason: "invalid_against" };
+        const againstSnap = snapshots.find((s) => s.eventIdx === againstIdx);
+        if (againstSnap == null) return { ok: false, reason: "snapshot_not_found" };
+        fromSha = againstSnap.commitSha;
+      }
+
+      return { ok: true, cwd: state.cwd, fromSha, toSha: snapshot.commitSha };
     },
   };
 }

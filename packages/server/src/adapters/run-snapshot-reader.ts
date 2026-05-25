@@ -11,6 +11,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { defaultGitExec, gitDiff } from "@fragua/workspace";
 import type { RunSnapshotReader, SnapshotTreeEntry } from "../ports.ts";
 
 const execFileAsync = promisify(execFile);
@@ -67,18 +68,7 @@ export function createRunSnapshotReader(): RunSnapshotReader {
     },
 
     async diff(cwd: string, fromSha: string, toSha: string, path?: string) {
-      const args = ["diff", `${fromSha}..${toSha}`];
-      if (path !== undefined && path.length > 0) args.push("--", path);
-      try {
-        const result = await execFileAsync("git", args, {
-          cwd,
-          timeout: GIT_TIMEOUT_MS,
-          maxBuffer: MAX_RESPONSE_BYTES,
-        });
-        return result.stdout;
-      } catch {
-        return "";
-      }
+      return gitDiff(defaultGitExec, cwd, fromSha, toSha, path);
     },
 
     async mergeability(cwd: string, intoRef: string, headsRef: string) {

@@ -163,6 +163,23 @@ export async function applyAccept(git: GitExec, gate: RunActionGate): Promise<Ac
   return { ok: true, sha: replayedTip ?? target, replayed, tailStaged };
 }
 
+/** One-shot `git diff <fromSha>..<toSha> [-- <path>]` in `cwd`, returning
+ * stdout. Tolerant like the rest of run-actions — a non-zero git exit yields
+ * "" rather than throwing. The single git-diff implementation shared by the
+ * HTTP snapshot route and the CLI `runs diff` store-client. */
+export async function gitDiff(
+  git: GitExec,
+  cwd: string,
+  fromSha: string,
+  toSha: string,
+  path?: string,
+): Promise<string> {
+  const args = ["diff", `${fromSha}..${toSha}`];
+  if (path !== undefined && path.length > 0) args.push("--", path);
+  const r = await git(cwd, args);
+  return r.exitCode === 0 ? r.stdout : "";
+}
+
 export type DiscardResult = { ok: true; refs: string[] } | { ok: false; reason: RunActionRefusal; detail: string };
 
 /** Drop a run's recoverable work — delete its `refs/fragua/{snapshots,heads}`.

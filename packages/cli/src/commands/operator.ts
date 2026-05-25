@@ -6,15 +6,15 @@
 // additionally run the shared `@fragua/workspace` git action first). No server
 // needed, works daemon-down.
 //
-// Reads (ls/inbox/diff) still go over HTTP against a running server, discovered
-// via the store's `server_endpoint` row (--db, else ~/.fragua/fragua.db).
+// Reads (ls/inbox/diff) are also direct store-clients via the read plane; `diff`
+// resolves the commit range through `readPlane.diffRange` and runs the git diff
+// inline with the same `@fragua/workspace` `gitDiff` the server uses.
 
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import { type RunStatus, SqliteStore } from "@fragua/store";
-import { applyAccept, applyDiscard, defaultGitExec, type RunActionGate } from "@fragua/workspace";
+import type { DiffRange } from "@fragua/core/read-plane";
+import type { RunStatus, SqliteStore } from "@fragua/store";
+import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
 import { withStoreClient } from "../store-client.ts";
 
@@ -22,39 +22,6 @@ interface DiscoveryOpts {
   url?: string;
   cwd?: string;
   dbPath?: string;
-}
-
-/** Read the published server URL from a store's `server_endpoint` row.
- *  Tolerates a missing/locked DB by returning undefined. */
-function discoverEndpointUrl(dbPath: string): string | undefined {
-  if (!existsSync(dbPath)) return undefined;
-  try {
-    const store = new SqliteStore({ path: dbPath });
-    try {
-      return store.currentServerEndpoint()?.url ?? undefined;
-    } finally {
-      store.close();
-    }
-  } catch {
-    return undefined;
-  }
-}
-
-/** Resolve the server URL, or undefined when none is discoverable. No
- *  localhost default — a missing server is an error the caller surfaces. */
-function resolveBaseUrl(opts: DiscoveryOpts): string | undefined {
-  const cwd = opts.cwd ?? process.cwd();
-  const projectDb = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
-  const harnessDb = resolve(homedir(), ".fragua/fragua.db");
-  const url = opts.url ?? discoverEndpointUrl(projectDb) ?? discoverEndpointUrl(harnessDb);
-  return url?.replace(/\/$/, "");
-}
-
-/** Actionable error when no server is discoverable. Returns exit code 1. */
-function noServerFound(): number {
-  console.error(chalk.red("no running fragua server found"));
-  console.error(chalk.dim("  start one with `fragua harness`, or pass --url http://host:port[/api]"));
-  return 1;
 }
 
 /** Write a control intent through the plane against the local store. Checks
@@ -84,21 +51,6 @@ function writeIntent(
       return 1;
     }
   });
-}
-
-async function failResponse(verb: string, res: Response): Promise<number> {
-  let detail = "";
-  try {
-    const body = (await res.json()) as { error?: string; code?: string };
-    detail = body.error ?? "";
-    if (body.code) detail += chalk.dim(` [${body.code}]`);
-  } catch {
-    try {
-      detail = await res.text();
-    } catch {}
-  }
-  console.error(chalk.red(`${verb}: ${res.status}`) + (detail ? ` ${detail}` : ""));
-  return 1;
 }
 
 export interface DiscardOptions extends DiscoveryOpts {
@@ -162,12 +114,6 @@ function readGate(store: SqliteStore, runId: string): RunActionGate | null {
     cwd: state.cwd,
     baseGitSha: state.baseGitSha ?? "",
   };
-}
-
-interface SnapshotRow {
-  eventIdx: number;
-  nodeId: string | null;
-  label: string;
 }
 
 interface InboxRunRow {
@@ -503,28 +449,52 @@ export interface DiffOptions extends DiscoveryOpts {
   runId: string;
   against?: string;
   snap?: number;
+  path?: string;
 }
 
-export async function diffCommand(opts: DiffOptions): Promise<number> {
-  const baseUrl = resolveBaseUrl(opts);
-  if (baseUrl == null) return noServerFound();
-  const listRes = await fetch(`${baseUrl}/runs/${encodeURIComponent(opts.runId)}/snapshots`);
-  if (!listRes.ok) return failResponse("diff", listRes);
-  const snapshots = (await listRes.json()) as SnapshotRow[];
-  if (snapshots.length === 0) {
-    console.error(chalk.yellow(`diff: run ${opts.runId} has no snapshots (bare-cwd or no worktree)`));
-    return 1;
-  }
-  const eventIdx = opts.snap ?? snapshots[snapshots.length - 1]!.eventIdx;
-  const against = opts.against ?? "base";
-  const url = `${baseUrl}/runs/${encodeURIComponent(opts.runId)}/snapshots/${eventIdx}/diff?against=${encodeURIComponent(against)}`;
-  const diffRes = await fetch(url);
-  if (!diffRes.ok) return failResponse("diff", diffRes);
-  const text = await diffRes.text();
-  if (text.trim() === "") {
-    console.log(chalk.dim(`(no changes vs ${against})`));
+export function diffCommand(opts: DiffOptions): Promise<number> {
+  return withStoreClient(opts, async ({ readPlane }) => {
+    const snapshots = readPlane.snapshots(opts.runId);
+    if (snapshots == null) {
+      console.error(chalk.red("diff: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (snapshots.length === 0) {
+      console.error(chalk.yellow(`diff: run ${opts.runId} has no snapshots (bare-cwd or no worktree)`));
+      return 1;
+    }
+    const eventIdx = opts.snap ?? snapshots[snapshots.length - 1]!.eventIdx;
+    const against = opts.against ?? "base";
+
+    const range = readPlane.diffRange(opts.runId, eventIdx, against);
+    if (!range.ok) {
+      console.error(chalk.red(`diff: ${diffRefusalMessage(range.reason, against)}`) + chalk.dim(` [${range.reason}]`));
+      return 1;
+    }
+
+    const text = await gitDiff(defaultGitExec, range.cwd, range.fromSha, range.toSha, opts.path);
+    if (text.trim() === "") {
+      console.log(chalk.dim(`(no changes vs ${against})`));
+      return 0;
+    }
+    process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
     return 0;
+  });
+}
+
+type DiffRefusal = Extract<DiffRange, { ok: false }>["reason"];
+
+function diffRefusalMessage(reason: DiffRefusal, against: string): string {
+  switch (reason) {
+    case "run_not_found":
+      return "run not found";
+    case "no_worktree":
+      return "run has no worktree (bare-cwd)";
+    case "snapshot_not_found":
+      return "no snapshot at that --snap eventIdx";
+    case "invalid_against":
+      return `--against "${against}" is not "base", "previous", or a snapshot eventIdx`;
+    case "base_missing":
+      return "run has no recorded base commit to diff against";
   }
-  process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
-  return 0;
 }

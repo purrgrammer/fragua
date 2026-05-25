@@ -12,6 +12,14 @@ export {
 } from "./projections.ts";
 export { NodeState, RunDetail, RunSummary, SelectedEdge } from "./schemas.ts";
 export {
+  type DiffRange,
+  extractCommitSha,
+  parseEventIdx,
+  type SnapshotItem,
+  type SnapshotStat,
+  toScrubberRow,
+} from "./snapshots.ts";
+export {
   attachStepAggregates,
   eventsToSteps,
   fillOrphanDurations,

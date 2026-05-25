@@ -441,7 +441,7 @@ function runsHelp(): void {
   Disposition (terminal runs with recoverable work):
     accept  <id>                      replay the run's commits onto your branch + stage the tail to commit
     discard <id>                      drop the run's fragua refs
-    diff    <id> [--against <ref>] [--snap <idx>]  print the snapshot diff
+    diff    <id> [--against <ref>] [--snap <idx>] [--path <p>]  print the snapshot diff
 
   Lifecycle (blocked runs):
     respond <id> [route] [--note <t>] answer a HITL gate (interactive without a route)
@@ -469,6 +469,7 @@ cli
   .command("runs [action] [runId] [arg]", "Operate on an existing run (run without args for help)")
   .option("--against <ref>", "diff: base | previous | <eventIdx> (default base)")
   .option("--snap <eventIdx>", "diff: snapshot to show (default: latest)")
+  .option("--path <path>", "diff: restrict to a repo-relative path")
   .option("--route <route>", "respond: HITL route (omit for interactive)")
   .option("--note <text>", "respond/resume/unquarantine: optional note")
   .option("--reason <text>", "cancel: optional reason")
@@ -540,6 +541,7 @@ cli
               runId: needId(),
               ...(pickStr(options, "against") !== undefined ? { against: pickStr(options, "against")! } : {}),
               ...(snap !== undefined && Number.isFinite(snap) ? { snap } : {}),
+              ...(pickStr(options, "path") !== undefined ? { path: pickStr(options, "path")! } : {}),
               ...discovery(options),
             }),
           );
