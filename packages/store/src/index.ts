@@ -1,3 +1,4 @@
+export { BUNDLE_VERSION, type BundleManifest, type TarEntry, writeTar } from "./bundle.ts";
 export type { MetricsSnapshot } from "./metrics.ts";
 export { Metrics } from "./metrics.ts";
 export {

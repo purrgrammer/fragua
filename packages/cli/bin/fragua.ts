@@ -350,20 +350,26 @@ cli
   });
 
 cli
-  .command("db <action>", "DB maintenance: vacuum | gc-blobs | backup | migrate")
-  .option("--to <path>", "`backup` only: destination path")
+  .command("db <action> [run]", "DB maintenance: vacuum | gc-blobs | backup | migrate | export <run>")
+  .option("--to <path>", "`backup` / `export` destination path")
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
   .option("--dry-run", "`migrate` only: print the plan without applying")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
-  .action(async (action: string, options: Record<string, unknown>) => {
+  .action(async (action: string, run: string | undefined, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
-    if (action !== "vacuum" && action !== "gc-blobs" && action !== "backup" && action !== "migrate") {
+    if (
+      action !== "vacuum" &&
+      action !== "gc-blobs" &&
+      action !== "backup" &&
+      action !== "migrate" &&
+      action !== "export"
+    ) {
       console.error(chalk.red(`unknown db action: ${action}`));
-      console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup | migrate"));
+      console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup | migrate | export"));
       process.exit(1);
     }
     const limitRaw = options["limit"];
@@ -375,6 +381,7 @@ cli
           : undefined;
     const code = await dbCommand({
       action,
+      ...(run !== undefined ? { run } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
@@ -453,7 +460,8 @@ cli
       "(ANTHROPIC_API_KEY, …); the .db is a portable artifact (pin with --db).",
   )
   .option("-i, --input <name=value>", "Run input; repeat for multiple. Value @path reads a file, @- reads stdin")
-  .option("--db <path>", "Pin the ephemeral store here as an artifact (default: a temp dir, discarded)")
+  .option("--db <path>", "Pin the raw store here (pruned to portable tables on exit; default: a temp dir, discarded)")
+  .option("--bundle <path>", "Export a portable, secret-free .fragua bundle here — the safe artifact to upload/import")
   .option("--json", "Emit the event log as JSONL instead of the human render")
   .option("--provider <id>", "LLM provider override (else config defaults, else env-autodetect)")
   .option("--model <id>", "LLM model override")
@@ -474,6 +482,7 @@ cli
       workflow,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+      ...(pick("bundle") !== undefined ? { bundle: pick("bundle")! } : {}),
       ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
       ...(options["json"] === true ? { json: true } : {}),

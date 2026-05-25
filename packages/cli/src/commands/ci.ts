@@ -16,10 +16,10 @@
 // LocalEnvironment (non-git cwd). Pluggable HITL and cross-machine import are
 // deferred (docs/proposals/hitl-channel.md, db-import.md).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { AUTO_RESUME_AT_KEY } from "@fragua/core";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane } from "@fragua/core/read-plane";
@@ -34,6 +34,7 @@ import { seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
+import { FRAGUA_VERSION } from "../version.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
 const POLL_MS = 50;
@@ -42,8 +43,11 @@ const BATCH = 500;
 export interface CiCommandOptions {
   workflow: string;
   /** Ephemeral store path. Default: a temp dir (discarded on exit). Pin with
-   * `--db` to keep the run as a portable artifact. */
+   * `--db` to keep the raw store (pruned to portable tables on exit). */
   dbPath?: string;
+  /** Export a portable, secret-free `.fragua` bundle on exit — the safe CI
+   * artifact (carries only the portable run record; credentials never travel). */
+  bundle?: string;
   /** Typed run inputs (`--input name=value`). */
   inputs?: Record<string, string>;
   /** Emit the event log as JSONL instead of the human render. */
@@ -299,6 +303,19 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         await provisioner.dispose(runId);
       } catch {
         // already disposed, or never provisioned — nothing to clean up.
+      }
+    }
+    // Export a portable, secret-free `.fragua` bundle before the store
+    // closes/vanishes — the safe CI artifact (carries only the portable run
+    // record; provider tables are never read into it, so no scrub needed).
+    if (opts.bundle != null && opts.bundle.length > 0 && runId !== undefined) {
+      try {
+        const dest = resolve(opts.bundle);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, store.exportRunBundle(runId, { fraguaVersion: FRAGUA_VERSION }));
+        console.log(chalk.dim(`bundle → ${dest}`));
+      } catch (e) {
+        console.error(chalk.yellow(`ci: bundle export failed: ${(e as Error).message}`));
       }
     }
     // A persisted `--db` store is left behind as a portable artifact, but the

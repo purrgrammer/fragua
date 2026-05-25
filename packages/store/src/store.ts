@@ -38,6 +38,7 @@ import {
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
+import { BUNDLE_VERSION, type BundleManifest, type TarEntry, writeTar } from "./bundle.ts";
 import {
   deleteDaemonLock,
   deleteServerEndpoint,
@@ -80,7 +81,7 @@ import {
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
-import { applyCreationPragmas, applyPragmas, EVENT_CONTRACT_VERSION } from "./pragmas.ts";
+import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION, EVENT_CONTRACT_VERSION } from "./pragmas.ts";
 import {
   type ProviderConfigDbRow,
   deleteProviderConfig as queryDeleteProviderConfig,
@@ -1250,6 +1251,50 @@ export class SqliteStore implements IEventStore {
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec("VACUUM");
     this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
+  /** Export `runId` as a portable `.fragua` bundle (db-import.md): a
+   * manifest-first tar carrying only the portable subset — run_state, events,
+   * messages, artifacts, the content-addressed workflow, and the referenced
+   * blob bytes. Secret + machine-local tables are never read, so the artifact
+   * is credential-free by construction (no scrub). `fraguaVersion` is stamped
+   * for the import-time compatibility check (the store doesn't know the CLI
+   * version).
+   *
+   * Blob coverage is the run's artifacts; message/event spill blobs are a
+   * follow-up — import validates FK closure, so a gap is a clear error, never
+   * silent corruption. */
+  exportRunBundle(runId: string, opts: { fraguaVersion: string }): Uint8Array {
+    const run = this.getState(runId);
+    if (run == null) throw new Error(`exportRunBundle: run not found: ${runId}`);
+    const wf = this.getWorkflow(run.workflowSha);
+    if (wf == null) throw new Error(`exportRunBundle: workflow ${run.workflowSha} missing for run ${runId}`);
+
+    const artifacts = this.listArtifacts(runId);
+    const shas = [...new Set(artifacts.map((a) => a.blobSha))].sort();
+    const blobEntries: TarEntry[] = [];
+    const blobManifest: { sha256: string; size: number }[] = [];
+    for (const sha of shas) {
+      const bytes = this.blobs.get(sha);
+      blobEntries.push({ name: `blobs/${sha}`, data: bytes });
+      blobManifest.push({ sha256: sha, size: bytes.length });
+    }
+
+    const manifest: BundleManifest = {
+      bundleVersion: BUNDLE_VERSION,
+      fraguaVersion: opts.fraguaVersion,
+      contractVersion: EVENT_CONTRACT_VERSION,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      irVersion: wf.irVersion,
+      run,
+      workflow: { sha: wf.sha, name: wf.name, source: wf.source, ir: wf.ir, irVersion: wf.irVersion },
+      events: this.getEvents(runId),
+      messages: this.getMessages(runId),
+      artifacts,
+      blobs: blobManifest,
+    };
+    const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+    return writeTar([{ name: "manifest.json", data: manifestBytes }, ...blobEntries]);
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {
