@@ -14,6 +14,7 @@ import { AlertCircle } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   adjustBudget,
   adjustGoalGate,
@@ -28,6 +29,29 @@ import { toast, toastError } from "@/lib/toast";
 
 export interface RunPausedNoticeProps {
   runId: string;
+  /** Bumps once per SSE frame (the parent's `totalEvents`). Folded into the
+   * events query key so the notice refetches when the pause fact lands —
+   * without it the separate query can serve pre-pause events and render
+   * nothing until a manual refresh. */
+  eventEpoch?: number;
+}
+
+/** Pauses that are genuine errors / wedged states get the destructive
+ * (red) treatment. Expected gates — operator stops, budget ceilings, auto
+ * retries, cap exhaustion — are routine control-plane events, not failures,
+ * so they render on the neutral surface. */
+const DESTRUCTIVE_REASONS = new Set<PauseReason>([
+  "provider_error",
+  "payment_required",
+  "abort_loop",
+  "provider_exhausted",
+  "engine_incompatible",
+]);
+
+/** Budget amounts: cost to exactly 2 decimals with a `$`, tokens as a
+ * grouped integer. Anything more precise is noise in the UI. */
+function formatBudgetAmount(metric: "cost" | "tokens", value: number): string {
+  return metric === "cost" ? `$${value.toFixed(2)}` : value.toLocaleString();
 }
 
 type PausePayload =
@@ -224,7 +248,8 @@ function BudgetActions({
   onAdjustBudget: RenderCtx["onAdjustBudget"];
 }): JSX.Element {
   const inputId = useId();
-  const [draft, setDraft] = useState<string>(String(payload.limit));
+  const isCost = payload.metric === "cost";
+  const [draft, setDraft] = useState<string>(isCost ? payload.limit.toFixed(2) : String(payload.limit));
   const parsed = Number(draft);
   // Any positive finite number is a valid adjustment. The operator may
   // submit the same limit (re-pause immediately) or a lower one (also
@@ -232,34 +257,28 @@ function BudgetActions({
   // text "Raise & Resume" + the input min carry the UX nudge.
   const valid = Number.isFinite(parsed) && parsed > 0;
   return (
-    <div className="col-start-2 mt-3 flex flex-col gap-2">
+    <div className="col-start-2 mt-3 flex flex-col gap-3">
       <div className="flex items-center gap-2 text-sw-xs text-sw-muted">
         <label htmlFor={inputId} className="shrink-0">
-          New {payload.metric} limit:
+          New {payload.metric} limit
         </label>
-        <input
+        <Input
           id={inputId}
           type="number"
           inputMode="decimal"
-          step={payload.metric === "cost" ? "0.01" : "1"}
+          step={isCost ? "0.01" : "1"}
           min={payload.limit}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           disabled={busy}
           data-testid="run-paused-budget-input"
-          className="w-32 rounded-sw-card border border-sw-border bg-sw-bg px-2 py-1 text-sw-text focus:outline-none"
+          className="w-28"
         />
-        <span className="text-sw-muted">(current {payload.limit})</span>
+        <span>current {formatBudgetAmount(payload.metric, payload.limit)}</span>
       </div>
       <div className="flex gap-2">
-        <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel} data-testid="run-paused-cancel">
-          Cancel
-        </Button>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={onResume} data-testid="run-paused-resume">
-          Resume as-is
-        </Button>
         <Button
-          variant="outline"
+          variant="default"
           size="sm"
           disabled={busy || !valid}
           onClick={async () => {
@@ -267,9 +286,19 @@ function BudgetActions({
             onResume();
           }}
           data-testid="run-paused-raise-resume"
-          title={valid ? `Raise to ${parsed} and resume` : "Enter a value greater than the current limit"}
+          title={
+            valid
+              ? `Raise to ${formatBudgetAmount(payload.metric, parsed)} and resume`
+              : "Enter a value greater than the current limit"
+          }
         >
-          Raise &amp; Resume
+          Raise &amp; resume
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onResume} data-testid="run-paused-resume">
+          Resume as-is
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel} data-testid="run-paused-cancel">
+          Cancel
         </Button>
       </div>
     </div>
@@ -301,12 +330,12 @@ function CapAdjustActions({
   const parsed = Number(draft);
   const valid = Number.isFinite(parsed) && parsed > 0;
   return (
-    <div className="col-start-2 mt-3 flex flex-col gap-2">
+    <div className="col-start-2 mt-3 flex flex-col gap-3">
       <div className="flex items-center gap-2 text-sw-xs text-sw-muted">
         <label htmlFor={inputId} className="shrink-0">
-          New {unit} limit:
+          New {unit} limit
         </label>
-        <input
+        <Input
           id={inputId}
           type="number"
           inputMode="numeric"
@@ -316,19 +345,13 @@ function CapAdjustActions({
           onChange={(e) => setDraft(e.target.value)}
           disabled={busy}
           data-testid="run-paused-cap-input"
-          className="w-32 rounded-sw-card border border-sw-border bg-sw-bg px-2 py-1 text-sw-text focus:outline-none"
+          className="w-28"
         />
-        <span className="text-sw-muted">(current {currentLimit})</span>
+        <span>current {currentLimit.toLocaleString()}</span>
       </div>
       <div className="flex gap-2">
-        <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel} data-testid="run-paused-cancel">
-          Cancel
-        </Button>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={onResume} data-testid="run-paused-resume">
-          Resume as-is
-        </Button>
         <Button
-          variant="outline"
+          variant="default"
           size="sm"
           disabled={busy || !valid}
           onClick={async () => {
@@ -338,7 +361,13 @@ function CapAdjustActions({
           data-testid="run-paused-raise-resume"
           title={valid ? `Raise to ${parsed} and resume` : "Enter a value greater than the current limit"}
         >
-          Raise &amp; Resume
+          Raise &amp; resume
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onResume} data-testid="run-paused-resume">
+          Resume as-is
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel} data-testid="run-paused-cancel">
+          Cancel
         </Button>
       </div>
     </div>
@@ -423,14 +452,12 @@ const RENDERERS: Renderers = {
     actions: <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} />,
   }),
   budget: ({ payload, ctx }) => {
-    const unit = payload.metric === "cost" ? "$" : "";
     return {
       title: "Budget reached — paused",
       body: (
         <span data-testid="run-paused-message">
-          Budget reached: {payload.scope} {payload.metric} {unit}
-          {payload.actual} ≥ {unit}
-          {payload.limit}.
+          {payload.scope} {payload.metric} reached {formatBudgetAmount(payload.metric, payload.actual)} of{" "}
+          {formatBudgetAmount(payload.metric, payload.limit)}. Raise the limit to continue.
         </span>
       ),
       actions: (
@@ -576,10 +603,15 @@ function renderPause(payload: PausePayload, ctx: RenderCtx): RenderOutput {
   return renderer({ payload: payload as never, ctx });
 }
 
-export function RunPausedNotice({ runId }: RunPausedNoticeProps): JSX.Element | null {
+export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps): JSX.Element | null {
   const qc = useQueryClient();
   const eventsQuery = useQuery({
-    queryKey: ["run-paused-events", runId],
+    // `eventEpoch` (parent's SSE frame counter) is in the key so a pause
+    // fact landing live forces a refetch — the notice mounts the moment the
+    // overlay flips to paused, and this guarantees it reads the fresh trail
+    // rather than a cached pre-pause one. While paused no frames arrive, so
+    // the key is stable and we don't refetch in a loop.
+    queryKey: ["run-paused-events", runId, eventEpoch],
     queryFn: () => getRunEvents(runId),
     enabled: !!runId,
     staleTime: 5_000,
@@ -607,7 +639,10 @@ export function RunPausedNotice({ runId }: RunPausedNoticeProps): JSX.Element | 
     mutationFn: (input: { scope: "node" | "run"; metric: "cost" | "tokens"; newLimit: number }) =>
       adjustBudget(runId, input.scope, input.metric, input.newLimit),
     onSuccess: (_, input) => {
-      const label = input.metric === "cost" ? `$${input.newLimit}` : `${input.newLimit} tokens`;
+      const label =
+        input.metric === "cost"
+          ? formatBudgetAmount("cost", input.newLimit)
+          : `${input.newLimit.toLocaleString()} tokens`;
       toast.success(`Budget raised to ${label}`);
     },
     onError: (err) => toastError(err),
@@ -657,8 +692,9 @@ export function RunPausedNotice({ runId }: RunPausedNoticeProps): JSX.Element | 
   };
   const { title, body, actions } = renderPause(payload, ctx);
 
+  const variant = DESTRUCTIVE_REASONS.has(payload.reason) ? "destructive" : "default";
   return (
-    <Alert variant="destructive" data-testid="run-paused-notice" data-pause-reason={payload.reason}>
+    <Alert variant={variant} data-testid="run-paused-notice" data-pause-reason={payload.reason}>
       <AlertCircle />
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>{body}</AlertDescription>

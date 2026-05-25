@@ -226,6 +226,64 @@ describe("RunPausedNotice", () => {
     }
   });
 
+  it("renders budget amounts with exactly two decimals and seeds the input to 2dp", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "budget", nodeId: "implement", scope: "run", metric: "cost", limit: 0.3, actual: 0.4567 },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      // actual/limit rendered to 2dp with a leading $, no extra precision.
+      expect(message.textContent).toContain("$0.46");
+      expect(message.textContent).toContain("$0.30");
+      expect(message.textContent).not.toContain("0.4567");
+      const input = (await findByTestId("run-paused-budget-input")) as HTMLInputElement;
+      expect(input.value).toBe("0.30");
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not style a budget pause as destructive (it is an expected gate, not an error)", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "budget", nodeId: "implement", scope: "run", metric: "cost", limit: 1, actual: 2 },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const notice = await findByTestId("run-paused-notice");
+      expect(notice.className).not.toContain("destructive");
+    } finally {
+      restore();
+    }
+  });
+
+  it("styles a provider_error pause as destructive", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () => json(PROVIDER_ERROR_EVENTS),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const notice = await findByTestId("run-paused-notice");
+      expect(notice.className).toContain("destructive");
+    } finally {
+      restore();
+    }
+  });
+
   it("Resume button POSTs intent.resume", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     const { restore } = installFetchMock({
