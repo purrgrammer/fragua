@@ -16,11 +16,11 @@ export interface RunDiffTabProps {
   run?: RunDetail;
 }
 
-/** Human-readable label for a snapshot entry in the selector. */
-function snapshotLabel(snap: RunSnapshot, index: number): string {
-  const kind = snap.label === "hitl" ? "HITL" : snap.label === "terminal" ? "terminal" : "step";
-  const node = snap.nodeId ? ` · ${snap.nodeId}` : "";
-  return `#${index + 1} ${kind}${node}`;
+/** Selector label for a snapshot: the step (node) name. The terminal /
+ *  HITL boundaries carry no node, so they fall back to a one-word kind. */
+export function snapshotLabel(snap: RunSnapshot): string {
+  if (snap.nodeId) return snap.nodeId;
+  return snap.label === "hitl" ? "HITL" : "terminal";
 }
 
 export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
@@ -63,7 +63,12 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
   return (
     <section className="flex min-h-0 flex-col gap-3 p-3" data-testid="run-diff-section">
       <div className="flex min-w-0 items-center gap-3">
-        <SnapshotSelector snapshots={snapshots} selectedEventIdx={selectedEventIdx} onChange={setSelectedEventIdx} />
+        <SnapshotSelector
+          snapshots={snapshots}
+          selectedEventIdx={selectedEventIdx}
+          latestEventIdx={latest?.eventIdx ?? null}
+          onChange={setSelectedEventIdx}
+        />
         {stat && (
           <ChangeStat
             className="flex-1 text-sw-sm"
@@ -96,15 +101,27 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
 
 interface SnapshotSelectorProps {
   snapshots: RunSnapshot[];
+  /** `null` ⇒ following the newest snapshot. */
   selectedEventIdx: number | null;
+  /** `eventIdx` of the newest snapshot — what `null` resolves to. */
+  latestEventIdx: number | null;
   onChange: (eventIdx: number | null) => void;
 }
 
-function SnapshotSelector({ snapshots, selectedEventIdx, onChange }: SnapshotSelectorProps): JSX.Element {
-  const value = selectedEventIdx === null ? "latest" : String(selectedEventIdx);
+function SnapshotSelector({
+  snapshots,
+  selectedEventIdx,
+  latestEventIdx,
+  onChange,
+}: SnapshotSelectorProps): JSX.Element {
+  // `null` (follow-latest) resolves to the newest snapshot — there's no
+  // separate "Latest" row, since for a terminal run it would duplicate the
+  // terminal snapshot. Picking the newest row re-enters follow-latest.
+  const value = String(selectedEventIdx ?? latestEventIdx ?? -1);
 
   function handleChange(v: string): void {
-    onChange(v === "latest" ? null : Number(v));
+    const idx = Number(v);
+    onChange(idx === latestEventIdx ? null : idx);
   }
 
   return (
@@ -113,16 +130,13 @@ function SnapshotSelector({ snapshots, selectedEventIdx, onChange }: SnapshotSel
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="latest" data-testid="snapshot-option-latest">
-          Latest
-        </SelectItem>
-        {snapshots.map((snap, i) => (
+        {snapshots.map((snap) => (
           <SelectItem
             key={snap.eventIdx}
             value={String(snap.eventIdx)}
             data-testid={`snapshot-option-${snap.eventIdx}`}
           >
-            {snapshotLabel(snap, i)}
+            {snapshotLabel(snap)}
           </SelectItem>
         ))}
       </SelectContent>

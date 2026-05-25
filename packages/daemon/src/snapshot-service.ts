@@ -70,6 +70,8 @@ export async function captureBoundarySnapshot(
             commitSha: snap.commitSha,
             parentSnap: snap.parentSnap,
             headSha: snap.headSha,
+            committed: snap.committed ?? null,
+            uncommitted: snap.uncommitted ?? null,
           };
     deps.store.appendObservabilityEvents(runId, [{ type: "snapshot.captured", payload }]);
   } catch (err) {

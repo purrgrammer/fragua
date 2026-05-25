@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { act, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { snapshotLabel } from "../../src/components/RunDiffTab.tsx";
 import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
@@ -1041,6 +1042,14 @@ steps:
       } finally {
         mock.restore();
       }
+    });
+
+    it("labels a snapshot by its step (node) name — no index, kind, or 'latest' marker", () => {
+      // A step snapshot shows just its node name; the node-less terminal /
+      // HITL boundaries fall back to a one-word kind.
+      expect(snapshotLabel(snapshots[0]!)).toBe("build");
+      expect(snapshotLabel(snapshots[1]!)).toBe("review");
+      expect(snapshotLabel(snapshots[2]!)).toBe("terminal");
     });
 
     it("fetches the diff for the latest snapshot by default (eventIdx of last snapshot)", async () => {

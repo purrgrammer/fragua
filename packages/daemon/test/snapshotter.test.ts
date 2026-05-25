@@ -71,6 +71,20 @@ describe("captureSnapshot", () => {
     expect(g(repo, "rev-parse", "HEAD")).toBe(base); // HEAD untouched
   });
 
+  test("step boundary computes the uncommitted delta (feeds the per-step Diff selector)", async () => {
+    const base = g(repo, "rev-parse", "HEAD");
+    await writeFile(join(repo, "a.txt"), "A changed at this step\n");
+    const res = expectSnapshot(
+      await captureSnapshot({ worktree: repo, runId: "r-step", baseGitSha: base, parentSnap: base, boundary: "step" }),
+    );
+    expect(res.uncommitted).not.toBeNull();
+    expect(res.uncommitted?.filesChanged).toBeGreaterThanOrEqual(1);
+    expect(res.committed).toBeNull();
+    // headRef / diffBaseSha stay hitl/terminal-only — not recorded per step.
+    expect(res.headRef).toBeUndefined();
+    expect(res.diffBaseSha).toBeUndefined();
+  });
+
   test("commit-as-you-go → committed delta + heads ref", async () => {
     const base = g(repo, "rev-parse", "HEAD");
     await writeFile(join(repo, "b.txt"), "B\n");

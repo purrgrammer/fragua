@@ -177,34 +177,38 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
 
     const result: SnapshotResult = { treeSha, commitSha, parentSnap, headSha };
 
+    // Diff stats feed the Diff selector and the inbox change-stat — computed
+    // at EVERY boundary (step included) so each selectable snapshot shows its
+    // delta, not just the hitl/terminal ones. Honest diff base: base when the
+    // workflow committed on top of it, the fork point when it checked out an
+    // unrelated line. merge-base(base, HEAD) == base exactly when base is an
+    // ancestor of HEAD; skip it (and the committed diff) when HEAD never moved
+    // off base, which is both the common case and trivially a null delta.
+    const headMovedFromBase = baseGitSha !== "" && headSha !== baseGitSha;
+    let diffBaseSha = baseGitSha;
+    if (headMovedFromBase) {
+      try {
+        diffBaseSha = await git(worktree, ["merge-base", baseGitSha, "HEAD"]);
+      } catch {
+        diffBaseSha = baseGitSha;
+      }
+    }
+    result.committed = headMovedFromBase
+      ? parseShortstat(await git(worktree, ["diff", "--shortstat", diffBaseSha, headSha]))
+      : null;
+    result.uncommitted = parseShortstat(await git(worktree, ["diff", "--shortstat", headSha, commitSha]));
+
     if (boundary !== "step") {
+      // Branch label + honest diff base — surfaced in the inbox / row feed,
+      // not needed per-step.
       let headRef: string | null = null;
       try {
         headRef = (await git(worktree, ["symbolic-ref", "--short", "HEAD"])) || null;
       } catch {
         headRef = null; // detached / tag / unborn
       }
-
-      // Honest diff base: base when the workflow committed on top of it, the
-      // fork point when it checked out an unrelated line. merge-base(base,
-      // HEAD) == base exactly when base is an ancestor of HEAD.
-      let diffBaseSha = baseGitSha;
-      if (baseGitSha !== "") {
-        try {
-          diffBaseSha = await git(worktree, ["merge-base", baseGitSha, "HEAD"]);
-        } catch {
-          diffBaseSha = baseGitSha;
-        }
-      }
-
-      const committed =
-        baseGitSha !== "" ? parseShortstat(await git(worktree, ["diff", "--shortstat", diffBaseSha, headSha])) : null;
-      const uncommitted = parseShortstat(await git(worktree, ["diff", "--shortstat", headSha, commitSha]));
-
       result.headRef = headRef;
       result.diffBaseSha = diffBaseSha;
-      result.committed = committed;
-      result.uncommitted = uncommitted;
     }
 
     return result;

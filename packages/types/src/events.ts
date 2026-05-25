@@ -373,8 +373,8 @@ export type InboxStatus = "pending" | "acted" | "discarded";
 
 /** Payload of the `snapshot.captured` observability event — a per-step (nodeId
  * set) or HITL (nodeId null) worktree snapshot. Addressed by `commitSha`; the
- * run's single tip ref keeps it reachable. `headRef` / `diffBaseSha` / stats
- * are present at HITL, omitted per step. */
+ * run's single tip ref keeps it reachable. `committed` / `uncommitted` stats
+ * are present at every boundary; `headRef` / `diffBaseSha` only at HITL. */
 export type SnapshotCapturedData = {
   runId: string;
   eventIdx: number;
