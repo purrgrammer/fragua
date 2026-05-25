@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
+import { FRAGUA_VERSION } from "../version.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
 import { startServer } from "./serve.ts";
@@ -69,7 +70,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   //    `web.port` from ~/.fragua/config.yaml > DEFAULT_WEB_PORT (6767).
   let serverHandle: Awaited<ReturnType<typeof startServer>>;
   try {
-    const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir, version: HARNESS_VERSION };
+    const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir, version: FRAGUA_VERSION };
     if (opts.port !== undefined) startOpts.port = opts.port;
     serverHandle = await startServer(startOpts);
   } catch (err) {
@@ -127,8 +128,6 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
 
   return 0;
 }
-
-const HARNESS_VERSION = "0.0.0"; // TODO: read from package.json when discovery clients care
 
 /** OSC 8 terminal hyperlink. Modern terminals (iTerm2, macOS Terminal,
  *  kitty, wezterm, alacritty, vscode) render it as a click-target;

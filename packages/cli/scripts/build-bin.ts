@@ -18,11 +18,13 @@
 //      committed, and in CI worktrees. The restore runs in a finally so
 //      a failed compile still leaves the working copy in a clean state.
 //
-// Defaults: outfile=`dist/fragua` at the repo root. Override with `--out
-// <path>`. `--keep-assets` skips the restore (debugging).
+// Defaults: outfile=`dist/fragua` at the repo root, host-platform target.
+// Override the path with `--out <path>` and cross-compile with `--target
+// <bun-target>` (e.g. `bun-linux-x64` for GitHub-hosted runners — see
+// `bun build --compile --help`). `--keep-assets` skips the restore (debugging).
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -51,36 +53,66 @@ export const EMBEDDED_WEB_ASSETS: Readonly<Record<string, string>> = {};
 const args = parseArgs(process.argv.slice(2));
 const outfile = resolve(args.out ?? DEFAULT_OUTFILE);
 const keepAssets = args.keepAssets;
+const target = args.target ?? "bun";
+const noWeb = args.noWeb;
+// Version stamped into the binary: `--version` (release passes the tag),
+// else the root package.json version. `bun build --define` folds it into the
+// `process.env.FRAGUA_VERSION` read in `src/version.ts`. Leading `v` stripped
+// so `fragua --version` reports `0.1.0`, not `v0.1.0`.
+const version = (args.version ?? readRepoVersion()).replace(/^v/, "");
 
-console.log(`fragua: compiling binary → ${relative(process.cwd(), outfile)}`);
+console.log(
+  `fragua: compiling binary → ${relative(process.cwd(), outfile)}${noWeb ? " (headless, no web bundle)" : ""}`,
+);
 
 try {
-  // 1. Build the web bundle. We always rebuild rather than relying on
-  //    mtime checks — the cost is ~5s and it guarantees the embedded
-  //    bytes match the source tree at compile time.
-  console.log("  [1/3] building web bundle (vite)…");
-  await runOrExit("bun", ["run", "--filter", "@fragua/web", "build"], { cwd: REPO_ROOT });
+  if (noWeb) {
+    // Headless build: skip vite + manifest, compile against the empty stub.
+    // `fragua ci` / `daemon` / `run` need no UI; only `harness` / `serve`
+    // do, and those aren't the CI binary's job. Write the stub explicitly so
+    // the result is web-free regardless of the working tree's current state.
+    console.log("  [1/2] --no-web: skipping web bundle (empty asset stub)");
+    writeFileSync(WEB_ASSETS_FILE, STUB_CONTENTS);
+  } else {
+    // 1. Build the web bundle. We always rebuild rather than relying on
+    //    mtime checks — the cost is ~5s and it guarantees the embedded
+    //    bytes match the source tree at compile time.
+    console.log("  [1/3] building web bundle (vite)…");
+    await runOrExit("bun", ["run", "--filter", "@fragua/web", "build"], { cwd: REPO_ROOT });
 
-  // 2. Regenerate the embedded-assets manifest. Walk the dist tree,
-  //    write one `import` per file plus the populated map.
-  console.log("  [2/3] regenerating web-assets manifest…");
-  if (!existsSync(WEB_DIST_DIR)) {
-    console.error(`  no dist at ${WEB_DIST_DIR} — vite build did not produce output`);
-    process.exit(1);
+    // 2. Regenerate the embedded-assets manifest. Walk the dist tree,
+    //    write one `import` per file plus the populated map.
+    console.log("  [2/3] regenerating web-assets manifest…");
+    if (!existsSync(WEB_DIST_DIR)) {
+      console.error(`  no dist at ${WEB_DIST_DIR} — vite build did not produce output`);
+      process.exit(1);
+    }
+    const files = listDistFiles(WEB_DIST_DIR);
+    writeFileSync(WEB_ASSETS_FILE, renderManifest(files));
+    console.log(`         embedded ${files.length} files`);
   }
-  const files = listDistFiles(WEB_DIST_DIR);
-  writeFileSync(WEB_ASSETS_FILE, renderManifest(files));
-  console.log(`         embedded ${files.length} files`);
 
-  // 3. Compile. --target=bun is the default but spelled out so the intent
-  //    is obvious. `--minify` shaves ~30% off the binary; `--sourcemap`
-  //    omitted because the use case is a shippable artefact, not a
-  //    debuggable one.
-  console.log("  [3/3] bun build --compile…");
+  // Compile. --target defaults to `bun` (host) but takes any compile target
+  // so the release matrix can cross-compile (`bun-linux-x64`, …). `--minify`
+  // shaves ~30% off the binary; `--sourcemap` omitted because the use case is
+  // a shippable artefact, not a debuggable one.
+  console.log(`  [${noWeb ? "2/2" : "3/3"}] bun build --compile (--target=${target}, v${version})…`);
   mkdirSync(dirname(outfile), { recursive: true });
-  await runOrExit("bun", ["build", "--compile", "--target=bun", "--minify", CLI_ENTRY, "--outfile", outfile], {
-    cwd: REPO_ROOT,
-  });
+  await runOrExit(
+    "bun",
+    [
+      "build",
+      "--compile",
+      `--target=${target}`,
+      "--minify",
+      "--define",
+      `process.env.FRAGUA_VERSION=${JSON.stringify(version)}`,
+      CLI_ENTRY,
+      "--outfile",
+      outfile,
+    ],
+    { cwd: REPO_ROOT },
+  );
 
   const sizeMb = (statSync(outfile).size / 1024 / 1024).toFixed(1);
   console.log(`✓ wrote ${relative(process.cwd(), outfile)} (${sizeMb} MB)`);
@@ -95,11 +127,22 @@ try {
 
 interface CliArgs {
   out?: string;
+  target?: string;
+  version?: string;
   keepAssets: boolean;
+  noWeb: boolean;
+}
+
+function readRepoVersion(): string {
+  try {
+    return JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const out: CliArgs = { keepAssets: false };
+  const out: CliArgs = { keepAssets: false, noWeb: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--out" || a === "-o") {
@@ -109,11 +152,32 @@ function parseArgs(argv: string[]): CliArgs {
         process.exit(1);
       }
       out.out = next;
+    } else if (a === "--target" || a === "-t") {
+      const next = argv[++i];
+      if (next == null) {
+        console.error("--target requires a bun compile target (e.g. bun-linux-x64)");
+        process.exit(1);
+      }
+      out.target = next;
+    } else if (a === "--version") {
+      const next = argv[++i];
+      if (next == null) {
+        console.error("--version requires a version string (e.g. 0.1.0)");
+        process.exit(1);
+      }
+      out.version = next;
+    } else if (a === "--no-web") {
+      out.noWeb = true;
     } else if (a === "--keep-assets") {
       out.keepAssets = true;
     } else if (a === "--help" || a === "-h") {
-      console.log("usage: build-bin.ts [--out <path>] [--keep-assets]");
+      console.log(
+        "usage: build-bin.ts [--out <path>] [--target <bun-target>] [--version <v>] [--no-web] [--keep-assets]",
+      );
       console.log("  --out PATH      output binary path (default dist/fragua)");
+      console.log("  --target TARGET bun compile target (default bun = host; e.g. bun-linux-x64)");
+      console.log("  --version V     version stamped into the binary (default: root package.json)");
+      console.log("  --no-web        skip the web bundle (smaller CI binary; no harness/serve UI)");
       console.log("  --keep-assets   skip restoring the web-assets stub after compile");
       process.exit(0);
     } else {
