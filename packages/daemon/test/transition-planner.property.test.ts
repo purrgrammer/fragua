@@ -19,6 +19,13 @@ import type { RunState } from "@fragua/store";
 import fc from "fast-check";
 import { planTransition, type TransitionInput } from "../src/transition-planner.ts";
 import { arbGraphWithCurrentNode } from "./arbitraries/graph.ts";
+import {
+  arbAccounting,
+  arbHandlerResult,
+  arbProceedDecision,
+  arbYieldHuman,
+  DEFAULT_ROUTES,
+} from "./transition-arbitraries.ts";
 
 // planTransition reads only currentNode / routing / workflowSha / metrics off
 // RunState; the rest is cast away (mirrors result-to-facts.route.test).
@@ -35,80 +42,24 @@ function mkState(currentNode: string): RunState {
   } as unknown as RunState;
 }
 
-const arbAccounting = fc.record({
-  turnBilled: fc.nat({ max: 100_000 }),
-  totalCostUsd: fc.double({ min: 0, max: 100, noNaN: true }),
-  totalInputTokens: fc.nat({ max: 100_000 }),
-  totalOutputTokens: fc.nat({ max: 100_000 }),
-  totalCacheReadTokens: fc.nat({ max: 100_000 }),
-  totalCacheWriteTokens: fc.nat({ max: 100_000 }),
-  lastModel: fc.option(fc.constantFrom("claude-opus-4-7", "gpt-5"), { nil: undefined }),
-});
-
-// nextNode is left unset so edge selection fires against the generated graph
-// (Phase 1 graphs declare no routes, so `route` stays unset too).
-const arbTransition = fc.record({
-  kind: fc.constant<"transition">("transition"),
-  outcomeStatus: fc.constantFrom<"success" | "fail" | "retry">("success", "fail", "retry"),
-  tokens: fc.nat({ max: 100_000 }),
-  costUsd: fc.double({ min: 0, max: 100, noNaN: true }),
-});
-
-const arbYieldHuman = fc.record({
-  kind: fc.constant<"yield_human">("yield_human"),
-  text: fc.string(),
-  routes: fc.array(fc.constantFrom("approve", "reject", "revise"), { minLength: 1, maxLength: 3 }),
-});
-
-const arbHalt = fc.record({
-  kind: fc.constant<"halt">("halt"),
-  reason: fc.constantFrom<"budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded">(
-    "budget",
-    "max_loops",
-    "error",
-    "goal_gate_unsatisfied",
-    "max_retries_exceeded",
-  ),
-  detail: fc.option(fc.string(), { nil: undefined }),
-});
-
-const arbPauseProvider = fc.record({
-  kind: fc.constant<"pause_provider">("pause_provider"),
-  httpStatus: fc.constantFrom<number | null>(402, 429, 500, 503, null),
-  provider: fc.constantFrom("anthropic", "openai"),
-  errorMessage: fc.string(),
-  retryAfterMs: fc.option(fc.nat({ max: 60_000 }), { nil: undefined }),
-});
-
-const arbHandlerResult = fc.oneof(
-  arbTransition,
-  arbYieldHuman,
-  arbHalt,
-  arbPauseProvider,
-) as fc.Arbitrary<HandlerResult>;
-
-const arbDecision = fc
-  .record({
-    routingDelta: fc.dictionary(fc.constantFrom("k1", "k2", "internal.x"), fc.oneof(fc.nat(), fc.string()), {
-      maxKeys: 3,
-    }),
-    shouldPauseAfterDispatch: fc.boolean(),
-    appliedSeqs: fc.array(fc.nat({ max: 1000 }), { maxLength: 5 }),
-  })
-  .map((d) => ({
-    kind: "proceed" as const,
-    routingDelta: d.routingDelta,
-    shouldPause: false,
-    shouldPauseAfterDispatch: d.shouldPauseAfterDispatch,
-    appliedSeqs: d.appliedSeqs,
-    dropped: [],
-  })) as fc.Arbitrary<TransitionInput["decision"]>;
+// Handler-result, accounting, and proceed-decision arbitraries live in
+// `./transition-arbitraries.ts` — the richer, shared input space (every
+// HandlerResult arm with its full field surface, both the edge-selection
+// `nextNode`-unset and verbatim-`nextNode` paths). Graph + state stay here
+// because they bind the current node.
 
 /** Compose a full TransitionInput from a (parameterizable) handler-result
  * arbitrary, so HITL-only properties can narrow to yield_human. */
 function inputArb(resultArb: fc.Arbitrary<HandlerResult>): fc.Arbitrary<TransitionInput> {
   return fc
-    .tuple(arbGraphWithCurrentNode, resultArb, arbDecision, arbAccounting, fc.nat({ max: 1e9 }), fc.nat({ max: 10 }))
+    .tuple(
+      arbGraphWithCurrentNode,
+      resultArb,
+      arbProceedDecision,
+      arbAccounting,
+      fc.nat({ max: 1e9 }),
+      fc.nat({ max: 10 }),
+    )
     .map(([gn, handlerResult, decision, accounting, now, iteration]) => {
       const state = mkState(gn.nodeId);
       return {
@@ -126,7 +77,7 @@ function inputArb(resultArb: fc.Arbitrary<HandlerResult>): fc.Arbitrary<Transiti
     });
 }
 
-const arbInput = inputArb(arbHandlerResult);
+const arbInput = inputArb(arbHandlerResult());
 
 const factTypes = (plan: { facts: { type: string }[] }): Set<string> => new Set(plan.facts.map((f) => f.type));
 
@@ -281,7 +232,7 @@ describe("planTransition — properties", () => {
 
   test("F: yield_human ⇒ run_paused_human, no node_started, no terminal (the HITL pause)", () => {
     fc.assert(
-      fc.property(inputArb(arbYieldHuman), (input) => {
+      fc.property(inputArb(arbYieldHuman(DEFAULT_ROUTES)), (input) => {
         const t = factTypes(planTransition(input));
         expect(t.has("fact.run_paused_human")).toBe(true);
         expect(t.has("fact.node_started")).toBe(false);
