@@ -163,6 +163,37 @@ const arbRouteCase = fc
     return { graph, route: `r${chosen % m}`, expectedTarget: targets[chosen % m]! };
   });
 
+// Budget breach: a 2-node spine (n1 → n2 → exit) with a run-level cost ceiling
+// the dispatched node n1 overspends. n1's transition is non-terminal (→ n2), so
+// node_started is emitted then swapped by the budget gate — the one
+// planTransition rewrite branch the broad inputs reach only incidentally.
+// policy "stop" halts, "pause" pauses; both keep node_completed.
+const arbBudgetCase = fc
+  .record({
+    policy: fc.constantFrom<"stop" | "pause">("stop", "pause"),
+    budgetUsd: fc.double({ min: 0.01, max: 1, noNaN: true }),
+    overspend: fc.double({ min: 1.01, max: 10, noNaN: true }),
+  })
+  .map(({ policy, budgetUsd, overspend }) => {
+    const graph: Graph = {
+      id: "g",
+      directed: true,
+      attrs: { budget_usd: budgetUsd, budget_policy: policy },
+      nodes: {
+        start: { id: "start", type: "start", attrs: { label: "start" } },
+        n1: { id: "n1", type: "llm", attrs: { label: "n1" } },
+        n2: { id: "n2", type: "llm", attrs: { label: "n2" } },
+        exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
+      },
+      edges: [
+        { from: "start", to: "n1", attrs: {} },
+        { from: "n1", to: "n2", attrs: {} },
+        { from: "n2", to: "exit", attrs: {} },
+      ],
+    };
+    return { graph, policy, costUsd: budgetUsd * overspend };
+  });
+
 describe("planTransition — properties", () => {
   test("A: pure — same input ⇒ equal plan, and handlerResult is never mutated", () => {
     fc.assert(
@@ -301,6 +332,51 @@ describe("planTransition — properties", () => {
         expect(payload.route).toBe(route);
       }),
       { numRuns: 500 },
+    );
+  });
+
+  test("H: budget breach — stop halts / pause pauses, both keep node_completed", () => {
+    fc.assert(
+      fc.property(arbBudgetCase, ({ graph, policy, costUsd }) => {
+        expect(validate(graph)).toEqual([]); // the constructed budget graph is clean
+        const input: TransitionInput = {
+          state: mkState("n1"),
+          decision: {
+            kind: "proceed",
+            routingDelta: {},
+            shouldPause: false,
+            shouldPauseAfterDispatch: false,
+            appliedSeqs: [],
+            dropped: [],
+          } as TransitionInput["decision"],
+          graph,
+          handlerResult: { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd },
+          accounting: {
+            turnBilled: 0,
+            totalCostUsd: 0,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            totalCacheReadTokens: 0,
+            totalCacheWriteTokens: 0,
+            lastModel: undefined,
+          },
+          effectiveRouting: {},
+          currentNode: "n1",
+          iteration: 0,
+          now: 0,
+          random: () => 0.5,
+        };
+        const plan = planTransition(input);
+        const t = factTypes(plan);
+        // The breaching node ran; its node_completed (spend) survives the swap.
+        expect(t.has("fact.node_completed")).toBe(true);
+        expect(t.has("fact.node_started")).toBe(false);
+        const breached = (type: string): boolean =>
+          plan.facts.some((f) => f.type === type && (f.payload as { reason?: string }).reason === "budget");
+        if (policy === "stop") expect(breached("fact.run_halted")).toBe(true);
+        else expect(breached("fact.run_paused")).toBe(true);
+      }),
+      { numRuns: 300 },
     );
   });
 });

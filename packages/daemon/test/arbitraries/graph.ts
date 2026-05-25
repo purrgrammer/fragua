@@ -25,10 +25,11 @@
 // human (route-keyed exits — the HITL + LLM-directed branch). Any node with a
 // non-empty `routes:` follows the unified routing discipline (E017–E024): all
 // outgoing edges route-keyed, exactly one per declared route, ≥1 forward for
-// exit-reachability, never a goal gate. Threads/summary, budget ceilings, and
-// inputs layer on next.
+// exit-reachability, never a goal gate. Budget ceilings (run-level budget_usd +
+// budget_policy, node-level max_cost_usd/max_tokens) are generated too.
+// Threads/summary and inputs layer on next.
 
-import type { Edge, Graph, Node, NodeAttrs } from "@fragua/core";
+import type { Edge, Graph, GraphAttrs, Node, NodeAttrs } from "@fragua/core";
 import fc from "fast-check";
 
 const MAX_BODY = 6;
@@ -59,6 +60,16 @@ interface NodeSpec {
    * exit, `1..k` = a body node. Route `r0` always takes the spine target to
    * preserve exit-reachability. Fixed-length 2 (max routeCount is 3); sliced. */
   extraRouteTargets: number[];
+  /** llm/tool only — optional per-node cost / token ceilings (the node-level
+   * budget gate). No validator rule beyond W013, so safe to attach freely. */
+  maxCostUsd: number | undefined;
+  maxTokens: number | undefined;
+}
+
+/** Run-level budget (graph attrs). `undefined` = no ceiling. */
+interface BudgetSpec {
+  usd: number;
+  policy: "warn" | "stop" | "pause";
 }
 
 function bodyId(i: number): string {
@@ -76,11 +87,18 @@ function nodeSpec(i: number, k: number): fc.Arbitrary<NodeSpec> {
     failTarget: fc.option(fc.integer({ min: 0, max: k }), { nil: undefined }),
     routeCount: fc.integer({ min: 1, max: 3 }),
     extraRouteTargets: fc.array(fc.integer({ min: 0, max: k }), { minLength: 2, maxLength: 2 }),
+    maxCostUsd: fc.option(fc.double({ min: 0.01, max: 50, noNaN: true }), { nil: undefined }),
+    maxTokens: fc.option(fc.integer({ min: 1, max: 100_000 }), { nil: undefined }),
   });
 }
 
-function buildGraph(specs: readonly NodeSpec[]): Graph {
+function buildGraph(specs: readonly NodeSpec[], budget: BudgetSpec | undefined): Graph {
   const k = specs.length;
+  const graphAttrs: GraphAttrs = {};
+  if (budget !== undefined) {
+    graphAttrs.budget_usd = budget.usd;
+    graphAttrs.budget_policy = budget.policy;
+  }
   const nodes: Record<string, Node> = {
     start: { id: "start", type: "start", attrs: { label: "start" } },
     exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
@@ -118,6 +136,8 @@ function buildGraph(specs: readonly NodeSpec[]): Graph {
       attrs.retry_target = bodyId(spec.retryTargetIdx);
       attrs.max_retries = spec.maxRetries;
     }
+    if (spec.maxCostUsd !== undefined) attrs.max_cost_usd = spec.maxCostUsd;
+    if (spec.maxTokens !== undefined) attrs.max_tokens = spec.maxTokens;
     nodes[id] = { id, type: spec.kind, attrs };
     edges.push({ from: id, to: spineTarget, attrs: {} });
     if (spec.failTarget !== undefined) {
@@ -125,13 +145,26 @@ function buildGraph(specs: readonly NodeSpec[]): Graph {
     }
   }
 
-  return { id: "g", directed: true, attrs: {}, nodes, edges };
+  return { id: "g", directed: true, attrs: graphAttrs, nodes, edges };
 }
 
+const arbBudget: fc.Arbitrary<BudgetSpec | undefined> = fc.option(
+  fc.record({
+    usd: fc.double({ min: 0.01, max: 50, noNaN: true }),
+    policy: fc.constantFrom<"warn" | "stop" | "pause">("warn", "stop", "pause"),
+  }),
+  { nil: undefined },
+);
+
 /** Whole-graph arbitrary (the tier-2 driven-executor harness consumes this). */
-export const arbGraph: fc.Arbitrary<Graph> = fc
-  .integer({ min: 1, max: MAX_BODY })
-  .chain((k) => fc.tuple(...Array.from({ length: k }, (_, idx) => nodeSpec(idx + 1, k))).map(buildGraph));
+export const arbGraph: fc.Arbitrary<Graph> = fc.integer({ min: 1, max: MAX_BODY }).chain((k) =>
+  fc
+    .record({
+      budget: arbBudget,
+      specs: fc.tuple(...Array.from({ length: k }, (_, idx) => nodeSpec(idx + 1, k))),
+    })
+    .map(({ budget, specs }) => buildGraph(specs, budget)),
+);
 
 /** Tier-1 slice for `planTransition`: a generated graph paired with one of its
  * non-terminal (llm/tool/human) nodes as the dispatch's `currentNode`. The
@@ -158,6 +191,12 @@ export function featuresOf(graph: Graph): string[] {
   }
   if (body.some((n) => Array.isArray(n.attrs.routes) && n.attrs.routes.length >= 2)) out.push("has-route-fanout");
   if (body.some((n) => n.attrs.goal_gate === true)) out.push("has-goal-gate");
+  if (
+    graph.attrs.budget_usd !== undefined ||
+    body.some((n) => n.attrs.max_cost_usd !== undefined || n.attrs.max_tokens !== undefined)
+  ) {
+    out.push("has-budget");
+  }
 
   const failEdges = graph.edges.filter((e) => e.attrs.outcome === "fail");
   if (failEdges.length > 0) out.push("has-fail-edge");
