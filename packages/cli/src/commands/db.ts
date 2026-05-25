@@ -2,15 +2,20 @@
 //   vacuum    — reclaim free pages (VACUUM).
 //   gc-blobs  — delete orphaned rows in the `blobs` table (no artifact refs).
 //   backup    — SQLite online backup API into a target path.
+//   migrate   — explicit, consent-driven schema migration (--dry-run prints
+//               the plan). Store-client verbs open WITHOUT migrating and point
+//               the operator here on a version mismatch; the harness/daemon
+//               auto-migrate under their lock. Migrations are transactional +
+//               version-gated, so this is gated on surprise, not correctness.
 
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { SqliteStore } from "@fragua/store";
+import { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
 export interface DbCommandOptions {
-  action: "vacuum" | "gc-blobs" | "backup";
+  action: "vacuum" | "gc-blobs" | "backup" | "migrate";
   cwd?: string;
   /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. */
   dbPath?: string;
@@ -18,6 +23,8 @@ export interface DbCommandOptions {
   to?: string;
   /** For `gc-blobs` — max rows to remove in one pass. */
   limit?: number;
+  /** For `migrate` — print the plan without applying. */
+  dryRun?: boolean;
 }
 
 export async function dbCommand(opts: DbCommandOptions): Promise<number> {
@@ -61,6 +68,58 @@ export async function dbCommand(opts: DbCommandOptions): Promise<number> {
         src.close();
       }
       console.log(chalk.green(`backed up to ${dest}`));
+      return 0;
+    }
+    case "migrate": {
+      // Read the current version WITHOUT mutating. The store-client open mode
+      // (`migrate:false`) throws on an out-of-band version — exactly the case
+      // `db migrate` exists to resolve — so probe the raw row instead.
+      const probe = new Database(storePath, { readonly: true });
+      let current: number | null;
+      try {
+        const hasTable = probe
+          .query("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+          .get();
+        current = hasTable
+          ? (probe.query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1").get()?.version ??
+            null)
+          : null;
+      } finally {
+        probe.close();
+      }
+      if (current === null) {
+        console.error(
+          chalk.red("db migrate: store is uninitialized (no schema_version) — start the harness to create it"),
+        );
+        return 1;
+      }
+      if (current > CURRENT_SCHEMA_VERSION) {
+        console.error(
+          chalk.red(
+            `db migrate: store is v${current}, newer than this binary (v${CURRENT_SCHEMA_VERSION}) — upgrade fragua`,
+          ),
+        );
+        return 1;
+      }
+      if (current < MIN_COMPATIBLE_SCHEMA_VERSION) {
+        console.error(
+          chalk.red(
+            `db migrate: store is v${current}, below the supported floor (v${MIN_COMPATIBLE_SCHEMA_VERSION}) — no migration path`,
+          ),
+        );
+        return 1;
+      }
+      if (current === CURRENT_SCHEMA_VERSION) {
+        console.log(chalk.dim(`already at v${current}; nothing to migrate`));
+        return 0;
+      }
+      if (opts.dryRun) {
+        console.log(`would migrate ${storePath}: v${current} → v${CURRENT_SCHEMA_VERSION}`);
+        return 0;
+      }
+      // The constructor runs the gated, transactional walk-forward migrate().
+      new SqliteStore({ path: storePath }).close();
+      console.log(chalk.green(`migrated ${storePath}: v${current} → v${CURRENT_SCHEMA_VERSION}`));
       return 0;
     }
   }

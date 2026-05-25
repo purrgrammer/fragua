@@ -1,9 +1,10 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
-import { SqliteStore } from "@fragua/store";
+import { CURRENT_SCHEMA_VERSION, SqliteStore } from "@fragua/store";
 import { dbCommand } from "../src/commands/db.ts";
 
 const workdirs: string[] = [];
@@ -66,5 +67,20 @@ describe("fragua db", () => {
     workdirs.push(cwd);
     const code = await dbCommand({ action: "vacuum", cwd });
     expect(code).toBe(1);
+  });
+
+  test("migrate is a no-op on a store already at the current version", async () => {
+    const cwd = makeStore();
+    expect(await dbCommand({ action: "migrate", cwd })).toBe(0);
+    expect(await dbCommand({ action: "migrate", cwd, dryRun: true })).toBe(0);
+  });
+
+  test("migrate refuses a store newer than the binary", async () => {
+    const cwd = makeStore();
+    // Hand-bump the pinned version past CURRENT to simulate a newer producer.
+    const db = new Database(join(cwd, ".fragua/fragua.db"));
+    db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(CURRENT_SCHEMA_VERSION + 1);
+    db.close();
+    expect(await dbCommand({ action: "migrate", cwd })).toBe(1);
   });
 });

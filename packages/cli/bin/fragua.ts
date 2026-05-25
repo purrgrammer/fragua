@@ -348,9 +348,10 @@ cli
   });
 
 cli
-  .command("db <action>", "DB maintenance: vacuum | gc-blobs | backup")
+  .command("db <action>", "DB maintenance: vacuum | gc-blobs | backup | migrate")
   .option("--to <path>", "`backup` only: destination path")
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
+  .option("--dry-run", "`migrate` only: print the plan without applying")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
   .action(async (action: string, options: Record<string, unknown>) => {
@@ -358,9 +359,9 @@ cli
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
-    if (action !== "vacuum" && action !== "gc-blobs" && action !== "backup") {
+    if (action !== "vacuum" && action !== "gc-blobs" && action !== "backup" && action !== "migrate") {
       console.error(chalk.red(`unknown db action: ${action}`));
-      console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup"));
+      console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup | migrate"));
       process.exit(1);
     }
     const limitRaw = options["limit"];
@@ -376,6 +377,7 @@ cli
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
       ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
+      ...(options["dryRun"] === true ? { dryRun: true } : {}),
     });
     process.exit(code);
   });
