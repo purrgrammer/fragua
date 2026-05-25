@@ -1,19 +1,27 @@
 ---
 title: "Executor decomposition for fault-injecting property-based testing"
 summary: "Finish modularizing packages/daemon/src/executor.ts so the per-run turn loop becomes a pure planner + named effect seams + single-step driver — the shape a fast-check harness needs to inject faults before/after every step and prove the SPEC invariants under adversarial schedules"
-status: proposed
+status: shipped
 maturity: designed
-last-reviewed: 2026-05-21
+last-reviewed: 2026-05-25
 ---
 
 # Executor decomposition for PBT
 
-> **North star, not scheduled.** The forcing function is the ability to
-> stress-test the executor in a property-based harness that injects faults
-> (crash, OCC conflict, abort, hang, store/snapshot/provision failure, clock
-> skew) before and after every step and proves the invariants hold. We are NOT
-> building that harness yet. We ARE shaping the decomposition so it's possible
-> without rewriting the executor again.
+> **Status (2026-05-25): goal met.** The property-based harness is built and the
+> SPEC §4 / §5 invariants are turned into properties **and tracked**
+> (`packages/daemon/test/invariant-coverage.test.ts` is the invariant→owner map).
+> It drives the *current* executor (`runOne`) directly rather than a
+> fully-decomposed `RunSession.step()` — so the decomposition's forcing function
+> is largely satisfied **without** finishing Phases 5/6/8, which are now deferred
+> (they buy finer per-step fault placement + `fragua ci`, not invariant coverage).
+> See §2 (shipped) and §3 Phase 7. The original framing follows.
+>
+> **North star.** The forcing function is the ability to stress-test the executor
+> in a property-based harness that injects faults (crash, OCC conflict, abort,
+> hang, store/snapshot/provision failure, clock skew) before and after every step
+> and proves the invariants hold. We ARE shaping the decomposition so it's
+> possible without rewriting the executor again.
 
 ## 1. What PBT-with-fault-injection demands from the code
 
@@ -83,12 +91,49 @@ needs three properties the executor doesn't fully expose today:
 `executor.ts` stays the orchestration entry point + public facade
 (~1.2k lines, down from 2.17k).
 
-**Resume here →** the abort arm (the post-handler block's other half:
-reactive-budget halt/pause, timeout-retry, abort-loop) is still inline — it has
-a two-phase commit + `consecutiveAborts`/`leakBudget` mutation, so folding it
-into a planner is its own phase. Otherwise Phase 3's remaining half
-(`buildDispatchContext`) or Phase 5 (`RunSession.step()`) is next. All work to
-date is committed on `main` locally and not yet pushed.
+**The harness + the invariant properties (Phase 7, built pragmatically):**
+
+- **Graph arbitrary** (`daemon/test/arbitraries/graph.ts`) — `makeArbGraph(kinds)`
+  generates the Graph IR directly, spine-first / back-edges-last, bounded-index
+  targets for shrink-safety. Covers llm / tool / routing / human, goal gates,
+  budget ceilings, threads/summary, inputs. Self-checking: a **bootstrap
+  property** runs the real `validate()` on every generated graph and asserts zero
+  diagnostics (`daemon/test/graph-arbitrary.property.test.ts`).
+- **Tier-1 — pure planner properties** (`daemon/test/transition-planner.property.test.ts`)
+  — A–H over generated `TransitionInput`: purity/no-mutation, ≤1 terminal,
+  node_started⊕pause/terminal, spend conservation, advanceAppliedTo, HITL pause
+  (yield_human → run_paused_human), HITL answer (route-case selection), budget
+  breach (stop halts / pause pauses, both keep node_completed).
+- **Tier-2 — driven-executor harness** (`daemon/test/driven-executor.property.test.ts`)
+  — `drive(graph, specFor, {crashTurns?})` runs the **real `runOne`** over a
+  generated graph against an **on-disk WAL store** + an injected advancing clock,
+  with a wake loop (paused_auto), HITL answering (paused_human →
+  `intent.human_input`), and a simulated crash (cut the pass short → leave
+  `running` → `startupSweep` requeues). Slices: all-success, fail+auto-wake,
+  HITL, crash-recovery.
+- **Shared invariant checker** (`daemon/test/invariants.ts`) — `checkRunInvariants`,
+  one predicate per log-derivable invariant (P4 projection=fold, terminal
+  absorbing, seq↑, causal order, pause↔status, activeMs); every driven slice
+  calls it, so **P4 is proven over happy / wake / HITL / crash**.
+- **Coverage map** (`daemon/test/invariant-coverage.test.ts`) — the tracked
+  invariant→owner map (SPEC §4 I1–I10, the ARCH §10 P1–P27 matrix — all already
+  owned — and the §5 set), asserted well-formed. Plus the exhaustive
+  pause-mapping reducer property (`daemon/test/pause-mapping.test.ts`).
+
+**Deferred (not on the critical path for invariant coverage):**
+
+- **Abort-arm extraction** (Phase 4 remainder) — the post-handler abort policy
+  (reactive-budget halt/pause, timeout-retry, abort-loop) is still inline (a
+  two-phase commit + `consecutiveAborts`/`leakBudget` mutation). Its invariants
+  are covered (P20, budget tier-1 H); extracting it would let the abort path be a
+  *tier-1* property too.
+- **Phase 3 remainder** (`buildDispatchContext`), **Phase 5** (`RunSession.step()`),
+  **Phase 6** (loop module), **Phase 8** (assembly factory) — Phases 5/6 buy
+  *per-step* fault placement (the tier-2 crash is coarse, via `maxTurns`); Phase 8
+  gates `fragua ci`. None are needed for the invariant goal.
+- **Harness-breadth faults** — OCC conflict / handler hang / orphan-side-effect
+  over *generated* graphs. The invariants themselves are already store/matrix-owned
+  (P2, P6, leak tests); these would exercise them generatively.
 
 ## 3. Remaining phases (ordered by PBT value × tractability)
 
@@ -141,11 +186,18 @@ terminal".
 `runExecutor`'s poll / claim / drain / inflight tracking + `runOneSafe` move
 out, so the scheduler is separable from the per-run driver.
 
-### Phase 7 — The PBT harness itself. *North star, later.*
+### Phase 7 — The PBT harness itself. *Built (pragmatic) — see §2.*
 
-`fast-check` model that generates `(graph shape, handler-result stream, fault
-schedule)` and drives `RunSession.step()` against a virtual store + virtual
-clock, asserting invariants after every step and every injected fault.
+Built on the **current** executor rather than waiting for Phases 5/6: the graph
+arbitrary + tier-1 planner properties + the tier-2 driven harness + the shared
+`checkRunInvariants` + the coverage map (all in §2). It generates `(graph,
+handler-result script, crash point)` and drives the real `runOne` over an on-disk
+WAL store + an injected advancing clock, asserting the invariants on the
+resulting event log. Coarser than the sketched `RunSession.step()` model — the
+crash is `maxTurns`-grained, not injected before/after *every* step — but it
+turns the SPEC §4 / §5 invariants into properties and tracks them today. Finer
+per-step fault placement (and OCC/hang/orphan generative faults) ride Phase 5
+when there's a reason to.
 
 ### Phase 8 — Assembly factory + injectable registries. *Unblocks `fragua ci`.*
 
@@ -186,3 +238,13 @@ sequenced earlier in practice than its number suggests.
 - **Spend conservation:** budget/retry/goal-gate fact-list rewrites preserve
   `node_completed` accounting — spend is never lost or double-counted.
 - **activeMs:** monotonic and bounded by wall-clock across pause/crash cycles.
+
+**Now proven + tracked.** Each invariant has an owner in
+`packages/daemon/test/invariant-coverage.test.ts` (SPEC §4 I1–I10, the ARCH §10
+P1–P27 matrix — all already owned across store/daemon/matrix.property + server
+routes — and this §5 set). Terminal-absorbing, causal order, projection = fold
+(P4), spend conservation, pause↔status, and activeMs are checked on **every**
+driven run via `checkRunInvariants`; OCC (P2), orphan-quarantine (P6), and
+crash-recovery (P5) are store/matrix-owned and exercised generatively by the
+harness. Pause↔status is also proven exhaustively over every `PauseReason`
+(`pause-mapping.test.ts`).

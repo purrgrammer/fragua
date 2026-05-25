@@ -22,6 +22,9 @@
 //             settles at a terminal or an operator pause, invariants intact.
 
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CURRENT_IR_VERSION, type Graph, type Node, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { type RunState, SqliteStore, type StoredEvent } from "@fragua/store";
@@ -95,6 +98,11 @@ interface DriveResult {
   status: string;
   /** Runs requeued by the simulated-crash startup sweep (0 = no crash). */
   requeued: number;
+  /** Total injected-clock advance over the whole drive (ms). */
+  clockSpanMs: number;
+  /** Of `clockSpanMs`, the time jumped while paused to fire wake-pending. The
+   * activeMs bound excludes it: active time ≤ non-paused elapsed. */
+  jumpedMs: number;
 }
 
 /** Drive a run to a resting state: terminal, or an operator pause. paused_auto
@@ -108,7 +116,24 @@ async function drive(
   opts: { maxSteps?: number; crashTurns?: number } = {},
 ): Promise<DriveResult> {
   const maxSteps = opts.maxSteps ?? 100;
-  const store = new SqliteStore({ path: ":memory:" });
+  // Advancing injected clock, shared by the store (fact timestamps) and the
+  // executor. Because the clock steps on every read, fact-commit times move
+  // forward and activeMs accumulates real, deterministic deltas. Pause-wakes
+  // jump it past the backoff; that jumped time is tracked so the activeMs bound
+  // excludes it (active time ≤ non-paused elapsed).
+  const TICK_MS = 1;
+  const T0 = 1_700_000_000_000;
+  let nowMs = T0;
+  let jumpedMs = 0;
+  const clock = (): number => {
+    nowMs += TICK_MS;
+    return nowMs;
+  };
+  // A real on-disk store (not :memory:) so the production pragmas actually
+  // engage — WAL journaling, STRICT tables, the busy-timeout — the true
+  // coordination surface the executor commits against.
+  const dir = mkdtempSync(join(tmpdir(), "fragua-pbt-"));
+  const store = new SqliteStore({ path: join(dir, "fragua.db"), now: clock });
   try {
     const sha = "g";
     store.saveWorkflow(sha, "g", "name: g", serializeGraph(graph), CURRENT_IR_VERSION);
@@ -123,8 +148,6 @@ async function drive(
     const runId = "r";
     store.enqueueRun({ runId, workflowSha: sha, priority: 0, initialRouting: { start_node: "start" } });
 
-    let nowMs = 1_700_000_000_000;
-    const clock = () => nowMs;
     const runOpts = {
       store,
       dispatcher,
@@ -156,7 +179,8 @@ async function drive(
       const st = store.getState(runId);
       if (st === null || TERMINAL_STATUS.has(st.status)) break;
       if (st.status === "paused_auto") {
-        nowMs += 3_600_000; // past any backoff so wakeAutoResume fires
+        nowMs += 3_600_000; // jump past any backoff so wakeAutoResume fires
+        jumpedMs += 3_600_000;
         wakePending(store, clock);
         continue;
       }
@@ -175,20 +199,40 @@ async function drive(
     }
     const finalState = store.getState(runId);
     if (finalState === null) throw new Error("run vanished from the store");
-    return { events: store.getEvents(runId), state: finalState, status: finalState.status, requeued };
+    return {
+      events: store.getEvents(runId),
+      state: finalState,
+      status: finalState.status,
+      requeued,
+      clockSpanMs: nowMs - T0,
+      jumpedMs,
+    };
   } finally {
     store.close();
+    rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** activeMs is non-negative and never exceeds the non-paused elapsed time
+ * (clockSpan minus the jumps spent parked) — time-of-active is conserved, never
+ * double-counted, across dispatch / pause / crash cycles. */
+function assertActiveMsBounded(state: RunState, clockSpanMs: number, jumpedMs: number): void {
+  expect(state.metrics.activeMs).toBeGreaterThanOrEqual(0);
+  expect(state.metrics.activeMs).toBeLessThanOrEqual(clockSpanMs - jumpedMs);
 }
 
 describe("driven executor — tier-2", () => {
   test("slice 1: all-success over any human-free graph completes, no pauses/aborts", async () => {
     await fc.assert(
       fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
-        const { events, state, status } = await drive(graph, successSpec);
+        const { events, state, status, clockSpanMs, jumpedMs } = await drive(graph, successSpec);
         expect(status).toBe("completed");
         expect(events.at(-1)?.type).toBe("fact.run_completed");
         checkRunInvariants(events, state);
+        // A completed run dispatched ≥1 node, so activeMs accumulated; and it
+        // never exceeds the non-paused elapsed time.
+        expect(state.metrics.activeMs).toBeGreaterThan(0);
+        assertActiveMsBounded(state, clockSpanMs, jumpedMs);
         const types = new Set(events.map((e) => e.type));
         expect(types.has("fact.node_aborted")).toBe(false);
         expect(types.has("fact.run_paused")).toBe(false);
@@ -209,13 +253,16 @@ describe("driven executor — tier-2", () => {
         async (graph, scripts) => {
           const scriptFor = (node: Node): NodeScript =>
             scripts[Number(node.id.slice(1)) - 1] ?? { providerFails: 0, retries: 0 };
-          const { events, state, status } = await drive(graph, (node) => scriptedSpec(node, scriptFor(node)));
+          const { events, state, status, clockSpanMs, jumpedMs } = await drive(graph, (node) =>
+            scriptedSpec(node, scriptFor(node)),
+          );
 
           // A — the run settled (never left parked in paused_auto: those are
           // all woken; remaining paused = an operator resting state).
           expect(["completed", "halted", "paused"]).toContain(status);
 
           checkRunInvariants(events, state);
+          assertActiveMsBounded(state, clockSpanMs, jumpedMs);
 
           // E — every auto-wake pause was resumed (we woke each paused_auto).
           const autoPauses = events.filter(
@@ -308,12 +355,15 @@ describe("driven executor — tier-2", () => {
         makeArbGraph(["llm", "tool", "routing"]),
         fc.integer({ min: 1, max: 4 }),
         async (graph, crashTurns) => {
-          const { events, state, status, requeued } = await drive(graph, successSpec, { crashTurns });
+          const { events, state, status, requeued, clockSpanMs, jumpedMs } = await drive(graph, successSpec, {
+            crashTurns,
+          });
           // Recovery converges: the run still reaches a clean completion after
           // the simulated crash + requeue.
           expect(status).toBe("completed");
           expect(events.at(-1)?.type).toBe("fact.run_completed");
           checkRunInvariants(events, state);
+          assertActiveMsBounded(state, clockSpanMs, jumpedMs);
           // When the crash actually fired (run was mid-flight), the sweep
           // requeued it and the recovery fact is in the log.
           if (requeued > 0) {
