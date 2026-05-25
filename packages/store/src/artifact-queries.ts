@@ -4,6 +4,7 @@
 // live on disk under `BlobFS`; the DB stores only the metadata + ref.
 
 import type { Database } from "bun:sqlite";
+import type { ArtifactListRow } from "./types.ts";
 
 // ─────────────────────────────────────────────────────────────────────
 // Artifact row reads + writes
@@ -73,6 +74,41 @@ export function selectArtifactRef(
       .query<ArtifactRefRow, [string, string, number, string]>(SELECT_ARTIFACT_REF_SQL)
       .get(scope.runId, scope.nodeId, scope.iteration, scope.key) ?? null
   );
+}
+
+interface ArtifactListSqlRow {
+  node_id: string;
+  iteration: number;
+  key: string;
+  mime: string | null;
+  blob_sha: string;
+  size_bytes: number;
+  created_at: number;
+}
+
+const SELECT_ARTIFACTS_FOR_RUN_SQL = `
+  SELECT a.node_id, a.iteration, a.key, a.mime, a.blob_sha, b.size_bytes, a.created_at
+    FROM artifacts a
+    JOIN blobs b ON b.sha256 = a.blob_sha
+   WHERE a.run_id = ?
+   ORDER BY a.created_at
+`;
+
+/** Every artifact a run produced, oldest-first. Metadata only — the bytes
+ *  come from `getArtifact(scope)`. */
+export function selectArtifactsForRun(db: Database, runId: string): ArtifactListRow[] {
+  return db
+    .query<ArtifactListSqlRow, [string]>(SELECT_ARTIFACTS_FOR_RUN_SQL)
+    .all(runId)
+    .map((r) => ({
+      nodeId: r.node_id,
+      iteration: r.iteration,
+      key: r.key,
+      mime: r.mime,
+      blobSha: r.blob_sha,
+      sizeBytes: r.size_bytes,
+      createdAt: r.created_at,
+    }));
 }
 
 // ─────────────────────────────────────────────────────────────────────

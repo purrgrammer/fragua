@@ -1,4 +1,6 @@
 export {
+  type ArtifactListRow,
+  type ArtifactScope,
   type GlobalFeedAtFloorCursor,
   type GlobalFeedForwardCursor,
   makeReadPlane,

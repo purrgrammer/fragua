@@ -350,6 +350,18 @@ export interface ArtifactRef extends ArtifactScope {
   mime: string | null;
 }
 
+/** One row of a run's artifact listing — metadata only, no bytes. Returned
+ * by `IEventReader.listArtifacts`; the body comes from `getArtifact(scope)`. */
+export interface ArtifactListRow {
+  nodeId: string;
+  iteration: number;
+  key: string;
+  mime: string | null;
+  blobSha: string;
+  sizeBytes: number;
+  createdAt: number;
+}
+
 // ─────────────── Daemon lock + results ───────────────
 
 export interface DaemonLockRow {
@@ -864,6 +876,9 @@ export interface IEventReader {
   // ─── Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
+  /** Every artifact a run produced, oldest-first (metadata only — the bytes
+   * come from `getArtifact(scope)`). Empty when the run has none. */
+  listArtifacts(runId: string): ArtifactListRow[];
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
 
   // ─── Workflow catalog (read)

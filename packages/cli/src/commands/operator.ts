@@ -12,12 +12,12 @@
 
 import { resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import type { DiffRange, RunDetail } from "@fragua/core/read-plane";
-import type { RunStatus, SqliteStore, StoredEvent } from "@fragua/store";
+import type { DiffRange, RunDetail, StepSnapshot } from "@fragua/core/read-plane";
+import type { ArtifactScope, NarrowMessage, RunStatus, SqliteStore, StoredEvent } from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
 import { pickRoute } from "../route-picker.ts";
-import { followRun } from "../run-follow.ts";
+import { followRun, renderEvent } from "../run-follow.ts";
 import { withStoreClient } from "../store-client.ts";
 
 interface DiscoveryOpts {
@@ -571,4 +571,197 @@ function diffRefusalMessage(reason: DiffRefusal, against: string): string {
     case "base_missing":
       return "run has no recorded base commit to diff against";
   }
+}
+
+// ─── Forensics (read-only): the postmortem skill's dissection verbs ─────────
+
+export interface EventsOptions extends DiscoveryOpts {
+  runId: string;
+  type?: string;
+  limit?: number;
+  json?: boolean;
+}
+
+/** Dump a run's event log. `--type <prefix>` filters by `type.startsWith`,
+ * `--limit N` keeps the last N (default 50), printed oldest-first. `--json`
+ * emits the raw `StoredEvent[]` with full payloads (the postmortem skill mines
+ * these); the default render reuses the live-follow `[seq] type payload` line. */
+export function eventsCommand(opts: EventsOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const all = readPlane.events(opts.runId);
+    if (all == null) {
+      console.error(chalk.red("events: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    const filtered = opts.type != null && opts.type.length > 0 ? all.filter((e) => e.type.startsWith(opts.type!)) : all;
+    const n = opts.limit != null && opts.limit > 0 ? opts.limit : 50;
+    const tail = filtered.slice(-n);
+    if (opts.json === true) {
+      console.log(JSON.stringify(tail, null, 2));
+      return 0;
+    }
+    for (const ev of tail) renderEvent(ev);
+    return 0;
+  });
+}
+
+export interface StepsOptions extends DiscoveryOpts {
+  runId: string;
+  json?: boolean;
+}
+
+/** Per-LLM-call cost / token / duration breakdown. `--json` emits the full
+ * `StepSnapshot[]` (resolved prompts etc.); default is one line per step. */
+export function stepsCommand(opts: StepsOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const steps = readPlane.steps(opts.runId);
+    if (steps == null) {
+      console.error(chalk.red("steps: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (opts.json === true) {
+      console.log(JSON.stringify(steps, null, 2));
+      return 0;
+    }
+    if (steps.length === 0) {
+      console.log(chalk.dim("(no LLM steps)"));
+      return 0;
+    }
+    for (const s of steps) console.log(renderStepLine(s));
+    return 0;
+  });
+}
+
+function renderStepLine(s: StepSnapshot): string {
+  const tokens = (s.cost?.input_tokens ?? 0) + (s.cost?.output_tokens ?? 0);
+  const cost = (s.cost?.cost_usd ?? 0).toFixed(4);
+  const dur = s.durationMs != null ? `${s.durationMs}` : "?";
+  return (
+    `${chalk.dim(`#${s.stepIdx}`)}  ${chalk.cyan(s.nodeId)}  ${s.model ?? chalk.dim("?")}  ` +
+    `${tokens} tok  $${cost}  ${dur} ms`
+  );
+}
+
+export interface MessagesOptions extends DiscoveryOpts {
+  runId: string;
+  node?: string;
+  json?: boolean;
+}
+
+/** LLM-visible transcript. `--node <id>` scopes to one node. `--json` emits the
+ * full messages (transcript mining); default is one preview line per message. */
+export function messagesCommand(opts: MessagesOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const msgs = readPlane.messages(opts.runId, opts.node != null ? { nodeId: opts.node } : {});
+    if (msgs == null) {
+      console.error(chalk.red("messages: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (opts.json === true) {
+      console.log(JSON.stringify(msgs, null, 2));
+      return 0;
+    }
+    for (const m of msgs) console.log(renderMessageLine(m));
+    return 0;
+  });
+}
+
+/** A pi-agent-core message's `content` is either a plain string or an array of
+ * typed blocks; only the text blocks carry prose. */
+interface TextBlock {
+  type: string;
+  text?: string;
+}
+
+function previewOf(content: NarrowMessage["content"]): string {
+  const raw = content as { role?: string; content?: unknown };
+  const body = raw.content;
+  let text: string;
+  if (typeof body === "string") {
+    text = body;
+  } else if (Array.isArray(body)) {
+    text = (body as TextBlock[])
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text ?? "")
+      .join(" ");
+  } else {
+    text = "";
+  }
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed;
+}
+
+function renderMessageLine(m: NarrowMessage): string {
+  const role = (m.content as { role?: string }).role ?? "?";
+  const where = `${m.nodeId ?? "?"}#${m.iteration}`;
+  return `${chalk.dim(`[${m.ordinal}]`)} ${chalk.cyan(role)} ${chalk.dim(where)}  ${previewOf(m.content)}`;
+}
+
+export interface ArtifactsOptions extends DiscoveryOpts {
+  runId: string;
+}
+
+/** List a run's artifacts: one line per artifact, metadata only. */
+export function artifactsCommand(opts: ArtifactsOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const rows = readPlane.artifacts(opts.runId);
+    if (rows == null) {
+      console.error(chalk.red("artifacts: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (rows.length === 0) {
+      console.log(chalk.dim("(no artifacts)"));
+      return 0;
+    }
+    for (const a of rows) {
+      console.log(
+        `${chalk.cyan(`${a.nodeId}#${a.iteration}`)}  ${a.key}  ${chalk.dim(a.mime ?? "?")}  ${a.sizeBytes}B`,
+      );
+    }
+    return 0;
+  });
+}
+
+export interface ArtifactOptions extends DiscoveryOpts {
+  runId: string;
+  nodeId: string;
+  key: string;
+  iteration?: number;
+}
+
+/** Write one artifact's bytes to stdout. Text passes through as-is; binary
+ * (NUL byte in the first 8KiB) is refused with a notice on stderr so the
+ * terminal isn't garbled — redirect to a file instead. */
+export function artifactCommand(opts: ArtifactOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const scope: ArtifactScope = {
+      runId: opts.runId,
+      nodeId: opts.nodeId,
+      key: opts.key,
+      iteration: opts.iteration ?? 0,
+    };
+    const bytes = readPlane.artifactBody(scope);
+    if (bytes == null) {
+      console.error(
+        chalk.red("artifact: not found") + chalk.dim(` (${opts.runId}/${opts.nodeId}#${scope.iteration}:${opts.key})`),
+      );
+      return 1;
+    }
+    if (looksBinary(bytes)) {
+      console.error(chalk.yellow(`(binary, ${bytes.byteLength} bytes — redirect to a file)`));
+      return 1;
+    }
+    process.stdout.write(bytes);
+    return 0;
+  });
+}
+
+/** A NUL byte in the first 8KiB is the same heuristic git uses to flag a blob
+ * as binary. */
+function looksBinary(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.byteLength, 8192);
+  for (let i = 0; i < n; i++) {
+    if (bytes[i] === 0) return true;
+  }
+  return false;
 }

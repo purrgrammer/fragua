@@ -34,6 +34,7 @@ import {
   deleteOrphanBlobs,
   insertBlobIfAbsent,
   selectArtifactRef as querySelectArtifactRef,
+  selectArtifactsForRun,
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
@@ -151,6 +152,7 @@ import { startupSweep } from "./sweep.ts";
 import {
   type AppendFactOpts,
   ArtifactCollisionError,
+  type ArtifactListRow,
   type ArtifactRef,
   type ArtifactScope,
   ArtifactTooLargeError,
@@ -915,6 +917,10 @@ export class SqliteStore implements IEventStore {
       sizeBytes: row.size_bytes,
       mime: row.mime,
     };
+  }
+
+  listArtifacts(runId: string): ArtifactListRow[] {
+    return selectArtifactsForRun(this.db, runId);
   }
 
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null {

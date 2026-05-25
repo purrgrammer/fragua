@@ -17,21 +17,27 @@ import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core"
 import type { RunSnapshotReader } from "@fragua/server";
 import { createServer } from "@fragua/server";
 import { type IEventStore, SqliteStore } from "@fragua/store";
+import { doctorCommand } from "../src/commands/doctor.ts";
 import {
   acceptCommand,
+  artifactCommand,
+  artifactsCommand,
   budgetCommand,
   cancelCommand,
   discardCommand,
+  eventsCommand,
   goalGateCommand,
   inboxCommand,
   maxLoopsCommand,
   maxRetriesCommand,
+  messagesCommand,
   pauseCommand,
   priorityCommand,
   respondCommand,
   resumeCommand,
   statusCommand,
   steerCommand,
+  stepsCommand,
   tailCommand,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
@@ -357,5 +363,172 @@ describe("fragua operator verbs", () => {
     const out = logs.join("\n");
     expect(out).toContain("in-1");
     expect(out).toContain("+5"); // committed stat round-trips server → CLI
+  });
+});
+
+// ─── Forensics (read) verbs: events / steps / messages / artifacts / artifact
+
+describe("fragua forensics verbs", () => {
+  let r: Rig;
+  let logs: string[];
+  beforeEach(() => {
+    r = rig();
+    logs = [];
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(async () => {
+    await r.close();
+  });
+  const out = (): string => logs.join("\n");
+
+  test("events: seedCommitted → exit 0, output has a fact. line", async () => {
+    seedCommitted(r.store, "ev1");
+    const code = await eventsCommand({ runId: "ev1", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("fact.run_completed");
+  });
+
+  test("events: --type filters to the matching prefix", async () => {
+    seedCommitted(r.store, "ev2");
+    const code = await eventsCommand({ runId: "ev2", type: "fact.run_completed", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("fact.run_completed");
+    expect(out()).not.toContain("fact.run_started");
+  });
+
+  test("events: --json emits an array of stored events", async () => {
+    seedCommitted(r.store, "ev3");
+    const code = await eventsCommand({ runId: "ev3", json: true, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out()) as Array<{ type: string }>;
+    expect(parsed.some((e) => e.type === "fact.run_completed")).toBe(true);
+  });
+
+  test("events: unknown run → exit 1", async () => {
+    const code = await eventsCommand({ runId: "nope", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+
+  test("steps: seedCommitted (no llm.start) → (no LLM steps), exit 0", async () => {
+    seedCommitted(r.store, "st1");
+    const code = await stepsCommand({ runId: "st1", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("(no LLM steps)");
+  });
+
+  test("steps: unknown run → exit 1", async () => {
+    const code = await stepsCommand({ runId: "nope", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+
+  test("messages: seedCommitted → exit 0", async () => {
+    seedCommitted(r.store, "ms1");
+    const code = await messagesCommand({ runId: "ms1", dbPath: r.dbPath });
+    expect(code).toBe(0);
+  });
+
+  test("messages: a seeded message renders a preview line", async () => {
+    seedCommitted(r.store, "ms2");
+    r.store.appendMessage("ms2", {
+      content: { role: "user", content: "hello forensics", timestamp: new Date().toISOString() } as never,
+      nodeId: "n1",
+      iteration: 0,
+    });
+    const code = await messagesCommand({ runId: "ms2", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("hello forensics");
+    expect(out()).toContain("user");
+  });
+
+  test("messages: unknown run → exit 1", async () => {
+    const code = await messagesCommand({ runId: "nope", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+
+  test("artifacts: lists a put artifact; empty run → (no artifacts)", async () => {
+    seedCommitted(r.store, "ar1");
+    const empty = await artifactsCommand({ runId: "ar1", dbPath: r.dbPath });
+    expect(empty).toBe(0);
+    expect(out()).toContain("(no artifacts)");
+
+    logs.length = 0;
+    r.store.putArtifact(
+      { runId: "ar1", nodeId: "n1", key: "report.md", iteration: 0 },
+      new TextEncoder().encode("# Report\nbody"),
+      "text/markdown",
+    );
+    const code = await artifactsCommand({ runId: "ar1", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("report.md");
+    expect(out()).toContain("n1#0");
+  });
+
+  test("artifacts: unknown run → exit 1", async () => {
+    const code = await artifactsCommand({ runId: "nope", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+
+  test("artifact: prints the body of a text artifact", async () => {
+    seedCommitted(r.store, "ar2");
+    r.store.putArtifact(
+      { runId: "ar2", nodeId: "n1", key: "out.txt", iteration: 0 },
+      new TextEncoder().encode("forensic body"),
+      "text/plain",
+    );
+    const written: Uint8Array[] = [];
+    const spy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      written.push(chunk as Uint8Array);
+      return true;
+    });
+    const code = await artifactCommand({ runId: "ar2", nodeId: "n1", key: "out.txt", dbPath: r.dbPath });
+    spy.mockRestore();
+    expect(code).toBe(0);
+    expect(new TextDecoder().decode(written[0])).toBe("forensic body");
+  });
+
+  test("artifact: binary content → exit 1, refuses to garble stdout", async () => {
+    seedCommitted(r.store, "ar3");
+    r.store.putArtifact(
+      { runId: "ar3", nodeId: "n1", key: "blob.bin", iteration: 0 },
+      new Uint8Array([1, 2, 0, 3]),
+      "application/octet-stream",
+    );
+    const code = await artifactCommand({ runId: "ar3", nodeId: "n1", key: "blob.bin", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+
+  test("artifact: missing key → exit 1", async () => {
+    seedCommitted(r.store, "ar4");
+    const code = await artifactCommand({ runId: "ar4", nodeId: "n1", key: "ghost", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+});
+
+// ─── doctor: liveness check
+
+describe("fragua doctor", () => {
+  let r: Rig;
+  let logs: string[];
+  beforeEach(() => {
+    r = rig();
+    logs = [];
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(async () => {
+    await r.close();
+  });
+
+  test("doctor: exit 0, mentions store path + daemon state", async () => {
+    const code = await doctorCommand({ dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain(r.dbPath);
+    expect(out).toContain("no daemon");
   });
 });

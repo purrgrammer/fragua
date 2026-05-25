@@ -12,6 +12,8 @@
 // `@fragua/core/intent-plane`.
 
 import {
+  type ArtifactListRow,
+  type ArtifactScope,
   FEED_EVENT_KINDS,
   type GetGlobalEventsAtFloorOpts,
   type GetGlobalEventsForwardOpts,
@@ -26,6 +28,8 @@ import { runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
 import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnapshot } from "./steps.ts";
+
+export type { ArtifactListRow, ArtifactScope } from "@fragua/store";
 
 export interface ReadPlaneDeps {
   store: IEventStore;
@@ -56,6 +60,12 @@ export interface ReadPlane {
   /** Raw store event log (`fact.*` + `intent.*`), or `null` when the run
    *  is absent. Mirrors `GET /runs/:id/events.json`. */
   events(runId: string): StoredEvent[] | null;
+  /** A run's artifact listing (metadata only), or `null` when the run is
+   *  absent. The bytes come from {@link ReadPlane.artifactBody}. */
+  artifacts(runId: string): ArtifactListRow[] | null;
+  /** Raw bytes of one artifact, or `null` when no artifact exists at the
+   *  scope. */
+  artifactBody(scope: ArtifactScope): Uint8Array | null;
   /** Ordered snapshot scrubber feed, or `null` when the run is absent.
    *  Mirrors `GET /runs/:id/snapshots`. */
   snapshots(runId: string): SnapshotItem[] | null;
@@ -124,6 +134,13 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     events(runId) {
       if (store.getState(runId) == null) return null;
       return store.getEvents(runId);
+    },
+    artifacts(runId) {
+      if (store.getState(runId) == null) return null;
+      return store.listArtifacts(runId);
+    },
+    artifactBody(scope) {
+      return store.getArtifactRef(scope) == null ? null : store.getArtifact(scope);
     },
     snapshots(runId) {
       if (store.getState(runId) == null) return null;

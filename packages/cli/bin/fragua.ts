@@ -1,34 +1,42 @@
 #!/usr/bin/env bun
 // fragua CLI entry — dispatches subcommands.
 //
-// Run control (`fragua runs <verb>`) is a thin client over the HTTP intent
-// routes: disposition (accept/discard/diff), lifecycle (respond/resume/
-// unquarantine/cancel), and control (steer/pause/priority/budget).
+// The CLI is a direct store-client (no HTTP): `fragua runs <verb>` writes
+// intents through the intent plane and reads through the read plane. Verbs
+// span disposition (accept/discard/diff), lifecycle (respond/resume/
+// unquarantine/cancel), control (steer/pause/priority/budget/max-*), and
+// inspect/forensics (status/tail/events/steps/messages/artifacts).
 
 import cac from "cac";
 import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
+import { doctorCommand } from "../src/commands/doctor.ts";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
   acceptCommand,
+  artifactCommand,
+  artifactsCommand,
   budgetCommand,
   cancelCommand,
   diffCommand,
   discardCommand,
+  eventsCommand,
   goalGateCommand,
   inboxCommand,
   lsCommand,
   maxLoopsCommand,
   maxRetriesCommand,
+  messagesCommand,
   pauseCommand,
   priorityCommand,
   respondCommand,
   resumeCommand,
   statusCommand,
   steerCommand,
+  stepsCommand,
   tailCommand,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
@@ -371,6 +379,15 @@ cli
   });
 
 cli
+  .command("doctor", "Liveness check: store path, daemon lock, server endpoint, providers")
+  .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
+  .action(async (options: Record<string, unknown>) => {
+    const db = typeof options["db"] === "string" ? (options["db"] as string) : undefined;
+    const code = await doctorCommand(db !== undefined ? { dbPath: db } : {});
+    process.exit(code);
+  });
+
+cli
   .command(
     "run <workflow>",
     "Enqueue a run on the local store and tail its event log to stdout. " +
@@ -460,11 +477,18 @@ function runsHelp(): void {
     goal-gate   <id> <n>             raise the goal-gate retry cap
     max-loops   <id> <n>             raise the per-run dispatch ceiling
 
-  Listing + inspect:
+  Listing:
     inbox                             runs needing attention (2 sections)
     ls [--status a,b] [--limit N]     list runs
     status <id>                       one run's state + the why (pause/halt reason, quarantine orphans)
-    tail   <id>                       follow a run's event log to terminal (live, like \`run\` without --no-follow)`);
+    tail   <id>                       follow a run's event log to terminal (live, like \`run\` without --no-follow)
+
+  Inspect (forensics — dissect a run, no raw SQL):
+    events    <id> [--type <prefix>] [--limit N] [--json]   the event log (default last 50, oldest-first)
+    steps     <id> [--json]                                 per-LLM-call cost / tokens / duration
+    messages  <id> [--node <id>] [--json]                   the LLM-visible transcript (one preview line each)
+    artifacts <id>                                          list a run's artifacts (metadata)
+    artifact  <id> <nodeId> --key <k> [--iteration N]       write one artifact's bytes to stdout`);
 }
 
 cli
@@ -479,9 +503,13 @@ cli
   .option("--scope <s>", "budget: scope (e.g. run)")
   .option("--metric <m>", "budget: metric (e.g. cost | tokens)")
   .option("--new-limit <n>", "budget: the raised ceiling")
-  .option("--node <id>", "max-retries: the node whose retry cap to raise")
+  .option("--node <id>", "max-retries / messages: the node whose retry cap to raise / scope the transcript")
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
-  .option("--limit <n>", "ls/inbox: cap results")
+  .option("--limit <n>", "ls/inbox/events: cap results")
+  .option("--type <prefix>", "events: filter by event-type prefix (e.g. fact.)")
+  .option("--json", "events/steps/messages: emit full JSON instead of one-line render")
+  .option("--key <k>", "artifact: the artifact key to fetch")
+  .option("--iteration <n>", "artifact: node iteration (default 0)")
   .option("--url <url>", "Server URL (default: discovered via the store's server_endpoint row)")
   .option("--cwd <dir>", "Project root for server discovery")
   .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
@@ -656,6 +684,68 @@ cli
             }),
           );
           break;
+        case "events":
+          process.exit(
+            await eventsCommand({
+              runId: needId(),
+              ...(pickStr(options, "type") !== undefined ? { type: pickStr(options, "type")! } : {}),
+              ...limitOpt,
+              ...(options["json"] === true ? { json: true } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        case "steps":
+          process.exit(
+            await stepsCommand({
+              runId: needId(),
+              ...(options["json"] === true ? { json: true } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        case "messages":
+          process.exit(
+            await messagesCommand({
+              runId: needId(),
+              ...(pickStr(options, "node") !== undefined ? { node: pickStr(options, "node")! } : {}),
+              ...(options["json"] === true ? { json: true } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        case "artifacts":
+          process.exit(await artifactsCommand({ runId: needId(), ...discovery(options) }));
+          break;
+        case "artifact": {
+          const id = needId();
+          if (arg == null) {
+            console.error(chalk.red("runs artifact: <nodeId> required"));
+            process.exit(1);
+          }
+          const key = pickStr(options, "key");
+          if (key == null) {
+            console.error(chalk.red("runs artifact: --key <k> required"));
+            process.exit(1);
+          }
+          const iterRaw = options["iteration"];
+          const iter =
+            typeof iterRaw === "number"
+              ? iterRaw
+              : typeof iterRaw === "string"
+                ? Number.parseInt(iterRaw, 10)
+                : undefined;
+          process.exit(
+            await artifactCommand({
+              runId: id,
+              nodeId: arg,
+              key,
+              ...(iter !== undefined && Number.isFinite(iter) ? { iteration: iter } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        }
         default:
           console.error(chalk.red(`unknown runs action: ${action}`));
           runsHelp();
