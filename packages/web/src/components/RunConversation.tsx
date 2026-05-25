@@ -24,7 +24,7 @@
 //   - `conversation-empty`         — empty state
 
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
-import { Fragment, type ReactNode, useCallback, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -135,28 +135,6 @@ export function RunConversation({
     return map;
   }, [nodeStates]);
 
-  const nodeStartSeqByIterKey = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const n of nodeStates ?? []) {
-      map.set(`${n.nodeId}\x00${n.iteration}`, n.lastEventSeq);
-    }
-    return map;
-  }, [nodeStates]);
-
-  const nodeStartSeq = useCallback(
-    (nodeId: string | null, iteration: number): number => {
-      if (nodeId == null) return Number.POSITIVE_INFINITY;
-      const perIter = nodeStartSeqByIterKey.get(`${nodeId}\x00${iteration}`);
-      if (perIter !== undefined) return perIter;
-      let best = Number.POSITIVE_INFINITY;
-      for (const n of nodeStates ?? []) {
-        if (n.nodeId === nodeId && n.lastEventSeq < best) best = n.lastEventSeq;
-      }
-      return best;
-    },
-    [nodeStartSeqByIterKey, nodeStates],
-  );
-
   // Group contiguous rows by nodeId. A fresh section opens whenever
   // the nodeId changes from the previous row. `null` / missing nodeIds
   // collapse into a single "(unscoped)" section — shouldn't happen
@@ -197,170 +175,54 @@ export function RunConversation({
     return out;
   }, [toolStreams, persistedToolNodeIds]);
 
-  const lanes = useMemo<Lane[]>(() => {
-    // Message sections keep their natural ordinal (append) order — the
-    // transcript backbone is NEVER reordered. `rankSeq` exists only to slot
-    // the message-less synthetic lanes (open HITL gate, orphan streaming,
-    // live tool nodes, decided-gate banners) between the right sections by
-    // execution order. Sorting the sections themselves is wrong: a node
-    // re-run by a retry loop (e.g. ci→fix→ci, all iteration 0) carries one
-    // collapsed nodeState whose `lastEventSeq` is its LAST event, which
-    // would drag the node's earlier section down next to its later one.
-    const sectionLanes = visibleSections.map((section, i) => {
-      const isTail = i === visibleSections.length - 1;
-      const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
-      const showStreamHere = appendStreamingToTail && isTail;
-      const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
-      const decision =
-        !showHitlHere && section.nodeId != null ? (hitlDecisions?.[section.nodeId] ?? undefined) : undefined;
-      const rankSeq = nodeStartSeq(section.nodeId, section.rows[0]?.iteration ?? 0);
-      const lane: Lane = {
-        key: section.key,
-        render: () => (
-          <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
-            {section.rows.map((row) => (
-              <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
-            ))}
-            {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
-            {showHitlHere && (
-              <HitlStepCard
-                runId={hitl!.runId}
-                label={hitl!.label}
-                options={hitl!.options}
-                optionLabels={hitl!.optionLabels}
-              />
-            )}
-            {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
-          </NodeSection>
-        ),
-      };
-      return { lane, rankSeq };
-    });
-
-    const synthetic: Array<{ seq: number; lane: Lane }> = [];
-
-    if (orphanStreaming) {
-      synthetic.push({
-        seq: nodeStartSeq(streamingNodeId, 0),
-        lane: {
-          key: `stream-${streamingNodeId ?? "unscoped"}`,
-          render: () => (
-            <NodeSection
-              nodeId={streamingNodeId}
-              state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
-              isLive={isLive}
-              isPaused={isPaused}
-            >
-              <StreamingMessageRow streaming={streaming!} />
-            </NodeSection>
-          ),
-        },
-      });
+  // Decided human gates with no message rows of their own (the common
+  // case — human nodes emit none) render as standalone banner sections.
+  // Slot them into node-EXECUTION order so a mid-flow signoff appears
+  // between the nodes it ran between, not dumped at the tail (which also
+  // stole the conversation's auto-scroll from a still-streaming node).
+  // `before` = decisions that precede the first visible section;
+  // `after.get(i)` = decisions rendered right after visible section `i`.
+  const decisionBuckets = useMemo(() => {
+    const before: DecisionEntry[] = [];
+    const after = new Map<number, DecisionEntry[]>();
+    if (!hitlDecisions) return { before, after };
+    // Key nodes by their first-seen lastEventSeq so ordering reflects
+    // temporal execution, not the alphabetical sort deriveNodeStates uses.
+    const order = new Map<string, number>();
+    for (const n of nodeStates ?? []) {
+      const prev = order.get(n.nodeId);
+      if (prev === undefined || n.lastEventSeq < prev) order.set(n.nodeId, n.lastEventSeq);
     }
-
-    if (hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId)) {
-      synthetic.push({
-        seq: nodeStartSeq(hitl.nodeId, 0),
-        lane: {
-          key: `hitl-${hitl.nodeId}`,
-          render: () => (
-            <NodeSection
-              nodeId={hitl!.nodeId}
-              state={stateByNodeId.get(hitl!.nodeId)}
-              isLive={isLive}
-              isPaused={isPaused}
-            >
-              <HitlStepCard
-                runId={hitl!.runId}
-                label={hitl!.label}
-                options={hitl!.options}
-                optionLabels={hitl!.optionLabels}
-              />
-            </NodeSection>
-          ),
-        },
-      });
-    }
-
-    for (const { nodeId, stream } of liveToolNodes) {
-      synthetic.push({
-        seq: nodeStartSeq(nodeId, 0),
-        lane: {
-          key: `tool-stream-${nodeId}`,
-          render: () => (
-            <NodeSection nodeId={nodeId} state={stateByNodeId.get(nodeId)} isLive={isLive} isPaused={isPaused}>
-              <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
-            </NodeSection>
-          ),
-        },
-      });
-    }
-
-    if (hitlDecisions) {
-      for (const [nodeId, decision] of Object.entries(hitlDecisions)) {
-        if (nodeId === hitl?.nodeId) continue;
-        if (visibleSections.some((s) => s.nodeId === nodeId)) continue;
-        synthetic.push({
-          seq: nodeStartSeq(nodeId, 0),
-          lane: {
-            key: `decision-${nodeId}`,
-            render: () => (
-              <DecisionSection
-                entry={{ nodeId, decision }}
-                stateByNodeId={stateByNodeId}
-                isLive={isLive}
-                isPaused={isPaused}
-              />
-            ),
-          },
-        });
-      }
-    }
-
-    // Order synthetic lanes among themselves by execution seq (stable, so
-    // equal-seq lanes keep push order) before slotting — without this, two
-    // synthetic lanes landing in the same bucket (e.g. all of them when
-    // there are no message sections to anchor against) would render in
-    // push order, not execution order.
-    synthetic.sort((a, b) => a.seq - b.seq);
-
-    // Slot each synthetic lane after the last section whose rank seq does
-    // not exceed it (−1 ⇒ before all sections). Sections never move.
-    const before: Lane[] = [];
-    const after = new Map<number, Lane[]>();
-    for (const { seq, lane } of synthetic) {
+    const sectionOrder = visibleSections.map((s) =>
+      s.nodeId != null ? (order.get(s.nodeId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY,
+    );
+    for (const [nodeId, decision] of Object.entries(hitlDecisions)) {
+      // The open gate shows its card, not a banner; nodes that have their
+      // own message section render the banner in-section.
+      if (nodeId === hitl?.nodeId) continue;
+      if (visibleSections.some((s) => s.nodeId === nodeId)) continue;
+      const oi = order.get(nodeId) ?? Number.POSITIVE_INFINITY;
       let k = -1;
-      for (let i = 0; i < sectionLanes.length; i++) {
-        if (sectionLanes[i]!.rankSeq <= seq) k = i;
+      for (let i = 0; i < sectionOrder.length; i++) {
+        if (sectionOrder[i]! <= oi) k = i;
       }
-      if (k === -1) before.push(lane);
-      else (after.get(k) ?? after.set(k, []).get(k)!).push(lane);
+      if (k === -1) before.push({ nodeId, decision });
+      else (after.get(k) ?? after.set(k, []).get(k)!).push({ nodeId, decision });
     }
+    return { before, after };
+  }, [hitlDecisions, nodeStates, visibleSections, hitl?.nodeId]);
 
-    const out: Lane[] = [...before];
-    for (let i = 0; i < sectionLanes.length; i++) {
-      out.push(sectionLanes[i]!.lane);
-      const trailing = after.get(i);
-      if (trailing) out.push(...trailing);
-    }
-    return out;
-  }, [
-    visibleSections,
-    stateByNodeId,
-    appendStreamingToTail,
-    hitl,
-    hitlDecisions,
-    streaming,
-    orphanStreaming,
-    streamingNodeId,
-    liveToolNodes,
-    toolResultsById,
-    isLive,
-    isPaused,
-    nodeStartSeq,
-  ]);
+  const hasDecisions = decisionBuckets.before.length > 0 || decisionBuckets.after.size > 0;
+  const sectionChrome = { stateByNodeId, isLive, isPaused };
 
-  const empty = !isLoading && !userInput && lanes.length === 0;
+  const empty =
+    !isLoading &&
+    !userInput &&
+    visibleSections.length === 0 &&
+    streaming == null &&
+    liveToolNodes.length === 0 &&
+    hitl == null &&
+    !hasDecisions;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
@@ -376,8 +238,75 @@ export function RunConversation({
         ) : (
           <ConversationContent>
             {userInput && <UserPromptMessage text={userInput} />}
-            {lanes.map((lane) => (
-              <Fragment key={lane.key}>{lane.render()}</Fragment>
+            {decisionBuckets.before.map((d) => (
+              <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+            ))}
+            {visibleSections.map((section, i) => {
+              const isTail = i === visibleSections.length - 1;
+              const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
+              const showStreamHere = appendStreamingToTail && isTail;
+              const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
+              // The open gate's card takes precedence over its own past
+              // decision (loop re-entry); suppress the banner there.
+              const decision = !showHitlHere && section.nodeId != null ? hitlDecisions?.[section.nodeId] : undefined;
+              return (
+                <Fragment key={section.key}>
+                  <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
+                    {section.rows.map((row) => (
+                      <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
+                    ))}
+                    {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
+                    {showHitlHere && (
+                      <HitlStepCard
+                        runId={hitl.runId}
+                        label={hitl.label}
+                        options={hitl.options}
+                        optionLabels={hitl.optionLabels}
+                      />
+                    )}
+                    {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
+                  </NodeSection>
+                  {decisionBuckets.after.get(i)?.map((d) => (
+                    <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+                  ))}
+                </Fragment>
+              );
+            })}
+            {orphanStreaming && (
+              <NodeSection
+                nodeId={streamingNodeId}
+                state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
+                isLive={isLive}
+                isPaused={isPaused}
+              >
+                <StreamingMessageRow streaming={streaming!} />
+              </NodeSection>
+            )}
+            {hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId) && (
+              <NodeSection
+                nodeId={hitl.nodeId}
+                state={stateByNodeId.get(hitl.nodeId)}
+                isLive={isLive}
+                isPaused={isPaused}
+              >
+                <HitlStepCard
+                  runId={hitl.runId}
+                  label={hitl.label}
+                  options={hitl.options}
+                  optionLabels={hitl.optionLabels}
+                />
+              </NodeSection>
+            )}
+            {liveToolNodes.map(({ nodeId, stream }) => (
+              <NodeSection
+                key={`tool-stream-${nodeId}`}
+                nodeId={nodeId}
+                state={stateByNodeId.get(nodeId)}
+                isLive={isLive}
+                isPaused={isPaused}
+              >
+                <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
+              </NodeSection>
             ))}
           </ConversationContent>
         )}
@@ -387,14 +316,7 @@ export function RunConversation({
   );
 }
 
-// ─── Types ──────────────────────────────────────────────────────────
-
-interface Lane {
-  /** React list key — stable and unique per lane (the owning section's key,
-   * or a kind-prefixed nodeId for synthetic lanes). */
-  key: string;
-  render: () => ReactNode;
-}
+// ─── Node section grouping ──────────────────────────────────────────
 
 interface Section {
   key: string;
