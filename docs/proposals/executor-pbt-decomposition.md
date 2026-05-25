@@ -8,14 +8,21 @@ last-reviewed: 2026-05-25
 
 # Executor decomposition for PBT
 
-> **Status (2026-05-25): goal met.** The property-based harness is built and the
-> SPEC §4 / §5 invariants are turned into properties **and tracked**
-> (`packages/daemon/test/invariant-coverage.test.ts` is the invariant→owner map).
-> It drives the *current* executor (`runOne`) directly rather than a
-> fully-decomposed `RunSession.step()` — so the decomposition's forcing function
-> is largely satisfied **without** finishing Phases 5/6/8, which are now deferred
-> (they buy finer per-step fault placement + `fragua ci`, not invariant coverage).
-> See §2 (shipped) and §3 Phase 7. The original framing follows.
+> **Status (2026-05-25): goal met + fault injection complete.** The property-based
+> harness is built, the SPEC §4 / §5 invariants are turned into properties **and
+> tracked** (`packages/daemon/test/invariant-coverage.test.ts`), and the
+> fault-injection layer is in: the whole post-handler policy is now pure +
+> tier-1-tested (`planTransition` **and** `planAbort`), and
+> `daemon/test/executor-faults.property.test.ts` sweeps OCC / handler-hang /
+> orphan-side-effect / provision / store-commit faults at the effect seams over
+> generated graphs. **The fault sweep already paid off** — it found a real P4
+> divergence (the quarantine projection vs the `run_quarantined` fold), now fixed
+> (`c4a9ff69`). Faults are injected at effect *boundaries* (where they can
+> actually happen) × turn boundaries (`runOne({maxTurnsForTesting:1})` is the
+> single-step primitive) — so the literal "before/after every step" stress test
+> is realized **without** the `RunSession.step()` class refactor (Phase 5), which
+> is retired along with 3b/6 (no fault payoff). Phase 8 (assembly factory) shipped
+> for `fragua ci`. See §2. The original framing follows.
 >
 > **North star.** The forcing function is the ability to stress-test the executor
 > in a property-based harness that injects faults (crash, OCC conflict, abort,
@@ -120,26 +127,46 @@ needs three properties the executor doesn't fully expose today:
   owned — and the §5 set), asserted well-formed. Plus the exhaustive
   pause-mapping reducer property (`daemon/test/pause-mapping.test.ts`).
 
-**Deferred (not on the critical path for invariant coverage):**
+**Fault injection (SHIPPED 2026-05-25).** The §1 north-star fault list, realized
+at the effect seams over generated graphs (`daemon/test/executor-faults.property.test.ts`,
+`daemon/test/fault-store.ts`):
 
-- **Abort-arm extraction** (Phase 4 remainder) — the post-handler abort policy
-  (reactive-budget halt/pause, timeout-retry, abort-loop) is still inline (a
-  two-phase commit + `consecutiveAborts`/`leakBudget` mutation). Its invariants
-  are covered (P20, budget tier-1 H); extracting it would let the abort path be a
-  *tier-1* property too.
-- **Phase 3 remainder** (`buildDispatchContext`), **Phase 5** (`RunSession.step()`),
-  **Phase 6** (loop module) — Phases 5/6 buy *per-step* fault placement (the
-  tier-2 crash is coarse, via `maxTurns`). None are needed for the invariant goal.
-- **Phase 8** (assembly factory) — **SHIPPED 2026-05-25**, but as a CLI-level
-  extraction, not the PBT seam it was sketched as: `buildExecutorDeps`
-  (`packages/cli/src/executor-deps.ts`) lifts the daemon's executor assembly so
-  `fragua daemon` and `fragua ci` share it. Credentials stayed store-backed
-  rather than becoming an injected registry port (the env→creds bridge seeds the
-  rows), so the "injectable credentials registry" the PBT harness wanted is still
-  open — the driven harness builds its own deps directly, so it never needed it.
-- **Harness-breadth faults** — OCC conflict / handler hang / orphan-side-effect
-  over *generated* graphs. The invariants themselves are already store/matrix-owned
-  (P2, P6, leak tests); these would exercise them generatively.
+- **Abort-arm extraction** (Phase 4 remainder) — DONE. `planAbort`
+  (`daemon/src/abort-planner.ts`) is the pure post-handler abort policy
+  (reactive-budget halt/pause, watchdog timeout-retry/exhausted, plain abort);
+  the executor keeps the commit / OCC re-drive / `consecutiveAborts` ceiling.
+  Tier-1 properties A–G in `abort-planner.property.test.ts`. So the **whole**
+  post-handler policy (success + abort) is now pure + property-tested.
+- **OCC conflict** — `fault-store.ts` throws `ConcurrencyError` on a scheduled
+  commit (the exact real-conflict signal). Swept: a transient conflict is
+  absorbed (retry → same terminal); a persistent one halts bounded
+  (`occ_exhausted`). Terminal-commit conflicts are scoped out (that's P18).
+- **Handler hang** — a node that ignores its signal is leaked by the watchdog →
+  `handler_timeout_leaked` + halt, never a wedge.
+- **Orphan side-effect** — a lone `side_effect_intent` (recorder-durable, no
+  `_done`) → `startupSweep` quarantines. **This sweep found the P4 bug above.**
+- **Provision / store failure** — a throwing provisioner halts with
+  `worktree_provision_failed`; a non-OCC commit error is fatal-but-clean (halt,
+  never a wedge — only OCC retries).
+- **Run-count scaling** — every property's `numRuns` goes through
+  `pbtRuns(base)`, scaled by `FRAGUA_PBT_RUNS` (`FRAGUA_PBT_RUNS=20 bun test
+  packages/daemon` is a deep adversarial pass).
+
+**Retired (assessed 2026-05-25 — no fault-injection payoff):**
+
+- **Phase 3b** (`buildDispatchContext`) — its only fault, "ctx-build throws," is
+  already covered (`executor.abort-registry-leak.test.ts`) without it.
+- **Phase 5** (`RunSession.step()`) **+ Phase 6** (loop module) — the *capability*
+  ("inject before/after every step") is delivered by single-stepping via
+  `runOne({maxTurnsForTesting:1})` + the faultable effect seams; faults are only
+  meaningful at effect boundaries (pure sub-steps can't fail), so a class refactor
+  of the hot loop to expose pure-step boundaries buys no coverage. Revisit only if
+  a future fault needs sub-seam placement.
+- **Phase 8** (assembly factory) — **SHIPPED** as a CLI-level extraction:
+  `buildExecutorDeps` (`packages/cli/src/executor-deps.ts`) lets `fragua daemon`
+  and `fragua ci` share the assembly. Credentials stayed store-backed (the
+  env→creds bridge seeds the rows), so the sketched "injectable credentials
+  registry" was dropped — the driven harness builds its deps directly.
 
 ## 3. Remaining phases (ordered by PBT value × tractability)
 

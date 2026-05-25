@@ -44,7 +44,8 @@ const COVERAGE: InvariantCoverage[] = [
     id: "I4",
     statement: "handlers receive AbortSignal; respecting it is contract",
     status: "covered",
-    owner: "invoke-handler.test.ts + executor.timeout.test.ts",
+    owner:
+      "invoke-handler.test.ts + executor.timeout.test.ts + executor-faults.property.test.ts (a hung handler is leaked, never wedges)",
   },
   {
     id: "I5",
@@ -79,7 +80,8 @@ const COVERAGE: InvariantCoverage[] = [
     id: "P2",
     statement: "OCC correctness — exactly one writer wins the race",
     status: "covered",
-    owner: "store.property.test.ts",
+    owner:
+      "store.property.test.ts + executor-faults.property.test.ts (OCC conflict swept across commits, generated graphs)",
   },
   { id: "P3", statement: "intent never lost", status: "covered", owner: "daemon.property.test.ts" },
   {
@@ -92,13 +94,15 @@ const COVERAGE: InvariantCoverage[] = [
     id: "P5",
     statement: "crash recovery requeue (running → queued on startup sweep)",
     status: "covered",
-    owner: "daemon.property.test.ts + driven-executor.property.test.ts (slice 4, generated graphs)",
+    owner:
+      "daemon.property.test.ts + driven-executor.property.test.ts (slice 4) + executor-faults.property.test.ts (store-commit failure → bounded halt, never wedges)",
   },
   {
     id: "P6",
     statement: "orphan quarantine (kill between intent and done)",
     status: "covered",
-    owner: "matrix.property.test.ts",
+    owner:
+      "matrix.property.test.ts + executor-faults.property.test.ts (orphan sweep over generated graphs — this slice found the run_quarantined P4 fix, c4a9ff69)",
   },
   {
     id: "P7",
@@ -194,7 +198,7 @@ const COVERAGE: InvariantCoverage[] = [
     id: "S5-spend",
     statement: "spend conservation: rewrites preserve node_completed accounting",
     status: "covered",
-    owner: "transition-planner.property.test.ts (D, H)",
+    owner: "transition-planner.property.test.ts (D, H) + abort-planner.property.test.ts (node_aborted partial spend)",
   },
   {
     id: "S5-pause-map",
