@@ -71,36 +71,55 @@ needs three properties the executor doesn't fully expose today:
   injectable too (`ExecutorOpts.random`, forwarded into `retryStep` +
   `decideProviderRetry`; `RetryStepInput.random` reaches `delayForAttempt`).
   The per-turn step path is now fully deterministic given `(clock, random)`.
+- `transition-planner.ts` (Phase 4) — `planTransition`: the **pure**
+  success/transition-path policy (edge selection → budget → goal gates → retry
+  → provider retry → `resultToFacts` → fact-list rewrites → routing patch). No
+  store, clock, RNG, or I/O — a function of `(state, decision, graph,
+  handlerResult, accounting, effectiveRouting, currentNode, iteration, now,
+  random)`. The executor keeps the commit, OCC retry, and snapshot. Closure
+  audit confirmed the cut clean; the full suite (incl. `matrix.property`) is
+  green unchanged.
 
 `executor.ts` stays the orchestration entry point + public facade
-(~1.78k lines, down from 2.17k).
+(~1.2k lines, down from 2.17k).
 
-**Resume here →** Phase 4 (the pure transition planner) is the next and
-highest-leverage step. It's also the riskiest extraction (the coupled
-post-handler policy block), so it's worth a design pass before the surgery.
-All work to date is committed on `main` locally and not yet pushed.
+**Resume here →** the abort arm (the post-handler block's other half:
+reactive-budget halt/pause, timeout-retry, abort-loop) is still inline — it has
+a two-phase commit + `consecutiveAborts`/`leakBudget` mutation, so folding it
+into a planner is its own phase. Otherwise Phase 3's remaining half
+(`buildDispatchContext`) or Phase 5 (`RunSession.step()`) is next. All work to
+date is committed on `main` locally and not yet pushed.
 
 ## 3. Remaining phases (ordered by PBT value × tractability)
 
-### Phase 4 — Transition planner (pure). *Highest PBT value.*
+### Phase 4 — Transition planner (pure). *Highest PBT value.* — DONE (transition-path scope)
 
-Extract the post-handler policy block (edge selection → goal gates → retry
-policy → provider retry → budget pause/halt → fact-list rewrites → routing
-patch) into a pure function:
+Extracted the post-handler **success/transition-path** policy (edge selection →
+budget → goal gates → retry policy → provider retry → `resultToFacts` →
+fact-list rewrites → routing patch) into `transition-planner.ts`:
 
 ```
 planTransition(input: TransitionInput): TransitionPlan
-//   input:  { state, foldDecision, graph, handlerResult, accounting,
-//             effectiveRouting, now }     // `now` is a value, not a clock
-//   output: { facts, routingPatch?, advanceAppliedTo?, observability,
-//             terminalKind }              // no store, no I/O, no timers
+//   input:  { state, decision, graph, handlerResult, accounting,
+//             effectiveRouting, currentNode, iteration, now, random }
+//             // `now` is a value, not a clock
+//   output: { facts, routingPatch?, advanceAppliedTo?, observability }
+//             // no store, no I/O, no timers
 ```
 
-The executor keeps the commit (`tryAppendFact`) and the `result` mutation goes
-away (planner is referentially transparent). This is the single biggest
-unlock: every fact-list-rewrite invariant (exactly-one-terminal, node_completed
-preserved under budget halt, retry pause swaps node_started, etc.) becomes a
-property over generated `TransitionInput`.
+The executor keeps the commit (`tryAppendFact`), OCC retry, and snapshot; the
+planner never mutates its `handlerResult` input (clones the transition variant).
+This is the single biggest unlock: every fact-list-rewrite invariant
+(exactly-one-terminal, node_completed preserved under budget halt, retry pause
+swaps node_started, etc.) is now a property over generated `TransitionInput` —
+the `matrix.property` suite stayed green through the extraction; dedicated
+properties over `TransitionInput` are the follow-up.
+
+Two deltas from the sketch above: `terminalKind` proved unnecessary (the success
+arm always commits and returns `continue`; the loop self-terminates on the next
+pass's status check), and the **abort arm** stays inline (its two-phase commit +
+`consecutiveAborts`/`leakBudget` mutation make it a separate phase — see
+"Resume here").
 
 ### Phase 3 — Handler-turn services. *Key fault seam.*
 
