@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@sinclair/typebox": "0.34.41",
+    "@sinclair/typebox": "0.34.49",
     "@fragua/agent": "workspace:*",
     "@fragua/core": "workspace:*",
     "@fragua/daemon": "workspace:*",

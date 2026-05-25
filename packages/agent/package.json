@@ -15,7 +15,7 @@
   "dependencies": {
     "@mariozechner/pi-agent-core": "0.71.0",
     "@mariozechner/pi-ai": "0.71.0",
-    "@sinclair/typebox": "0.34.41",
+    "@sinclair/typebox": "0.34.49",
     "@fragua/core": "workspace:*",
     "@fragua/store": "workspace:*",
     "@fragua/types": "workspace:*",

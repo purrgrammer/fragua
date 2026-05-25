@@ -14,13 +14,13 @@
   },
   "dependencies": {
     "@mariozechner/pi-ai": "0.71.0",
-    "@sinclair/typebox": "0.34.41",
+    "@sinclair/typebox": "0.34.49",
     "@fragua/agent": "workspace:*",
     "@fragua/core": "workspace:*",
     "@fragua/store": "workspace:*",
     "@fragua/types": "workspace:*",
     "@fragua/workspace": "workspace:*",
-    "hono": "4.12.14"
+    "hono": "4.12.23"
   },
   "devDependencies": {
     "fast-check": "3.23.1",
