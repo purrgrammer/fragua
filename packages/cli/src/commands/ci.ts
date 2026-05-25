@@ -134,7 +134,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // overlaid so a CI secret overrides. Both no-op gracefully — no global store
     // on a CI machine, no matching env vars locally. The executor then resolves
     // from this store's provider_credentials, the same path the daemon uses.
-    const seededGlobal = seedCredsFromGlobalStore(store, storePath);
+    const seededGlobal = await seedCredsFromGlobalStore(store, storePath);
     const seededEnv = seedCredsFromEnv(store);
     const seeded = [...new Set([...seededGlobal, ...seededEnv])];
     const config = await loadConfig(cwd);

@@ -62,20 +62,29 @@ export function seedCredsFromEnv(store: IProviderCredentialStore): string[] {
  * Seed `target` from the GLOBAL store's configured providers — what `fragua
  * providers add` wrote into `~/.fragua/fragua.db`. This is what makes local
  * `fragua ci` "just work": without it, ci sees only env vars and ignores the
- * creds you already configured. Copies `provider_credentials` verbatim — incl.
- * OAuth rows with their refresh material, which an env token can't carry — and
- * `provider_config` (custom providers). A no-op when there's no global store
- * (a fresh CI machine), so ci falls back to env-only there.
+ * creds you already configured.
  *
- * Layer `seedCredsFromEnv` AFTER this so an env/CI secret overrides a configured
- * provider (env wins) — the standard env-overrides-config precedence. Returns
- * the providers copied.
+ * It RESOLVES each provider's token against the global store and seeds `target`
+ * with the bare token as an `api_key` — it does NOT copy raw credential rows.
+ * That distinction is load-bearing for OAuth: refreshing an OAuth token ROTATES
+ * the refresh token. If we copied the OAuth row into the ephemeral ci store and
+ * it refreshed there, the rotated token would land in the ephemeral store (and
+ * vanish with the temp dir) while the global store kept the now-dead one —
+ * silently breaking the daemon's creds. Resolving here means any refresh happens
+ * IN the global store (rotation persists where the daemon reads it), under the
+ * same per-row lock the daemon uses; the ephemeral store only ever holds an
+ * immutable bare token that can't rotate anything. Custom-provider definitions
+ * (`provider_config`) are copied as-is — they carry no rotating secret.
+ *
+ * A no-op when there's no global store (a fresh CI machine), so ci falls back to
+ * env-only there. Layer `seedCredsFromEnv` AFTER this so an env/CI secret
+ * overrides a configured provider (env wins). Returns the providers seeded.
  */
-export function seedCredsFromGlobalStore(
+export async function seedCredsFromGlobalStore(
   target: SqliteStore,
   targetPath: string,
   globalPath: string = resolve(homedir(), ".fragua/fragua.db"),
-): string[] {
+): Promise<string[]> {
   // No global store (CI), or ci was pointed AT the global store (--db) so the
   // creds are already present — nothing to copy.
   if (!existsSync(globalPath) || resolve(targetPath) === resolve(globalPath)) return [];
@@ -84,8 +93,12 @@ export function seedCredsFromGlobalStore(
     const from = AuthStorage.fromStore(source);
     const to = AuthStorage.fromStore(target);
     const seeded: string[] = [];
-    for (const [provider, cred] of Object.entries(from.getAll())) {
-      to.set(provider, cred);
+    for (const provider of from.list()) {
+      // Resolves an api_key verbatim, or an OAuth access token (refreshing in
+      // the GLOBAL store when expired — see the rotation note above).
+      const key = await from.getApiKey(provider);
+      if (!key || key === "<authenticated>") continue;
+      to.set(provider, { type: "api_key", key });
       seeded.push(provider);
     }
     // Custom-provider definitions (Ollama / vLLM / proxies) live in

@@ -148,8 +148,10 @@ describe("seedCredsFromGlobalStore", () => {
 
       const target = new SqliteStore({ path: targetPath });
       try {
-        expect(seedCredsFromGlobalStore(target, targetPath, globalPath)).toContain("openai");
+        expect(await seedCredsFromGlobalStore(target, targetPath, globalPath)).toContain("openai");
+        // Seeded as a bare api_key (resolved), never a copied raw row.
         expect(await AuthStorage.fromStore(target).getApiKey("openai")).toBe("sk-global-openai");
+        expect(AuthStorage.fromStore(target).describeAuthSource("openai")).toBe("stored api_key");
       } finally {
         target.close();
       }
@@ -158,24 +160,24 @@ describe("seedCredsFromGlobalStore", () => {
     }
   });
 
-  test("no global store → no-op", () => {
+  test("no global store → no-op", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fragua-global-"));
     const target = new SqliteStore({ path: ":memory:" });
     try {
-      expect(seedCredsFromGlobalStore(target, join(dir, "ci.db"), join(dir, "absent.db"))).toEqual([]);
+      expect(await seedCredsFromGlobalStore(target, join(dir, "ci.db"), join(dir, "absent.db"))).toEqual([]);
     } finally {
       target.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("target IS the global store → no self-copy", () => {
+  test("target IS the global store → no self-copy", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fragua-global-"));
     const p = join(dir, "store.db");
     const target = new SqliteStore({ path: p });
     try {
       AuthStorage.fromStore(target).set("openai", { type: "api_key", key: "k" });
-      expect(seedCredsFromGlobalStore(target, p, p)).toEqual([]);
+      expect(await seedCredsFromGlobalStore(target, p, p)).toEqual([]);
     } finally {
       target.close();
       rmSync(dir, { recursive: true, force: true });
