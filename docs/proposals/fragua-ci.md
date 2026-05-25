@@ -1,20 +1,26 @@
 ---
 title: fragua ci — embedded executor over an ephemeral, portable store
 summary: "A one-shot CI command that embeds the executor in-process over an ephemeral SQLite store: env-discovered credentials, write the routing intent, run to terminal, exit with the outcome, render the event log as JSONL. The .db is a portable artifact. Not symmetric with the store-client CLI — it is the one command that writes facts — so it is its own entity, not a flag on `run`."
-status: proposed
-maturity: sketch
-last-reviewed: 2026-05-23
+status: shipped
+maturity: shipped
+last-reviewed: 2026-05-25
 parent: cli-topology.md
 ---
 
 # `fragua ci`
 
-> Child of [`cli-topology.md`](cli-topology.md). The **urgent** deliverable —
-> but **sketch, not designed**: an adversarial pass found two unnamed
-> prerequisites (executor-assembly extraction, env→creds bridge) and an
-> under-specified drive loop. Gated on [`intent-plane.md`](intent-plane.md),
-> the executor-assembly factory ([executor-pbt-decomposition.md Phase 8](executor-pbt-decomposition.md)),
-> and the pre-0.1.0 cleanup (shipped).
+> **Status (2026-05-25): MVP shipped.** `fragua ci <workflow>` is live
+> (`packages/cli/src/commands/ci.ts`). All three prerequisites landed: the
+> intent plane, the executor-assembly factory
+> ([executor-pbt-decomposition.md Phase 8](executor-pbt-decomposition.md) →
+> `packages/cli/src/executor-deps.ts` `buildExecutorDeps`), and the env→creds
+> bridge (`packages/cli/src/env-creds.ts` `seedCredsFromEnv`, over pi-ai's
+> `getEnvApiKey` map). The drive loop is claim → `runOne` → check-status with a
+> store-tailer fiber; exit code = outcome; **fail-on-pause** is the hardcoded
+> MVP policy. Deferred (see §3): pluggable `--on-pause`, cross-machine
+> `db-import`. The original framing follows.
+>
+> Child of [`cli-topology.md`](cli-topology.md).
 
 ## 1. Why it is separate
 
@@ -78,21 +84,26 @@ fragua ci <wf> [--db <path>] [--input k=v] [--json]
 
 ## 3. Scope / dependencies / MVP
 
-- **Depends on:** [`intent-plane.md`](intent-plane.md) (mint + write the routing
-  intent); **the executor-assembly factory** (executor
-  [Phase 8](executor-pbt-decomposition.md) — `buildExecutorDeps` + injectable
-  tool/credentials registries); the **env→creds bridge**; the
-  pre-0.1.0 cleanup (shipped — which removed the sub-agent backend,
-  shrinking the assembly to extract); a renderer (built here, shared into
-  `cli-store-client`'s `watch`).
-- **Wins independently:** yes *once its prerequisites land* — but it is **not**
-  gated only on intent-plane (the original claim). The assembly extraction is the
-  item that, left implicit, blows the estimate.
-- **MVP:** ephemeral store + `runOne` + env creds + JSONL-to-stdout + outcome
-  exit code + **hardcoded `fail-on-pause`** (so it ships before the HITL
-  workstream). Deferred: pluggable HITL (generalize `fail-on-pause` into
-  `--on-pause=auto|fail|first` in [`hitl-channel.md`](hitl-channel.md));
-  cross-machine import (artifact is just the `.db` until [`db-import.md`](db-import.md)).
+- **Depends on (all landed):** ✅ [`intent-plane.md`](intent-plane.md) (mint +
+  write the routing intent — `buildSaveWorkflow`/`buildEnqueue`); ✅ **the
+  executor-assembly factory** (executor [Phase 8](executor-pbt-decomposition.md) →
+  `packages/cli/src/executor-deps.ts` `buildExecutorDeps`; credentials stay
+  store-backed, so the seam is the store's cred rows, not an injected registry —
+  the env→creds bridge seeds them); ✅ the **env→creds bridge**
+  (`packages/cli/src/env-creds.ts`); ✅ the pre-0.1.0 cleanup; ✅ a renderer —
+  reused, not built: `run-follow.ts` `renderEvent` already backs `run --follow`,
+  so `ci` shares it (the tailer reads the store, so neither can drift).
+- **Estimate note (borne out):** the assembly extraction was indeed the long
+  pole — done as its own commit (Phase 8) before the command, behaviour-preserving
+  for the daemon.
+- **MVP (shipped):** ephemeral store + claim/`runOne` drive loop + env creds +
+  JSONL-to-stdout (`--json`, else human render) + outcome exit code (0 completed,
+  130 cancelled, nonzero otherwise) + **hardcoded `fail-on-pause`**. Execution
+  environment: a `WorktreeProvisioner` at the checkout cwd (git → worktree,
+  non-git → LocalEnvironment). Deferred: pluggable HITL (generalize
+  `fail-on-pause` into `--on-pause=auto|fail|first` in
+  [`hitl-channel.md`](hitl-channel.md)); cross-machine import (the artifact is
+  just the `.db` until [`db-import.md`](db-import.md)).
 
 ## 4. Open notes
 

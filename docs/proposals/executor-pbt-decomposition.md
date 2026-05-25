@@ -128,9 +128,15 @@ needs three properties the executor doesn't fully expose today:
   are covered (P20, budget tier-1 H); extracting it would let the abort path be a
   *tier-1* property too.
 - **Phase 3 remainder** (`buildDispatchContext`), **Phase 5** (`RunSession.step()`),
-  **Phase 6** (loop module), **Phase 8** (assembly factory) — Phases 5/6 buy
-  *per-step* fault placement (the tier-2 crash is coarse, via `maxTurns`); Phase 8
-  gates `fragua ci`. None are needed for the invariant goal.
+  **Phase 6** (loop module) — Phases 5/6 buy *per-step* fault placement (the
+  tier-2 crash is coarse, via `maxTurns`). None are needed for the invariant goal.
+- **Phase 8** (assembly factory) — **SHIPPED 2026-05-25**, but as a CLI-level
+  extraction, not the PBT seam it was sketched as: `buildExecutorDeps`
+  (`packages/cli/src/executor-deps.ts`) lifts the daemon's executor assembly so
+  `fragua daemon` and `fragua ci` share it. Credentials stayed store-backed
+  rather than becoming an injected registry port (the env→creds bridge seeds the
+  rows), so the "injectable credentials registry" the PBT harness wanted is still
+  open — the driven harness builds its own deps directly, so it never needed it.
 - **Harness-breadth faults** — OCC conflict / handler hang / orphan-side-effect
   over *generated* graphs. The invariants themselves are already store/matrix-owned
   (P2, P6, leak tests); these would exercise them generatively.
@@ -199,21 +205,26 @@ turns the SPEC §4 / §5 invariants into properties and tracks them today. Finer
 per-step fault placement (and OCC/hang/orphan generative faults) ride Phase 5
 when there's a reason to.
 
-### Phase 8 — Assembly factory + injectable registries. *Unblocks `fragua ci`.*
+### Phase 8 — Assembly factory. *Unblocks `fragua ci`.* — DONE (2026-05-25)
 
-Extract the executor assembly out of `daemonCommand`
-(`packages/cli/src/commands/daemon.ts:128–~520`) into a reusable factory:
-`buildExecutorDeps(env): ExecutorOpts`-shaped, with the **tool registry** and a
-**credentials registry** as injected ports rather than inline construction.
-Today credentials are resolved from the store's `provider_credentials` /
-`provider_config` rows (`daemon.ts:145`); making the cred *source* a port lets
-the PBT harness pass fakes and lets `fragua ci` pass an env-sourced adapter
-without the daemon's wiring. The pre-0.1.0 cleanup (shipped) removed the
-sub-agent backend first, so there is less to extract. This phase is orthogonal
-to the per-turn-loop phases
-(4–6) — it is about the executor's *construction*, not its *step logic* — but it
-is the prerequisite the `fragua ci` deliverable stands on, so it is likely
-sequenced earlier in practice than its number suggests.
+Extracted the ~200-line executor assembly out of `daemonCommand` into
+`buildExecutorDeps(input): ExecutorDeps` (`packages/cli/src/executor-deps.ts`):
+dispatcher + auto-dispatcher resolver (real llm path — tool registry, backend
+opts, per-node codergen factory), graph loader, credential/model registries,
+summariser, and skills discovery, from a `(store, cwd, config, timeouts,
+provider?, model?, homeDir?)` input. `daemonCommand` now calls it and keeps only
+what differs (provisioner, auto-titler, `startDaemon` loop); `ciCommand` calls
+it and drives `runOne`. Behaviour-preserving for the daemon (typecheck clean,
+startup output identical; the harness inherits it by spawning `fragua daemon`).
+
+Two deltas from the sketch: (1) the **tool/credentials registries did not
+become injected ports** — credentials stayed store-backed
+(`AuthStorage.fromStore`), and `fragua ci` seeds the store's
+`provider_credentials` rows from env (`env-creds.ts`) *before* calling the
+factory, so resolution is unchanged and the cred *source* is the store rows, not
+a port; (2) `homeDir` *did* become injectable (skills discovery), for CI/test
+control. The PBT harness never needed the injected-registry seam — it builds its
+deps directly — so that idea is dropped rather than deferred.
 
 ## 4. Determinism debt to clear along the way
 
