@@ -4,6 +4,7 @@ import { CURRENT_IR_VERSION, failProvider, ok, parseWorkflow, serializeGraph } f
 import * as handler from "@fragua/core/handler";
 import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@fragua/store";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { makeLlmHandler } from "../src/handler-bridge.ts";
 
 function node(overrides: Partial<Node> = {}): Node {
@@ -510,7 +511,7 @@ describe("makeLlmHandler — routing delegation invariants", () => {
           store.close();
         }
       }),
-      { numRuns: 30 },
+      { numRuns: pbtRuns(30) },
     );
   });
 });

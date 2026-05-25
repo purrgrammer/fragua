@@ -1,10 +1,12 @@
 name: Property tests (nightly)
 
-# Seeded property runs go deeper than the per-PR CI — we crank numRuns up
-# and iterate through fresh seeds so rare-branch coverage of the store /
-# daemon invariants (OCC, sweep, HITL durability, abort loop) builds over
-# time. Runs once a day; also available via workflow_dispatch for manual
-# kicks.
+# Goes deeper than the per-PR CI: FRAGUA_PBT_RUNS multiplies every property's
+# baseline numRuns (×20 here) so rare-branch coverage of the store / daemon /
+# agent invariants (OCC, sweep, HITL durability, abort loop) gets a hard
+# nightly stress pass. The matrix shards the suite N ways for wall-clock; each
+# shard picks a fresh fast-check seed, so coverage of the long tail accumulates
+# across nights rather than re-testing one frozen seed. Runs once a day; also
+# available via workflow_dispatch for manual kicks.
 
 on:
   schedule:
@@ -18,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seed: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
 
@@ -30,8 +32,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Property suite — seed ${{ matrix.seed }}
+      - name: Property suite — shard ${{ matrix.shard }} (FRAGUA_PBT_RUNS=20×)
         env:
-          FAST_CHECK_NUM_RUNS: "500"
-          FAST_CHECK_SEED: ${{ matrix.seed }}
-        run: bun test ./packages/store ./packages/daemon ./packages/core
+          FRAGUA_PBT_RUNS: "20"
+        run: bun test ./packages/store ./packages/daemon ./packages/core ./packages/agent

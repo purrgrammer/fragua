@@ -17,9 +17,9 @@ import { type Edge, type Graph, type Node, type NodeAttrs, validate } from "@fra
 import type { HandlerResult } from "@fragua/core/handler";
 import type { RunState } from "@fragua/store";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { planTransition, type TransitionInput } from "../src/transition-planner.ts";
 import { arbGraphWithCurrentNode } from "./arbitraries/graph.ts";
-import { pbtRuns } from "./pbt-runs.ts";
 import {
   arbAccounting,
   arbHandlerResult,

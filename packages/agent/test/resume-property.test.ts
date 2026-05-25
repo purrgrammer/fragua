@@ -20,6 +20,7 @@ import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { type FauxResponseStep, fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { PiLlmBackend } from "../src/backend.ts";
 import { makeLlmHandler } from "../src/handler-bridge.ts";
 
@@ -203,7 +204,7 @@ describe("threaded transcript is content-invariant across daemon restart pattern
           expect(canonicalise(b)).toBe(canonicalise(a));
         },
       ),
-      { numRuns: 20 },
+      { numRuns: pbtRuns(20) },
     );
   });
 });
@@ -251,7 +252,7 @@ describe("inProcessWrites boot reconstruction matches live in-process state", ()
           }
         },
       ),
-      { numRuns: 25 },
+      { numRuns: pbtRuns(25) },
     );
   });
 });
@@ -296,7 +297,7 @@ describe("resume detection never false-positives within a live daemon", () => {
           }
         },
       ),
-      { numRuns: 25 },
+      { numRuns: pbtRuns(25) },
     );
   });
 });
@@ -359,7 +360,7 @@ describe("restart-at-turn-k preserves the final transcript byte-for-byte", () =>
         const b = await runWithRestart();
         expect(canonicalise(b)).toBe(canonicalise(a));
       }),
-      { numRuns: 15 },
+      { numRuns: pbtRuns(15) },
     );
   });
 });

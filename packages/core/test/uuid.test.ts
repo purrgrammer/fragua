@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { isUuidv7, uuidv7 } from "../src/uuid.ts";
 
 describe("uuidv7", () => {
@@ -43,7 +44,7 @@ describe("uuidv7", () => {
           expect(isUuidv7(uuidv7())).toBe(true);
         }
       }),
-      { numRuns: 32 },
+      { numRuns: pbtRuns(32) },
     );
   });
 });

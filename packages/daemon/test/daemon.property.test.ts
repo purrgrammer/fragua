@@ -15,13 +15,13 @@ import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core"
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { DaemonAlreadyRunningError, startDaemon } from "../src/entrypoint.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
-import { pbtRuns } from "./pbt-runs.ts";
 
 const closers: Array<() => void> = [];
 afterEach(() => {

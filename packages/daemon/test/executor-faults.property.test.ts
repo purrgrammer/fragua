@@ -26,6 +26,7 @@ import { CURRENT_IR_VERSION, type Graph, type Node, serializeGraph } from "@frag
 import * as handler from "@fragua/core/handler";
 import { type RunState, SqliteStore, type StoredEvent } from "@fragua/store";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
@@ -35,7 +36,6 @@ import type { Provisioner } from "../src/worktree-provisioner.ts";
 import { makeArbGraph } from "./arbitraries/graph.ts";
 import { type AppendFaultSchedule, faultStore } from "./fault-store.ts";
 import { checkRunInvariants } from "./invariants.ts";
-import { pbtRuns } from "./pbt-runs.ts";
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 

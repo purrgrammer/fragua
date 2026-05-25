@@ -11,8 +11,8 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RESUME_AT_KEY } from "@fragua/core";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { type AbortPlanInput, planAbort } from "../src/abort-planner.ts";
-import { pbtRuns } from "./pbt-runs.ts";
 
 const NODE_IDS = ["plan", "implement", "review", "gate"] as const;
 const timeoutKey = (node: string): string => `internal.timeout_retries.${node}`;

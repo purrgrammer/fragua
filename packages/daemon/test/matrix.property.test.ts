@@ -19,11 +19,11 @@ import {
   sha256Hex as sha256,
 } from "@fragua/store";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { CommittingRecorder } from "../src/recorder.ts";
 import { enqueue, rig } from "./helpers.ts";
-import { pbtRuns } from "./pbt-runs.ts";
 
 // ─────────────── P6 ───────────────
 describe("P6 — orphan quarantine on crash between intent and done", () => {

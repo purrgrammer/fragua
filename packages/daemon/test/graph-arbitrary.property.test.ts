@@ -12,8 +12,8 @@
 import { describe, expect, test } from "bun:test";
 import { validate } from "@fragua/core";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { arbGraph, arbGraphWithCurrentNode, featuresOf } from "./arbitraries/graph.ts";
-import { pbtRuns } from "./pbt-runs.ts";
 
 describe("graph arbitrary — bootstrap", () => {
   test("every generated graph validates clean (zero diagnostics)", () => {

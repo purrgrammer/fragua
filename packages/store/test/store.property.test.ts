@@ -14,6 +14,7 @@
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import {
   applyFact,
   emptyMetrics,
@@ -56,7 +57,7 @@ describe("P1 — seq monotonic & contiguous per run", () => {
         expect(store.getState(runId)!.nextSeq).toBe(events.length + 1);
         store.close();
       }),
-      { numRuns: 25 },
+      { numRuns: pbtRuns(25) },
     );
   });
 });
@@ -160,7 +161,7 @@ describe("P4 — projection equals fold of facts", () => {
           store.close();
         },
       ),
-      { numRuns: 20 },
+      { numRuns: pbtRuns(20) },
     );
   });
 });
@@ -240,7 +241,7 @@ describe("P14 — blob dedup", () => {
         expect(artCount).toBe(copies);
         store.close();
       }),
-      { numRuns: 10 },
+      { numRuns: pbtRuns(10) },
     );
   });
 });
@@ -276,7 +277,7 @@ describe("P15 — artifact loop scoping across iterations", () => {
         }
         store.close();
       }),
-      { numRuns: 15 },
+      { numRuns: pbtRuns(15) },
     );
   });
 

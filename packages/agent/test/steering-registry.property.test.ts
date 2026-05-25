@@ -27,6 +27,7 @@
 
 import { describe, test } from "bun:test";
 import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { type SteerableAgent, SteeringRegistry } from "../src/steering-registry.ts";
 
 // ---------- Fake agent ----------
@@ -251,7 +252,7 @@ describe("SteeringRegistry — properties", () => {
           cmds,
         );
       }),
-      { numRuns: 500 },
+      { numRuns: pbtRuns(500) },
     );
   });
 });
