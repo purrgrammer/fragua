@@ -115,7 +115,6 @@ describe("runGlobalFeedLoop", () => {
       {
         fetchForward,
         fetchAtFloor: () => [],
-        kindIn: ["fact.run_started"],
         batchSize,
         pollMs: 1,
         keepaliveMs: 999_999,
@@ -176,7 +175,6 @@ describe("runGlobalFeedLoop", () => {
       {
         fetchForward,
         fetchAtFloor,
-        kindIn: ["fact.run_started"],
         batchSize: 100,
         pollMs: 1,
         keepaliveMs: 999_999,
@@ -231,7 +229,6 @@ describe("runGlobalFeedLoop", () => {
       {
         fetchForward,
         fetchAtFloor: () => [],
-        kindIn: ["fact.run_started"],
         batchSize: 5,
         pollMs: 1,
         keepaliveMs: 999_999,

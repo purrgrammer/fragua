@@ -14,7 +14,8 @@
 // forward cursor stepped past. See `queries.ts` for the full
 // rationale.
 
-import type { GetGlobalEventsAtFloorOpts, GetGlobalEventsForwardOpts, StoredEvent } from "@fragua/store";
+import type { GlobalFeedAtFloorCursor, GlobalFeedForwardCursor } from "@fragua/core/read-plane";
+import type { StoredEvent } from "@fragua/store";
 import type { SSEStreamingApi } from "hono/streaming";
 
 /**
@@ -124,14 +125,13 @@ export interface GlobalEventCursor {
 }
 
 interface GlobalFeedLoopConfig {
-  /** Forward strict-tuple scan. */
-  fetchForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
+  /** Forward strict-tuple scan. The read plane bakes the feed allow-list
+   * in, so the cursor carries no `kindIn`. */
+  fetchForward(cursor: GlobalFeedForwardCursor): StoredEvent[];
   /** Boundary rescan: events at exactly `floorTs` with `(run_id, seq) >
    * cursor`. Paginated ASC from `("", -1)` to walk the full boundary;
    * the loop filters duplicates via a per-`floorTs` Set. */
-  fetchAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
-  /** Allow-listed event kinds. */
-  kindIn: readonly string[];
+  fetchAtFloor(cursor: GlobalFeedAtFloorCursor): StoredEvent[];
   batchSize: number;
   pollMs: number;
   keepaliveMs?: number;
@@ -199,7 +199,6 @@ export async function runGlobalFeedLoop(
       floorTs,
       lastRunId: maxAt?.runId ?? "",
       lastSeq: maxAt?.seq ?? -1,
-      kindIn: cfg.kindIn,
       limit: cfg.batchSize,
     });
     for (const event of forward) {
@@ -221,7 +220,6 @@ export async function runGlobalFeedLoop(
           floorTs,
           afterRunId: rescanRunId,
           afterSeq: rescanSeq,
-          kindIn: cfg.kindIn,
           limit: cfg.batchSize,
         });
         if (rescan.length === 0) break;

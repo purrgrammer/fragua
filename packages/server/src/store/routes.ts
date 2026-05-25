@@ -6,8 +6,8 @@
 
 import { InvalidDurationError, parseDurationMs, type parseWorkflow } from "@fragua/core";
 import { type BuildResult, makeIntentPlane } from "@fragua/core/intent-plane";
+import { makeReadPlane } from "@fragua/core/read-plane";
 import {
-  FEED_EVENT_KINDS,
   type IEventStore,
   type IntentEvent,
   isTerminal as isTerminalStatus,
@@ -178,6 +178,10 @@ export function createRoutes(deps: ServerDeps): Hono {
   // `commitBuilt` — no route validates an intent body or calls
   // `store.appendIntent` itself (enforced by `discipline.test.ts`).
   const plane = makeIntentPlane({ store: deps.store, newRunId });
+  // The read plane: the one read/projection surface. Event-streaming
+  // reads (per-run tail, global feed) route through it so no reader
+  // bypasses the shared projection — the feed allow-list lives there.
+  const readPlane = makeReadPlane({ store: deps.store });
   const commitBuilt = (c: Context, runId: string, built: BuildResult): Response =>
     built.ok ? appendIntentOr413(c, runId, built.intent) : c.json({ error: built.error }, 400);
   // Mint a workflow's identity through the chokepoint, surfacing the parse /
@@ -612,10 +616,7 @@ export function createRoutes(deps: ServerDeps): Hono {
   app.get("/runs/:id/events", (c) => {
     const sinceSeq = Number(c.req.query("since") ?? 0);
     const limit = Math.min(Number(c.req.query("limit") ?? 1000), 5000);
-    const events = deps.store.getEvents(c.req.param("id"), {
-      sinceSeq,
-      limit,
-    });
+    const events = readPlane.eventsSince(c.req.param("id"), sinceSeq, limit);
     return c.json(events);
   });
 
@@ -631,7 +632,7 @@ export function createRoutes(deps: ServerDeps): Hono {
       // client already reads. Registering 45 typed listeners per mount
       // was 45× the closure retention for zero functional gain.
       await runSseLoop<number>(stream, initialSeq, {
-        fetchBatch: (sinceSeq, limit) => deps.store.getEvents(runId, { sinceSeq, limit }),
+        fetchBatch: (sinceSeq, limit) => readPlane.eventsSince(runId, sinceSeq, limit),
         cursorOf: (event) => event.seq,
         idOf: (event) => String(event.seq),
         shouldClose: () => {
@@ -653,7 +654,7 @@ export function createRoutes(deps: ServerDeps): Hono {
     // the route returns matches the order the client appends — no
     // client-side reverse). The SSE stream picks up the live tail from
     // the newest returned cursor.
-    const events = deps.store.getGlobalEventsLatest({ kindIn: FEED_EVENT_KINDS, limit });
+    const events = readPlane.globalFeedLatest(limit);
     return c.json(events);
   });
 
@@ -665,9 +666,8 @@ export function createRoutes(deps: ServerDeps): Hono {
       });
       try {
         await runGlobalFeedLoop(stream, initialCursor, {
-          fetchForward: (opts) => deps.store.getGlobalEventsForward(opts),
-          fetchAtFloor: (opts) => deps.store.getGlobalEventsAtFloor(opts),
-          kindIn: FEED_EVENT_KINDS,
+          fetchForward: (cursor) => readPlane.globalFeedForward(cursor),
+          fetchAtFloor: (cursor) => readPlane.globalFeedAtFloor(cursor),
           batchSize,
           pollMs,
         });

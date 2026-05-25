@@ -1,4 +1,10 @@
-export { makeReadPlane, type ReadPlane, type ReadPlaneDeps } from "./plane.ts";
+export {
+  type GlobalFeedAtFloorCursor,
+  type GlobalFeedForwardCursor,
+  makeReadPlane,
+  type ReadPlane,
+  type ReadPlaneDeps,
+} from "./plane.ts";
 export {
   deriveNodeStates,
   deriveSelectedEdges,

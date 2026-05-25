@@ -12,6 +12,9 @@
 // `@fragua/core/intent-plane`.
 
 import {
+  FEED_EVENT_KINDS,
+  type GetGlobalEventsAtFloorOpts,
+  type GetGlobalEventsForwardOpts,
   type GetMessagesOpts,
   type IEventStore,
   isTerminal as isTerminalStatus,
@@ -27,6 +30,15 @@ import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnap
 export interface ReadPlaneDeps {
   store: IEventStore;
 }
+
+/** Forward-cursor fields for the global feed, MINUS the `kindIn`
+ *  allow-list — the read plane bakes `FEED_EVENT_KINDS` in, so the
+ *  caller (SSE loop, future CLI watch) never threads it. */
+export type GlobalFeedForwardCursor = Omit<GetGlobalEventsForwardOpts, "kindIn">;
+
+/** At-floor (boundary rescan) cursor fields for the global feed, MINUS
+ *  the `kindIn` allow-list. See {@link GlobalFeedForwardCursor}. */
+export type GlobalFeedAtFloorCursor = Omit<GetGlobalEventsAtFloorOpts, "kindIn">;
 
 export interface ReadPlane {
   /** SQL-backed list projection — one `RunSummary` per row, no per-row
@@ -51,6 +63,21 @@ export interface ReadPlane {
    *  refusal. Pure — picks the commit shas; the git diff is the caller's.
    *  Mirrors the resolution in `GET /runs/:id/snapshots/:eventIdx/diff`. */
   diffRange(runId: string, eventIdx: number, against: string): DiffRange;
+  /** Per-run incremental tail: events strictly after `sinceSeq`, up to
+   *  `limit`, in seq order. No kind filter — the run view needs every
+   *  event. Backs `GET /runs/:id/events` and the `/runs/:id/stream`
+   *  drain loop. */
+  eventsSince(runId: string, sinceSeq: number, limit?: number): StoredEvent[];
+  /** Global cross-run feed backfill: most-recent `limit` allow-listed
+   *  events, oldest-first. `FEED_EVENT_KINDS` is baked in. Backs
+   *  `GET /events`. */
+  globalFeedLatest(limit: number): StoredEvent[];
+  /** Global feed forward strict-tuple scan. `FEED_EVENT_KINDS` is baked
+   *  in. Backs the `/events/stream` forward query. */
+  globalFeedForward(cursor: GlobalFeedForwardCursor): StoredEvent[];
+  /** Global feed boundary rescan at `floorTs`. `FEED_EVENT_KINDS` is
+   *  baked in. Backs the `/events/stream` at-floor query. */
+  globalFeedAtFloor(cursor: GlobalFeedAtFloorCursor): StoredEvent[];
 }
 
 export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
@@ -133,6 +160,18 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
       }
 
       return { ok: true, cwd: state.cwd, fromSha, toSha: snapshot.commitSha };
+    },
+    eventsSince(runId, sinceSeq, limit) {
+      return store.getEvents(runId, limit === undefined ? { sinceSeq } : { sinceSeq, limit });
+    },
+    globalFeedLatest(limit) {
+      return store.getGlobalEventsLatest({ kindIn: FEED_EVENT_KINDS, limit });
+    },
+    globalFeedForward(cursor) {
+      return store.getGlobalEventsForward({ ...cursor, kindIn: FEED_EVENT_KINDS });
+    },
+    globalFeedAtFloor(cursor) {
+      return store.getGlobalEventsAtFloor({ ...cursor, kindIn: FEED_EVENT_KINDS });
     },
   };
 }
