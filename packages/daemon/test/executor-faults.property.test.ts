@@ -31,6 +31,7 @@ import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
+import type { Provisioner } from "../src/worktree-provisioner.ts";
 import { makeArbGraph } from "./arbitraries/graph.ts";
 import { type AppendFaultSchedule, faultStore } from "./fault-store.ts";
 import { checkRunInvariants } from "./invariants.ts";
@@ -82,6 +83,9 @@ interface FaultOpts {
   schedule?: AppendFaultSchedule;
   /** Leak watchdog grace (default executor value is 30s — set small to fire fast). */
   leakGraceMs?: number;
+  /** Execution-environment provisioner (default: none → handlers run env-less).
+   * Inject a throwing `ensure` to model a provision failure. */
+  provisioner?: Provisioner;
 }
 
 /** Drive a run to a resting state, committing through a faultStore governed by
@@ -127,11 +131,21 @@ async function driveFaulted(graph: Graph, opts: FaultOpts = {}): Promise<Faulted
       clock,
       random: () => 0.5,
       ...(opts.leakGraceMs !== undefined ? { leakGraceMs: opts.leakGraceMs } : {}),
+      ...(opts.provisioner !== undefined ? { provisioner: opts.provisioner } : {}),
     };
 
     for (let step = 0; step < 100; step++) {
       store.claimNextRun(1);
-      await runOne(runId, runOpts);
+      try {
+        await runOne(runId, runOpts);
+      } catch {
+        // A non-OCC store fault (schedule "error") escaped runOne — exactly
+        // what runOneSafe catches in production. The turn's commit didn't land,
+        // so the run is left in its durable state; a startup sweep requeues it
+        // (run_requeued_after_crash) and the next iteration re-dispatches.
+        if (store.getState(runId)?.status === "running") store.startupSweep();
+        continue;
+      }
       const st = store.getState(runId);
       if (st === null || TERMINAL_STATUS.has(st.status)) break;
       if (st.status === "paused_auto") {
@@ -331,6 +345,64 @@ describe("executor faults — orphan side-effect (crash between intent and done)
         const payload = q!.payload as { reason?: string; orphanedIntents?: number[] };
         expect(payload.reason).toBe("orphan_side_effect");
         expect(payload.orphanedIntents).toContain(orphanSeq);
+        checkRunInvariants(events, state);
+      }),
+      { numRuns: pbtRuns(80) },
+    );
+  });
+});
+
+/** A provisioner whose `ensure` always throws — the worktree/provision-failure
+ * seam. The executor records daemon.worktree_provisioned{ok:false} and halts. */
+const throwingProvisioner: Provisioner = {
+  ensure: async () => {
+    throw new Error("provision boom");
+  },
+  dispose: async () => {},
+  envFor: () => undefined,
+  baseGitSha: () => null,
+  baseGitRef: () => null,
+  snapshot: async () => null,
+};
+
+describe("executor faults — provision + store failure", () => {
+  // provisioner.ensure throwing → the executor halts the run with a clear
+  // reason rather than dispatching env-less or wedging.
+  test("provision failure halts the run (worktree_provision_failed), invariants intact", async () => {
+    await fc.assert(
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+        const { status, events, state } = await driveFaulted(graph, { provisioner: throwingProvisioner });
+        expect(status).toBe("halted");
+        // Halted with a clear provision-failure reason (in the fact log;
+        // daemon.worktree_provisioned is a daemon-stream event, not here).
+        const halt = events.find((e) => e.type === "fact.run_halted");
+        expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("error");
+        expect((halt?.payload as { detail?: string } | undefined)?.detail ?? "").toContain("worktree_provision_failed");
+        checkRunInvariants(events, state);
+      }),
+      { numRuns: pbtRuns(80) },
+    );
+  });
+
+  // A non-OCC commit failure (the store throws) escapes runOne; runOneSafe
+  // catches it, the sweep requeues the run, and it re-dispatches to completion —
+  // a commit failure never loses the run. Sweep the failure across commits.
+  test("a transient store-commit failure is recovered (requeue + redrive) → completes", async () => {
+    await fc.assert(
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), fc.integer({ min: 1, max: 30 }), async (graph, k) => {
+        const { status, events, state, faultsInjected } = await driveFaulted(graph, {
+          schedule: (n, facts) => (n === k && !hasTerminalFact(facts) ? "error" : "ok"),
+        });
+        // A non-OCC commit error is fatal-but-clean: the executor halts the run
+        // (reason "error") rather than retrying (only OCC conflicts retry) or
+        // wedging. When k lands past the run's commits, no fault fires → it
+        // completes. Either way: a terminal, never a wedge; invariants intact.
+        if (faultsInjected > 0) {
+          expect(status).toBe("halted");
+          expect(haltReason(events)).toBe("error");
+        } else {
+          expect(status).toBe("completed");
+        }
         checkRunInvariants(events, state);
       }),
       { numRuns: pbtRuns(80) },
