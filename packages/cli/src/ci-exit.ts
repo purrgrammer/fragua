@@ -1,0 +1,111 @@
+// Exit-code taxonomy for `fragua ci`. One code per terminal reason: a CI
+// pipeline can `case $?` on exactly why a run stopped. Codes are banded by
+// status-class for legibility (10s halt, 30s operator-pause, 50s quarantine),
+// leaving 0 for a clean exit and 130 for cancellation (the SIGINT convention).
+//
+// The per-reason maps are `Record<Union, number>`, so the totality check is
+// the type system itself: adding a `HaltReason` / `PauseReason` /
+// `QuarantineReason` literal without a code is a compile error (CLAUDE.md
+// ground rule 1, enum-literal consumers). NOTE: because each engine reason is
+// now a public exit code, adding a reason is a CLI contract change — pick the
+// next code in the band and document it here.
+//
+// The drive loop CONTINUES the `paused_auto` arm (provider_retry /
+// handler_retry / timeout_retry), so it never STOPS on those — they map to
+// `internal` only to keep `PAUSE_EXIT` total; reaching a stop with one of them
+// is a `ci` driver bug.
+
+import type { HaltReason, PauseReason, QuarantineReason, RunStatus } from "@fragua/types";
+
+/** Status-class singletons + the well-known codes. Per-reason codes live in
+ * the maps below. */
+export const CI_EXIT = {
+  /** `completed` — reached the `<exit>` sink cleanly. The only zero. */
+  ok: 0,
+  /** `ci` could not run the workflow at all: not found / unparseable / bad
+   * config / an unexpected throw. Not a run outcome — a generic invocation
+   * failure (the conventional `1`). */
+  usage: 1,
+  /** `paused_human` — the workflow asked a question (HITL). No responder
+   * in CI. (Single code: `paused_human` carries no reason enum.) */
+  needsHuman: 60,
+  /** A non-terminal status (`queued` / `running` / `paused_auto`) observed
+   * as a STOP-state — a `ci` driver bug, not a workflow outcome. */
+  internal: 70,
+  /** `cancelled`, or a SIGINT/SIGTERM-interrupted drive. 128 + SIGINT(2). */
+  cancelled: 130,
+} as const;
+
+/** `halted` reason → exit code (band 10–19). */
+export const HALT_EXIT: Record<HaltReason, number> = {
+  error: 10,
+  aborted_exit: 11,
+  budget: 12,
+  occ_exhausted: 13,
+  timeout_exhausted: 14,
+  route_not_picked: 15,
+  route_call_not_isolated: 16,
+  edge_no_match: 17,
+};
+
+/** `paused` reason → exit code (band 30–39). The auto-wake reasons project
+ * to `paused_auto` (which the loop continues), so they can't be a stop —
+ * they map to `internal` only to keep the record total. */
+export const PAUSE_EXIT: Record<PauseReason, number> = {
+  operator: 30,
+  provider_error: 31,
+  payment_required: 32,
+  budget: 33,
+  max_retries: 34,
+  goal_gate: 35,
+  max_loops: 36,
+  abort_loop: 37,
+  provider_exhausted: 38,
+  engine_incompatible: 39,
+  provider_retry: CI_EXIT.internal,
+  handler_retry: CI_EXIT.internal,
+  timeout_retry: CI_EXIT.internal,
+};
+
+/** `quarantined` reason → exit code (band 50–59). */
+export const QUARANTINE_EXIT: Record<QuarantineReason, number> = {
+  orphan_side_effect: 50,
+  other: 51,
+};
+
+/** The reason carried by a stop-state's terminal fact, by kind. Only the one
+ * matching the final status is consulted; the others are ignored. */
+export interface CiStopReason {
+  halt?: HaltReason;
+  pause?: PauseReason;
+  quarantine?: QuarantineReason;
+}
+
+/** Stop-state → exit code. Exhaustive over {@link RunStatus}; the per-reason
+ * codes come from the maps above. A missing reason falls back to the band's
+ * generic code (the reason should always be present on the terminal fact;
+ * this is defensive). */
+export function ciExitCode(status: RunStatus, reason: CiStopReason = {}): number {
+  switch (status) {
+    case "completed":
+      return CI_EXIT.ok;
+    case "cancelled":
+      return CI_EXIT.cancelled;
+    case "halted":
+      return HALT_EXIT[reason.halt ?? "error"];
+    case "paused":
+      return PAUSE_EXIT[reason.pause ?? "operator"];
+    case "paused_human":
+      return CI_EXIT.needsHuman;
+    case "quarantined":
+      return QUARANTINE_EXIT[reason.quarantine ?? "other"];
+    case "queued":
+    case "running":
+    case "paused_auto":
+      return CI_EXIT.internal;
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}

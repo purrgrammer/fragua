@@ -1,25 +1,33 @@
 // `fragua ci <workflow>` — the one-shot embedded executor. Unlike every other
 // CLI verb (pure store-clients that write an intent and return), `ci` embeds
 // the executor in-process and writes `fact.*` itself: open an ephemeral store,
-// seed credentials from env, save + enqueue the workflow, drive `runOne` to a
-// terminal state, render the event log, and exit with a code that reflects the
-// outcome. The `.db` is a portable artifact.
+// seed credentials from env, save + enqueue the workflow, drive the run to a
+// stop-state, render the event log, and exit with a code that reflects the
+// outcome (see `../ci-exit.ts` for the total status → exit-code map). The
+// `.db` is a portable artifact.
 //
-// MVP scope (docs/proposals/fragua-ci.md §3): fail-on-pause (a CI run has no
-// responder, so any pause is a failure) and run in the checkout via a
-// per-run worktree (git cwd) / LocalEnvironment (non-git cwd). Pluggable HITL
-// and cross-machine import are deferred.
+// Pause policy: the drive loop CONTINUES the `paused_auto` arm — the
+// daemon-owed clock tick (provider_retry / handler_retry / timeout_retry) —
+// honouring its backoff and re-claiming, exactly as the daemon would. It only
+// STOPS (non-zero exit) on a terminal state or an unanswerable pause: `paused`
+// (operator action), `paused_human` (HITL), `quarantined`. CI has no responder
+// for those. Run in the checkout via a per-run worktree (git cwd) /
+// LocalEnvironment (non-git cwd). Pluggable HITL and cross-machine import are
+// deferred (docs/proposals/fragua-ci.md §3).
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { AUTO_RESUME_AT_KEY } from "@fragua/core";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane } from "@fragua/core/read-plane";
-import { AbortRegistry, type ExecutorOpts, runOne, WorktreeProvisioner } from "@fragua/daemon";
-import { newRunId, SqliteStore, type StoredEvent } from "@fragua/store";
-import { isTerminal, type RunStatus } from "@fragua/types";
+import { AbortRegistry, type ExecutorOpts, runOne, WorktreeProvisioner, wakePending } from "@fragua/daemon";
+import { type IEventStore, newRunId, SqliteStore, type StoredEvent } from "@fragua/store";
+import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
+import { driveCiRun } from "../ci-drive.ts";
+import { CI_EXIT, type CiStopReason, ciExitCode } from "../ci-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 import { seedCredsFromEnv } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
@@ -46,12 +54,29 @@ export interface CiCommandOptions {
   cwd?: string;
 }
 
-/** Terminal/parked status → process exit code. fail-on-pause (MVP): any pause
- * or non-terminal end is a failure, because a CI run has no responder. */
-function exitCodeFor(status: RunStatus): number {
-  if (status === "completed") return 0;
-  if (status === "cancelled") return 130;
-  return 1; // halted, quarantined, paused*, or unexpectedly non-terminal
+/** Wall-clock ms at which a `paused_auto` run becomes wake-eligible, read
+ * from `routing.internal.auto_resume_at` (set by the engine when it parks
+ * the run for `provider_retry` / `handler_retry` / `timeout_retry`).
+ * `undefined` if the run isn't auto-paused or the key is missing. */
+function autoResumeAt(store: IEventStore, runId: string): number | undefined {
+  const v = store.getState(runId)?.routing[AUTO_RESUME_AT_KEY];
+  return typeof v === "number" ? v : undefined;
+}
+
+/** Sleep until `wakeAt` (ms epoch), waking early on shutdown. Floored at
+ * `POLL_MS` so a stale/past timestamp can't spin the drive loop. */
+async function sleepUntil(wakeAt: number | undefined, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return;
+  const delay = wakeAt === undefined ? POLL_MS : Math.max(POLL_MS, wakeAt - Date.now());
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(done, delay);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
 }
 
 export async function ciCommand(opts: CiCommandOptions): Promise<number> {
@@ -72,7 +97,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         ),
       );
     }
-    return 1;
+    return CI_EXIT.usage;
   }
   const { dotPath, name, scope } = resolved;
 
@@ -81,7 +106,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     source = await readFile(dotPath, "utf8");
   } catch (err) {
     console.error(chalk.red(`ci: cannot read ${dotPath}: ${(err as Error).message}`));
-    return 1;
+    return CI_EXIT.usage;
   }
 
   // Ephemeral store: --db-pinned (portable artifact) or a temp dir. A fresh
@@ -112,7 +137,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       timeouts = resolveTimeouts(config);
     } catch (err) {
       console.error(chalk.red(`ci: ${(err as Error).message}`));
-      return 1;
+      return CI_EXIT.usage;
     }
     const deps = await buildExecutorDeps({
       store,
@@ -136,7 +161,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     const mint = plane.buildSaveWorkflow(source);
     if (!mint.ok) {
       console.error(chalk.red(`ci: ${opts.workflow} did not parse: ${mint.detail}`));
-      return 1;
+      return CI_EXIT.usage;
     }
     plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
     const enq = plane.buildEnqueue({
@@ -152,7 +177,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     });
     if (!enq.ok) {
       console.error(chalk.red(`ci: ${enq.error}`));
-      return 1;
+      return CI_EXIT.usage;
     }
     plane.commitEnqueue(enq.params);
     runId = enq.runId;
@@ -171,21 +196,41 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     };
     if (timeouts.leakGrace !== undefined) execOpts.leakGraceMs = timeouts.leakGrace;
 
-    // Fiber A: claim + drive to terminal/pause. Fiber B (this loop): tail the
-    // store and render. The tailer reads the store, not the executor, so `ci`
-    // and `fragua run --follow` share one rendering path and can't drift. One
+    // Fiber A: drive the run (see `driveCiRun` — continues paused_auto, stops
+    // on terminal/unanswerable-pause). Fiber B (this loop): tail the store and
+    // render. The tailer reads the store, not the executor, so `ci` and
+    // `fragua run --follow` share one rendering path and can't drift. One
     // bun:sqlite handle: SQLite calls are sync and fibers yield only at await,
     // so write/poll interleave safely.
     let execDone = false;
-    const exec = (async () => {
-      const claimed = store.claimNextRun(1);
-      if (claimed && claimed.runId === rid) await runOne(rid, execOpts);
-    })();
+    const exec = driveCiRun({
+      shutdownSignal: shutdown.signal,
+      wake: () => wakePending(store),
+      claimAndDispatch: async () => {
+        const claimed = store.claimNextRun(1);
+        if (claimed?.runId !== rid) return false;
+        await runOne(rid, execOpts);
+        return true;
+      },
+      status: () => store.getState(rid)?.status,
+      autoResumeAt: () => autoResumeAt(store, rid),
+      sleepUntil: (wakeAt) => sleepUntil(wakeAt, shutdown.signal),
+    });
     const execSettled = exec.finally(() => {
       execDone = true;
     });
 
+    // Capture the terminal reason as it streams past — it selects the
+    // per-reason exit code for the stop-state (one code per HaltReason /
+    // PauseReason / QuarantineReason; see `../ci-exit.ts`).
+    const stopReason: CiStopReason = {};
     const emit = (ev: StoredEvent) => {
+      const r = (ev.payload as { reason?: string } | null)?.reason;
+      if (r !== undefined) {
+        if (ev.type === "fact.run_halted") stopReason.halt = r as HaltReason;
+        else if (ev.type === "fact.run_paused") stopReason.pause = r as PauseReason;
+        else if (ev.type === "fact.run_quarantined") stopReason.quarantine = r as QuarantineReason;
+      }
       if (opts.json) process.stdout.write(`${JSON.stringify(ev)}\n`);
       else renderEvent(ev);
     };
@@ -210,14 +255,31 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     }
     await execSettled; // surface a driver throw after the log has drained
 
+    // A SIGINT/SIGTERM-interrupted drive is a cancellation regardless of the
+    // status the run happened to be parked in when the signal fired.
+    if (shutdown.signal.aborted) return CI_EXIT.cancelled;
+
     const status = store.getState(rid)?.status ?? "halted";
-    if (!isTerminal(status)) {
-      console.error(chalk.yellow(`ci: run ended non-terminal (status=${status}) — fail-on-pause`));
+    const code = ciExitCode(status, stopReason);
+    if (status === "halted") {
+      console.error(chalk.red(`ci: run halted (${stopReason.halt ?? "error"}) — exit ${code}`));
+    } else if (status === "paused") {
+      console.error(
+        chalk.yellow(`ci: run needs an operator (paused: ${stopReason.pause ?? "operator"}) — no responder in CI`),
+      );
+    } else if (status === "paused_human") {
+      console.error(chalk.yellow(`ci: run is waiting on human input (paused_human) — no responder in CI`));
+    } else if (status === "quarantined") {
+      console.error(
+        chalk.yellow(`ci: run quarantined (${stopReason.quarantine ?? "other"}) — needs manual resolution`),
+      );
+    } else if (status === "queued" || status === "running" || status === "paused_auto") {
+      console.error(chalk.red(`ci: driver stopped on a non-terminal status (${status}) — this is a ci bug`));
     }
-    return exitCodeFor(status);
+    return code;
   } catch (err) {
     console.error(chalk.red(`ci: ${(err as Error).message}`));
-    return 1;
+    return CI_EXIT.usage;
   } finally {
     process.removeListener("SIGINT", onSig);
     process.removeListener("SIGTERM", onSig);

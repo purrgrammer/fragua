@@ -51,9 +51,11 @@ a function return to a store intent.
   `cli-store-client` (console TTY). The web channel exists.
 - **Wins independently:** the resolver *seam* + the queue resolver land alone and
   immediately unblock deterministic HITL testing.
-- **MVP:** the resolver seam + the auto-approve channel — i.e. generalize
-  `fragua ci`'s hardcoded `fail-on-pause` into `--on-pause`. Console + queue are
-  fast-follows.
+- **MVP:** the resolver seam + the auto-approve channel — i.e. give `fragua ci`
+  a responder for the *unanswerable* pauses (`paused` / `paused_human` /
+  `quarantined`) it currently stops on, via `--on-pause`. (`paused_auto` already
+  continues — the drive loop rides the daemon-owed retry tick.) Console + queue
+  are fast-follows.
 
 ## 4. Open notes
 

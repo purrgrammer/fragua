@@ -64,6 +64,25 @@ describe("ciCommand", () => {
     expect(types).toContain("fact.run_completed");
   });
 
+  test("a tool step that fails with no fail route halts (aborted_exit) → exit 11", async () => {
+    writeFileSync(wfPath, 'name: ci-fail\nsteps:\n  boom:\n    type: tool\n    run: "exit 1"\n    next: exit\n');
+    const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
+    expect(code).toBe(11); // HALT_EXIT.aborted_exit
+    const { status, types } = readArtifact();
+    expect(status).toBe("halted");
+    expect(types).toContain("fact.run_halted");
+  });
+
+  test("a tool step that fails but routes fail→exit lands gracefully → exit 0", async () => {
+    writeFileSync(
+      wfPath,
+      'name: ci-soft-fail\nsteps:\n  boom:\n    type: tool\n    run: "exit 1"\n    on: {fail: exit}\n',
+    );
+    const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
+    expect(code).toBe(0);
+    expect(readArtifact().status).toBe("completed");
+  });
+
   test("missing workflow → exit 1", async () => {
     const code = await runCi({ workflow: join(dir, "does-not-exist.yaml"), cwd: dir, dbPath, json: true });
     expect(code).toBe(1);

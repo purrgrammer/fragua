@@ -1,6 +1,6 @@
 ---
 title: fragua ci — embedded executor over an ephemeral, portable store
-summary: "A one-shot CI command that embeds the executor in-process over an ephemeral SQLite store: env-discovered credentials, write the routing intent, run to terminal, exit with the outcome, render the event log as JSONL. The .db is a portable artifact. Not symmetric with the store-client CLI — it is the one command that writes facts — so it is its own entity, not a flag on `run`."
+summary: "A one-shot CI command that embeds the executor in-process over an ephemeral SQLite store: env-discovered credentials, write the routing intent, drive the run to a stop-state (continuing the daemon-owed paused_auto retry tick), exit with the outcome through a total status→code map, render the event log as JSONL. The .db is a portable artifact. Not symmetric with the store-client CLI — it is the one command that writes facts — so it is its own entity, not a flag on `run`."
 status: shipped
 maturity: shipped
 last-reviewed: 2026-05-25
@@ -15,12 +15,47 @@ parent: cli-topology.md
 > ([executor-pbt-decomposition.md Phase 8](executor-pbt-decomposition.md) →
 > `packages/cli/src/executor-deps.ts` `buildExecutorDeps`), and the env→creds
 > bridge (`packages/cli/src/env-creds.ts` `seedCredsFromEnv`, over pi-ai's
-> `getEnvApiKey` map). The drive loop is claim → `runOne` → check-status with a
-> store-tailer fiber; exit code = outcome; **fail-on-pause** is the hardcoded
-> MVP policy. Deferred (see §3): pluggable `--on-pause`, cross-machine
-> `db-import`. The original framing follows.
+> `getEnvApiKey` map). The drive loop (`packages/cli/src/ci-drive.ts`
+> `driveCiRun`) mirrors the daemon's `wakePending → claim → runOne` tick for one
+> run, with a store-tailer fiber for the render. Exit code = outcome through the
+> total `RunStatus`/`HaltReason` → code map (`packages/cli/src/ci-exit.ts`
+> `ciExitCode`). Deferred (see §3): pluggable `--on-pause` responder,
+> cross-machine `db-import`. The original framing follows.
 >
 > Child of [`cli-topology.md`](cli-topology.md).
+
+> **Pause policy (2026-05-25, supersedes "fail-on-pause").** The drive loop
+> **continues the `paused_auto` arm** — the daemon-owed clock tick
+> (`provider_retry` / `handler_retry` / `timeout_retry`). It honours the run's
+> `routing.internal.auto_resume_at` backoff, then loops so `wakePending` flips
+> the run back to `queued` for re-claim, exactly as the daemon would. So a CI
+> run is no longer failed the instant a node retries — it drives to a real
+> terminal. The loop only STOPS (non-zero exit) on a terminal state or an
+> *unanswerable* pause: `paused` (operator action), `paused_human` (HITL),
+> `quarantined` — CI has no responder for those. **One exit code per terminal
+> reason**, banded by status-class for legibility, so a CI run **never exits 0
+> on anything but a clean `completed`** and can `case $?` on exactly why it
+> stopped:
+>
+> | Stop-state / reason | Code |
+> |---|---|
+> | `completed` | `0` |
+> | `ci` couldn't run the workflow (not found / parse / config / throw) | `1` |
+> | `halted`: `error` `aborted_exit` `budget` `occ_exhausted` `timeout_exhausted` `route_not_picked` `route_call_not_isolated` `edge_no_match` | `10`–`17` |
+> | `paused`: `operator` `provider_error` `payment_required` `budget` `max_retries` `goal_gate` `max_loops` `abort_loop` `provider_exhausted` `engine_incompatible` | `30`–`39` |
+> | `quarantined`: `orphan_side_effect` `other` | `50`–`51` |
+> | `paused_human` (HITL — no reason enum) | `60` |
+> | `queued`/`running`/`paused_auto` as a stop-state (a `ci` driver bug) | `70` |
+> | `cancelled` (or SIGINT/SIGTERM) | `130` |
+>
+> The per-reason maps are `Record<Union, number>` (`HALT_EXIT` / `PAUSE_EXIT` /
+> `QUARANTINE_EXIT`), so totality is the type system itself — adding a
+> `HaltReason`/`PauseReason`/`QuarantineReason` literal without a code is a
+> compile error (CLAUDE.md ground rule 1). The trade-off: each engine reason is
+> now a public exit code, so adding a reason is a CLI contract change — pick the
+> next code in the band. The auto-wake PauseReasons (`provider_retry` /
+> `handler_retry` / `timeout_retry`) project to `paused_auto`, which the loop
+> *continues*, so they map to `70` only to keep the record total.
 
 ## 1. Why it is separate
 
@@ -46,9 +81,12 @@ fragua ci <wf> [--db <path>] [--input k=v] [--json]
      workflow is never already present), THEN buildEnqueue → commit by the just-minted
      sha. Two ops sequenced by the command, same save-then-enqueue as every other
      caller (intent-plane §3.1).
-  5. drive to terminal:  claimNextRun → runOne(deps) → check status → repeat   [fiber A]
+  5. drive (driveCiRun): wakePending → claimNextRun → runOne(deps);            [fiber A]
+       paused_auto → honour auto_resume_at, re-claim (continue); stop on
+       terminal / paused / paused_human / quarantined
      tailer: poll store seq → render to stdout                                 [fiber B]
-  6. exit code = outcome (cli-store-client exit map); pause ⇒ fail (MVP)
+  6. exit code = ciExitCode(status, {halt|pause|quarantine}) — one code per
+       reason (banded), 0 only on completed
   artifact: the .db (and/or JSONL export)
 ```
 
@@ -68,9 +106,11 @@ fragua ci <wf> [--db <path>] [--input k=v] [--json]
   the tool + credentials registries injectable.
 - **Drive loop.** `runOne` does *not* claim or loop — `runExecutor` claims via
   `claimNextRun` then calls `runOne` once, which drives the run to its next yield
-  (terminal **or pause**). CI either reuses `runExecutor` (maxConcurrent=1, shut
-  down on terminal) or claims-then-`runOne`-then-checks-status in a loop. A pause
-  with no responder ⇒ exit nonzero (MVP fail-on-pause).
+  (terminal **or pause**). CI runs its own one-run version of the daemon tick
+  (`ci-drive.ts` `driveCiRun`): `wakePending → claim → runOne`, **continuing the
+  `paused_auto` arm** (honour `auto_resume_at`, then re-claim) and stopping only
+  on a terminal state or an unanswerable pause (`paused` / `paused_human` /
+  `quarantined`) ⇒ exit nonzero (see the Pause-policy note above).
 - **Executor + tailer fibers.** Even in-process, **the tailer reads the store,
   not the executor** — so `ci` and `fragua watch` share one rendering path and
   cannot drift. (Both on one `bun:sqlite` handle; SQLite calls are sync and
@@ -96,14 +136,15 @@ fragua ci <wf> [--db <path>] [--input k=v] [--json]
 - **Estimate note (borne out):** the assembly extraction was indeed the long
   pole — done as its own commit (Phase 8) before the command, behaviour-preserving
   for the daemon.
-- **MVP (shipped):** ephemeral store + claim/`runOne` drive loop + env creds +
-  JSONL-to-stdout (`--json`, else human render) + outcome exit code (0 completed,
-  130 cancelled, nonzero otherwise) + **hardcoded `fail-on-pause`**. Execution
+- **MVP (shipped):** ephemeral store + `driveCiRun` loop (continues
+  `paused_auto`) + env creds + JSONL-to-stdout (`--json`, else human render) +
+  the total `ciExitCode` map (see the Pause-policy table). Execution
   environment: a `WorktreeProvisioner` at the checkout cwd (git → worktree,
-  non-git → LocalEnvironment). Deferred: pluggable HITL (generalize
-  `fail-on-pause` into `--on-pause=auto|fail|first` in
-  [`hitl-channel.md`](hitl-channel.md)); cross-machine import (the artifact is
-  just the `.db` until [`db-import.md`](db-import.md)).
+  non-git → LocalEnvironment). Deferred: a pluggable responder for the
+  *unanswerable* pauses (`--on-pause=auto|fail|first` in
+  [`hitl-channel.md`](hitl-channel.md)) — until then they stop the run with a
+  distinct non-zero code; cross-machine import (the artifact is just the `.db`
+  until [`db-import.md`](db-import.md)).
 
 ## 4. Open notes
 
@@ -111,5 +152,9 @@ fragua ci <wf> [--db <path>] [--input k=v] [--json]
   binary's* `CURRENT_SCHEMA_VERSION`. Importing that artifact into a central
   store on a different version is exactly the schema-drift window — tracked in
   [`db-import.md`](db-import.md) §schema-version.
-- **HITL in CI** is answered by the auto-approve channel; until then,
-  `fail-on-pause` is the safe default (a CI run with no responder must not hang).
+- **HITL in CI** is answered by the auto-approve channel; until then, an
+  *unanswerable* pause (`paused` / `paused_human` / `quarantined`) stops the run
+  with a distinct non-zero exit code — a CI run with no responder must not hang.
+  Note this is narrower than the old "fail-on-pause": `paused_auto` (the
+  daemon-owed retry tick) is *not* a stop — the loop rides it to a real
+  terminal.

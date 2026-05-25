@@ -66,7 +66,7 @@ the intent to the store directly.
   cleanup-pre-0.1.0 ─┐  (agent-tool removal · migration collapse · run_id widen)
   executor Phase 8 ──┤  (assembly factory + injectable registries)
                      ▼
-        intent-plane  ──┬──▶ fragua-ci (MVP: fail-on-pause)
+        intent-plane  ──┬──▶ fragua-ci (continues paused_auto; stops on unanswerable pause)
          (foundation)   │         │
        + store {migrate:false}    ├──▶ db-import ──▶ event-contract-version
                         └──▶ cli-store-client       (independent; substrate
