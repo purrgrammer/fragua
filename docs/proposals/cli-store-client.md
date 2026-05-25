@@ -1,19 +1,22 @@
 ---
 title: CLI as a direct store-client — no HTTP, run enqueues, watch tails
 summary: "Decomplect the CLI from HTTP: it opens the local SQLite directly, reads projections, and writes intents through the shared intent plane — no localhost round-trip. `fragua run` enqueues and exits 0 (recorded, not succeeded); tailing is the explicit `fragua watch`. Nail scriptability: stdout=data/stderr=chatter, --json⇒JSONL, a HaltReason exit-code taxonomy, TTY-only rendering. Removes --url; adds `fragua db migrate`."
-status: proposed
+status: shipped
 maturity: sketch
-last-reviewed: 2026-05-21
+last-reviewed: 2026-05-25
 parent: cli-topology.md
 ---
 
 # CLI as a direct store-client
 
-> Child of [`cli-topology.md`](cli-topology.md). **Sketch** — depends on a
-> store-layer change (a no-migrate open mode, §6) that an adversarial pass
-> surfaced as foundational, not CLI-local. Depends on
-> [`intent-plane.md`](intent-plane.md); shares the renderer built in
-> [`fragua-ci.md`](fragua-ci.md).
+> **Shipped.** The CLI opens the local store directly (`packages/cli/src/store-client.ts`,
+> `withStoreClient`) and reads/writes through the two planes — no HTTP. The
+> `migrate:false` open mode it stands on landed in `@fragua/store` (verify-and-refuse-to-bump);
+> `run` enqueues + follows by default, the operate/schedule verbs are store-clients, and
+> the `'web'→'client'` writer rename landed. Kept for the design record.
+>
+> Child of [`cli-topology.md`](cli-topology.md). Built on
+> [`intent-plane.md`](intent-plane.md) (shipped) and the shared read plane.
 
 ## 1. Problem
 

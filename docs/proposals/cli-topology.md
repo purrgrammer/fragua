@@ -53,12 +53,12 @@ the intent to the store directly.
 
 | # | Proposal | What | Maturity |
 |---|---|---|---|
-| 1 | [`intent-plane.md`](intent-plane.md) | shared validate/construct/mint surface, many ports | designed |
+| 1 | [`intent-plane.md`](intent-plane.md) | shared validate/construct/mint surface, many ports | ✅ shipped |
 | 2 | [`fragua-ci.md`](fragua-ci.md) | embedded executor over an ephemeral, portable store | sketch |
-| 3 | [`cli-store-client.md`](cli-store-client.md) | CLI as a direct store-client; `run` enqueues, `watch` tails; log UX; `db migrate` | sketch |
+| 3 | [`cli-store-client.md`](cli-store-client.md) | CLI as a direct store-client; `run` enqueues + tails; log UX; `db migrate` | ✅ shipped |
 | 4 | [`hitl-channel.md`](hitl-channel.md) | pluggable HITL — the interviewer pattern over pause-fact/answer-intent | sketch |
 | 5 | [`db-import.md`](db-import.md) | cross-machine import of a run's events into another store | sketch |
-| 6 | [`event-contract-version.md`](event-contract-version.md) | gate resume on an event-contract version, not the DB counter; make mismatch a recoverable pause not a terminal halt | sketch |
+| 6 | [`event-contract-version.md`](event-contract-version.md) | gate resume on an event-contract version, not the DB counter; make mismatch a recoverable pause not a terminal halt | partial — §3.2 shipped, §3.1 axis split open |
 
 ## 4. Dependency DAG + ship order
 

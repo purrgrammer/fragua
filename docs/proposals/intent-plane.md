@@ -1,16 +1,21 @@
 ---
 title: Intent plane — one validate/construct/mint surface, many ports
 summary: "Author intent validation, event construction, run-id minting, and the workflow-identity mint into a single shared code surface that the HTTP server, the (future) direct-store-client CLI, and the schedule-dispatcher fiber all call through thin adapters. One audit point, one test suite; no two writers can disagree about what a valid intent is. Foundation for the rest of the CLI-topology roadmap."
-status: proposed
+status: shipped
 maturity: designed
-last-reviewed: 2026-05-23
+last-reviewed: 2026-05-25
 parent: cli-topology.md
 ---
 
 # Intent plane
 
-> Child of [`cli-topology.md`](cli-topology.md). **Ship first** — it gates every
-> other workstream and is a behavior-preserving refactor on its own.
+> **Shipped.** Lives at `packages/core/src/intent-plane/{plane,schemas,index}.ts`,
+> guarded by `packages/server/test/intent-plane-discipline.test.ts` (the build fails
+> if any store write lands outside the plane). The HTTP server, the CLI, and the
+> schedule dispatcher all route writes through it; accept/discard included (§3.7).
+> Kept for the design record — the sections below describe the landed surface.
+>
+> Child of [`cli-topology.md`](cli-topology.md).
 
 ## 1. Problem
 
