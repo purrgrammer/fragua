@@ -53,22 +53,29 @@ jobs:
           GH_TOKEN: ${{ github.token }} # gh pr diff / view / review
 
       # The run store is a replayable record of the review — but `fragua ci`
-      # seeds the provider credentials (ANTHROPIC_API_KEY) into it, so the raw
-      # file would leak a secret. Strip the provider tables, then VACUUM INTO a
-      # fresh single-file copy (no WAL / freelist residue, so dropped bytes are
-      # truly gone) and refuse to proceed if any `provider*` table survives.
-      # Only that scrubbed export is ever uploaded.
+      # seeds the provider credential (ANTHROPIC_API_KEY) into it, so the raw
+      # file would leak a secret. Strip the provider tables, VACUUM INTO a fresh
+      # single-file copy (no WAL / freelist residue), then FAIL CLOSED: if any
+      # `provider*` table survived, OR the literal key appears anywhere (e.g. a
+      # tool that printed env, recorded into events/messages), DELETE the export
+      # and fail. Deleting it means the always() upload below has nothing to
+      # publish, so a leak can't escape even though that step always runs.
       - name: Export run store (credentials stripped)
         if: always()
         env:
           SRC: ${{ runner.temp }}/pr-review.db
           OUT: ${{ runner.temp }}/pr-review-export.db
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           [ -f "$SRC" ] || { echo "no run store at $SRC — nothing to export"; exit 0; }
           sqlite3 "$SRC" "DROP TABLE IF EXISTS provider_credentials; DROP TABLE IF EXISTS provider_config; VACUUM INTO '$OUT';"
+          fail() { rm -f "$OUT"; echo "::error::$1"; exit 1; }
           leak=$(sqlite3 "$OUT" "SELECT group_concat(name) FROM sqlite_master WHERE name LIKE 'provider%';")
-          [ -z "$leak" ] || { echo "::error::provider tables present in export ($leak) — refusing to upload"; exit 1; }
+          [ -z "$leak" ] || fail "provider tables present in export ($leak)"
+          if [ -n "${ANTHROPIC_API_KEY:-}" ] && grep -qaF "$ANTHROPIC_API_KEY" "$OUT"; then
+            fail "provider key found in export bytes — a tool likely recorded it into events/messages"
+          fi
           echo "exported scrubbed run store → $OUT"
 
       # Post-mortem locally: `fragua runs status|events|messages --db <download>`.
@@ -109,7 +116,7 @@ jobs:
           echo "latest fragua review: $state"
           if [ "$state" = "COMMENTED" ]; then
             gh pr merge "$PR" --auto --squash \
-              || echo "::warning::auto-merge not armed — enable repo 'Allow auto-merge' + branch protection requiring the ci check"
+              || echo "::warning::could not arm --squash auto-merge — needs repo 'Allow auto-merge' + squash-merge enabled + branch protection requiring the ci check"
           else
             gh pr merge "$PR" --disable-auto >/dev/null 2>&1 || true
             echo "review is $state — auto-merge not armed (any prior arm disabled)"
