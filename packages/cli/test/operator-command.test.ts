@@ -30,7 +30,9 @@ import {
   priorityCommand,
   respondCommand,
   resumeCommand,
+  statusCommand,
   steerCommand,
+  tailCommand,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
 
@@ -185,6 +187,32 @@ describe("fragua operator verbs", () => {
 
   test("accept: unknown run → exit 1", async () => {
     const code = await acceptCommand({ runId: "nope", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+
+  // ─── status / tail (read verbs)
+
+  test("status: prints the run's id + lifecycle status", async () => {
+    seedCommitted(r.store, "rst");
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rst", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("rst");
+    expect(out).toContain("completed");
+  });
+
+  test("status: unknown run → exit 1", async () => {
+    const code = await statusCommand({ runId: "nope", dbPath: r.dbPath });
+    expect(code).toBe(1);
+  });
+
+  test("tail: unknown run → exit 1 (no live loop)", async () => {
+    const code = await tailCommand({ runId: "nope", dbPath: r.dbPath });
     expect(code).toBe(1);
   });
 

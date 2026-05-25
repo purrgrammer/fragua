@@ -27,7 +27,9 @@ import {
   priorityCommand,
   respondCommand,
   resumeCommand,
+  statusCommand,
   steerCommand,
+  tailCommand,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
 import {
@@ -458,9 +460,11 @@ function runsHelp(): void {
     goal-gate   <id> <n>             raise the goal-gate retry cap
     max-loops   <id> <n>             raise the per-run dispatch ceiling
 
-  Listing:
+  Listing + inspect:
     inbox                             runs needing attention (2 sections)
-    ls [--status a,b] [--limit N]     list runs`);
+    ls [--status a,b] [--limit N]     list runs
+    status <id>                       one run's state + the why (pause/halt reason, quarantine orphans)
+    tail   <id>                       follow a run's event log to terminal (live, like \`run\` without --no-follow)`);
 }
 
 cli
@@ -525,6 +529,12 @@ cli
           break;
         case "discard":
           process.exit(await discardCommand({ runId: needId(), ...discovery(options) }));
+          break;
+        case "status":
+          process.exit(await statusCommand({ runId: needId(), ...discovery(options) }));
+          break;
+        case "tail":
+          process.exit(await tailCommand({ runId: needId(), ...discovery(options) }));
           break;
         case "diff": {
           const snapRaw = options["snap"];

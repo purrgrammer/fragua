@@ -12,11 +12,12 @@
 
 import { resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import type { DiffRange } from "@fragua/core/read-plane";
-import type { RunStatus, SqliteStore } from "@fragua/store";
+import type { DiffRange, RunDetail } from "@fragua/core/read-plane";
+import type { RunStatus, SqliteStore, StoredEvent } from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
 import { pickRoute } from "../route-picker.ts";
+import { followRun } from "../run-follow.ts";
 import { withStoreClient } from "../store-client.ts";
 
 interface DiscoveryOpts {
@@ -189,6 +190,78 @@ function renderInbox(blocked: InboxRunRow[], ready: InboxRunRow[]): number {
     }
   }
   return 0;
+}
+
+export interface StatusOptions extends DiscoveryOpts {
+  runId: string;
+}
+
+/** Single-run detail: lifecycle + outcome, workflow, cost/tokens, change-stat,
+ * and the "why" — the pause reason (+ which cap to raise), halt reason, or
+ * quarantine orphans — read off the run's events. */
+export function statusCommand(opts: StatusOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const detail = readPlane.runDetail(opts.runId);
+    if (detail == null) {
+      console.error(chalk.red("status: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    renderStatus(detail, readPlane.events(opts.runId) ?? []);
+    return 0;
+  });
+}
+
+function renderStatus(d: RunDetail, events: StoredEvent[]): void {
+  const statusColor = d.status === "success" ? chalk.green : d.status === "fail" ? chalk.red : chalk.yellow;
+  console.log(chalk.bold(d.runId));
+  console.log(`  title:    ${d.title ?? chalk.dim("(untitled)")}`);
+  console.log(`  status:   ${statusColor(d.runStatus)} ${chalk.dim(`(${d.status})`)}`);
+  console.log(`  workflow: ${d.workflowName ?? d.workflow?.slice(0, 12) ?? chalk.dim("?")}`);
+  if (d.cwd != null) console.log(`  cwd:      ${d.cwd}`);
+  console.log(`  cost:     $${d.costUsd.toFixed(4)} ${chalk.dim(`(${d.inputTokens}+${d.outputTokens} tok)`)}`);
+  if (d.durationMs != null) console.log(`  duration: ${(d.durationMs / 1000).toFixed(1)}s`);
+
+  // The "why" for a blocked/terminal run — the last relevant fact.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === "fact.run_paused") {
+      const { reason, ...rest } = e.payload as { reason?: string };
+      console.log(`  paused:   ${chalk.yellow(reason ?? "?")} ${chalk.dim(JSON.stringify(rest))}`);
+      break;
+    }
+    if (e.type === "fact.run_halted") {
+      const p = e.payload as { reason?: string; detail?: string };
+      console.log(`  halted:   ${chalk.red(p.reason ?? "?")}${p.detail != null ? chalk.dim(` — ${p.detail}`) : ""}`);
+      break;
+    }
+    if (e.type === "fact.run_quarantined") {
+      const p = e.payload as { reason?: string; orphanedIntents?: number[] };
+      console.log(
+        `  quarantined: ${chalk.red(p.reason ?? "?")} ${chalk.dim(`orphans: ${(p.orphanedIntents ?? []).join(", ")}`)}`,
+      );
+      break;
+    }
+  }
+  if (d.runStatus === "paused_human" && d.hitlLabel != null) {
+    console.log(`  awaiting: ${chalk.yellow(d.hitlLabel)}`);
+    console.log(`  routes:   ${(d.hitlOptions ?? []).join("  |  ")} ${chalk.dim("→ fragua runs respond")}`);
+  }
+}
+
+export interface TailOptions extends DiscoveryOpts {
+  runId: string;
+}
+
+/** Tail an existing run's event log to terminal — the same live follow +
+ * inline HITL picker `fragua run` uses, for a run you didn't just enqueue. */
+export function tailCommand(opts: TailOptions): Promise<number> {
+  return withStoreClient(opts, (client) => {
+    if (client.store.getState(opts.runId) == null) {
+      console.error(chalk.red("tail: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    return followRun(client, opts.runId);
+  });
 }
 
 export interface RespondOptions extends DiscoveryOpts {
