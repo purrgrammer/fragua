@@ -8,7 +8,7 @@
 //
 // No files, no sockets, no IPC. Just the store.
 
-import { AUTO_RESUME_AT_KEY, type ExecutionEnvironment, evaluateBudget, type Graph } from "@fragua/core";
+import { type ExecutionEnvironment, evaluateBudget, type Graph } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import { CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore, MIN_COMPATIBLE_SCHEMA_VERSION } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
@@ -34,11 +34,12 @@ import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 // are imported from executor.ts by tests and other call sites.
 export { buildSubstitutionArgs, classifyAbortCause, resolveBackoff } from "./executor-helpers.ts";
 
+import { planAbort } from "./abort-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { makeOccController, tryAppendFact } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import { CommittingRecorder } from "./recorder.ts";
-import { abortResultToFacts, cancelToFacts } from "./result-to-facts.ts";
+import { cancelToFacts } from "./result-to-facts.ts";
 import { captureBoundarySnapshot, disposeTerminalWorktree } from "./snapshot-service.ts";
 import { planTransition } from "./transition-planner.ts";
 import { wakePending } from "./wake-pending.ts";
@@ -906,149 +907,62 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (wasAborted) {
       flushObservability();
-      // Reapply partial usage to node_aborted; executor doesn't roll back blobs.
-      // Side-effect facts are already durable via the pre-commit recorder.
-      const facts = abortResultToFacts(currentNode, iteration, abortCause, {
-        tokens: turnBilled,
-        costUsd: totalCostUsd,
-        inputTokens: totalInputTokens,
-        outputTokens: totalOutputTokens,
-        cacheReadTokens: totalCacheReadTokens,
-        cacheWriteTokens: totalCacheWriteTokens,
+      // Pure decision: which facts + routing patch + control outcome for this
+      // abort — reactive-budget halt/pause, watchdog timeout-retry/exhausted, or
+      // a plain workflow/operator abort. See abort-planner.ts. The fold's
+      // routing delta + applied seqs ride the commit so an operator intent
+      // queued for the dying dispatch isn't left unapplied (which would
+      // re-fold → re-dispatch → re-trip the abort forever). The commit, OCC
+      // re-drive, consecutiveAborts bump, and abort-loop ceiling stay here.
+      const abortPlan = planAbort({
+        currentNode,
+        iteration,
+        abortCause,
+        reactiveBudgetHaltDetail,
+        reactiveBudgetPauseBreach,
+        usage: {
+          tokens: turnBilled,
+          costUsd: totalCostUsd,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cacheReadTokens: totalCacheReadTokens,
+          cacheWriteTokens: totalCacheWriteTokens,
+        },
+        routingDelta: decision.routingDelta,
+        appliedSeqs: decision.appliedSeqs,
+        effectiveRouting,
+        now: clock(),
+        attemptedMs: spec.maxMs ?? 0,
       });
-      // Reactive budget halt: when the cost.recorded mirror tripped a
-      // stop-policy breach mid-handler and triggered the abort, append
-      // fact.run_halted{reason:"budget"} alongside fact.node_aborted in
-      // the same atomic commit so the run terminates immediately.
-      // Otherwise the abort would just bump consecutiveAborts and the
-      // next dispatch would re-enter the same node — exactly the
-      // overshoot we're trying to avoid.
-      // Build the abort commit's routing patch + applied-seq advance
-      // from this turn's fold. Without this, an operator intent queued
-      // for this dispatch (e.g. intent.budget_adjusted that the resume
-      // chain folded in) would be left UNAPPLIED — the next resume
-      // would re-fold the same intent, dispatch the same handler,
-      // re-trip the abort, ad infinitum. The post-handler commit path
-      // (further below) does the same merge for the success arm; the
-      // abort arms need it equally.
       const abortAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
-      if (Object.keys(decision.routingDelta).length > 0) abortAppendOpts.routingPatch = decision.routingDelta;
-      if (decision.appliedSeqs.length > 0) {
-        abortAppendOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
-      }
+      if (abortPlan.routingPatch !== undefined) abortAppendOpts.routingPatch = abortPlan.routingPatch;
+      if (abortPlan.advanceAppliedTo !== undefined) abortAppendOpts.advanceAppliedTo = abortPlan.advanceAppliedTo;
 
-      if (reactiveBudgetHaltDetail !== undefined) {
-        const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
-        if (reactiveBudgetHaltDetail.length > 0) haltPayload.detail = reactiveBudgetHaltDetail;
-        facts.push({ type: "fact.run_halted", payload: haltPayload });
-        await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
-        return { kind: "terminal" };
-      }
-      // Reactive budget pause: same shape as the halt arm above but
-      // for `budget_policy="pause"` (the default). Emits
-      // `fact.run_paused{reason:"budget", scope, metric, limit, actual}`
-      // alongside the node_aborted in one atomic commit so the run
-      // releases its concurrency slot. The operator raises the cap via
-      // `intent.budget_adjusted` and resumes via `intent.resume`.
-      // consecutiveAborts is NOT bumped — like the timeout-retry path,
-      // this is system-initiated.
-      if (reactiveBudgetPauseBreach !== undefined) {
-        facts.push({
-          type: "fact.run_paused",
-          payload: {
-            reason: "budget",
-            nodeId: currentNode,
-            scope: reactiveBudgetPauseBreach.scope,
-            metric: reactiveBudgetPauseBreach.metric,
-            limit: reactiveBudgetPauseBreach.limit,
-            actual: reactiveBudgetPauseBreach.actual,
-          },
-        });
-        await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
-        return { kind: "terminal" };
-      }
-      // Watchdog timeout: re-categorise the abort as a system-initiated
-      // pause-retry. The current dispatch's transcript stays on disk
-      // and the resume re-dispatches with it intact (handler-bridge
-      // restores priorMessages from the messages table on a paused_auto
-      // wake — the same mechanism HITL + provider-retry resumes use).
-      // Bounded by a per-nodeId counter at
-      // `routing.internal.timeout_retries.<nodeId>`; exhaustion halts
-      // with `timeout_exhausted`. fact.node_aborted still lands so
-      // partial-spend metrics accrue exactly as on the abort path.
-      // consecutiveAborts is intentionally NOT bumped — watchdog
-      // timeouts are system-initiated, not workflow-initiated, so the
-      // abort-loop ceiling shouldn't compound with them.
-      if (abortCause === "timeout") {
-        const TIMEOUT_RETRY_COUNTER_KEY = `internal.timeout_retries.${currentNode}`;
-        const TIMEOUT_RETRY_BACKOFF_MS_BASE = 5_000;
-        const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
-        const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
-        const priorAttempts = readNumber(effectiveRouting[TIMEOUT_RETRY_COUNTER_KEY]);
-        const nextAttempt = priorAttempts + 1;
-        if (nextAttempt < TIMEOUT_RETRY_MAX_ATTEMPTS) {
-          const delayMs = Math.min(
-            TIMEOUT_RETRY_BACKOFF_MS_CEILING,
-            TIMEOUT_RETRY_BACKOFF_MS_BASE * 2 ** priorAttempts,
-          );
-          const resumeAt = clock() + delayMs;
-          facts.push({
-            type: "fact.run_paused",
-            payload: {
-              reason: "timeout_retry",
-              nodeId: currentNode,
-              attempt: nextAttempt,
-              delayMs,
-              resumeAt,
-              maxAttempts: TIMEOUT_RETRY_MAX_ATTEMPTS,
-              // spec.maxMs is necessarily defined here — abortCause === "timeout"
-              // only fires when AbortSignal.timeout(spec.maxMs) was wired into the
-              // merged signal, which the dispatch block skips when spec.maxMs is
-              // undefined. The ?? 0 is purely a typecheck narrowing.
-              attemptedMs: spec.maxMs ?? 0,
-            },
-          });
-          // Merge timeout-retry routing keys with the fold's delta so
-          // operator intents queued during the dying turn (steer text,
-          // cap raises, etc.) persist into the resumed dispatch.
-          const timeoutRoutingPatch: Record<string, unknown> = {
-            ...decision.routingDelta,
-            [AUTO_RESUME_AT_KEY]: resumeAt,
-            [TIMEOUT_RETRY_COUNTER_KEY]: nextAttempt,
-          };
-          const timeoutAppendOpts: { routingPatch: Record<string, unknown>; advanceAppliedTo?: number } = {
-            routingPatch: timeoutRoutingPatch,
-          };
-          if (decision.appliedSeqs.length > 0) {
-            timeoutAppendOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
-          }
-          const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, timeoutAppendOpts);
-          if (!ok) {
-            const { halted } = await onOccConflict("fact.run_paused", currentNode, iteration, recorder.version());
-            if (halted) return { kind: "terminal" };
-            return { kind: "continue" };
-          }
-          return { kind: "terminal" };
+      // Watchdog timeout-retry: commit node_aborted + run_paused{timeout_retry};
+      // an OCC conflict re-drives (continue) or halts. consecutiveAborts is NOT
+      // bumped — the retry is system-initiated.
+      if (abortPlan.outcome === "timeout_retry") {
+        const ok = await tryAppendFact(opts.store, runId, recorder.version(), abortPlan.facts, abortAppendOpts);
+        if (!ok) {
+          const { halted } = await onOccConflict("fact.run_paused", currentNode, iteration, recorder.version());
+          if (halted) return { kind: "terminal" };
+          return { kind: "continue" };
         }
-        // Exhausted — terminal halt. fact.node_aborted lands first
-        // for metrics, then fact.run_halted with the operator-readable
-        // reason.
-        facts.push({
-          type: "fact.run_halted",
-          payload: {
-            reason: "timeout_exhausted",
-            detail: `${TIMEOUT_RETRY_MAX_ATTEMPTS} watchdog timeouts on node "${currentNode}"; thread continuity preserved but progress stalled`,
-          },
-        });
-        await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
         return { kind: "terminal" };
       }
-      await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
+      // Reactive-budget halt/pause + timeout-exhausted: one atomic terminal
+      // commit (the terminal/pause fact rides alongside node_aborted).
+      if (abortPlan.outcome === "halt" || abortPlan.outcome === "pause") {
+        await tryAppendFact(opts.store, runId, recorder.version(), abortPlan.facts, abortAppendOpts);
+        return { kind: "terminal" };
+      }
+      // Plain workflow/operator abort: commit node_aborted, then bump the
+      // abort-loop counter. A one-shot warning the abort before the ceiling so a
+      // watcher sees the trend (observability — no version bump, rides alongside
+      // the just-committed node_aborted); at the ceiling, a recoverable
+      // abort_loop pause (a SECOND commit against a re-read version).
+      await tryAppendFact(opts.store, runId, recorder.version(), abortPlan.facts, abortAppendOpts);
       consecutiveAborts++;
-      // One-shot warning the abort before the halt lands so a watcher
-      // sees the trend before the run dies. Observability (no version
-      // bump, no OCC) so it can ride alongside the just-committed
-      // fact.node_aborted in causal order.
       if (consecutiveAborts === abortLoopCeiling - 1) {
         opts.store.appendObservabilityEvents(runId, [
           {
