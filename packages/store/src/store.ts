@@ -773,6 +773,7 @@ export class SqliteStore implements IEventStore {
       ordinal: r.ordinal,
       content: JSON.parse(r.content),
       nodeId: r.node_id,
+      iteration: r.iteration,
     }));
   }
 

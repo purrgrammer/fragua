@@ -27,6 +27,7 @@ function toolNodeRow(opts: {
   return {
     ordinal: opts.ordinal,
     nodeId: opts.nodeId,
+    iteration: 0,
     content: {
       role: "tool_node",
       command: opts.command,

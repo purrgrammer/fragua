@@ -16,6 +16,7 @@ function userMsg(text: string): RunMessageRow {
   return {
     ordinal: nextOrdinal++,
     nodeId: null,
+    iteration: 0,
     content: { role: "user", content: text, timestamp: 0 },
   };
 }
@@ -24,6 +25,7 @@ function userMsgParts(text: string): RunMessageRow {
   return {
     ordinal: nextOrdinal++,
     nodeId: null,
+    iteration: 0,
     content: { role: "user", content: [{ type: "text", text }], timestamp: 0 },
   };
 }
@@ -32,6 +34,7 @@ function assistantMsg(text: string): RunMessageRow {
   return {
     ordinal: nextOrdinal++,
     nodeId: null,
+    iteration: 0,
     content: {
       role: "assistant",
       content: [{ type: "text", text }],

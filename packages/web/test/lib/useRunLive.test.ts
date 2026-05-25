@@ -136,6 +136,7 @@ describe("useRunLive — bootstrap fetch is gated on a settled snapshot", () => 
     const toolNodeRow = {
       ordinal: 1,
       nodeId: "find_pr",
+      iteration: 0,
       content: {
         role: "tool_node",
         command: "echo hi",

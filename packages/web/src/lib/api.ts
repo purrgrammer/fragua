@@ -732,7 +732,8 @@ export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
 
 /** A messages-table row. `content` is a pi-agent-core `AgentMessage`
  * (lossless JSON round-trip). `nodeId` is fragua's projection of which
- * graph node emitted the turn.
+ * graph node emitted the turn. `iteration` is the loop-iteration counter
+ * for the emitting node (0 for the first dispatch).
  *
  * `runId` is intentionally absent — the URL pins it for single-run
  * reads, so `ordinal` alone is a stable identity. */
@@ -740,6 +741,7 @@ export interface RunMessageRow {
   ordinal: number;
   content: AgentMessage;
   nodeId: string | null;
+  iteration: number;
 }
 
 export async function getRunMessages(id: string, sinceOrdinal?: number): Promise<RunMessageRow[]> {

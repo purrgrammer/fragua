@@ -102,10 +102,10 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   // losslessly — the messages table is the source of truth for
   // rehydrating prior turns on threaded nodes across daemon restarts.
   //
-  // Returns the *narrow* wire shape: `{ ordinal, nodeId, content }` —
-  // `runId` (already pinned by the URL) and `iteration` (unused by the
-  // web UI) are skipped at the SQL projection layer, not in JS, so
-  // SQLite never materialises them into a row buffer.
+  // Returns the *narrow* wire shape: `{ ordinal, nodeId, iteration, content }` —
+  // `runId` is omitted (already pinned by the URL). `iteration` is included
+  // so the web transcript can align looped-node sections to their
+  // per-iteration nodeState.
   //
   // No `limit` is applied — the transcript view shows the full list.
   // Clients that need paging pass `?sinceOrdinal=<last>`.

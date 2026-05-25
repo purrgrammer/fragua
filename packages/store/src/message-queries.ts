@@ -27,15 +27,15 @@ export interface MessageRow {
 
 /**
  * Wire-shape row for the `/runs/:id/messages` HTTP endpoint — only the
- * columns the web transcript consumes. `run_id` is always equal to the
- * URL/path scope (redundant) and `iteration` is unused by the UI;
- * skipping both at the SQL layer keeps SQLite from materialising them
- * into the row buffer at all.
+ * columns the web transcript consumes. `run_id` is omitted (already
+ * pinned by the URL). `iteration` is included so the transcript can
+ * align looped-node sections to their per-iteration nodeState.
  */
 export interface NarrowMessageRow {
   ordinal: number;
   content: string;
   node_id: string | null;
+  iteration: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ const SELECT_MESSAGES_BY_RUN_NODE_SQL = `
 `;
 
 const SELECT_MESSAGES_NARROW_BY_RUN_SQL = `
-  SELECT ordinal, content, node_id
+  SELECT ordinal, content, node_id, iteration
     FROM messages
    WHERE run_id = ?1 AND ordinal > ?2
    ORDER BY ordinal ASC
@@ -67,7 +67,7 @@ const SELECT_MESSAGES_NARROW_BY_RUN_SQL = `
 `;
 
 const SELECT_MESSAGES_NARROW_BY_RUN_NODE_SQL = `
-  SELECT ordinal, content, node_id
+  SELECT ordinal, content, node_id, iteration
     FROM messages
    WHERE run_id = ?1 AND ordinal > ?2 AND node_id = ?3
    ORDER BY ordinal ASC

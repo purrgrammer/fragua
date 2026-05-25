@@ -17,6 +17,7 @@ function userRow(ordinal: number, nodeId: string, text: string): RunMessageRow {
   return {
     ordinal,
     nodeId,
+    iteration: 0,
     content: { role: "user", content: text, timestamp: 0 },
   };
 }

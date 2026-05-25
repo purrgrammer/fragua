@@ -327,12 +327,14 @@ export interface Message {
 }
 
 /** Wire-shape projection of `Message` for the web transcript endpoint.
- * Excludes `runId` (already pinned by the URL) and `iteration` (unused
- * by the UI). Returned directly by `IEventStore.getMessagesNarrow`. */
+ * `runId` is omitted (already pinned by the URL). `iteration` is included
+ * so the transcript can align looped-node sections to their per-iteration
+ * nodeState. Returned directly by `IEventStore.getMessagesNarrow`. */
 export interface NarrowMessage {
   ordinal: number;
   content: AgentMessage;
   nodeId: string | null;
+  iteration: number;
 }
 
 export interface ArtifactScope {

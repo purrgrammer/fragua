@@ -20,6 +20,7 @@ function userMsg(ordinal: number, text: string): RunMessageRow {
   return {
     ordinal,
     nodeId: null,
+    iteration: 0,
     content: { role: "user", content: text, timestamp: 0 },
   };
 }

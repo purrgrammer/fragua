@@ -1104,7 +1104,7 @@ app.get("/runs/:id/events", (c) => {
 // Per-run conversation transcript: pi-agent AgentMessage rows, ordered
 // by per-run `ordinal`. `nodeId` stamps which node appended each
 // message. Used by the web conversation view and post-mortem tooling.
-// Returns the narrow wire shape `{ ordinal, nodeId, content }` —
+// Returns the narrow wire shape `{ ordinal, nodeId, iteration, content }` —
 // `?nodeId=` filters to one thread, `?sinceOrdinal=` for resume-style
 // pagination, `?limit=` caps the result set.
 app.get("/runs/:id/messages", (c) => {
