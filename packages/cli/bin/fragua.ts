@@ -661,8 +661,7 @@ cli
   .option("--input <text>", "`add` only: free-form description for every fire (seeds the title)")
   .option("--on-overlap <policy>", "`add` only: skip | queue | concurrent (default skip)")
   .option("--no-fire-on-create", "`add` only: wait one full interval before the first fire")
-  .option("--url <url>", "Server URL (default: discovered via the store's server_endpoint row)")
-  .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
+  .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
   .action(async (action: string | undefined, target: string | undefined, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -685,7 +684,6 @@ cli
         const code = await scheduleAddCommand({
           workflow: target,
           every,
-          ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
           ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
           ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
           ...(pick("input") !== undefined ? { input: pick("input")! } : {}),
@@ -699,7 +697,6 @@ cli
       case "list":
       case "ls": {
         const code = await scheduleListCommand({
-          ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
           ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
           ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
         });
@@ -715,7 +712,6 @@ cli
         }
         const idOpts = {
           id: target,
-          ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
           ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
           ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
         };

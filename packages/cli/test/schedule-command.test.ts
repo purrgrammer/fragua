@@ -1,6 +1,7 @@
-// `fragua schedule` CLI \u2014 covers the four happy-path commands by spinning
-// up a real `@fragua/server` schedule routes app and pointing the
-// command's URL discovery at it via the explicit `--url` override.
+// `fragua schedule` CLI \u2014 store-client. The commands open the store by path
+// (migrate:false) and read/write schedule rows + their daemon-event audit
+// directly, no HTTP. The rig is a file-backed store the command opens on a
+// second connection (WAL); the test's handle reads back the committed writes.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -8,8 +9,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore } from "@fragua/store";
-import { Hono } from "hono";
-import { createScheduleRoutes, type ScheduleRoutesDeps } from "../../server/src/store/schedule-routes.ts";
 import {
   scheduleAddCommand,
   scheduleListCommand,
@@ -19,8 +18,9 @@ import {
 } from "../src/commands/schedule.ts";
 
 interface Rig {
-  url: string;
+  dbPath: string;
   store: SqliteStore;
+  dir: string;
   close: () => void;
 }
 
@@ -30,19 +30,10 @@ let originalLog: typeof console.log;
 let originalError: typeof console.error;
 
 beforeEach(async () => {
-  const store = new SqliteStore({ path: ":memory:" });
-  const app = new Hono();
-  const deps: ScheduleRoutesDeps = { store };
-  app.route("/", createScheduleRoutes(deps));
-  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
-  r = {
-    url: `http://127.0.0.1:${server.port}`,
-    store,
-    close: () => {
-      server.stop(true);
-      store.close();
-    },
-  };
+  const dir = await mkdtemp(join(tmpdir(), "fragua-sched-db-"));
+  const dbPath = join(dir, "t.db");
+  const store = new SqliteStore({ path: dbPath });
+  r = { dbPath, store, dir, close: () => store.close() };
   logs = [];
   originalLog = console.log;
   originalError = console.error;
@@ -54,10 +45,11 @@ beforeEach(async () => {
   };
 });
 
-afterEach(() => {
+afterEach(async () => {
   console.log = originalLog;
   console.error = originalError;
   r.close();
+  await rm(r.dir, { recursive: true, force: true });
 });
 
 describe("scheduleAddCommand", () => {
@@ -78,7 +70,7 @@ describe("scheduleAddCommand", () => {
       workflow: "analyze",
       every: "1h",
       cwd: proj,
-      url: r.url,
+      dbPath: r.dbPath,
     });
     expect(code).toBe(0);
     const rows = r.store.listSchedules();
@@ -96,7 +88,7 @@ describe("scheduleAddCommand", () => {
     const code = await scheduleAddCommand({
       workflow: "wf",
       every: "5m",
-      url: r.url,
+      dbPath: r.dbPath,
     });
     expect(code).toBe(1);
     expect(r.store.listSchedules().length).toBe(0);
@@ -108,7 +100,7 @@ describe("scheduleAddCommand", () => {
       every: "1h",
       cwd: proj,
       noFireOnCreate: true,
-      url: r.url,
+      dbPath: r.dbPath,
     });
     expect(code).toBe(0);
     const row = r.store.listSchedules()[0]!;
@@ -137,7 +129,7 @@ describe("scheduleListCommand", () => {
     );
     r.store.pauseSchedule("sch_b", Date.now());
 
-    const code = await scheduleListCommand({ url: r.url });
+    const code = await scheduleListCommand({ dbPath: r.dbPath });
     expect(code).toBe(0);
     const out = logs.join("\n");
     expect(out).toContain("sch_a");
@@ -192,7 +184,7 @@ describe("scheduleListCommand", () => {
       s2b.version,
     );
 
-    const code = await scheduleListCommand({ url: r.url });
+    const code = await scheduleListCommand({ dbPath: r.dbPath });
     expect(code).toBe(0);
     const out = logs.join("\n");
     // r1=completed→✅, r2=halted→❌, r3=queued(in-flight)→⏳
@@ -211,7 +203,7 @@ describe("scheduleListCommand", () => {
       { id: "sch_y", workflowRef: "wf", cwd: "/two", intervalMs: 3_600_000, intervalText: "1h" },
       Date.now(),
     );
-    const code = await scheduleListCommand({ url: r.url, cwd: "/two" });
+    const code = await scheduleListCommand({ dbPath: r.dbPath, cwd: "/two" });
     expect(code).toBe(0);
     const out = logs.join("\n");
     expect(out).toContain("sch_y");
@@ -225,14 +217,14 @@ describe("scheduleRmCommand", () => {
       { id: "sch_d", workflowRef: "wf", cwd: "/r", intervalMs: 3_600_000, intervalText: "1h" },
       Date.now(),
     );
-    const code = await scheduleRmCommand({ id: "sch_d", url: r.url });
+    const code = await scheduleRmCommand({ id: "sch_d", dbPath: r.dbPath });
     expect(code).toBe(0);
     expect(r.store.getSchedule("sch_d")).toBeNull();
     expect(logs.some((l) => l.includes("schedule deleted"))).toBe(true);
   });
 
   test("returns 1 on unknown id", async () => {
-    const code = await scheduleRmCommand({ id: "sch_nope", url: r.url });
+    const code = await scheduleRmCommand({ id: "sch_nope", dbPath: r.dbPath });
     expect(code).toBe(1);
   });
 });
@@ -243,11 +235,11 @@ describe("schedulePauseCommand / scheduleResumeCommand", () => {
       { id: "sch_p", workflowRef: "wf", cwd: "/r", intervalMs: 3_600_000, intervalText: "1h" },
       Date.now(),
     );
-    const pauseCode = await schedulePauseCommand({ id: created.id, url: r.url });
+    const pauseCode = await schedulePauseCommand({ id: created.id, dbPath: r.dbPath });
     expect(pauseCode).toBe(0);
     expect(r.store.getSchedule(created.id)!.pausedAt).not.toBeNull();
 
-    const resumeCode = await scheduleResumeCommand({ id: created.id, url: r.url });
+    const resumeCode = await scheduleResumeCommand({ id: created.id, dbPath: r.dbPath });
     expect(resumeCode).toBe(0);
     expect(r.store.getSchedule(created.id)!.pausedAt).toBeNull();
   });
