@@ -167,6 +167,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.run_quarantined": {
       closeDispatchInterval(next, now);
       next.status = "quarantined";
+      next.currentNode = null;
       next.nodeStartedAt = null;
       return next;
     }

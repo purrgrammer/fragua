@@ -245,3 +245,95 @@ describe("executor faults — handler hang (leaked watchdog timeout)", () => {
     );
   });
 });
+
+/** Drive a generated run to mid-flight `running` (one turn → run_started), then
+ * model "the pre-commit recorder durably wrote a side_effect_intent and the
+ * daemon died before the external call's _done": append a lone
+ * fact.side_effect_intent and run the startup sweep. */
+async function orphanCase(
+  graph: Graph,
+): Promise<{ status: string; events: StoredEvent[]; state: RunState; orphanSeq: number }> {
+  const TICK_MS = 1;
+  let nowMs = 1_700_000_000_000;
+  const clock = (): number => {
+    nowMs += TICK_MS;
+    return nowMs;
+  };
+  const dir = mkdtempSync(join(tmpdir(), "fragua-orphan-"));
+  const store = new SqliteStore({ path: join(dir, "fragua.db"), now: clock });
+  try {
+    const sha = "g";
+    store.saveWorkflow(sha, "g", "name: g", serializeGraph(graph), CURRENT_IR_VERSION);
+    const runId = "r";
+    store.enqueueRun({ runId, workflowSha: sha, priority: 0, initialRouting: { start_node: "start" } });
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    for (const node of Object.values(graph.nodes)) {
+      if (node.type === "start" || node.type === "exit" || node.type === "human") continue;
+      dispatcher.register(sha, node.id, successSpec(node));
+    }
+    // One turn lands run_started and leaves the run `running` (the turn returns
+    // `continue` to reload state) — a deterministic mid-flight point.
+    store.claimNextRun(1);
+    await runOne(runId, {
+      store,
+      dispatcher,
+      registry: new AbortRegistry(),
+      tools: new handler.InMemoryToolRegistry(),
+      llmCall: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 1,
+      shutdownSignal: new AbortController().signal,
+      clock,
+      random: () => 0.5,
+    });
+    const mid = store.getState(runId);
+    if (mid === null) throw new Error("run vanished");
+    // Recorder-durable intent, no matching _done (the crash window).
+    const res = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.side_effect_intent",
+          payload: {
+            nodeId: mid.currentNode ?? "start",
+            iteration: 0,
+            toolName: "charge",
+            argsHash: "h",
+            attempt: 1,
+            idempotencyKey: "ik-orphan",
+          },
+        },
+      ],
+      mid.version,
+    );
+    store.startupSweep();
+    const finalState = store.getState(runId);
+    if (finalState === null) throw new Error("run vanished post-sweep");
+    return { status: finalState.status, events: store.getEvents(runId), state: finalState, orphanSeq: res.seqs[0]! };
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("executor faults — orphan side-effect (crash between intent and done)", () => {
+  // A side_effect_intent with no matching _done makes the startup sweep
+  // quarantine the run (orphan-side-effect invariant, I5/P6) — for ANY
+  // generated graph, mid-flight at a real node.
+  test("an orphaned side_effect_intent quarantines the run on sweep, invariants intact", async () => {
+    await fc.assert(
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+        const { status, events, state, orphanSeq } = await orphanCase(graph);
+        expect(status).toBe("quarantined");
+        const q = events.find((e) => e.type === "fact.run_quarantined");
+        expect(q).toBeDefined();
+        const payload = q!.payload as { reason?: string; orphanedIntents?: number[] };
+        expect(payload.reason).toBe("orphan_side_effect");
+        expect(payload.orphanedIntents).toContain(orphanSeq);
+        checkRunInvariants(events, state);
+      }),
+      { numRuns: pbtRuns(80) },
+    );
+  });
+});
