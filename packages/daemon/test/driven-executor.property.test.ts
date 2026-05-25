@@ -104,7 +104,9 @@ async function drive(graph: Graph, specFor: (node: Node) => handler.HandlerSpec,
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
     for (const node of Object.values(graph.nodes)) {
-      if (node.type === "start" || node.type === "exit") continue;
+      // Human nodes keep the auto-dispatcher's real human handler (yield on
+      // first dispatch, route on resume); the harness answers their pause.
+      if (node.type === "start" || node.type === "exit" || node.type === "human") continue;
       dispatcher.register(sha, node.id, specFor(node));
     }
     const runId = "r";
@@ -135,7 +137,18 @@ async function drive(graph: Graph, specFor: (node: Node) => handler.HandlerSpec,
         wakePending(store, clock);
         continue;
       }
-      break; // operator pause (resting) or paused_human
+      if (st.status === "paused_human") {
+        // Answer the operator gate: pick the node's first declared route (r0,
+        // which the generator always points at the forward spine) so the run
+        // progresses, then wake — the genuine pause→answer→resume HITL loop.
+        const pause = [...store.getEvents(runId)].reverse().find((e) => e.type === "fact.run_paused_human");
+        const routes = (pause?.payload as { routes?: string[] } | undefined)?.routes ?? [];
+        if (routes.length === 0) break;
+        store.appendIntent(runId, { type: "intent.human_input", payload: { route: routes[0]! } });
+        wakePending(store, clock);
+        continue;
+      }
+      break; // operator pause (resting)
     }
     return { events: store.getEvents(runId), status: store.getState(runId)?.status ?? "unknown" };
   } finally {
@@ -243,6 +256,48 @@ describe("driven executor — tier-2", () => {
     ).length;
     expect(providerPauses).toBe(2);
     expect(events.filter((e) => e.type === "fact.run_resumed").length).toBe(2);
+    assertCoreInvariants(events);
+  });
+
+  test("slice 3: HITL — human pauses are answered (intent.human_input) and the run completes", async () => {
+    await fc.assert(
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing", "human"]), async (graph) => {
+        // Non-human nodes all succeed; each human gate is answered with its
+        // forward route (r0). The run threads every pause and reaches exit.
+        const { events, status } = await drive(graph, successSpec);
+        expect(status).toBe("completed");
+        expect(events.at(-1)?.type).toBe("fact.run_completed");
+        assertCoreInvariants(events);
+        // Every human pause was answered and resumed.
+        const humanPauses = events.filter((e) => e.type === "fact.run_paused_human").length;
+        const resumes = events.filter((e) => e.type === "fact.run_resumed").length;
+        expect(resumes).toBeGreaterThanOrEqual(humanPauses);
+      }),
+      { numRuns: 150 },
+    );
+  });
+
+  // Deterministic proof the HITL loop fires (the property's graph may contain
+  // no human node). start → h(human) → exit; the gate is answered via "go".
+  test("slice 3 (deterministic): a human node pauses, is answered, and completes", async () => {
+    const graph: Graph = {
+      id: "g",
+      directed: true,
+      attrs: {},
+      nodes: {
+        start: { id: "start", type: "start", attrs: { label: "start" } },
+        h: { id: "h", type: "human", attrs: { label: "h", routes: ["go"], text: "choose" } },
+        exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
+      },
+      edges: [
+        { from: "start", to: "h", attrs: {} },
+        { from: "h", to: "exit", attrs: { route: "go" } },
+      ],
+    };
+    const { events, status } = await drive(graph, successSpec);
+    expect(status).toBe("completed");
+    expect(events.filter((e) => e.type === "fact.run_paused_human").length).toBe(1);
+    expect(events.filter((e) => e.type === "fact.run_resumed").length).toBeGreaterThanOrEqual(1);
     assertCoreInvariants(events);
   });
 });
