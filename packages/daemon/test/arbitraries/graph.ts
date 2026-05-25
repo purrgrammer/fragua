@@ -25,11 +25,13 @@
 // human (route-keyed exits — the HITL + LLM-directed branch). Any node with a
 // non-empty `routes:` follows the unified routing discipline (E017–E024): all
 // outgoing edges route-keyed, exactly one per declared route, ≥1 forward for
-// exit-reachability, never a goal gate. Budget ceilings (run-level budget_usd +
-// budget_policy, node-level max_cost_usd/max_tokens) are generated too.
-// Threads/summary and inputs layer on next.
+// exit-reachability, never a goal gate. Also generated: budget ceilings
+// (run-level budget_usd + budget_policy, node-level max_cost_usd / max_tokens),
+// threads + summary (graph thread_id with node summary — E027 kept by always
+// pairing summary with a thread), and an inputs: block with a declared
+// `${{ inputs.in0 }}` reference (E030 kept by only referencing declared names).
 
-import type { Edge, Graph, GraphAttrs, Node, NodeAttrs } from "@fragua/core";
+import type { Edge, Graph, GraphAttrs, InputDecl, Node, NodeAttrs } from "@fragua/core";
 import fc from "fast-check";
 
 const MAX_BODY = 6;
@@ -64,12 +66,27 @@ interface NodeSpec {
    * budget gate). No validator rule beyond W013, so safe to attach freely. */
   maxCostUsd: number | undefined;
   maxTokens: number | undefined;
+  /** plain-llm only — optional thread summariser level. Applied only when the
+   * graph carries a thread_id (always paired below), keeping E027 satisfied. */
+  summary: "low" | "medium" | "high" | undefined;
 }
 
 /** Run-level budget (graph attrs). `undefined` = no ceiling. */
 interface BudgetSpec {
   usd: number;
   policy: "warn" | "stop" | "pause";
+}
+
+/** Graph-level generation spec — attrs that aren't per-node. */
+interface GraphSpec {
+  budget: BudgetSpec | undefined;
+  /** Force a graph-level `thread_id` even when no node summarises. */
+  thread: boolean;
+  /** Declared `inputs:` count (`in0..in{n-1}`), 0 = no inputs block. */
+  inputCount: number;
+  /** Embed a `${{ inputs.in0 }}` reference in n1's prompt (only when inputs
+   * are declared — keeps E030 clean). */
+  embedInputRef: boolean;
 }
 
 function bodyId(i: number): string {
@@ -89,16 +106,28 @@ function nodeSpec(i: number, k: number): fc.Arbitrary<NodeSpec> {
     extraRouteTargets: fc.array(fc.integer({ min: 0, max: k }), { minLength: 2, maxLength: 2 }),
     maxCostUsd: fc.option(fc.double({ min: 0.01, max: 50, noNaN: true }), { nil: undefined }),
     maxTokens: fc.option(fc.integer({ min: 1, max: 100_000 }), { nil: undefined }),
+    summary: fc.option(fc.constantFrom<"low" | "medium" | "high">("low", "medium", "high"), { nil: undefined }),
   });
 }
 
-function buildGraph(specs: readonly NodeSpec[], budget: BudgetSpec | undefined): Graph {
+function buildGraph(specs: readonly NodeSpec[], g: GraphSpec): Graph {
   const k = specs.length;
   const graphAttrs: GraphAttrs = {};
-  if (budget !== undefined) {
-    graphAttrs.budget_usd = budget.usd;
-    graphAttrs.budget_policy = budget.policy;
+  if (g.budget !== undefined) {
+    graphAttrs.budget_usd = g.budget.usd;
+    graphAttrs.budget_policy = g.budget.policy;
   }
+  // A graph thread_id is set whenever requested OR any plain-llm node wants a
+  // summary, so summary is never orphaned (E027: summary requires a thread).
+  const anySummary = specs.some((s) => s.kind === "llm" && s.summary !== undefined);
+  if (g.thread || anySummary) graphAttrs.thread_id = "main";
+  if (g.inputCount > 0) {
+    graphAttrs.inputs = Array.from(
+      { length: g.inputCount },
+      (_, j): InputDecl => ({ name: `in${j}`, type: "string", required: false }),
+    );
+  }
+
   const nodes: Record<string, Node> = {
     start: { id: "start", type: "start", attrs: { label: "start" } },
     exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
@@ -138,6 +167,7 @@ function buildGraph(specs: readonly NodeSpec[], budget: BudgetSpec | undefined):
     }
     if (spec.maxCostUsd !== undefined) attrs.max_cost_usd = spec.maxCostUsd;
     if (spec.maxTokens !== undefined) attrs.max_tokens = spec.maxTokens;
+    if (spec.kind === "llm" && spec.summary !== undefined) attrs.summary = spec.summary;
     nodes[id] = { id, type: spec.kind, attrs };
     edges.push({ from: id, to: spineTarget, attrs: {} });
     if (spec.failTarget !== undefined) {
@@ -145,25 +175,36 @@ function buildGraph(specs: readonly NodeSpec[], budget: BudgetSpec | undefined):
     }
   }
 
+  // A declared input referenced from n1's prompt — exercises E030's clean path
+  // (the ref is always a declared name).
+  if (g.inputCount > 0 && g.embedInputRef) {
+    nodes[bodyId(1)]!.attrs.prompt = "use ${{ inputs.in0 }}";
+  }
+
   return { id: "g", directed: true, attrs: graphAttrs, nodes, edges };
 }
 
-const arbBudget: fc.Arbitrary<BudgetSpec | undefined> = fc.option(
-  fc.record({
-    usd: fc.double({ min: 0.01, max: 50, noNaN: true }),
-    policy: fc.constantFrom<"warn" | "stop" | "pause">("warn", "stop", "pause"),
-  }),
-  { nil: undefined },
-);
+const arbGraphSpec: fc.Arbitrary<GraphSpec> = fc.record({
+  budget: fc.option(
+    fc.record({
+      usd: fc.double({ min: 0.01, max: 50, noNaN: true }),
+      policy: fc.constantFrom<"warn" | "stop" | "pause">("warn", "stop", "pause"),
+    }),
+    { nil: undefined },
+  ),
+  thread: fc.boolean(),
+  inputCount: fc.integer({ min: 0, max: 2 }),
+  embedInputRef: fc.boolean(),
+});
 
 /** Whole-graph arbitrary (the tier-2 driven-executor harness consumes this). */
 export const arbGraph: fc.Arbitrary<Graph> = fc.integer({ min: 1, max: MAX_BODY }).chain((k) =>
   fc
     .record({
-      budget: arbBudget,
+      graphSpec: arbGraphSpec,
       specs: fc.tuple(...Array.from({ length: k }, (_, idx) => nodeSpec(idx + 1, k))),
     })
-    .map(({ budget, specs }) => buildGraph(specs, budget)),
+    .map(({ graphSpec, specs }) => buildGraph(specs, graphSpec)),
 );
 
 /** Tier-1 slice for `planTransition`: a generated graph paired with one of its
@@ -197,6 +238,9 @@ export function featuresOf(graph: Graph): string[] {
   ) {
     out.push("has-budget");
   }
+  if (graph.attrs.thread_id !== undefined) out.push("has-thread");
+  if (body.some((n) => typeof n.attrs.summary === "string")) out.push("has-summary");
+  if (Array.isArray(graph.attrs.inputs) && graph.attrs.inputs.length > 0) out.push("has-inputs");
 
   const failEdges = graph.edges.filter((e) => e.attrs.outcome === "fail");
   if (failEdges.length > 0) out.push("has-fail-edge");
