@@ -1,0 +1,106 @@
+# dependencies.yaml — survey outdated third-party deps, bump them, and keep the
+# project green. Mirrors `work`: the change is made in the worktree and left
+# UNCOMMITTED — green CI ends the run, the operator accepts (apply + commit) from
+# the inbox, where the per-bump rationale lives in the run transcript.
+#
+# Shape:
+#   update → review → typecheck → ci → exit          (green ⇒ done, uncommitted)
+#               ↑retry            ↓fail   ↓fail
+#               update             fix ←───┘ → typecheck
+#
+# Principles:
+#   - `update` touches MANIFESTS ONLY (package.json + lockfile). Adapting source
+#     to a new API is the downstream `fix` step's job — keeps the bump diff
+#     reviewable and the gate's job crisp.
+#   - `review` is an independent judge: it reads the manifest diff fresh (exact
+#     pins, scope respected, no `workspace:` deps touched), never the author's
+#     reasoning. REJECT is a goal-gate retarget back to `update`.
+#   - `update` + `fix` share `thread: bump` so the fixer sees WHICH deps moved
+#     and the stated breaking changes; the type/CI gates re-derive from the env.
+#   - "Nothing in scope to update" is a graceful no-op → route to `exit`, not a
+#     halt — this workflow is meant to be run on a cadence.
+#
+#   bun run fragua run dependencies
+#   bun run fragua run dependencies --input scope=patch
+#   bun run fragua run dependencies --input scope=major --input package=hono
+
+name: dependencies
+goal: Survey outdated third-party dependencies, bump their exact pins, and leave the project typecheck- and CI-green for the operator to accept.
+budget: 6.00
+budget-policy: pause
+
+inputs:
+  scope:
+    type: choice
+    options: [patch, minor, major]
+    default: minor
+    description: How aggressive the bumps may be (patch ⊂ minor ⊂ major)
+  package:
+    type: string
+    default: ""
+    description: Restrict to a single dependency; empty means every eligible dep
+
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+
+steps:
+  update:
+    type: llm
+    thread: bump
+    allowed-tools: [read, grep, find, bash, edit]
+    prompt: |
+      Update fragua's third-party dependencies. Scope `${{ inputs.scope }}`: patch → patch bumps only; minor → patch + minor; major → include majors. Package filter `${{ inputs.package }}` — if non-empty, restrict to that one dependency; empty means every eligible dep.
+
+      1. `bun outdated --filter='*'` to survey the WHOLE workspace (plain `bun outdated` only sees the root package). Every pin is exact, so the `Update` column mirrors `Current` — ignore it. Compare `Current` → `Latest`, classify each gap as patch/minor/major yourself, and keep only those within scope.
+      2. For each in-scope dependency, bump its EXACT pin to `Latest` in the owning package.json — no `^` / `~` / ranges (AGENTS.md: every dep is an exact pin). The same dep may appear in several workspace packages; bump each. Skip `workspace:` protocol deps (internal `@fragua/*`).
+      3. `bun install` to settle the lockfile.
+
+      Manifests and lockfile only — do NOT edit source. Leave any compile/test breakage for the downstream steps.
+
+      End with a SUMMARY block — one line per bump: `<pkg> <old>→<new> (patch|minor|major) — <one-line rationale>` — then the total count. Then call `route` exactly once: `updated` if you bumped anything, `none` if nothing was in scope.
+    routes:
+      updated: {to: review, label: "Bumps applied"}
+      none:    {to: exit,   label: "Nothing to update"}
+
+  review:
+    type: llm
+    retry: update
+    max-retries: 2
+    next: typecheck
+    allowed-tools: [read, grep, bash]
+    prompt: |
+      Judge `git diff HEAD` — the dependency bumps only (package.json files + lockfile). Fresh read; ignore any prose, trust the diff.
+        (a) every changed pin is EXACT — no `^` / `~` / ranges.
+        (b) each bump respects scope `${{ inputs.scope }}` (no surprise majors when scope is patch/minor).
+        (c) no `workspace:` internal dep altered; no source files changed.
+        (d) the lockfile is consistent with the manifest edits (`bun install --frozen-lockfile` succeeds).
+      Call out any major with known breaking changes in your one line.
+      `APPROVE: <one line>`, or `abort` with `REJECT: <one line>`.
+
+  typecheck:
+    type: tool
+    run: bun run typecheck
+    max-retries: 3
+    on:
+      success: ci
+      fail: fix
+
+  ci:
+    type: tool
+    run: bun run ci
+    max-retries: 5
+    on:
+      success: exit
+      fail: fix
+
+  fix:
+    type: llm
+    thread: bump
+    max-cost: 0.40
+    allowed-tools: [read, write, edit, grep, bash]
+    prompt: |
+      A dependency bump broke the build. Re-run the failing check (`bun run typecheck`, then `bun run ci`), read the failure, and make the MINIMAL source change to adapt to the new dependency APIs — the bumps in this thread tell you what moved.
+
+      Never downgrade a pin, loosen it to a range, disable a test, lower an assertion, or relax a linter to make a check pass. If a bump can only be made to pass by reverting it, `abort` with `incompatible bump: <pkg> <reason>`. Stop once the check you ran is green.
+    next: typecheck
