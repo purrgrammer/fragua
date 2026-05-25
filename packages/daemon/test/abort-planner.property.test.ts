@@ -12,6 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { AUTO_RESUME_AT_KEY } from "@fragua/core";
 import fc from "fast-check";
 import { type AbortPlanInput, planAbort } from "../src/abort-planner.ts";
+import { pbtRuns } from "./pbt-runs.ts";
 
 const NODE_IDS = ["plan", "implement", "review", "gate"] as const;
 const timeoutKey = (node: string): string => `internal.timeout_retries.${node}`;
@@ -81,7 +82,7 @@ describe("planAbort — properties", () => {
         expect(a).toEqual(b);
         expect(input).toEqual(before);
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -94,7 +95,7 @@ describe("planAbort — properties", () => {
         // ...and only once.
         expect(facts.filter((f) => f.type === "fact.node_aborted").length).toBe(1);
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -109,7 +110,7 @@ describe("planAbort — properties", () => {
         // Never a terminal-completed on the abort path.
         expect(has(facts, "fact.run_completed")).toBe(false);
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -141,7 +142,7 @@ describe("planAbort — properties", () => {
             break;
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -159,7 +160,7 @@ describe("planAbort — properties", () => {
           expect(reasonOf(paused!)).toBe("budget");
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -190,7 +191,7 @@ describe("planAbort — properties", () => {
           expect(reasonOf(halted!)).toBe("timeout_exhausted");
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -213,7 +214,7 @@ describe("planAbort — properties", () => {
           expect(Object.keys(input.routingDelta).length).toBe(0);
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 });

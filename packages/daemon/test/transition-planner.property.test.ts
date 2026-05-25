@@ -19,6 +19,7 @@ import type { RunState } from "@fragua/store";
 import fc from "fast-check";
 import { planTransition, type TransitionInput } from "../src/transition-planner.ts";
 import { arbGraphWithCurrentNode } from "./arbitraries/graph.ts";
+import { pbtRuns } from "./pbt-runs.ts";
 import {
   arbAccounting,
   arbHandlerResult,
@@ -155,7 +156,7 @@ describe("planTransition — properties", () => {
         expect(a).toEqual(b);
         expect(input.handlerResult).toEqual(before);
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -166,7 +167,7 @@ describe("planTransition — properties", () => {
         const terminals = plan.facts.filter((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
         expect(terminals.length).toBeLessThanOrEqual(1);
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -181,7 +182,7 @@ describe("planTransition — properties", () => {
           expect(t.has("fact.run_completed")).toBe(false);
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -209,7 +210,7 @@ describe("planTransition — properties", () => {
           expect(plan.facts.some((f) => f.type === "fact.node_completed")).toBe(true);
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -226,7 +227,7 @@ describe("planTransition — properties", () => {
           expect(plan.advanceAppliedTo).toBe(max);
         }
       }),
-      { numRuns: 1000 },
+      { numRuns: pbtRuns(1000) },
     );
   });
 
@@ -239,7 +240,7 @@ describe("planTransition — properties", () => {
         expect(t.has("fact.run_completed")).toBe(false);
         expect(t.has("fact.run_halted")).toBe(false);
       }),
-      { numRuns: 500 },
+      { numRuns: pbtRuns(500) },
     );
   });
 
@@ -282,7 +283,7 @@ describe("planTransition — properties", () => {
         expect(payload.nextNode).toBe(expectedTarget);
         expect(payload.route).toBe(route);
       }),
-      { numRuns: 500 },
+      { numRuns: pbtRuns(500) },
     );
   });
 
@@ -327,7 +328,7 @@ describe("planTransition — properties", () => {
         if (policy === "stop") expect(breached("fact.run_halted")).toBe(true);
         else expect(breached("fact.run_paused")).toBe(true);
       }),
-      { numRuns: 300 },
+      { numRuns: pbtRuns(300) },
     );
   });
 });

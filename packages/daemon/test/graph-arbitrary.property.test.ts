@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { validate } from "@fragua/core";
 import fc from "fast-check";
 import { arbGraph, arbGraphWithCurrentNode, featuresOf } from "./arbitraries/graph.ts";
+import { pbtRuns } from "./pbt-runs.ts";
 
 describe("graph arbitrary — bootstrap", () => {
   test("every generated graph validates clean (zero diagnostics)", () => {
@@ -26,7 +27,7 @@ describe("graph arbitrary — bootstrap", () => {
           );
         }
       }),
-      { numRuns: 2000 },
+      { numRuns: pbtRuns(2000) },
     );
   });
 
@@ -38,7 +39,7 @@ describe("graph arbitrary — bootstrap", () => {
         // non-terminal: a dispatchable node (llm / tool / human), never start/exit.
         expect(node!.type !== "start" && node!.type !== "exit").toBe(true);
       }),
-      { numRuns: 500 },
+      { numRuns: pbtRuns(500) },
     );
   });
 
@@ -47,7 +48,7 @@ describe("graph arbitrary — bootstrap", () => {
   // mean the planner/executor properties aren't exercising the interesting
   // machinery.
   test("coverage distribution (reported, not asserted)", () => {
-    fc.statistics(arbGraph, (g) => featuresOf(g), { numRuns: 1000 });
+    fc.statistics(arbGraph, (g) => featuresOf(g), { numRuns: pbtRuns(1000) });
     expect(true).toBe(true);
   });
 });

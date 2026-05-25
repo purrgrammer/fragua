@@ -36,6 +36,7 @@ import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { makeArbGraph } from "./arbitraries/graph.ts";
 import { checkRunInvariants } from "./invariants.ts";
+import { pbtRuns } from "./pbt-runs.ts";
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 const AUTO_PAUSE_REASONS = new Set(["provider_retry", "handler_retry", "timeout_retry"]);
@@ -238,7 +239,7 @@ describe("driven executor — tier-2", () => {
         expect(types.has("fact.run_paused")).toBe(false);
         expect(types.has("fact.run_paused_human")).toBe(false);
       }),
-      { numRuns: 150 },
+      { numRuns: pbtRuns(150) },
     );
   });
 
@@ -273,7 +274,7 @@ describe("driven executor — tier-2", () => {
           expect(resumes).toBeGreaterThanOrEqual(autoPauses);
         },
       ),
-      { numRuns: 150 },
+      { numRuns: pbtRuns(150) },
     );
   });
 
@@ -321,7 +322,7 @@ describe("driven executor — tier-2", () => {
         const resumes = events.filter((e) => e.type === "fact.run_resumed").length;
         expect(resumes).toBeGreaterThanOrEqual(humanPauses);
       }),
-      { numRuns: 150 },
+      { numRuns: pbtRuns(150) },
     );
   });
 
@@ -371,7 +372,7 @@ describe("driven executor — tier-2", () => {
           }
         },
       ),
-      { numRuns: 150 },
+      { numRuns: pbtRuns(150) },
     );
   });
 

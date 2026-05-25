@@ -21,6 +21,7 @@ import { DaemonAlreadyRunningError, startDaemon } from "../src/entrypoint.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
+import { pbtRuns } from "./pbt-runs.ts";
 
 const closers: Array<() => void> = [];
 afterEach(() => {
@@ -88,7 +89,7 @@ describe("P3 — intents never lost", () => {
           expect(events).toHaveLength(kinds.length);
         },
       ),
-      { numRuns: 15 },
+      { numRuns: pbtRuns(15) },
     );
   });
 });
