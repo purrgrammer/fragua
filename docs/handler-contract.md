@@ -324,7 +324,11 @@ workflows route via `on: {fail: …}` edges.
 
 The `abort` tool is **force-included** on every llm node — even
 when the node pins `allowed_tools` or lists `abort` under
-`denied_tools` — exactly like the `skill` tool. The tool's own
+`denied_tools`. The `skill` tool is force-included on the same terms,
+but only when the node's effective skill catalogue is non-empty: a node
+with `skills_disabled: true`, an empty `skills:` intersection, or no
+skills in scope at all gets neither the catalogue block nor the `skill`
+tool (it could resolve no name). The tool's own
 description teaches the contract; workflow node prompts do not restate
 it. They declare *when* to abort, in their own task-specific terms
 (e.g. "abort with reason `typecheck blocked: <top error>` after 5 fix

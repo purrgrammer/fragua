@@ -199,19 +199,21 @@ export class PiLlmBackend implements LlmBackend {
       );
     }
 
-    // Force-include the built-in `skill` and `abort` tools. Even when the
-    // node pins `allowed_tools` (excluding them) or lists them under
-    // `denied_tools`, they must remain available — both are universal
-    // affordances ("always available, zero .yaml migration"). The system
-    // prompt and tool descriptions advertise them; if they weren't
-    // actually wired the model would call them and get a hard-to-diagnose
-    // unknown-tool error. Skipped only when the registry doesn't carry
-    // them (tests with a hand-rolled registry); workflow `allowed_tools`
-    // / `denied_tools` cannot exclude them.
-    const skillTool = this.registry.get("skill");
+    // Force-include the built-in `abort` tool. Even when the node pins
+    // `allowed_tools` (excluding it) or lists it under `denied_tools`, it
+    // must remain available — a universal affordance ("always available,
+    // zero .yaml migration"). The system prompt and tool description
+    // advertise it; if it weren't actually wired the model would call it
+    // and get a hard-to-diagnose unknown-tool error. Skipped only when the
+    // registry doesn't carry it (tests with a hand-rolled registry);
+    // workflow `allowed_tools` / `denied_tools` cannot exclude it.
+    //
+    // The `skill` tool is force-included too, but conditionally — only
+    // once we know this node has a non-empty catalogue (see below). A
+    // `skill` tool with an empty catalogue can resolve no name, so wiring
+    // it is dead weight that misleads the model into calling it.
     const abortTool = this.registry.get("abort");
     let finalTools = selectedTools;
-    if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
     if (abortTool && !finalTools.some((t) => t.name === "abort")) finalTools = [...finalTools, abortTool];
 
     // Prefer per-call env (wired via HandlerContext → LlmInput by
@@ -240,10 +242,27 @@ export class PiLlmBackend implements LlmBackend {
     // the system-prompt advertisement and the `skill` tool's name lookup
     // (via fraguaContext.skillCatalog patched onto the closure below).
     const nodeSkills = input.node.attrs.skills as string[] | undefined;
-    const skillFilter: { skills?: readonly string[] } = {};
+    const skillFilter: { skills?: readonly string[]; skills_disabled?: boolean } = {};
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
+    if (input.node.attrs.skills_disabled === true) skillFilter.skills_disabled = true;
     const effectiveSkills = filterSkillsForNode(runCwdSkills, skillFilter);
     const skillsCatalog = renderSkillsCatalog(effectiveSkills);
+
+    // Reconcile the `skill` tool against this node's effective catalogue.
+    // `skill` ships in CORE_TOOLS, so a catch-all `select({})` already
+    // carries it — the gate below both force-includes it when the
+    // catalogue is non-empty (so `allowed_tools` / `denied_tools` can't
+    // exclude it, same terms as `abort`) and strips it when the catalogue
+    // is empty. `skills_disabled` / an empty `skills:` intersection / a
+    // project with no skills at all all collapse `effectiveSkills` to
+    // empty — a `skill` tool then resolves no name, so wiring it is dead
+    // weight that misleads the model into calling it.
+    if (effectiveSkills.length > 0) {
+      const skillTool = this.registry.get("skill");
+      if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
+    } else {
+      finalTools = finalTools.filter((t) => t.name !== "skill");
+    }
     // Per-run fragua context. Built-in I/O tools ignore this field; the
     // `skill` tool reads `skillCatalog` for its name lookup. Captured by
     // closure on each `toAgentTool` call — a fresh `Agent({tools})` is

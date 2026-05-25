@@ -143,6 +143,55 @@ describe("PiLlmBackend skill tool wiring", () => {
     }
   });
 
+  // When the `skill` tool isn't wired, pi-agent-core still emits a
+  // `tool.execution_end` for the scripted call — but as a synthesised
+  // "Tool skill not found" error (top-level `is_error: true`) rather than
+  // a resolved execution. That error envelope is the signal that the tool
+  // was absent from the agent's tool list.
+  function skillCallNotFound(events: CapturedEvent[]): boolean {
+    const end = events.find((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "skill");
+    if (!end) return false;
+    if (end.data["is_error"] !== true) return false;
+    const result = end.data["result"] as { content?: Array<{ type: string; text?: string }> } | undefined;
+    return (result?.content ?? []).some((b) => typeof b.text === "string" && b.text.includes("not found"));
+  }
+
+  test("skill tool is NOT wired when skills_disabled is set", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-skill-disabled-"));
+    try {
+      const { skillsCatalog } = await setupSkill(scratch);
+      const { events } = await runOnce({
+        scratch,
+        registry: withSkillRegistry(),
+        skills: skillsCatalog,
+        // skills_disabled collapses the effective catalogue to empty, so
+        // the `skill` tool must be stripped from the agent's tool list —
+        // even though it ships in CORE_TOOLS and the catch-all select()
+        // would otherwise carry it. The scripted skill() call then hits an
+        // unknown tool.
+        attrs: { skills_disabled: true },
+      });
+      expect(skillCallNotFound(events)).toBe(true);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  test("skill tool is NOT wired when the run has no skills in scope", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-skill-empty-"));
+    try {
+      const { events } = await runOnce({
+        scratch,
+        registry: withSkillRegistry(),
+        skills: [], // empty discovery superset → empty effective catalogue
+        attrs: {},
+      });
+      expect(skillCallNotFound(events)).toBe(true);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   test("skillCatalog is populated by the time the skill tool executes", async () => {
     // Pins the contract that the fraguaContext.skillCatalog field is
     // visible from inside a tool-execute closure invoked during the
