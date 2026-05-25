@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release + upload binary assets
+
+jobs:
+  # Create (or reuse) the GitHub Release first so the matrix jobs below race
+  # only on asset upload, never on release creation.
+  create-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" \
+                 --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  binaries:
+    needs: create-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Bun cross-compiles every target from one host, so all jobs run on
+        # ubuntu. linux-x64 is what GitHub-hosted CI runners use; the rest
+        # cover local dev. Asset name = `fragua-<target>`.
+        target:
+          - bun-linux-x64
+          - bun-linux-arm64
+          - bun-darwin-arm64
+          - bun-darwin-x64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.17"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Two assets per target: the canonical full binary (ships the web UI for
+      # `harness`/`serve`) and a headless one (~20% smaller, no UI) that
+      # `setup-fragua` installs by default for CI, where only `fragua ci` runs.
+      - name: Compile binary (full)
+        run: bun run build:bin --version "$GITHUB_REF_NAME" --target ${{ matrix.target }} --out dist/fragua-${{ matrix.target }}
+
+      - name: Compile binary (headless)
+        run: bun run build:bin --version "$GITHUB_REF_NAME" --no-web --target ${{ matrix.target }} --out dist/fragua-headless-${{ matrix.target }}
+
+      # Smoke the assets that run natively on this host (the ubuntu runner is
+      # linux-x64). Cross-compiled targets can't be executed here.
+      - name: Smoke test
+        if: matrix.target == 'bun-linux-x64'
+        run: |
+          ./dist/fragua-${{ matrix.target }} --version
+          ./dist/fragua-headless-${{ matrix.target }} --version
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/fragua-${{ matrix.target }} \
+            dist/fragua-headless-${{ matrix.target }} \
+            --clobber

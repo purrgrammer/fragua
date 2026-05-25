@@ -1,0 +1,73 @@
+name: "Setup fragua"
+description: "Download the fragua binary for the runner OS/arch and add it to PATH."
+
+inputs:
+  version:
+    description: "fragua release tag to install (e.g. v0.1.0), or 'latest'."
+    required: false
+    default: "latest"
+  token:
+    description: "Token used to download the release asset. Defaults to the job token."
+    required: false
+    default: ${{ github.token }}
+  web:
+    description: "Install the full binary with the harness/serve web UI. Default false installs the smaller headless binary (fine for `fragua ci`)."
+    required: false
+    default: "false"
+
+outputs:
+  version:
+    description: "The release tag that was installed."
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: "Directory the fragua binary was installed into (added to PATH)."
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        # The repo this action was pulled from — that's where the binaries
+        # live, regardless of the consumer repo `gh` would default to.
+        FRAGUA_REPO: ${{ github.action_repository }}
+        REQUESTED: ${{ inputs.version }}
+        WEB: ${{ inputs.web }}
+      run: |
+        set -euo pipefail
+
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64)    target=bun-linux-x64 ;;
+          Linux-ARM64)  target=bun-linux-arm64 ;;
+          macOS-ARM64)  target=bun-darwin-arm64 ;;
+          macOS-X64)    target=bun-darwin-x64 ;;
+          *) echo "::error::setup-fragua: unsupported runner ${{ runner.os }}/${{ runner.arch }}"; exit 1 ;;
+        esac
+
+        # Default to the smaller headless binary; `web: true` opts into the
+        # full UI build. Asset names match release.yml.
+        if [ "$WEB" = "true" ]; then asset="fragua-$target"; else asset="fragua-headless-$target"; fi
+
+        tag="$REQUESTED"
+        if [ "$tag" = "latest" ]; then
+          tag=$(gh release view --repo "$FRAGUA_REPO" --json tagName -q .tagName)
+        fi
+
+        dir="$RUNNER_TEMP/fragua-bin"
+        mkdir -p "$dir"
+        gh release download "$tag" \
+          --repo "$FRAGUA_REPO" \
+          --pattern "$asset" \
+          --output "$dir/fragua" \
+          --clobber
+        chmod +x "$dir/fragua"
+        echo "$dir" >> "$GITHUB_PATH"
+
+        echo "version=$tag" >> "$GITHUB_OUTPUT"
+        echo "path=$dir" >> "$GITHUB_OUTPUT"
+        echo "setup-fragua: installed $asset ($tag) → $dir"
+
+    - shell: bash
+      run: fragua --version
