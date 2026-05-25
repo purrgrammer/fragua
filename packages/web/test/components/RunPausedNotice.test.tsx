@@ -233,7 +233,14 @@ describe("RunPausedNotice", () => {
           {
             seq: 1,
             type: "fact.run_paused",
-            payload: { reason: "budget", nodeId: "implement", scope: "run", metric: "cost", limit: 0.3, actual: 0.4567 },
+            payload: {
+              reason: "budget",
+              nodeId: "implement",
+              scope: "run",
+              metric: "cost",
+              limit: 0.3,
+              actual: 0.4567,
+            },
           },
         ]),
     });
