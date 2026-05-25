@@ -52,17 +52,32 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }} # gh pr diff / view / review
 
-      # The run's SQLite store is a portable, replayable record of the whole
-      # review. WAL mode keeps recent writes in the `-wal` sidecar, so glob the
-      # set (`.db`, `-wal`, `-shm`) — uploading the main file alone loses most
-      # of the data. Captured on success AND failure for post-mortems:
-      # `fragua runs status|events|messages --db <downloaded .db>`.
+      # The run store is a replayable record of the review — but `fragua ci`
+      # seeds the provider credentials (ANTHROPIC_API_KEY) into it, so the raw
+      # file would leak a secret. Strip the provider tables, then VACUUM INTO a
+      # fresh single-file copy (no WAL / freelist residue, so dropped bytes are
+      # truly gone) and refuse to proceed if any `provider*` table survives.
+      # Only that scrubbed export is ever uploaded.
+      - name: Export run store (credentials stripped)
+        if: always()
+        env:
+          SRC: ${{ runner.temp }}/pr-review.db
+          OUT: ${{ runner.temp }}/pr-review-export.db
+        run: |
+          set -euo pipefail
+          [ -f "$SRC" ] || { echo "no run store at $SRC — nothing to export"; exit 0; }
+          sqlite3 "$SRC" "DROP TABLE IF EXISTS provider_credentials; DROP TABLE IF EXISTS provider_config; VACUUM INTO '$OUT';"
+          leak=$(sqlite3 "$OUT" "SELECT group_concat(name) FROM sqlite_master WHERE name LIKE 'provider%';")
+          [ -z "$leak" ] || { echo "::error::provider tables present in export ($leak) — refusing to upload"; exit 1; }
+          echo "exported scrubbed run store → $OUT"
+
+      # Post-mortem locally: `fragua runs status|events|messages --db <download>`.
       - name: Upload run store
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: pr-review-run-${{ github.event.pull_request.number }}
-          path: ${{ runner.temp }}/pr-review.db*
+          path: ${{ runner.temp }}/pr-review-export.db
           if-no-files-found: warn
 
   automerge:
@@ -82,13 +97,14 @@ jobs:
       - name: Arm/disarm auto-merge on the review verdict
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }} # this job has no checkout; tell gh the repo
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           state=$(gh pr view "$PR" --json reviews --jq '
             [.reviews[]
               | select(.author.login == "github-actions")
-              | select(.body | test("^(# Code Review|LGTM:)"))]
+              | select((.body // "") | test("^(# Code Review|LGTM:)"))]
             | last | .state // "NONE"')
           echo "latest fragua review: $state"
           if [ "$state" = "COMMENTED" ]; then
