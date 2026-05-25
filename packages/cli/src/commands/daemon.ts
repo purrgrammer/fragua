@@ -7,33 +7,14 @@
 // the trivial transitions.
 
 import { mkdirSync } from "node:fs";
-import { homedir, hostname as osHostname } from "node:os";
+import { hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
-import {
-  AuthStorage,
-  defaultSummariserModel,
-  firstCredentialedProvider,
-  ModelRegistry,
-  makeLlmHandler,
-  PiSummariserBackend,
-  SteeringRegistry,
-} from "@fragua/agent";
 import { parseDurationMs } from "@fragua/core";
-import * as handler from "@fragua/core/handler";
-import {
-  AutoTitler,
-  autoDispatcherResolver,
-  Dispatcher,
-  makeGraphLoader,
-  type Provisioner,
-  startDaemon,
-  WorktreeProvisioner,
-} from "@fragua/daemon";
+import { AutoTitler, type Provisioner, startDaemon, WorktreeProvisioner } from "@fragua/daemon";
 import { SqliteStore } from "@fragua/store";
-import { CORE_TOOLS, discoverSkills, ToolRegistry } from "@fragua/workspace";
-import type { Model } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import { loadConfig, loadProjectConfig, resolveTimeouts } from "../config.ts";
+import { buildExecutorDeps, type SummariserInfo } from "../executor-deps.ts";
 
 /**
  * Poll interval for `fragua daemon stop` — how often we check whether
@@ -129,30 +110,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   mkdirSync(dirname(storePath), { recursive: true });
 
   const store = new SqliteStore({ path: storePath });
-  const dispatcher = new Dispatcher();
-  // One shared parse-once boundary for the whole daemon: the
-  // auto-dispatcher and the executor both consume it so each workflow sha
-  // parses once across every run.
-  const graphLoader = makeGraphLoader(store);
 
-  const tools = new handler.InMemoryToolRegistry();
-  const llmCall: handler.LlmCallFn = async () => ({
-    content: "",
-    tokens: 0,
-    costUsd: 0,
-    model: "stub",
-  });
-
-  // Credentials + model registry. Both live on the global store:
-  // `provider_credentials` (api_key + OAuth) and `provider_config`
-  // (custom-provider definitions). Constructed once per daemon
-  // process; cheap to hold on to for the process lifetime.
-  const authStorage = AuthStorage.fromStore(store);
-  const modelRegistry = ModelRegistry.create(authStorage, store);
-  const getApiKey = (p: string) => authStorage.getApiKey(p);
-
-  // Resolve provider/model. Precedence: CLI flags >
-  // .fragua/config.yaml defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
   let timeouts: ReturnType<typeof resolveTimeouts>;
   try {
@@ -161,25 +119,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     console.error(chalk.red((err as Error).message));
     return 1;
   }
-  const cfgProvider = config.defaults?.provider;
-  const cfgModel = config.defaults?.model;
-  let provider = opts.provider;
-  let model = opts.model;
-  let llmSource: "flags" | "config" | "env" | "stub" = "stub";
-  if (provider != null && model != null) {
-    llmSource = "flags";
-  } else if (provider == null && model == null && cfgProvider && cfgModel) {
-    provider = cfgProvider;
-    model = cfgModel;
-    llmSource = "config";
-  } else if (provider == null && model == null) {
-    const auto = firstCredentialedProvider(modelRegistry);
-    if (auto) {
-      provider = auto.provider;
-      model = auto.model.id;
-      llmSource = "env";
-    }
-  }
   const concurrency = opts.concurrency ?? config.concurrency ?? 16;
 
   const signalCtrl = new AbortController();
@@ -187,178 +126,21 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
 
-  // Shared summariser — one PiSummariserBackend per daemon process, used
-  // by BOTH the AutoTitler (run-title generation) AND every llm
-  // backend's per-node `summary=low|medium|high` path. Without reuse the
-  // summary path has no backend wired and degrades to a deterministic
-  // role-census + tail template with a soft warning (visible in events.jsonl).
-  const summariserInfo = buildSummariserBackend({
+  // The shared executor assembly: dispatcher + auto-dispatcher resolver
+  // (the real llm path — tool registry, backend opts, per-node codergen
+  // factory), graph loader, credential/model registries, summariser, and
+  // skills discovery. `fragua ci` builds the same deps from the same factory
+  // so the two embedded-executor callers can't drift. The daemon owns what
+  // genuinely differs: the worktree provisioner, the auto-titler, and the
+  // long-running poll/claim/drain loop below.
+  const deps = await buildExecutorDeps({
+    store,
+    cwd,
     config,
-    primaryProvider: provider,
-    modelRegistry,
-    getApiKey,
+    timeouts,
+    ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
+    ...(opts.model !== undefined ? { model: opts.model } : {}),
   });
-
-  // Discover skills once at boot. Walks every cwd that has ever been a
-  // run target (`store.listCwds()`) plus the daemon's own startup cwd,
-  // emitting a superset across all known projects. Per-run filtering
-  // happens at llm dispatch time. New project cwds discovered after
-  // boot trigger an auto-scan on first sight.
-  const knownCwds = store.listCwds().map((r) => r.cwd);
-  const projectCwds = Array.from(new Set([cwd, ...knownCwds]));
-  const { skills: discoveredSkills, warnings: skillWarnings } = await discoverSkills({
-    projectCwds,
-    homeDir: homedir(),
-    ...(config.skills ? { config: config.skills } : {}),
-  });
-  for (const w of skillWarnings) console.warn(chalk.yellow(`skills: ${w}`));
-  if (discoveredSkills.length > 0) {
-    console.log(
-      chalk.dim(
-        `discovered ${discoveredSkills.length} skill${discoveredSkills.length === 1 ? "" : "s"} across ${projectCwds.length} project${projectCwds.length === 1 ? "" : "s"} (${discoveredSkills.map((s) => s.name).join(", ")})`,
-      ),
-    );
-  }
-
-  // Auto-scan-on-first-sight. The skills catalogue above is a superset
-  // across every cwd known at boot. When the dispatcher prepares a llm
-  // call for a `run.cwd` that wasn't in `store.listCwds()` yet —
-  // typically the first run for a freshly-onboarded project — we
-  // incrementally scan that cwd and merge results into the live array
-  // before the backend reads it. The backend's `this.skills` is set once
-  // on construction, but it holds the same array reference mutated here,
-  // so pushed records become visible on the next read.
-  const knownProjectCwds = new Set<string>(projectCwds);
-  const inflightAutoScans = new Map<string, Promise<void>>();
-  const ensureCatalogueForCwd = async (runCwd: string): Promise<void> => {
-    if (knownProjectCwds.has(runCwd)) return;
-    const inflight = inflightAutoScans.get(runCwd);
-    if (inflight !== undefined) {
-      await inflight;
-      return;
-    }
-    const promise = (async () => {
-      const home = homedir();
-      const skillsResult = await discoverSkills({
-        projectCwds: [runCwd],
-        homeDir: home,
-        ...(config.skills ? { config: config.skills } : {}),
-      });
-      // Merge by `location` — globally unique per record. Skip any
-      // duplicate (e.g. user-scope records the second scan re-emits).
-      const existingSkillLocs = new Set(discoveredSkills.map((s) => s.location));
-      for (const s of skillsResult.skills) {
-        if (!existingSkillLocs.has(s.location)) discoveredSkills.push(s);
-      }
-      for (const w of skillsResult.warnings) console.warn(chalk.yellow(`skills (auto-scan ${runCwd}): ${w}`));
-      knownProjectCwds.add(runCwd);
-    })();
-    inflightAutoScans.set(runCwd, promise);
-    try {
-      await promise;
-    } finally {
-      inflightAutoScans.delete(runCwd);
-    }
-  };
-
-  const useLlm = provider != null && model != null;
-  let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
-  let steeringRegistry: SteeringRegistry | undefined;
-  if (useLlm) {
-    // `env` is wired per-run via the WorktreeProvisioner below —
-    // the backend reads it off `LlmInput` on each call, so we
-    // intentionally leave `backendOpts.env` unset here.
-    // Register the four core tools (read / write / edit / bash) on the
-    // backend registry. Without this the registry is empty, pi-agent-core
-    // gets `tools: []`, and the model has no schemas to structure tool
-    // calls against — it falls back to emitting `<tool_call>` XML as raw
-    // text (mimicking what it saw in training). Symptom: zero
-    // `tool.execution_*` events across an entire run and the agent
-    // "hallucinates" command output that never ran.
-    const registry = new ToolRegistry();
-    registry.registerAll(CORE_TOOLS);
-    // Shared `inProcessWrites` — one Set for the whole daemon process so
-    // every llm backend (one per workflow node — see the factory
-    // below) sees the same "we've written to this (runId, threadId)"
-    // signal. The Set's job is to stop `computeResumeDecision` from
-    // misreading a legitimate cross-node dispatch (e.g. `implement` →
-    // `verify` on shared `thread_id="dev"`) as a process-boundary resume.
-    //
-    // Seeded at boot from the messages table + llm.start events of
-    // non-terminal runs: a resumed node on a pre-existing thread finds
-    // its key already present and the decision stays `resumed=false`.
-    // Without this seed, an honest cross-restart resume would flip
-    // `resumed=true` purely on the basis of "we don't have this key yet"
-    // — which is observational but still noisy in event logs.
-    const inProcessWrites = new Set<string>();
-    for (const pair of store.listThreadsWithMessages()) {
-      inProcessWrites.add(`${pair.runId}::${pair.threadId}`);
-    }
-    // Shared steer-buffer registry. The daemon entrypoint hands this same
-    // registry to the supervisor's `onSteer` so an `intent.steering_requested`
-    // routes into pi-agent-core's `steeringQueue` (drained at end-of-turn)
-    // rather than tripping the abort controller — which would force the
-    // llm handler to classify the in-flight call's `stopReason: "aborted"`
-    // as a fail outcome.
-    steeringRegistry = new SteeringRegistry();
-    const backendOpts = {
-      registry,
-      defaultModel: { provider: provider!, model: model! },
-      // Route model resolution through the ModelRegistry so custom
-      // providers (Ollama etc.) and provider_config overrides are honoured.
-      // Throws if the id is unknown — backend.run catches and surfaces.
-      resolveModel: (p: string, id: string): Model<string> => {
-        const m = modelRegistry.find(p, id);
-        if (!m) throw new Error(`model "${p}/${id}" not registered`);
-        return m as Model<string>;
-      },
-      getApiKey,
-      inProcessWrites,
-      steering: steeringRegistry,
-      // Tier-1 skills catalog — rendered into the system prompt of every
-      // llm call, filtered per-node by `attrs.skills` /
-      // `skills_disabled`. Empty array is a valid no-op.
-      skills: discoveredSkills,
-      ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
-    };
-    // `nextNode` is intentionally NOT forwarded to makeLlmHandler.
-    // The factory receives the first outgoing edge as a legacy-compat
-    // hint for tool/transition nodes, but for llm that would force
-    // every call to route to whichever edge happens to appear first —
-    // bypassing the edge selector. Real llm nodes need
-    // the selector to pick based on outcome status + condition matching
-    // (e.g. `implement -> done [condition="outcome=fail"]` vs the
-    // unconditional `implement -> verify`).
-    codergenFactory = (node, _nextNode, maxMs) => {
-      const factoryOpts: Parameters<typeof makeLlmHandler>[0] = { node, backendOpts };
-      if (maxMs !== undefined) factoryOpts.maxMs = maxMs;
-      const inner = makeLlmHandler(factoryOpts);
-      // Run auto-scan before the inner handler dispatches: if the run's
-      // project cwd hasn't been catalogued yet, scan it and merge.
-      // First-run-of-a-new-project pays one extra frontmatter walk;
-      // every subsequent dispatch hits the `knownProjectCwds.has()`
-      // fast path and is a no-op.
-      const innerHandler = inner.handler;
-      return {
-        ...inner,
-        handler: async (ctx) => {
-          if (ctx.env !== undefined) await ensureCatalogueForCwd(ctx.env.projectCwd());
-          return innerHandler(ctx);
-        },
-      };
-    };
-  }
-  const defaultMaxMs: { llm?: number; tool?: number } = {};
-  if (timeouts.llm !== undefined) defaultMaxMs.llm = timeouts.llm;
-  if (timeouts.tool !== undefined) defaultMaxMs.tool = timeouts.tool;
-  dispatcher.setResolver(
-    autoDispatcherResolver({
-      store,
-      graphLoader,
-      ...(codergenFactory ? { codergenFactory } : {}),
-      ...(Object.keys(defaultMaxMs).length > 0 ? { defaultMaxMs } : {}),
-    }),
-  );
 
   // Auto-title summariser — cheap cross-run call that labels each run
   // post-enqueue. Uses `summariser.{provider,model}` when set;
@@ -368,7 +150,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const autoTitler = buildAutoTitler({
     store,
     config,
-    summariser: summariserInfo,
+    summariser: deps.summariser,
     shutdownSignal: signalCtrl.signal,
   });
 
@@ -418,24 +200,28 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   console.log(chalk.dim(`  store: ${storePath}`));
   console.log(chalk.dim(`  concurrency: ${concurrency}`));
   const sourceSuffix =
-    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .fragua/config.yaml)" : "";
-  const llmLabel = useLlm
-    ? `${provider}/${model}${sourceSuffix}`
+    deps.llm.source === "env"
+      ? " (auto-detected from env)"
+      : deps.llm.source === "config"
+        ? " (from .fragua/config.yaml)"
+        : "";
+  const llmLabel = deps.llm.useLlm
+    ? `${deps.llm.provider}/${deps.llm.model}${sourceSuffix}`
     : "stub (set a provider API key, or pass --provider + --model)";
   console.log(chalk.dim(`  llm default: ${llmLabel}`));
-  if (useLlm) {
+  if (deps.llm.useLlm) {
     console.log(chalk.dim(`  nodes can override via \`provider=\`/\`model=\` attrs`));
   }
   // Explicit summariser line so operators see the wired model. When
   // `buildSummariserBackend` rejected the configured model at validation
-  // (model not registered / no default for provider), `summariserInfo.backend`
+  // (model not registered / no default for provider), `deps.summariser.backend`
   // is undefined and the label carries the rejection reason — surface it
   // loudly so the operator updates `.fragua/config.yaml` rather than
   // chasing the failure at runtime.
-  if (summariserInfo.backend) {
-    console.log(chalk.dim(`  summariser: ${summariserInfo.label}`));
-  } else if (summariserInfo.label) {
-    console.log(chalk.yellow(`  summariser: disabled — ${summariserInfo.label}`));
+  if (deps.summariser.backend) {
+    console.log(chalk.dim(`  summariser: ${deps.summariser.label}`));
+  } else if (deps.summariser.label) {
+    console.log(chalk.yellow(`  summariser: disabled — ${deps.summariser.label}`));
   }
   if (autoTitler.label !== undefined) {
     console.log(chalk.dim(`  auto-title: ${autoTitler.label}`));
@@ -447,13 +233,13 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   try {
     const daemonOpts: Parameters<typeof startDaemon>[0] = {
       store,
-      dispatcher,
-      tools,
-      llmCall,
+      dispatcher: deps.dispatcher,
+      tools: deps.tools,
+      llmCall: deps.llmCall,
       maxConcurrentRuns: concurrency,
       shutdownSignal: signalCtrl.signal,
       provisioner,
-      graphLoader,
+      graphLoader: deps.graphLoader,
     };
     if (autoTitler.titler) daemonOpts.autoTitler = autoTitler.titler;
     if (timeouts.leakGrace !== undefined) daemonOpts.leakGraceMs = timeouts.leakGrace;
@@ -471,8 +257,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       }
     }
     if (config["blob-gc"]?.["max-rows"] !== undefined) daemonOpts.blobGcMaxRows = config["blob-gc"]["max-rows"];
-    if (steeringRegistry !== undefined) {
-      const reg = steeringRegistry;
+    if (deps.steeringRegistry !== undefined) {
+      const reg = deps.steeringRegistry;
       daemonOpts.onSteer = (runId, text) => reg.steer(runId, text);
     }
     const handleRef = startDaemon(daemonOpts);
@@ -484,52 +270,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     store.close();
   }
   return exitCode;
-}
-
-interface SummariserInfo {
-  backend: PiSummariserBackend | undefined;
-  label: string | undefined;
-}
-
-/** Construct the shared `PiSummariserBackend` used by AutoTitler + every
- * llm backend's per-node `summary=` path. Returns `{ backend:
- * undefined }` when there's no usable provider/model combination — the
- * caller decides how to surface that (AutoTitler disables itself;
- * summary paths already warn + fall back to the deterministic template). */
-function buildSummariserBackend(args: {
-  config: Awaited<ReturnType<typeof loadConfig>>;
-  primaryProvider: string | undefined;
-  modelRegistry: ModelRegistry;
-  getApiKey: (provider: string) => Promise<string | undefined>;
-}): SummariserInfo {
-  const { config, primaryProvider, modelRegistry, getApiKey } = args;
-  const sumProvider = config.summariser?.provider ?? primaryProvider;
-  if (!sumProvider) return { backend: undefined, label: undefined };
-  const sumModel = config.summariser?.model ?? defaultSummariserModel(sumProvider);
-  if (!sumModel) return { backend: undefined, label: `no default model for ${sumProvider}` };
-  // Validate at boot — the summariser's resolveModel throws lazily on
-  // first call, which surfaces deep inside whatever path triggered it
-  // (autoTitler / per-node `summary=`) and looks like a tool failure
-  // rather than a config error. Catching it here gives the operator
-  // one obvious "fix this in config.yaml" line at startup.
-  // `fragua providers` lists valid ids per provider.
-  if (!modelRegistry.find(sumProvider, sumModel)) {
-    return {
-      backend: undefined,
-      label: `model "${sumProvider}/${sumModel}" not registered (run \`fragua providers\` for valid ids)`,
-    };
-  }
-  const backend = new PiSummariserBackend({
-    provider: sumProvider,
-    model: sumModel,
-    resolveModel: (p, id) => {
-      const m = modelRegistry.find(p, id);
-      if (!m) throw new Error(`summariser model "${p}/${id}" not registered`);
-      return m as Model<string>;
-    },
-    getApiKey,
-  });
-  return { backend, label: `${sumProvider}/${sumModel}` };
 }
 
 function buildAutoTitler(args: {
