@@ -44,9 +44,20 @@ jobs:
       - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.1.0
 
       - name: "Review PR #${{ github.event.pull_request.number }}"
-        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }}
+        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --db "$RUNNER_TEMP/pr-review.db"
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }} # gh pr diff / view / review
+
+      # The run's SQLite store is a portable, replayable record of the whole
+      # review. Uploaded on success AND failure so a bad/halted review can be
+      # post-mortemed locally: `fragua runs status|events|messages --db <path>`.
+      - name: Upload run store
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-review-run-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/pr-review.db
+          if-no-files-found: warn
