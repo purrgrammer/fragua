@@ -254,8 +254,8 @@ canonicalizers needed). The core rules, each a forever contract:
   the daemon schedule-dispatcher. (B) must route all three through a single
   `workflowIdentity(source) → { sha, ir, ir_version }`; the by-name dedup path in
   particular would mis-key (source-hash vs IR-hash) if left as-is. **That single
-  function's home is `plane.buildSaveWorkflow`** ([`intent-plane.md`](intent-plane.md)
-  §3.1): the intent plane already consolidates the three mint sites into one
+  function's home is `plane.buildSaveWorkflow`** (the intent plane, shipped —
+  `@fragua/core/intent-plane`): the intent plane already consolidates the three mint sites into one
   save op for its own reasons (one audit surface, no CLI/server drift), so (B)
   becomes a one-line source-hash → IR-hash swap *inside that function*, not a
   three-site sweep. The plane refactor is therefore the natural carrier for (B),

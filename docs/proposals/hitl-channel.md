@@ -11,7 +11,7 @@ parent: cli-topology.md
 
 > Child of [`cli-topology.md`](cli-topology.md). An additive tail; blocks
 > nothing. The resolver seam + queue resolver can land alone; concrete channels
-> host on [`fragua-ci.md`](fragua-ci.md) and [`cli-store-client.md`](cli-store-client.md).
+> host on fragua ci (shipped) and [`cli-store-client.md`](cli-store-client.md).
 
 ## 1. What already exists
 
@@ -31,7 +31,7 @@ is ported as an **async resolver**, not a synchronous `ask`:
 
 > A HITL channel observes `fact.run_paused{reason:human}` on the store and writes
 > back an `intent.human_input`. It is a store-client like everything else; the
-> answer intent is constructed via the [intent plane](intent-plane.md).
+> answer intent is constructed via the intent plane (shipped).
 
 The Question/Answer/Option models port near-verbatim; the transport changes from
 a function return to a store intent.
@@ -46,9 +46,9 @@ a function return to a store intent.
 
 ## 3. Scope / dependencies / MVP
 
-- **Depends on:** [`intent-plane.md`](intent-plane.md) (construct
-  `intent.human_input`). Concrete channels host on `fragua-ci` (auto-approve) and
-  `cli-store-client` (console TTY). The web channel exists.
+- **Depends on:** the intent plane (shipped) — construct `intent.human_input`.
+  Concrete channels host on `fragua ci` (auto-approve) and `cli-store-client`
+  (console TTY). The web channel exists.
 - **Wins independently:** the resolver *seam* + the queue resolver land alone and
   immediately unblock deterministic HITL testing.
 - **MVP:** the resolver seam + the auto-approve channel — i.e. give `fragua ci`

@@ -47,15 +47,15 @@ the intent to the store directly.
 | Proposal | What | Maturity |
 |---|---|---|
 | pre-0.1.0 cleanup — **shipped** | nuked the `agent` tool + sub-agent machinery; collapsed migrations to a fresh baseline; widened `run_id` to a ULID | ✅ done |
-| [`executor-pbt-decomposition.md`](executor-pbt-decomposition.md) | untangle the executor; **Phase 8** extracts the assembly into a factory with injectable tool/credentials registries — what `fragua ci` stands on | designed |
+| executor PBT decomposition — **shipped** (design doc removed; see code + git) | untangled the executor — pure `planTransition` + `planAbort`, a fault-injection harness; **Phase 8** extracted `buildExecutorDeps`, what `fragua ci` stands on | ✅ done |
 
 **Children:**
 
 | # | Proposal | What | Maturity |
 |---|---|---|---|
-| 1 | [`intent-plane.md`](intent-plane.md) | shared validate/construct/mint surface, many ports | ✅ shipped |
-| 2 | [`fragua-ci.md`](fragua-ci.md) | embedded executor over an ephemeral, portable store | sketch |
-| 3 | [`cli-store-client.md`](cli-store-client.md) | CLI as a direct store-client; `run` enqueues + tails; log UX; `db migrate` | ✅ shipped |
+| 1 | intent plane — **shipped** (design doc removed) | shared validate/construct/mint surface, many ports | ✅ shipped |
+| 2 | fragua ci — **shipped** (design doc removed) | embedded executor over an ephemeral, portable store | ✅ shipped |
+| 3 | [`cli-store-client.md`](cli-store-client.md) | CLI as a direct store-client; `run` enqueues + tails; log UX | ✅ mostly — open: `--url`, `db migrate`, run/runs exit taxonomy |
 | 4 | [`hitl-channel.md`](hitl-channel.md) | pluggable HITL — the interviewer pattern over pause-fact/answer-intent | sketch |
 | 5 | [`db-import.md`](db-import.md) | cross-machine import of a run's events into another store | sketch |
 | 6 | [`event-contract-version.md`](event-contract-version.md) | gate resume on an event-contract version, not the DB counter; make mismatch a recoverable pause not a terminal halt | partial — §3.2 shipped, §3.1 axis split open |
