@@ -19,7 +19,7 @@ on:
     types: [opened, reopened, synchronize]
 
 permissions:
-  contents: read
+  contents: write # arm auto-merge on a clean review (the merge itself)
   pull-requests: write # the review posts itself back to the PR
 
 # A new commit on the PR cancels the review still running for the previous one
@@ -61,3 +61,27 @@ jobs:
           name: pr-review-run-${{ github.event.pull_request.number }}
           path: ${{ runner.temp }}/pr-review.db
           if-no-files-found: warn
+
+      # Auto-merge only when the bot's own review came back clean. The review
+      # STATE is the gate: COMMENTED (no Critical/High) arms it, CHANGES_REQUESTED
+      # does not. `--auto` means GitHub merges only once the required `ci` check
+      # passes — CI is the hard gate; the LLM review is a soft pre-condition.
+      # Runs only on a successful review (implicit success()), so a halted run
+      # never merges. Needs repo "Allow auto-merge" + branch protection requiring
+      # `ci` — WITHOUT the latter, --auto would merge with no CI gate. No-ops
+      # (warns) when auto-merge isn't enabled.
+      - name: Auto-merge on a clean review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          state=$(gh pr view "$PR" --json reviews \
+            --jq '[.reviews[] | select(.author.login == "github-actions")] | last | .state // "NONE"')
+          echo "latest bot review: $state"
+          if [ "$state" = "COMMENTED" ]; then
+            gh pr merge "$PR" --auto --squash \
+              || echo "::warning::auto-merge not armed — enable repo 'Allow auto-merge' + branch protection requiring the ci check"
+          else
+            echo "review is $state (not clean) — not arming auto-merge"
+          fi
