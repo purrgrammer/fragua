@@ -1,20 +1,22 @@
-// `fragua runs {accept,discard,diff}` — operator post-run primitives over the
-// HTTP surface.
+// `fragua runs <verb>` — operator primitives.
 //
-// accept/discard POST the post-terminal operator-action intents the daemon
-// sweep folds into git mutations (accept replays the run's commits onto the
-// operator's current branch + stages the tail; discard drops the refs).
-// `diff` is a read over the snapshot endpoints. Server discovery mirrors
-// `fragua run`:
-//   1. --url   2. server_endpoint in the project store (--db, else
-//   <cwd>/.fragua/fragua.db)   3. server_endpoint in ~/.fragua/fragua.db
-//   (the harness)   4. http://localhost:3000
+// Writes (steer/pause/cancel/resume/respond/unquarantine/priority/budget/
+// max-retries/goal-gate/max-loops, plus accept/discard) are direct
+// store-clients: open the store, write through the intent plane (accept/discard
+// additionally run the shared `@fragua/workspace` git action first). No server
+// needed, works daemon-down.
+//
+// Reads (ls/inbox/diff) still go over HTTP against a running server, discovered
+// via the store's `server_endpoint` row (--db, else ~/.fragua/fragua.db).
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
 import { SqliteStore } from "@fragua/store";
+import { applyAccept, applyDiscard, defaultGitExec, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
+import { withStoreClient } from "../store-client.ts";
 
 interface DiscoveryOpts {
   url?: string;
@@ -55,31 +57,33 @@ function noServerFound(): number {
   return 1;
 }
 
-async function postAction(verb: string, runId: string, body: unknown, opts: DiscoveryOpts): Promise<number> {
-  const baseUrl = resolveBaseUrl(opts);
-  if (baseUrl == null) return noServerFound();
-  const res = await fetch(`${baseUrl}/runs/${encodeURIComponent(runId)}/${verb}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+/** Write a control intent through the plane against the local store. Checks
+ * the run exists, builds + validates via the plane, commits, prints the seq. */
+function writeIntent(
+  opts: DiscoveryOpts,
+  runId: string,
+  verb: string,
+  build: (plane: IntentPlane) => BuildResult,
+): Promise<number> {
+  return withStoreClient(opts, ({ store, plane }) => {
+    if (store.getState(runId) == null) {
+      console.error(chalk.red(`${verb}: run not found`) + chalk.dim(` (${runId})`));
+      return 1;
+    }
+    const built = build(plane);
+    if (!built.ok) {
+      console.error(chalk.red(`${verb}: ${built.error}`));
+      return 1;
+    }
+    try {
+      const { seq } = plane.commit(runId, built.intent);
+      console.log(chalk.green(`${verb} requested`) + chalk.dim(` (run ${runId}, intent seq ${seq})`));
+      return 0;
+    } catch (err) {
+      console.error(chalk.red(`${verb}: ${(err as Error).message}`));
+      return 1;
+    }
   });
-  if (!res.ok) return failResponse(verb, res);
-  const body2 = (await res.json()) as {
-    seq?: number;
-    sha?: string;
-    replayed?: number;
-    tailStaged?: boolean;
-  };
-  // accept/discard run synchronously server-side and return their result.
-  if (verb === "accept" && body2.sha != null) {
-    const tail = body2.tailStaged === true ? "; tail staged — `git commit` when ready" : "";
-    console.log(chalk.green("accepted") + chalk.dim(` (run ${runId}, replayed ${body2.replayed ?? 0}${tail})`));
-  } else if (verb === "discard") {
-    console.log(chalk.green("discarded") + chalk.dim(` (run ${runId})`));
-  } else {
-    console.log(chalk.green(`${verb} requested`) + chalk.dim(` (run ${runId}, intent seq ${body2.seq})`));
-  }
-  return 0;
 }
 
 async function failResponse(verb: string, res: Response): Promise<number> {
@@ -102,7 +106,21 @@ export interface DiscardOptions extends DiscoveryOpts {
 }
 
 export function discardCommand(opts: DiscardOptions): Promise<number> {
-  return postAction("discard", opts.runId, {}, opts);
+  return withStoreClient(opts, async ({ store, plane }) => {
+    const gate = readGate(store, opts.runId);
+    if (gate == null) {
+      console.error(chalk.red("discard: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    const res = await applyDiscard(defaultGitExec, gate);
+    if (!res.ok) {
+      console.error(chalk.red(`discard: ${res.detail}`) + chalk.dim(` [${res.reason}]`));
+      return 1;
+    }
+    plane.commit(opts.runId, plane.buildDiscardRun(res));
+    console.log(chalk.green("discarded") + chalk.dim(` (run ${opts.runId})`));
+    return 0;
+  });
 }
 
 export interface AcceptOptions extends DiscoveryOpts {
@@ -110,7 +128,40 @@ export interface AcceptOptions extends DiscoveryOpts {
 }
 
 export function acceptCommand(opts: AcceptOptions): Promise<number> {
-  return postAction("accept", opts.runId, {}, opts);
+  return withStoreClient(opts, async ({ store, plane }) => {
+    const gate = readGate(store, opts.runId);
+    if (gate == null) {
+      console.error(chalk.red("accept: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    // Replay synchronously against the local worktree, then record the result
+    // as intent.accept_run via the plane (the daemon folds it into the inbox
+    // projection). The state gate is inside applyAccept (§3.7).
+    const res = await applyAccept(defaultGitExec, gate);
+    if (!res.ok) {
+      console.error(chalk.red(`accept: ${res.detail}`) + chalk.dim(` [${res.reason}]`));
+      return 1;
+    }
+    plane.commit(opts.runId, plane.buildAcceptRun(res));
+    const tail = res.tailStaged ? "; tail staged — `git commit` when ready" : "";
+    console.log(chalk.green("accepted") + chalk.dim(` (run ${opts.runId}, replayed ${res.replayed}${tail})`));
+    return 0;
+  });
+}
+
+/** Build the run-action gate from run_state, or null if the run doesn't exist.
+ * The state preconditions (terminal / inbox / worktree) are checked inside the
+ * workspace action — this only assembles the inputs (§3.7). */
+function readGate(store: SqliteStore, runId: string): RunActionGate | null {
+  const state = store.getState(runId);
+  if (state == null) return null;
+  return {
+    runId,
+    status: state.status,
+    inboxStatus: state.inboxStatus,
+    cwd: state.cwd,
+    baseGitSha: state.baseGitSha ?? "",
+  };
 }
 
 interface SnapshotRow {
@@ -205,34 +256,54 @@ export interface RespondOptions extends DiscoveryOpts {
  * (scriptable); without, it shows the gate prompt + routes and reads a choice
  * from stdin (interactive). */
 export async function respondCommand(opts: RespondOptions): Promise<number> {
-  const baseUrl = resolveBaseUrl(opts);
-  if (baseUrl == null) return noServerFound();
-  const detailRes = await fetch(`${baseUrl}/runs/${encodeURIComponent(opts.runId)}`);
-  if (!detailRes.ok) return failResponse("respond", detailRes);
-  const detail = (await detailRes.json()) as { runStatus?: string; hitlLabel?: string; hitlOptions?: string[] };
-  if (detail.runStatus !== "paused_human") {
-    console.error(chalk.red(`respond: run is not at a HITL gate (status=${detail.runStatus ?? "?"})`));
-    return 1;
-  }
-  const routes = detail.hitlOptions ?? [];
-  let route = opts.route;
-  if (route == null) {
-    console.log(detail.hitlLabel ?? "(needs input)");
-    for (let i = 0; i < routes.length; i++) console.log(`  [${i + 1}] ${routes[i]}`);
-    const ans = (globalThis.prompt?.(`Choose [1-${routes.length}]:`) ?? "").trim();
-    const idx = Number.parseInt(ans, 10) - 1;
-    if (!(idx >= 0 && idx < routes.length)) {
-      console.error(chalk.red("respond: invalid choice (pass --route to script it)"));
+  return withStoreClient(opts, ({ store, plane }) => {
+    const state = store.getState(opts.runId);
+    if (state == null) {
+      console.error(chalk.red("respond: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    route = routes[idx];
-  } else if (routes.length > 0 && !routes.includes(route)) {
-    console.error(chalk.red(`respond: unknown route "${route}" (expected one of: ${routes.join(", ")})`));
-    return 1;
-  }
-  const body: { route: string; note?: string } = { route: route! };
-  if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("human", opts.runId, body, opts);
+    if (state.status !== "paused_human") {
+      console.error(chalk.red(`respond: run is not at a HITL gate (status=${state.status})`));
+      return 1;
+    }
+    // The gate's routes + prompt live on the last fact.run_paused_human.
+    let routes: string[] = [];
+    let label = "(needs input)";
+    const events = store.getEvents(opts.runId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i]!.type === "fact.run_paused_human") {
+        const p = events[i]!.payload as { text?: string; routes?: string[] };
+        routes = p.routes ?? [];
+        label = p.text ?? label;
+        break;
+      }
+    }
+    let route = opts.route;
+    if (route == null) {
+      console.log(label);
+      for (let i = 0; i < routes.length; i++) console.log(`  [${i + 1}] ${routes[i]}`);
+      const ans = (globalThis.prompt?.(`Choose [1-${routes.length}]:`) ?? "").trim();
+      const idx = Number.parseInt(ans, 10) - 1;
+      if (!(idx >= 0 && idx < routes.length)) {
+        console.error(chalk.red("respond: invalid choice (pass --route to script it)"));
+        return 1;
+      }
+      route = routes[idx];
+    } else if (routes.length > 0 && !routes.includes(route)) {
+      console.error(chalk.red(`respond: unknown route "${route}" (expected one of: ${routes.join(", ")})`));
+      return 1;
+    }
+    const body: { route: string; note?: string } = { route: route! };
+    if (opts.note != null && opts.note.length > 0) body.note = opts.note;
+    const built = plane.buildHuman(body);
+    if (!built.ok) {
+      console.error(chalk.red(`respond: ${built.error}`));
+      return 1;
+    }
+    const { seq } = plane.commit(opts.runId, built.intent);
+    console.log(chalk.green("human input recorded") + chalk.dim(` (run ${opts.runId}, intent seq ${seq})`));
+    return 0;
+  });
 }
 
 export interface ResumeOptions extends DiscoveryOpts {
@@ -243,7 +314,7 @@ export interface ResumeOptions extends DiscoveryOpts {
 export function resumeCommand(opts: ResumeOptions): Promise<number> {
   const body: { note?: string } = {};
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("resume", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "resume", (p) => p.buildResume(body));
 }
 
 export interface CancelOptions extends DiscoveryOpts {
@@ -254,7 +325,7 @@ export interface CancelOptions extends DiscoveryOpts {
 export function cancelCommand(opts: CancelOptions): Promise<number> {
   const body: { reason?: string } = {};
   if (opts.reason != null && opts.reason.length > 0) body.reason = opts.reason;
-  return postAction("cancel", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "cancel", (p) => p.buildCancel(body));
 }
 
 export interface UnquarantineOptions extends DiscoveryOpts {
@@ -271,7 +342,7 @@ export function unquarantineCommand(opts: UnquarantineOptions): Promise<number> 
   }
   const body: { resolution: string; note?: string } = { resolution: r };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("unquarantine", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "unquarantine", (p) => p.buildUnquarantine(body));
 }
 
 export interface SteerOptions extends DiscoveryOpts {
@@ -286,7 +357,7 @@ export function steerCommand(opts: SteerOptions): Promise<number> {
     console.error(chalk.red("steer: <text> required"));
     return Promise.resolve(1);
   }
-  return postAction("steer", opts.runId, { text: opts.text }, opts);
+  return writeIntent(opts, opts.runId, "steer", (p) => p.buildSteer({ text: opts.text }));
 }
 
 export interface PauseOptions extends DiscoveryOpts {
@@ -295,7 +366,7 @@ export interface PauseOptions extends DiscoveryOpts {
 
 /** Pause a running run (operator). Aborts the current handler; resume with `resume`. */
 export function pauseCommand(opts: PauseOptions): Promise<number> {
-  return postAction("pause", opts.runId, {}, opts);
+  return writeIntent(opts, opts.runId, "pause", (p) => p.buildPause({}));
 }
 
 export interface PriorityOptions extends DiscoveryOpts {
@@ -312,7 +383,7 @@ export function priorityCommand(opts: PriorityOptions): Promise<number> {
   }
   const body: { newPriority: number; note?: string } = { newPriority: opts.newPriority };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("priority", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "priority", (p) => p.buildPriority(body));
 }
 
 export interface BudgetOptions extends DiscoveryOpts {
@@ -335,7 +406,7 @@ export function budgetCommand(opts: BudgetOptions): Promise<number> {
     newLimit: opts.newLimit,
   };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("budget", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "budget", (p) => p.buildBudget(body));
 }
 
 export interface MaxRetriesOptions extends DiscoveryOpts {
@@ -360,7 +431,7 @@ export function maxRetriesCommand(opts: MaxRetriesOptions): Promise<number> {
     newLimit: opts.newLimit,
   };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("max_retries", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "max-retries", (p) => p.buildMaxRetries(body));
 }
 
 export interface GoalGateOptions extends DiscoveryOpts {
@@ -377,7 +448,7 @@ export function goalGateCommand(opts: GoalGateOptions): Promise<number> {
   }
   const body: { newLimit: number; note?: string } = { newLimit: opts.newLimit };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("goal_gate", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "goal-gate", (p) => p.buildGoalGate(body));
 }
 
 export interface MaxLoopsOptions extends DiscoveryOpts {
@@ -394,7 +465,7 @@ export function maxLoopsCommand(opts: MaxLoopsOptions): Promise<number> {
   }
   const body: { newLimit: number; note?: string } = { newLimit: opts.newLimit };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return postAction("max_loops", opts.runId, body, opts);
+  return writeIntent(opts, opts.runId, "max-loops", (p) => p.buildMaxLoops(body));
 }
 
 export interface LsOptions extends DiscoveryOpts {
