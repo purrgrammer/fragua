@@ -1,11 +1,11 @@
 ---
 name: operate
-description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is the `fragua` CLI; for deep run reads (raw events, step snapshots) it points at the postmortem skill. Assumes Claude Code with Bash / Read on a fragua checkout.
+description: Drive a fragua run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", or otherwise asks to operate on live runs (not analyse completed ones — that's postmortem). Teaches pre-flight (harness liveness + provider credentials), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct DB/HTTP queries; deep forensics on a finished run (transcript, per-call cost, artifacts) go to the postmortem skill. Assumes Claude Code with Bash / Read on a fragua checkout.
 ---
 
 # operate — enqueue, watch, and control a live run
 
-Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — entirely through the `fragua` CLI. Every action below is a `fragua` subcommand; for deep run reads (raw events, step snapshots) switch to the postmortem skill.
+Go from a workflow (a bare name under `~/.fragua/workflows/` or `<cwd>/.fragua/workflows/`, or a literal `.yaml` path) to a running, observable run you can steer and land — **entirely through the `fragua` CLI, no direct DB/HTTP queries**. Every action below is a `fragua` subcommand. Only *forensics* on a finished run — the full messages transcript, per-LLM-call cost/context, artifacts — go to the postmortem skill (§10).
 
 Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §7 (web server), `AGENTS.md` (commands).
 
@@ -17,13 +17,13 @@ Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs
 fragua runs ls          # harness up if this returns (errors if no daemon to discover)
 fragua providers ls     # at least one provider shows ✓
 
-# Run. Trailing args become the run's free-form input; --input name=value
-# (repeatable) binds the typed inputs declared in the workflow's `inputs:` block.
-fragua run change "rename foo() to bar() in packages/core"
+# Run. --input name=value (repeatable) binds the typed inputs declared in the
+# workflow's `inputs:` block; --title sets the run title.
+fragua run change --input task="rename foo() to bar() in packages/core"
 fragua run deploy --input ticket=BUG-1 --input env=prod
 ```
 
-`fragua run` uploads the workflow, enqueues, and streams events until terminal. Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. It exits non-zero on halt/cancel; `paused_*` is suspensive (exits 0; the run resumes on its own via retry timer or your HITL response).
+`fragua run` saves the workflow, enqueues, and tails its event log until terminal. Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. It exits non-zero on halt/cancel. A `paused_human` gate prompts you inline (on a TTY — answer and it keeps following) or exits for `fragua runs respond`; `paused_auto` resumes itself on the retry timer.
 
 > `fragua` and `bun run fragua <args…>` are interchangeable on a checkout; this doc uses the bare binary.
 
@@ -52,15 +52,15 @@ Common failures:
 ## 2. Enqueue — `fragua run`
 
 ```sh
-fragua run <workflow> [trailing positional args…]  \
+fragua run <workflow>  \
   [--input name=value]   # typed input; repeat for several (gh-style)
   [--title "…"]          # set the run title now (suppresses the auto-titler)
   [--priority 10]        # higher runs first (queue tie-breaker)
   [--no-follow]          # enqueue and exit; print only the run id
-  [--db path/to/db]      # pairs with `fragua serve --db` for parallel fraguas
+  [--db path/to/db]      # target a specific store (default ~/.fragua/fragua.db)
 ```
 
-`<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or ending `.yaml` is a literal path. Trailing positional args join into the run's free-form input (description / auto-title seed). `--input name=value` binds typed inputs (`${{ inputs.name }}`); a missing required input or out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts stream colorised.
+`<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or ending `.yaml` is a literal path. `--input name=value` binds typed inputs (`${{ inputs.name }}`; a value `@path`/`@-` reads a file/stdin); a missing required input or out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts stream colorised (follow by default; `--no-follow` to opt out).
 
 ---
 
@@ -69,10 +69,12 @@ fragua run <workflow> [trailing positional args…]  \
 ```sh
 fragua runs ls [--status queued,running,…] [--limit N]   # one line per run: id · status · title
 fragua runs inbox                                        # runs awaiting an operator decision (2 sections)
-fragua runs diff <id> [--against base|previous|<eventIdx>] [--snap <eventIdx>]   # review the change
+fragua runs status <id>                                  # one run: lifecycle + outcome + the why (pause/halt reason, quarantine orphans, HITL gate)
+fragua runs tail <id>                                    # follow an existing run's event log to terminal (live)
+fragua runs diff <id> [--against base|previous|<eventIdx>] [--snap <eventIdx>] [--path <p>]   # review the change
 ```
 
-`fragua run` tails the run it enqueues; to watch a run you *didn't* just start, poll `fragua runs ls` (no separate live-tail verb). `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
+`fragua run` tails the run it enqueues; to watch a run you *didn't* just start, `fragua runs tail <id>` (live event log to terminal, same renderer + inline HITL picker); for a one-shot snapshot, `fragua runs status <id>`. `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
 
 **Two status words, don't conflate.** Lifecycle (`queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) answers "still going?"; outcome (`success | fail | null`) answers "did it succeed?" once terminal. `fragua runs ls` shows the lifecycle status.
 
@@ -86,10 +88,10 @@ until fragua runs ls --limit 50 | grep "$RID" \
 
 - `queued` — waiting for a dispatch slot. Not broken; no daemon = no dispatch.
 - `paused_human` — a `human` node yielded. Answer with `fragua runs respond` (§5).
-- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`) / `max_retries` / `goal_gate` / `max_loops` (raise the cap via `fragua runs max-retries|goal-gate|max-loops`, then `resume` — §4) / `abort_loop` / `provider_exhausted` (naked `resume` only) / `engine_incompatible` (daemon version mismatch; heals when a capable daemon runs).
+- `paused` — operator-resumable. `fragua runs status <id>` surfaces the reason: `operator` / `provider_error` (fix creds/request) / `payment_required` (top up the provider) / `budget` (raise via `fragua runs budget`, then `resume`) / `max_retries` / `goal_gate` / `max_loops` (raise the cap via `fragua runs max-retries|goal-gate|max-loops`, then `resume` — §4) / `abort_loop` / `provider_exhausted` (naked `resume` only) / `engine_incompatible` (daemon version mismatch; heals when a capable daemon runs).
 - `paused_auto` — daemon owes a clock tick (`provider_retry`, `handler_retry`, or `timeout_retry`); frees its slot and re-queues itself when the backoff passes. No action unless the timer never fires (check the harness). Short-circuit with `fragua runs resume`.
 - `quarantined` — orphan side effect; resolve with `fragua runs unquarantine` (§6).
-- `halted` / `cancelled` — terminal. For `reason` codes, switch to the postmortem skill.
+- `halted` / `cancelled` — terminal. `fragua runs status <id>` shows the halt `reason` + detail; for deep failure analysis (transcript, the failing step), the postmortem skill.
 
 If the last event is `fact.node_started` with no follow-up past the node's `maxMs` and the watchdog hasn't fired, the daemon is wedged — switch to postmortem.
 
@@ -144,7 +146,7 @@ fragua runs unquarantine <id> --resolution treat_as_done|retry|cancel --note "<e
 #   cancel        — stop the run (blast radius unclear)
 ```
 
-Inspect the orphaned intents first (the postmortem skill reads them off the quarantine fact) and present options + evidence to the user. Never auto-choose.
+Inspect the orphaned intents first — `fragua runs status <id>` lists them (the `quarantined:` line) — and present options + evidence to the user. Never auto-choose.
 
 ---
 
@@ -187,6 +189,6 @@ If a schedule's workflow goes missing/unparseable at fire time, the dispatcher r
 
 ---
 
-## 10. Deep reads — switch to postmortem
+## 10. Forensics — switch to postmortem
 
-This skill drives runs **forward** through the CLI verbs above. For reads with no operate verb — the raw event tail, per-LLM-call step snapshots, the messages transcript, artifacts, orphaned-intent payloads, daemon liveness — switch to the **postmortem** skill, which reads them straight off the store. Rule of thumb: operate writes intents (drives the run); postmortem reads facts (explains it).
+Everything operate needs is a `fragua` CLI verb above — **no direct DB/HTTP queries** (status, tail, the event log, pause reasons, and quarantine orphans all have verbs). Drop to the **postmortem** skill only for deep *forensics* on a finished or stuck run: the full messages transcript, per-LLM-call cost / context / resolved prompts, artifacts, and replay/step analysis. Postmortem reads the store directly (by design). Rule of thumb: operate **drives + inspects live runs** through the CLI; postmortem **dissects completed ones**.
