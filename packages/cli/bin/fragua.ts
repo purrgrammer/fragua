@@ -9,6 +9,7 @@
 
 import cac from "cac";
 import chalk from "chalk";
+import { ciCommand } from "../src/commands/ci.ts";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
 import { doctorCommand } from "../src/commands/doctor.ts";
@@ -434,6 +435,44 @@ cli
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
       ...(options["follow"] === false ? { follow: false } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command(
+    "ci <workflow>",
+    "Run a workflow to completion in-process and exit with a code that reflects the " +
+      "outcome (0 completed, nonzero on halt/cancel/pause). Embeds the executor over " +
+      "an ephemeral store — no daemon or server. Credentials come from env " +
+      "(ANTHROPIC_API_KEY, …); the .db is a portable artifact (pin with --db).",
+  )
+  .option("-i, --input <name=value>", "Run input; repeat for multiple. Value @path reads a file, @- reads stdin")
+  .option("--db <path>", "Pin the ephemeral store here as an artifact (default: a temp dir, discarded)")
+  .option("--json", "Emit the event log as JSONL instead of the human render")
+  .option("--provider <id>", "LLM provider override (else config defaults, else env-autodetect)")
+  .option("--model <id>", "LLM model override")
+  .option("--cwd <path>", "Base directory for the workflow + project identity")
+  .action(async (workflow: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    let inputs: Record<string, string> = {};
+    try {
+      inputs = await resolveInputArgs(options["input"] as string | string[] | undefined);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(2);
+    }
+    const code = await ciCommand({
+      workflow,
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+      ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
+      ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
+      ...(options["json"] === true ? { json: true } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
     });
     process.exit(code);
   });
