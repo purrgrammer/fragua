@@ -273,7 +273,7 @@ steps:
     r.store.claimNextRun(1);
     r.store.appendFact(
       "replay-crash",
-      [{ type: "fact.run_started", payload: { workflowSha: r.workflowSha, schemaVersion: 1, startNode: "work" } }],
+      [{ type: "fact.run_started", payload: { workflowSha: r.workflowSha, contractVersion: 1, startNode: "work" } }],
       r.store.getState("replay-crash")!.version,
     );
     const live = r.store.getState("replay-crash") as RunState;

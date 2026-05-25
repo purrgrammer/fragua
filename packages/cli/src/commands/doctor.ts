@@ -4,8 +4,10 @@
 // direct store-client — the operate skill's forensics process-level checks
 // without raw SQL on `daemon_lock` / `server_endpoint`.
 
+import { EVENT_CONTRACT_VERSION, MIN_COMPATIBLE_CONTRACT_VERSION } from "@fragua/store";
 import chalk from "chalk";
 import { resolveStorePath, withStoreClient } from "../store-client.ts";
+import { FRAGUA_VERSION } from "../version.ts";
 
 export interface DoctorOptions {
   /** Explicit store path. Default `~/.fragua/fragua.db` (the harness store). */
@@ -21,6 +23,11 @@ export function doctorCommand(opts: DoctorOptions): Promise<number> {
   return withStoreClient(opts, ({ store }) => {
     console.log(chalk.bold("fragua doctor"));
     console.log(`  store:    ${path}`);
+    const contractWindow =
+      MIN_COMPATIBLE_CONTRACT_VERSION === EVENT_CONTRACT_VERSION
+        ? `v${EVENT_CONTRACT_VERSION}`
+        : `v${MIN_COMPATIBLE_CONTRACT_VERSION}–v${EVENT_CONTRACT_VERSION}`;
+    console.log(`  engine:   ${FRAGUA_VERSION} ${chalk.dim(`(event-contract ${contractWindow})`)}`);
 
     const lock = store.currentDaemonLock();
     if (lock == null) {

@@ -22,7 +22,7 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     status: "running",
     currentNode: "n1",
     workflowSha: "wf",
-    schemaVersion: 1,
+    contractVersion: 1,
     routing: {},
     metrics: {
       billedTokens: 0,

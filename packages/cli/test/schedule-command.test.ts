@@ -167,14 +167,14 @@ describe("scheduleListCommand", () => {
     const s2 = r.store.getState(r2)!;
     r.store.appendFact(
       r1,
-      [{ type: "fact.run_started", payload: { workflowSha: sha, schemaVersion: 5, startNode: "a" } } as never],
+      [{ type: "fact.run_started", payload: { workflowSha: sha, contractVersion: 5, startNode: "a" } } as never],
       s1.version,
     );
     const s1b = r.store.getState(r1)!;
     r.store.appendFact(r1, [{ type: "fact.run_completed", payload: { finalNode: "b" } } as never], s1b.version);
     r.store.appendFact(
       r2,
-      [{ type: "fact.run_started", payload: { workflowSha: sha, schemaVersion: 5, startNode: "a" } } as never],
+      [{ type: "fact.run_started", payload: { workflowSha: sha, contractVersion: 5, startNode: "a" } } as never],
       s2.version,
     );
     const s2b = r.store.getState(r2)!;

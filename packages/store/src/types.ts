@@ -187,7 +187,7 @@ export interface RunState {
   status: RunStatus;
   currentNode: string | null;
   workflowSha: string;
-  schemaVersion: number;
+  contractVersion: number;
   routing: Record<string, unknown>;
   metrics: RunMetrics;
   nextSeq: number;

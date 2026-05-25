@@ -662,7 +662,12 @@ describe("GET /runs/:id/steps", () => {
     const s0 = store.getState("steps-one")!;
     store.appendFact(
       "steps-one",
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "n1" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+        },
+      ],
       s0.version,
     );
     const s1 = store.getState("steps-one")!;
@@ -890,7 +895,7 @@ describe("GET /metrics/global", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: "wf",
-            schemaVersion: s.schemaVersion,
+            contractVersion: s.contractVersion,
             startNode: "a",
           },
         },
@@ -1064,7 +1069,12 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     const s0 = store.getState("long")!;
     store.appendFact(
       "long",
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "a" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "a" },
+        },
+      ],
       s0.version,
     );
     // Emit 12 cost.recorded events, well past a tiny batchSize of 3.
@@ -1114,7 +1124,12 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     const s0 = store.getState("term")!;
     store.appendFact(
       "term",
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "a" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "a" },
+        },
+      ],
       s0.version,
     );
     const s1 = store.getState("term")!;
@@ -1178,7 +1193,12 @@ describe("global event feed (cross-run)", () => {
     const a0 = store.getState("a")!;
     const a1 = store.appendFact(
       "a",
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: a0.schemaVersion, startNode: "n" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: a0.contractVersion, startNode: "n" },
+        },
+      ],
       a0.version,
     );
     store.appendFact("a", [{ type: "fact.node_started", payload: { nodeId: "n", iteration: 1 } }], a1.newVersion);
@@ -1190,7 +1210,12 @@ describe("global event feed (cross-run)", () => {
     const b0 = store.getState("b")!;
     const b1 = store.appendFact(
       "b",
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: b0.schemaVersion, startNode: "n" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: b0.contractVersion, startNode: "n" },
+        },
+      ],
       b0.version,
     );
     store.appendFact("b", [{ type: "fact.run_completed", payload: { finalNode: "n" } }], b1.newVersion);
@@ -1292,7 +1317,7 @@ describe("global event feed (cross-run)", () => {
     const st = s.getState(runId)!;
     s.appendFact(
       runId,
-      [{ type: "fact.run_started", payload: { workflowSha, schemaVersion: st.schemaVersion, startNode: "n" } }],
+      [{ type: "fact.run_started", payload: { workflowSha, contractVersion: st.contractVersion, startNode: "n" } }],
       st.version,
     );
   }
@@ -1469,7 +1494,12 @@ describe("global event feed (cross-run)", () => {
     const s0 = store.getState("done")!;
     const s1 = store.appendFact(
       "done",
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "n" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n" },
+        },
+      ],
       s0.version,
     );
     store.appendFact("done", [{ type: "fact.run_completed", payload: { finalNode: "n" } }], s1.newVersion);
@@ -1497,7 +1527,12 @@ describe("global event feed (cross-run)", () => {
     const c0 = store.getState("c")!;
     const c1 = store.appendFact(
       "c",
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: c0.schemaVersion, startNode: "n" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: c0.contractVersion, startNode: "n" },
+        },
+      ],
       c0.version,
     );
     // Operator-action facts — now in FEED_EVENT_KINDS, must appear in the feed.

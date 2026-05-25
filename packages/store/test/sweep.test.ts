@@ -14,7 +14,7 @@ describe("startupSweep", () => {
       type: "fact.run_started",
       payload: {
         workflowSha: s0.workflowSha,
-        schemaVersion: s0.schemaVersion,
+        contractVersion: s0.contractVersion,
         startNode: "a",
       },
     };
@@ -45,7 +45,7 @@ describe("startupSweep", () => {
       type: "fact.run_started",
       payload: {
         workflowSha: s0.workflowSha,
-        schemaVersion: s0.schemaVersion,
+        contractVersion: s0.contractVersion,
         startNode: "a",
       },
     };
@@ -94,7 +94,7 @@ describe("startupSweep", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "a",
           },
         },
@@ -133,7 +133,7 @@ describe("startupSweep", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "a",
           },
         },
@@ -183,7 +183,7 @@ describe("startupSweep", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "a",
           },
         },
@@ -214,7 +214,7 @@ describe("startupSweep", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "a",
           },
         },
@@ -243,7 +243,7 @@ describe("startupSweep", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "a",
           },
         },

@@ -66,7 +66,7 @@ function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?:
         type: "fact.run_started",
         payload: {
           workflowSha: "sha",
-          schemaVersion: s0.schemaVersion,
+          contractVersion: s0.contractVersion,
           startNode: "work",
           baseGitSha: head,
           baseGitRef: "main",

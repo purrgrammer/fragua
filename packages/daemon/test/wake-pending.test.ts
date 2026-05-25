@@ -13,7 +13,7 @@ function startRun(r: ReturnType<typeof rig>, runId: string): void {
     [
       {
         type: "fact.run_started",
-        payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" },
+        payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "start" },
       },
     ],
     s0.version,

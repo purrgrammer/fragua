@@ -28,7 +28,7 @@ export interface RunStateRow {
   status: RunStatus;
   current_node: string | null;
   workflow_sha: string;
-  schema_version: number;
+  contract_version: number;
   routing: string;
   metrics: string;
   next_seq: number;
@@ -73,7 +73,7 @@ export interface WakeCandidateRow {
 
 const SELECT_RUN_STATE_FULL_SQL = `
   SELECT run_id, version, status, current_node, workflow_sha,
-         schema_version, routing, metrics, next_seq, last_applied_seq,
+         contract_version, routing, metrics, next_seq, last_applied_seq,
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
          cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path,
@@ -431,7 +431,7 @@ export function selectGcEligibleSnapshotRuns(db: Database, opts: { cwd: string; 
 const INSERT_RUN_STATE_SQL = `
   INSERT INTO run_state (
     run_id, version, status, current_node, workflow_sha,
-    schema_version, routing, metrics, next_seq, last_applied_seq, priority,
+    contract_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
     cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path, schedule_id
   ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -442,7 +442,7 @@ export function insertRunState(
   args: {
     runId: string;
     workflowSha: string;
-    schemaVersion: number;
+    contractVersion: number;
     routing: string;
     metrics: string;
     priority: number;
@@ -461,7 +461,7 @@ export function insertRunState(
   db.query(INSERT_RUN_STATE_SQL).run(
     args.runId,
     args.workflowSha,
-    args.schemaVersion,
+    args.contractVersion,
     args.routing,
     args.metrics,
     args.priority,

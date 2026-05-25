@@ -37,7 +37,7 @@ function mkState(currentNode: string): RunState {
     status: "running",
     currentNode,
     workflowSha: "g",
-    schemaVersion: 1,
+    contractVersion: 1,
     routing: {},
     metrics: { totalCostUsd: 0, totalInputTokens: 0, totalOutputTokens: 0, nodeCosts: {} },
   } as unknown as RunState;

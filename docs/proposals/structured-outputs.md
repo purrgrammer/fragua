@@ -152,7 +152,22 @@ hand-handles "plan present / failing test present / neither" in prose today.
 Scalar outputs interpolate into commands and prompts directly and ride
 `fact.node_completed.payload.outputs` — which keeps them under the 5 KB
 event-payload cap (ARCH property P12), the reason scalars stay small and bulk
-goes elsewhere. **Blob outputs are materialised by the runtime to a temp file;
+goes elsewhere.
+
+> **Event-contract impact — verified re-snapshot, NOT a bump.** Adding `outputs`
+> to `fact.node_completed` trips the contract-surface hash
+> ([`event-contract-version.md`](event-contract-version.md) §3.3 — field shapes
+> are in scope), which *forces the decision* — by design. It resolves to a
+> `// contract: no-bump` re-snapshot, not an `EVENT_CONTRACT_VERSION` bump:
+> auditing every `fact.node_completed` consumer confirmed that **only**
+> `packages/store/src/reducers.ts` folds the fact into `run_state`, and it reads
+> cost/token/model fields + `nodeId` + `nextNode` — never `route`,
+> `outcomeStatus`, or (the future) `outputs`. The read-plane
+> (`core/src/read-plane/{projections,steps}.ts`) reads the fact at display time,
+> which is off the fold contract. So an old daemon folds the stream to an
+> identical `run_state`; the new field is consumed only by substitution/routing
+> at execution and by the read-plane for display. (Flip condition: this becomes a
+> real bump only if a reducer arm ever folds `outputs` into `run_state`.) **Blob outputs are materialised by the runtime to a temp file;
 you interpolate the `.path`** (`--body-file
 ${{ steps.synthesize.outputs.review_body.path }}`). This keeps shell lines
 scalar-only (no markdown-blob-into-a-shell-line injection) and keeps the blob

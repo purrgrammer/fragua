@@ -18,8 +18,9 @@ CREATE TABLE IF NOT EXISTS workflows (
   -- Canonical IR: the parsed Graph serialized as JSON with `loc` (validator-
   -- only metadata) stripped. The dispatch GraphLoader deserializes this — it
   -- is the executable artifact; `source` stays the human/provenance artifact.
-  -- `ir_version` is the IR contract version (a third axis, distinct from
-  -- schema_version and the workflow sha). Both NOT NULL — every workflow is
+  -- `ir_version` is the IR contract version (a third axis, distinct from the
+  -- DB-migration `schema_version`, a run's `contract_version`, and the workflow
+  -- sha). Both NOT NULL — every workflow is
   -- parsed once at mint and carries its IR. `sha` is still sha256(source);
   -- IR-hash identity (proposal move B) is deferred until the graph shape is
   -- feature-complete.
@@ -44,7 +45,10 @@ CREATE TABLE IF NOT EXISTS run_state (
   )),
   current_node TEXT,
   workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
-  schema_version INTEGER NOT NULL,
+  -- Event-contract version pinned at enqueue (EVENT_CONTRACT_VERSION). The
+  -- executor's run-resume gate, DISTINCT from the singleton `schema_version`
+  -- DB-migration counter above — see docs/proposals/event-contract-version.md.
+  contract_version INTEGER NOT NULL,
   routing TEXT NOT NULL CHECK (length(routing) < 8192),
   metrics TEXT NOT NULL,
   next_seq INTEGER NOT NULL DEFAULT 1,

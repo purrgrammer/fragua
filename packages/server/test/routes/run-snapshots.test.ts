@@ -95,7 +95,7 @@ async function setupFixture(): Promise<SnapFixture> {
     [
       {
         type: "fact.run_started",
-        payload: { workflowSha: "wf1", schemaVersion: 1, startNode: "n1", baseGitSha: baseSha },
+        payload: { workflowSha: "wf1", contractVersion: 1, startNode: "n1", baseGitSha: baseSha },
       },
     ],
     enqueued.version,

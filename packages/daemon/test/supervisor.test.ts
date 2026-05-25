@@ -28,7 +28,7 @@ function makeRunningStore(runId: string, workflowSha: string): SqliteStore {
   store.enqueueRun({ runId, workflowSha, initialRouting: { start_node: "start" } });
   store.claimNextRun(1);
   const facts = [
-    { type: "fact.run_started" as const, payload: { workflowSha, schemaVersion: 1, startNode: "start" } },
+    { type: "fact.run_started" as const, payload: { workflowSha, contractVersion: 1, startNode: "start" } },
     {
       type: "fact.node_completed" as const,
       payload: { nodeId: "start", iteration: 0, tokens: 0, costUsd: 0, nextNode: "impl" },

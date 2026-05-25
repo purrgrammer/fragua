@@ -797,9 +797,9 @@ describe("executor — version mismatch", () => {
       }),
     });
     enqueue(r, runId, "start");
-    // Forcibly rewrite schema_version on the row to simulate skew.
+    // Forcibly rewrite contract_version on the row to simulate skew.
     const db = (r.store as unknown as { db: import("bun:sqlite").Database }).db;
-    db.query("UPDATE run_state SET schema_version = ? WHERE run_id = ?").run(pinnedVersion, runId);
+    db.query("UPDATE run_state SET contract_version = ? WHERE run_id = ?").run(pinnedVersion, runId);
 
     r.store.claimNextRun(1);
     const ac = new AbortController();

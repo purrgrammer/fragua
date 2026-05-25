@@ -272,9 +272,15 @@ canonicalizers needed). The core rules, each a forever contract:
 
 ### 8.3 Residual notes
 
-- **Three version axes stay separate**: `schema_version` (store), `ir_version`
-  (IR contract), `sha` (content identity). The proposal's whole value is not
-  collapsing them.
+- **Four version axes stay separate**: `schema_version` (store migrations),
+  `ir_version` (IR contract), `sha` (content identity), and
+  `EVENT_CONTRACT_VERSION` (fold contract —
+  [`event-contract-version.md`](event-contract-version.md)). The proposal's whole
+  value is not collapsing them — and the pairing that bites is `ir_version` vs
+  `EVENT_CONTRACT_VERSION`: a new node type / attr / default is an **`ir_version`**
+  bump + an up-converter (§5), *not* an event-contract bump, because the executor
+  records the routing *result* (`fact.node_completed.payload.nextNode`) and the
+  reducer folds that verbatim — the node-language change never reaches `foldFacts`.
 - **Source provenance fidelity** (only bites under (B)): the stored `source` for
   a `sha` is whichever upload won; not byte-equal to every author's input. Fine
   for execution; note it for any "show original" UI.

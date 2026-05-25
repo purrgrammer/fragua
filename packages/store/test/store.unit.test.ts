@@ -85,7 +85,7 @@ describe("SqliteStore — appendFact", () => {
       type: "fact.run_started",
       payload: {
         workflowSha: state.workflowSha,
-        schemaVersion: state.schemaVersion,
+        contractVersion: state.contractVersion,
         startNode: "a",
       },
     };
@@ -108,7 +108,7 @@ describe("SqliteStore — appendFact", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "a",
           },
         },
@@ -182,7 +182,7 @@ describe("SqliteStore — appendFact", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "a" },
+          payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "a" },
         },
       ],
       s0.version,
@@ -246,7 +246,7 @@ describe("SqliteStore — appendFact", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "a" },
+          payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "a" },
         },
       ],
       s0.version,
@@ -286,7 +286,7 @@ describe("SqliteStore — appendFact", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "a" },
+          payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "a" },
         },
       ],
       s0.version,
@@ -409,7 +409,7 @@ describe("SqliteStore — appendObservabilityEvents", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: "wf", schemaVersion: CURRENT_SCHEMA_VERSION, startNode: "n1" },
+          payload: { workflowSha: "wf", contractVersion: CURRENT_SCHEMA_VERSION, startNode: "n1" },
         },
       ],
       s.version,
@@ -799,7 +799,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s.workflowSha, schemaVersion: s.schemaVersion, startNode: "a" },
+          payload: { workflowSha: s.workflowSha, contractVersion: s.contractVersion, startNode: "a" },
         },
       ],
       s.version,
@@ -832,7 +832,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s.workflowSha, schemaVersion: s.schemaVersion, startNode: "a" },
+          payload: { workflowSha: s.workflowSha, contractVersion: s.contractVersion, startNode: "a" },
         },
       ],
       s.version,
@@ -860,7 +860,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s.workflowSha, schemaVersion: s.schemaVersion, startNode: "a" },
+          payload: { workflowSha: s.workflowSha, contractVersion: s.contractVersion, startNode: "a" },
         },
       ],
       s.version,

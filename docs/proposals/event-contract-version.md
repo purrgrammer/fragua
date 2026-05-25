@@ -1,9 +1,9 @@
 ---
 title: Event-contract version — decouple resume-gating from the DB migration counter, and make version mismatch recoverable
 summary: "The per-run schema_version gate conflates two things and over-punishes both. (1) It pins to the DB migration counter, which bumps on projection-only changes that never touch event/reducer semantics — so runs are gated on versions irrelevant to whether their events fold. (2) A mismatch produces fact.run_halted{schema_drift}, which is TERMINAL and unresumable — so a transient version skew (a momentarily-downgraded daemon, an imported run) kills a run permanently. Fix: gate on an event-contract version that bumps only on real fact/intent/reducer changes, and make the mismatch a recoverable pause, not a terminal halt."
-status: partially-shipped
-maturity: designed
-last-reviewed: 2026-05-23
+status: shipped
+maturity: shipped
+last-reviewed: 2026-05-25
 parent: cli-topology.md
 ---
 
@@ -66,11 +66,11 @@ that later catches up. The response outlived the cause.
 
 §3.2 fixes this: the gate now emits a recoverable `fact.run_paused`
 (`engine_incompatible`, status `paused`) the operator can resume.
-The remaining defect (§2.1, wrong axis) is still open — §3.1.
+The axis split (§2.1, wrong axis) is now also fixed — §3.1, SHIPPED.
 
 ## 3. The fix
 
-### 3.1 Gate on an event-contract version
+### 3.1 Gate on an event-contract version — SHIPPED
 
 Introduce `EVENT_CONTRACT_VERSION`, separate from the DB migration counter, that
 bumps **only** when `FactEvent`/`IntentEvent` payload shapes or reducer semantics
@@ -88,6 +88,16 @@ actually change — a rare event. Runs pin *that*. The executor gates on it:
 
 The DB migration counter keeps doing its job (walk-forward `migrate()` for the
 projection/schema); it just stops being the run-resume gate.
+
+> **As shipped:** `EVENT_CONTRACT_VERSION` + `MIN_COMPATIBLE_CONTRACT_VERSION`
+> live in `packages/store/src/pragmas.ts` (both `1`). The per-run pin column was
+> renamed `run_state.schema_version → contract_version` (a free pre-freeze
+> rename; the `fact.run_started` payload field followed, `schemaVersion →
+> contractVersion`). Enqueue pins `EVENT_CONTRACT_VERSION`; the executor gates on
+> `[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]`. `fragua --version`
+> prints `event-contract vN`; `fragua doctor` prints the supported window on its
+> `engine:` line (a standalone `daemon status` verb does not exist — `doctor` is
+> the liveness screen).
 
 ### 3.2 Make a mismatch a recoverable pause — SHIPPED
 
@@ -157,11 +167,22 @@ version, folding a stream containing this change, produce a different or erroneo
 
 **Enforcement — force the decision, don't trust memory.** A per-PR judgment call
 rots into "bump on everything" or "never bump." The structural surface is made
-mechanical instead: a discipline test (in the shape of
-`store/test/lint.test.ts`) snapshots a hash of the compiled TypeBox
-`FactEvent`/`IntentEvent` schema set plus the enumerated reason/status arrays, and
-**fails the build when that hash changes unless `EVENT_CONTRACT_VERSION` and the
-snapshot move in the same diff.** The test does not *decide* the bump — it converts
+mechanical instead: a discipline test
+(`packages/store/test/contract-version.test.ts`) snapshots a hash of the
+`FactEvent`/`IntentEvent` declarations plus the enumerated reason/status sets
+(`RunStatus`, `TERMINAL_STATUSES`, `PauseReason`, `AUTO_WAKE_PAUSE_REASONS`,
+`HaltReason`, `QuarantineReason`), and **fails the build when that hash changes
+unless `EVENT_CONTRACT_VERSION` and the snapshot move in the same diff.**
+
+> **Implementation note — TS types, not TypeBox.** The original design assumed
+> `FactEvent`/`IntentEvent` were compiled TypeBox schemas hashable as runtime
+> objects. They are plain TypeScript union types (erased at runtime), so the test
+> instead slices each declaration's *source text* out of
+> `packages/types/src/events.ts` (declaration-boundary scan, brace-agnostic),
+> strips comments + collapses whitespace, and hashes that. Same guarantee — field
+> names/types/optionality and the literal sets are all in the text, so there are
+> no false negatives for structural change; comment/format edits don't trip it.
+> Re-snapshot with `UPDATE_CONTRACT_SNAPSHOT=1`. The test does not *decide* the bump — it converts
 the failure mode from "silently forgot" into "build red until you consciously choose
 bump vs. re-snapshot-only." A false positive (a field reorder) is cheap to clear;
 the test has **no false negatives for structural change**, which is the dangerous
@@ -244,12 +265,12 @@ the first future projection-only migration. Low priority.
      hash (§3.3) does not exist yet; its baseline snapshot is taken from the
      **post-§3.2** surface (the `engine_incompatible` reason present, `schema_drift` absent)
      — nobody retroactively snapshots a pre-§3.2 state.
-  2. **§3.1 + §3.3 + §3.4 — the axis split, before [`db-import.md`](db-import.md).**
-     Introduce `EVENT_CONTRACT_VERSION`, the bump checklist + its mechanical
-     enforcement (§3.3), and the backward-compat / ratchet discipline (§3.4) so the
-     gate rarely trips and cross-store import conflicts only on real contract
-     divergence. Surface the version operator-side (§3.1) and take the first hash
-     baseline here. This is the substrate import safety stands on.
+  2. **§3.1 + §3.3 + §3.4 — the axis split — SHIPPED, before [`db-import.md`](db-import.md).**
+     `EVENT_CONTRACT_VERSION` introduced, the contract-surface hash test + the
+     `reducers.ts` touch-gate (§3.3) wired into CI, and the backward-compat /
+     ratchet discipline recorded (§3.4) with `MIN_COMPATIBLE_CONTRACT_VERSION`
+     snapshot-pinned. The version is operator-visible (§3.1) and the first hash
+     baseline is taken. This is the substrate import safety stands on.
   3. **§3.5 — backfill, near-moot at 0.1.0.** No stale-pin population on the
      clean-slate baseline; hold for a future projection-only migration.
 

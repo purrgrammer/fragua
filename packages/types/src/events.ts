@@ -394,7 +394,7 @@ export type FactEvent =
       type: "fact.run_started";
       payload: {
         workflowSha: string;
-        schemaVersion: number;
+        contractVersion: number;
         startNode: string;
         /** HEAD sha of the run's worktree at provision time. Set when a
          * `WorktreeProvisioner` is configured; absent for runs with a

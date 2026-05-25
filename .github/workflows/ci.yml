@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history so the contract touch-gate can diff against the merge base
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -29,6 +31,12 @@ jobs:
 
       - name: Test
         run: bun test ./packages
+
+      - name: Event-contract version touch-gate
+        run: |
+          base="${GITHUB_BASE_REF:-main}"
+          git fetch --no-tags origin "$base"
+          bash scripts/check-contract-bump.sh "origin/$base"
 
       - name: Verify pure core subtrees have no I/O imports
         run: |

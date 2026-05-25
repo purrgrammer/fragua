@@ -80,7 +80,7 @@ import {
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
-import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
+import { applyCreationPragmas, applyPragmas, EVENT_CONTRACT_VERSION } from "./pragmas.ts";
 import {
   type ProviderConfigDbRow,
   deleteProviderConfig as queryDeleteProviderConfig,
@@ -259,7 +259,7 @@ function rowToRunState(row: RunStateRow): RunState {
     status: row.status,
     currentNode: row.current_node,
     workflowSha: row.workflow_sha,
-    schemaVersion: row.schema_version,
+    contractVersion: row.contract_version,
     routing,
     metrics,
     nextSeq: row.next_seq,
@@ -551,7 +551,7 @@ export class SqliteStore implements IEventStore {
       insertRunState(this.db, {
         runId: params.runId,
         workflowSha: params.workflowSha,
-        schemaVersion: CURRENT_SCHEMA_VERSION,
+        contractVersion: EVENT_CONTRACT_VERSION,
         routing,
         metrics,
         priority: params.priority ?? 0,

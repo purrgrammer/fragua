@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 // fragua CLI entry — dispatches subcommands.
 //
 // The CLI is a direct store-client (no HTTP): `fragua runs <verb>` writes
@@ -7,6 +8,7 @@
 // unquarantine/cancel), control (steer/pause/priority/budget/max-*), and
 // inspect/forensics (status/tail/events/steps/messages/artifacts).
 
+import { EVENT_CONTRACT_VERSION } from "@fragua/store";
 import cac from "cac";
 import chalk from "chalk";
 import { ciCommand } from "../src/commands/ci.ts";
@@ -872,7 +874,7 @@ cli
   });
 
 cli.help();
-cli.version(FRAGUA_VERSION);
+cli.version(`${FRAGUA_VERSION} (event-contract v${EVENT_CONTRACT_VERSION})`);
 const parsed = cli.parse(process.argv, { run: false });
 
 if (!cli.matchedCommand && !parsed.options["help"] && !parsed.options["version"]) {

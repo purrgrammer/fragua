@@ -107,7 +107,7 @@ describe("P4 — projection equals fold of facts", () => {
             type: "fact.run_started",
             payload: {
               workflowSha: state.workflowSha,
-              schemaVersion: state.schemaVersion,
+              contractVersion: state.contractVersion,
               startNode: "a",
             },
           };

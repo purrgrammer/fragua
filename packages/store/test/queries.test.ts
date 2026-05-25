@@ -538,7 +538,7 @@ describe("getSnapshotEvents", () => {
     if (state == null) throw new Error("no state");
     store.appendFact(
       runId,
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: 1, startNode: "n1" } }],
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", contractVersion: 1, startNode: "n1" } }],
       state.version,
     );
 

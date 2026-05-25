@@ -104,7 +104,7 @@ function seedCommitted(store: IEventStore, runId: string): void {
         type: "fact.run_started",
         payload: {
           workflowSha: "wf",
-          schemaVersion: s0.schemaVersion,
+          contractVersion: s0.contractVersion,
           startNode: "n1",
           baseGitSha: BASE,
           baseGitRef: "main",
@@ -144,7 +144,12 @@ function seedPausedHuman(store: IEventStore, runId: string): void {
   const s0 = store.getState(runId)!;
   store.appendFact(
     runId,
-    [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "n1" } }],
+    [
+      {
+        type: "fact.run_started",
+        payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+      },
+    ],
     s0.version,
   );
   const s1 = store.getState(runId)!;

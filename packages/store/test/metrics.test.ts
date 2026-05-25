@@ -33,7 +33,7 @@ describe("store metrics", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: state.workflowSha,
-            schemaVersion: state.schemaVersion,
+            contractVersion: state.contractVersion,
             startNode: "a",
           },
         },
@@ -55,7 +55,7 @@ describe("store metrics", () => {
       type: "fact.run_started" as const,
       payload: {
         workflowSha: state.workflowSha,
-        schemaVersion: state.schemaVersion,
+        contractVersion: state.contractVersion,
         startNode: "a",
       },
     };

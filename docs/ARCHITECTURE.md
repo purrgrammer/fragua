@@ -140,7 +140,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any pin in `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]` and **pauses** (recoverable) an out-of-range pin with `fact.run_paused { reason: "engine_incompatible", pinnedVersion, supportedMin, supportedMax }`. The payload's window distinguishes the arms: `pinnedVersion > supportedMax` (too new — a downgraded daemon, or a newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Both project to `paused` (operator-resumable) — capability-gated auto-wake for the too-new arm is deferred (`docs/proposals/event-contract-version.md` §3.1). There is a single baseline: `MIN_COMPATIBLE_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION = 1`, so the gate is latent. `migrate()` creates the baseline on a fresh DB and re-runs `schema.sql` idempotently on an existing DB already at the baseline; any other version (downgrade or pre-baseline) is refused with no migration path. The first post-baseline schema change reintroduces a step-delta map keyed by target version. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
+- **Contract drift across long pauses** — `contract_version` pinned per run (`EVENT_CONTRACT_VERSION` at enqueue), the run-resume gate. It is a SEPARATE axis from the DB-migration counter `schema_version`: it bumps only on real `FactEvent`/`IntentEvent`/reducer changes, so projection-only migrations never trip the gate. The daemon resumes any pin in `[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` and **pauses** (recoverable) an out-of-range pin with `fact.run_paused { reason: "engine_incompatible", pinnedVersion, supportedMin, supportedMax }`. The payload's window distinguishes the arms: `pinnedVersion > supportedMax` (too new — a downgraded daemon, or a newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Both project to `paused` (operator-resumable) — capability-gated auto-wake for the too-new arm is deferred (`docs/proposals/event-contract-version.md` §3.2). **Backward-compat invariant:** a daemon at contract version `V` folds-correctly every stream pinned in `[MIN_COMPATIBLE, V]`; only the *downgrade* direction parks (an older daemon meeting a newer pin) — a current daemon never parks on an older run, and may not delete reducer paths for any contract version ≥ `MIN_COMPATIBLE` until the floor ratchets past it. `MIN_COMPATIBLE_CONTRACT_VERSION` ratchets only by deliberate act (it strands every run below it). There is a single baseline: `MIN_COMPATIBLE_CONTRACT_VERSION = EVENT_CONTRACT_VERSION = 1`, so the gate is latent. Two discipline tests guard it: a contract-surface hash snapshot (`packages/store/test/contract-version.test.ts`) and the `reducers.ts` touch-gate (`scripts/check-contract-bump.sh`) — both force a conscious bump-or-resnapshot. **Bump iff** a daemon at the prior contract version, folding a stream with the change, would produce a different/erroneous `run_state`: new/removed fact or intent type → yes; new field a fold path reads → yes; new pause/halt reason → yes; reducer behaviour change → yes; new observability event or projection column → no (off the fold path). Separately, the DB-migration `schema_version`: `migrate()` creates the baseline on a fresh DB and re-runs `schema.sql` idempotently on an existing DB already at the baseline; any other version (downgrade or pre-baseline) is refused with no migration path. The first post-baseline schema change reintroduces a step-delta map keyed by target version. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -175,8 +175,9 @@ CREATE TABLE workflows (
   name TEXT NOT NULL,
   source TEXT NOT NULL,
   -- Canonical IR: the parsed Graph serialised as JSON with `loc` stripped.
-  -- `ir_version` is the IR contract version (distinct from schema_version and
-  -- the workflow sha). Both NOT NULL — every workflow is parsed once at mint.
+  -- `ir_version` is the IR contract version (distinct from the DB-migration
+  -- `schema_version`, a run's `contract_version`, and the workflow sha). Both
+  -- NOT NULL — every workflow is parsed once at mint.
   ir TEXT NOT NULL,
   ir_version INTEGER NOT NULL,
   created_at INTEGER NOT NULL
@@ -191,7 +192,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   )),
   current_node TEXT,
   workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
-  schema_version INTEGER NOT NULL,
+  contract_version INTEGER NOT NULL,              -- EVENT_CONTRACT_VERSION pin; run-resume gate, NOT the DB counter
   routing TEXT NOT NULL CHECK (length(routing) < 8192),
   metrics TEXT NOT NULL,
   next_seq INTEGER NOT NULL DEFAULT 1,            -- per-run counter; I10
@@ -443,7 +444,7 @@ Post-terminal operator actions run **synchronously in the caller** (intent-plane
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
 |---|---|---|
-| `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?`, `baseGitRef?` | Run enters `running`. `baseGitRef` is the source repo's branch at provision — the post-run merge/commit target default |
+| `fact.run_started` | `workflowSha`, `contractVersion`, `startNode`, `baseGitSha?`, `baseGitRef?` | Run enters `running`. `baseGitRef` is the source repo's branch at provision — the post-run merge/commit target default |
 | `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_human'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
 | `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the llm agent exited via the synthesised `route` tool) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for llm handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
@@ -882,8 +883,8 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
     const state = store.getState(runId);
     if (!state || isTerminal(state.status) || state.status === "paused" || state.status === "paused_human" || state.status === "paused_auto" || state.status === "quarantined") return;
 
-    if (state.schema_version < MIN_COMPATIBLE_SCHEMA_VERSION || state.schema_version > CURRENT_SCHEMA_VERSION) {
-      store.appendFact(runId, [pausedFact("engine_incompatible", { pinnedVersion: state.schema_version, supportedMin: MIN_COMPATIBLE_SCHEMA_VERSION, supportedMax: CURRENT_SCHEMA_VERSION })], state.version);
+    if (state.contract_version < MIN_COMPATIBLE_CONTRACT_VERSION || state.contract_version > EVENT_CONTRACT_VERSION) {
+      store.appendFact(runId, [pausedFact("engine_incompatible", { pinnedVersion: state.contract_version, supportedMin: MIN_COMPATIBLE_CONTRACT_VERSION, supportedMax: EVENT_CONTRACT_VERSION })], state.version);
       return;
     }
 

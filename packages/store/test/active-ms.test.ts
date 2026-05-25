@@ -12,7 +12,7 @@ function blankState(): RunState {
     status: "queued",
     currentNode: null,
     workflowSha: "wf",
-    schemaVersion: 1,
+    contractVersion: 1,
     routing: {},
     metrics: emptyMetrics(),
     nextSeq: 1,
@@ -44,7 +44,7 @@ function blankState(): RunState {
 
 const RUN_STARTED: FactEvent = {
   type: "fact.run_started",
-  payload: { workflowSha: "wf", schemaVersion: 1, startNode: "a" },
+  payload: { workflowSha: "wf", contractVersion: 1, startNode: "a" },
 };
 
 function dispatchStarted(now: number, resumeOf: "fresh" | "crash" | "paused_human" | "paused"): FactEvent {

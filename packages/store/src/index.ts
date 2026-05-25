@@ -1,6 +1,11 @@
 export type { MetricsSnapshot } from "./metrics.ts";
 export { Metrics } from "./metrics.ts";
-export { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION } from "./pragmas.ts";
+export {
+  CURRENT_SCHEMA_VERSION,
+  EVENT_CONTRACT_VERSION,
+  MIN_COMPATIBLE_CONTRACT_VERSION,
+  MIN_COMPATIBLE_SCHEMA_VERSION,
+} from "./pragmas.ts";
 export { applyFact, emptyMetrics, foldFacts } from "./reducers.ts";
 export { newRunId } from "./run-id.ts";
 export { sha256Hex } from "./sha256.ts";

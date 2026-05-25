@@ -45,7 +45,7 @@ function seed(store: IEventStore, o: SeedOpts): void {
         type: "fact.run_started",
         payload: {
           workflowSha: "wf",
-          schemaVersion: s0.schemaVersion,
+          contractVersion: s0.contractVersion,
           startNode: "n1",
           baseGitSha: o.baseGitSha ?? BASE,
           ...(o.baseGitRef === undefined

@@ -347,7 +347,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" },
+          payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "start" },
         },
       ],
       s0.version,

@@ -198,7 +198,7 @@ async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string
         type: "fact.run_started",
         payload: {
           workflowSha: "wf_changes",
-          schemaVersion: 1,
+          contractVersion: 1,
           startNode: "a",
           baseGitSha: baseSha,
         },

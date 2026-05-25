@@ -326,7 +326,7 @@ function appendTerminalFailure(store: IEventStore, runId: string): void {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: state.workflowSha, schemaVersion: state.schemaVersion, startNode: "a" },
+          payload: { workflowSha: state.workflowSha, contractVersion: state.contractVersion, startNode: "a" },
         } as FactEvent,
       ],
       v,

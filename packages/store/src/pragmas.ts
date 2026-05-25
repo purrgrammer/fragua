@@ -1,14 +1,31 @@
 import type { Database } from "bun:sqlite";
 
-/** Schema version this code emits for new DBs and pins on new runs.
+/** Schema version this code emits for new DBs — the DB-migration counter.
  * 0.1.0 baseline — there is no walk-forward migration chain yet; the
  * first post-0.1.0 schema change bumps this and registers a step-delta
- * in `migrations.ts`. */
+ * in `migrations.ts`. Note: it does NOT gate run resume — runs pin
+ * `EVENT_CONTRACT_VERSION` for that (axis split, §3.1). */
 export const CURRENT_SCHEMA_VERSION = 1;
 
 /** Lowest schema version `migrate()` accepts. Equal to the baseline
  * until the first migration lands. */
 export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
+
+/** Event-contract version a run pins at enqueue, and the executor's
+ * run-resume gate. DISTINCT from `CURRENT_SCHEMA_VERSION` (the DB-migration
+ * counter): it bumps ONLY when `FactEvent`/`IntentEvent` payload shapes or
+ * reducer fold-semantics actually change — a rare event — so the resume gate
+ * stops tripping on projection-only migrations. See
+ * docs/proposals/event-contract-version.md §3.1. The contract-surface hash
+ * test (packages/store/test/contract-version.test.ts) forces a conscious
+ * bump-or-resnapshot whenever the surface moves. */
+export const EVENT_CONTRACT_VERSION = 1;
+
+/** Lowest contract version the daemon folds. Ratchets ONLY by deliberate act
+ * (§3.4): advancing it strands every run pinned below it, so it moves only in
+ * a dedicated commit that names the dropped versions and removes their reducer
+ * paths. A snapshot test pins this value. */
+export const MIN_COMPATIBLE_CONTRACT_VERSION = 1;
 
 /**
  * Apply connection-level pragmas. Called on every opened Database.

@@ -10,7 +10,12 @@
 
 import { type ExecutionEnvironment, evaluateBudget, type Graph } from "@fragua/core";
 import * as core from "@fragua/core/handler";
-import { CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore, MIN_COMPATIBLE_SCHEMA_VERSION } from "@fragua/store";
+import {
+  EVENT_CONTRACT_VERSION,
+  type FactEvent,
+  type IEventStore,
+  MIN_COMPATIBLE_CONTRACT_VERSION,
+} from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
@@ -314,25 +319,27 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
-    // Version-mismatch refusal. Pins in the compatibility range
-    // [MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION] resume
-    // cleanly. An out-of-range pin is RECOVERABLE, not terminal — park
-    // the run as `paused{engine_incompatible}` instead of killing it (a
-    // downgraded daemon gets upgraded; an imported run lands on a store
-    // that later catches up). The payload carries the window, so the
-    // operator/UI infers too-new (`pinnedVersion > supportedMax`) vs
-    // too-old (`< supportedMin`) without a second reason. Capability-gated
-    // auto-wake for the too-new arm is deferred to the contract-version
-    // axis split — see docs/proposals/event-contract-version.md §3.1.
-    if (state.schemaVersion < MIN_COMPATIBLE_SCHEMA_VERSION || state.schemaVersion > CURRENT_SCHEMA_VERSION) {
+    // Event-contract version gate. A run pins EVENT_CONTRACT_VERSION at
+    // enqueue; pins in [MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]
+    // fold cleanly. The contract version is DISTINCT from the DB-migration
+    // counter (CURRENT_SCHEMA_VERSION) — it bumps only on real fact/intent/
+    // reducer changes, so projection-only migrations never trip this gate.
+    // An out-of-range pin is RECOVERABLE, not terminal — park the run as
+    // `paused{engine_incompatible}` instead of killing it (a downgraded daemon
+    // gets upgraded; an imported run lands on a store that later catches up).
+    // The payload carries the window, so the operator/UI infers too-new
+    // (`pinnedVersion > supportedMax`) vs too-old (`< supportedMin`) without a
+    // second reason. Capability-gated auto-wake for the too-new arm is deferred
+    // — see docs/proposals/event-contract-version.md §3.2.
+    if (state.contractVersion < MIN_COMPATIBLE_CONTRACT_VERSION || state.contractVersion > EVENT_CONTRACT_VERSION) {
       await tryAppendFact(opts.store, runId, state.version, [
         {
           type: "fact.run_paused",
           payload: {
             reason: "engine_incompatible",
-            pinnedVersion: state.schemaVersion,
-            supportedMin: MIN_COMPATIBLE_SCHEMA_VERSION,
-            supportedMax: CURRENT_SCHEMA_VERSION,
+            pinnedVersion: state.contractVersion,
+            supportedMin: MIN_COMPATIBLE_CONTRACT_VERSION,
+            supportedMax: EVENT_CONTRACT_VERSION,
           },
         },
       ]);
@@ -476,7 +483,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           type: "fact.run_started",
           payload: {
             workflowSha: state.workflowSha,
-            schemaVersion: state.schemaVersion,
+            contractVersion: state.contractVersion,
             startNode: start,
             ...(baseGitSha != null ? { baseGitSha } : {}),
             ...(baseGitRef != null ? { baseGitRef } : {}),

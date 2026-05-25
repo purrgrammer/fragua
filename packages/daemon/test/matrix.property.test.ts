@@ -4,7 +4,7 @@
 //   P7  unquarantine retry       — intent.unquarantine:retry resumes & reuses idempotencyKey
 //   P8  mid-flight abort replay  — abort → next turn converges; external call ≤ 1 per key
 //   P16 blob GC                  — orphan blobs removed, shared blobs retained
-//   P17 schema drift refusal     — resume with mismatched schema_version → run_halted
+//   P17 contract-version refusal — resume with out-of-range contract_version → paused{engine_incompatible}
 //   P18 zombie daemon commit     — reclaimed original fails OCC on commit
 //   P20 abort loop ceiling       — K consecutive aborts with no progress → halt
 
@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import * as handler from "@fragua/core/handler";
 import {
   ConcurrencyError,
-  MIN_COMPATIBLE_SCHEMA_VERSION,
+  MIN_COMPATIBLE_CONTRACT_VERSION,
   type RunStatus,
   type StoredEvent,
   sha256Hex as sha256,
@@ -38,7 +38,7 @@ describe("P6 — orphan quarantine on crash between intent and done", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "start",
           },
         },
@@ -86,7 +86,7 @@ describe("P7 — unquarantine retry reuses idempotencyKey", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "start",
           },
         },
@@ -186,7 +186,7 @@ describe("P25 — pre-commit recorder durability across hard crash", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" },
+          payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "start" },
         },
       ],
       s0.version,
@@ -241,7 +241,7 @@ describe("P25 — pre-commit recorder durability across hard crash", () => {
       [
         {
           type: "fact.run_started",
-          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" },
+          payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "start" },
         },
       ],
       s0.version,
@@ -487,7 +487,7 @@ describe("P18 — reclaimed zombie daemon fails OCC on commit", () => {
           type: "fact.run_started",
           payload: {
             workflowSha: s0.workflowSha,
-            schemaVersion: s0.schemaVersion,
+            contractVersion: s0.contractVersion,
             startNode: "start",
           },
         },
@@ -526,9 +526,9 @@ describe("P17 — version-mismatch refusal on resume", () => {
     const before = r.store.getState("rp17")!;
 
     // Simulate a downgraded daemon starting against a newer-pinned run:
-    // rewrite schema_version out from under the executor.
+    // rewrite contract_version out from under the executor.
     const db = (r.store as unknown as { db: Database }).db;
-    db.query("UPDATE run_state SET schema_version = 999 WHERE run_id = ?").run("rp17");
+    db.query("UPDATE run_state SET contract_version = 999 WHERE run_id = ?").run("rp17");
 
     r.store.claimNextRun(1);
     const ac = new AbortController();
@@ -556,9 +556,9 @@ describe("P17 — version-mismatch refusal on resume", () => {
   });
 
   test("a run pinned to a version inside [MIN, CURRENT] resumes without halting", async () => {
-    // Same setup as P17, but with a schema_version that, while not equal
-    // to CURRENT, still falls inside the compat range. Picking
-    // MIN_COMPATIBLE_SCHEMA_VERSION directly is the most defensive fixture
+    // Same setup as P17, but with a contract_version that, while not equal
+    // to EVENT_CONTRACT_VERSION, still falls inside the compat range. Picking
+    // MIN_COMPATIBLE_CONTRACT_VERSION directly is the most defensive fixture
     // — it'll keep working as MIN floats forward.
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {
@@ -570,7 +570,10 @@ describe("P17 — version-mismatch refusal on resume", () => {
     enqueue(r, "rp17b", "start");
 
     const db = (r.store as unknown as { db: Database }).db;
-    db.query("UPDATE run_state SET schema_version = ? WHERE run_id = ?").run(MIN_COMPATIBLE_SCHEMA_VERSION, "rp17b");
+    db.query("UPDATE run_state SET contract_version = ? WHERE run_id = ?").run(
+      MIN_COMPATIBLE_CONTRACT_VERSION,
+      "rp17b",
+    );
 
     r.store.claimNextRun(1);
     await runOne("rp17b", {
