@@ -1,14 +1,15 @@
 // Store-backed /runs/* summary + detail reads for the web UI.
 //
 // Everything a RunSummary / RunDetail carries is derived from
-// run_state + the event log. Workflow name/source comes from the
-// workflows table (saveWorkflow writes the source on enqueue).
+// run_state + the event log. The projection logic lives in the shared read
+// plane (`@fragua/core/read-plane`); these handlers parse query params and
+// delegate to `readPlane.*`, so the HTTP surface and any other read client
+// share one projection.
 
-import { type IEventStore, isTerminal as isTerminalStatus, type RunStatus } from "@fragua/store";
+import { makeReadPlane } from "@fragua/core/read-plane";
+import type { IEventStore, RunStatus } from "@fragua/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
-import { runStateToDetail, runSummaryRowToSummary } from "./runs-adapter.ts";
-import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "./steps.ts";
 
 export interface RunsRoutesOpts {
   store: IEventStore;
@@ -19,6 +20,7 @@ export interface RunsRoutesOpts {
 export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   const app = new Hono();
   const { store } = opts;
+  const readPlane = makeReadPlane({ store });
 
   app.get("/runs", (c) => {
     // Query params (all optional, all enforced server-side):
@@ -46,21 +48,15 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     if (inboxParam === "pending" || inboxParam === "acted" || inboxParam === "discarded") {
       queryOpts.inbox = inboxParam;
     }
-    return c.json(store.listRunSummaryRows(queryOpts).map(runSummaryRowToSummary));
+    return c.json(readPlane.runSummaries(queryOpts));
   });
 
-  app.get("/runs/:id", async (c) => {
+  app.get("/runs/:id", (c) => {
     const runId = c.req.param("id");
-    const state = store.getState(runId);
-    if (state == null) {
+    const detail = readPlane.runDetail(runId);
+    if (detail == null) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
-    const events = store.getEvents(runId);
-    const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
-    const name = wf?.name;
-    const source = wf?.source;
-    const detail = runStateToDetail(state, events, name, source);
-    detail.lastEventSeq = events.at(-1)?.seq ?? 0;
     return c.json(detail);
   });
 
@@ -72,18 +68,15 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   // shapes have their own narrowed endpoints (`/messages`, `/steps`).
   app.get("/runs/:id/events.json", (c) => {
     const runId = c.req.param("id");
-    if (store.getState(runId) == null) {
+    const events = readPlane.events(runId);
+    if (events == null) {
       return c.json({ error: "run not found" }, 404);
     }
-    return c.json(store.getEvents(runId));
+    return c.json(events);
   });
 
   app.get("/runs/:id/steps", (c) => {
     const runId = c.req.param("id");
-    const state = store.getState(runId);
-    if (state == null) {
-      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
-    }
     // Two-pass projection:
     //   1. eventsToSteps walks the full event log to extract per-step
     //      static fields (prompt, system_prompt, messages, tools,
@@ -95,22 +88,11 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     //      under-counting because the agent fires multiple cost events
     //      per step (one per assistant message) and the previous
     //      reducer dropped everything after the first llm.done.
-    const events = store.getEvents(runId);
-    const steps = attachStepAggregates(eventsToSteps(events), store.getStepAggregates(runId)).map((step, stepIdx) => ({
-      ...step,
-      stepIdx,
-    }));
-    // Fill `durationMs` for orphan steps (no `llm.done` in the window).
-    // Each step's effective end is the next step's `startedAt`, falling
-    // back to the run's last event timestamp when the run is terminal.
-    // The truly-still-running last step on a live run keeps `durationMs`
-    // undefined so the client ticks `now - startedAt`.
-    const lastEventTs = events.length > 0 ? Math.max(...events.map((event) => event.ts)) : undefined;
-    const filled = fillOrphanDurations(steps, {
-      lastEventTs,
-      runIsTerminal: isTerminalStatus(state.status),
-    });
-    return c.json(filled);
+    const steps = readPlane.steps(runId);
+    if (steps == null) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    return c.json(steps);
   });
 
   // LLM-visible message transcript (§I9). Sourced from the messages
@@ -129,13 +111,10 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   // Clients that need paging pass `?sinceOrdinal=<last>`.
   app.get("/runs/:id/messages", (c) => {
     const runId = c.req.param("id");
-    if (store.getState(runId) == null) {
-      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
-    }
     const nodeIdParam = c.req.query("nodeId");
     const sinceParam = c.req.query("sinceOrdinal");
     const limitParam = c.req.query("limit");
-    const opts: Parameters<typeof store.getMessagesNarrow>[1] = {};
+    const opts: Parameters<typeof readPlane.messages>[1] = {};
     if (nodeIdParam) opts.nodeId = nodeIdParam;
     if (sinceParam) {
       const n = Number(sinceParam);
@@ -145,7 +124,11 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
       const n = Number(limitParam);
       if (Number.isFinite(n) && n > 0) opts.limit = Math.floor(n);
     }
-    return c.json(store.getMessagesNarrow(runId, opts));
+    const messages = readPlane.messages(runId, opts);
+    if (messages == null) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    return c.json(messages);
   });
 
   return app;
