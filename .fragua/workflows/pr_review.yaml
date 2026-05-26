@@ -66,6 +66,10 @@ steps:
       full:  {to: review_full,  label: "Full review"}
 
   review_quick:                        # quick tier — one focused pass
+    # Intentionally routes straight to `verdict` with NO `verify` gate: this tier
+    # only fires for small, single-concern changes (low blast radius), so the
+    # verdict classifier is the sole gate. Only the `full` tier — feature-scale,
+    # risk-bearing — earns the evidence-quality gate (and its retry cost).
     type: llm
     thread: review
     allowed-tools: [read, grep, bash, write]

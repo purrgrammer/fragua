@@ -79,6 +79,9 @@ export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
     const run = asObject(r, `runs[${i}]`);
     if (typeof run["runId"] !== "string") throw new Error(`bundle manifest: runs[${i}].runId is not a string`);
     assertSha256(run["workflowSha"], `runs[${i}].workflowSha`);
+    for (const c of ["events", "messages"] as const) {
+      if (typeof run[c] !== "number") throw new Error(`bundle manifest: runs[${i}].${c} is not a number`);
+    }
   }
   for (const [i, w] of (o["workflows"] as unknown[]).entries()) {
     const wf = asObject(w, `workflows[${i}]`);

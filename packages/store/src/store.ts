@@ -1451,11 +1451,15 @@ export class SqliteStore implements IEventStore {
       const artData = byName.get(runArtifactsPath(r.runId));
       const artifacts = (artData == null ? [] : decodeJsonl(artData)) as ArtifactListRow[];
 
-      // Untrusted event rows: gate the provenance `writer` to the known set
-      // (the column has no CHECK, by design — but the import trust boundary
-      // does), and require a string `type`/numeric `seq` so a malformed row
-      // can't reach the events table.
+      // Untrusted event rows: reject a non-object row (a `null` line decodes to
+      // null and would TypeError on `.writer`), gate the provenance `writer` to
+      // the known set (the column has no CHECK, by design — but the import trust
+      // boundary does), and require a string `type`/numeric `seq` so a malformed
+      // row can't reach the events table.
       for (const ev of events) {
+        if (ev == null || typeof ev !== "object") {
+          throw new Error(`importRunBundle: run ${r.runId} carries a non-object event row`);
+        }
         if (!VALID_WRITERS.has(ev.writer)) {
           throw new Error(
             `importRunBundle: run ${r.runId} event seq ${ev.seq} has invalid writer ${JSON.stringify(ev.writer)}`,
@@ -1463,6 +1467,20 @@ export class SqliteStore implements IEventStore {
         }
         if (typeof ev.type !== "string" || typeof ev.seq !== "number") {
           throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq)`);
+        }
+      }
+      // Same gate for transcript rows — `ordinal`/`iteration` numeric, `nodeId`
+      // string-or-null — so a tampered messages.jsonl fails clearly here, not as
+      // an opaque SQLITE_CONSTRAINT in the txn.
+      for (const m of messages) {
+        if (m == null || typeof m !== "object") {
+          throw new Error(`importRunBundle: run ${r.runId} carries a non-object message row`);
+        }
+        if (typeof m.ordinal !== "number" || typeof m.iteration !== "number") {
+          throw new Error(`importRunBundle: run ${r.runId} message has non-numeric ordinal/iteration`);
+        }
+        if (m.nodeId !== null && typeof m.nodeId !== "string") {
+          throw new Error(`importRunBundle: run ${r.runId} message has a non-string nodeId`);
         }
       }
       // Defense-in-depth: shape-gate the genesis identity fields BEFORE

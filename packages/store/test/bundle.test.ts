@@ -236,7 +236,7 @@ describe("importRunBundle", () => {
     };
     const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(canonicalJson(manifest)) }]);
     const dst = freshStore();
-    expect(() => dst.importRunBundle(bytes)).toThrow(/exceeds 512/);
+    expect(() => dst.importRunBundle(bytes)).toThrow(/exceeds \d+ chars/);
     dst.close();
   });
 
@@ -294,6 +294,26 @@ describe("importRunBundle", () => {
     await genesisTamperRejects((p) => {
       p["routing"] = [];
     }, /genesis routing is not an object/);
+  });
+
+  test("rejects a tampered messages.jsonl row (non-numeric ordinal)", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    const entries = readTar(bytes);
+    const msgName = `runs/${runId}/messages.jsonl`;
+    const tampered = entries.map((e) => {
+      if (e.name !== msgName) return e;
+      const lines = new TextDecoder().decode(e.data).trim().split("\n");
+      const m = JSON.parse(lines[0]!);
+      m.ordinal = "1"; // string, not number — non-null, slips a bare sweep
+      lines[0] = JSON.stringify(m);
+      return { name: e.name, data: new TextEncoder().encode(`${lines.join("\n")}\n`) };
+    });
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(writeTar(tampered))).toThrow(/non-numeric ordinal/);
+    dst.close();
   });
 
   test("rejects a duplicate runId in the manifest", async () => {
