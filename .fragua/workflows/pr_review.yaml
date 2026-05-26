@@ -23,7 +23,7 @@
 
 name: pr_review
 goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR with no human gate.
-budget: 3.75 # ≥ scope (0.40) + review_full (2.50) + verify (0.60) + verdict (0.10)
+budget: 6.75 # covers ONE verify retry: scope (0.40) + 2×(review_full 2.50 + verify 0.60) + verdict (0.10)
 
 inputs:
   pr:
@@ -115,8 +115,8 @@ steps:
   verify:                              # full tier — automated evidence-quality gate
     type: llm
     thread: review
-    retry: review_full                 # REJECT ⇒ re-review (capped)
-    max-retries: 2
+    retry: review_full                 # REJECT ⇒ re-review (one retry; budget covers it)
+    max-retries: 1
     allowed-tools: [read, grep]
     max-cost: 0.60
     next: verdict

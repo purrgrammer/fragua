@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
+import { VALID_WRITERS } from "@fragua/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -1454,7 +1455,7 @@ export class SqliteStore implements IEventStore {
       // does), and require a string `type`/numeric `seq` so a malformed row
       // can't reach the events table.
       for (const ev of events) {
-        if (ev.writer !== "daemon" && ev.writer !== "client") {
+        if (!VALID_WRITERS.has(ev.writer)) {
           throw new Error(
             `importRunBundle: run ${r.runId} event seq ${ev.seq} has invalid writer ${JSON.stringify(ev.writer)}`,
           );

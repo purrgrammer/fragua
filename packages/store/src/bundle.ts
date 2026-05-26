@@ -83,10 +83,13 @@ export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
     if ((wf["name"] as string).length > MAX_WORKFLOW_NAME_CHARS) {
       throw new Error(`bundle manifest: workflows[${i}].name exceeds ${MAX_WORKFLOW_NAME_CHARS} chars`);
     }
+    if (typeof wf["irVersion"] !== "number")
+      throw new Error(`bundle manifest: workflows[${i}].irVersion is not a number`);
   }
   for (const [i, b] of (o["blobs"] as unknown[]).entries()) {
     const blob = asObject(b, `blobs[${i}]`);
     assertSha256(blob["sha256"], `blobs[${i}].sha256`);
+    if (typeof blob["size"] !== "number") throw new Error(`bundle manifest: blobs[${i}].size is not a number`);
   }
 }
 

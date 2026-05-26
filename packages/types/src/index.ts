@@ -52,6 +52,7 @@ export {
   type RunStatus,
   type SnapshotCapturedData,
   type SnapshotStat,
+  VALID_WRITERS,
 } from "./events.ts";
 export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "./skills.ts";
 

@@ -240,6 +240,23 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
+  test("rejects a non-numeric workflow irVersion (every SQL-bound field is gated)", () => {
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 1,
+      schemaVersion: 1,
+      irVersion: 1,
+      runs: [],
+      workflows: [{ sha: "a".repeat(64), name: "n", irVersion: "1" }],
+      blobs: [],
+    };
+    const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(canonicalJson(manifest)) }]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/irVersion/);
+    dst.close();
+  });
+
   test("rejects a wrong-typed genesis workflowSha (not just non-null)", async () => {
     const src = freshStore();
     const runId = await seedTerminalRun(src);
