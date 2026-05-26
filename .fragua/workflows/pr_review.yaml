@@ -18,7 +18,7 @@
 
 name: pr_review
 goal: Unattended PR review for CI — review scaled to the change, posted back to the PR with no human gate.
-budget: 2.50
+budget: 3.50 # ≥ scope (0.40) + review_full (2.50) + verify (0.60) so the node caps are reachable
 
 inputs:
   pr:
@@ -87,7 +87,7 @@ steps:
     effort: high
     thread: review
     allowed-tools: [read, grep, bash, write]
-    max-cost: 1.80
+    max-cost: 2.50
     next: verify
     prompt: |
       Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
