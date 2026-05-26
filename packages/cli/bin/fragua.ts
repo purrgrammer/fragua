@@ -451,7 +451,8 @@ cli
     "Run a workflow to completion in-process and exit with a code that reflects the " +
       "outcome (0 completed, nonzero on halt/cancel/pause). Embeds the executor over " +
       "an ephemeral store — no daemon or server. Credentials come from env " +
-      "(ANTHROPIC_API_KEY, …); the .db is a portable artifact (pin with --db).",
+      "(ANTHROPIC_API_KEY, …); --export writes a portable, secret-free .fragua bundle — " +
+      "the artifact to upload/import.",
   )
   .option("-i, --input <name=value>", "Run input; repeat for multiple. Value @path reads a file, @- reads stdin")
   .option("--db <path>", "Pin the raw store here (pruned to portable tables on exit; default: a temp dir, discarded)")

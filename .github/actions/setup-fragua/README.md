@@ -77,19 +77,36 @@ Notes:
 
 ## Keeping the run as an artifact
 
-`fragua ci --db <path>` pins the run's SQLite store, which is a portable,
-replayable record of the whole run — useful for post-mortems on a failed job:
+`fragua ci --export <path>` writes a portable, **secret-free** `.fragua` bundle —
+the run's events, messages, artifacts, and worktree tree state in one file. It is
+the safe thing to upload (the bundle never carries provider credentials/config)
+and the thing `fragua runs import` consumes. The bundle is written even when the
+run halts or pauses, so pair the upload with `if: always()`:
 
 ```yaml
-- run: fragua ci my-workflow --db "$RUNNER_TEMP/run.db"
+- run: fragua ci my-workflow --export "$RUNNER_TEMP/run.fragua"
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 - uses: actions/upload-artifact@v4
   if: always()
   with:
-    name: fragua-run-db
-    path: ${{ runner.temp }}/run.db
+    name: fragua-run
+    path: ${{ runner.temp }}/run.fragua
 ```
+
+Download it and inspect locally — import merges the run into your store, and
+`--rehydrate` reconstructs the worktree so `runs diff` resolves:
+
+```sh
+fragua runs import run.fragua              # merge in (inspect-only)
+fragua runs import run.fragua --rehydrate  # + rebuild the worktree for `runs diff`
+fragua runs status|events|messages <run-id>
+```
+
+> Exporting the **raw SQLite store** from CI is no longer the path: `--db <path>`
+> still pins the store for same-machine replay/debug, but it can carry secrets (a
+> tool that echoes a key into an event lands in it), so the **bundle** — not the
+> db — is the artifact you upload.
 
 ## Supported runners
 
