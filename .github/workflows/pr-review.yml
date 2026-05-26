@@ -82,8 +82,8 @@ jobs:
           fi
           echo "bundle is secret-free → $BUNDLE"
 
-      # Post-mortem locally: `fragua runs import <download> [--rehydrate]`, then
-      # `fragua runs status|events|messages <run-id>`.
+      # Post-mortem locally: `fragua show <download>` to summarize, then
+      # `fragua import <download>` + `fragua runs status|events|messages <run-id>`.
       - name: Upload run bundle
         if: always()
         uses: actions/upload-artifact@v7

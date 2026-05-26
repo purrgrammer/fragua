@@ -78,10 +78,11 @@ Notes:
 ## Keeping the run as an artifact
 
 `fragua ci --export <path>` writes a portable, **secret-free** `.fragua` bundle —
-the run's events, messages, artifacts, and worktree tree state in one file. It is
-the safe thing to upload (the bundle never carries provider credentials/config)
-and the thing `fragua runs import` consumes. The bundle is written even when the
-run halts or pauses, so pair the upload with `if: always()`:
+the run's event log, transcript, artifacts, and workflow in one file (`run_state`
+is re-derived on import, not carried). It is the safe thing to upload (the bundle
+never carries provider credentials/config) and the thing `fragua import`
+consumes. The bundle is written even when the run halts or pauses, so pair the
+upload with `if: always()`:
 
 ```yaml
 - run: fragua ci my-workflow --export "$RUNNER_TEMP/run.fragua"
@@ -94,12 +95,12 @@ run halts or pauses, so pair the upload with `if: always()`:
     path: ${{ runner.temp }}/run.fragua
 ```
 
-Download it and inspect locally — import merges the run into your store, and
-`--rehydrate` reconstructs the worktree so `runs diff` resolves:
+Download it and inspect locally — `show` summarizes it without a store; `import`
+merges the run in (inspect-only — the imported run is inert):
 
 ```sh
-fragua runs import run.fragua              # merge in (inspect-only)
-fragua runs import run.fragua --rehydrate  # + rebuild the worktree for `runs diff`
+fragua show run.fragua                     # validate + summarize (no store needed)
+fragua import run.fragua                   # merge into a store (default: the harness store)
 fragua runs status|events|messages <run-id>
 ```
 

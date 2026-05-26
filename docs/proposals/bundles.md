@@ -18,6 +18,12 @@ supersedes: "db-import.md §3 (tree-state/git-bundle), §3.2 (--rehydrate), §4.
 > experimental. Treat a bundle as a throwaway inspection artifact, not durable
 > storage. Do not wire production CI to depend on the format yet.
 
+> **Status: implemented** on branch `run-bundle-import` — genesis enrichment (§2),
+> the bundle format (§3), `ci --export` / `show` / `import` (§4), derive-on-import
+> (run_state is replayed, not carried), inline messages (§5 v1), and the removal
+> of the tree-state / `--rehydrate` / `adopt` surface (§8). Deferred as written:
+> message-content-as-blobs (§5 north star) and resume of an imported run.
+
 > Child of [`cli-topology.md`](cli-topology.md). Additive; blocks nothing.
 > Consumes the artifact a CI run produces.
 >
