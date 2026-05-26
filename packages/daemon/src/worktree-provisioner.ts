@@ -44,8 +44,6 @@ export interface ResolvedRunBootstrap {
 }
 
 export interface WorktreeProvisionerOptions {
-  /** Repo root. Defaults to `process.cwd()`. */
-  repoRoot?: string;
   /** Shell command (or callback) run inside each fresh worktree before
    * the first node fires. Missing = no-op.
    *
@@ -55,7 +53,7 @@ export interface WorktreeProvisionerOptions {
    * nothing**: read from `<run.cwd>/.fragua/config.yaml` for each
    * fresh worktree, with no daemon-startup-cwd fallback. */
   bootstrap?: BootstrapSpec;
-  /** Directory under `repoRoot` where worktrees live. Default
+  /** Directory (relative to each run's cwd) where worktrees live. Default
    * `.fragua/worktrees`. Each run gets a `<worktreesDir>/<run-id>` dir. */
   worktreesDir?: string;
   /** Keep worktrees around after dispose — useful for post-mortems.
@@ -113,7 +111,6 @@ export interface Provisioner {
 }
 
 export class WorktreeProvisioner implements Provisioner {
-  private readonly repoRoot: string;
   private readonly bootstrap: BootstrapSpec | undefined;
   private readonly worktreesDir: string;
   private readonly keepAfterDispose: boolean;
@@ -130,7 +127,6 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly snapshotCursor = new Map<string, { commitSha: string; treeSha: string }>();
 
   constructor(opts: WorktreeProvisionerOptions = {}) {
-    this.repoRoot = opts.repoRoot ?? process.cwd();
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
     this.worktreesDir = opts.worktreesDir ?? ".fragua/worktrees";
     this.keepAfterDispose = opts.keepAfterDispose ?? false;
@@ -221,7 +217,13 @@ export class WorktreeProvisioner implements Provisioner {
 
   private async create(runId: string, provisionOpts: ProvisionOpts): Promise<ExecutionEnvironment> {
     if (this.factory) return this.factory(runId);
-    const repoRoot = provisionOpts.cwd ?? this.repoRoot;
+    const repoRoot = provisionOpts.cwd;
+    if (repoRoot == null) {
+      // A run with no cwd has no project to provision against. Never fall back
+      // to the daemon's own dir — that would execute the run in the operator's
+      // checkout. Fail; the executor turns this into a clean fact.run_halted.
+      throw new Error("worktree provision: run has no cwd (imported / ephemeral runs must carry a cwd)");
+    }
 
     if (!(await isGitRepo(repoRoot))) {
       const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: repoRoot };

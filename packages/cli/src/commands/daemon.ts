@@ -188,7 +188,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     return out;
   };
   const provisioner: Provisioner = new WorktreeProvisioner({
-    repoRoot: cwd,
     resolveRunBootstrap,
     ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
   });

@@ -107,26 +107,65 @@ opt-in for "I might delete the checkout but still want to resume."
 
 ### 3.2 Import — reconstruct, then rebind
 
-> Status: **deferred** — the reach goal. The shipped floor merges DB rows + blobs
-> and sets `cwd → null` (inspect-only); steps 2–4 below are the resume increment.
+> Status: **deferred** — the reach goal. The shipped floor merges DB rows +
+> artifact blobs, sets `cwd → null`, and neutralizes a non-terminal status to
+> `cancelled` (§4). Everything below is the resume increment, in two layers:
+> **A + B = inspect-with-diffs**, **C = resume**.
 
-`fragua runs import <bundle>` (into an existing store — default the harness store):
+Tree state is git objects in the run's repo, reachable only by SHA from the
+event log; every read/action (`run-actions.ts`, `read-plane/snapshots.ts`)
+shells `git` **in `run_state.cwd`** against `refs/fragua/{snapshots,heads}/<runId>`
++ `baseGitSha` / `diffBaseSha`. So rehydration = make every one of those SHAs +
+refs resolvable in a **local repo at a local `cwd`**.
 
-1. Merge the DB rows (§2) and write the blob files.
-2. Create a local worktree; `git bundle unbundle` the git-bundle blob into its
-   repo (a clone of the same repo, or a scratch repo for inspect-only).
-3. **Recreate `refs/fragua/{snapshots,heads}/<runId>` locally** so the snapshot
-   readers / Diff scrubber work against the local repo.
-4. **Rewrite the imported `run_state.cwd`** to the new local worktree path — the
-   source cwd is a foreign path. cwd is a local binding (project identity,
-   shipped); identity travels in `project_id`.
+**Export prerequisite (not yet done).** The export must add a git-bundle blob —
+`git bundle create <tmp> refs/fragua/snapshots/<runId> refs/fragua/heads/<runId>
+<baseGitSha> <diffBaseSha>` — stored as one content-addressed blob in the
+manifest. **Self-contained** (include the base objects) for the foreign-machine
+case; a *thin* bundle (base as a prerequisite) is the opt-in optimisation when
+importing into a clone of the same repo.
 
-The `git add -A` snapshot folds committed + uncommitted into one tree, so a
-checkout is byte-identical to the paused working state. The worktree is the
-*tree*, not the whole resume: resuming a HITL run also needs the imported run
-rows (`paused_human`, current node, routing), the transcript, the workflow IR,
-the operator's human input — and the **provider credentialed locally** (secrets
-never travel; inspection needs no credential).
+**A. Objects + refs + base — diffs resolve:**
+
+1. Merge the DB rows (§2) and write the artifact + git-bundle blob files.
+2. Pick a local host repo: a **clone** of the same repo (base objects already
+   present → thin bundle suffices) or a **scratch** repo (inspect-only on a
+   foreign machine → needs the self-contained bundle).
+3. `git bundle unbundle` into it, then **recreate `refs/fragua/{snapshots,heads}/<runId>`**
+   (`git update-ref`). `baseGitSha` / `diffBaseSha` must resolve, or
+   `git diff <base>…` fails.
+
+**B. Worktree + cwd — a real working tree, `runs diff` works:**
+
+4. Create a local worktree (`git worktree add --detach <localPath>
+   <snapshotTip|finalGitSha>`). `git add -A` folded committed + uncommitted into
+   one tree, so the checkout is byte-identical to the paused working state.
+5. **Rewrite `run_state.cwd` → `<localPath>`** (the source cwd is foreign;
+   identity travelled in `project_id`). Strictly, diffs need only objects+refs,
+   but `run-actions`/readers all key on `cwd`, and `accept`/`discard`/`diff`
+   already refuse `cwd == null` (`no_worktree`) — so a real local path is the
+   uniform answer.
+
+   *A + B alone is a worthwhile increment:* an imported run becomes
+   `runs diff`-able without touching the executor/resume path.
+
+**C. Resume — the run continues here:**
+
+6. **Un-neutralize the status.** The floor lands non-terminal → `cancelled`
+   (§4); resume must restore the true lifecycle status (re-fold the events, or
+   carry the pre-neutralization status) so the executor re-enters at the right
+   node. The neutralization is *deliberately* coupled to this: it is safe
+   precisely because the tree isn't rehydrated — rehydration is the precondition
+   to safely un-neutralize.
+7. **Provisioner uses the rehydrated worktree.** The precondition here already
+   landed: the worktree provisioner no longer falls back to the daemon's own dir
+   — a run provisions at its own cwd or fails (clean halt). So rehydration only
+   needs to rebind `cwd` to the local worktree (step 5) before the executor can
+   resume; a half-rehydrated run with `cwd` still null can't run by accident.
+8. **Non-tree resume preconditions:** the imported run rows (`paused_human`,
+   current node, routing — travel), the transcript (travels), the workflow IR
+   (travels), the operator's human input for a HITL gate, and the **provider
+   credentialed locally** (secrets never travel; inspection needs none).
 
 ## 4. Table-by-table portability audit
 

@@ -129,7 +129,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const onSig = () => shutdown.abort();
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
-  const provisioner = new WorktreeProvisioner({ repoRoot: cwd });
+  const provisioner = new WorktreeProvisioner();
   let runId: string | undefined;
 
   try {
