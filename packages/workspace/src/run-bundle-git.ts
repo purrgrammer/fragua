@@ -6,7 +6,7 @@
 // `WorktreeEnvironment` a native run uses — so bootstrap runs identically. Used
 // by `runs export`, `ci --export`, and `runs import --rehydrate`.
 
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitExec } from "./run-actions.ts";
@@ -43,13 +43,16 @@ export async function buildRunGitBundle(
   }
   if (!revs.includes(snapRef)) return null; // no snapshots → no tree state
 
-  const tmp = join(tmpdir(), `fragua-export-${runId}-${process.pid}.gitbundle`);
+  // Private 0700 dir (not a predictable name in the world-writable tmpdir) so a
+  // local attacker can't pre-create the path as a symlink to redirect the write.
+  const dir = mkdtempSync(join(tmpdir(), "fragua-export-"));
+  const tmp = join(dir, "run.gitbundle");
   try {
     const r = await git(cwd, ["bundle", "create", tmp, ...revs]);
     if (r.exitCode !== 0) return null;
     return new Uint8Array(readFileSync(tmp));
   } finally {
-    rmSync(tmp, { force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -79,13 +82,16 @@ export async function rehydrateRunWorktree(
   opts: RehydrateOptions = {},
 ): Promise<RehydrateResult> {
   if (!RUN_ID_RE.test(runId)) return { ok: false, error: `unsafe run id ${JSON.stringify(runId)}` };
-  const tmp = join(tmpdir(), `fragua-rehydrate-${runId}-${process.pid}.gitbundle`);
+  // Private 0700 dir (see buildRunGitBundle) — no predictable tmpdir path for a
+  // symlink pre-creation attack.
+  const dir = mkdtempSync(join(tmpdir(), "fragua-rehydrate-"));
+  const tmp = join(dir, "run.gitbundle");
   try {
     writeFileSync(tmp, bundleBytes);
     const fetched = await git(host, ["fetch", tmp, "+refs/fragua/*:refs/fragua/*"]);
     if (fetched.exitCode !== 0) return { ok: false, error: `git fetch (unbundle) failed: ${fetched.stderr.trim()}` };
   } finally {
-    rmSync(tmp, { force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 
   const env = new WorktreeEnvironment({

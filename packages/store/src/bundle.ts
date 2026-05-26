@@ -127,7 +127,8 @@ export function readTar(bytes: Uint8Array): TarEntry[] {
     while (n < 100 && h[n] !== 0) n++;
     if (n === 100) throw new Error("readTar: entry name not null-terminated within 100 bytes (malformed header)");
     const name = dec.decode(h.subarray(0, n));
-    const size = Number.parseInt(dec.decode(h.subarray(124, 136)).replace(/[\0 ]/g, ""), 8) || 0;
+    const size = Number.parseInt(dec.decode(h.subarray(124, 136)).replace(/[\0 ]/g, ""), 8);
+    if (!Number.isInteger(size) || size < 0) throw new Error("readTar: malformed size header");
     off += 512;
     out.push({ name, data: bytes.subarray(off, off + size) });
     off += Math.ceil(size / 512) * 512; // step past the data's padded block span

@@ -1426,7 +1426,7 @@ export class SqliteStore implements IEventStore {
       if (actual !== b.sha256) {
         throw new Error(`importRunBundle: blob ${b.sha256} failed its integrity check (bytes hash to ${actual})`);
       }
-      blobs.push({ sha256: b.sha256, size: b.size, data });
+      blobs.push({ sha256: b.sha256, size: data.length, data }); // size from the verified bytes, not the manifest's claim
     }
 
     // Tree state (the git-bundle) rides a dedicated `git-bundle` entry, not the
@@ -1456,7 +1456,11 @@ export class SqliteStore implements IEventStore {
     // divergent collision is a hard error (delete the local run to re-import).
     const existing = this.getState(run.runId);
     if (existing != null) {
-      if (existing.version !== run.version || existing.lastAppliedSeq !== run.lastAppliedSeq) {
+      if (
+        existing.version !== run.version ||
+        existing.lastAppliedSeq !== run.lastAppliedSeq ||
+        existing.updatedAt !== run.updatedAt
+      ) {
         throw new Error(
           `importRunBundle: run ${run.runId} already present with divergent state ` +
             `(local v${existing.version}/seq${existing.lastAppliedSeq} != bundle v${run.version}/seq${run.lastAppliedSeq}) — refusing to merge`,
@@ -1477,8 +1481,11 @@ export class SqliteStore implements IEventStore {
     const routingJson = JSON.stringify(run.routing);
     const metricsJson = JSON.stringify(run.metrics);
     const changeStatJson = run.changeStat != null ? JSON.stringify(run.changeStat) : null;
+    // Every event/message row lands under run.runId — NEVER the per-row runId
+    // from the (untrusted) manifest, else a bundle whose events[].runId names a
+    // different local run would splice forged rows into that run's history.
     const eventRows = manifest.events.map((ev) => ({
-      runId: ev.runId,
+      runId: run.runId,
       seq: ev.seq,
       type: ev.type,
       writer: ev.writer,
@@ -1488,7 +1495,7 @@ export class SqliteStore implements IEventStore {
     const messageRows = manifest.messages.map((m) => {
       const content = JSON.stringify(m.content);
       return {
-        runId: m.runId,
+        runId: run.runId,
         ordinal: m.ordinal,
         content,
         nodeId: m.nodeId,
@@ -1496,6 +1503,17 @@ export class SqliteStore implements IEventStore {
         contentHash: sha256Hex(content),
       };
     });
+
+    // The bundle's nextSeq must lead every event it carries (and sit past
+    // lastAppliedSeq) — else the first bumpRunSeq after adoption would mint a
+    // seq colliding with an imported row. Fail closed at import.
+    const maxEventSeq = eventRows.reduce((m, e) => Math.max(m, e.seq), -1);
+    if (run.nextSeq <= maxEventSeq || run.nextSeq < run.lastAppliedSeq + 1) {
+      throw new Error(
+        `importRunBundle: run ${run.runId} nextSeq ${run.nextSeq} is not ahead of its events ` +
+          `(max event seq ${maxEventSeq}, lastAppliedSeq ${run.lastAppliedSeq})`,
+      );
+    }
 
     // Blob files before the txn (fs I/O): the `blobs` row must never point at a
     // missing file — same file-then-row ordering as putArtifact. Wrapped so that

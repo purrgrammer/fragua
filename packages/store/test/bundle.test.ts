@@ -415,6 +415,57 @@ describe("importRunBundle", () => {
     expect(() => dst.importRunBundle(bytes)).toThrow(/events/);
     dst.close();
   });
+
+  // Security: rows land under the bundle's own run, never the per-row runId — a
+  // forged event/message naming another local run must not splice into it.
+  test("does not splice forged events into another local run via per-row runId", async () => {
+    const dst = freshStore();
+    const victim = await seedRun(dst);
+    const victimEvents = dst.getEvents(victim).length;
+
+    const src = freshStore();
+    const attacker = await seedRun(src);
+    src.appendMessage(attacker, {
+      content: { role: "user", content: [{ type: "text", text: "forged" }], timestamp: 1 },
+      nodeId: "work",
+      iteration: 0,
+    });
+    const bytes = src.exportRunBundle(attacker, { fraguaVersion: "x" });
+    src.close();
+    // Forge every event/message runId to point at the victim run.
+    const entries = readTar(bytes);
+    const mEntry = entries.find((e) => e.name === "manifest.json");
+    const manifest = JSON.parse(new TextDecoder().decode(mEntry?.data ?? new Uint8Array()));
+    for (const ev of manifest.events) ev.runId = victim;
+    for (const m of manifest.messages) m.runId = victim;
+    const forged = writeTar([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) },
+      ...entries.filter((e) => e.name.startsWith("blobs/")),
+    ]);
+
+    expect(dst.importRunBundle(forged).runId).toBe(attacker); // imported under its OWN id
+    expect(dst.getEvents(victim).length).toBe(victimEvents); // victim history untouched
+    expect(dst.getEvents(attacker).length).toBeGreaterThan(0); // rows landed under the attacker run
+    dst.close();
+  });
+
+  test("rejects a bundle whose nextSeq is behind its events (fail-closed)", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    const entries = readTar(bytes);
+    const mEntry = entries.find((e) => e.name === "manifest.json");
+    const manifest = JSON.parse(new TextDecoder().decode(mEntry?.data ?? new Uint8Array()));
+    manifest.run.nextSeq = 0; // behind the events it carries
+    const tampered = writeTar([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) },
+      ...entries.filter((e) => e.name.startsWith("blobs/")),
+    ]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(tampered)).toThrow(/nextSeq/);
+    dst.close();
+  });
 });
 
 describe("readTar", () => {

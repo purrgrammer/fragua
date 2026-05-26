@@ -181,6 +181,10 @@ export function importCommand(opts: ImportOptions): Promise<number> {
       );
     }
     if (opts.rehydrate) {
+      if (!imported) {
+        console.log(chalk.dim("  rehydrate skipped — run already present; its worktree/cwd left intact"));
+        return 0;
+      }
       return rehydrateRun(defaultGitExec, store, runId, bytes, opts.into);
     }
     return 0;
