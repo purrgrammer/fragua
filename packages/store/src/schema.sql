@@ -126,18 +126,6 @@ CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
   ON run_state(schedule_id)
   WHERE schedule_id IS NOT NULL;
 
--- Local import marker — written by `fragua runs import`, NEVER carried in a
--- bundle (the export set is run_state/events/messages/artifacts/workflows/blobs;
--- this sidecar is local by construction, so the marker never travels). One row
--- per imported run; while `adopted_at IS NULL` the run is held inert — excluded
--- from dispatch, concurrency capacity, and the inbox — even though its status
--- travelled verbatim. Adopt/resume (db-import.md §3.2 C) sets `adopted_at`.
-CREATE TABLE IF NOT EXISTS imported_runs (
-  run_id      TEXT PRIMARY KEY REFERENCES run_state(run_id) ON DELETE CASCADE,
-  imported_at INTEGER NOT NULL,
-  adopted_at  INTEGER
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   seq INTEGER NOT NULL,

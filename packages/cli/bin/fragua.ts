@@ -20,7 +20,6 @@ import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
   acceptCommand,
-  adoptCommand,
   artifactCommand,
   artifactsCommand,
   budgetCommand,
@@ -70,6 +69,7 @@ import {
   scheduleRmCommand,
 } from "../src/commands/schedule.ts";
 import { serveCommand } from "../src/commands/serve.ts";
+import { showCommand } from "../src/commands/show.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 import { FRAGUA_VERSION } from "../src/version.ts";
 
@@ -387,6 +387,30 @@ cli
   });
 
 cli
+  .command("show <bundle>", "Validate + summarize a portable .fragua bundle (no store needed)")
+  .action(async (bundle: string) => {
+    process.exit(await showCommand({ bundle }));
+  });
+
+cli
+  .command("import <bundle>", "Merge a .fragua bundle's runs into a store (default: the harness store)")
+  .option("--cwd <path>", "Base directory (default process.cwd)")
+  .option("--db <path>", "Target store path (default ~/.fragua/fragua.db); must already exist")
+  .action(async (bundle: string, options: Record<string, unknown>) => {
+    const pickOpt = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    process.exit(
+      await importCommand({
+        bundle,
+        ...(pickOpt("cwd") !== undefined ? { cwd: pickOpt("cwd")! } : {}),
+        ...(pickOpt("db") !== undefined ? { dbPath: pickOpt("db")! } : {}),
+      }),
+    );
+  });
+
+cli
   .command("doctor", "Liveness check: store path, daemon lock, server endpoint, providers")
   .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
   .action(async (options: Record<string, unknown>) => {
@@ -540,8 +564,7 @@ function runsHelp(): void {
 
   Portability (move a run between stores as a secret-free .fragua bundle):
     export    <id> --to <file.fragua>                       write the run as a portable bundle
-    import    <file.fragua> [--db <target>] [--rehydrate]   merge a bundle in; --rehydrate rebuilds its worktree (runs diff)
-    adopt     <id>                                          un-park an imported run so it can resume (needs --rehydrate first)`);
+                                                            (read it back with \`fragua show\`, merge with \`fragua import\`)`);
 }
 
 cli
@@ -564,8 +587,6 @@ cli
   .option("--key <k>", "artifact: the artifact key to fetch")
   .option("--iteration <n>", "artifact: node iteration (default 0)")
   .option("--to <path>", "export: destination path for the .fragua bundle")
-  .option("--rehydrate", "import: reconstruct the run's worktree from the bundle's tree state")
-  .option("--into <dir>", "import --rehydrate: host git repo for the worktree (default: cwd)")
   .option("--cwd <dir>", "Project root (scopes ls/inbox; resolves diff worktrees)")
   .option("--db <path>", "Store path (default: the harness store ~/.fragua/fragua.db)")
   .action(
@@ -658,9 +679,6 @@ cli
               ...discovery(options),
             }),
           );
-          break;
-        case "adopt":
-          process.exit(await adoptCommand({ runId: needId(), ...discovery(options) }));
           break;
         case "cancel":
           process.exit(
@@ -816,21 +834,6 @@ cli
             process.exit(1);
           }
           process.exit(await exportCommand({ runId: needId(), to, ...discovery(options) }));
-          break;
-        }
-        case "import": {
-          if (runId == null) {
-            console.error(chalk.red("runs import: <bundle.fragua> required"));
-            process.exit(1);
-          }
-          process.exit(
-            await importCommand({
-              bundle: runId,
-              ...(options["rehydrate"] === true ? { rehydrate: true } : {}),
-              ...(pickStr(options, "into") !== undefined ? { into: pickStr(options, "into")! } : {}),
-              ...discovery(options),
-            }),
-          );
           break;
         }
         default:

@@ -1,4 +1,5 @@
 export {
+  assertBundleManifest,
   BUNDLE_VERSION,
   type BundleManifest,
   blobPath,

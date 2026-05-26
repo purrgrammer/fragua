@@ -88,40 +88,18 @@ export function selectRunStateRow(db: Database, runId: string): RunStateRow | nu
   return db.query<RunStateRow, [string]>(SELECT_RUN_STATE_FULL_SQL).get(runId) ?? null;
 }
 
-/** Gate fragment (db-import §4.1): a run is the daemon's to drive toward
- *  execution only when it is NOT an imported run still awaiting adoption. Spliced
- *  into every toward-execution selection (queued claim, capacity count, wake
- *  candidates, the startup sweep) so the marker can't be honoured in one place
- *  and forgotten in another. Imported-unadopted runs stay verbatim-statused and
- *  fully inspectable; they're just invisible to dispatch. */
-export const NOT_IMPORTED_UNADOPTED_SQL = `NOT EXISTS (
-    SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id AND i.adopted_at IS NULL
-  )`;
-
 const COUNT_RUN_STATE_RUNNING_SQL = `
   SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'
-`;
-
-// Capacity count for the concurrency cap — EXCLUDES imported-unadopted runs, so
-// an imported `running` run (which can never be claimed here) doesn't burn a
-// live slot. Distinct from the display gauge below, which counts them (§4.1).
-const COUNT_DISPATCHABLE_RUNNING_SQL = `
-  SELECT COUNT(*) AS n FROM run_state WHERE status = 'running' AND ${NOT_IMPORTED_UNADOPTED_SQL}
 `;
 
 const COUNT_RUN_STATE_QUEUED_SQL = `
   SELECT COUNT(*) AS n FROM run_state WHERE status = 'queued'
 `;
 
-/** Display gauge — counts ALL running runs, imported included (§4.1). */
+/** Count of running runs — feeds both the display gauge and the concurrency cap
+ *  (`claimNextRun`). */
 export function countRunningRuns(db: Database): number {
   return db.query<{ n: number }, []>(COUNT_RUN_STATE_RUNNING_SQL).get()?.n ?? 0;
-}
-
-/** Concurrency-capacity count — running runs the daemon could actually be
- *  executing here (imported-unadopted excluded). Feeds `claimNextRun`. */
-export function countDispatchableRunningRuns(db: Database): number {
-  return db.query<{ n: number }, []>(COUNT_DISPATCHABLE_RUNNING_SQL).get()?.n ?? 0;
 }
 
 export function countQueuedRuns(db: Database): number {
@@ -387,7 +365,7 @@ export function selectWakeCandidates(
 ): WakeCandidateRow[] {
   if (opts.statuses.length === 0) return [];
   const placeholders = opts.statuses.map(() => "?").join(",");
-  const where = `${SELECT_WAKE_CANDIDATES_BASE_SQL} (${placeholders}) AND ${NOT_IMPORTED_UNADOPTED_SQL}`;
+  const where = `${SELECT_WAKE_CANDIDATES_BASE_SQL} (${placeholders})`;
   if (opts.autoResumeBefore != null) {
     const sql = `${where}
        AND CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) IS NOT NULL
@@ -512,7 +490,7 @@ export function updateRunStateTitle(db: Database, runId: string, title: string, 
 
 const SELECT_NEXT_QUEUED_RUN_SQL = `
   SELECT run_id, version FROM run_state
-   WHERE status = 'queued' AND ${NOT_IMPORTED_UNADOPTED_SQL}
+   WHERE status = 'queued'
    ORDER BY priority DESC, ready_at ASC, run_id ASC
    LIMIT 1
 `;
@@ -567,52 +545,6 @@ const SET_RUN_STATE_NEXT_SEQ_SQL = `
  *  any future resume mints the next event at the correct seq. */
 export function setRunStateNextSeq(db: Database, runId: string, nextSeq: number): void {
   db.query(SET_RUN_STATE_NEXT_SEQ_SQL).run(nextSeq, runId);
-}
-
-const SET_RUN_STATE_CWD_SQL = `
-  UPDATE run_state SET cwd = ? WHERE run_id = ?
-`;
-
-/** Rebind a run's `cwd` (a local binding). Used by `runs import --rehydrate` to
- *  point an imported run at the local worktree it was reconstructed into
- *  (db-import §3.2). */
-export function setRunStateCwd(db: Database, runId: string, cwd: string): void {
-  db.query(SET_RUN_STATE_CWD_SQL).run(cwd, runId);
-}
-
-const MARK_RUN_IMPORTED_SQL = `
-  INSERT OR IGNORE INTO imported_runs (run_id, imported_at, adopted_at) VALUES (?, ?, NULL)
-`;
-
-/** Stamp the local import marker (db-import §4.1). Pure-SQL, safe inside the
- *  import write txn. INSERT-OR-IGNORE so a re-import never clobbers an
- *  already-adopted row. The run's status travelled verbatim; this row — while
- *  `adopted_at IS NULL` — is what holds it out of dispatch/concurrency. */
-export function markRunImported(db: Database, runId: string, importedAt: number): void {
-  db.query(MARK_RUN_IMPORTED_SQL).run(runId, importedAt);
-}
-
-const IS_RUN_IMPORTED_SQL = `
-  SELECT 1 AS n FROM imported_runs WHERE run_id = ? AND adopted_at IS NULL
-`;
-
-/** True when the run is imported and not yet adopted — i.e. inert (§4.1). The
- *  read-plane uses this to badge imported runs without putting the marker on the
- *  portable `run_state` row. */
-export function isRunImported(db: Database, runId: string): boolean {
-  return db.query<{ n: number }, [string]>(IS_RUN_IMPORTED_SQL).get(runId) != null;
-}
-
-const ADOPT_IMPORTED_RUN_SQL = `
-  UPDATE imported_runs SET adopted_at = ? WHERE run_id = ? AND adopted_at IS NULL
-`;
-
-/** Adopt an imported run (db-import §4.1 C): stamp `adopted_at` so the gate
- *  fragment stops excluding it and the run rejoins dispatch/wake at its verbatim
- *  status. Idempotent — a no-op once adopted (the `adopted_at IS NULL` guard).
- *  Returns true when it flipped a row. */
-export function adoptImportedRun(db: Database, runId: string, adoptedAt: number): boolean {
-  return db.query(ADOPT_IMPORTED_RUN_SQL).run(adoptedAt, runId).changes > 0;
 }
 
 const WRITE_PROJECTION_SQL = `

@@ -731,10 +731,6 @@ export interface IEventWriter {
 export interface IEventReader {
   // ─── Run state + enumeration
   getState(runId: string): RunState | null;
-  /** True when the run is imported and not yet adopted — inert (db-import §4.1).
-   * Lets the read-plane badge imported runs without the marker riding on the
-   * portable `run_state` row. */
-  isRunImported(runId: string): boolean;
   /** Enumerate run ids with status filter, ordering, and limit pushed
    * into SQL. Powers the web `/runs` list and the analytics drilldown
    * re-hydration loop. */

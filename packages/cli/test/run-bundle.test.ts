@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newRunId, SqliteStore } from "@fragua/store";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
+import { showCommand } from "../src/commands/show.ts";
 
 const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
 const dirs: string[] = [];
@@ -80,5 +81,18 @@ describe("fragua runs export / import", () => {
   test("import of a missing bundle errors", async () => {
     const { dbPath } = seedStore(freshDir());
     expect(await importCommand({ bundle: join(freshDir(), "nope.fragua"), dbPath })).toBe(1);
+  });
+});
+
+describe("fragua show", () => {
+  test("validates + summarizes a real bundle (exit 0)", async () => {
+    const { dbPath: srcDb, runId } = seedStore(freshDir());
+    const bundle = join(freshDir(), "r.fragua");
+    expect(await exportCommand({ runId, to: bundle, dbPath: srcDb })).toBe(0);
+    expect(await showCommand({ bundle })).toBe(0);
+  });
+
+  test("errors on a missing bundle (exit 1)", async () => {
+    expect(await showCommand({ bundle: join(freshDir(), "nope.fragua") })).toBe(1);
   });
 });

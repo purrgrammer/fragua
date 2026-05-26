@@ -125,18 +125,15 @@ import {
 import { applyFact, deriveRunState, emptyMetrics } from "./reducers.ts";
 import { assertSafeRunId } from "./run-id.ts";
 import {
-  adoptImportedRun,
   bumpRunSeq,
   type CwdSummaryRow,
   claimQueuedRun,
-  countDispatchableRunningRuns,
   countQueuedRuns,
   countRunningRuns,
   type GcSnapshotRunRow,
   type GlobalMetricsTotalsRow,
   type GlobalModelBreakdownRow,
   insertRunState,
-  isRunImported,
   type ListRunIdsOpts,
   type ListRunSummaryRowsOpts,
   type ProjectSummaryRow,
@@ -159,7 +156,6 @@ import {
   selectRunStateRow,
   selectRunSummaryRows,
   selectWakeCandidates,
-  setRunStateCwd,
   setRunStateNextSeq,
   updateRunStateTitle,
   type WakeCandidateRow,
@@ -638,7 +634,7 @@ export class SqliteStore implements IEventStore {
     this.writeTxn(() => {
       // Capacity counts only runs the daemon could be executing here — imported
       // runs awaiting adoption never claim, so they must not burn a slot (§4.1).
-      if (countDispatchableRunningRuns(this.db) >= maxInFlight) return;
+      if (countRunningRuns(this.db) >= maxInFlight) return;
 
       const row = selectNextQueuedRun(this.db);
       if (row == null) return;
@@ -651,33 +647,6 @@ export class SqliteStore implements IEventStore {
 
   startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult {
     return startupSweep(this.db, this.now, opts);
-  }
-
-  /** Rebind a run's cwd (a local binding) — used by `runs import --rehydrate`
-   *  after reconstructing the run's worktree locally (db-import §3.2). */
-  setRunCwd(runId: string, cwd: string): void {
-    this.writeTxn(() => setRunStateCwd(this.db, runId, cwd));
-  }
-
-  /** True when the run is imported and not yet adopted — inert (db-import §4.1).
-   *  Surfaced so the read-plane can badge imported runs without the marker
-   *  riding on the portable `run_state` row. */
-  isRunImported(runId: string): boolean {
-    return isRunImported(this.db, runId);
-  }
-
-  /** Adopt an imported run — clear its inert marker (db-import §4.1 C) so it
-   *  rejoins dispatch/wake at its verbatim status. A local binding (like
-   *  `setRunCwd`), no event; the subsequent status transition rides the normal
-   *  resume intent. Idempotent; returns true if it flipped (false if not
-   *  imported / already adopted). */
-  adoptRun(runId: string): boolean {
-    const now = this.now();
-    let flipped = false;
-    this.writeTxn(() => {
-      flipped = adoptImportedRun(this.db, runId, now);
-    });
-    return flipped;
   }
 
   setRunTitle(runId: string, title: string): void {
