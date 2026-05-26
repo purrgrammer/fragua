@@ -16,6 +16,14 @@ parent: cli-topology.md
 > (the workflow link), and [`event-contract-version.md`](event-contract-version.md)
 > (the resume gate across versions).
 
+> **Status (2026-05-26): inspect-after-import shipped (the floor).** `fragua runs
+> export`/`import` move a run's DB rows + artifact blobs as a canonical,
+> secret-free `.fragua` bundle; merge is idempotent and fail-closed (§6), and the
+> event-contract version is reported, not gated, at import (§5). **Deferred (the
+> reach goal):** the git-bundle blob and everything resume needs — worktree
+> reconstruction, ref recreation, rebinding `cwd` to a local worktree (§3.1/§3.2).
+> Imported runs are inspect-only; `cwd → null`.
+
 ## 1. Problem
 
 A run that executed elsewhere — a CI runner, a teammate's laptop, an
@@ -63,6 +71,8 @@ objects.
 
 ### 3.1 Mitigation — git-bundle-as-blob, exported lazily
 
+> Status: **deferred** — the reach goal, not in the shipped floor.
+
 Do **not** extract trees into per-file/per-tree blobs: that reimplements git's
 content store, loses cross-snapshot delta compression (the Diff scrubber
 captures one snapshot per step/HITL boundary — many near-identical trees that
@@ -96,6 +106,9 @@ a run whose repo was deleted can still export events/messages/artifact-blobs but
 opt-in for "I might delete the checkout but still want to resume."
 
 ### 3.2 Import — reconstruct, then rebind
+
+> Status: **deferred** — the reach goal. The shipped floor merges DB rows + blobs
+> and sets `cwd → null` (inspect-only); steps 2–4 below are the resume increment.
 
 `fragua runs import <bundle>` (into an existing store — default the harness store):
 
@@ -150,8 +163,11 @@ is a hard dependency for *routine* cross-version import: gate resume on an
 semantics change (rare) — decoupled from the DB migration counter, so the window
 almost never rejects. The recoverable-park half (§3.2) is already in place. The
 manifest carries `fragua_version`, `schema_version`, the event-contract version,
-and `ir_version` so import validates compatibility up front (clear error / park,
-never a silent later halt).
+and `ir_version`. **Import does not reject on the event-contract version** — a
+too-new/too-old run still imports so it can be inspected; `runs import` reports
+`resumeCompatible`, and the daemon's resume gate parks an incompatible run
+(`engine_incompatible`) only on resume. The only hard import gates are the bundle
+format and per-blob integrity (§6).
 
 ## 6. Bundle manifest
 
@@ -164,14 +180,20 @@ A portable manifest + a blob payload:
 - **Excludes:** `daemon_lock`, `daemon_events`, `schedules`,
   `provider_credentials`, and local operator state (`inbox_status`,
   `accepted_sha`) — reset on import.
-- **Validate on import:** version compatibility; every referenced blob present
-  and its bytes hash to its sha256; FK closure (no dangling blob/workflow ref);
-  `run_id` idempotency.
+- **Validate on import (shipped):** bundle-format version (hard reject) + every
+  referenced blob present and hashing to its sha256 (hard reject). FK closure (no
+  dangling blob/workflow ref) is **enforced by the import transaction** —
+  `PRAGMA foreign_keys = ON` aborts a dangling insert — rather than pre-validated
+  with a bespoke message. The event-contract version is reported, not gated (§5).
 - **Merge:** content-addressed dedup for `blobs` + `workflows`; upsert the run by
-  `run_id` (skip-if-identical, conflict-detect); `events` by `(run_id, seq)`.
-- **Re-export determinism:** canonical row ordering + stable serialization, so
-  re-exporting an imported run yields an equivalent manifest — bundles compose
-  cleanly across any number of stores.
+  `run_id` (skip-if-identical via INSERT-OR-IGNORE for events/messages, upsert for
+  artifacts, run_state inserted once); `events` by `(run_id, seq)`.
+- **Re-export determinism (shipped):** canonical JSON (recursively sorted keys) +
+  canonical row ordering (events by seq, messages by ordinal, artifacts by scope,
+  blobs by sha), so re-exporting an imported run is byte-identical across any
+  number of stores. (Live-run local state — `inbox_status` / `cwd` /
+  `accepted_sha` — is reset on import per §4, so a re-export equals other
+  re-exports, not the original live export.)
 
 ## 7. Schema changes to make BEFORE stone
 
@@ -206,8 +228,11 @@ freeze.
   [`event-contract-version.md`](event-contract-version.md) for cross-version
   resume.
 - **Wins independently:** yes — additive `fragua runs export` / `import`.
-- **MVP:** export the DB-row subset + blobs + a self-contained git-bundle blob;
-  import = merge rows + write blobs + unbundle + recreate local refs + rebind
-  cwd; PK-conflict skip-if-identical; refuse (or park) a too-new pin with a clear
-  message. The version-axis split is its own proposal; resume-after-import is the
-  MVP's reach goal, inspect-after-import the floor.
+- **Shipped (the floor — inspect-after-import):** export the DB-row subset +
+  artifact blobs as a canonical, secret-free bundle; import = merge rows + write
+  blobs into an **existing** store (migrate:false — never creates/migrates),
+  PK-conflict skip-if-identical, fail-closed on format/integrity; the
+  event-contract version is flagged (`resumeCompatible`), not rejected.
+- **Deferred (the reach goal — resume-after-import):** the self-contained
+  git-bundle blob + unbundle + recreate local refs + rebind `cwd` to a worktree.
+  The version-axis split is its own proposal.

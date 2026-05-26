@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BundleManifest, readTar, writeTar } from "../src/bundle.ts";
+import { type BundleManifest, canonicalJson, readTar, writeTar } from "../src/bundle.ts";
 import { freshStore, seedRun } from "./helpers.ts";
 
 function untar(bytes: Uint8Array, dir: string): void {
@@ -115,6 +115,7 @@ describe("importRunBundle", () => {
     const r = dst.importRunBundle(bytes);
     expect(r.runId).toBe(runId);
     expect(r.imported).toBe(true);
+    expect(r.resumeCompatible).toBe(true);
 
     const state = dst.getState(runId);
     expect(state).not.toBeNull();
@@ -156,11 +157,34 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
-  test("rejects an incompatible contractVersion (fail-closed)", () => {
+  test("imports a too-new contractVersion but flags it resume-incompatible (inspect still works)", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    // Tamper the manifest's contract to a future version, re-tar.
+    const entries = readTar(bytes);
+    const mEntry = entries.find((e) => e.name === "manifest.json");
+    const manifest = JSON.parse(new TextDecoder().decode(mEntry?.data ?? new Uint8Array()));
+    manifest.contractVersion = 999;
+    const tampered = writeTar([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) },
+      ...entries.filter((e) => e.name.startsWith("blobs/")),
+    ]);
+
+    const dst = freshStore();
+    const r = dst.importRunBundle(tampered);
+    expect(r.imported).toBe(true);
+    expect(r.resumeCompatible).toBe(false); // resume would park; inspect works now
+    expect(dst.getState(runId)).not.toBeNull();
+    dst.close();
+  });
+
+  test("rejects an unknown bundleVersion (fail-closed)", () => {
     const manifest = {
-      bundleVersion: 1,
+      bundleVersion: 999,
       fraguaVersion: "x",
-      contractVersion: 999,
+      contractVersion: 1,
       schemaVersion: 1,
       irVersion: 1,
       run: {},
@@ -172,7 +196,7 @@ describe("importRunBundle", () => {
     };
     const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) }]);
     const dst = freshStore();
-    expect(() => dst.importRunBundle(bytes)).toThrow(/contractVersion/);
+    expect(() => dst.importRunBundle(bytes)).toThrow(/bundleVersion/);
     dst.close();
   });
 
@@ -204,5 +228,45 @@ describe("importRunBundle", () => {
     const dst = freshStore();
     expect(() => dst.importRunBundle(bytes)).toThrow(/manifest/);
     dst.close();
+  });
+});
+
+describe("export determinism (db-import §6)", () => {
+  test("canonicalJson sorts keys recursively — order-independent", () => {
+    expect(canonicalJson({ b: 1, a: { d: 4, c: 3 } })).toBe(canonicalJson({ a: { c: 3, d: 4 }, b: 1 }));
+    expect(canonicalJson({ b: 1, a: 2 })).toBe('{"a":2,"b":1}');
+  });
+
+  test("re-export is store-independent and a fixpoint", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    src.putArtifact({ runId, nodeId: "work", iteration: 0, key: "out" }, new TextEncoder().encode("bytes"));
+    src.appendMessage(runId, {
+      content: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+      nodeId: "work",
+      iteration: 0,
+    });
+    const orig = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+
+    // Two independent stores import the same bundle; their re-exports are
+    // byte-identical (canonical manifest + ordered rows ⇒ store-independent).
+    const a = freshStore();
+    const b = freshStore();
+    a.importRunBundle(orig);
+    b.importRunBundle(orig);
+    const ra = a.exportRunBundle(runId, { fraguaVersion: "x" });
+    const rb = b.exportRunBundle(runId, { fraguaVersion: "x" });
+    expect(Buffer.from(ra).equals(Buffer.from(rb))).toBe(true);
+
+    // Re-export is a fixpoint: import a re-export, export again → identical bytes.
+    const c = freshStore();
+    c.importRunBundle(ra);
+    const rc = c.exportRunBundle(runId, { fraguaVersion: "x" });
+    expect(Buffer.from(rc).equals(Buffer.from(ra))).toBe(true);
+
+    a.close();
+    b.close();
+    c.close();
   });
 });

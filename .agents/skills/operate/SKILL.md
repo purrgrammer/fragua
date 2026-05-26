@@ -1,6 +1,6 @@
 ---
 name: operate
-description: Drive AND diagnose a fragua run — enqueue, steer, land, and debug. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", "why did run X fail/hang/halt/pause", "what happened to <run>", "debug/diagnose this run", "is it stuck", or otherwise asks to operate on or investigate a run. Teaches pre-flight (provider credentials + a running harness so runs execute), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct queries. Deep forensics on a failed/stuck run (the failure-mode playbook, transcript, per-call cost, artifacts) live in the load-on-demand reference `references/forensics.md`. Assumes the `fragua` CLI (on PATH, or `bun run fragua` in a checkout).
+description: Drive AND diagnose a fragua run — enqueue, steer, land, and debug. Load this when the user says "run workflow X", "kick off change", "enqueue work", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", "raise the retry/loop/goal-gate cap", "land/accept this run", "what's the status of run …", "tail/follow this run", "why did run X fail/hang/halt/pause", "what happened to <run>", "debug/diagnose this run", "is it stuck", "export this run", "import a run bundle", "inspect a CI run locally", or otherwise asks to operate on or investigate a run. Teaches pre-flight (provider credentials + a running harness so runs execute), enqueue (`fragua run`), watch + review (`fragua runs ls|inbox|status|tail|diff`), the operate verbs (`fragua runs steer|pause|cancel|resume|respond|unquarantine|priority|budget|max-retries|goal-gate|max-loops`) with post-conditions, landing work (`fragua runs accept|discard`), moving a run between stores as a portable secret-free bundle (`fragua runs export|import`), and the HITL + quarantine protocols. Everything is a `fragua` CLI verb — no direct queries. Deep forensics on a failed/stuck run (the failure-mode playbook, transcript, per-call cost, artifacts) live in the load-on-demand reference `references/forensics.md`. Assumes the `fragua` CLI (on PATH, or `bun run fragua` in a checkout).
 ---
 
 # operate — enqueue, watch, and control a live run
@@ -79,6 +79,15 @@ fragua runs diff <id> [--against base|previous|<eventIdx>] [--snap <eventIdx>] [
 `fragua run` tails the run it enqueues; to watch a run you *didn't* just start, `fragua runs tail <id>` (live event log to terminal, same renderer + inline HITL picker); for a one-shot snapshot, `fragua runs status <id>`. `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
 
 **Two status words, don't conflate.** Lifecycle (`queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) answers "still going?"; outcome (`success | fail | null`) answers "did it succeed?" once terminal. `fragua runs ls` shows the lifecycle status.
+
+**Move a run between stores.** A run that executed elsewhere — a CI `.fragua` artifact, a teammate's box — imports into your store so you can inspect it here:
+
+```sh
+fragua runs export <id> --to <file.fragua>          # write a run as a portable, secret-free bundle
+fragua runs import <file.fragua> [--db <target>]    # merge it into a store (default: the harness store)
+```
+
+The bundle carries the run's events, messages, workflow, and artifact blobs — **never credentials** (secret-free by construction). Import is a store-client like the other verbs: it lands in an **existing** store (never creates or migrates one) and resets local operator state (`cwd`, inbox); `runs status|events|messages <id>` then work against the imported run. A bundle from a newer engine still imports for inspection — only *resume* gates on the contract version. Worktree/tree state isn't bundled yet: inspect, not resume.
 
 ```sh
 # Poll to terminal (lifecycle status, not outcome):

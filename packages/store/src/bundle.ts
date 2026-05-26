@@ -110,3 +110,25 @@ export function readTar(bytes: Uint8Array): TarEntry[] {
   }
   return out;
 }
+
+/**
+ * Deterministic JSON: object keys sorted recursively, so two semantically-equal
+ * values serialize to byte-identical strings regardless of key insertion order
+ * (db-import §6 re-export determinism). Arrays keep their order — the exporter
+ * orders its rows canonically (events by seq, messages by ordinal, artifacts by
+ * scope, blobs by sha) so the whole manifest is store-independent.
+ */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortKeysDeep(value));
+}
+
+function sortKeysDeep(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeysDeep);
+  if (v !== null && typeof v === "object") {
+    const src = v as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(src).sort()) out[k] = sortKeysDeep(src[k]);
+    return out;
+  }
+  return v;
+}

@@ -64,12 +64,20 @@ export function importCommand(opts: ImportOptions): Promise<number> {
   const storePath = resolveStorePath(opts);
   return withStoreClient(opts, ({ store }) => {
     try {
-      const { runId, imported } = store.importRunBundle(bytes);
+      const { runId, imported, resumeCompatible } = store.importRunBundle(bytes);
       console.log(
         imported
           ? chalk.green(`imported run ${runId} → ${storePath}`)
           : chalk.dim(`run ${runId} already present in ${storePath} (no-op)`),
       );
+      if (!resumeCompatible) {
+        console.warn(
+          chalk.yellow(
+            "  note: this run's engine contract is outside this build's range — " +
+              "inspect works, but resume will park until the binary catches up",
+          ),
+        );
+      }
       return 0;
     } catch (err) {
       console.error(chalk.red(`import: ${(err as Error).message}`));

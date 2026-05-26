@@ -38,7 +38,7 @@ import {
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
-import { BUNDLE_VERSION, type BundleManifest, readTar, type TarEntry, writeTar } from "./bundle.ts";
+import { BUNDLE_VERSION, type BundleManifest, canonicalJson, readTar, type TarEntry, writeTar } from "./bundle.ts";
 import {
   deleteDaemonLock,
   deleteServerEndpoint,
@@ -1279,7 +1279,11 @@ export class SqliteStore implements IEventStore {
     const wf = this.getWorkflow(run.workflowSha);
     if (wf == null) throw new Error(`exportRunBundle: workflow ${run.workflowSha} missing for run ${runId}`);
 
-    const artifacts = this.listArtifacts(runId);
+    // Canonical row order (by artifact scope) so the manifest is
+    // store-independent — listArtifacts orders by created_at, not a total order.
+    const artifacts = this.listArtifacts(runId).sort(
+      (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
+    );
     const shas = [...new Set(artifacts.map((a) => a.blobSha))].sort();
     const blobEntries: TarEntry[] = [];
     const blobManifest: { sha256: string; size: number }[] = [];
@@ -1302,23 +1306,28 @@ export class SqliteStore implements IEventStore {
       artifacts,
       blobs: blobManifest,
     };
-    const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const manifestBytes = new TextEncoder().encode(canonicalJson(manifest));
     return writeTar([{ name: "manifest.json", data: manifestBytes }, ...blobEntries]);
   }
 
   /** Merge a `.fragua` bundle (from {@link exportRunBundle}, possibly produced
    * on another machine) into this store so the run is inspectable here
-   * (`fragua runs status|events|messages`). Fail-closed: rejects an unknown
-   * `bundleVersion`, a `contractVersion` outside this build's compatible range,
-   * or a blob whose bytes don't hash to its manifest sha — nothing is written
-   * if validation fails. Idempotent: re-importing the same bundle is a no-op
+   * (`fragua runs status|events|messages`). Fail-closed on what blocks a safe
+   * read: an unknown `bundleVersion` (manifest shape this build can't parse) or
+   * a blob whose bytes don't hash to its manifest sha — nothing is written. The
+   * event-contract version does NOT gate import: a too-new/too-old run still
+   * imports so it can be inspected, and `resumeCompatible` reports whether the
+   * daemon's resume gate would accept it — an incompatible run parks on resume,
+   * never on inspect (db-import §5). Idempotent: re-importing is a no-op
    * (events/messages INSERT-OR-IGNORE, artifacts upsert, run_state inserted
-   * once). Per db-import §4 the import rebinds `cwd → null` and resets local
-   * operator state (`inboxStatus → pending`, `acceptedSha → null`); resume —
-   * which needs the git tree the export does not yet package — is out of scope.
+   * once). Per §4 the import rebinds `cwd → null` and resets local operator
+   * state (`inboxStatus → pending`, `acceptedSha → null`); tree state + resume
+   * are a later increment.
    *
-   * Returns `imported: false` when the run was already present. */
-  importRunBundle(bytes: Uint8Array): { runId: string; imported: boolean } {
+   * Returns `imported: false` when the run was already present, and
+   * `resumeCompatible: false` when the run's contract is outside this build's
+   * supported range. */
+  importRunBundle(bytes: Uint8Array): { runId: string; imported: boolean; resumeCompatible: boolean } {
     const entries = readTar(bytes);
     const manifestEntry = entries.find((e) => e.name === "manifest.json");
     if (manifestEntry == null) throw new Error("importRunBundle: manifest.json missing from bundle");
@@ -1329,15 +1338,11 @@ export class SqliteStore implements IEventStore {
         `importRunBundle: unsupported bundleVersion ${manifest.bundleVersion} (this build reads ${BUNDLE_VERSION})`,
       );
     }
-    if (
-      manifest.contractVersion < MIN_COMPATIBLE_CONTRACT_VERSION ||
-      manifest.contractVersion > EVENT_CONTRACT_VERSION
-    ) {
-      throw new Error(
-        `importRunBundle: incompatible contractVersion ${manifest.contractVersion} ` +
-          `(this build accepts ${MIN_COMPATIBLE_CONTRACT_VERSION}..${EVENT_CONTRACT_VERSION})`,
-      );
-    }
+    // The event-contract version does NOT gate import — a too-new/too-old run
+    // still imports so it can be inspected; only the daemon's resume gate parks
+    // it (engine_incompatible), and only on resume (db-import §5).
+    const resumeCompatible =
+      manifest.contractVersion >= MIN_COMPATIBLE_CONTRACT_VERSION && manifest.contractVersion <= EVENT_CONTRACT_VERSION;
 
     // Verify every manifest blob is present and hashes to its claimed sha
     // BEFORE any write — a tampered or truncated bundle fails closed.
@@ -1463,7 +1468,7 @@ export class SqliteStore implements IEventStore {
       }
     });
 
-    return { runId: run.runId, imported: !already };
+    return { runId: run.runId, imported: !already, resumeCompatible };
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {
