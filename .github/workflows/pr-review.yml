@@ -1,15 +1,14 @@
 name: PR review
 
-# Unattended review on every push to a PR, in two jobs:
-#   review    — builds fragua from THIS PR's checkout (bun) and runs the
-#               `pr_review` workflow (`.fragua/workflows/pr_review.yaml`) with
-#               `fragua ci`, posting the result back to the PR. Read-only: it runs
-#               LLM tool-calls over an untrusted diff, so it must NOT hold
-#               `contents: write` (prompt-injection surface).
-#   automerge — a SEPARATE job (needs: review) that holds the write scope and,
-#               on a clean review, arms GitHub auto-merge so the PR merges once
-#               the required `ci` check passes. CI is the hard gate; the LLM
-#               review is a soft pre-condition.
+# Unattended review on every push to a PR: builds fragua from THIS PR's checkout
+# (bun) and runs the `pr_review` workflow (`.fragua/workflows/pr_review.yaml`)
+# with `fragua ci`, posting the result back to the PR as a `comment` or
+# `request-changes` review. Read-only: it runs LLM tool-calls over an untrusted
+# diff, so it must NOT hold `contents: write` (prompt-injection surface).
+#
+# NO auto-merge. The review is a human-facing signal — a human merges. (A bot
+# using GITHUB_TOKEN cannot post an APPROVED review state anyway, so there is no
+# bot verdict that could safely gate a merge; CI remains the hard required gate.)
 #
 # The review runs fragua FROM SOURCE (not setup-fragua's released binary) so it
 # exercises the code under review — and `fragua ci --export`, which lands the run
@@ -21,7 +20,7 @@ on:
   pull_request:
     types: [opened, reopened, synchronize]
 
-# Workflow default is read-only; only the automerge job opts up to write.
+# Read-only over the untrusted diff; the only write is posting the review back.
 permissions:
   contents: read
   pull-requests: write # the review posts itself back to the PR
@@ -91,41 +90,3 @@ jobs:
           name: pr-review-bundle-${{ github.event.pull_request.number }}
           path: ${{ runner.temp }}/pr-review.fragua
           if-no-files-found: warn
-
-  automerge:
-    needs: review # runs only after a SUCCESSFUL review (a halt never merges)
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # the merge itself — isolated from the LLM-executing job
-      pull-requests: write
-    steps:
-      # Arm GitHub auto-merge ONLY on an APPROVED fragua review. The workflow's
-      # `verdict` node classifies by worst severity: approve (clean/LGTM/Low-only)
-      # → APPROVED; medium → COMMENTED; critical/high → CHANGES_REQUESTED. So a
-      # Medium-only review comments and waits for a human — it does NOT merge.
-      # Identity filter is the review-body shape (`# Code Review` / `LGTM:`), not
-      # the `github-actions` login alone — that login is shared by every Actions
-      # bot. On any non-approve (or no) verdict, disable a previously armed
-      # auto-merge so a stale approve from an earlier push can't carry an arm
-      # forward (the cancel-in-progress race).
-      - name: Arm/disarm auto-merge on the review verdict
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }} # this job has no checkout; tell gh the repo
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          state=$(gh pr view "$PR" --json reviews --jq '
-            [.reviews[]
-              | select(.author.login == "github-actions")
-              | select((.body // "") | test("^(# Code Review|LGTM:)"))]
-            | last | .state // "NONE"')
-          echo "latest fragua review: $state"
-          if [ "$state" = "APPROVED" ]; then
-            gh pr merge "$PR" --auto --squash \
-              || echo "::warning::could not arm --squash auto-merge — needs repo 'Allow auto-merge' + squash-merge enabled + branch protection requiring the ci check"
-          else
-            gh pr merge "$PR" --disable-auto >/dev/null 2>&1 || true
-            echo "review is $state — auto-merge not armed (any prior arm disabled)"
-          fi

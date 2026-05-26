@@ -5,14 +5,14 @@
 # The non-HITL sibling of `review`. Where `review` ends at a `signoff` human
 # step, `pr_review` runs to completion under `fragua ci pr_review --input pr=<n>`
 # and posts the review itself. A dedicated `verdict` route node reads the written
-# review and classifies it by WORST severity into one of three terminal posts:
-#   request-changes  — any Critical or High finding   (gh --request-changes)
-#   comment          — only Medium findings (advisory) (gh --comment)
-#   approve          — All clear / LGTM / Low-only     (gh --approve)
+# review and classifies it by WORST severity into one of two terminal posts:
+#   changes  — any Critical or High finding   (gh pr review --request-changes)
+#   comment  — everything else (incl. clean)   (gh pr review --comment)
 # The verdict is a first-class routing decision (auditable in the event log),
-# not a `$(cat verdict.txt)` shell hack. `.github/workflows/pr-review.yml` arms
-# auto-merge ONLY on an `approve` verdict — so a Medium-only review comments and
-# waits for a human; a clean/trivial PR auto-merges.
+# not a `$(cat verdict.txt)` shell hack. There is NO `approve` post and NO
+# auto-merge: a bot using GITHUB_TOKEN cannot post an APPROVED review state, so
+# the verdict is a human-facing signal — a human merges. (CHANGES_REQUESTED can
+# still gate a merge via branch protection; that's the operator's choice.)
 #
 # The classifier still scales depth (skip/quick/full) so a typo PR never draws
 # an Opus full pass. Runs in the CI checkout's worktree: the PR's files are on
@@ -22,8 +22,8 @@
 #   fragua ci pr_review --input pr=128
 
 name: pr_review
-goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR with no human gate.
-budget: 10.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 2.50 + verify 0.60) + verdict (0.10) = 9.80, so a retry never halts mid-pass on the cap
+goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR (comment or request-changes) with no human gate.
+budget: 10.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 2.50 + verify 0.60) + verdict (0.15) = 9.85, so a retry never halts mid-pass on the cap
 
 inputs:
   pr:
@@ -131,32 +131,26 @@ steps:
         3. Schema followed — Scope present; severities ordered or replaced by All clear; Next steps present.
       All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>`.
 
-  verdict:                             # classify the written review → route to one of three posts.
+  verdict:                             # classify the written review → route to one of two posts.
     # A cheap isolated classifier (no thread): reads pr-review.md fresh and decides the GitHub review
     # action by worst severity. The route is the verdict — first-class + auditable, no verdict file.
+    # Only `changes` and `comment` — a GITHUB_TOKEN bot cannot post an APPROVED state, so a clean
+    # review is a `comment` (its body says All clear / LGTM); there is no approve post.
     type: llm
     model: claude-haiku-4-5
     allowed-tools: [read]
-    max-cost: 0.10
+    max-cost: 0.15
     prompt: |
       Read `pr-review.md`. Classify it by its WORST finding and call `route` once (state the deciding severity in one line first):
         changes  — there is any Critical or High finding
-        comment  — no Critical/High, but at least one Medium finding
-        approve  — no Critical/High/Medium (an `All clear`, an `LGTM`, or Low-only)
+        comment  — everything else (only Medium/Low findings, an `All clear`, or an `LGTM`)
+      You MUST end by calling the `route` tool exactly once. Do not reply with prose instead of routing.
     routes:
-      approve: {to: post_approve, label: "Approve"}
       comment: {to: post_comment, label: "Comment"}
       changes: {to: post_changes, label: "Request changes"}
 
-  # Three terminal posts — each a PURE TOOL node (no LLM): the body is already a file, so posting is
-  # one deterministic gh call. A non-zero gh exit halts the run. Only `post_approve` lets auto-merge arm.
-  # Auto-merge arms on the APPROVED review *state* this sets — NOT on a counted
-  # approval (branch-protection "required approvals" ignore a bot review). The
-  # `state == "APPROVED"` filter in pr-review.yml is the actual merge signal.
-  post_approve:
-    type: tool
-    run: gh pr review ${{ inputs.pr }} --approve --body-file pr-review.md
-    next: exit
+  # Two terminal posts — each a PURE TOOL node (no LLM): the body is already a file, so posting is one
+  # deterministic gh call (the states a GITHUB_TOKEN bot can actually post). A non-zero gh exit halts.
   post_comment:
     type: tool
     run: gh pr review ${{ inputs.pr }} --comment --body-file pr-review.md

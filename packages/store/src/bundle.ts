@@ -16,6 +16,8 @@
 //   workflows/<sha>/ir.json           — its compiled IR
 //   blobs/<sha256>                    — content-addressed bytes (artifacts)
 
+import { assertSafeRunId } from "./run-id.ts";
+
 /** Bump when the bundle layout changes. Experimental — bumps freely, no
  *  migration path while the format is unstable (bundles.md). */
 export const BUNDLE_VERSION = 1;
@@ -77,7 +79,10 @@ export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
   }
   for (const [i, r] of (o["runs"] as unknown[]).entries()) {
     const run = asObject(r, `runs[${i}]`);
-    if (typeof run["runId"] !== "string") throw new Error(`bundle manifest: runs[${i}].runId is not a string`);
+    // Full ULID-shape gate (not just `typeof string`): runId flows into worktree
+    // paths + git refspecs, and this manifest gate is `show`'s ONLY preflight —
+    // so it must reject a traversal-shaped id here, matching what import enforces.
+    assertSafeRunId(run["runId"]);
     assertSha256(run["workflowSha"], `runs[${i}].workflowSha`);
     for (const c of ["events", "messages"] as const) {
       if (typeof run[c] !== "number") throw new Error(`bundle manifest: runs[${i}].${c} is not a number`);

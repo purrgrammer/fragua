@@ -1469,6 +1469,13 @@ export class SqliteStore implements IEventStore {
           throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq)`);
         }
       }
+      // Scope note: we shape-gate the row envelope (writer/type/seq) and the
+      // GENESIS payload (below), but NOT every other event's `payload` — the
+      // reducer is intentionally tolerant, an imported run is inert (never
+      // executes here), and event payloads are INSERT OR IGNORE'd verbatim for
+      // inspection. Gating every fact/intent payload shape would duplicate the
+      // event-contract surface; it's deliberately out of scope.
+      //
       // Same gate for transcript rows — `ordinal`/`iteration` numeric, `nodeId`
       // string-or-null — so a tampered messages.jsonl fails clearly here, not as
       // an opaque SQLITE_CONSTRAINT in the txn.
