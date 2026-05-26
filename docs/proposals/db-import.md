@@ -9,8 +9,8 @@ parent: cli-topology.md
 
 # Run import & bundling
 
-> Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua db
-> export` / `fragua db import`); blocks nothing. Consumes the artifact a
+> Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua runs
+> export` / `fragua runs import`); blocks nothing. Consumes the artifact a
 > CI run produces. Interlocks with project identity (shipped — cwd is
 > a local binding, rebound on import), [`workflow-ir.md`](workflow-ir.md)
 > (the workflow link), and [`event-contract-version.md`](event-contract-version.md)
@@ -87,7 +87,7 @@ base listed as a prerequisite) is an opt-in optimization for the same-repo case
 — and stays tiny because git only ships objects the prerequisite doesn't cover.
 
 **Lazy, not eager.** Export reads the refs from the repo on demand
-(`fragua db export <run>`); CI exports by default at run terminal (its refs
+(`fragua runs export <run>`); CI exports by default at run terminal (its refs
 exist while the runner is alive). `refs/fragua/snapshots/<runId>` live in the
 *main* repo's object store — git worktrees share it — so they survive worktree
 disposal and are not pruned by `git gc` while the ref exists. Retention caveat:
@@ -97,7 +97,7 @@ opt-in for "I might delete the checkout but still want to resume."
 
 ### 3.2 Import — reconstruct, then rebind
 
-`fragua db import <bundle>`:
+`fragua runs import <bundle>` (into an existing store — default the harness store):
 
 1. Merge the DB rows (§2) and write the blob files.
 2. Create a local worktree; `git bundle unbundle` the git-bundle blob into its
@@ -205,7 +205,7 @@ freeze.
 - **Depends on:** the snapshot git objects existing at export (lazy, repo-alive);
   [`event-contract-version.md`](event-contract-version.md) for cross-version
   resume.
-- **Wins independently:** yes — additive `fragua db export` / `import`.
+- **Wins independently:** yes — additive `fragua runs export` / `import`.
 - **MVP:** export the DB-row subset + blobs + a self-contained git-bundle blob;
   import = merge rows + write blobs + unbundle + recreate local refs + rebind
   cwd; PK-conflict skip-if-identical; refuse (or park) a too-new pin with a clear

@@ -59,6 +59,7 @@ import {
 } from "../src/commands/providers.ts";
 import type { ModelOpsFlags } from "../src/commands/providers-custom.ts";
 import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
+import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 import {
   scheduleAddCommand,
   scheduleHelp,
@@ -350,26 +351,20 @@ cli
   });
 
 cli
-  .command("db <action> [run]", "DB maintenance: vacuum | gc-blobs | backup | migrate | export <run>")
-  .option("--to <path>", "`backup` / `export` destination path")
+  .command("db <action>", "DB maintenance: vacuum | gc-blobs | backup | migrate")
+  .option("--to <path>", "`backup` destination path")
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
   .option("--dry-run", "`migrate` only: print the plan without applying")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
-  .action(async (action: string, run: string | undefined, options: Record<string, unknown>) => {
+  .action(async (action: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
-    if (
-      action !== "vacuum" &&
-      action !== "gc-blobs" &&
-      action !== "backup" &&
-      action !== "migrate" &&
-      action !== "export"
-    ) {
+    if (action !== "vacuum" && action !== "gc-blobs" && action !== "backup" && action !== "migrate") {
       console.error(chalk.red(`unknown db action: ${action}`));
-      console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup | migrate | export"));
+      console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup | migrate"));
       process.exit(1);
     }
     const limitRaw = options["limit"];
@@ -381,7 +376,6 @@ cli
           : undefined;
     const code = await dbCommand({
       action,
-      ...(run !== undefined ? { run } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
@@ -461,7 +455,7 @@ cli
   )
   .option("-i, --input <name=value>", "Run input; repeat for multiple. Value @path reads a file, @- reads stdin")
   .option("--db <path>", "Pin the raw store here (pruned to portable tables on exit; default: a temp dir, discarded)")
-  .option("--bundle <path>", "Export a portable, secret-free .fragua bundle here — the safe artifact to upload/import")
+  .option("--export <path>", "Export a portable, secret-free .fragua bundle here — the safe artifact to upload/import")
   .option("--json", "Emit the event log as JSONL instead of the human render")
   .option("--provider <id>", "LLM provider override (else config defaults, else env-autodetect)")
   .option("--model <id>", "LLM model override")
@@ -482,7 +476,7 @@ cli
       workflow,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-      ...(pick("bundle") !== undefined ? { bundle: pick("bundle")! } : {}),
+      ...(pick("export") !== undefined ? { exportPath: pick("export")! } : {}),
       ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
       ...(options["json"] === true ? { json: true } : {}),
@@ -540,7 +534,11 @@ function runsHelp(): void {
     steps     <id> [--json]                                 per-LLM-call cost / tokens / duration
     messages  <id> [--node <id>] [--json]                   the LLM-visible transcript (one preview line each)
     artifacts <id>                                          list a run's artifacts (metadata)
-    artifact  <id> <nodeId> --key <k> [--iteration N]       write one artifact's bytes to stdout`);
+    artifact  <id> <nodeId> --key <k> [--iteration N]       write one artifact's bytes to stdout
+
+  Portability (move a run between stores as a secret-free .fragua bundle):
+    export    <id> --to <file.fragua>                       write the run as a portable bundle
+    import    <file.fragua> [--db <target>]                 merge a bundle into the (default: harness) store`);
 }
 
 cli
@@ -562,6 +560,7 @@ cli
   .option("--json", "events/steps/messages: emit full JSON instead of one-line render")
   .option("--key <k>", "artifact: the artifact key to fetch")
   .option("--iteration <n>", "artifact: node iteration (default 0)")
+  .option("--to <path>", "export: destination path for the .fragua bundle")
   .option("--cwd <dir>", "Project root (scopes ls/inbox; resolves diff worktrees)")
   .option("--db <path>", "Store path (default: the harness store ~/.fragua/fragua.db)")
   .action(
@@ -795,6 +794,23 @@ cli
               ...discovery(options),
             }),
           );
+          break;
+        }
+        case "export": {
+          const to = pickStr(options, "to");
+          if (to == null) {
+            console.error(chalk.red("runs export: --to <file.fragua> required"));
+            process.exit(1);
+          }
+          process.exit(await exportCommand({ runId: needId(), to, ...discovery(options) }));
+          break;
+        }
+        case "import": {
+          if (runId == null) {
+            console.error(chalk.red("runs import: <bundle.fragua> required"));
+            process.exit(1);
+          }
+          process.exit(await importCommand({ bundle: runId, ...discovery(options) }));
           break;
         }
         default:

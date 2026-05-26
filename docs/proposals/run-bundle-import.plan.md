@@ -35,7 +35,7 @@ interface BundleManifest {
 
 `SqliteStore.exportRunBundle(runId, { fraguaVersion }): Uint8Array` (store.ts) → a `.fragua`:
 a tar of `manifest.json` (first entry) then `blobs/<sha256>` for each referenced blob.
-CLI: `fragua db export <run> --to <x.fragua>`, `fragua ci --bundle <x.fragua>`.
+CLI: `fragua runs export <run> --to <x.fragua>`, `fragua ci --export <x.fragua>`.
 
 The store import helpers you'll reuse already live in store.ts's import block:
 `insertWorkflowIfAbsent`, `insertBlobIfAbsent`, `insertRunState`,
@@ -90,7 +90,7 @@ Place it right after `exportRunBundle`. Structure (mind I1 — serialize + do bl
    - artifacts: `for (a) upsertArtifact(db, …)` — **confirm signature** (artifact-queries.ts:32); FK → blobs (already inserted).
 7. `return { runId: manifest.run.runId, imported: !already };`
 
-## Step 3 — CLI: `fragua db import <bundle> [--db <target>]`
+## Step 3 — CLI: `fragua runs import <bundle> [--db <target>]`
 
 `packages/cli/src/commands/db.ts`:
 - Add `"import"` to the `action` union; the **bundle path arrives as `opts.run`** (the existing `[run]` positional — reuse it; or read `opts.to` if you prefer `--to`). Pick one and note it in `--help`.
@@ -124,13 +124,13 @@ bun run lint
 bun test packages/store/test/bundle.test.ts ./packages/store ./packages/cli
 ```
 Smoke (ephemeral, no global-store touch — seed via a repo-local script like the export smoke):
-`fragua db export <run> --db src.db --to r.fragua` → `fragua db import r.fragua --db fresh.db` → `fragua runs status <run> --db fresh.db`.
+`fragua runs export <run> --db src.db --to r.fragua` → `fragua runs import r.fragua --db existing.db` → `fragua runs status <run> --db existing.db` (import targets an *existing* store — migrate:false, no create).
 
 ## Out of scope — follow-ups (do NOT do here)
 
 - **git-bundle / tree state → resume-after-import** (db-import.md §3.1/§3.2): export must `git bundle create refs/fragua/*` into a blob first; import unbundles + recreates refs + rebinds `cwd` to a real worktree.
 - message/event **spill blobs** (export currently collects only artifact blobs — see `exportRunBundle`'s note); add full blob enumeration + FK-closure validation.
-- run-id **prefix resolution** for `db export`/`db import` ergonomics.
+- run-id **prefix resolution** for `runs export`/`runs import` ergonomics.
 - canonical-JSON (sorted keys) for true re-export determinism (§6).
 
 ## Confirmed signatures (don't re-investigate)

@@ -172,6 +172,34 @@ export function insertMessage(
   );
 }
 
+const INSERT_MESSAGE_OR_IGNORE_SQL = `
+  INSERT OR IGNORE INTO messages (run_id, ordinal, content, node_id, iteration, content_hash)
+  VALUES (?, ?, ?, ?, ?, ?)
+`;
+
+/** Idempotent message insert for bundle import — PK `(run_id, ordinal)` makes
+ *  a re-import a no-op for rows already present. */
+export function insertMessageOrIgnore(
+  db: Database,
+  args: {
+    runId: string;
+    ordinal: number;
+    content: string;
+    nodeId: string | null;
+    iteration: number;
+    contentHash: string;
+  },
+): void {
+  db.query(INSERT_MESSAGE_OR_IGNORE_SQL).run(
+    args.runId,
+    args.ordinal,
+    args.content,
+    args.nodeId,
+    args.iteration,
+    args.contentHash,
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Thread rehydration (cross-table — messages + events + run_state)
 // ─────────────────────────────────────────────────────────────────────

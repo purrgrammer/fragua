@@ -533,6 +533,18 @@ export function bumpRunSeq(db: Database, runId: string): number {
   return row.seq;
 }
 
+const SET_RUN_STATE_NEXT_SEQ_SQL = `
+  UPDATE run_state SET next_seq = ? WHERE run_id = ?
+`;
+
+/** Patch `next_seq` directly. Used by bundle import to restore a run's full
+ *  projection: `writeRunStateProjection` deliberately omits `next_seq` (it's a
+ *  creation column, not a projected one), so import sets it from the source so
+ *  any future resume mints the next event at the correct seq. */
+export function setRunStateNextSeq(db: Database, runId: string, nextSeq: number): void {
+  db.query(SET_RUN_STATE_NEXT_SEQ_SQL).run(nextSeq, runId);
+}
+
 const WRITE_PROJECTION_SQL = `
   UPDATE run_state SET
     version             = ?,

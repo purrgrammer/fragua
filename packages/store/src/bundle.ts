@@ -85,3 +85,28 @@ export function writeTar(entries: readonly TarEntry[]): Uint8Array {
   }
   return out;
 }
+
+/**
+ * Inverse of {@link writeTar}: walk the 512-byte ustar blocks and return each
+ * entry as a name + a zero-copy `subarray` view of its data. Reads only the
+ * two fields `writeTar` emits — name (0..100) and the octal size (124..136) —
+ * and stops at the first zero block (the archive terminator). Lenient by
+ * design: it parses our own writer's output, not arbitrary tar.
+ */
+export function readTar(bytes: Uint8Array): TarEntry[] {
+  const dec = new TextDecoder();
+  const out: TarEntry[] = [];
+  let off = 0;
+  while (off + 512 <= bytes.length) {
+    const h = bytes.subarray(off, off + 512);
+    if (h[0] === 0) break; // zero block → end of archive
+    let n = 0;
+    while (n < 100 && h[n] !== 0) n++;
+    const name = dec.decode(h.subarray(0, n));
+    const size = Number.parseInt(dec.decode(h.subarray(124, 136)).replace(/[\0 ]/g, ""), 8) || 0;
+    off += 512;
+    out.push({ name, data: bytes.subarray(off, off + size) });
+    off += Math.ceil(size / 512) * 512; // step past the data's padded block span
+  }
+  return out;
+}

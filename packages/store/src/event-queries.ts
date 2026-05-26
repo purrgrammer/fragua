@@ -92,6 +92,28 @@ export function insertEventRunEnqueued(db: Database, runId: string, seq: number,
   db.query(INSERT_EVENT_RUN_ENQUEUED_SQL).run(runId, seq, payload, ts);
 }
 
+const INSERT_EVENT_OR_IGNORE_SQL = `
+  INSERT OR IGNORE INTO events (run_id, seq, type, writer, payload, ts)
+  VALUES (?, ?, ?, ?, ?, ?)
+`;
+
+/** Idempotent event insert that preserves the source `writer` verbatim — the
+ *  bundle-import path replays a run's events into a target store. PK
+ *  `(run_id, seq)` makes a re-import a no-op for rows already present, and the
+ *  unconstrained `writer` column (see schema) carries the origin provenance
+ *  through unchanged. */
+export function insertEventOrIgnore(
+  db: Database,
+  runId: string,
+  seq: number,
+  type: string,
+  writer: string,
+  payload: string,
+  ts: number,
+): void {
+  db.query(INSERT_EVENT_OR_IGNORE_SQL).run(runId, seq, type, writer, payload, ts);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Per-run reads (single-run scope)
 // ─────────────────────────────────────────────────────────────────────

@@ -47,7 +47,7 @@ export interface CiCommandOptions {
   dbPath?: string;
   /** Export a portable, secret-free `.fragua` bundle on exit — the safe CI
    * artifact (carries only the portable run record; credentials never travel). */
-  bundle?: string;
+  exportPath?: string;
   /** Typed run inputs (`--input name=value`). */
   inputs?: Record<string, string>;
   /** Emit the event log as JSONL instead of the human render. */
@@ -308,9 +308,9 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // Export a portable, secret-free `.fragua` bundle before the store
     // closes/vanishes — the safe CI artifact (carries only the portable run
     // record; provider tables are never read into it, so no scrub needed).
-    if (opts.bundle != null && opts.bundle.length > 0 && runId !== undefined) {
+    if (opts.exportPath != null && opts.exportPath.length > 0 && runId !== undefined) {
       try {
-        const dest = resolve(opts.bundle);
+        const dest = resolve(opts.exportPath);
         mkdirSync(dirname(dest), { recursive: true });
         writeFileSync(dest, store.exportRunBundle(runId, { fraguaVersion: FRAGUA_VERSION }));
         console.log(chalk.dim(`bundle → ${dest}`));

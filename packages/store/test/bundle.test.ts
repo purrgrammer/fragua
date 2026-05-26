@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BundleManifest, writeTar } from "../src/bundle.ts";
+import { type BundleManifest, readTar, writeTar } from "../src/bundle.ts";
 import { freshStore, seedRun } from "./helpers.ts";
 
 function untar(bytes: Uint8Array, dir: string): void {
@@ -74,5 +74,135 @@ describe("exportRunBundle", () => {
       rmSync(dir, { recursive: true, force: true });
     }
     store.close();
+  });
+});
+
+describe("importRunBundle", () => {
+  test("round-trips a run into a fresh store; the credential never travels", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    src.setRunTitle(runId, "imported title");
+    // An artifact (→ a blob) and a message, so import exercises the blob
+    // integrity + replay paths, not just run_state + events.
+    src.putArtifact({ runId, nodeId: "work", iteration: 0, key: "out" }, new TextEncoder().encode("artifact-bytes"));
+    src.appendMessage(runId, {
+      content: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+      nodeId: "work",
+      iteration: 0,
+    });
+    const SECRET = "sk-ant-test-DO-NOT-LEAK-0123456789abcdef";
+    src.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: SECRET }),
+    });
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    const srcEvents = src.getEvents(runId).length;
+
+    // The blob bytes must physically travel inside the bundle: there's a
+    // `blobs/<sha>` entry carrying the content.
+    const blobEntry = readTar(bytes).find((e) => e.name.startsWith("blobs/"));
+    expect(blobEntry).toBeDefined();
+    expect(new TextDecoder().decode(blobEntry?.data ?? new Uint8Array())).toBe("artifact-bytes");
+
+    // Close src FIRST — `:memory:` stores own a fresh temp blob dir that close()
+    // destroys, so dst can't read the blob from a shared location. After this,
+    // the tar `bytes` are the only possible carrier; a successful read on dst
+    // proves the blob was rehydrated from the bundle, not aliased.
+    src.close();
+
+    const dst = freshStore();
+    const r = dst.importRunBundle(bytes);
+    expect(r.runId).toBe(runId);
+    expect(r.imported).toBe(true);
+
+    const state = dst.getState(runId);
+    expect(state).not.toBeNull();
+    expect(state?.title).toBe("imported title");
+    expect(dst.getEvents(runId).length).toBe(srcEvents);
+    expect(dst.getMessages(runId).length).toBe(1);
+    // The blob survived and reads back through the artifact ref.
+    const art = dst.getArtifact({ runId, nodeId: "work", iteration: 0, key: "out" });
+    expect(new TextDecoder().decode(art)).toBe("artifact-bytes");
+    // Local operator state was rebound / reset per db-import §4.
+    expect(state?.cwd).toBeNull();
+    expect(state?.inboxStatus).toBe("pending");
+    expect(state?.acceptedSha).toBeNull();
+    // The credential did NOT ride along — secret-free by construction.
+    expect(dst.getProviderCredential("anthropic")).toBeNull();
+    dst.close();
+  });
+
+  test("is idempotent — re-importing the same bundle is a no-op", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    src.appendMessage(runId, {
+      content: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+      nodeId: "work",
+      iteration: 0,
+    });
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    expect(dst.importRunBundle(bytes).imported).toBe(true);
+    const events = dst.getEvents(runId).length;
+    const messages = dst.getMessages(runId).length;
+
+    const second = dst.importRunBundle(bytes);
+    expect(second.imported).toBe(false);
+    expect(dst.getEvents(runId).length).toBe(events);
+    expect(dst.getMessages(runId).length).toBe(messages);
+    dst.close();
+  });
+
+  test("rejects an incompatible contractVersion (fail-closed)", () => {
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 999,
+      schemaVersion: 1,
+      irVersion: 1,
+      run: {},
+      workflow: { sha: "x", name: "x", source: "x", ir: "x", irVersion: 1 },
+      events: [],
+      messages: [],
+      artifacts: [],
+      blobs: [],
+    };
+    const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) }]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/contractVersion/);
+    dst.close();
+  });
+
+  test("rejects a blob whose bytes don't match its manifest sha (fail-closed)", () => {
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 1,
+      schemaVersion: 1,
+      irVersion: 1,
+      run: {},
+      workflow: { sha: "x", name: "x", source: "x", ir: "x", irVersion: 1 },
+      events: [],
+      messages: [],
+      artifacts: [],
+      blobs: [{ sha256: "deadbeef", size: 3 }],
+    };
+    const bytes = writeTar([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) },
+      { name: "blobs/deadbeef", data: new TextEncoder().encode("xyz") },
+    ]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/integrity/);
+    dst.close();
+  });
+
+  test("rejects a bundle with no manifest", () => {
+    const bytes = writeTar([{ name: "blobs/abc", data: new TextEncoder().encode("x") }]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/manifest/);
+    dst.close();
   });
 });

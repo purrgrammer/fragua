@@ -38,7 +38,7 @@ import {
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
-import { BUNDLE_VERSION, type BundleManifest, type TarEntry, writeTar } from "./bundle.ts";
+import { BUNDLE_VERSION, type BundleManifest, readTar, type TarEntry, writeTar } from "./bundle.ts";
 import {
   deleteDaemonLock,
   deleteServerEndpoint,
@@ -54,6 +54,7 @@ import {
 } from "./daemon-queries.ts";
 import {
   insertEventDaemon,
+  insertEventOrIgnore,
   insertEventRunEnqueued,
   insertEventWeb,
   type OrphanSideEffectRow,
@@ -73,6 +74,7 @@ import {
 } from "./event-queries.ts";
 import {
   insertMessage,
+  insertMessageOrIgnore,
   selectActiveThreads,
   selectMaxMessageOrdinal,
   selectMessageByDedup,
@@ -81,7 +83,13 @@ import {
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
-import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION, EVENT_CONTRACT_VERSION } from "./pragmas.ts";
+import {
+  applyCreationPragmas,
+  applyPragmas,
+  CURRENT_SCHEMA_VERSION,
+  EVENT_CONTRACT_VERSION,
+  MIN_COMPATIBLE_CONTRACT_VERSION,
+} from "./pragmas.ts";
 import {
   type ProviderConfigDbRow,
   deleteProviderConfig as queryDeleteProviderConfig,
@@ -130,6 +138,7 @@ import {
   selectRunStateRow,
   selectRunSummaryRows,
   selectWakeCandidates,
+  setRunStateNextSeq,
   updateRunStateTitle,
   type WakeCandidateRow,
   writeRunStateProjection,
@@ -1295,6 +1304,166 @@ export class SqliteStore implements IEventStore {
     };
     const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
     return writeTar([{ name: "manifest.json", data: manifestBytes }, ...blobEntries]);
+  }
+
+  /** Merge a `.fragua` bundle (from {@link exportRunBundle}, possibly produced
+   * on another machine) into this store so the run is inspectable here
+   * (`fragua runs status|events|messages`). Fail-closed: rejects an unknown
+   * `bundleVersion`, a `contractVersion` outside this build's compatible range,
+   * or a blob whose bytes don't hash to its manifest sha — nothing is written
+   * if validation fails. Idempotent: re-importing the same bundle is a no-op
+   * (events/messages INSERT-OR-IGNORE, artifacts upsert, run_state inserted
+   * once). Per db-import §4 the import rebinds `cwd → null` and resets local
+   * operator state (`inboxStatus → pending`, `acceptedSha → null`); resume —
+   * which needs the git tree the export does not yet package — is out of scope.
+   *
+   * Returns `imported: false` when the run was already present. */
+  importRunBundle(bytes: Uint8Array): { runId: string; imported: boolean } {
+    const entries = readTar(bytes);
+    const manifestEntry = entries.find((e) => e.name === "manifest.json");
+    if (manifestEntry == null) throw new Error("importRunBundle: manifest.json missing from bundle");
+    const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.data)) as BundleManifest;
+
+    if (manifest.bundleVersion !== BUNDLE_VERSION) {
+      throw new Error(
+        `importRunBundle: unsupported bundleVersion ${manifest.bundleVersion} (this build reads ${BUNDLE_VERSION})`,
+      );
+    }
+    if (
+      manifest.contractVersion < MIN_COMPATIBLE_CONTRACT_VERSION ||
+      manifest.contractVersion > EVENT_CONTRACT_VERSION
+    ) {
+      throw new Error(
+        `importRunBundle: incompatible contractVersion ${manifest.contractVersion} ` +
+          `(this build accepts ${MIN_COMPATIBLE_CONTRACT_VERSION}..${EVENT_CONTRACT_VERSION})`,
+      );
+    }
+
+    // Verify every manifest blob is present and hashes to its claimed sha
+    // BEFORE any write — a tampered or truncated bundle fails closed.
+    const blobByName = new Map<string, Uint8Array>();
+    for (const e of entries) {
+      if (e.name.startsWith("blobs/")) blobByName.set(e.name.slice("blobs/".length), e.data);
+    }
+    const blobs: { sha256: string; size: number; data: Uint8Array }[] = [];
+    for (const b of manifest.blobs) {
+      const data = blobByName.get(b.sha256);
+      if (data == null) {
+        throw new Error(`importRunBundle: blob ${b.sha256} is in the manifest but absent from the bundle`);
+      }
+      const actual = sha256Hex(data);
+      if (actual !== b.sha256) {
+        throw new Error(`importRunBundle: blob ${b.sha256} failed its integrity check (bytes hash to ${actual})`);
+      }
+      blobs.push({ sha256: b.sha256, size: b.size, data });
+    }
+
+    const run = manifest.run;
+    const wf = manifest.workflow;
+    const already = this.getState(run.runId) != null;
+    const now = this.now();
+
+    // Pre-serialize outside the write lock — I1 bans JSON.stringify (and any
+    // allocation-heavy work) inside writeTxn.
+    const routingJson = JSON.stringify(run.routing);
+    const metricsJson = JSON.stringify(run.metrics);
+    const changeStatJson = run.changeStat != null ? JSON.stringify(run.changeStat) : null;
+    const eventRows = manifest.events.map((ev) => ({
+      runId: ev.runId,
+      seq: ev.seq,
+      type: ev.type,
+      writer: ev.writer,
+      payload: JSON.stringify(ev.payload),
+      ts: ev.ts,
+    }));
+    const messageRows = manifest.messages.map((m) => {
+      const content = JSON.stringify(m.content);
+      return {
+        runId: m.runId,
+        ordinal: m.ordinal,
+        content,
+        nodeId: m.nodeId,
+        iteration: m.iteration,
+        contentHash: sha256Hex(content),
+      };
+    });
+
+    // Blob files before the txn (fs I/O): the `blobs` row must never point at
+    // a missing file — same file-then-row ordering as putArtifact.
+    for (const b of blobs) this.blobs.put(b.sha256, b.data);
+
+    this.writeTxn(() => {
+      // FK order: workflow → blobs → run_state → events/messages/artifacts.
+      insertWorkflowIfAbsent(this.db, wf.sha, wf.name, wf.source, wf.ir, wf.irVersion, now);
+      for (const b of blobs) insertBlobIfAbsent(this.db, b.sha256, b.size, now);
+
+      if (!already) {
+        insertRunState(this.db, {
+          runId: run.runId,
+          workflowSha: run.workflowSha,
+          contractVersion: run.contractVersion,
+          routing: routingJson,
+          metrics: metricsJson,
+          priority: run.priority,
+          enqueuedAt: run.enqueuedAt,
+          readyAt: run.readyAt,
+          updatedAt: run.updatedAt,
+          cwd: null, // rebind on this machine — db-import §4
+          projectId: run.projectId,
+          projectName: run.projectName,
+          workflowName: run.workflowName,
+          workflowScope: run.workflowScope,
+          workflowPath: run.workflowPath,
+          scheduleId: run.scheduleId,
+        });
+        writeRunStateProjection(this.db, {
+          runId: run.runId,
+          version: run.version,
+          status: run.status,
+          currentNode: run.currentNode,
+          routingJson,
+          metricsJson,
+          lastAppliedSeq: run.lastAppliedSeq,
+          priority: run.priority,
+          readyAt: run.readyAt,
+          nodeStartedAt: run.nodeStartedAt,
+          dispatchStartedAt: run.dispatchStartedAt,
+          updatedAt: run.updatedAt,
+          baseGitSha: run.baseGitSha,
+          baseGitRef: run.baseGitRef,
+          finalGitSha: run.finalGitSha,
+          finalHeadRef: run.finalHeadRef,
+          diffBaseSha: run.diffBaseSha,
+          changeStatJson,
+          inboxStatus: "pending", // reset local operator state — db-import §4
+          acceptedSha: null,
+        });
+        setRunStateNextSeq(this.db, run.runId, run.nextSeq); // projection write omits next_seq
+        // Title rides its own writer — the auto-titler sets it out-of-band, so
+        // the create + projection helpers omit the column. An imported run is
+        // terminal (the titler never re-runs), so carry it here; pass the
+        // source updatedAt so this doesn't clobber updated_at to import time.
+        if (run.title != null) updateRunStateTitle(this.db, run.runId, run.title, run.updatedAt);
+      }
+
+      for (const ev of eventRows) {
+        insertEventOrIgnore(this.db, ev.runId, ev.seq, ev.type, ev.writer, ev.payload, ev.ts);
+      }
+      for (const m of messageRows) insertMessageOrIgnore(this.db, m);
+      for (const a of manifest.artifacts) {
+        upsertArtifact(this.db, {
+          runId: run.runId,
+          nodeId: a.nodeId,
+          iteration: a.iteration,
+          key: a.key,
+          blobSha: a.blobSha,
+          mime: a.mime,
+          now: a.createdAt,
+        });
+      }
+    });
+
+    return { runId: run.runId, imported: !already };
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {
