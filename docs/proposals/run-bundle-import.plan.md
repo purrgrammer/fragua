@@ -1,5 +1,10 @@
 # Run-bundle import — MVP implementation plan
 
+> **DEAD — superseded by [`bundles.impl.plan.md`](bundles.impl.plan.md)
+> (2026-05-26).** This planned the carry-`run_state` + tree-state model the
+> branch later abandoned. The current plan derives `run_state` on import and
+> drops tree-state/adopt. Kept only as a record of the tangent.
+
 > Implements the **import leg** of [`db-import.md`](db-import.md). The **export leg
 > shipped on `main`** (commit `b6040b71`). Build this on branch
 > `run-bundle-import` (already cut off `main`, so it has the export).
