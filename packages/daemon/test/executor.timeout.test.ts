@@ -65,10 +65,18 @@ describe("classifyAbortCause", () => {
   });
 
   test("real AbortSignal.timeout propagated through AbortSignal.any", async () => {
-    const timeoutSignal = AbortSignal.timeout(5);
+    // Use a timeout generous enough that even a saturated CI runner fires it
+    // well before the poll deadline, without becoming so long that the test
+    // contributes meaningfully to suite wall-time.
+    const timeoutSignal = AbortSignal.timeout(50);
     const ctrl = new AbortController();
     const merged = AbortSignal.any([timeoutSignal, ctrl.signal]);
-    await new Promise((r) => setTimeout(r, 20));
+    // Poll until the merged signal is aborted rather than relying on a fixed
+    // sleep that can race the event loop under heavy PBT load.
+    const deadline = Date.now() + 500;
+    while (!merged.aborted && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     expect(merged.aborted).toBe(true);
     expect(classifyAbortCause(merged, makeAbortError())).toBe("timeout");
   });
