@@ -159,27 +159,20 @@ export function importCommand(opts: ImportOptions): Promise<number> {
   const bytes = readFileSync(src);
   const storePath = resolveStorePath(opts);
   return withStoreClient(opts, async ({ store }) => {
-    let result: { runId: string; imported: boolean; resumeCompatible: boolean; neutralized: boolean };
+    let result: { runId: string; imported: boolean; resumeCompatible: boolean };
     try {
       result = store.importRunBundle(bytes);
     } catch (err) {
       console.error(chalk.red(`import: ${(err as Error).message}`));
       return 1;
     }
-    const { runId, imported, resumeCompatible, neutralized } = result;
+    const { runId, imported, resumeCompatible } = result;
     console.log(
       imported
-        ? chalk.green(`imported run ${runId} → ${storePath}`)
+        ? chalk.green(`imported run ${runId} → ${storePath}`) +
+            chalk.dim("  (status verbatim; parked — won't run here until adopted)")
         : chalk.dim(`run ${runId} already present in ${storePath} (no-op)`),
     );
-    if (neutralized) {
-      console.warn(
-        chalk.yellow(
-          "  note: run was mid-flight at export; landed terminal here (inspect-only — " +
-            "resume-after-import is not yet supported)",
-        ),
-      );
-    }
     if (!resumeCompatible) {
       console.warn(
         chalk.yellow(

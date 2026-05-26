@@ -125,16 +125,56 @@ describe("importRunBundle", () => {
     // The blob survived and reads back through the artifact ref.
     const art = dst.getArtifact({ runId, nodeId: "work", iteration: 0, key: "out" });
     expect(new TextDecoder().decode(art)).toBe("artifact-bytes");
-    // Local operator state was rebound / reset per db-import §4, and the
-    // non-terminal source status (queued) was neutralized to terminal so the
-    // daemon can't claim/resume an inspect-only run.
-    expect(r.neutralized).toBe(true);
-    expect(state?.status).toBe("cancelled");
+    // db-import §4: the source status travels VERBATIM (queued stays queued) —
+    // no neutralization, show the original state. Local operator state is reset;
+    // cwd unbound; the inbox is left empty (not local work to triage).
+    expect(state?.status).toBe("queued");
     expect(state?.cwd).toBeNull();
-    expect(state?.inboxStatus).toBe("pending");
+    expect(state?.inboxStatus).toBeNull();
     expect(state?.acceptedSha).toBeNull();
+    // Inertness is the imported_runs marker (§4.1), NOT the status: the run is
+    // marked imported, and the queued claim skips it (the daemon won't dispatch it).
+    expect(dst.isRunImported(runId)).toBe(true);
+    expect(dst.claimNextRun(16)).toBeNull(); // the lone queued run is imported → not dispatched
     // The credential did NOT ride along — secret-free by construction.
     expect(dst.getProviderCredential("anthropic")).toBeNull();
+    dst.close();
+  });
+
+  // §4.1: an imported run is inert (no dispatch / no capacity / no sweep / no
+  // wake) but still VISIBLE (display counts include it) — the marker gates the
+  // toward-execution paths, not the observational ones.
+  test("an imported run is inert but visible — capacity, sweep, and wake all skip it", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    // Drive the source run to `running` so the bundle carries a non-terminal,
+    // would-otherwise-dispatch status verbatim.
+    expect(src.claimNextRun(16)).toEqual({ runId });
+    expect(src.getState(runId)?.status).toBe("running");
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    expect(dst.importRunBundle(bytes).imported).toBe(true);
+    expect(dst.getState(runId)?.status).toBe("running"); // verbatim
+    expect(dst.isRunImported(runId)).toBe(true);
+
+    // Visible: the display gauge counts the imported running run (§4.1 "counts is fine").
+    expect(dst.runStateCounts().running).toBe(1);
+    // Sweep: NOT requeued — its orphan-less running status is left exactly as-is.
+    expect(dst.startupSweep().requeued).not.toContain(runId);
+    expect(dst.getState(runId)?.status).toBe("running");
+    // Wake: never a wake candidate, in any status set.
+    const woke = dst.getWakeCandidates({
+      statuses: ["running", "paused", "paused_human", "paused_auto", "quarantined"],
+    });
+    expect(woke.some((w) => w.runId === runId)).toBe(false);
+
+    // Capacity: the imported running run does NOT consume a live slot. With a cap
+    // of 1 and a native queued run present, the claim still goes through (it would
+    // be blocked if the imported running run counted against the cap).
+    const native = await seedRun(dst); // reuses the co-travelled workflow (saveWorkflow is idempotent)
+    expect(dst.claimNextRun(1)).toEqual({ runId: native });
     dst.close();
   });
 

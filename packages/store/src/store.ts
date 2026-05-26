@@ -110,14 +110,17 @@ import {
   bumpRunSeq,
   type CwdSummaryRow,
   claimQueuedRun,
+  countDispatchableRunningRuns,
   countQueuedRuns,
   countRunningRuns,
   type GcSnapshotRunRow,
   type GlobalMetricsTotalsRow,
   type GlobalModelBreakdownRow,
   insertRunState,
+  isRunImported,
   type ListRunIdsOpts,
   type ListRunSummaryRowsOpts,
+  markRunImported,
   type ProjectSummaryRow,
   // queryRunCostTotals renamed at import for symmetry with the other
   // `query*` imports below; original symbol used by tests directly.
@@ -187,7 +190,6 @@ import {
   type IntentAppendResult,
   type IntentEvent,
   type IntentType,
-  isTerminal,
   MAX_BLOB_BYTES,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_MESSAGE_CONTENT_BYTES,
@@ -606,7 +608,9 @@ export class SqliteStore implements IEventStore {
     let claimed: string | null = null;
 
     this.writeTxn(() => {
-      if (countRunningRuns(this.db) >= maxInFlight) return;
+      // Capacity counts only runs the daemon could be executing here — imported
+      // runs awaiting adoption never claim, so they must not burn a slot (§4.1).
+      if (countDispatchableRunningRuns(this.db) >= maxInFlight) return;
 
       const row = selectNextQueuedRun(this.db);
       if (row == null) return;
@@ -625,6 +629,13 @@ export class SqliteStore implements IEventStore {
    *  after reconstructing the run's worktree locally (db-import §3.2). */
   setRunCwd(runId: string, cwd: string): void {
     this.writeTxn(() => setRunStateCwd(this.db, runId, cwd));
+  }
+
+  /** True when the run is imported and not yet adopted — inert (db-import §4.1).
+   *  Surfaced so the read-plane can badge imported runs without the marker
+   *  riding on the portable `run_state` row. */
+  isRunImported(runId: string): boolean {
+    return isRunImported(this.db, runId);
   }
 
   setRunTitle(runId: string, title: string): void {
@@ -1336,22 +1347,20 @@ export class SqliteStore implements IEventStore {
    * daemon's resume gate would accept it — an incompatible run parks on resume,
    * never on inspect (db-import §5). Idempotent: re-importing is a no-op
    * (events/messages INSERT-OR-IGNORE, artifacts upsert, run_state inserted
-   * once). Per §4 the import rebinds `cwd → null`, resets local operator state
-   * (`inboxStatus → pending`, `acceptedSha → null`), and **neutralizes a
-   * non-terminal status to `cancelled`** so the local daemon never claims (queued)
-   * or resumes (paused*) an inspect-only run into execution against the wrong
-   * tree (it has no cwd); the events keep the run's true elsewhere-history. Tree
-   * state + resume are a later increment.
+   * once). Per §4 the import rebinds `cwd → null` and resets local operator state
+   * (`inboxStatus → null`, `acceptedSha → null`). The **status travels verbatim**
+   * (an imported `paused_human` shows `paused_human`); inertness is a separate
+   * concern — a row in `imported_runs` (§4.1) holds the run out of dispatch,
+   * concurrency, and the inbox until it is explicitly adopted, rather than lying
+   * about its status. Tree-state rehydrate + adopt/resume are later increments.
    *
-   * Returns `imported: false` when the run was already present,
+   * Returns `imported: false` when the run was already present, and
    * `resumeCompatible: false` when the run's contract is outside this build's
-   * supported range, and `neutralized: true` when a non-terminal status was
-   * landed `cancelled` (terminal, inert — not a failure). */
+   * supported range. */
   importRunBundle(bytes: Uint8Array): {
     runId: string;
     imported: boolean;
     resumeCompatible: boolean;
-    neutralized: boolean;
   } {
     const entries = readTar(bytes);
     const manifestEntry = entries.find((e) => e.name === "manifest.json");
@@ -1408,12 +1417,11 @@ export class SqliteStore implements IEventStore {
     const already = this.getState(run.runId) != null;
     const now = this.now();
 
-    // db-import §4: an imported run is inspect-only here (no tree state, cwd=null),
-    // so a non-terminal source status is neutralized to terminal — the local
-    // daemon must never claim (queued) or resume (paused*) it into execution.
-    // Events keep the run's true elsewhere-history; only the projection is inert.
-    const landedStatus = isTerminal(run.status) ? run.status : "cancelled";
-    const neutralized = !already && landedStatus !== run.status;
+    // db-import §4: the status travels VERBATIM (show the original state). The
+    // local daemon must still never claim/resume an imported run into execution,
+    // but that's enforced by the `imported_runs` marker (§4.1) — written below —
+    // not by mutating the status. So a `paused_human` import shows paused_human,
+    // a `running` import shows running, etc.
 
     // Pre-serialize outside the write lock — I1 bans JSON.stringify (and any
     // allocation-heavy work) inside writeTxn.
@@ -1471,7 +1479,7 @@ export class SqliteStore implements IEventStore {
         writeRunStateProjection(this.db, {
           runId: run.runId,
           version: run.version,
-          status: landedStatus,
+          status: run.status, // verbatim — db-import §4 (inertness via imported_runs)
           currentNode: run.currentNode,
           routingJson,
           metricsJson,
@@ -1487,14 +1495,18 @@ export class SqliteStore implements IEventStore {
           finalHeadRef: run.finalHeadRef,
           diffBaseSha: run.diffBaseSha,
           changeStatJson,
-          inboxStatus: "pending", // reset local operator state — db-import §4
+          inboxStatus: null, // not local work to triage — db-import §4 (out of the inbox)
           acceptedSha: null,
         });
         setRunStateNextSeq(this.db, run.runId, run.nextSeq); // projection write omits next_seq
+        // Local import marker (§4.1): holds the run inert (no dispatch / no
+        // concurrency slot / no inbox) until adopted, while its status stays
+        // verbatim. Pure INSERT — safe in this write txn.
+        markRunImported(this.db, run.runId, now);
         // Title rides its own writer — the auto-titler sets it out-of-band, so
-        // the create + projection helpers omit the column. An imported run is
-        // terminal (the titler never re-runs), so carry it here; pass the
-        // source updatedAt so this doesn't clobber updated_at to import time.
+        // the create + projection helpers omit the column. Carry the source
+        // title here; pass the source updatedAt so this doesn't clobber
+        // updated_at to import time.
         if (run.title != null) updateRunStateTitle(this.db, run.runId, run.title, run.updatedAt);
       }
 
@@ -1515,7 +1527,7 @@ export class SqliteStore implements IEventStore {
       }
     });
 
-    return { runId: run.runId, imported: !already, resumeCompatible, neutralized };
+    return { runId: run.runId, imported: !already, resumeCompatible };
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {
