@@ -111,7 +111,7 @@ steps:
     retry: review_full                 # REJECT ⇒ re-review (capped)
     max-retries: 2
     allowed-tools: [read, grep]
-    max-cost: 0.30
+    max-cost: 0.60
     next: post
     prompt: |
       Evidence-quality gate for the review. Judge on its own merits.
