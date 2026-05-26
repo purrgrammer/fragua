@@ -8,7 +8,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeReadPlane } from "@fragua/core/read-plane";
 import { SqliteStore } from "@fragua/store";
+import { defaultGitExec, gitDiff } from "@fragua/workspace";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 
 const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
@@ -82,10 +84,11 @@ describe("fragua runs export/import", () => {
   });
 
   // End-to-end A+B (db-import §3.2): export carries the run's tree state as a
-  // git-bundle, and `import --rehydrate` reconstructs the worktree at the
-  // snapshot tip in a fresh host repo — the same per-run worktree a native run
-  // would have.
-  test("export + import --rehydrate rebuilds the worktree at the snapshot tip", async () => {
+  // git-bundle; `import --rehydrate` rebuilds the worktree at the snapshot tip
+  // in a fresh host repo AND the imported run is `runs diff`-able — the snapshot
+  // events + base sha travel, and the base↔snapshot range resolves + diffs
+  // against the rehydrated repo.
+  test("export + import --rehydrate → worktree at snapshot tip, and the run is diff-able", async () => {
     const srcDir = freshDir();
     const repo = join(srcDir, "repo");
     mkdirSync(repo, { recursive: true });
@@ -99,22 +102,40 @@ describe("fragua runs export/import", () => {
     writeFileSync(join(repo, "base.txt"), "base\n");
     git(["add", "-A"]);
     git([...ident, "commit", "-q", "-m", "base"]);
+    const baseSha = out(["rev-parse", "HEAD"]);
 
-    // The run's working state → a fragua snapshot ref (what the snapshotter does:
-    // add -A into a sentinel index → write-tree → commit-tree → update-ref).
+    // The run's working state → a fragua snapshot commit, parented on base (what
+    // the snapshotter does: add -A into a sentinel index → write-tree → commit-tree).
     writeFileSync(join(repo, "work.txt"), "work-state\n");
     const idx = join(srcDir, "sentinel-index");
     git(["add", "-A"], { GIT_INDEX_FILE: idx });
     const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
-    const snap = out([...ident, "commit-tree", tree, "-m", "snap"]);
+    const snap = out([...ident, "commit-tree", tree, "-p", baseSha, "-m", "snap"]);
     const runId = "run_rehy";
     git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
 
-    // Source store: the run pinned to the repo.
+    // Source store: run pinned to the repo, baseGitSha stamped (fact.run_started),
+    // one snapshot event (so diff resolves) — what a real run accumulates.
     const srcDb = join(srcDir, "store.db");
     const s = new SqliteStore({ path: srcDb });
     s.saveWorkflow("wf1", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
     s.enqueueRun({ runId, workflowSha: "wf1", cwd: repo });
+    s.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf1", contractVersion: 1, startNode: "work", baseGitSha: baseSha },
+        },
+      ],
+      s.getState(runId)!.version,
+    );
+    s.appendObservabilityEvents(runId, [
+      {
+        type: "snapshot.captured",
+        payload: { runId, eventIdx: 1, nodeId: "work", treeSha: tree, commitSha: snap, parentSnap: "", headSha: null },
+      },
+    ]);
     s.close();
 
     const bundle = join(srcDir, "r.fragua");
@@ -127,13 +148,27 @@ describe("fragua runs export/import", () => {
     new SqliteStore({ path: tgtDb }).close();
     expect(await importCommand({ bundle, dbPath: tgtDb, rehydrate: true, into: host })).toBe(0);
 
-    // The worktree exists at the snapshot tip, carrying the run's working state.
+    // (B) worktree at the snapshot tip carries the run's working state.
     const wt = join(host, ".fragua/worktrees", runId);
-    expect(existsSync(join(wt, "work.txt"))).toBe(true);
+    expect(existsSync(wt)).toBe(true);
     expect(readFileSync(join(wt, "work.txt"), "utf8")).toBe("work-state\n");
-    // cwd rebound to the host repo.
+
+    // (last mile) the imported run is diff-able: snapshots resolve, the base↔snap
+    // range resolves against the rehydrated repo, and the diff shows the change.
     const tgt = new SqliteStore({ path: tgtDb, migrate: false });
-    expect(tgt.getState(runId)?.cwd).toBe(host);
-    tgt.close();
+    try {
+      expect(tgt.getState(runId)?.cwd).toBe(host);
+      const rp = makeReadPlane({ store: tgt });
+      const snaps = rp.snapshots(runId);
+      expect(snaps?.length ?? 0).toBeGreaterThan(0);
+      const range = rp.diffRange(runId, snaps?.[snaps.length - 1]?.eventIdx ?? -1, "base");
+      expect(range.ok).toBe(true);
+      if (range.ok) {
+        const text = await gitDiff(defaultGitExec, range.cwd, range.fromSha, range.toSha);
+        expect(text).toContain("work.txt");
+      }
+    } finally {
+      tgt.close();
+    }
   });
 });
