@@ -35,16 +35,51 @@ export interface BundleManifest {
   blobs: { sha256: string; size: number }[];
 }
 
-/** Type-narrow a parsed manifest before any heavy work: confirm the required
- *  top-level fields are present and well-shaped, so a tampered/malformed bundle
- *  fails with a clear error instead of a deep `TypeError` partway through the
- *  blob-integrity loop or the import txn (bundles.md). */
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+/** A bundle-supplied identifier that flows into a filesystem path
+ *  (`blobs/<sha>`, `workflows/<sha>/…`) or a SQL key MUST be a real sha256 —
+ *  64 lowercase hex chars — before it goes anywhere. The blob-integrity check
+ *  (`sha256Hex(data) === sha`) incidentally enforces this for blobs, but that
+ *  makes integrity load-bearing for path safety; this is the explicit gate
+ *  (bundles.md trust boundary). */
+export function assertSha256(sha: unknown, what: string): asserts sha is string {
+  if (typeof sha !== "string" || !SHA256_RE.test(sha)) {
+    throw new Error(`bundle manifest: ${what} is not a sha256 (expected 64 lowercase hex chars)`);
+  }
+}
+
+function asObject(v: unknown, what: string): Record<string, unknown> {
+  if (v == null || typeof v !== "object" || Array.isArray(v))
+    throw new Error(`bundle manifest: ${what} is not an object`);
+  return v as Record<string, unknown>;
+}
+
+/** Type-narrow a parsed manifest before any heavy work: confirm every field a
+ *  caller dereferences — and every bundle-supplied sha that reaches a path or a
+ *  SQL key — is present and well-shaped, so a tampered/malformed bundle fails
+ *  with a clear error instead of a deep `TypeError` or an opaque SQLite
+ *  constraint partway through the import txn (bundles.md trust boundary). */
 export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
   if (m == null || typeof m !== "object") throw new Error("bundle manifest is not an object");
   const o = m as Record<string, unknown>;
   if (typeof o["bundleVersion"] !== "number") throw new Error("bundle manifest: bundleVersion missing or not a number");
   for (const k of ["runs", "workflows", "blobs"] as const) {
     if (!Array.isArray(o[k])) throw new Error(`bundle manifest: ${k} missing or not an array`);
+  }
+  for (const [i, r] of (o["runs"] as unknown[]).entries()) {
+    const run = asObject(r, `runs[${i}]`);
+    if (typeof run["runId"] !== "string") throw new Error(`bundle manifest: runs[${i}].runId is not a string`);
+    assertSha256(run["workflowSha"], `runs[${i}].workflowSha`);
+  }
+  for (const [i, w] of (o["workflows"] as unknown[]).entries()) {
+    const wf = asObject(w, `workflows[${i}]`);
+    assertSha256(wf["sha"], `workflows[${i}].sha`);
+    if (typeof wf["name"] !== "string") throw new Error(`bundle manifest: workflows[${i}].name is not a string`);
+  }
+  for (const [i, b] of (o["blobs"] as unknown[]).entries()) {
+    const blob = asObject(b, `blobs[${i}]`);
+    assertSha256(blob["sha256"], `blobs[${i}].sha256`);
   }
 }
 

@@ -100,12 +100,15 @@ jobs:
       contents: write # the merge itself — isolated from the LLM-executing job
       pull-requests: write
     steps:
-      # Arm GitHub auto-merge only when fragua's own review came back clean.
-      # Identity filter is the review-body shape (`# Code Review` / `LGTM:`),
-      # not the `github-actions` login alone — that login is shared by every
-      # Actions bot. On any non-clean (or no) verdict, disable a previously
-      # armed auto-merge so a stale clean review from an earlier push can't
-      # carry an arm forward (the cancel-in-progress race).
+      # Arm GitHub auto-merge ONLY on an APPROVED fragua review. The workflow's
+      # `verdict` node classifies by worst severity: approve (clean/LGTM/Low-only)
+      # → APPROVED; medium → COMMENTED; critical/high → CHANGES_REQUESTED. So a
+      # Medium-only review comments and waits for a human — it does NOT merge.
+      # Identity filter is the review-body shape (`# Code Review` / `LGTM:`), not
+      # the `github-actions` login alone — that login is shared by every Actions
+      # bot. On any non-approve (or no) verdict, disable a previously armed
+      # auto-merge so a stale approve from an earlier push can't carry an arm
+      # forward (the cancel-in-progress race).
       - name: Arm/disarm auto-merge on the review verdict
         env:
           GH_TOKEN: ${{ github.token }}
@@ -119,7 +122,7 @@ jobs:
               | select((.body // "") | test("^(# Code Review|LGTM:)"))]
             | last | .state // "NONE"')
           echo "latest fragua review: $state"
-          if [ "$state" = "COMMENTED" ]; then
+          if [ "$state" = "APPROVED" ]; then
             gh pr merge "$PR" --auto --squash \
               || echo "::warning::could not arm --squash auto-merge — needs repo 'Allow auto-merge' + squash-merge enabled + branch protection requiring the ci check"
           else

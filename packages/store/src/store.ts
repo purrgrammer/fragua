@@ -1405,15 +1405,25 @@ export class SqliteStore implements IEventStore {
       blobs.push({ sha256: b.sha256, size: data.length, data });
     }
 
-    // Workflows: read the source + IR bytes each manifest entry declares.
+    // Workflows: read the source + IR bytes each manifest entry declares. The
+    // bundle-supplied `name` is free text → clamp it (it's persisted + rendered).
     const workflows = manifest.workflows.map((w) => {
       const source = byName.get(workflowSourcePath(w.sha));
       const ir = byName.get(workflowIrPath(w.sha));
       if (source == null || ir == null) {
         throw new Error(`importRunBundle: workflow ${w.sha} is in the manifest but its source/ir entry is absent`);
       }
-      return { ...w, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
+      const name = w.name.length > 512 ? w.name.slice(0, 512) : w.name;
+      return { ...w, name, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
     });
+
+    // The format is multi-run by construction; a duplicate id would import the
+    // first run then fail the second on a PK conflict (opaque SQLite error).
+    const seenIds = new Set<string>();
+    for (const r of manifest.runs) {
+      if (seenIds.has(r.runId)) throw new Error(`importRunBundle: duplicate runId ${r.runId} in manifest`);
+      seenIds.add(r.runId);
+    }
 
     // Decode + derive every run OUTSIDE the write txn (I1: no JSON / alloc work
     // inside). Each run's `run_state` is reconstructed from its event log.
@@ -1437,6 +1447,32 @@ export class SqliteStore implements IEventStore {
       }[];
       const artData = byName.get(runArtifactsPath(r.runId));
       const artifacts = (artData == null ? [] : decodeJsonl(artData)) as ArtifactListRow[];
+
+      // Untrusted event rows: gate the provenance `writer` to the known set
+      // (the column has no CHECK, by design — but the import trust boundary
+      // does), and require a string `type`/numeric `seq` so a malformed row
+      // can't reach the events table.
+      for (const ev of events) {
+        if (ev.writer !== "daemon" && ev.writer !== "client") {
+          throw new Error(
+            `importRunBundle: run ${r.runId} event seq ${ev.seq} has invalid writer ${JSON.stringify(ev.writer)}`,
+          );
+        }
+        if (typeof ev.type !== "string" || typeof ev.seq !== "number") {
+          throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq)`);
+        }
+      }
+      // Clear error if the genesis payload is missing required identity — else
+      // it surfaces as an opaque SQLITE_CONSTRAINT_NOTNULL deep in the txn.
+      const genesis = events.find((e) => e.type === "intent.run_enqueued");
+      if (genesis == null)
+        throw new Error(`importRunBundle: run ${r.runId} has no genesis (intent.run_enqueued) event`);
+      const gp = genesis.payload as Record<string, unknown> | null;
+      for (const f of ["workflowSha", "projectId", "projectName", "contractVersion", "routing"] as const) {
+        if (gp == null || gp[f] == null) {
+          throw new Error(`importRunBundle: run ${r.runId} genesis payload is missing ${f}`);
+        }
+      }
 
       const derived = deriveRunState(r.runId, events);
       return {

@@ -21,7 +21,8 @@ function untar(bytes: Uint8Array, dir: string): void {
 /** Enqueue (with cwd, so the import-drops-cwd invariant is observable), then
  *  drive a terminal run: started → snapshot → completed + a message + artifact. */
 async function seedTerminalRun(store: ReturnType<typeof freshStore>): Promise<string> {
-  const sha = await seedWorkflow(store);
+  // A realistic content-hash workflow sha — import shape-gates it as a sha256.
+  const sha = await seedWorkflow(store, "a".repeat(64));
   const runId = newRunId();
   store.enqueueRun({
     runId,
@@ -158,7 +159,7 @@ describe("importRunBundle", () => {
     // A bundle of a NOT-yet-started source run derives to status `queued` with a
     // null cwd. The marker — not the null cwd — is what holds it out of dispatch.
     const src = freshStore();
-    const sha = await seedWorkflow(src);
+    const sha = await seedWorkflow(src, "a".repeat(64));
     const runId = newRunId();
     src.enqueueRun({ runId, workflowSha: sha, cwd: "/somewhere", initialRouting: { input: "x" } });
     const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
@@ -202,6 +203,60 @@ describe("importRunBundle", () => {
     const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(canonicalJson(manifest)) }]);
     const dst = freshStore();
     expect(() => dst.importRunBundle(bytes)).toThrow(/unsupported bundleVersion/);
+    dst.close();
+  });
+
+  test("rejects a workflow id that isn't a sha256 (shape gate on a path/SQL key)", () => {
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 1,
+      schemaVersion: 1,
+      irVersion: 1,
+      runs: [],
+      workflows: [{ sha: "not-a-sha", name: "n", irVersion: 1 }],
+      blobs: [],
+    };
+    const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(canonicalJson(manifest)) }]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/sha256/);
+    dst.close();
+  });
+
+  test("rejects a duplicate runId in the manifest", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    // Duplicate the single run entry in the manifest.
+    const entries = readTar(bytes);
+    const mani = JSON.parse(new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data));
+    mani.runs.push({ ...mani.runs[0] });
+    const tampered = entries.map((e) =>
+      e.name === "manifest.json" ? { name: e.name, data: new TextEncoder().encode(canonicalJson(mani)) } : e,
+    );
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(writeTar(tampered))).toThrow(/duplicate runId/);
+    dst.close();
+  });
+
+  test("rejects an event with an invalid writer", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    const entries = readTar(bytes);
+    const evName = `runs/${runId}/events.jsonl`;
+    const tampered = entries.map((e) => {
+      if (e.name !== evName) return e;
+      const lines = new TextDecoder().decode(e.data).trim().split("\n");
+      const first = JSON.parse(lines[0]!);
+      first.writer = "attacker";
+      lines[0] = JSON.stringify(first);
+      return { name: e.name, data: new TextEncoder().encode(`${lines.join("\n")}\n`) };
+    });
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(writeTar(tampered))).toThrow(/invalid writer/);
     dst.close();
   });
 
