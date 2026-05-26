@@ -1,4 +1,20 @@
-export { BUNDLE_VERSION, type BundleManifest, canonicalJson, readTar, type TarEntry, writeTar } from "./bundle.ts";
+export {
+  BUNDLE_VERSION,
+  type BundleManifest,
+  blobPath,
+  canonicalJson,
+  decodeJsonl,
+  encodeJsonl,
+  MANIFEST_ENTRY,
+  readTar,
+  runArtifactsPath,
+  runEventsPath,
+  runMessagesPath,
+  type TarEntry,
+  workflowIrPath,
+  workflowSourcePath,
+  writeTar,
+} from "./bundle.ts";
 export type { MetricsSnapshot } from "./metrics.ts";
 export { Metrics } from "./metrics.ts";
 export {
@@ -7,7 +23,7 @@ export {
   MIN_COMPATIBLE_CONTRACT_VERSION,
   MIN_COMPATIBLE_SCHEMA_VERSION,
 } from "./pragmas.ts";
-export { applyFact, emptyMetrics, foldFacts, genesisToInitialState } from "./reducers.ts";
+export { applyFact, deriveRunState, emptyMetrics, foldFacts, genesisToInitialState } from "./reducers.ts";
 export { newRunId } from "./run-id.ts";
 export { sha256Hex } from "./sha256.ts";
 export { SqliteStore } from "./store.ts";

@@ -42,9 +42,18 @@ import {
   assertBundleManifest,
   BUNDLE_VERSION,
   type BundleManifest,
+  blobPath,
   canonicalJson,
+  decodeJsonl,
+  encodeJsonl,
+  MANIFEST_ENTRY,
   readTar,
+  runArtifactsPath,
+  runEventsPath,
+  runMessagesPath,
   type TarEntry,
+  workflowIrPath,
+  workflowSourcePath,
   writeTar,
 } from "./bundle.ts";
 import {
@@ -113,7 +122,7 @@ import {
   selectAllProviderCredentials,
   selectProviderCredential,
 } from "./provider-credentials-queries.ts";
-import { applyFact, emptyMetrics } from "./reducers.ts";
+import { applyFact, deriveRunState, emptyMetrics } from "./reducers.ts";
 import { assertSafeRunId } from "./run-id.ts";
 import {
   adoptImportedRun,
@@ -130,7 +139,6 @@ import {
   isRunImported,
   type ListRunIdsOpts,
   type ListRunSummaryRowsOpts,
-  markRunImported,
   type ProjectSummaryRow,
   // queryRunCostTotals renamed at import for symmetry with the other
   // `query*` imports below; original symbol used by tests directly.
@@ -1315,42 +1323,37 @@ export class SqliteStore implements IEventStore {
     this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   }
 
-  /** Export `runId` as a portable `.fragua` bundle (db-import.md): a
-   * manifest-first tar carrying only the portable subset — run_state, events,
-   * messages, artifacts, the content-addressed workflow, and the referenced
-   * blob bytes. Secret + machine-local tables are never read, so the artifact
-   * is credential-free by construction (no scrub). `fraguaVersion` is stamped
-   * for the import-time compatibility check (the store doesn't know the CLI
-   * version).
+  /** Export `runId` as a portable `.fragua` bundle (bundles.md): a
+   * manifest-first tar carrying the run's raw EVENT LOG (genesis + facts),
+   * transcript, artifact rows, the content-addressed workflow, and the
+   * referenced blob bytes. There is NO `run_state` — it is re-derived on import
+   * by replaying the log. Secret + machine-local tables are never read, so the
+   * artifact is credential-free by construction. `fraguaVersion` is stamped for
+   * the import-time compatibility check.
    *
-   * Blob coverage is the run's artifacts; message/event spill blobs are a
-   * follow-up — import validates FK closure, so a gap is a clear error, never
-   * silent corruption. `gitBundle` (optional) carries the run's tree state — a
-   * `git bundle` the CLI builds from the run's refs — in a dedicated `git-bundle`
-   * tar entry for `runs import --rehydrate` (db-import §3.2); the store can't
-   * shell git, so the caller produces the bytes. */
-  exportRunBundle(runId: string, opts: { fraguaVersion: string; gitBundle?: Uint8Array }): Uint8Array {
+   * Single-run today (the `fragua ci --export` producer); the format is
+   * multi-run by construction. Rows are canonically ordered (events by seq,
+   * messages by ordinal, artifacts/blobs by sha) for re-export determinism. */
+  exportRunBundle(runId: string, opts: { fraguaVersion: string }): Uint8Array {
     const run = this.getState(runId);
     if (run == null) throw new Error(`exportRunBundle: run not found: ${runId}`);
     const wf = this.getWorkflow(run.workflowSha);
     if (wf == null) throw new Error(`exportRunBundle: workflow ${run.workflowSha} missing for run ${runId}`);
 
-    // Canonical row order (by artifact scope) so the manifest is
-    // store-independent — listArtifacts orders by created_at, not a total order.
+    const events = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
+    const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
     const artifacts = this.listArtifacts(runId).sort(
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
     );
+
     const shas = [...new Set(artifacts.map((a) => a.blobSha))].sort();
     const blobEntries: TarEntry[] = [];
     const blobManifest: { sha256: string; size: number }[] = [];
     for (const sha of shas) {
       const bytes = this.blobs.get(sha);
-      blobEntries.push({ name: `blobs/${sha}`, data: bytes });
+      blobEntries.push({ name: blobPath(sha), data: bytes });
       blobManifest.push({ sha256: sha, size: bytes.length });
     }
-
-    const gitBundle =
-      opts.gitBundle != null ? { sha256: sha256Hex(opts.gitBundle), size: opts.gitBundle.length } : undefined;
 
     const manifest: BundleManifest = {
       bundleVersion: BUNDLE_VERSION,
@@ -1358,251 +1361,221 @@ export class SqliteStore implements IEventStore {
       contractVersion: EVENT_CONTRACT_VERSION,
       schemaVersion: CURRENT_SCHEMA_VERSION,
       irVersion: wf.irVersion,
-      run,
-      workflow: { sha: wf.sha, name: wf.name, source: wf.source, ir: wf.ir, irVersion: wf.irVersion },
-      // Sort locally so re-export determinism (db-import §6) is provable in this
-      // function and can't silently break if a read-plane query's ordering shifts.
-      events: [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq),
-      messages: [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal),
-      artifacts,
+      runs: [{ runId, workflowSha: run.workflowSha, events: events.length, messages: messages.length }],
+      workflows: [{ sha: wf.sha, name: wf.name, irVersion: wf.irVersion }],
       blobs: blobManifest,
-      ...(gitBundle != null ? { gitBundle } : {}),
     };
-    const manifestBytes = new TextEncoder().encode(canonicalJson(manifest));
-    const extra: TarEntry[] = opts.gitBundle != null ? [{ name: "git-bundle", data: opts.gitBundle }] : [];
-    return writeTar([{ name: "manifest.json", data: manifestBytes }, ...blobEntries, ...extra]);
+
+    return writeTar([
+      { name: MANIFEST_ENTRY, data: new TextEncoder().encode(canonicalJson(manifest)) },
+      {
+        name: runEventsPath(runId),
+        data: encodeJsonl(
+          events.map((e) => ({ seq: e.seq, type: e.type, writer: e.writer, payload: e.payload, ts: e.ts })),
+        ),
+      },
+      {
+        name: runMessagesPath(runId),
+        data: encodeJsonl(
+          messages.map((m) => ({ ordinal: m.ordinal, content: m.content, nodeId: m.nodeId, iteration: m.iteration })),
+        ),
+      },
+      { name: runArtifactsPath(runId), data: encodeJsonl(artifacts) },
+      { name: workflowSourcePath(wf.sha), data: new TextEncoder().encode(wf.source) },
+      { name: workflowIrPath(wf.sha), data: new TextEncoder().encode(wf.ir) },
+      ...blobEntries,
+    ]);
   }
 
-  /** Merge a `.fragua` bundle (from {@link exportRunBundle}, possibly produced
-   * on another machine) into this store so the run is inspectable here
-   * (`fragua runs status|events|messages`). Fail-closed on what blocks a safe
-   * read: an unknown `bundleVersion` (manifest shape this build can't parse) or
-   * a blob whose bytes don't hash to its manifest sha — nothing is written. The
-   * event-contract version does NOT gate import: a too-new/too-old run still
-   * imports so it can be inspected, and `resumeCompatible` reports whether the
-   * daemon's resume gate would accept it — an incompatible run parks on resume,
-   * never on inspect (db-import §5). Idempotent: re-importing is a no-op
-   * (events/messages INSERT-OR-IGNORE, artifacts upsert, run_state inserted
-   * once). Per §4 the import rebinds `cwd → null` and resets local operator state
-   * (`inboxStatus → null`, `acceptedSha → null`). The **status travels verbatim**
-   * (an imported `paused_human` shows `paused_human`); inertness is a separate
-   * concern — a row in `imported_runs` (§4.1) holds the run out of dispatch,
-   * concurrency, and the inbox until it is explicitly adopted, rather than lying
-   * about its status. Tree-state rehydrate + adopt/resume are later increments.
+  /** Merge a `.fragua` bundle into this store so its runs are inspectable here
+   * (`fragua runs status|events|messages`). `run_state` is DERIVED by replaying
+   * each run's event log (`deriveRunState`) — the bundle carries no projection.
+   * An imported run is inert by construction: its derived `cwd` is `null`, so
+   * the daemon can never claim or provision it (no marker needed).
    *
-   * Returns `imported: false` when the run was already present, and
-   * `resumeCompatible: false` when the run's contract is outside this build's
-   * supported range. */
+   * Fail-closed on what blocks a safe read: an unknown `bundleVersion` or any
+   * blob absent / failing its sha256. The event-contract version is reported
+   * (`resumeCompatible`), not gated — a too-new/too-old run still imports for
+   * inspection. Idempotent: a run already present is a no-op. */
   importRunBundle(bytes: Uint8Array): {
-    runId: string;
-    imported: boolean;
+    runs: { runId: string; imported: boolean }[];
     resumeCompatible: boolean;
   } {
     const entries = readTar(bytes);
-    const manifestEntry = entries.find((e) => e.name === "manifest.json");
+    const byName = new Map(entries.map((e) => [e.name, e.data] as const));
+    const manifestEntry = byName.get(MANIFEST_ENTRY);
     if (manifestEntry == null) throw new Error("importRunBundle: manifest.json missing from bundle");
     let manifest: BundleManifest;
     try {
-      manifest = JSON.parse(new TextDecoder().decode(manifestEntry.data)) as BundleManifest;
+      manifest = JSON.parse(new TextDecoder().decode(manifestEntry)) as BundleManifest;
     } catch {
       throw new Error("importRunBundle: manifest.json is not valid JSON");
     }
     assertBundleManifest(manifest);
-
     if (manifest.bundleVersion !== BUNDLE_VERSION) {
       throw new Error(
         `importRunBundle: unsupported bundleVersion ${manifest.bundleVersion} (this build reads ${BUNDLE_VERSION})`,
       );
     }
-    // The event-contract version does NOT gate import — a too-new/too-old run
-    // still imports so it can be inspected; only the daemon's resume gate parks
-    // it (engine_incompatible), and only on resume (db-import §5).
     const resumeCompatible =
       manifest.contractVersion >= MIN_COMPATIBLE_CONTRACT_VERSION && manifest.contractVersion <= EVENT_CONTRACT_VERSION;
 
-    // Verify every manifest blob is present and hashes to its claimed sha
-    // BEFORE any write — a tampered or truncated bundle fails closed.
-    const blobByName = new Map<string, Uint8Array>();
-    for (const e of entries) {
-      if (e.name.startsWith("blobs/")) blobByName.set(e.name.slice("blobs/".length), e.data);
-    }
+    // Verify every manifest blob is present and hashes to its claimed sha BEFORE
+    // any write — a tampered or truncated bundle fails closed.
     const blobs: { sha256: string; size: number; data: Uint8Array }[] = [];
     for (const b of manifest.blobs) {
-      const data = blobByName.get(b.sha256);
-      if (data == null) {
+      const data = byName.get(blobPath(b.sha256));
+      if (data == null)
         throw new Error(`importRunBundle: blob ${b.sha256} is in the manifest but absent from the bundle`);
-      }
       const actual = sha256Hex(data);
       if (actual !== b.sha256) {
         throw new Error(`importRunBundle: blob ${b.sha256} failed its integrity check (bytes hash to ${actual})`);
       }
-      blobs.push({ sha256: b.sha256, size: data.length, data }); // size from the verified bytes, not the manifest's claim
+      blobs.push({ sha256: b.sha256, size: data.length, data });
     }
 
-    // Tree state (the git-bundle) rides a dedicated `git-bundle` entry, not the
-    // content-addressed `blobs/` set (it's run-level, not an artifact). Validate
-    // its integrity here; the CLI reads the same entry for `--rehydrate` (the
-    // store can't shell git, so it doesn't persist or unbundle it).
-    if (manifest.gitBundle != null) {
-      const gb = entries.find((e) => e.name === "git-bundle");
-      if (gb == null) {
-        throw new Error("importRunBundle: manifest declares a gitBundle but the git-bundle entry is absent");
+    // Workflows: read the source + IR bytes each manifest entry declares.
+    const workflows = manifest.workflows.map((w) => {
+      const source = byName.get(workflowSourcePath(w.sha));
+      const ir = byName.get(workflowIrPath(w.sha));
+      if (source == null || ir == null) {
+        throw new Error(`importRunBundle: workflow ${w.sha} is in the manifest but its source/ir entry is absent`);
       }
-      const actual = sha256Hex(gb.data);
-      if (actual !== manifest.gitBundle.sha256) {
-        throw new Error(`importRunBundle: git-bundle failed its integrity check (bytes hash to ${actual})`);
-      }
-    }
+      return { ...w, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
+    });
 
-    const run = manifest.run;
-    const wf = manifest.workflow;
-    // The bundle-supplied id is untrusted and flows into worktree paths + git
-    // refs on rehydrate — validate its shape before any of that.
-    assertSafeRunId(run.runId);
+    // Decode + derive every run OUTSIDE the write txn (I1: no JSON / alloc work
+    // inside). Each run's `run_state` is reconstructed from its event log.
+    const runsToImport = manifest.runs.map((r) => {
+      assertSafeRunId(r.runId);
+      const evData = byName.get(runEventsPath(r.runId));
+      if (evData == null) throw new Error(`importRunBundle: run ${r.runId} has no events.jsonl`);
+      const events = decodeJsonl(evData) as {
+        seq: number;
+        type: string;
+        writer: EventWriter;
+        payload: unknown;
+        ts: number;
+      }[];
+      const msgData = byName.get(runMessagesPath(r.runId));
+      const messages = (msgData == null ? [] : decodeJsonl(msgData)) as {
+        ordinal: number;
+        content: unknown;
+        nodeId: string | null;
+        iteration: number;
+      }[];
+      const artData = byName.get(runArtifactsPath(r.runId));
+      const artifacts = (artData == null ? [] : decodeJsonl(artData)) as ArtifactListRow[];
 
-    // Never write into a run that already exists here: a hand-crafted bundle
-    // reusing a known runId could otherwise splice events at unused seqs or
-    // overwrite artifact pointers. A non-divergent re-import is a clean no-op; a
-    // divergent collision is a hard error (delete the local run to re-import).
-    const existing = this.getState(run.runId);
-    if (existing != null) {
-      if (
-        existing.version !== run.version ||
-        existing.lastAppliedSeq !== run.lastAppliedSeq ||
-        existing.updatedAt !== run.updatedAt
-      ) {
-        throw new Error(
-          `importRunBundle: run ${run.runId} already present with divergent state ` +
-            `(local v${existing.version}/seq${existing.lastAppliedSeq} != bundle v${run.version}/seq${run.lastAppliedSeq}) — refusing to merge`,
-        );
-      }
-      return { runId: run.runId, imported: false, resumeCompatible };
-    }
-    const now = this.now();
-
-    // db-import §4: the status travels VERBATIM (show the original state). The
-    // local daemon must still never claim/resume an imported run into execution,
-    // but that's enforced by the `imported_runs` marker (§4.1) — written below —
-    // not by mutating the status. So a `paused_human` import shows paused_human,
-    // a `running` import shows running, etc.
-
-    // Pre-serialize outside the write lock — I1 bans JSON.stringify (and any
-    // allocation-heavy work) inside writeTxn.
-    const routingJson = JSON.stringify(run.routing);
-    const metricsJson = JSON.stringify(run.metrics);
-    const changeStatJson = run.changeStat != null ? JSON.stringify(run.changeStat) : null;
-    // Every event/message row lands under run.runId — NEVER the per-row runId
-    // from the (untrusted) manifest, else a bundle whose events[].runId names a
-    // different local run would splice forged rows into that run's history.
-    const eventRows = manifest.events.map((ev) => ({
-      runId: run.runId,
-      seq: ev.seq,
-      type: ev.type,
-      writer: ev.writer,
-      payload: JSON.stringify(ev.payload),
-      ts: ev.ts,
-    }));
-    const messageRows = manifest.messages.map((m) => {
-      const content = JSON.stringify(m.content);
+      const derived = deriveRunState(r.runId, events);
       return {
-        runId: run.runId,
-        ordinal: m.ordinal,
-        content,
-        nodeId: m.nodeId,
-        iteration: m.iteration,
-        contentHash: sha256Hex(content),
+        derived,
+        routingJson: JSON.stringify(derived.routing),
+        metricsJson: JSON.stringify(derived.metrics),
+        changeStatJson: derived.changeStat != null ? JSON.stringify(derived.changeStat) : null,
+        eventRows: events.map((ev) => ({
+          seq: ev.seq,
+          type: ev.type,
+          writer: ev.writer,
+          payload: JSON.stringify(ev.payload),
+          ts: ev.ts,
+        })),
+        messageRows: messages.map((m) => {
+          const content = JSON.stringify(m.content);
+          return {
+            ordinal: m.ordinal,
+            content,
+            nodeId: m.nodeId,
+            iteration: m.iteration,
+            contentHash: sha256Hex(content),
+          };
+        }),
+        artifacts,
+        already: this.getState(r.runId) != null,
       };
     });
 
-    // The bundle's nextSeq must lead every event it carries (and sit past
-    // lastAppliedSeq) — else the first bumpRunSeq after adoption would mint a
-    // seq colliding with an imported row. Fail closed at import.
-    const maxEventSeq = eventRows.reduce((m, e) => Math.max(m, e.seq), -1);
-    if (run.nextSeq <= maxEventSeq || run.nextSeq < run.lastAppliedSeq + 1) {
-      throw new Error(
-        `importRunBundle: run ${run.runId} nextSeq ${run.nextSeq} is not ahead of its events ` +
-          `(max event seq ${maxEventSeq}, lastAppliedSeq ${run.lastAppliedSeq})`,
-      );
-    }
+    const now = this.now();
+    const result: { runId: string; imported: boolean }[] = [];
 
-    // Blob files before the txn (fs I/O): the `blobs` row must never point at a
-    // missing file — same file-then-row ordering as putArtifact. Wrapped so that
-    // if the txn throws, any blob we just wrote that no row now references is
-    // reaped at once (a blob shared with another run keeps its row → is left
-    // intact) instead of lingering until gcBlobs.
+    // Blob files before the txn (fs I/O); reap any orphan if the txn throws.
     try {
       for (const b of blobs) this.blobs.put(b.sha256, b.data);
 
       this.writeTxn(() => {
-        // FK order: workflow → blobs → run_state → events/messages/artifacts.
-        insertWorkflowIfAbsent(this.db, wf.sha, wf.name, wf.source, wf.ir, wf.irVersion, now);
+        for (const w of workflows) insertWorkflowIfAbsent(this.db, w.sha, w.name, w.source, w.ir, w.irVersion, now);
         for (const b of blobs) insertBlobIfAbsent(this.db, b.sha256, b.size, now);
 
-        insertRunState(this.db, {
-          runId: run.runId,
-          workflowSha: run.workflowSha,
-          contractVersion: run.contractVersion,
-          routing: routingJson,
-          metrics: metricsJson,
-          priority: run.priority,
-          enqueuedAt: run.enqueuedAt,
-          readyAt: run.readyAt,
-          updatedAt: run.updatedAt,
-          cwd: null, // rebind on this machine — db-import §4
-          projectId: run.projectId,
-          projectName: run.projectName,
-          workflowName: run.workflowName,
-          workflowScope: run.workflowScope,
-          workflowPath: run.workflowPath,
-          scheduleId: run.scheduleId,
-        });
-        writeRunStateProjection(this.db, {
-          runId: run.runId,
-          version: run.version,
-          status: run.status, // verbatim — db-import §4 (inertness via imported_runs)
-          currentNode: run.currentNode,
-          routingJson,
-          metricsJson,
-          lastAppliedSeq: run.lastAppliedSeq,
-          priority: run.priority,
-          readyAt: run.readyAt,
-          nodeStartedAt: run.nodeStartedAt,
-          dispatchStartedAt: run.dispatchStartedAt,
-          updatedAt: run.updatedAt,
-          baseGitSha: run.baseGitSha,
-          baseGitRef: run.baseGitRef,
-          finalGitSha: run.finalGitSha,
-          finalHeadRef: run.finalHeadRef,
-          diffBaseSha: run.diffBaseSha,
-          changeStatJson,
-          inboxStatus: null, // not local work to triage — db-import §4 (out of the inbox)
-          acceptedSha: null,
-        });
-        setRunStateNextSeq(this.db, run.runId, run.nextSeq); // projection write omits next_seq
-        // Local import marker (§4.1): holds the run inert (no dispatch / no
-        // concurrency slot / no inbox) until adopted, while its status stays
-        // verbatim. Pure INSERT — safe in this write txn.
-        markRunImported(this.db, run.runId, now);
-        // Title rides its own writer — the auto-titler sets it out-of-band, so
-        // the create + projection helpers omit the column. Carry the source
-        // title here; pass the source updatedAt so this doesn't clobber
-        // updated_at to import time.
-        if (run.title != null) updateRunStateTitle(this.db, run.runId, run.title, run.updatedAt);
-
-        for (const ev of eventRows) {
-          insertEventOrIgnore(this.db, ev.runId, ev.seq, ev.type, ev.writer, ev.payload, ev.ts);
-        }
-        for (const m of messageRows) insertMessageOrIgnore(this.db, m);
-        for (const a of manifest.artifacts) {
-          upsertArtifact(this.db, {
-            runId: run.runId,
-            nodeId: a.nodeId,
-            iteration: a.iteration,
-            key: a.key,
-            blobSha: a.blobSha,
-            mime: a.mime,
-            now: a.createdAt,
-          });
+        for (const r of runsToImport) {
+          const d = r.derived;
+          if (!r.already) {
+            insertRunState(this.db, {
+              runId: d.runId,
+              workflowSha: d.workflowSha,
+              contractVersion: d.contractVersion,
+              routing: r.routingJson,
+              metrics: r.metricsJson,
+              priority: d.priority,
+              enqueuedAt: d.enqueuedAt,
+              readyAt: d.readyAt,
+              updatedAt: d.updatedAt,
+              cwd: null, // a local binding — absent from the log; keeps the run inert
+              projectId: d.projectId,
+              projectName: d.projectName,
+              workflowName: d.workflowName,
+              workflowScope: d.workflowScope,
+              workflowPath: d.workflowPath,
+              scheduleId: d.scheduleId,
+            });
+            writeRunStateProjection(this.db, {
+              runId: d.runId,
+              version: d.version,
+              status: d.status,
+              currentNode: d.currentNode,
+              routingJson: r.routingJson,
+              metricsJson: r.metricsJson,
+              lastAppliedSeq: d.lastAppliedSeq,
+              priority: d.priority,
+              readyAt: d.readyAt,
+              nodeStartedAt: d.nodeStartedAt,
+              dispatchStartedAt: d.dispatchStartedAt,
+              updatedAt: d.updatedAt,
+              baseGitSha: d.baseGitSha,
+              baseGitRef: d.baseGitRef,
+              finalGitSha: d.finalGitSha,
+              finalHeadRef: d.finalHeadRef,
+              diffBaseSha: d.diffBaseSha,
+              changeStatJson: r.changeStatJson,
+              inboxStatus: d.inboxStatus,
+              acceptedSha: d.acceptedSha,
+            });
+            setRunStateNextSeq(this.db, d.runId, d.nextSeq);
+          }
+          for (const ev of r.eventRows) {
+            insertEventOrIgnore(this.db, d.runId, ev.seq, ev.type, ev.writer, ev.payload, ev.ts);
+          }
+          for (const m of r.messageRows) {
+            insertMessageOrIgnore(this.db, {
+              runId: d.runId,
+              ordinal: m.ordinal,
+              content: m.content,
+              nodeId: m.nodeId,
+              iteration: m.iteration,
+              contentHash: m.contentHash,
+            });
+          }
+          for (const a of r.artifacts) {
+            upsertArtifact(this.db, {
+              runId: d.runId,
+              nodeId: a.nodeId,
+              iteration: a.iteration,
+              key: a.key,
+              blobSha: a.blobSha,
+              mime: a.mime,
+              now: a.createdAt,
+            });
+          }
+          result.push({ runId: d.runId, imported: !r.already });
         }
       });
     } catch (err) {
@@ -1612,7 +1585,7 @@ export class SqliteStore implements IEventStore {
       throw err;
     }
 
-    return { runId: run.runId, imported: true, resumeCompatible };
+    return { runs: result, resumeCompatible };
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {

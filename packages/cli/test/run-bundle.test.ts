@@ -1,16 +1,14 @@
-// `fragua runs export` / `fragua runs import` command layer. The store-level
+// `fragua runs export` / `fragua import` command layer. The store-level
 // round-trip + fail-closed paths live in @fragua/store's bundle.test.ts; here we
 // cover the CLI wiring: export of a real run, import into an EXISTING store
 // (import is a migrate:false store-client — it never creates/migrates), and the
-// error paths (missing run, absent target store).
+// error paths (missing run, absent target store, missing bundle).
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeReadPlane } from "@fragua/core/read-plane";
 import { newRunId, SqliteStore } from "@fragua/store";
-import { defaultGitExec, gitDiff } from "@fragua/workspace";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 
 const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
@@ -40,7 +38,7 @@ afterEach(() => {
   dirs.length = 0;
 });
 
-describe("fragua runs export/import", () => {
+describe("fragua runs export / import", () => {
   test("export → import round-trips a run (+ its blob) into an existing store", async () => {
     const { dbPath: srcDb, runId } = seedStore(freshDir());
     const dstDir = freshDir();
@@ -53,10 +51,11 @@ describe("fragua runs export/import", () => {
     expect(await importCommand({ bundle, dbPath: dstDb })).toBe(0);
 
     // src + dst have separate blobs dirs, so a readable artifact on dst proves
-    // the blob travelled inside the bundle and was rehydrated.
+    // the blob travelled inside the bundle.
     const dst = new SqliteStore({ path: dstDb, migrate: false });
     try {
       expect(dst.getState(runId)).not.toBeNull();
+      expect(dst.getState(runId)?.cwd).toBeNull(); // imported runs are inert
       const art = dst.getArtifact({ runId, nodeId: "work", iteration: 0, key: "out" });
       expect(new TextDecoder().decode(art)).toBe("hello-bytes");
     } finally {
@@ -81,247 +80,5 @@ describe("fragua runs export/import", () => {
   test("import of a missing bundle errors", async () => {
     const { dbPath } = seedStore(freshDir());
     expect(await importCommand({ bundle: join(freshDir(), "nope.fragua"), dbPath })).toBe(1);
-  });
-
-  // End-to-end A+B (db-import §3.2): export carries the run's tree state as a
-  // git-bundle; `import --rehydrate` rebuilds the worktree at the snapshot tip
-  // in a fresh host repo AND the imported run is `runs diff`-able — the snapshot
-  // events + base sha travel, and the base↔snapshot range resolves + diffs
-  // against the rehydrated repo.
-  test("export + import --rehydrate → worktree at snapshot tip, and the run is diff-able", async () => {
-    const srcDir = freshDir();
-    const repo = join(srcDir, "repo");
-    mkdirSync(repo, { recursive: true });
-    const git = (args: string[], env?: Record<string, string>) =>
-      Bun.spawnSync({ cmd: ["git", ...args], cwd: repo, ...(env ? { env: { ...process.env, ...env } } : {}) });
-    const out = (args: string[], env?: Record<string, string>) =>
-      new TextDecoder().decode(git(args, env).stdout).trim();
-    const ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
-
-    git(["init", "-q"]);
-    writeFileSync(join(repo, "base.txt"), "base\n");
-    git(["add", "-A"]);
-    git([...ident, "commit", "-q", "-m", "base"]);
-    const baseSha = out(["rev-parse", "HEAD"]);
-
-    // The run's working state → a fragua snapshot commit, parented on base (what
-    // the snapshotter does: add -A into a sentinel index → write-tree → commit-tree).
-    writeFileSync(join(repo, "work.txt"), "work-state\n");
-    const idx = join(srcDir, "sentinel-index");
-    git(["add", "-A"], { GIT_INDEX_FILE: idx });
-    const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
-    const snap = out([...ident, "commit-tree", tree, "-p", baseSha, "-m", "snap"]);
-    const runId = newRunId();
-    git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
-
-    // Source store: run pinned to the repo, baseGitSha stamped (fact.run_started),
-    // one snapshot event (so diff resolves) — what a real run accumulates.
-    const srcDb = join(srcDir, "store.db");
-    const s = new SqliteStore({ path: srcDb });
-    s.saveWorkflow("wf1", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
-    s.enqueueRun({ runId, workflowSha: "wf1", cwd: repo });
-    s.appendFact(
-      runId,
-      [
-        {
-          type: "fact.run_started",
-          payload: { workflowSha: "wf1", contractVersion: 1, startNode: "work", baseGitSha: baseSha },
-        },
-      ],
-      s.getState(runId)!.version,
-    );
-    s.appendObservabilityEvents(runId, [
-      {
-        type: "snapshot.captured",
-        payload: { runId, eventIdx: 1, nodeId: "work", treeSha: tree, commitSha: snap, parentSnap: "", headSha: null },
-      },
-    ]);
-    s.close();
-
-    const bundle = join(srcDir, "r.fragua");
-    expect(await exportCommand({ runId, to: bundle, dbPath: srcDb })).toBe(0);
-
-    // Import + rehydrate into a fresh host repo (git-init'd by --into).
-    const hostDir = freshDir();
-    const host = join(hostDir, "host");
-    const tgtDb = join(hostDir, "store.db");
-    new SqliteStore({ path: tgtDb }).close();
-    expect(await importCommand({ bundle, dbPath: tgtDb, rehydrate: true, into: host })).toBe(0);
-
-    // (B) worktree at the snapshot tip carries the run's working state.
-    const wt = join(host, ".fragua/worktrees", runId);
-    expect(existsSync(wt)).toBe(true);
-    expect(readFileSync(join(wt, "work.txt"), "utf8")).toBe("work-state\n");
-
-    // (last mile) the imported run is diff-able: snapshots resolve, the base↔snap
-    // range resolves against the rehydrated repo, and the diff shows the change.
-    const tgt = new SqliteStore({ path: tgtDb, migrate: false });
-    try {
-      expect(tgt.getState(runId)?.cwd).toBe(host);
-      const rp = makeReadPlane({ store: tgt });
-      const snaps = rp.snapshots(runId);
-      expect(snaps?.length ?? 0).toBeGreaterThan(0);
-      const range = rp.diffRange(runId, snaps?.[snaps.length - 1]?.eventIdx ?? -1, "base");
-      expect(range.ok).toBe(true);
-      if (range.ok) {
-        const text = await gitDiff(defaultGitExec, range.cwd, range.fromSha, range.toSha);
-        expect(text).toContain("work.txt");
-      }
-    } finally {
-      tgt.close();
-    }
-  });
-
-  // Everything travels: a run whose worktree has MULTIPLE commits (HEAD moved
-  // off base) PLUS uncommitted dirty changes. The snapshot folds committed +
-  // uncommitted into one tree, so rehydrate reproduces the exact paused state,
-  // and the moved-HEAD ref travels too.
-  test("export + rehydrate carries multiple commits + dirty changes", async () => {
-    const srcDir = freshDir();
-    const repo = join(srcDir, "repo");
-    mkdirSync(repo, { recursive: true });
-    const git = (args: string[], env?: Record<string, string>) =>
-      Bun.spawnSync({ cmd: ["git", ...args], cwd: repo, ...(env ? { env: { ...process.env, ...env } } : {}) });
-    const out = (args: string[], env?: Record<string, string>) =>
-      new TextDecoder().decode(git(args, env).stdout).trim();
-    const ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
-
-    git(["init", "-q"]);
-    writeFileSync(join(repo, "base.txt"), "base\n");
-    git(["add", "-A"]);
-    git([...ident, "commit", "-q", "-m", "base"]);
-    const baseSha = out(["rev-parse", "HEAD"]);
-
-    // Two commits on top of base — HEAD moves off base.
-    writeFileSync(join(repo, "c1.txt"), "one\n");
-    git(["add", "-A"]);
-    git([...ident, "commit", "-q", "-m", "c1"]);
-    writeFileSync(join(repo, "c2.txt"), "two\n");
-    git(["add", "-A"]);
-    git([...ident, "commit", "-q", "-m", "c2"]);
-    const headSha = out(["rev-parse", "HEAD"]);
-
-    // Uncommitted dirt: a new file + a modification of a tracked file.
-    writeFileSync(join(repo, "dirty.txt"), "dirty\n");
-    writeFileSync(join(repo, "base.txt"), "base-modified\n");
-
-    // Snapshot folds committed + uncommitted (add -A → write-tree → commit-tree).
-    const idx = join(srcDir, "sentinel-index");
-    git(["add", "-A"], { GIT_INDEX_FILE: idx });
-    const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
-    const snap = out([...ident, "commit-tree", tree, "-m", "snap"]);
-    const runId = newRunId();
-    git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
-    git(["update-ref", `refs/fragua/heads/${runId}`, headSha]); // HEAD moved off base
-
-    const srcDb = join(srcDir, "store.db");
-    const s = new SqliteStore({ path: srcDb });
-    s.saveWorkflow("wf1", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
-    s.enqueueRun({ runId, workflowSha: "wf1", cwd: repo });
-    s.appendFact(
-      runId,
-      [
-        {
-          type: "fact.run_started",
-          payload: { workflowSha: "wf1", contractVersion: 1, startNode: "work", baseGitSha: baseSha },
-        },
-      ],
-      s.getState(runId)!.version,
-    );
-    s.appendObservabilityEvents(runId, [
-      {
-        type: "snapshot.captured",
-        payload: { runId, eventIdx: 1, nodeId: "work", treeSha: tree, commitSha: snap, parentSnap: "", headSha },
-      },
-    ]);
-    s.close();
-
-    const bundle = join(srcDir, "r.fragua");
-    expect(await exportCommand({ runId, to: bundle, dbPath: srcDb })).toBe(0);
-
-    const hostDir = freshDir();
-    const host = join(hostDir, "host");
-    const tgtDb = join(hostDir, "store.db");
-    new SqliteStore({ path: tgtDb }).close();
-    expect(await importCommand({ bundle, dbPath: tgtDb, rehydrate: true, into: host })).toBe(0);
-
-    // Worktree at the snapshot tip = committed files AND the dirt, byte-faithful.
-    const wt = join(host, ".fragua/worktrees", runId);
-    expect(readFileSync(join(wt, "c1.txt"), "utf8")).toBe("one\n"); // committed
-    expect(readFileSync(join(wt, "c2.txt"), "utf8")).toBe("two\n"); // committed
-    expect(readFileSync(join(wt, "dirty.txt"), "utf8")).toBe("dirty\n"); // uncommitted
-    expect(readFileSync(join(wt, "base.txt"), "utf8")).toBe("base-modified\n"); // uncommitted mod
-
-    // The moved-HEAD ref travelled too (resume needs it).
-    const hostHead = new TextDecoder()
-      .decode(Bun.spawnSync({ cmd: ["git", "rev-parse", "--verify", `refs/fragua/heads/${runId}`], cwd: host }).stdout)
-      .trim();
-    expect(hostHead).toBe(headSha);
-
-    // diff base→snapshot shows every change: the two commits + the dirty file + mod.
-    const tgt = new SqliteStore({ path: tgtDb, migrate: false });
-    try {
-      const rp = makeReadPlane({ store: tgt });
-      const snaps = rp.snapshots(runId);
-      const range = rp.diffRange(runId, snaps?.[snaps.length - 1]?.eventIdx ?? -1, "base");
-      expect(range.ok).toBe(true);
-      if (range.ok) {
-        const text = await gitDiff(defaultGitExec, range.cwd, range.fromSha, range.toSha);
-        for (const f of ["c1.txt", "c2.txt", "dirty.txt", "base.txt"]) expect(text).toContain(f);
-      }
-    } finally {
-      tgt.close();
-    }
-  });
-
-  // The host project's `.fragua/config.yaml` bootstrap runs in the rehydrated
-  // worktree — the same wiring (and source) a native run provisions from, so a
-  // rehydrated worktree regenerates the ignored deps a bundle can't carry.
-  test("import --rehydrate runs the host project's bootstrap in the worktree", async () => {
-    const srcDir = freshDir();
-    const repo = join(srcDir, "repo");
-    mkdirSync(repo, { recursive: true });
-    const git = (args: string[], env?: Record<string, string>) =>
-      Bun.spawnSync({ cmd: ["git", ...args], cwd: repo, ...(env ? { env: { ...process.env, ...env } } : {}) });
-    const out = (args: string[], env?: Record<string, string>) =>
-      new TextDecoder().decode(git(args, env).stdout).trim();
-    const ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
-
-    git(["init", "-q"]);
-    writeFileSync(join(repo, "base.txt"), "base\n");
-    git(["add", "-A"]);
-    git([...ident, "commit", "-q", "-m", "base"]);
-    const baseSha = out(["rev-parse", "HEAD"]);
-
-    writeFileSync(join(repo, "work.txt"), "work\n");
-    const idx = join(srcDir, "sentinel-index");
-    git(["add", "-A"], { GIT_INDEX_FILE: idx });
-    const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
-    const snap = out([...ident, "commit-tree", tree, "-p", baseSha, "-m", "snap"]);
-    const runId = newRunId();
-    git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
-
-    const srcDb = join(srcDir, "store.db");
-    const s = new SqliteStore({ path: srcDb });
-    s.saveWorkflow("wf1", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
-    s.enqueueRun({ runId, workflowSha: "wf1", cwd: repo });
-    s.close();
-
-    const bundle = join(srcDir, "r.fragua");
-    expect(await exportCommand({ runId, to: bundle, dbPath: srcDb })).toBe(0);
-
-    // Host carries a project config with a bootstrap command BEFORE import;
-    // `--into` git-inits it, then rehydrate resolves + runs that bootstrap.
-    const hostDir = freshDir();
-    const host = join(hostDir, "host");
-    mkdirSync(join(host, ".fragua"), { recursive: true });
-    writeFileSync(join(host, ".fragua/config.yaml"), 'bootstrap: "printf bootstrapped > BOOTSTRAP_MARKER"\n');
-    const tgtDb = join(hostDir, "store.db");
-    new SqliteStore({ path: tgtDb }).close();
-    expect(await importCommand({ bundle, dbPath: tgtDb, rehydrate: true, into: host })).toBe(0);
-
-    const wt = join(host, ".fragua/worktrees", runId);
-    expect(readFileSync(join(wt, "work.txt"), "utf8")).toBe("work\n"); // run state arrived
-    expect(readFileSync(join(wt, "BOOTSTRAP_MARKER"), "utf8")).toBe("bootstrapped"); // bootstrap ran
   });
 });

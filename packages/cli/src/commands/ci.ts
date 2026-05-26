@@ -26,7 +26,6 @@ import { makeReadPlane } from "@fragua/core/read-plane";
 import { AbortRegistry, type ExecutorOpts, runOne, WorktreeProvisioner, wakePending } from "@fragua/daemon";
 import { type IEventStore, newRunId, SqliteStore, type StoredEvent } from "@fragua/store";
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
-import { buildRunGitBundle, defaultGitExec } from "@fragua/workspace";
 import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
@@ -313,22 +312,8 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       try {
         const dest = resolve(opts.exportPath);
         mkdirSync(dirname(dest), { recursive: true });
-        // Tree state too, so a paused-HITL CI run can be rehydrated + diffed.
-        // dispose() above removed the worktree, but refs/fragua/* survive in the
-        // checkout's main repo, so the bundle still builds (best-effort).
-        const exported = store.getState(runId);
-        const gitBundle =
-          exported?.cwd != null
-            ? await buildRunGitBundle(defaultGitExec, exported.cwd, runId, exported.baseGitSha, exported.diffBaseSha)
-            : null;
-        writeFileSync(
-          dest,
-          store.exportRunBundle(runId, {
-            fraguaVersion: FRAGUA_VERSION,
-            ...(gitBundle != null ? { gitBundle } : {}),
-          }),
-        );
-        console.log(chalk.dim(`bundle → ${dest}`) + (gitBundle != null ? chalk.dim(" (+ tree state)") : ""));
+        writeFileSync(dest, store.exportRunBundle(runId, { fraguaVersion: FRAGUA_VERSION }));
+        console.log(chalk.dim(`bundle → ${dest}`));
       } catch (e) {
         console.error(chalk.yellow(`ci: bundle export failed: ${(e as Error).message}`));
       }

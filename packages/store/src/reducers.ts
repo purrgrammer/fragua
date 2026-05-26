@@ -291,6 +291,32 @@ export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload
   };
 }
 
+/**
+ * Reconstruct a complete `run_state` from a run's raw event log — the import /
+ * `show` derivation. Seeds from the genesis `intent.run_enqueued`, then applies
+ * each fact at its recorded ts (exactly as `appendFact` did), so timestamps and
+ * `activeMs` match the original. Non-fact events (observability) are skipped.
+ * Seq/version bookkeeping is set from the log's seqs (`nextSeq` leads every
+ * carried seq, so a later `bumpRunSeq` can't collide).
+ */
+export function deriveRunState(
+  runId: string,
+  events: readonly { seq: number; type: string; payload: unknown; ts: number }[],
+): RunState {
+  const genesis = events.find((e) => e.type === "intent.run_enqueued");
+  if (genesis == null) throw new Error(`deriveRunState: no genesis (intent.run_enqueued) event for ${runId}`);
+  let state = genesisToInitialState(runId, genesis.payload as RunEnqueuedPayload, genesis.ts);
+  let maxSeq = -1;
+  let lastFactSeq = 0;
+  for (const e of events) {
+    if (e.seq > maxSeq) maxSeq = e.seq;
+    if (e.type === "intent.run_enqueued" || !e.type.startsWith("fact.")) continue;
+    state = applyFact(state, { type: e.type, payload: e.payload } as FactEvent, e.ts);
+    if (e.seq > lastFactSeq) lastFactSeq = e.seq;
+  }
+  return { ...state, version: lastFactSeq, nextSeq: maxSeq + 1, lastAppliedSeq: lastFactSeq };
+}
+
 export function foldFacts(initial: RunState, facts: FactEvent[], now: number): RunState {
   let state = initial;
   for (const f of facts) state = applyFact(state, f, now);

@@ -74,7 +74,7 @@ describe("genesis derivation", () => {
             headRef: null,
             diffBaseSha: "base-sha",
             committed: null,
-            uncommitted: { files: 2, insertions: 10, deletions: 1 },
+            uncommitted: { filesChanged: 2, insertions: 10, deletions: 1 },
           },
         },
       ],

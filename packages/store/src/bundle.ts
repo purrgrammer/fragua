@@ -1,59 +1,62 @@
-// Run bundle format — the portable `.fragua` artifact (docs/proposals/db-import.md).
+// Bundle format — the portable `.fragua` artifact (docs/proposals/bundles.md).
 //
-// A bundle is a tar, MANIFEST-FIRST: `manifest.json` (so a reader can pull it
-// with `tar xO -f x.fragua manifest.json` without unpacking blobs) then
-// `blobs/<sha256>` for each referenced blob. The manifest carries only the
-// PORTABLE subset of a run — never `provider_credentials`/`provider_config` or
-// any machine-local table — so the artifact is secret-free by construction (no
-// scrub step to get wrong). The exporter assembles this; import (merge) reads
-// the same shape.
+// A bundle is its own ENTITY: one or more runs (as raw event logs), the
+// workflows they reference, and the content-addressed blobs they produced.
+// There is NO projection in a bundle — `run_state` is re-derived on import by
+// replaying the event log. The tar is MANIFEST-FIRST (`manifest.json`, a pure
+// index a reader can pull without unpacking), then per-run logs, workflows, and
+// blobs. No `provider_credentials`/`provider_config` ever — secret-free by
+// construction.
+//
+// Layout:
+//   manifest.json                     — index + version stamps only
+//   runs/<id>/events.jsonl            — the run's event log (genesis + facts)
+//   runs/<id>/messages.jsonl          — the transcript (one message per line)
+//   workflows/<sha>/source.yaml       — the workflow as authored
+//   workflows/<sha>/ir.json           — its compiled IR
+//   blobs/<sha256>                    — content-addressed bytes (artifacts)
 
-import type { ArtifactListRow, Message, RunState, StoredEvent } from "./types.ts";
-
-/** Bump when the manifest shape changes incompatibly. */
+/** Bump when the bundle layout changes. Experimental — bumps freely, no
+ *  migration path while the format is unstable (bundles.md). */
 export const BUNDLE_VERSION = 1;
 
 export interface BundleManifest {
   bundleVersion: number;
-  /** Version stamps for the import-time compatibility check (db-import §5). */
+  /** Version stamps for the import-time compatibility check (bundles.md §7). */
   fraguaVersion: string;
   contractVersion: number;
   schemaVersion: number;
   irVersion: number;
-  /** The full run_state projection. No secrets; import rebinds `cwd` and
-   * resets local operator state (`inboxStatus`, `acceptedSha`) per §4. */
-  run: RunState;
-  /** Content-addressed workflow (source + canonical IR); dedup by `sha`. */
-  workflow: { sha: string; name: string; source: string; ir: string; irVersion: number };
-  events: StoredEvent[];
-  messages: Message[];
-  artifacts: ArtifactListRow[];
+  /** Index of the runs carried; counts let `show` summarize cheaply. */
+  runs: { runId: string; workflowSha: string; events: number; messages: number }[];
+  /** Content-addressed workflows the runs reference; bytes live in `workflows/<sha>/`. */
+  workflows: { sha: string; name: string; irVersion: number }[];
   /** Manifest of every blob carried in `blobs/`; bytes must hash to `sha256`. */
   blobs: { sha256: string; size: number }[];
-  /** Optional git-bundle carrying the run's tree state (snapshot + base commits)
-   * in the `git-bundle` tar entry — present when the run had a worktree whose
-   * refs were reachable at export. Enables `runs import --rehydrate` (db-import
-   * §3.2). NOT a content-addressed artifact blob: it's run-level tree state,
-   * validated by hash but not merged into `blobs`. */
-  gitBundle?: { sha256: string; size: number };
 }
 
 /** Type-narrow a parsed manifest before any heavy work: confirm the required
  *  top-level fields are present and well-shaped, so a tampered/malformed bundle
  *  fails with a clear error instead of a deep `TypeError` partway through the
- *  blob-integrity loop or the import txn (db-import). */
+ *  blob-integrity loop or the import txn (bundles.md). */
 export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
   if (m == null || typeof m !== "object") throw new Error("bundle manifest is not an object");
   const o = m as Record<string, unknown>;
   if (typeof o["bundleVersion"] !== "number") throw new Error("bundle manifest: bundleVersion missing or not a number");
-  if (o["run"] == null || typeof o["run"] !== "object")
-    throw new Error("bundle manifest: run missing or not an object");
-  if (o["workflow"] == null || typeof o["workflow"] !== "object")
-    throw new Error("bundle manifest: workflow missing or not an object");
-  for (const k of ["events", "messages", "artifacts", "blobs"] as const) {
+  for (const k of ["runs", "workflows", "blobs"] as const) {
     if (!Array.isArray(o[k])) throw new Error(`bundle manifest: ${k} missing or not an array`);
   }
 }
+
+// ─────────────── Layout paths ───────────────
+
+export const MANIFEST_ENTRY = "manifest.json";
+export const runEventsPath = (runId: string): string => `runs/${runId}/events.jsonl`;
+export const runMessagesPath = (runId: string): string => `runs/${runId}/messages.jsonl`;
+export const runArtifactsPath = (runId: string): string => `runs/${runId}/artifacts.jsonl`;
+export const workflowSourcePath = (sha: string): string => `workflows/${sha}/source.yaml`;
+export const workflowIrPath = (sha: string): string => `workflows/${sha}/ir.json`;
+export const blobPath = (sha256: string): string => `blobs/${sha256}`;
 
 export interface TarEntry {
   /** POSIX path inside the archive (< 100 bytes; we only use short names). */
@@ -64,7 +67,7 @@ export interface TarEntry {
 /**
  * Minimal, DETERMINISTIC ustar writer: fixed mode/uid/gid/mtime, no per-file
  * metadata, entries emitted in caller order — so the same inputs always yield
- * byte-identical output (db-import §6 re-export determinism). No dependency,
+ * byte-identical output (bundles.md §7 re-export determinism). No dependency,
  * no compression (blobs are already content-packed; the consumer/transport
  * compresses if it wants).
  */
@@ -139,9 +142,9 @@ export function readTar(bytes: Uint8Array): TarEntry[] {
 /**
  * Deterministic JSON: object keys sorted recursively, so two semantically-equal
  * values serialize to byte-identical strings regardless of key insertion order
- * (db-import §6 re-export determinism). Arrays keep their order — the exporter
- * orders its rows canonically (events by seq, messages by ordinal, artifacts by
- * scope, blobs by sha) so the whole manifest is store-independent.
+ * (bundles.md §7 re-export determinism). Arrays keep their order — the exporter
+ * orders its rows canonically (events by seq, messages by ordinal, blobs/
+ * workflows by sha) so the whole bundle is store-independent.
  */
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortKeysDeep(value));
@@ -156,4 +159,18 @@ function sortKeysDeep(v: unknown): unknown {
     return out;
   }
   return v;
+}
+
+const TEXT = { enc: new TextEncoder(), dec: new TextDecoder() };
+
+/** Encode rows as newline-delimited canonical JSON (a `.jsonl` tar entry). */
+export function encodeJsonl(rows: readonly unknown[]): Uint8Array {
+  return TEXT.enc.encode(rows.map((r) => canonicalJson(r)).join("\n") + (rows.length > 0 ? "\n" : ""));
+}
+
+/** Parse a `.jsonl` tar entry into rows; tolerates a trailing newline. */
+export function decodeJsonl(data: Uint8Array): unknown[] {
+  const text = TEXT.dec.decode(data).trim();
+  if (text.length === 0) return [];
+  return text.split("\n").map((line) => JSON.parse(line));
 }
