@@ -73,7 +73,8 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     .query<RunningRow, []>(
       `SELECT run_id, version, current_node
          FROM run_state
-        WHERE status = 'running'`,
+        WHERE status = 'running'
+          AND NOT EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id)`,
     )
     .all();
   const requeuePayloads = new Map<string, string>();
@@ -90,8 +91,10 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     for (const [runId, _seqs] of quarantined) {
       const ts = now();
       const stateRow = db
-        .query<{ version: number; status: string; next_seq: number }, [string]>(
-          "SELECT version, status, next_seq FROM run_state WHERE run_id = ?",
+        .query<{ version: number; status: string; next_seq: number; imported: number }, [string]>(
+          `SELECT version, status, next_seq,
+                  EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id) AS imported
+             FROM run_state WHERE run_id = ?`,
         )
         .get(runId);
       if (stateRow == null) continue;
@@ -99,7 +102,10 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
         stateRow.status === "completed" ||
         stateRow.status === "cancelled" ||
         stateRow.status === "halted" ||
-        stateRow.status === "quarantined"
+        stateRow.status === "quarantined" ||
+        // An imported run's orphans were the source's concern — never quarantine
+        // (it would mutate an inert, inspect-only run).
+        stateRow.imported === 1
       ) {
         continue;
       }

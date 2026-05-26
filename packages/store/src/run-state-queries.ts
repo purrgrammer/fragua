@@ -88,16 +88,39 @@ export function selectRunStateRow(db: Database, runId: string): RunStateRow | nu
   return db.query<RunStateRow, [string]>(SELECT_RUN_STATE_FULL_SQL).get(runId) ?? null;
 }
 
+/** Gate fragment: a run is the daemon's to drive toward execution only when it
+ *  is NOT an imported run. Spliced into every toward-execution selection (the
+ *  queued claim, the concurrency-capacity count, the wake candidates, the crash
+ *  sweep) so the inert marker is honoured uniformly. Imported runs executed
+ *  elsewhere — they stay fully inspectable, just invisible to dispatch. */
+export const NOT_IMPORTED_SQL = `NOT EXISTS (
+    SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id
+  )`;
+
 const COUNT_RUN_STATE_RUNNING_SQL = `
   SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'
+`;
+
+// Capacity count for the concurrency cap — EXCLUDES imported runs, so an
+// imported run that derived to `running` (a non-terminal source run) can never
+// burn a live slot. Distinct from the display gauge, which counts them.
+const COUNT_DISPATCHABLE_RUNNING_SQL = `
+  SELECT COUNT(*) AS n FROM run_state WHERE status = 'running' AND ${NOT_IMPORTED_SQL}
 `;
 
 const COUNT_RUN_STATE_QUEUED_SQL = `
   SELECT COUNT(*) AS n FROM run_state WHERE status = 'queued'
 `;
 
+/** Display gauge — counts ALL running runs, imported included. */
 export function countRunningRuns(db: Database): number {
   return db.query<{ n: number }, []>(COUNT_RUN_STATE_RUNNING_SQL).get()?.n ?? 0;
+}
+
+/** Concurrency-capacity count — running runs the daemon could actually execute
+ *  here (imported runs excluded). Feeds `claimNextRun`. */
+export function countDispatchableRunningRuns(db: Database): number {
+  return db.query<{ n: number }, []>(COUNT_DISPATCHABLE_RUNNING_SQL).get()?.n ?? 0;
 }
 
 export function countQueuedRuns(db: Database): number {
@@ -363,7 +386,7 @@ export function selectWakeCandidates(
 ): WakeCandidateRow[] {
   if (opts.statuses.length === 0) return [];
   const placeholders = opts.statuses.map(() => "?").join(",");
-  const where = `${SELECT_WAKE_CANDIDATES_BASE_SQL} (${placeholders})`;
+  const where = `${SELECT_WAKE_CANDIDATES_BASE_SQL} (${placeholders}) AND ${NOT_IMPORTED_SQL}`;
   if (opts.autoResumeBefore != null) {
     const sql = `${where}
        AND CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) IS NOT NULL
@@ -488,7 +511,7 @@ export function updateRunStateTitle(db: Database, runId: string, title: string, 
 
 const SELECT_NEXT_QUEUED_RUN_SQL = `
   SELECT run_id, version FROM run_state
-   WHERE status = 'queued'
+   WHERE status = 'queued' AND ${NOT_IMPORTED_SQL}
    ORDER BY priority DESC, ready_at ASC, run_id ASC
    LIMIT 1
 `;
@@ -531,6 +554,30 @@ export function bumpRunSeq(db: Database, runId: string): number {
   const row = db.query<{ seq: number }, [string]>(BUMP_SEQ_SQL).get(runId);
   if (row == null) throw new Error(`run_state missing for ${runId}`);
   return row.seq;
+}
+
+const SET_RUN_STATE_NEXT_SEQ_SQL = `
+  UPDATE run_state SET next_seq = ? WHERE run_id = ?
+`;
+
+/** Patch `next_seq` directly. Used by bundle import to restore a run's full
+ *  projection: `writeRunStateProjection` deliberately omits `next_seq` (it's a
+ *  creation column, not a projected one), so import sets it from the source so
+ *  any future resume mints the next event at the correct seq. */
+export function setRunStateNextSeq(db: Database, runId: string, nextSeq: number): void {
+  db.query(SET_RUN_STATE_NEXT_SEQ_SQL).run(nextSeq, runId);
+}
+
+const MARK_RUN_IMPORTED_SQL = `
+  INSERT OR IGNORE INTO imported_runs (run_id, imported_at) VALUES (?, ?)
+`;
+
+/** Stamp the local inert marker for a run merged in by `fragua import` — the
+ *  authoritative gate that holds it out of dispatch/concurrency/sweep. Pure
+ *  SQL, safe inside the import write txn; INSERT OR IGNORE so a re-import is a
+ *  no-op. The marker is local-only — never serialized into a bundle. */
+export function markRunImported(db: Database, runId: string, importedAt: number): void {
+  db.query(MARK_RUN_IMPORTED_SQL).run(runId, importedAt);
 }
 
 const WRITE_PROJECTION_SQL = `

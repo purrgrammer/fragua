@@ -13,17 +13,14 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
-import { FRAGUA_VERSION } from "../version.ts";
 
 export interface DbCommandOptions {
-  action: "vacuum" | "gc-blobs" | "backup" | "migrate" | "export";
+  action: "vacuum" | "gc-blobs" | "backup" | "migrate";
   cwd?: string;
   /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. */
   dbPath?: string;
-  /** For `backup` / `export` — destination path. */
+  /** For `backup` — destination path. */
   to?: string;
-  /** For `export` — the run id to bundle. */
-  run?: string;
   /** For `gc-blobs` — max rows to remove in one pass. */
   limit?: number;
   /** For `migrate` — print the plan without applying. */
@@ -51,30 +48,6 @@ export async function dbCommand(opts: DbCommandOptions): Promise<number> {
       const { deleted } = store.gcBlobs(opts.limit ?? 1000);
       store.close();
       console.log(chalk.green(`deleted ${deleted} orphan blob row(s)`));
-      return 0;
-    }
-    case "export": {
-      if (opts.run == null || opts.run.length === 0) {
-        console.error(chalk.red("db export: <run-id> required"));
-        return 1;
-      }
-      if (opts.to == null || opts.to.length === 0) {
-        console.error(chalk.red("db export: --to <path.fragua> required"));
-        return 1;
-      }
-      const dest = resolve(cwd, opts.to);
-      mkdirSync(dirname(dest), { recursive: true });
-      // migrate:false — export reads; never mutate the source store's schema.
-      const store = new SqliteStore({ path: storePath, migrate: false });
-      try {
-        writeFileSync(dest, store.exportRunBundle(opts.run, { fraguaVersion: FRAGUA_VERSION }));
-      } catch (err) {
-        console.error(chalk.red(`db export: ${(err as Error).message}`));
-        return 1;
-      } finally {
-        store.close();
-      }
-      console.log(chalk.green(`exported run ${opts.run} → ${dest}`));
       return 0;
     }
     case "backup": {

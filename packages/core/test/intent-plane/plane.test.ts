@@ -197,11 +197,11 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.params.initialRouting).toEqual({ inputs: { ticket: "BUG-1" } });
   });
 
-  test("explicit runId is honored over the minter; scheduleId passes through", () => {
+  test("runId is always minted — no operator/client-supplied id; scheduleId passes through", () => {
     const { plane } = rig();
-    const r = plane.buildEnqueue({ workflowSha: "sha1", runId: "explicit", scheduleId: "sch-1" });
+    const r = plane.buildEnqueue({ workflowSha: "sha1", scheduleId: "sch-1" });
     if (!r.ok) throw new Error(r.error);
-    expect(r.runId).toBe("explicit");
+    expect(r.runId).toBe("run-1"); // the injected minter, never a supplied id
     expect(r.params.scheduleId).toBe("sch-1");
   });
 

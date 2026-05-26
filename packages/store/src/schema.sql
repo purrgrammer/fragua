@@ -126,6 +126,18 @@ CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
   ON run_state(schedule_id)
   WHERE schedule_id IS NOT NULL;
 
+-- Local inert marker — one row per run merged in by `fragua import`, NEVER
+-- carried in a bundle (the bundle has no run_state; this sidecar is local by
+-- construction). Its presence holds the run permanently OUT of dispatch,
+-- concurrency capacity, and the crash sweep: an imported run executed
+-- elsewhere and is inspect-only here. This is the AUTHORITATIVE inert gate —
+-- the run's derived `cwd` is also null, but dispatch keys on this marker, not
+-- on cwd (a legitimately-enqueued run can have a null cwd).
+CREATE TABLE IF NOT EXISTS imported_runs (
+  run_id      TEXT PRIMARY KEY REFERENCES run_state(run_id) ON DELETE CASCADE,
+  imported_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   seq INTEGER NOT NULL,

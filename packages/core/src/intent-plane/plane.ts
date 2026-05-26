@@ -60,8 +60,6 @@ export interface EnqueueInput {
   workflowName?: string | undefined;
   workflowScope?: "global" | "local" | "path" | "ephemeral" | undefined;
   workflowPath?: string | undefined;
-  /** Explicit run id (rare); otherwise minted via the injected minter. */
-  runId?: string | undefined;
   scheduleId?: string | undefined;
 }
 
@@ -219,7 +217,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       if (input.inputs != null && initialRouting["inputs"] === undefined) {
         initialRouting["inputs"] = input.inputs;
       }
-      const runId = input.runId ?? deps.newRunId();
+      const runId = deps.newRunId(); // always minted — no operator/client-supplied ids
       const params: EnqueueRunParams = {
         runId,
         workflowSha: input.workflowSha,

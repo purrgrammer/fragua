@@ -421,7 +421,6 @@ export function createRoutes(deps: ServerDeps): Hono {
         ? { workflowScope: body.workflowScope }
         : {}),
       ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
-      ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
     });
     if (!enq.ok) {
       return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);

@@ -18,7 +18,7 @@
 
 name: pr_review
 goal: Unattended PR review for CI — review scaled to the change, posted back to the PR with no human gate.
-budget: 2.50
+budget: 3.50 # ≥ scope (0.40) + review_full (2.50) + verify (0.60) so the node caps are reachable
 
 inputs:
   pr:
@@ -34,7 +34,7 @@ steps:
   scope:                               # resolve the PR diff + size the change; routes
     type: llm
     thread: review
-    allowed-tools: [read, grep, find, bash]
+    allowed-tools: [read, grep, find, bash, write]
     max-cost: 0.40
     prompt: |
       Review PR #${{ inputs.pr }}. Its files are already checked out on disk — read them directly. Get the diff with `gh pr diff ${{ inputs.pr }}` and metadata with `gh pr view ${{ inputs.pr }} --json baseRefName,title`.
@@ -54,7 +54,7 @@ steps:
         quick — small, single-concern change (a contained fix or minor change)
         full  — feature-scale, cross-cutting, or risk-bearing (auth / input parsing / data layer / shared contracts / large diff)
 
-      For `skip`, that one line is the whole review — make it a clean `LGTM: <reason>`.
+      For `skip`: write `pr-review.md` (cwd-relative, `write` tool) containing a clean `LGTM: <reason>` as the whole review, and write `pr-verdict.txt` containing exactly `comment`, before you route skip — `post` reads those files.
     routes:
       skip:  {to: post,         label: "Trivial"}
       quick: {to: review_quick, label: "Quick review"}
@@ -63,11 +63,13 @@ steps:
   review_quick:                        # quick tier — one focused pass
     type: llm
     thread: review
-    allowed-tools: [read, grep, bash]
+    allowed-tools: [read, grep, bash, write]
     max-cost: 0.40
     next: post
     prompt: |
-      Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). One focused pass over correctness and any obvious security or clarity issue — it's a small change, keep it to a single pass. Emit verbatim:
+      Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). One focused pass over correctness and any obvious security or clarity issue — it's a small change, keep it to a single pass.
+
+      WRITE the review to `pr-review.md` (cwd-relative) with the `write` tool — do NOT print it to the thread (the `post` step reads the file; re-emitting the body burns the node's cost twice). The file's content, verbatim:
 
       # Code Review
 
@@ -77,13 +79,15 @@ steps:
       ## Next steps
       ≤2 concrete actions, or `No follow-up required.`
 
+      Then write `pr-verdict.txt` (cwd-relative, `write` tool) containing exactly one word — `request-changes` if any finding is critical or high, else `comment`. Emit only `WROTE` (do NOT reprint the review).
+
   review_full:                         # full tier — one deep pass over the implicated lenses
     type: llm
     model: claude-opus-4-7
     effort: high
     thread: review
-    allowed-tools: [read, grep, bash]
-    max-cost: 1.80
+    allowed-tools: [read, grep, bash, write]
+    max-cost: 2.50
     next: verify
     prompt: |
       Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
@@ -93,7 +97,7 @@ steps:
         performance (iff hot paths / data layer / loops / large payloads touched) — complexity surprises (O(n²) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads; confidence ∝ evidence; no cold-path constant-factor nits.
         architecture (iff cross-package coupling / public surface / abstraction boundaries change) — coupling crossing boundaries, leaky abstractions, SRP violations, drift-inviting duplication, misleading naming, public surface exposing internals, half-finished work, scope creep.
 
-      Then emit one ranked review verbatim. Headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
+      Then WRITE one ranked review to `pr-review.md` (cwd-relative, `write` tool) — do NOT print it to the thread; `post` reads the file, and re-emitting the body burns cost twice. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
       ## Scope: one paragraph naming the touched packages/areas and the change type; name which lenses you applied and why.
 
@@ -103,7 +107,9 @@ steps:
 
       If everything is clean, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence).
 
-      End with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
+      End the file with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
+
+      Then write `pr-verdict.txt` (cwd-relative, `write` tool) containing exactly one word — `request-changes` if there is any Critical or High finding, else `comment`. After both files are written, emit only `WROTE`.
 
   verify:                              # full tier — automated evidence-quality gate
     type: llm
@@ -111,22 +117,18 @@ steps:
     retry: review_full                 # REJECT ⇒ re-review (capped)
     max-retries: 2
     allowed-tools: [read, grep]
-    max-cost: 0.30
+    max-cost: 0.60
     next: post
     prompt: |
-      Evidence-quality gate for the review. Judge on its own merits.
+      Read `pr-review.md` (the review under gate). Judge on its own merits.
         1. Every finding's path:line is verifiable — spot-check 2-3 by reading the cited path.
         2. Severity calibration sane (no low for misleading claims, no critical for nitpicks; cross-flagged ≥ high).
         3. Schema followed — Scope present; severities ordered or replaced by All clear; Next steps present.
       All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>`.
 
-  post:                                # auto-post the review — request-changes if blocking, else comment
-    type: llm
-    thread: review
-    allowed-tools: [bash]
-    max-cost: 0.15
+  post:                                # auto-post the review — a PURE TOOL node, no LLM. The body
+    # (pr-review.md) and verdict (pr-verdict.txt) are already files, so posting is one deterministic
+    # gh call: no body re-emit, no LLM cost, no budget spiral. A non-zero gh exit halts the run.
+    type: tool
+    run: gh pr review ${{ inputs.pr }} --$(cat pr-verdict.txt) --body-file pr-review.md
     next: exit
-    prompt: |
-      The review is above in this thread. Post it to PR #${{ inputs.pr }}.
-      Write the review body to a temp file (heredoc). If the review has any Critical or High finding, `gh pr review ${{ inputs.pr }} --request-changes --body-file <tmp>`; otherwise `gh pr review ${{ inputs.pr }} --comment --body-file <tmp>`. Emit `POSTED: PR ${{ inputs.pr }} <changes|comment> <url>`.
-      If the gh call fails, `abort` with `post failed: <one-line reason>`.

@@ -1,3 +1,4 @@
+import type { RunEnqueuedPayload } from "@fragua/types";
 import { AUTO_WAKE_PAUSE_REASONS, type FactEvent, type RunMetrics, type RunState } from "./types.ts";
 
 export function emptyMetrics(): RunMetrics {
@@ -237,6 +238,83 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
   }
   return next;
+}
+
+// contract: no-bump — the genesis payload enrichment is read only by this seed
+// at enqueue/import time, never re-folded at resume (genesis is projection-level,
+// applied once). Cross-version resume fold semantics over facts are unchanged.
+/**
+ * Seed an initial `run_state` from the genesis `intent.run_enqueued` payload —
+ * the run as of enqueue (status `queued`), before any fact. `foldFacts` evolves
+ * it. Together they reconstruct a complete projection from the event log alone.
+ *
+ * `cwd` is `null` by construction (a local binding, never in the log). The
+ * seq/version bookkeeping (`version`, `nextSeq`, `lastAppliedSeq`) is the
+ * write-path's, not the reducer's — the import path sets it from the actual
+ * event seqs. `title` is not in the log (the summariser writes it out-of-band),
+ * so it derives to `null`; the UI falls back to `routing.input`.
+ */
+export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload, ts: number): RunState {
+  return {
+    runId,
+    version: 0,
+    status: "queued",
+    currentNode: null,
+    workflowSha: payload.workflowSha,
+    contractVersion: payload.contractVersion,
+    routing: payload.routing,
+    metrics: emptyMetrics(),
+    nextSeq: 0,
+    lastAppliedSeq: 0,
+    priority: payload.priority ?? 0,
+    enqueuedAt: ts,
+    readyAt: ts,
+    nodeStartedAt: null,
+    dispatchStartedAt: null,
+    updatedAt: ts,
+    title: null,
+    baseGitSha: null,
+    baseGitRef: null,
+    finalGitSha: null,
+    finalHeadRef: null,
+    diffBaseSha: null,
+    changeStat: null,
+    inboxStatus: null,
+    acceptedSha: null,
+    cwd: null,
+    projectId: payload.projectId,
+    projectName: payload.projectName,
+    workflowName: payload.workflowName ?? null,
+    workflowScope: payload.workflowScope ?? null,
+    workflowPath: payload.workflowPath ?? null,
+    scheduleId: payload.scheduleId ?? null,
+  };
+}
+
+/**
+ * Reconstruct a complete `run_state` from a run's raw event log — the import /
+ * `show` derivation. Seeds from the genesis `intent.run_enqueued`, then applies
+ * each fact at its recorded ts (exactly as `appendFact` did), so timestamps and
+ * `activeMs` match the original. Non-fact events (observability) are skipped.
+ * Seq/version bookkeeping is set from the log's seqs (`nextSeq` leads every
+ * carried seq, so a later `bumpRunSeq` can't collide).
+ */
+export function deriveRunState(
+  runId: string,
+  events: readonly { seq: number; type: string; payload: unknown; ts: number }[],
+): RunState {
+  const genesis = events.find((e) => e.type === "intent.run_enqueued");
+  if (genesis == null) throw new Error(`deriveRunState: no genesis (intent.run_enqueued) event for ${runId}`);
+  let state = genesisToInitialState(runId, genesis.payload as RunEnqueuedPayload, genesis.ts);
+  let maxSeq = -1;
+  let lastFactSeq = 0;
+  for (const e of events) {
+    if (e.seq > maxSeq) maxSeq = e.seq;
+    if (e.type === "intent.run_enqueued" || !e.type.startsWith("fact.")) continue;
+    state = applyFact(state, { type: e.type, payload: e.payload } as FactEvent, e.ts);
+    if (e.seq > lastFactSeq) lastFactSeq = e.seq;
+  }
+  return { ...state, version: lastFactSeq, nextSeq: maxSeq + 1, lastAppliedSeq: lastFactSeq };
 }
 
 export function foldFacts(initial: RunState, facts: FactEvent[], now: number): RunState {

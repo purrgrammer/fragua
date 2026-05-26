@@ -219,6 +219,15 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
     }
   });
 
+  // Regression: a run with NO cwd must NOT fall back to the daemon's own dir —
+  // it fails to provision, which the executor turns into a clean halt. Imports
+  // are neutralized to terminal so they never reach here (db-import §4); an
+  // ephemeral run must carry a cwd.
+  test("run with no cwd → provision fails (never the daemon's dir)", async () => {
+    const p = new WorktreeProvisioner();
+    await expect(p.ensure("r-no-cwd", {})).rejects.toThrow(/no cwd/);
+  });
+
   test("git run cwd → WorktreeEnvironment under that cwd", async () => {
     const repo = mkdtempSync(join(tmpdir(), "fragua-prov-git-"));
     try {
@@ -240,31 +249,6 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
       await p.dispose("r-git");
     } finally {
       rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  test("daemon-startup pwd is irrelevant — non-git constructor default doesn't leak into a git run", async () => {
-    // Simulate a daemon launched from a non-git dir (this.repoRoot is non-git)
-    // but serving a run whose cwd IS a git repo. The provisioner must pick
-    // the git path based on the run's cwd, not the constructor default.
-    const nonGitRoot = mkdtempSync(join(tmpdir(), "fragua-prov-bootcwd-"));
-    const gitRoot = mkdtempSync(join(tmpdir(), "fragua-prov-runcwd-"));
-    try {
-      const initRes = Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: gitRoot });
-      if (initRes.exitCode !== 0) throw new Error(`git init failed (exit ${initRes.exitCode})`);
-      Bun.spawnSync({
-        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init", "-q"],
-        cwd: gitRoot,
-      });
-
-      const p = new WorktreeProvisioner({ repoRoot: nonGitRoot });
-      const env = await p.ensure("r-mixed", { cwd: gitRoot });
-      expect(env).toBeInstanceOf(WorktreeEnvironment);
-      expect(env.cwd().startsWith(gitRoot)).toBe(true);
-      await p.dispose("r-mixed");
-    } finally {
-      rmSync(nonGitRoot, { recursive: true, force: true });
-      rmSync(gitRoot, { recursive: true, force: true });
     }
   });
 });

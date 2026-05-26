@@ -23,6 +23,9 @@ export interface StoreClientOpts {
 
 export interface StoreClient {
   store: SqliteStoreType;
+  /** The resolved store path this client opened — so callers reuse it for log
+   *  lines instead of re-resolving (and risking drift). */
+  storePath: string;
   /** Write surface — validate/construct/commit intents. */
   plane: IntentPlane;
   /** Read surface — run summary / detail / step / message projections. */
@@ -43,7 +46,7 @@ export function openStoreClient(opts: StoreClientOpts): StoreClient {
   const store = new SqliteStore({ path, migrate: false });
   const plane = makeIntentPlane({ store, newRunId });
   const readPlane = makeReadPlane({ store });
-  return { store, plane, readPlane, close: () => store.close() };
+  return { store, storePath: path, plane, readPlane, close: () => store.close() };
 }
 
 /** Run `fn` against an open store-client, mapping a failed open to an actionable

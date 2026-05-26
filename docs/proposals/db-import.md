@@ -9,12 +9,36 @@ parent: cli-topology.md
 
 # Run import & bundling
 
-> Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua db
-> export` / `fragua db import`); blocks nothing. Consumes the artifact a
+> **Superseded in part by [`bundles.md`](bundles.md) (2026-05-26).** The bundle
+> *model* moved on: a bundle carries runs as raw event logs, workflows, and
+> blobs — `run_state` is derived on import, not carried — and tree-state /
+> `--rehydrate` / the `imported_runs` marker / `adopt` are dropped (an imported
+> run is inert by construction via `cwd = null`). What still holds here: the
+> identity collision-safety argument (§2), the table-by-table portability audit
+> (§4), and the cross-version resume gate (§5). Read `bundles.md` for the
+> current format and verbs; read this for the deeper portability rationale.
+
+> Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua runs
+> export` / `fragua runs import`); blocks nothing. Consumes the artifact a
 > CI run produces. Interlocks with project identity (shipped — cwd is
 > a local binding, rebound on import), [`workflow-ir.md`](workflow-ir.md)
 > (the workflow link), and [`event-contract-version.md`](event-contract-version.md)
 > (the resume gate across versions).
+
+> **Status (2026-05-26): inspect-with-diffs shipped (A + B).** `fragua runs
+> export`/`import` move a run's DB rows + artifact blobs as a canonical,
+> secret-free `.fragua` bundle; merge is idempotent and fail-closed (§6), and the
+> event-contract version is reported, not gated, at import (§5). The bundle also
+> carries the run's **tree state** as a git-bundle entry, and `import --rehydrate`
+> reconstructs the worktree at the snapshot tip (through the same
+> `WorktreeEnvironment` a native run provisions, so bootstrap runs too) and binds
+> `cwd` so `runs diff` works (§3.2 A + B).
+>
+> An imported run **shows its original status verbatim** and is held inert by a
+> local-only `imported_runs` marker table (§4) — never auto-dispatched, never
+> counted against concurrency, never in the inbox — until **explicitly adopted**.
+> **Deferred (the reach goal, C):** adopt/resume — clear the marker after
+> verifying the rehydrated worktree, and continue execution (§3.2 C).
 
 ## 1. Problem
 
@@ -63,6 +87,8 @@ objects.
 
 ### 3.1 Mitigation — git-bundle-as-blob, exported lazily
 
+> Status: **deferred** — the reach goal, not in the shipped floor.
+
 Do **not** extract trees into per-file/per-tree blobs: that reimplements git's
 content store, loses cross-snapshot delta compression (the Diff scrubber
 captures one snapshot per step/HITL boundary — many near-identical trees that
@@ -87,7 +113,7 @@ base listed as a prerequisite) is an opt-in optimization for the same-repo case
 — and stays tiny because git only ships objects the prerequisite doesn't cover.
 
 **Lazy, not eager.** Export reads the refs from the repo on demand
-(`fragua db export <run>`); CI exports by default at run terminal (its refs
+(`fragua runs export <run>`); CI exports by default at run terminal (its refs
 exist while the runner is alive). `refs/fragua/snapshots/<runId>` live in the
 *main* repo's object store — git worktrees share it — so they survive worktree
 disposal and are not pruned by `git gc` while the ref exists. Retention caveat:
@@ -97,30 +123,74 @@ opt-in for "I might delete the checkout but still want to resume."
 
 ### 3.2 Import — reconstruct, then rebind
 
-`fragua db import <bundle>`:
+> Status: **A + B shipped, C deferred.** Import merges DB rows + artifact blobs,
+> lands the status **verbatim** behind an `imported_runs` marker (§4), and
+> `--rehydrate` reconstructs the worktree + binds `cwd` (A + B below).
+> **C (adopt/resume)** is the remaining reach goal.
 
-1. Merge the DB rows (§2) and write the blob files.
-2. Create a local worktree; `git bundle unbundle` the git-bundle blob into its
-   repo (a clone of the same repo, or a scratch repo for inspect-only).
-3. **Recreate `refs/fragua/{snapshots,heads}/<runId>` locally** so the snapshot
-   readers / Diff scrubber work against the local repo.
-4. **Rewrite the imported `run_state.cwd`** to the new local worktree path — the
-   source cwd is a foreign path. cwd is a local binding (project identity,
-   shipped); identity travels in `project_id`.
+Tree state is git objects in the run's repo, reachable only by SHA from the
+event log; every read/action (`run-actions.ts`, `read-plane/snapshots.ts`)
+shells `git` **in `run_state.cwd`** against `refs/fragua/{snapshots,heads}/<runId>`
++ `baseGitSha` / `diffBaseSha`. So rehydration = make every one of those SHAs +
+refs resolvable in a **local repo at a local `cwd`**.
 
-The `git add -A` snapshot folds committed + uncommitted into one tree, so a
-checkout is byte-identical to the paused working state. The worktree is the
-*tree*, not the whole resume: resuming a HITL run also needs the imported run
-rows (`paused_human`, current node, routing), the transcript, the workflow IR,
-the operator's human input — and the **provider credentialed locally** (secrets
-never travel; inspection needs no credential).
+**Export prerequisite (not yet done).** The export must add a git-bundle blob —
+`git bundle create <tmp> refs/fragua/snapshots/<runId> refs/fragua/heads/<runId>
+<baseGitSha> <diffBaseSha>` — stored as one content-addressed blob in the
+manifest. **Self-contained** (include the base objects) for the foreign-machine
+case; a *thin* bundle (base as a prerequisite) is the opt-in optimisation when
+importing into a clone of the same repo.
+
+**A. Objects + refs + base — diffs resolve:**
+
+1. Merge the DB rows (§2) and write the artifact + git-bundle blob files.
+2. Pick a local host repo: a **clone** of the same repo (base objects already
+   present → thin bundle suffices) or a **scratch** repo (inspect-only on a
+   foreign machine → needs the self-contained bundle).
+3. `git bundle unbundle` into it, then **recreate `refs/fragua/{snapshots,heads}/<runId>`**
+   (`git update-ref`). `baseGitSha` / `diffBaseSha` must resolve, or
+   `git diff <base>…` fails.
+
+**B. Worktree + cwd — a real working tree, `runs diff` works:**
+
+4. Create a local worktree (`git worktree add --detach <localPath>
+   <snapshotTip|finalGitSha>`). `git add -A` folded committed + uncommitted into
+   one tree, so the checkout is byte-identical to the paused working state.
+5. **Rewrite `run_state.cwd` → `<localPath>`** (the source cwd is foreign;
+   identity travelled in `project_id`). Strictly, diffs need only objects+refs,
+   but `run-actions`/readers all key on `cwd`, and `accept`/`discard`/`diff`
+   already refuse `cwd == null` (`no_worktree`) — so a real local path is the
+   uniform answer.
+
+   *A + B alone is a worthwhile increment:* an imported run becomes
+   `runs diff`-able without touching the executor/resume path.
+
+**C. Adopt/resume — the run continues here:**
+
+6. **Adopt: clear the `imported_runs` marker** (set `adopted_at`). The status
+   already travelled verbatim (§4), so there is nothing to "un-neutralize" — the
+   run re-enters dispatch at its true lifecycle state the moment the marker is
+   cleared. Adoption is **gated on rehydration**: a worktree must exist (cwd bound
+   to a local worktree, step 5) or adopt refuses — you cannot resume a
+   non-hydrated run. This is the single explicit act; nothing clears the marker
+   automatically.
+7. **Provisioner reuses the rehydrated worktree.** The precondition already
+   landed: the worktree provisioner no longer falls back to the daemon's own dir
+   — a run provisions at its own cwd or fails (clean halt). `--rehydrate` builds
+   exactly the per-run worktree the provisioner expects (`.fragua/worktrees/<id>`,
+   reuse-aware), so on adopt the executor resumes against it directly.
+8. **Non-tree resume preconditions:** the imported run rows (`paused_human`,
+   current node, routing — travel), the transcript (travels), the workflow IR
+   (travels), the operator's human input for a HITL gate, and the **provider
+   credentialed locally** (secrets never travel; inspection needs none).
 
 ## 4. Table-by-table portability audit
 
 | Table | Class | On import |
 |---|---|---|
 | `workflows` | CONTENT-ADDRESSED | co-travels (FK target of `workflow_sha`); dedup by sha |
-| `run_state` | MIXED | `project_id` + `project_name` are the portable IDENTITY/label — both `NOT NULL`, so the bundle **must** carry them (verbatim); same id ⇒ same project on any machine, and the name labels an imported-only project without a local checkout (project identity); metrics / routing / title / status portable; `cwd` rebound to local worktree; `inbox_status` → `pending` (you haven't acted locally); `accepted_sha` cleared (a local branch tip); `branch` / `base_git_ref` advisory; `schedule_id` dangles harmlessly (already non-FK); `workflow_scope` / `workflow_path` advisory (sha is the link); git-state SHAs portable but inert without the git objects (§3); `schema_version` is the resume gate (§5) |
+| `run_state` | MIXED | `project_id` + `project_name` are the portable IDENTITY/label — both `NOT NULL`, so the bundle **must** carry them (verbatim); same id ⇒ same project on any machine, and the name labels an imported-only project without a local checkout (project identity); metrics / routing / title portable; **`status` travels verbatim** — an imported `paused_human` shows `paused_human`, `running` shows `running` (show the original state); inertness is **not** a status change but a separate local `imported_runs` marker (§4.1); `cwd` → `null` on import, **rebound to a local worktree by `--rehydrate`** (§3.2 B) so `runs diff`/`accept`/`discard` resolve; `inbox_status` → `null` (an imported run is not local work to triage — it enters the inbox only after adopt + a fresh local HITL pause); `accepted_sha` cleared (a local branch tip); `branch` / `base_git_ref` advisory; `schedule_id` dangles harmlessly (already non-FK); `workflow_scope` / `workflow_path` advisory (sha is the link); git-state SHAs portable, resolved against the rehydrated repo (§3); `schema_version` is the resume gate (§5) |
+| `imported_runs` | LOCAL (NEW) | **Not in the bundle** — written by the importer, never serialized. One row per imported run (`run_id`, `imported_at`, `adopted_at`). Its presence-while-unadopted is the inert marker (§4.1). A re-export reads only `run_state` et al., so the marker never travels — the next importer mints its own |
 | `events` | PORTABLE | verbatim; per-run PK; merge by `(run_id, seq)`; some payloads reference blob shas → co-travel |
 | `messages` | PORTABLE | verbatim; large content spills to blobs → co-travel |
 | `blobs` | METADATA + bytes-on-disk | **bytes live under `blobsDir`, not in SQLite** — the bundle must carry the files; content-addressed → dedups |
@@ -131,6 +201,54 @@ never travel; inspection needs no credential).
 | `schedules` | LOCAL | EXCLUDE (a run carries `schedule_id` as informational lineage only) |
 | `provider_credentials` | SECRET | NEVER bundle; resume precondition: provider credentialed locally |
 | `provider_config` | MACHINE-LOCAL | resolve locally; the run's events carry provider/model *identity* (strings) |
+
+### 4.1 The inert marker — `imported_runs` (a table, not a status)
+
+The tension import creates: `status` does two jobs — it *describes* the run **and**
+tells the daemon *whether to act on it*. We want to keep the first (verbatim,
+"show the original state") while suppressing the second (an elsewhere-run must
+not run, eat capacity, or nag here). So the two jobs are split: `status` stays
+description; a separate local table answers "is this run mine to act on yet?"
+
+```sql
+CREATE TABLE IF NOT EXISTS imported_runs (
+  run_id      TEXT PRIMARY KEY REFERENCES run_state(run_id) ON DELETE CASCADE,
+  imported_at INTEGER NOT NULL,
+  adopted_at  INTEGER            -- NULL until adopt/resume (§3.2 C); NULL ⇒ inert
+) STRICT;
+```
+
+**Why a table, not a `run_state` column:** (a) it must **not travel** — `manifest.run`
+is the serialized `run_state` row, so a column would ride along in every
+re-export; a sidecar table is never in the export set. (b) it keeps the already-wide
+hot table lean — the marker is read by a *narrow* set of queries, all via a cheap
+`NOT EXISTS` on a PK. (c) a new `CREATE TABLE IF NOT EXISTS` is picked up by the
+existing `migrate()` for free — no `ALTER TABLE` step.
+
+**The gate predicate** — "imported and not yet adopted":
+`NOT EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id AND i.adopted_at IS NULL)`.
+
+**Gated by the marker (an imported-unadopted run is excluded):**
+
+- **Dispatch** — the toward-execution transitions: the queued claim
+  (`selectNextQueuedRun`), the startup-sweep `running`-requeue (`sweep.ts` — this
+  also covers the server reaper, which calls the same sweep), and the wake passes
+  (`selectWakeCandidates`, so `wakeAutoResume`/`wakeResume`/`wakeHuman` all skip
+  it — a plain `intent.resume` can't wake an imported run; only adopt can).
+- **Concurrency** — the capacity count `claimNextRun` enforces the cap with (a
+  dedicated count that excludes the marker), so an imported `running` run never
+  consumes a live slot.
+- **Inbox** — handled at landing: import writes `inbox_status = null`, so imported
+  runs are out of the worktree inbox by construction (the marker is the backstop).
+
+**NOT gated (imported runs are visible history — by design):** the `runStateCounts`
+display gauge, the analytics per-status rollups, and `listRuns` all include
+imported runs (the read-plane `LEFT JOIN`s `imported_runs` to badge them). Seeing
+an imported run — verbatim status, marked imported — is the whole point.
+
+**Adopt (§3.2 C)** sets `adopted_at` (gated on a rehydrated worktree), at which
+point the run rejoins dispatch at its true status. Until then it is purely
+inspectable.
 
 ## 5. Cross-version resume — the gate that bites
 
@@ -150,8 +268,11 @@ is a hard dependency for *routine* cross-version import: gate resume on an
 semantics change (rare) — decoupled from the DB migration counter, so the window
 almost never rejects. The recoverable-park half (§3.2) is already in place. The
 manifest carries `fragua_version`, `schema_version`, the event-contract version,
-and `ir_version` so import validates compatibility up front (clear error / park,
-never a silent later halt).
+and `ir_version`. **Import does not reject on the event-contract version** — a
+too-new/too-old run still imports so it can be inspected; `runs import` reports
+`resumeCompatible`, and the daemon's resume gate parks an incompatible run
+(`engine_incompatible`) only on resume. The only hard import gates are the bundle
+format and per-blob integrity (§6).
 
 ## 6. Bundle manifest
 
@@ -162,16 +283,23 @@ A portable manifest + a blob payload:
   manifest (sha256 + size) with the bytes alongside, including the git-bundle
   blob (§3.1).
 - **Excludes:** `daemon_lock`, `daemon_events`, `schedules`,
-  `provider_credentials`, and local operator state (`inbox_status`,
-  `accepted_sha`) — reset on import.
-- **Validate on import:** version compatibility; every referenced blob present
-  and its bytes hash to its sha256; FK closure (no dangling blob/workflow ref);
-  `run_id` idempotency.
+  `provider_credentials`, the local `imported_runs` marker (§4.1 — local by
+  construction), and local operator state (`inbox_status`, `accepted_sha`) —
+  reset on import.
+- **Validate on import (shipped):** bundle-format version (hard reject) + every
+  referenced blob present and hashing to its sha256 (hard reject). FK closure (no
+  dangling blob/workflow ref) is **enforced by the import transaction** —
+  `PRAGMA foreign_keys = ON` aborts a dangling insert — rather than pre-validated
+  with a bespoke message. The event-contract version is reported, not gated (§5).
 - **Merge:** content-addressed dedup for `blobs` + `workflows`; upsert the run by
-  `run_id` (skip-if-identical, conflict-detect); `events` by `(run_id, seq)`.
-- **Re-export determinism:** canonical row ordering + stable serialization, so
-  re-exporting an imported run yields an equivalent manifest — bundles compose
-  cleanly across any number of stores.
+  `run_id` (skip-if-identical via INSERT-OR-IGNORE for events/messages, upsert for
+  artifacts, run_state inserted once); `events` by `(run_id, seq)`.
+- **Re-export determinism (shipped):** canonical JSON (recursively sorted keys) +
+  canonical row ordering (events by seq, messages by ordinal, artifacts by scope,
+  blobs by sha), so re-exporting an imported run is byte-identical across any
+  number of stores. (Live-run local state — `inbox_status` / `cwd` /
+  `accepted_sha` — is reset on import per §4, so a re-export equals other
+  re-exports, not the original live export.)
 
 ## 7. Schema changes to make BEFORE stone
 
@@ -205,9 +333,16 @@ freeze.
 - **Depends on:** the snapshot git objects existing at export (lazy, repo-alive);
   [`event-contract-version.md`](event-contract-version.md) for cross-version
   resume.
-- **Wins independently:** yes — additive `fragua db export` / `import`.
-- **MVP:** export the DB-row subset + blobs + a self-contained git-bundle blob;
-  import = merge rows + write blobs + unbundle + recreate local refs + rebind
-  cwd; PK-conflict skip-if-identical; refuse (or park) a too-new pin with a clear
-  message. The version-axis split is its own proposal; resume-after-import is the
-  MVP's reach goal, inspect-after-import the floor.
+- **Wins independently:** yes — additive `fragua runs export` / `import`.
+- **Shipped (A + B — inspect-with-diffs):** export the DB-row subset + artifact
+  blobs **+ the run's tree state as a git-bundle entry** as a canonical,
+  secret-free bundle; import = merge rows + write blobs into an **existing** store
+  (migrate:false — never creates/migrates), PK-conflict skip-if-identical,
+  fail-closed on format/integrity; the event-contract version is flagged
+  (`resumeCompatible`), not rejected; **status lands verbatim behind the
+  `imported_runs` marker** (§4.1); `import --rehydrate` rebuilds the worktree at
+  the snapshot tip (via `WorktreeEnvironment`, bootstrap included) and binds `cwd`
+  so `runs diff` resolves.
+- **Deferred (the reach goal — C, adopt/resume):** clear the marker after
+  verifying the rehydrated worktree, and continue execution. The version-axis
+  split is its own proposal.

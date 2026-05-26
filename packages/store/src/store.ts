@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ChangeStat, InboxStatus } from "@fragua/types";
+import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -38,7 +38,24 @@ import {
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
-import { BUNDLE_VERSION, type BundleManifest, type TarEntry, writeTar } from "./bundle.ts";
+import {
+  assertBundleManifest,
+  BUNDLE_VERSION,
+  type BundleManifest,
+  blobPath,
+  canonicalJson,
+  decodeJsonl,
+  encodeJsonl,
+  MANIFEST_ENTRY,
+  readTar,
+  runArtifactsPath,
+  runEventsPath,
+  runMessagesPath,
+  type TarEntry,
+  workflowIrPath,
+  workflowSourcePath,
+  writeTar,
+} from "./bundle.ts";
 import {
   deleteDaemonLock,
   deleteServerEndpoint,
@@ -54,6 +71,7 @@ import {
 } from "./daemon-queries.ts";
 import {
   insertEventDaemon,
+  insertEventOrIgnore,
   insertEventRunEnqueued,
   insertEventWeb,
   type OrphanSideEffectRow,
@@ -73,6 +91,7 @@ import {
 } from "./event-queries.ts";
 import {
   insertMessage,
+  insertMessageOrIgnore,
   selectActiveThreads,
   selectMaxMessageOrdinal,
   selectMessageByDedup,
@@ -81,7 +100,13 @@ import {
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
-import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION, EVENT_CONTRACT_VERSION } from "./pragmas.ts";
+import {
+  applyCreationPragmas,
+  applyPragmas,
+  CURRENT_SCHEMA_VERSION,
+  EVENT_CONTRACT_VERSION,
+  MIN_COMPATIBLE_CONTRACT_VERSION,
+} from "./pragmas.ts";
 import {
   type ProviderConfigDbRow,
   deleteProviderConfig as queryDeleteProviderConfig,
@@ -97,11 +122,13 @@ import {
   selectAllProviderCredentials,
   selectProviderCredential,
 } from "./provider-credentials-queries.ts";
-import { applyFact, emptyMetrics } from "./reducers.ts";
+import { applyFact, deriveRunState, emptyMetrics } from "./reducers.ts";
+import { assertSafeRunId } from "./run-id.ts";
 import {
   bumpRunSeq,
   type CwdSummaryRow,
   claimQueuedRun,
+  countDispatchableRunningRuns,
   countQueuedRuns,
   countRunningRuns,
   type GcSnapshotRunRow,
@@ -110,6 +137,7 @@ import {
   insertRunState,
   type ListRunIdsOpts,
   type ListRunSummaryRowsOpts,
+  markRunImported,
   type ProjectSummaryRow,
   // queryRunCostTotals renamed at import for symmetry with the other
   // `query*` imports below; original symbol used by tests directly.
@@ -130,6 +158,7 @@ import {
   selectRunStateRow,
   selectRunSummaryRows,
   selectWakeCandidates,
+  setRunStateNextSeq,
   updateRunStateTitle,
   type WakeCandidateRow,
   writeRunStateProjection,
@@ -544,6 +573,25 @@ export class SqliteStore implements IEventStore {
     const projectName =
       params.projectName ?? (cwd != null ? (cwd.split("/").filter(Boolean).at(-1) ?? "local") : "local");
 
+    // The genesis event carries the whole enqueue identity so `run_state` is
+    // derivable by replaying the log (no `cwd` — its absence keeps an imported
+    // run inert). Bounded by the 4 KiB event cap, tighter than routing's 8 KiB.
+    const genesisPayload = JSON.stringify({
+      workflowSha: params.workflowSha,
+      priority: params.priority ?? 0,
+      projectId,
+      projectName,
+      routing: params.initialRouting ?? {},
+      contractVersion: EVENT_CONTRACT_VERSION,
+      ...(params.workflowName != null ? { workflowName: params.workflowName } : {}),
+      ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
+      ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
+      ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
+    } satisfies RunEnqueuedPayload);
+    if (genesisPayload.length >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(genesisPayload.length, MAX_EVENT_PAYLOAD_BYTES);
+    }
+
     this.writeTxn(() => {
       if (!workflowExists(this.db, params.workflowSha)) {
         throw new Error(`unknown workflow sha ${params.workflowSha}`);
@@ -569,16 +617,7 @@ export class SqliteStore implements IEventStore {
       });
 
       const seq = bumpRunSeq(this.db, params.runId);
-      insertEventRunEnqueued(
-        this.db,
-        params.runId,
-        seq,
-        JSON.stringify({
-          workflowSha: params.workflowSha,
-          priority: params.priority ?? 0,
-        }),
-        now,
-      );
+      insertEventRunEnqueued(this.db, params.runId, seq, genesisPayload, now);
     });
   }
 
@@ -595,7 +634,9 @@ export class SqliteStore implements IEventStore {
     let claimed: string | null = null;
 
     this.writeTxn(() => {
-      if (countRunningRuns(this.db) >= maxInFlight) return;
+      // Capacity counts only runs the daemon could be executing here — imported
+      // runs (inert by marker) never claim, so they must not burn a slot.
+      if (countDispatchableRunningRuns(this.db) >= maxInFlight) return;
 
       const row = selectNextQueuedRun(this.db);
       if (row == null) return;
@@ -1253,30 +1294,35 @@ export class SqliteStore implements IEventStore {
     this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   }
 
-  /** Export `runId` as a portable `.fragua` bundle (db-import.md): a
-   * manifest-first tar carrying only the portable subset — run_state, events,
-   * messages, artifacts, the content-addressed workflow, and the referenced
-   * blob bytes. Secret + machine-local tables are never read, so the artifact
-   * is credential-free by construction (no scrub). `fraguaVersion` is stamped
-   * for the import-time compatibility check (the store doesn't know the CLI
-   * version).
+  /** Export `runId` as a portable `.fragua` bundle (bundles.md): a
+   * manifest-first tar carrying the run's raw EVENT LOG (genesis + facts),
+   * transcript, artifact rows, the content-addressed workflow, and the
+   * referenced blob bytes. There is NO `run_state` — it is re-derived on import
+   * by replaying the log. Secret + machine-local tables are never read, so the
+   * artifact is credential-free by construction. `fraguaVersion` is stamped for
+   * the import-time compatibility check.
    *
-   * Blob coverage is the run's artifacts; message/event spill blobs are a
-   * follow-up — import validates FK closure, so a gap is a clear error, never
-   * silent corruption. */
+   * Single-run today (the `fragua ci --export` producer); the format is
+   * multi-run by construction. Rows are canonically ordered (events by seq,
+   * messages by ordinal, artifacts/blobs by sha) for re-export determinism. */
   exportRunBundle(runId: string, opts: { fraguaVersion: string }): Uint8Array {
     const run = this.getState(runId);
     if (run == null) throw new Error(`exportRunBundle: run not found: ${runId}`);
     const wf = this.getWorkflow(run.workflowSha);
     if (wf == null) throw new Error(`exportRunBundle: workflow ${run.workflowSha} missing for run ${runId}`);
 
-    const artifacts = this.listArtifacts(runId);
+    const events = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
+    const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
+    const artifacts = this.listArtifacts(runId).sort(
+      (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
+    );
+
     const shas = [...new Set(artifacts.map((a) => a.blobSha))].sort();
     const blobEntries: TarEntry[] = [];
     const blobManifest: { sha256: string; size: number }[] = [];
     for (const sha of shas) {
       const bytes = this.blobs.get(sha);
-      blobEntries.push({ name: `blobs/${sha}`, data: bytes });
+      blobEntries.push({ name: blobPath(sha), data: bytes });
       blobManifest.push({ sha256: sha, size: bytes.length });
     }
 
@@ -1286,15 +1332,236 @@ export class SqliteStore implements IEventStore {
       contractVersion: EVENT_CONTRACT_VERSION,
       schemaVersion: CURRENT_SCHEMA_VERSION,
       irVersion: wf.irVersion,
-      run,
-      workflow: { sha: wf.sha, name: wf.name, source: wf.source, ir: wf.ir, irVersion: wf.irVersion },
-      events: this.getEvents(runId),
-      messages: this.getMessages(runId),
-      artifacts,
+      runs: [{ runId, workflowSha: run.workflowSha, events: events.length, messages: messages.length }],
+      workflows: [{ sha: wf.sha, name: wf.name, irVersion: wf.irVersion }],
       blobs: blobManifest,
     };
-    const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
-    return writeTar([{ name: "manifest.json", data: manifestBytes }, ...blobEntries]);
+
+    return writeTar([
+      { name: MANIFEST_ENTRY, data: new TextEncoder().encode(canonicalJson(manifest)) },
+      {
+        name: runEventsPath(runId),
+        data: encodeJsonl(
+          events.map((e) => ({ seq: e.seq, type: e.type, writer: e.writer, payload: e.payload, ts: e.ts })),
+        ),
+      },
+      {
+        name: runMessagesPath(runId),
+        data: encodeJsonl(
+          messages.map((m) => ({ ordinal: m.ordinal, content: m.content, nodeId: m.nodeId, iteration: m.iteration })),
+        ),
+      },
+      { name: runArtifactsPath(runId), data: encodeJsonl(artifacts) },
+      { name: workflowSourcePath(wf.sha), data: new TextEncoder().encode(wf.source) },
+      { name: workflowIrPath(wf.sha), data: new TextEncoder().encode(wf.ir) },
+      ...blobEntries,
+    ]);
+  }
+
+  /** Merge a `.fragua` bundle into this store so its runs are inspectable here
+   * (`fragua runs status|events|messages`). `run_state` is DERIVED by replaying
+   * each run's event log (`deriveRunState`) — the bundle carries no projection.
+   * An imported run is inert by construction: its derived `cwd` is `null`, so
+   * the daemon can never claim or provision it (no marker needed).
+   *
+   * Fail-closed on what blocks a safe read: an unknown `bundleVersion` or any
+   * blob absent / failing its sha256. The event-contract version is reported
+   * (`resumeCompatible`), not gated — a too-new/too-old run still imports for
+   * inspection. Idempotent: a run already present is a no-op. */
+  importRunBundle(bytes: Uint8Array): {
+    runs: { runId: string; imported: boolean }[];
+    resumeCompatible: boolean;
+  } {
+    const entries = readTar(bytes);
+    const byName = new Map(entries.map((e) => [e.name, e.data] as const));
+    const manifestEntry = byName.get(MANIFEST_ENTRY);
+    if (manifestEntry == null) throw new Error("importRunBundle: manifest.json missing from bundle");
+    let manifest: BundleManifest;
+    try {
+      manifest = JSON.parse(new TextDecoder().decode(manifestEntry)) as BundleManifest;
+    } catch {
+      throw new Error("importRunBundle: manifest.json is not valid JSON");
+    }
+    assertBundleManifest(manifest);
+    if (manifest.bundleVersion !== BUNDLE_VERSION) {
+      throw new Error(
+        `importRunBundle: unsupported bundleVersion ${manifest.bundleVersion} (this build reads ${BUNDLE_VERSION})`,
+      );
+    }
+    const resumeCompatible =
+      manifest.contractVersion >= MIN_COMPATIBLE_CONTRACT_VERSION && manifest.contractVersion <= EVENT_CONTRACT_VERSION;
+
+    // Verify every manifest blob is present and hashes to its claimed sha BEFORE
+    // any write — a tampered or truncated bundle fails closed.
+    const blobs: { sha256: string; size: number; data: Uint8Array }[] = [];
+    for (const b of manifest.blobs) {
+      const data = byName.get(blobPath(b.sha256));
+      if (data == null)
+        throw new Error(`importRunBundle: blob ${b.sha256} is in the manifest but absent from the bundle`);
+      const actual = sha256Hex(data);
+      if (actual !== b.sha256) {
+        throw new Error(`importRunBundle: blob ${b.sha256} failed its integrity check (bytes hash to ${actual})`);
+      }
+      blobs.push({ sha256: b.sha256, size: data.length, data });
+    }
+
+    // Workflows: read the source + IR bytes each manifest entry declares.
+    const workflows = manifest.workflows.map((w) => {
+      const source = byName.get(workflowSourcePath(w.sha));
+      const ir = byName.get(workflowIrPath(w.sha));
+      if (source == null || ir == null) {
+        throw new Error(`importRunBundle: workflow ${w.sha} is in the manifest but its source/ir entry is absent`);
+      }
+      return { ...w, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
+    });
+
+    // Decode + derive every run OUTSIDE the write txn (I1: no JSON / alloc work
+    // inside). Each run's `run_state` is reconstructed from its event log.
+    const runsToImport = manifest.runs.map((r) => {
+      assertSafeRunId(r.runId);
+      const evData = byName.get(runEventsPath(r.runId));
+      if (evData == null) throw new Error(`importRunBundle: run ${r.runId} has no events.jsonl`);
+      const events = decodeJsonl(evData) as {
+        seq: number;
+        type: string;
+        writer: EventWriter;
+        payload: unknown;
+        ts: number;
+      }[];
+      const msgData = byName.get(runMessagesPath(r.runId));
+      const messages = (msgData == null ? [] : decodeJsonl(msgData)) as {
+        ordinal: number;
+        content: unknown;
+        nodeId: string | null;
+        iteration: number;
+      }[];
+      const artData = byName.get(runArtifactsPath(r.runId));
+      const artifacts = (artData == null ? [] : decodeJsonl(artData)) as ArtifactListRow[];
+
+      const derived = deriveRunState(r.runId, events);
+      return {
+        derived,
+        routingJson: JSON.stringify(derived.routing),
+        metricsJson: JSON.stringify(derived.metrics),
+        changeStatJson: derived.changeStat != null ? JSON.stringify(derived.changeStat) : null,
+        eventRows: events.map((ev) => ({
+          seq: ev.seq,
+          type: ev.type,
+          writer: ev.writer,
+          payload: JSON.stringify(ev.payload),
+          ts: ev.ts,
+        })),
+        messageRows: messages.map((m) => {
+          const content = JSON.stringify(m.content);
+          return {
+            ordinal: m.ordinal,
+            content,
+            nodeId: m.nodeId,
+            iteration: m.iteration,
+            contentHash: sha256Hex(content),
+          };
+        }),
+        artifacts,
+        already: this.getState(r.runId) != null,
+      };
+    });
+
+    const now = this.now();
+    const result: { runId: string; imported: boolean }[] = [];
+
+    // Blob files before the txn (fs I/O); reap any orphan if the txn throws.
+    try {
+      for (const b of blobs) this.blobs.put(b.sha256, b.data);
+
+      this.writeTxn(() => {
+        for (const w of workflows) insertWorkflowIfAbsent(this.db, w.sha, w.name, w.source, w.ir, w.irVersion, now);
+        for (const b of blobs) insertBlobIfAbsent(this.db, b.sha256, b.size, now);
+
+        for (const r of runsToImport) {
+          const d = r.derived;
+          if (!r.already) {
+            insertRunState(this.db, {
+              runId: d.runId,
+              workflowSha: d.workflowSha,
+              contractVersion: d.contractVersion,
+              routing: r.routingJson,
+              metrics: r.metricsJson,
+              priority: d.priority,
+              enqueuedAt: d.enqueuedAt,
+              readyAt: d.readyAt,
+              updatedAt: d.updatedAt,
+              cwd: null, // a local binding — absent from the log; keeps the run inert
+              projectId: d.projectId,
+              projectName: d.projectName,
+              workflowName: d.workflowName,
+              workflowScope: d.workflowScope,
+              workflowPath: d.workflowPath,
+              scheduleId: d.scheduleId,
+            });
+            writeRunStateProjection(this.db, {
+              runId: d.runId,
+              version: d.version,
+              status: d.status,
+              currentNode: d.currentNode,
+              routingJson: r.routingJson,
+              metricsJson: r.metricsJson,
+              lastAppliedSeq: d.lastAppliedSeq,
+              priority: d.priority,
+              readyAt: d.readyAt,
+              nodeStartedAt: d.nodeStartedAt,
+              dispatchStartedAt: d.dispatchStartedAt,
+              updatedAt: d.updatedAt,
+              baseGitSha: d.baseGitSha,
+              baseGitRef: d.baseGitRef,
+              finalGitSha: d.finalGitSha,
+              finalHeadRef: d.finalHeadRef,
+              diffBaseSha: d.diffBaseSha,
+              changeStatJson: r.changeStatJson,
+              inboxStatus: d.inboxStatus,
+              acceptedSha: d.acceptedSha,
+            });
+            setRunStateNextSeq(this.db, d.runId, d.nextSeq);
+            // Authoritative inert marker: holds the run out of dispatch /
+            // concurrency / sweep regardless of its derived status (a
+            // non-terminal source run derives to queued/running but must never
+            // execute here). Only on first import; re-import is a no-op.
+            markRunImported(this.db, d.runId, now);
+          }
+          for (const ev of r.eventRows) {
+            insertEventOrIgnore(this.db, d.runId, ev.seq, ev.type, ev.writer, ev.payload, ev.ts);
+          }
+          for (const m of r.messageRows) {
+            insertMessageOrIgnore(this.db, {
+              runId: d.runId,
+              ordinal: m.ordinal,
+              content: m.content,
+              nodeId: m.nodeId,
+              iteration: m.iteration,
+              contentHash: m.contentHash,
+            });
+          }
+          for (const a of r.artifacts) {
+            upsertArtifact(this.db, {
+              runId: d.runId,
+              nodeId: a.nodeId,
+              iteration: a.iteration,
+              key: a.key,
+              blobSha: a.blobSha,
+              mime: a.mime,
+              now: a.createdAt,
+            });
+          }
+          result.push({ runId: d.runId, imported: !r.already });
+        }
+      });
+    } catch (err) {
+      for (const b of blobs) {
+        if (!blobRowExists(this.db, b.sha256)) this.blobs.delete(b.sha256);
+      }
+      throw err;
+    }
+
+    return { runs: result, resumeCompatible };
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {

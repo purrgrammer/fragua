@@ -77,19 +77,37 @@ Notes:
 
 ## Keeping the run as an artifact
 
-`fragua ci --db <path>` pins the run's SQLite store, which is a portable,
-replayable record of the whole run — useful for post-mortems on a failed job:
+`fragua ci --export <path>` writes a portable, **secret-free** `.fragua` bundle —
+the run's event log, transcript, artifacts, and workflow in one file (`run_state`
+is re-derived on import, not carried). It is the safe thing to upload (the bundle
+never carries provider credentials/config) and the thing `fragua import`
+consumes. The bundle is written even when the run halts or pauses, so pair the
+upload with `if: always()`:
 
 ```yaml
-- run: fragua ci my-workflow --db "$RUNNER_TEMP/run.db"
+- run: fragua ci my-workflow --export "$RUNNER_TEMP/run.fragua"
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 - uses: actions/upload-artifact@v4
   if: always()
   with:
-    name: fragua-run-db
-    path: ${{ runner.temp }}/run.db
+    name: fragua-run
+    path: ${{ runner.temp }}/run.fragua
 ```
+
+Download it and inspect locally — `show` summarizes it without a store; `import`
+merges the run in (inspect-only — the imported run is inert):
+
+```sh
+fragua show run.fragua                     # validate + summarize (no store needed)
+fragua import run.fragua                   # merge into a store (default: the harness store)
+fragua runs status|events|messages <run-id>
+```
+
+> `--export` is available from the fragua release that ships it. On an older
+> binary, `--db <path>` pins the raw store — but it can carry secrets (a tool that
+> echoes a key into an event lands in it), so scrub the provider tables and verify
+> before uploading. Prefer the bundle: it's secret-free by construction.
 
 ## Supported runners
 
