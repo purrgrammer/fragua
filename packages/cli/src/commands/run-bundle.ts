@@ -16,8 +16,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { readTar } from "@fragua/store";
-import { buildRunGitBundle, defaultGitExec, type GitExec, rehydrateRunWorktree } from "@fragua/workspace";
+import {
+  buildRunGitBundle,
+  defaultGitExec,
+  type GitExec,
+  type RehydrateOptions,
+  rehydrateRunWorktree,
+} from "@fragua/workspace";
 import chalk from "chalk";
+import { resolveProjectBootstrap } from "../config.ts";
 import { resolveStorePath, withStoreClient } from "../store-client.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 
@@ -116,13 +123,25 @@ async function rehydrateRun(
     }
   }
 
-  const res = await rehydrateRunWorktree(git, host, runId, gb.data);
+  // Bootstrap the rehydrated worktree from the host project's config — the same
+  // source (and logic) the daemon uses for a native run, so regenerated deps
+  // match a fresh provision.
+  const { bootstrap, bootstrapTimeoutMs } = await resolveProjectBootstrap(host);
+  const rehydrateOpts: RehydrateOptions = {};
+  if (bootstrap !== undefined) rehydrateOpts.bootstrap = bootstrap;
+  if (bootstrapTimeoutMs !== undefined) rehydrateOpts.bootstrapTimeoutMs = bootstrapTimeoutMs;
+
+  const res = await rehydrateRunWorktree(git, host, runId, gb.data, rehydrateOpts);
   if (!res.ok) {
     console.error(chalk.red(`rehydrate: ${res.error}`));
     return 1;
   }
   store.setRunCwd(runId, host);
-  console.log(chalk.green(`  rehydrated → ${res.worktree}`) + chalk.dim(`  (runs diff ${runId} now works)`));
+  console.log(
+    chalk.green(`  rehydrated → ${res.worktree}`) +
+      (res.bootstrapRan ? chalk.dim("  (bootstrap ran)") : "") +
+      chalk.dim(`  (runs diff ${runId} now works)`),
+  );
   return 0;
 }
 

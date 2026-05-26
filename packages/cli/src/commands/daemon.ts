@@ -13,7 +13,7 @@ import { parseDurationMs } from "@fragua/core";
 import { AutoTitler, type Provisioner, startDaemon, WorktreeProvisioner } from "@fragua/daemon";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
-import { loadConfig, loadProjectConfig, resolveTimeouts } from "../config.ts";
+import { loadConfig, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
 import { buildExecutorDeps, type SummariserInfo } from "../executor-deps.ts";
 
 /**
@@ -171,24 +171,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // daemon's own startup cwd is irrelevant — a run from a git-repo
   // cwd gets a worktree, a run from a non-git cwd gets a
   // LocalEnvironment rooted at *its own* cwd.
-  const resolveRunBootstrap = async (runCwd: string) => {
-    const projectCfg = await loadProjectConfig(runCwd);
-    const projectTimeouts = resolveTimeouts(projectCfg);
-    const out: { bootstrap?: string; bootstrapTimeoutMs?: number } = {};
-    if (projectCfg.bootstrap !== undefined) out.bootstrap = projectCfg.bootstrap;
-    // Top-level `bootstrap-timeout-ms` wins over nested `timeouts.bootstrap`
-    // when both are set — the top-level form is more explicit about
-    // pairing with `bootstrap`. `timeouts.bootstrap` stays supported and
-    // accepts duration strings ("10m").
-    if (projectCfg["bootstrap-timeout-ms"] !== undefined) {
-      out.bootstrapTimeoutMs = projectCfg["bootstrap-timeout-ms"];
-    } else if (projectTimeouts.bootstrap !== undefined) {
-      out.bootstrapTimeoutMs = projectTimeouts.bootstrap;
-    }
-    return out;
-  };
   const provisioner: Provisioner = new WorktreeProvisioner({
-    resolveRunBootstrap,
+    resolveRunBootstrap: resolveProjectBootstrap,
     ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
   });
   const provisionerLabel =

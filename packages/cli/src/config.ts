@@ -296,3 +296,28 @@ export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): 
 export async function loadProjectConfig(cwd: string): Promise<FraguaConfig> {
   return loadConfigFile(cwd);
 }
+
+/** Per-worktree bootstrap pair resolved from `<cwd>/.fragua/config.yaml`. */
+export interface ResolvedBootstrap {
+  bootstrap?: string;
+  bootstrapTimeoutMs?: number;
+}
+
+/** Resolve a project's per-worktree bootstrap command + timeout from its
+ * project-scoped config (no global cascade — bootstrap is per-project tooling).
+ * Top-level `bootstrap-timeout-ms` wins over nested `timeouts.bootstrap` when
+ * both are set. Shared by the daemon provisioner (`resolveRunBootstrap`) and
+ * `runs import --rehydrate`, so a rehydrated worktree bootstraps from the same
+ * source — and the same logic — a native run does. */
+export async function resolveProjectBootstrap(cwd: string): Promise<ResolvedBootstrap> {
+  const projectCfg = await loadProjectConfig(cwd);
+  const projectTimeouts = resolveTimeouts(projectCfg);
+  const out: ResolvedBootstrap = {};
+  if (projectCfg.bootstrap !== undefined) out.bootstrap = projectCfg.bootstrap;
+  if (projectCfg["bootstrap-timeout-ms"] !== undefined) {
+    out.bootstrapTimeoutMs = projectCfg["bootstrap-timeout-ms"];
+  } else if (projectTimeouts.bootstrap !== undefined) {
+    out.bootstrapTimeoutMs = projectTimeouts.bootstrap;
+  }
+  return out;
+}

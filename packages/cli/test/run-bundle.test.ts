@@ -273,4 +273,55 @@ describe("fragua runs export/import", () => {
       tgt.close();
     }
   });
+
+  // The host project's `.fragua/config.yaml` bootstrap runs in the rehydrated
+  // worktree — the same wiring (and source) a native run provisions from, so a
+  // rehydrated worktree regenerates the ignored deps a bundle can't carry.
+  test("import --rehydrate runs the host project's bootstrap in the worktree", async () => {
+    const srcDir = freshDir();
+    const repo = join(srcDir, "repo");
+    mkdirSync(repo, { recursive: true });
+    const git = (args: string[], env?: Record<string, string>) =>
+      Bun.spawnSync({ cmd: ["git", ...args], cwd: repo, ...(env ? { env: { ...process.env, ...env } } : {}) });
+    const out = (args: string[], env?: Record<string, string>) =>
+      new TextDecoder().decode(git(args, env).stdout).trim();
+    const ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
+
+    git(["init", "-q"]);
+    writeFileSync(join(repo, "base.txt"), "base\n");
+    git(["add", "-A"]);
+    git([...ident, "commit", "-q", "-m", "base"]);
+    const baseSha = out(["rev-parse", "HEAD"]);
+
+    writeFileSync(join(repo, "work.txt"), "work\n");
+    const idx = join(srcDir, "sentinel-index");
+    git(["add", "-A"], { GIT_INDEX_FILE: idx });
+    const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
+    const snap = out([...ident, "commit-tree", tree, "-p", baseSha, "-m", "snap"]);
+    const runId = "run_boot";
+    git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
+
+    const srcDb = join(srcDir, "store.db");
+    const s = new SqliteStore({ path: srcDb });
+    s.saveWorkflow("wf1", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
+    s.enqueueRun({ runId, workflowSha: "wf1", cwd: repo });
+    s.close();
+
+    const bundle = join(srcDir, "r.fragua");
+    expect(await exportCommand({ runId, to: bundle, dbPath: srcDb })).toBe(0);
+
+    // Host carries a project config with a bootstrap command BEFORE import;
+    // `--into` git-inits it, then rehydrate resolves + runs that bootstrap.
+    const hostDir = freshDir();
+    const host = join(hostDir, "host");
+    mkdirSync(join(host, ".fragua"), { recursive: true });
+    writeFileSync(join(host, ".fragua/config.yaml"), 'bootstrap: "printf bootstrapped > BOOTSTRAP_MARKER"\n');
+    const tgtDb = join(hostDir, "store.db");
+    new SqliteStore({ path: tgtDb }).close();
+    expect(await importCommand({ bundle, dbPath: tgtDb, rehydrate: true, into: host })).toBe(0);
+
+    const wt = join(host, ".fragua/worktrees", runId);
+    expect(readFileSync(join(wt, "work.txt"), "utf8")).toBe("work\n"); // run state arrived
+    expect(readFileSync(join(wt, "BOOTSTRAP_MARKER"), "utf8")).toBe("bootstrapped"); // bootstrap ran
+  });
 });
