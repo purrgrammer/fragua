@@ -20,6 +20,7 @@ import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
   acceptCommand,
+  adoptCommand,
   artifactCommand,
   artifactsCommand,
   budgetCommand,
@@ -539,7 +540,8 @@ function runsHelp(): void {
 
   Portability (move a run between stores as a secret-free .fragua bundle):
     export    <id> --to <file.fragua>                       write the run as a portable bundle
-    import    <file.fragua> [--db <target>] [--rehydrate]   merge a bundle in; --rehydrate rebuilds its worktree (runs diff)`);
+    import    <file.fragua> [--db <target>] [--rehydrate]   merge a bundle in; --rehydrate rebuilds its worktree (runs diff)
+    adopt     <id>                                          un-park an imported run so it can resume (needs --rehydrate first)`);
 }
 
 cli
@@ -657,6 +659,9 @@ cli
             }),
           );
           break;
+        case "adopt":
+          process.exit(await adoptCommand({ runId: needId(), ...discovery(options) }));
+          break;
         case "cancel":
           process.exit(
             await cancelCommand({
@@ -693,13 +698,18 @@ cli
           );
           break;
         case "budget": {
-          const nl = pickStr(options, "newLimit");
+          // cac coerces a numeric `--new-limit` to a number, so a string-only
+          // read silently dropped `--new-limit 0.5`. Accept number OR string,
+          // mirroring how `--limit` / `--iteration` are handled.
+          const nlRaw = options["newLimit"];
+          const nl =
+            typeof nlRaw === "number" ? nlRaw : typeof nlRaw === "string" ? Number.parseFloat(nlRaw) : undefined;
           process.exit(
             await budgetCommand({
               runId: needId(),
               ...(pickStr(options, "scope") !== undefined ? { scope: pickStr(options, "scope")! } : {}),
               ...(pickStr(options, "metric") !== undefined ? { metric: pickStr(options, "metric")! } : {}),
-              ...(nl !== undefined ? { newLimit: Number.parseFloat(nl) } : {}),
+              ...(nl !== undefined && Number.isFinite(nl) ? { newLimit: nl } : {}),
               ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
               ...discovery(options),
             }),

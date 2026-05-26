@@ -178,6 +178,31 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
+  // §4.1 C (adopt): clearing the marker un-parks the run — it rejoins dispatch
+  // at its verbatim status. (The rehydration precondition is enforced by the CLI
+  // `runs adopt` gate; here we cover the store primitive.)
+  test("adopt clears the marker — the imported run rejoins dispatch", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src); // queued
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    expect(dst.importRunBundle(bytes).imported).toBe(true);
+    expect(dst.getState(runId)?.status).toBe("queued"); // verbatim
+    // Parked: imported + not claimable by the dispatcher.
+    expect(dst.isRunImported(runId)).toBe(true);
+    expect(dst.claimNextRun(16)).toBeNull();
+
+    // Adopt → un-parked; the queued run is now claimable.
+    expect(dst.adoptRun(runId)).toBe(true);
+    expect(dst.isRunImported(runId)).toBe(false);
+    expect(dst.claimNextRun(16)).toEqual({ runId });
+    // Idempotent: re-adopting is a no-op.
+    expect(dst.adoptRun(runId)).toBe(false);
+    dst.close();
+  });
+
   test("is idempotent — re-importing the same bundle is a no-op", async () => {
     const src = freshStore();
     const runId = await seedRun(src);

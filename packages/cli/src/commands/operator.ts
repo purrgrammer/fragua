@@ -10,7 +10,8 @@
 // resolves the commit range through `readPlane.diffRange` and runs the git diff
 // inline with the same `@fragua/workspace` `gitDiff` the server uses.
 
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
 import type { DiffRange, RunDetail, StepSnapshot } from "@fragua/core/read-plane";
 import type { ArtifactScope, NarrowMessage, RunStatus, SqliteStore, StoredEvent } from "@fragua/store";
@@ -337,6 +338,48 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
     }
     const { seq } = plane.commit(opts.runId, built.intent);
     console.log(chalk.green("human input recorded") + chalk.dim(` (run ${opts.runId}, intent seq ${seq})`));
+    return 0;
+  });
+}
+
+export interface AdoptOptions extends DiscoveryOpts {
+  runId: string;
+}
+
+/** Adopt an imported run (db-import §4.1 C): clear its inert marker so it
+ * rejoins dispatch at its verbatim status, then continue it the normal way
+ * (`resume` / `respond` / `budget …` per its paused reason). Gated on
+ * rehydration — resume needs a worktree, so adopt refuses a run that hasn't been
+ * `runs import --rehydrate`'d (the "can't resume a non-hydrated run" rule). */
+export function adoptCommand(opts: AdoptOptions): Promise<number> {
+  return withStoreClient(opts, ({ store }) => {
+    const state = store.getState(opts.runId);
+    if (state == null) {
+      console.error(chalk.red("adopt: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (!store.isRunImported(opts.runId)) {
+      console.error(chalk.red("adopt: not an imported run, or already adopted") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (state.cwd == null) {
+      console.error(
+        chalk.red("adopt: run is not rehydrated") +
+          chalk.dim(" — run `fragua runs import <bundle> --rehydrate` first (resume needs a worktree)"),
+      );
+      return 1;
+    }
+    const worktree = join(state.cwd, ".fragua/worktrees", opts.runId);
+    if (!existsSync(worktree)) {
+      console.error(chalk.red(`adopt: worktree missing at ${worktree}`) + chalk.dim(" — re-import with --rehydrate"));
+      return 1;
+    }
+    store.adoptRun(opts.runId);
+    const next = state.status === "paused_human" ? "`runs respond`" : "`runs resume` / `runs budget …`";
+    console.log(
+      chalk.green(`adopted run ${opts.runId}`) +
+        chalk.dim(` (status ${state.status}) — un-parked; continue with ${next}`),
+    );
     return 0;
   });
 }

@@ -71,3 +71,38 @@ describe("fragua run — CLI argv → options mapping (cac camelCase contract)",
     expect(opts["input"]).toBe("hi");
   });
 });
+
+function parseRuns(argv: string[]): Record<string, unknown> {
+  const cli = cac("fragua");
+  let captured: Record<string, unknown> = {};
+  cli
+    .command("runs [action] [runId] [arg]")
+    .option("--scope <s>", "")
+    .option("--metric <m>", "")
+    .option("--new-limit <n>", "")
+    .option("--limit <n>", "")
+    .option("--iteration <n>", "")
+    .action((_action: string, _runId: string, _arg: string, options: Record<string, unknown>) => {
+      captured = options;
+    });
+  cli.parse(["node", "fragua", ...argv], { run: true });
+  return captured;
+}
+
+describe("fragua runs — numeric flags arrive coerced (cac → number)", () => {
+  test("--new-limit 0.5 lands on options.newLimit as a NUMBER, not a string", () => {
+    // The bug: the bin read this with a string-only `pickStr`, but cac coerces a
+    // numeric value to a number — so `--new-limit 0.5` was silently dropped and
+    // `runs budget` errored "--new-limit required". The fix reads number-or-string.
+    const opts = parseRuns(["runs", "budget", "r1", "--scope", "node", "--metric", "cost", "--new-limit", "0.5"]);
+    expect(opts["newLimit"]).toBe(0.5);
+    expect(typeof opts["newLimit"]).toBe("number");
+    expect(opts["new-limit"]).toBeUndefined(); // kebab key never populated
+  });
+
+  test("--limit and --iteration coerce to numbers too (the bin handles both forms)", () => {
+    const opts = parseRuns(["runs", "events", "r1", "--limit", "5", "--iteration", "2"]);
+    expect(opts["limit"]).toBe(5);
+    expect(opts["iteration"]).toBe(2);
+  });
+});

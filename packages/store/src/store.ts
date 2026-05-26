@@ -107,6 +107,7 @@ import {
 } from "./provider-credentials-queries.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import {
+  adoptImportedRun,
   bumpRunSeq,
   type CwdSummaryRow,
   claimQueuedRun,
@@ -636,6 +637,20 @@ export class SqliteStore implements IEventStore {
    *  riding on the portable `run_state` row. */
   isRunImported(runId: string): boolean {
     return isRunImported(this.db, runId);
+  }
+
+  /** Adopt an imported run — clear its inert marker (db-import §4.1 C) so it
+   *  rejoins dispatch/wake at its verbatim status. A local binding (like
+   *  `setRunCwd`), no event; the subsequent status transition rides the normal
+   *  resume intent. Idempotent; returns true if it flipped (false if not
+   *  imported / already adopted). */
+  adoptRun(runId: string): boolean {
+    const now = this.now();
+    let flipped = false;
+    this.writeTxn(() => {
+      flipped = adoptImportedRun(this.db, runId, now);
+    });
+    return flipped;
   }
 
   setRunTitle(runId: string, title: string): void {

@@ -603,6 +603,18 @@ export function isRunImported(db: Database, runId: string): boolean {
   return db.query<{ n: number }, [string]>(IS_RUN_IMPORTED_SQL).get(runId) != null;
 }
 
+const ADOPT_IMPORTED_RUN_SQL = `
+  UPDATE imported_runs SET adopted_at = ? WHERE run_id = ? AND adopted_at IS NULL
+`;
+
+/** Adopt an imported run (db-import §4.1 C): stamp `adopted_at` so the gate
+ *  fragment stops excluding it and the run rejoins dispatch/wake at its verbatim
+ *  status. Idempotent — a no-op once adopted (the `adopted_at IS NULL` guard).
+ *  Returns true when it flipped a row. */
+export function adoptImportedRun(db: Database, runId: string, adoptedAt: number): boolean {
+  return db.query(ADOPT_IMPORTED_RUN_SQL).run(adoptedAt, runId).changes > 0;
+}
+
 const WRITE_PROJECTION_SQL = `
   UPDATE run_state SET
     version             = ?,
