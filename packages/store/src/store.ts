@@ -128,6 +128,7 @@ import {
   bumpRunSeq,
   type CwdSummaryRow,
   claimQueuedRun,
+  countDispatchableRunningRuns,
   countQueuedRuns,
   countRunningRuns,
   type GcSnapshotRunRow,
@@ -136,6 +137,7 @@ import {
   insertRunState,
   type ListRunIdsOpts,
   type ListRunSummaryRowsOpts,
+  markRunImported,
   type ProjectSummaryRow,
   // queryRunCostTotals renamed at import for symmetry with the other
   // `query*` imports below; original symbol used by tests directly.
@@ -633,8 +635,8 @@ export class SqliteStore implements IEventStore {
 
     this.writeTxn(() => {
       // Capacity counts only runs the daemon could be executing here — imported
-      // runs awaiting adoption never claim, so they must not burn a slot (§4.1).
-      if (countRunningRuns(this.db) >= maxInFlight) return;
+      // runs (inert by marker) never claim, so they must not burn a slot.
+      if (countDispatchableRunningRuns(this.db) >= maxInFlight) return;
 
       const row = selectNextQueuedRun(this.db);
       if (row == null) return;
@@ -1519,6 +1521,11 @@ export class SqliteStore implements IEventStore {
               acceptedSha: d.acceptedSha,
             });
             setRunStateNextSeq(this.db, d.runId, d.nextSeq);
+            // Authoritative inert marker: holds the run out of dispatch /
+            // concurrency / sweep regardless of its derived status (a
+            // non-terminal source run derives to queued/running but must never
+            // execute here). Only on first import; re-import is a no-op.
+            markRunImported(this.db, d.runId, now);
           }
           for (const ev of r.eventRows) {
             insertEventOrIgnore(this.db, d.runId, ev.seq, ev.type, ev.writer, ev.payload, ev.ts);

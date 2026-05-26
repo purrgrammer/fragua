@@ -154,6 +154,25 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
+  test("an imported run is inert — never claimed, even when it derives to queued", async () => {
+    // A bundle of a NOT-yet-started source run derives to status `queued` with a
+    // null cwd. The marker — not the null cwd — is what holds it out of dispatch.
+    const src = freshStore();
+    const sha = await seedWorkflow(src);
+    const runId = newRunId();
+    src.enqueueRun({ runId, workflowSha: sha, cwd: "/somewhere", initialRouting: { input: "x" } });
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    expect(dst.getState(runId)?.status).toBe("queued"); // derived, non-terminal
+    // The daemon must never claim it — the inert marker excludes it from the
+    // queued selection (a native queued run WOULD be claimed).
+    expect(dst.claimNextRun(10)).toBeNull();
+    dst.close();
+  });
+
   test("idempotent — re-import is a no-op", async () => {
     const src = freshStore();
     const runId = await seedTerminalRun(src);
