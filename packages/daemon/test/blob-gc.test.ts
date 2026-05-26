@@ -80,7 +80,14 @@ describe("startBlobGc", () => {
       intervalMs: 10,
       onSweep: (deleted) => sweeps.push(deleted),
     });
-    await new Promise((res) => setTimeout(res, 40));
+
+    // Poll until ≥2 calls land, then shut down. The 2s ceiling is generous
+    // enough to survive a saturated CI runner without weakening the assertion
+    // (the loop fires every 10ms; even at 100× slowdown it finishes well inside 2s).
+    const deadline = Date.now() + 2_000;
+    while (calls < 2 && Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 10));
+    }
     ctrl.abort();
     await gc.promise;
 
