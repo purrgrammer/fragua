@@ -103,10 +103,10 @@ fragua runs import run.fragua --rehydrate  # + rebuild the worktree for `runs di
 fragua runs status|events|messages <run-id>
 ```
 
-> Exporting the **raw SQLite store** from CI is no longer the path: `--db <path>`
-> still pins the store for same-machine replay/debug, but it can carry secrets (a
-> tool that echoes a key into an event lands in it), so the **bundle** — not the
-> db — is the artifact you upload.
+> `--export` is available from the fragua release that ships it. On an older
+> binary, `--db <path>` pins the raw store — but it can carry secrets (a tool that
+> echoes a key into an event lands in it), so scrub the provider tables and verify
+> before uploading. Prefer the bundle: it's secret-free by construction.
 
 ## Supported runners
 
