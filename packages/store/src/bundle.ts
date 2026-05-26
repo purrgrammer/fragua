@@ -30,6 +30,12 @@ export interface BundleManifest {
   artifacts: ArtifactListRow[];
   /** Manifest of every blob carried in `blobs/`; bytes must hash to `sha256`. */
   blobs: { sha256: string; size: number }[];
+  /** Optional git-bundle carrying the run's tree state (snapshot + base commits)
+   * in the `git-bundle` tar entry — present when the run had a worktree whose
+   * refs were reachable at export. Enables `runs import --rehydrate` (db-import
+   * §3.2). NOT a content-addressed artifact blob: it's run-level tree state,
+   * validated by hash but not merged into `blobs`. */
+  gitBundle?: { sha256: string; size: number };
 }
 
 export interface TarEntry {

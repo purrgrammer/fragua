@@ -545,6 +545,17 @@ export function setRunStateNextSeq(db: Database, runId: string, nextSeq: number)
   db.query(SET_RUN_STATE_NEXT_SEQ_SQL).run(nextSeq, runId);
 }
 
+const SET_RUN_STATE_CWD_SQL = `
+  UPDATE run_state SET cwd = ? WHERE run_id = ?
+`;
+
+/** Rebind a run's `cwd` (a local binding). Used by `runs import --rehydrate` to
+ *  point an imported run at the local worktree it was reconstructed into
+ *  (db-import §3.2). */
+export function setRunStateCwd(db: Database, runId: string, cwd: string): void {
+  db.query(SET_RUN_STATE_CWD_SQL).run(cwd, runId);
+}
+
 const WRITE_PROJECTION_SQL = `
   UPDATE run_state SET
     version             = ?,

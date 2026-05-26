@@ -5,7 +5,7 @@
 // error paths (missing run, absent target store).
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteStore } from "@fragua/store";
@@ -79,5 +79,61 @@ describe("fragua runs export/import", () => {
   test("import of a missing bundle errors", async () => {
     const { dbPath } = seedStore(freshDir());
     expect(await importCommand({ bundle: join(freshDir(), "nope.fragua"), dbPath })).toBe(1);
+  });
+
+  // End-to-end A+B (db-import §3.2): export carries the run's tree state as a
+  // git-bundle, and `import --rehydrate` reconstructs the worktree at the
+  // snapshot tip in a fresh host repo — the same per-run worktree a native run
+  // would have.
+  test("export + import --rehydrate rebuilds the worktree at the snapshot tip", async () => {
+    const srcDir = freshDir();
+    const repo = join(srcDir, "repo");
+    mkdirSync(repo, { recursive: true });
+    const git = (args: string[], env?: Record<string, string>) =>
+      Bun.spawnSync({ cmd: ["git", ...args], cwd: repo, ...(env ? { env: { ...process.env, ...env } } : {}) });
+    const out = (args: string[], env?: Record<string, string>) =>
+      new TextDecoder().decode(git(args, env).stdout).trim();
+    const ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
+
+    git(["init", "-q"]);
+    writeFileSync(join(repo, "base.txt"), "base\n");
+    git(["add", "-A"]);
+    git([...ident, "commit", "-q", "-m", "base"]);
+
+    // The run's working state → a fragua snapshot ref (what the snapshotter does:
+    // add -A into a sentinel index → write-tree → commit-tree → update-ref).
+    writeFileSync(join(repo, "work.txt"), "work-state\n");
+    const idx = join(srcDir, "sentinel-index");
+    git(["add", "-A"], { GIT_INDEX_FILE: idx });
+    const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
+    const snap = out([...ident, "commit-tree", tree, "-m", "snap"]);
+    const runId = "run_rehy";
+    git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
+
+    // Source store: the run pinned to the repo.
+    const srcDb = join(srcDir, "store.db");
+    const s = new SqliteStore({ path: srcDb });
+    s.saveWorkflow("wf1", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
+    s.enqueueRun({ runId, workflowSha: "wf1", cwd: repo });
+    s.close();
+
+    const bundle = join(srcDir, "r.fragua");
+    expect(await exportCommand({ runId, to: bundle, dbPath: srcDb })).toBe(0);
+
+    // Import + rehydrate into a fresh host repo (git-init'd by --into).
+    const hostDir = freshDir();
+    const host = join(hostDir, "host");
+    const tgtDb = join(hostDir, "store.db");
+    new SqliteStore({ path: tgtDb }).close();
+    expect(await importCommand({ bundle, dbPath: tgtDb, rehydrate: true, into: host })).toBe(0);
+
+    // The worktree exists at the snapshot tip, carrying the run's working state.
+    const wt = join(host, ".fragua/worktrees", runId);
+    expect(existsSync(join(wt, "work.txt"))).toBe(true);
+    expect(readFileSync(join(wt, "work.txt"), "utf8")).toBe("work-state\n");
+    // cwd rebound to the host repo.
+    const tgt = new SqliteStore({ path: tgtDb, migrate: false });
+    expect(tgt.getState(runId)?.cwd).toBe(host);
+    tgt.close();
   });
 });

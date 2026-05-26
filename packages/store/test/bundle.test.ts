@@ -233,6 +233,53 @@ describe("importRunBundle", () => {
     expect(() => dst.importRunBundle(bytes)).toThrow(/manifest/);
     dst.close();
   });
+
+  test("carries an optional git-bundle in its own entry; import validates + merges", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    const fakeBundle = new TextEncoder().encode("PACK-fake-git-bundle-bytes");
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x", gitBundle: fakeBundle });
+    src.close();
+
+    // The git-bundle rides a dedicated `git-bundle` entry + a manifest pointer —
+    // NOT the content-addressed `blobs/` set.
+    const entries = readTar(bytes);
+    const gb = entries.find((e) => e.name === "git-bundle");
+    expect(new TextDecoder().decode(gb?.data ?? new Uint8Array())).toBe("PACK-fake-git-bundle-bytes");
+    const mEntry = entries.find((e) => e.name === "manifest.json");
+    const manifest = JSON.parse(new TextDecoder().decode(mEntry?.data ?? new Uint8Array()));
+    expect(manifest.gitBundle.size).toBe(fakeBundle.length);
+
+    // Import validates its integrity and still merges the run (it's not a DB blob).
+    const dst = freshStore();
+    expect(dst.importRunBundle(bytes).runId).toBe(runId);
+    expect(dst.getState(runId)).not.toBeNull();
+    dst.close();
+  });
+
+  test("rejects a tampered git-bundle (fail-closed)", () => {
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 1,
+      schemaVersion: 1,
+      irVersion: 1,
+      run: {},
+      workflow: { sha: "x", name: "x", source: "x", ir: "x", irVersion: 1 },
+      events: [],
+      messages: [],
+      artifacts: [],
+      blobs: [],
+      gitBundle: { sha256: "deadbeef", size: 3 },
+    };
+    const bytes = writeTar([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) },
+      { name: "git-bundle", data: new TextEncoder().encode("xyz") },
+    ]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/git-bundle/);
+    dst.close();
+  });
 });
 
 describe("export determinism (db-import §6)", () => {

@@ -538,7 +538,7 @@ function runsHelp(): void {
 
   Portability (move a run between stores as a secret-free .fragua bundle):
     export    <id> --to <file.fragua>                       write the run as a portable bundle
-    import    <file.fragua> [--db <target>]                 merge a bundle into the (default: harness) store`);
+    import    <file.fragua> [--db <target>] [--rehydrate]   merge a bundle in; --rehydrate rebuilds its worktree (runs diff)`);
 }
 
 cli
@@ -561,6 +561,8 @@ cli
   .option("--key <k>", "artifact: the artifact key to fetch")
   .option("--iteration <n>", "artifact: node iteration (default 0)")
   .option("--to <path>", "export: destination path for the .fragua bundle")
+  .option("--rehydrate", "import: reconstruct the run's worktree from the bundle's tree state")
+  .option("--into <dir>", "import --rehydrate: host git repo for the worktree (default: cwd)")
   .option("--cwd <dir>", "Project root (scopes ls/inbox; resolves diff worktrees)")
   .option("--db <path>", "Store path (default: the harness store ~/.fragua/fragua.db)")
   .action(
@@ -810,7 +812,14 @@ cli
             console.error(chalk.red("runs import: <bundle.fragua> required"));
             process.exit(1);
           }
-          process.exit(await importCommand({ bundle: runId, ...discovery(options) }));
+          process.exit(
+            await importCommand({
+              bundle: runId,
+              ...(options["rehydrate"] === true ? { rehydrate: true } : {}),
+              ...(pickStr(options, "into") !== undefined ? { into: pickStr(options, "into")! } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         }
         default:

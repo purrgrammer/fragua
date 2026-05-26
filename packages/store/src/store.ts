@@ -138,6 +138,7 @@ import {
   selectRunStateRow,
   selectRunSummaryRows,
   selectWakeCandidates,
+  setRunStateCwd,
   setRunStateNextSeq,
   updateRunStateTitle,
   type WakeCandidateRow,
@@ -618,6 +619,12 @@ export class SqliteStore implements IEventStore {
 
   startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult {
     return startupSweep(this.db, this.now, opts);
+  }
+
+  /** Rebind a run's cwd (a local binding) — used by `runs import --rehydrate`
+   *  after reconstructing the run's worktree locally (db-import §3.2). */
+  setRunCwd(runId: string, cwd: string): void {
+    this.writeTxn(() => setRunStateCwd(this.db, runId, cwd));
   }
 
   setRunTitle(runId: string, title: string): void {
@@ -1273,8 +1280,11 @@ export class SqliteStore implements IEventStore {
    *
    * Blob coverage is the run's artifacts; message/event spill blobs are a
    * follow-up — import validates FK closure, so a gap is a clear error, never
-   * silent corruption. */
-  exportRunBundle(runId: string, opts: { fraguaVersion: string }): Uint8Array {
+   * silent corruption. `gitBundle` (optional) carries the run's tree state — a
+   * `git bundle` the CLI builds from the run's refs — in a dedicated `git-bundle`
+   * tar entry for `runs import --rehydrate` (db-import §3.2); the store can't
+   * shell git, so the caller produces the bytes. */
+  exportRunBundle(runId: string, opts: { fraguaVersion: string; gitBundle?: Uint8Array }): Uint8Array {
     const run = this.getState(runId);
     if (run == null) throw new Error(`exportRunBundle: run not found: ${runId}`);
     const wf = this.getWorkflow(run.workflowSha);
@@ -1294,6 +1304,9 @@ export class SqliteStore implements IEventStore {
       blobManifest.push({ sha256: sha, size: bytes.length });
     }
 
+    const gitBundle =
+      opts.gitBundle != null ? { sha256: sha256Hex(opts.gitBundle), size: opts.gitBundle.length } : undefined;
+
     const manifest: BundleManifest = {
       bundleVersion: BUNDLE_VERSION,
       fraguaVersion: opts.fraguaVersion,
@@ -1306,9 +1319,11 @@ export class SqliteStore implements IEventStore {
       messages: this.getMessages(runId),
       artifacts,
       blobs: blobManifest,
+      ...(gitBundle != null ? { gitBundle } : {}),
     };
     const manifestBytes = new TextEncoder().encode(canonicalJson(manifest));
-    return writeTar([{ name: "manifest.json", data: manifestBytes }, ...blobEntries]);
+    const extra: TarEntry[] = opts.gitBundle != null ? [{ name: "git-bundle", data: opts.gitBundle }] : [];
+    return writeTar([{ name: "manifest.json", data: manifestBytes }, ...blobEntries, ...extra]);
   }
 
   /** Merge a `.fragua` bundle (from {@link exportRunBundle}, possibly produced
@@ -1371,6 +1386,21 @@ export class SqliteStore implements IEventStore {
         throw new Error(`importRunBundle: blob ${b.sha256} failed its integrity check (bytes hash to ${actual})`);
       }
       blobs.push({ sha256: b.sha256, size: b.size, data });
+    }
+
+    // Tree state (the git-bundle) rides a dedicated `git-bundle` entry, not the
+    // content-addressed `blobs/` set (it's run-level, not an artifact). Validate
+    // its integrity here; the CLI reads the same entry for `--rehydrate` (the
+    // store can't shell git, so it doesn't persist or unbundle it).
+    if (manifest.gitBundle != null) {
+      const gb = entries.find((e) => e.name === "git-bundle");
+      if (gb == null) {
+        throw new Error("importRunBundle: manifest declares a gitBundle but the git-bundle entry is absent");
+      }
+      const actual = sha256Hex(gb.data);
+      if (actual !== manifest.gitBundle.sha256) {
+        throw new Error(`importRunBundle: git-bundle failed its integrity check (bytes hash to ${actual})`);
+      }
     }
 
     const run = manifest.run;
