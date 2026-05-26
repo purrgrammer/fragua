@@ -26,14 +26,13 @@ import { makeReadPlane } from "@fragua/core/read-plane";
 import { AbortRegistry, type ExecutorOpts, runOne, WorktreeProvisioner, wakePending } from "@fragua/daemon";
 import { type IEventStore, newRunId, SqliteStore, type StoredEvent } from "@fragua/store";
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
-import { defaultGitExec } from "@fragua/workspace";
+import { buildRunGitBundle, defaultGitExec } from "@fragua/workspace";
 import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 import { seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
-import { buildGitBundle } from "../git-bundle.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
 import { FRAGUA_VERSION } from "../version.ts";
@@ -320,7 +319,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         const exported = store.getState(runId);
         const gitBundle =
           exported?.cwd != null
-            ? await buildGitBundle(defaultGitExec, exported.cwd, runId, exported.baseGitSha, exported.diffBaseSha)
+            ? await buildRunGitBundle(defaultGitExec, exported.cwd, runId, exported.baseGitSha, exported.diffBaseSha)
             : null;
         writeFileSync(
           dest,

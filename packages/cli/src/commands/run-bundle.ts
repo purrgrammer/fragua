@@ -13,13 +13,11 @@
 // checks out the snapshot tip as a worktree — exactly the per-run worktree a
 // native run uses — so `runs diff` works against the imported run.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { readTar } from "@fragua/store";
-import { defaultGitExec, type GitExec } from "@fragua/workspace";
+import { buildRunGitBundle, defaultGitExec, type GitExec, rehydrateRunWorktree } from "@fragua/workspace";
 import chalk from "chalk";
-import { buildGitBundle } from "../git-bundle.ts";
 import { resolveStorePath, withStoreClient } from "../store-client.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 
@@ -50,7 +48,7 @@ export function exportCommand(opts: ExportOptions): Promise<number> {
     let gitBundle: Uint8Array | undefined;
     if (run.cwd != null) {
       try {
-        const gb = await buildGitBundle(defaultGitExec, run.cwd, opts.runId, run.baseGitSha, run.diffBaseSha);
+        const gb = await buildRunGitBundle(defaultGitExec, run.cwd, opts.runId, run.baseGitSha, run.diffBaseSha);
         if (gb != null) gitBundle = gb;
       } catch {
         // Best-effort: fall through to a rows-only export.
@@ -118,26 +116,13 @@ async function rehydrateRun(
     }
   }
 
-  const tmp = join(tmpdir(), `fragua-rehydrate-${runId}-${process.pid}.gitbundle`);
-  try {
-    writeFileSync(tmp, gb.data);
-    const fetched = await git(host, ["fetch", tmp, "+refs/fragua/*:refs/fragua/*"]);
-    if (fetched.exitCode !== 0) {
-      console.error(chalk.red(`rehydrate: git fetch (unbundle) failed: ${fetched.stderr.trim()}`));
-      return 1;
-    }
-  } finally {
-    rmSync(tmp, { force: true });
-  }
-
-  const worktree = join(host, ".fragua/worktrees", runId);
-  const added = await git(host, ["worktree", "add", "--detach", worktree, `refs/fragua/snapshots/${runId}`]);
-  if (added.exitCode !== 0) {
-    console.error(chalk.red(`rehydrate: git worktree add failed: ${added.stderr.trim()}`));
+  const res = await rehydrateRunWorktree(git, host, runId, gb.data);
+  if (!res.ok) {
+    console.error(chalk.red(`rehydrate: ${res.error}`));
     return 1;
   }
   store.setRunCwd(runId, host);
-  console.log(chalk.green(`  rehydrated → ${worktree}`) + chalk.dim(`  (runs diff ${runId} now works)`));
+  console.log(chalk.green(`  rehydrated → ${res.worktree}`) + chalk.dim(`  (runs diff ${runId} now works)`));
   return 0;
 }
 
