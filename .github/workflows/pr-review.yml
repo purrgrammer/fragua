@@ -1,18 +1,21 @@
 name: PR review
 
 # Unattended review on every push to a PR, in two jobs:
-#   review    — installs the released fragua binary via setup-fragua and runs
-#               the `pr_review` workflow (`.fragua/workflows/pr_review.yaml`)
-#               with `fragua ci`, posting the result back to the PR. Read-only:
-#               it runs LLM tool-calls over an untrusted diff, so it must NOT
-#               hold `contents: write` (prompt-injection surface).
+#   review    — builds fragua from THIS PR's checkout (bun) and runs the
+#               `pr_review` workflow (`.fragua/workflows/pr_review.yaml`) with
+#               `fragua ci`, posting the result back to the PR. Read-only: it runs
+#               LLM tool-calls over an untrusted diff, so it must NOT hold
+#               `contents: write` (prompt-injection surface).
 #   automerge — a SEPARATE job (needs: review) that holds the write scope and,
 #               on a clean review, arms GitHub auto-merge so the PR merges once
 #               the required `ci` check passes. CI is the hard gate; the LLM
 #               review is a soft pre-condition.
 #
-# Using setup-fragua keeps the action itself under test on every PR. `@v0.1.0`
-# pins the action + the headless binary it installs (fine for `fragua ci`).
+# The review runs fragua FROM SOURCE (not setup-fragua's released binary) so it
+# exercises the code under review — and `fragua ci --export`, which lands the run
+# as a secret-free `.fragua` bundle (the flag is newer than any release). The
+# trust boundary is unchanged: a same-repo PR already controls pr_review.yaml and
+# this file, and fork PRs (no secrets) are skipped.
 
 on:
   pull_request:
@@ -42,54 +45,51 @@ jobs:
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.1.0
+      # Build fragua from the PR's checkout (not setup-fragua's released binary)
+      # so the review runs the code under review AND `fragua ci --export`. Mirror
+      # ci.yml's bun setup.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.17"
+      - run: bun install --frozen-lockfile
 
-      # NOTE: this self-test runs the *released* binary (setup-fragua@v0.1.0),
-      # which predates `fragua ci --export`. So the artifact here is still the raw
-      # store (--db, scrubbed below). Switch to `--export "$RUNNER_TEMP/pr-review.fragua"`
-      # (a secret-free bundle — drops the whole scrub step) once a release ships
-      # the flag. See setup-fragua/README.md § Keeping the run as an artifact.
       - name: "Review PR #${{ github.event.pull_request.number }}"
-        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --db "$RUNNER_TEMP/pr-review.db"
+        run: bun run fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --export "$RUNNER_TEMP/pr-review.fragua"
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }} # gh pr diff / view / review
 
-      # The run store is a replayable record of the review — but `fragua ci`
-      # seeds the provider credential (ANTHROPIC_API_KEY) into it, so the raw
-      # file would leak a secret. Strip the provider tables, VACUUM INTO a fresh
-      # single-file copy (no WAL / freelist residue), then FAIL CLOSED: if any
-      # `provider*` table survived, OR the literal key appears anywhere (e.g. a
-      # tool that printed env, recorded into events/messages), DELETE the export
-      # and fail. Deleting it means the always() upload below has nothing to
-      # publish, so a leak can't escape even though that step always runs.
-      - name: Export run store (credentials stripped)
+      # The `.fragua` bundle is secret-free BY CONSTRUCTION — it never carries the
+      # provider_credentials / provider_config tables (no scrub needed). Residual
+      # guard: a tool that printed the key could have recorded it into an
+      # event/message, which DOES travel — so FAIL CLOSED if the literal key
+      # appears in the bundle bytes; delete it so the always() upload can't
+      # publish a leak.
+      - name: Verify bundle is secret-free (fail closed)
         if: always()
         env:
-          SRC: ${{ runner.temp }}/pr-review.db
-          OUT: ${{ runner.temp }}/pr-review-export.db
+          BUNDLE: ${{ runner.temp }}/pr-review.fragua
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
-          [ -f "$SRC" ] || { echo "no run store at $SRC — nothing to export"; exit 0; }
-          sqlite3 "$SRC" "DROP TABLE IF EXISTS provider_credentials; DROP TABLE IF EXISTS provider_config; VACUUM INTO '$OUT';"
-          fail() { rm -f "$OUT"; echo "::error::$1"; exit 1; }
-          leak=$(sqlite3 "$OUT" "SELECT group_concat(name) FROM sqlite_master WHERE name LIKE 'provider%';")
-          [ -z "$leak" ] || fail "provider tables present in export ($leak)"
-          if [ -n "${ANTHROPIC_API_KEY:-}" ] && grep -qaF "$ANTHROPIC_API_KEY" "$OUT"; then
-            fail "provider key found in export bytes — a tool likely recorded it into events/messages"
+          [ -f "$BUNDLE" ] || { echo "no bundle at $BUNDLE — nothing to upload"; exit 0; }
+          if [ -n "${ANTHROPIC_API_KEY:-}" ] && grep -qaF "$ANTHROPIC_API_KEY" "$BUNDLE"; then
+            rm -f "$BUNDLE"
+            echo "::error::provider key found in bundle bytes — a tool likely recorded it into events/messages"
+            exit 1
           fi
-          echo "exported scrubbed run store → $OUT"
+          echo "bundle is secret-free → $BUNDLE"
 
-      # Post-mortem locally: `fragua runs status|events|messages --db <download>`.
-      - name: Upload run store
+      # Post-mortem locally: `fragua runs import <download> [--rehydrate]`, then
+      # `fragua runs status|events|messages <run-id>`.
+      - name: Upload run bundle
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: pr-review-run-${{ github.event.pull_request.number }}
-          path: ${{ runner.temp }}/pr-review-export.db
+          name: pr-review-bundle-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/pr-review.fragua
           if-no-files-found: warn
 
   automerge:
