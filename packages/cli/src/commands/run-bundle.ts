@@ -25,7 +25,7 @@ import {
 } from "@fragua/workspace";
 import chalk from "chalk";
 import { resolveProjectBootstrap } from "../config.ts";
-import { resolveStorePath, withStoreClient } from "../store-client.ts";
+import { withStoreClient } from "../store-client.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 
 interface DiscoveryOpts {
@@ -157,8 +157,7 @@ export function importCommand(opts: ImportOptions): Promise<number> {
     return Promise.resolve(1);
   }
   const bytes = readFileSync(src);
-  const storePath = resolveStorePath(opts);
-  return withStoreClient(opts, async ({ store }) => {
+  return withStoreClient(opts, async ({ store, storePath }) => {
     let result: { runId: string; imported: boolean; resumeCompatible: boolean };
     try {
       result = store.importRunBundle(bytes);

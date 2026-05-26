@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
-import { SqliteStore } from "@fragua/store";
+import { newRunId, SqliteStore } from "@fragua/store";
 import { defaultGitExec, gitDiff } from "@fragua/workspace";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 
@@ -28,7 +28,7 @@ function seedStore(dir: string): { dbPath: string; runId: string } {
   const dbPath = join(dir, "store.db");
   const store = new SqliteStore({ path: dbPath });
   store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
-  const runId = "run_1";
+  const runId = newRunId();
   store.enqueueRun({ runId, workflowSha: "wf1", priority: 0 });
   store.putArtifact({ runId, nodeId: "work", iteration: 0, key: "out" }, new TextEncoder().encode("hello-bytes"));
   store.close();
@@ -111,7 +111,7 @@ describe("fragua runs export/import", () => {
     git(["add", "-A"], { GIT_INDEX_FILE: idx });
     const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
     const snap = out([...ident, "commit-tree", tree, "-p", baseSha, "-m", "snap"]);
-    const runId = "run_rehy";
+    const runId = newRunId();
     git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
 
     // Source store: run pinned to the repo, baseGitSha stamped (fact.run_started),
@@ -210,7 +210,7 @@ describe("fragua runs export/import", () => {
     git(["add", "-A"], { GIT_INDEX_FILE: idx });
     const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
     const snap = out([...ident, "commit-tree", tree, "-m", "snap"]);
-    const runId = "run_multi";
+    const runId = newRunId();
     git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
     git(["update-ref", `refs/fragua/heads/${runId}`, headSha]); // HEAD moved off base
 
@@ -298,7 +298,7 @@ describe("fragua runs export/import", () => {
     git(["add", "-A"], { GIT_INDEX_FILE: idx });
     const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
     const snap = out([...ident, "commit-tree", tree, "-p", baseSha, "-m", "snap"]);
-    const runId = "run_boot";
+    const runId = newRunId();
     git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
 
     const srcDb = join(srcDir, "store.db");

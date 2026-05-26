@@ -38,6 +38,23 @@ export interface BundleManifest {
   gitBundle?: { sha256: string; size: number };
 }
 
+/** Type-narrow a parsed manifest before any heavy work: confirm the required
+ *  top-level fields are present and well-shaped, so a tampered/malformed bundle
+ *  fails with a clear error instead of a deep `TypeError` partway through the
+ *  blob-integrity loop or the import txn (db-import). */
+export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
+  if (m == null || typeof m !== "object") throw new Error("bundle manifest is not an object");
+  const o = m as Record<string, unknown>;
+  if (typeof o["bundleVersion"] !== "number") throw new Error("bundle manifest: bundleVersion missing or not a number");
+  if (o["run"] == null || typeof o["run"] !== "object")
+    throw new Error("bundle manifest: run missing or not an object");
+  if (o["workflow"] == null || typeof o["workflow"] !== "object")
+    throw new Error("bundle manifest: workflow missing or not an object");
+  for (const k of ["events", "messages", "artifacts", "blobs"] as const) {
+    if (!Array.isArray(o[k])) throw new Error(`bundle manifest: ${k} missing or not an array`);
+  }
+}
+
 export interface TarEntry {
   /** POSIX path inside the archive (< 100 bytes; we only use short names). */
   name: string;
@@ -108,6 +125,7 @@ export function readTar(bytes: Uint8Array): TarEntry[] {
     if (h[0] === 0) break; // zero block → end of archive
     let n = 0;
     while (n < 100 && h[n] !== 0) n++;
+    if (n === 100) throw new Error("readTar: entry name not null-terminated within 100 bytes (malformed header)");
     const name = dec.decode(h.subarray(0, n));
     const size = Number.parseInt(dec.decode(h.subarray(124, 136)).replace(/[\0 ]/g, ""), 8) || 0;
     off += 512;

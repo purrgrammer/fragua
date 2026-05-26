@@ -47,3 +47,24 @@ function encodeRandom(): string {
   }
   return out.join("");
 }
+
+// Every run id is minted by `newRunId` (no operator-supplied ids) — a 26-char
+// lowercased Crockford base-32 ULID. On import a run id crosses a trust boundary
+// and flows into filesystem paths (worktree dirs, tmpfiles) and git ref names,
+// so we enforce that exact shape: it rejects `/`, `.`, and anything else that
+// could traverse out of a worktree or forge a refspec, with no false positives
+// because there is no other legitimate id shape.
+const RUN_ID_RE = /^[0-9a-hjkmnp-tv-z]{26}$/; // Crockford base-32, lowercased, I/L/O/U excluded
+
+export function isSafeRunId(id: unknown): id is string {
+  return typeof id === "string" && RUN_ID_RE.test(id);
+}
+
+/** Throw unless `id` is a well-formed (ULID-shaped) run id — call before a
+ *  bundle-supplied id reaches any path/refspec construction (db-import:
+ *  untrusted-bundle traversal). */
+export function assertSafeRunId(id: unknown): asserts id is string {
+  if (!isSafeRunId(id)) {
+    throw new Error(`unsafe run id ${JSON.stringify(id)} — expected a 26-char ULID`);
+  }
+}

@@ -1,4 +1,4 @@
-import { SqliteStore } from "../src/index.ts";
+import { newRunId, SqliteStore } from "../src/index.ts";
 
 const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
 
@@ -25,7 +25,7 @@ export async function seedRun(
   store: SqliteStore,
   opts: { runId?: string; workflowSha?: string; priority?: number } = {},
 ): Promise<string> {
-  const runId = opts.runId ?? nextId();
+  const runId = opts.runId ?? newRunId(); // real ULID — what every production run has (import validates the shape)
   const sha = opts.workflowSha ?? (await seedWorkflow(store));
   store.enqueueRun({
     runId,

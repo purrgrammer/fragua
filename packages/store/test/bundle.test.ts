@@ -345,6 +345,85 @@ describe("importRunBundle", () => {
     expect(() => dst.importRunBundle(bytes)).toThrow(/git-bundle/);
     dst.close();
   });
+
+  // Security: the bundle-supplied runId flows into worktree paths + git refs on
+  // rehydrate. A traversal-shaped id must be rejected before any of that.
+  test("rejects a bundle whose runId could traverse paths/refs", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    const entries = readTar(bytes);
+    const mEntry = entries.find((e) => e.name === "manifest.json");
+    const manifest = JSON.parse(new TextDecoder().decode(mEntry?.data ?? new Uint8Array()));
+    manifest.run.runId = "../../etc/evil";
+    const tampered = writeTar([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) },
+      ...entries.filter((e) => e.name.startsWith("blobs/")),
+    ]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(tampered)).toThrow(/unsafe run id/);
+    dst.close();
+  });
+
+  // Security: never merge into an existing run. Identical re-import is a no-op;
+  // a bundle reusing the runId with divergent state is a hard error (not a splice).
+  test("refuses a divergent collision; identical re-import is a no-op", async () => {
+    const src = freshStore();
+    const runId = await seedRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+
+    const dst = freshStore();
+    expect(dst.importRunBundle(bytes).imported).toBe(true);
+    expect(dst.importRunBundle(bytes).imported).toBe(false); // identical → clean no-op
+
+    const entries = readTar(bytes);
+    const mEntry = entries.find((e) => e.name === "manifest.json");
+    const manifest = JSON.parse(new TextDecoder().decode(mEntry?.data ?? new Uint8Array()));
+    manifest.run.version = (manifest.run.version ?? 0) + 1; // same runId, divergent state
+    const divergent = writeTar([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) },
+      ...entries.filter((e) => e.name.startsWith("blobs/")),
+    ]);
+    expect(() => dst.importRunBundle(divergent)).toThrow(/divergent/);
+    dst.close();
+  });
+
+  test("rejects a manifest that isn't valid JSON (fail-closed)", () => {
+    const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode("{not json") }]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/not valid JSON/);
+    dst.close();
+  });
+
+  test("rejects a manifest missing a required array (fail-closed)", () => {
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 1,
+      schemaVersion: 1,
+      irVersion: 1,
+      run: {},
+      workflow: { sha: "x", name: "x", source: "x", ir: "x", irVersion: 1 },
+      messages: [],
+      artifacts: [],
+      blobs: [], // events missing → shape check fails before any TypeError
+    };
+    const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest)) }]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/events/);
+    dst.close();
+  });
+});
+
+describe("readTar", () => {
+  test("rejects an entry whose name isn't null-terminated within 100 bytes", () => {
+    const good = writeTar([{ name: "manifest.json", data: new TextEncoder().encode("{}") }]);
+    const corrupt = new Uint8Array(good);
+    for (let i = 0; i < 100; i++) corrupt[i] = 0x41; // 'A' — clobber the name field, no NUL
+    expect(() => readTar(corrupt)).toThrow(/null-terminated/);
+  });
 });
 
 describe("export determinism (db-import §6)", () => {

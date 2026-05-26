@@ -38,7 +38,15 @@ import {
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
-import { BUNDLE_VERSION, type BundleManifest, canonicalJson, readTar, type TarEntry, writeTar } from "./bundle.ts";
+import {
+  assertBundleManifest,
+  BUNDLE_VERSION,
+  type BundleManifest,
+  canonicalJson,
+  readTar,
+  type TarEntry,
+  writeTar,
+} from "./bundle.ts";
 import {
   deleteDaemonLock,
   deleteServerEndpoint,
@@ -106,6 +114,7 @@ import {
   selectProviderCredential,
 } from "./provider-credentials-queries.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
+import { assertSafeRunId } from "./run-id.ts";
 import {
   adoptImportedRun,
   bumpRunSeq,
@@ -1341,8 +1350,10 @@ export class SqliteStore implements IEventStore {
       irVersion: wf.irVersion,
       run,
       workflow: { sha: wf.sha, name: wf.name, source: wf.source, ir: wf.ir, irVersion: wf.irVersion },
-      events: this.getEvents(runId),
-      messages: this.getMessages(runId),
+      // Sort locally so re-export determinism (db-import §6) is provable in this
+      // function and can't silently break if a read-plane query's ordering shifts.
+      events: [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq),
+      messages: [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal),
       artifacts,
       blobs: blobManifest,
       ...(gitBundle != null ? { gitBundle } : {}),
@@ -1380,7 +1391,13 @@ export class SqliteStore implements IEventStore {
     const entries = readTar(bytes);
     const manifestEntry = entries.find((e) => e.name === "manifest.json");
     if (manifestEntry == null) throw new Error("importRunBundle: manifest.json missing from bundle");
-    const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.data)) as BundleManifest;
+    let manifest: BundleManifest;
+    try {
+      manifest = JSON.parse(new TextDecoder().decode(manifestEntry.data)) as BundleManifest;
+    } catch {
+      throw new Error("importRunBundle: manifest.json is not valid JSON");
+    }
+    assertBundleManifest(manifest);
 
     if (manifest.bundleVersion !== BUNDLE_VERSION) {
       throw new Error(
@@ -1429,7 +1446,24 @@ export class SqliteStore implements IEventStore {
 
     const run = manifest.run;
     const wf = manifest.workflow;
-    const already = this.getState(run.runId) != null;
+    // The bundle-supplied id is untrusted and flows into worktree paths + git
+    // refs on rehydrate — validate its shape before any of that.
+    assertSafeRunId(run.runId);
+
+    // Never write into a run that already exists here: a hand-crafted bundle
+    // reusing a known runId could otherwise splice events at unused seqs or
+    // overwrite artifact pointers. A non-divergent re-import is a clean no-op; a
+    // divergent collision is a hard error (delete the local run to re-import).
+    const existing = this.getState(run.runId);
+    if (existing != null) {
+      if (existing.version !== run.version || existing.lastAppliedSeq !== run.lastAppliedSeq) {
+        throw new Error(
+          `importRunBundle: run ${run.runId} already present with divergent state ` +
+            `(local v${existing.version}/seq${existing.lastAppliedSeq} != bundle v${run.version}/seq${run.lastAppliedSeq}) — refusing to merge`,
+        );
+      }
+      return { runId: run.runId, imported: false, resumeCompatible };
+    }
     const now = this.now();
 
     // db-import §4: the status travels VERBATIM (show the original state). The
@@ -1463,16 +1497,19 @@ export class SqliteStore implements IEventStore {
       };
     });
 
-    // Blob files before the txn (fs I/O): the `blobs` row must never point at
-    // a missing file — same file-then-row ordering as putArtifact.
-    for (const b of blobs) this.blobs.put(b.sha256, b.data);
+    // Blob files before the txn (fs I/O): the `blobs` row must never point at a
+    // missing file — same file-then-row ordering as putArtifact. Wrapped so that
+    // if the txn throws, any blob we just wrote that no row now references is
+    // reaped at once (a blob shared with another run keeps its row → is left
+    // intact) instead of lingering until gcBlobs.
+    try {
+      for (const b of blobs) this.blobs.put(b.sha256, b.data);
 
-    this.writeTxn(() => {
-      // FK order: workflow → blobs → run_state → events/messages/artifacts.
-      insertWorkflowIfAbsent(this.db, wf.sha, wf.name, wf.source, wf.ir, wf.irVersion, now);
-      for (const b of blobs) insertBlobIfAbsent(this.db, b.sha256, b.size, now);
+      this.writeTxn(() => {
+        // FK order: workflow → blobs → run_state → events/messages/artifacts.
+        insertWorkflowIfAbsent(this.db, wf.sha, wf.name, wf.source, wf.ir, wf.irVersion, now);
+        for (const b of blobs) insertBlobIfAbsent(this.db, b.sha256, b.size, now);
 
-      if (!already) {
         insertRunState(this.db, {
           runId: run.runId,
           workflowSha: run.workflowSha,
@@ -1523,26 +1560,31 @@ export class SqliteStore implements IEventStore {
         // title here; pass the source updatedAt so this doesn't clobber
         // updated_at to import time.
         if (run.title != null) updateRunStateTitle(this.db, run.runId, run.title, run.updatedAt);
-      }
 
-      for (const ev of eventRows) {
-        insertEventOrIgnore(this.db, ev.runId, ev.seq, ev.type, ev.writer, ev.payload, ev.ts);
+        for (const ev of eventRows) {
+          insertEventOrIgnore(this.db, ev.runId, ev.seq, ev.type, ev.writer, ev.payload, ev.ts);
+        }
+        for (const m of messageRows) insertMessageOrIgnore(this.db, m);
+        for (const a of manifest.artifacts) {
+          upsertArtifact(this.db, {
+            runId: run.runId,
+            nodeId: a.nodeId,
+            iteration: a.iteration,
+            key: a.key,
+            blobSha: a.blobSha,
+            mime: a.mime,
+            now: a.createdAt,
+          });
+        }
+      });
+    } catch (err) {
+      for (const b of blobs) {
+        if (!blobRowExists(this.db, b.sha256)) this.blobs.delete(b.sha256);
       }
-      for (const m of messageRows) insertMessageOrIgnore(this.db, m);
-      for (const a of manifest.artifacts) {
-        upsertArtifact(this.db, {
-          runId: run.runId,
-          nodeId: a.nodeId,
-          iteration: a.iteration,
-          key: a.key,
-          blobSha: a.blobSha,
-          mime: a.mime,
-          now: a.createdAt,
-        });
-      }
-    });
+      throw err;
+    }
 
-    return { runId: run.runId, imported: !already, resumeCompatible };
+    return { runId: run.runId, imported: true, resumeCompatible };
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {

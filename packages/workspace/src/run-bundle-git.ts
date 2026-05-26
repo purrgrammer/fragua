@@ -12,6 +12,12 @@ import { join } from "node:path";
 import type { GitExec } from "./run-actions.ts";
 import { type BootstrapSpec, WorktreeEnvironment } from "./worktree-env.ts";
 
+// A run id flows into tmpfile paths, the worktree dir, and refspecs below. The
+// store validates it on import, but these functions are also reached directly
+// (export / ci --export) and on rehydrate carry a bundle-supplied id — so guard
+// at the fs/ref boundary too. Mirrors `assertSafeRunId` in @fragua/store.
+const RUN_ID_RE = /^[0-9a-hjkmnp-tv-z]{26}$/; // 26-char lowercased Crockford ULID
+
 /** A self-contained git-bundle of a run's tree state (snapshot + head + base
  *  commits), or `null` when the run has none — a bare-cwd run, or the repo /
  *  refs are gone. Best-effort: a missing snapshots ref means no tree state. */
@@ -22,6 +28,7 @@ export async function buildRunGitBundle(
   baseGitSha: string | null,
   diffBaseSha: string | null,
 ): Promise<Uint8Array | null> {
+  if (!RUN_ID_RE.test(runId)) throw new Error(`buildRunGitBundle: unsafe run id ${JSON.stringify(runId)}`);
   const snapRef = `refs/fragua/snapshots/${runId}`;
   const candidates = [
     snapRef,
@@ -71,6 +78,7 @@ export async function rehydrateRunWorktree(
   bundleBytes: Uint8Array,
   opts: RehydrateOptions = {},
 ): Promise<RehydrateResult> {
+  if (!RUN_ID_RE.test(runId)) return { ok: false, error: `unsafe run id ${JSON.stringify(runId)}` };
   const tmp = join(tmpdir(), `fragua-rehydrate-${runId}-${process.pid}.gitbundle`);
   try {
     writeFileSync(tmp, bundleBytes);

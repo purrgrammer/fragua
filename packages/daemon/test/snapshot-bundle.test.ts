@@ -25,8 +25,22 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { newRunId } from "@fragua/store";
 import { buildRunGitBundle, defaultGitExec, rehydrateRunWorktree } from "@fragua/workspace";
 import { captureSnapshot } from "../src/snapshotter.ts";
+
+// Tests use readable keys for run ids; map each to a real ULID once (paired
+// snapshot/rehydrate calls share a key → share the id) so the import-side run-id
+// validation accepts them, exactly as production ULIDs would.
+const _rids = new Map<string, string>();
+function rid(key: string): string {
+  let v = _rids.get(key);
+  if (v === undefined) {
+    v = newRunId();
+    _rids.set(key, v);
+  }
+  return v;
+}
 
 const dirs: string[] = [];
 function freshDir(): string {
@@ -101,7 +115,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     writeFileSync(join(repo, "base.txt"), "base-modified\n");
     writeFileSync(join(repo, "added.txt"), "added\n");
 
-    const wt = await roundTrip(repo, baseSha, "run_add_mod_del");
+    const wt = await roundTrip(repo, baseSha, rid("run_add_mod_del"));
     expect(existsSync(join(wt, "del.txt"))).toBe(false); // deletion travelled
     expect(readFileSync(join(wt, "base.txt"), "utf8")).toBe("base-modified\n"); // modification
     expect(readFileSync(join(wt, "added.txt"), "utf8")).toBe("added\n"); // addition
@@ -113,7 +127,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     writeFileSync(script, "#!/bin/sh\necho hi\n");
     chmodSync(script, 0o755);
 
-    const wt = await roundTrip(repo, baseSha, "run_mode");
+    const wt = await roundTrip(repo, baseSha, rid("run_mode"));
     expect(lstatSync(join(wt, "run.sh")).mode & 0o111).not.toBe(0); // an exec bit survived
   });
 
@@ -121,7 +135,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     const { repo, baseSha } = initRepo();
     symlinkSync("base.txt", join(repo, "link"));
 
-    const wt = await roundTrip(repo, baseSha, "run_link");
+    const wt = await roundTrip(repo, baseSha, rid("run_link"));
     const st = lstatSync(join(wt, "link"));
     expect(st.isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(wt, "link"))).toBe("base.txt");
@@ -132,7 +146,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     const bin = new Uint8Array([0, 1, 2, 255, 254, 0, 128, 42, 13, 10]);
     writeFileSync(join(repo, "data.bin"), bin);
 
-    const wt = await roundTrip(repo, baseSha, "run_bin");
+    const wt = await roundTrip(repo, baseSha, rid("run_bin"));
     expect(new Uint8Array(readFileSync(join(wt, "data.bin")))).toEqual(bin);
   });
 
@@ -147,7 +161,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     writeFileSync(join(repo, "secret.env"), "SECRET=xyz\n");
     writeFileSync(join(repo, "tracked.txt"), "tracked\n");
 
-    const wt = await roundTrip(repo, baseSha, "run_ignore");
+    const wt = await roundTrip(repo, baseSha, rid("run_ignore"));
     expect(existsSync(join(wt, "secret.env"))).toBe(false); // ignored secret didn't leak
     expect(existsSync(join(wt, "ignored/junk.txt"))).toBe(false); // ignored junk didn't travel
     expect(readFileSync(join(wt, "tracked.txt"), "utf8")).toBe("tracked\n"); // tracked addition did
@@ -155,7 +169,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
 
   test("a multi-snapshot chain travels; the tip rehydrates with every change", async () => {
     const { repo, baseSha } = initRepo();
-    const runId = "run_multi";
+    const runId = rid("run_multi");
 
     writeFileSync(join(repo, "s1.txt"), "one\n");
     const snap1 = await captureSnapshot({
@@ -198,7 +212,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     writeFileSync(join(repo, "a/b/c/d/deep.txt"), "deep\n");
     writeFileSync(join(repo, "ünïcøde-文件.txt"), "u\n");
 
-    const wt = await roundTrip(repo, baseSha, "run_paths");
+    const wt = await roundTrip(repo, baseSha, rid("run_paths"));
     expect(readFileSync(join(wt, "a/b/c/d/deep.txt"), "utf8")).toBe("deep\n");
     expect(readFileSync(join(wt, "ünïcøde-文件.txt"), "utf8")).toBe("u\n");
   });
@@ -206,7 +220,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
   test("rehydrates into a clone that already shares base history (objects overlap)", async () => {
     const { repo, baseSha } = initRepo();
     writeFileSync(join(repo, "feature.txt"), "feature\n"); // uncommitted run state
-    const bundle = await snapshotAndBundle(repo, baseSha, "run_clone");
+    const bundle = await snapshotAndBundle(repo, baseSha, rid("run_clone"));
 
     // The host is a CLONE of the source — it already has base + its objects, so
     // the self-contained bundle's objects overlap what's there. git dedupes on
@@ -215,7 +229,7 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     await defaultGitExec(freshDir(), ["clone", "-q", repo, host]);
     expect(gitSync(host, ["rev-parse", "HEAD"])).toBe(baseSha); // clone shares the base sha
 
-    const res = await rehydrateRunWorktree(defaultGitExec, host, "run_clone", bundle);
+    const res = await rehydrateRunWorktree(defaultGitExec, host, rid("run_clone"), bundle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(readFileSync(join(res.worktree, "feature.txt"), "utf8")).toBe("feature\n"); // run state arrived
@@ -225,14 +239,14 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
   test("two runs rehydrate into one host without colliding (per-run refs + worktrees)", async () => {
     const a = initRepo();
     writeFileSync(join(a.repo, "a.txt"), "alpha\n");
-    const bundleA = await snapshotAndBundle(a.repo, a.baseSha, "run_a");
+    const bundleA = await snapshotAndBundle(a.repo, a.baseSha, rid("run_a"));
     const b = initRepo();
     writeFileSync(join(b.repo, "b.txt"), "bravo\n");
-    const bundleB = await snapshotAndBundle(b.repo, b.baseSha, "run_b");
+    const bundleB = await snapshotAndBundle(b.repo, b.baseSha, rid("run_b"));
 
     const host = await freshHost();
-    const resA = await rehydrateRunWorktree(defaultGitExec, host, "run_a", bundleA);
-    const resB = await rehydrateRunWorktree(defaultGitExec, host, "run_b", bundleB);
+    const resA = await rehydrateRunWorktree(defaultGitExec, host, rid("run_a"), bundleA);
+    const resB = await rehydrateRunWorktree(defaultGitExec, host, rid("run_b"), bundleB);
     expect(resA.ok && resB.ok).toBe(true);
     if (!resA.ok || !resB.ok) return;
     // Distinct worktrees, each carrying only its own run's state — no cross-talk.
@@ -246,15 +260,15 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
   test("re-rehydrating the same run reuses the worktree (resume-aware, no error)", async () => {
     const { repo, baseSha } = initRepo();
     writeFileSync(join(repo, "x.txt"), "x\n");
-    const bundle = await snapshotAndBundle(repo, baseSha, "run_re");
+    const bundle = await snapshotAndBundle(repo, baseSha, rid("run_re"));
     const host = await freshHost();
 
-    const first = await rehydrateRunWorktree(defaultGitExec, host, "run_re", bundle);
+    const first = await rehydrateRunWorktree(defaultGitExec, host, rid("run_re"), bundle);
     expect(first.ok).toBe(true);
     // A second rehydrate of the same run into the same host: WorktreeEnvironment
     // detects the already-registered worktree and reuses it (the same path the
     // executor's provisioner takes on resume) rather than failing on `worktree add`.
-    const second = await rehydrateRunWorktree(defaultGitExec, host, "run_re", bundle);
+    const second = await rehydrateRunWorktree(defaultGitExec, host, rid("run_re"), bundle);
     expect(second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     expect(second.worktree).toBe(first.worktree);
@@ -271,8 +285,8 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
     mkdirSync(join(repo, "deps"));
     writeFileSync(join(repo, "deps/lib"), "installed-in-source\n"); // ignored → does NOT travel
 
-    const bundle = await snapshotAndBundle(repo, baseSha, "run_boot");
-    const res = await rehydrateRunWorktree(defaultGitExec, await freshHost(), "run_boot", bundle, {
+    const bundle = await snapshotAndBundle(repo, baseSha, rid("run_boot"));
+    const res = await rehydrateRunWorktree(defaultGitExec, await freshHost(), rid("run_boot"), bundle, {
       bootstrap: "mkdir -p deps && printf regenerated > deps/lib",
     });
     expect(res.ok).toBe(true);
@@ -287,8 +301,8 @@ describe("snapshot → bundle → rehydrate (real snapshotter)", () => {
   test("a failing bootstrap fails the rehydrate (surfaced, not swallowed)", async () => {
     const { repo, baseSha } = initRepo();
     writeFileSync(join(repo, "x.txt"), "x\n");
-    const bundle = await snapshotAndBundle(repo, baseSha, "run_bootfail");
-    const res = await rehydrateRunWorktree(defaultGitExec, await freshHost(), "run_bootfail", bundle, {
+    const bundle = await snapshotAndBundle(repo, baseSha, rid("run_bootfail"));
+    const res = await rehydrateRunWorktree(defaultGitExec, await freshHost(), rid("run_bootfail"), bundle, {
       bootstrap: "exit 7",
     });
     expect(res.ok).toBe(false);
