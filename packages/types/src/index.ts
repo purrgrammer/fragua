@@ -48,6 +48,7 @@ export {
   type PauseReason,
   type QuarantineReason,
   type RawEvent,
+  type RunEnqueuedPayload,
   type RunStatus,
   type SnapshotCapturedData,
   type SnapshotStat,

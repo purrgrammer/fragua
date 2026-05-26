@@ -261,8 +261,32 @@ export type MessageRole = AgentMessage["role"];
 
 // ─────────────── Intent events (writer: "client", no OCC) ───────────────
 
+/**
+ * Genesis payload — the synthetic `intent.run_enqueued` event carries the run's
+ * whole enqueue-time IDENTITY, so a complete `run_state` is derivable by
+ * replaying the log (the seed for `foldFacts`). It deliberately omits the local
+ * bindings (`cwd`, inbox triage, `acceptedSha`): their absence from the log is
+ * what makes an imported run inert by construction.
+ *
+ * Bounded by `MAX_EVENT_PAYLOAD_BYTES` (4 KiB) — tighter than the 8 KiB
+ * `run_state.routing` column. The only variable field is `routing` (the
+ * description / title seed); enqueue rejects an over-cap payload.
+ */
+export interface RunEnqueuedPayload {
+  workflowSha: string;
+  priority?: number;
+  projectId: string;
+  projectName: string;
+  routing: Record<string, unknown>;
+  contractVersion: number;
+  workflowName?: string;
+  workflowScope?: "global" | "local" | "path" | "ephemeral";
+  workflowPath?: string;
+  scheduleId?: string;
+}
+
 export type IntentEvent =
-  | { type: "intent.run_enqueued"; payload: { workflowSha: string; priority?: number } }
+  | { type: "intent.run_enqueued"; payload: RunEnqueuedPayload }
   | { type: "intent.steering_requested"; payload: { text: string } }
   | { type: "intent.pause_requested"; payload: Record<string, never> }
   | { type: "intent.cancel_requested"; payload: { reason?: string } }

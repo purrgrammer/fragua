@@ -36,6 +36,7 @@ const SURFACE_DECLS = [
   "AUTO_WAKE_PAUSE_REASONS",
   "HaltReason",
   "QuarantineReason",
+  "RunEnqueuedPayload",
   "IntentEvent",
   "FactEvent",
 ] as const;

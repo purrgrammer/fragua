@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ChangeStat, InboxStatus } from "@fragua/types";
+import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -567,6 +567,25 @@ export class SqliteStore implements IEventStore {
     const projectName =
       params.projectName ?? (cwd != null ? (cwd.split("/").filter(Boolean).at(-1) ?? "local") : "local");
 
+    // The genesis event carries the whole enqueue identity so `run_state` is
+    // derivable by replaying the log (no `cwd` — its absence keeps an imported
+    // run inert). Bounded by the 4 KiB event cap, tighter than routing's 8 KiB.
+    const genesisPayload = JSON.stringify({
+      workflowSha: params.workflowSha,
+      priority: params.priority ?? 0,
+      projectId,
+      projectName,
+      routing: params.initialRouting ?? {},
+      contractVersion: EVENT_CONTRACT_VERSION,
+      ...(params.workflowName != null ? { workflowName: params.workflowName } : {}),
+      ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
+      ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
+      ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
+    } satisfies RunEnqueuedPayload);
+    if (genesisPayload.length >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(genesisPayload.length, MAX_EVENT_PAYLOAD_BYTES);
+    }
+
     this.writeTxn(() => {
       if (!workflowExists(this.db, params.workflowSha)) {
         throw new Error(`unknown workflow sha ${params.workflowSha}`);
@@ -592,16 +611,7 @@ export class SqliteStore implements IEventStore {
       });
 
       const seq = bumpRunSeq(this.db, params.runId);
-      insertEventRunEnqueued(
-        this.db,
-        params.runId,
-        seq,
-        JSON.stringify({
-          workflowSha: params.workflowSha,
-          priority: params.priority ?? 0,
-        }),
-        now,
-      );
+      insertEventRunEnqueued(this.db, params.runId, seq, genesisPayload, now);
     });
   }
 
