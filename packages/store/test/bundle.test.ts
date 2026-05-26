@@ -223,6 +223,46 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
+  test("rejects a workflow name over the cap (reject, not silent clamp)", () => {
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 1,
+      schemaVersion: 1,
+      irVersion: 1,
+      runs: [],
+      workflows: [{ sha: "a".repeat(64), name: "x".repeat(513), irVersion: 1 }],
+      blobs: [],
+    };
+    const bytes = writeTar([{ name: "manifest.json", data: new TextEncoder().encode(canonicalJson(manifest)) }]);
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/exceeds 512/);
+    dst.close();
+  });
+
+  test("rejects a wrong-typed genesis workflowSha (not just non-null)", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    // Tamper the genesis event's payload.workflowSha to a NUMBER — non-null, so
+    // the old `!= null` sweep accepted it; the typed gate must reject it.
+    const entries = readTar(bytes);
+    const evName = `runs/${runId}/events.jsonl`;
+    const tampered = entries.map((e) => {
+      if (e.name !== evName) return e;
+      const lines = new TextDecoder().decode(e.data).trim().split("\n");
+      const i = lines.findIndex((l) => l.includes("intent.run_enqueued"));
+      const ev = JSON.parse(lines[i]!);
+      ev.payload.workflowSha = 12345;
+      lines[i] = JSON.stringify(ev);
+      return { name: e.name, data: new TextEncoder().encode(`${lines.join("\n")}\n`) };
+    });
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(writeTar(tampered))).toThrow(/sha256/);
+    dst.close();
+  });
+
   test("rejects a duplicate runId in the manifest", async () => {
     const src = freshStore();
     const runId = await seedTerminalRun(src);

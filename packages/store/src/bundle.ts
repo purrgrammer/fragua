@@ -37,6 +37,10 @@ export interface BundleManifest {
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
+/** Upper bound on a bundle-supplied workflow `name` (persisted + UI-rendered).
+ *  Rejected past this, not clamped — no silent mutation at the trust boundary. */
+export const MAX_WORKFLOW_NAME_CHARS = 512;
+
 /** A bundle-supplied identifier that flows into a filesystem path
  *  (`blobs/<sha>`, `workflows/<sha>/…`) or a SQL key MUST be a real sha256 —
  *  64 lowercase hex chars — before it goes anywhere. The blob-integrity check
@@ -76,6 +80,9 @@ export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
     const wf = asObject(w, `workflows[${i}]`);
     assertSha256(wf["sha"], `workflows[${i}].sha`);
     if (typeof wf["name"] !== "string") throw new Error(`bundle manifest: workflows[${i}].name is not a string`);
+    if ((wf["name"] as string).length > MAX_WORKFLOW_NAME_CHARS) {
+      throw new Error(`bundle manifest: workflows[${i}].name exceeds ${MAX_WORKFLOW_NAME_CHARS} chars`);
+    }
   }
   for (const [i, b] of (o["blobs"] as unknown[]).entries()) {
     const blob = asObject(b, `blobs[${i}]`);

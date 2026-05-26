@@ -74,15 +74,11 @@ steps:
     prompt: |
       Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). One focused pass over correctness and any obvious security or clarity issue — it's a small change, keep it to a single pass.
 
-      WRITE the review to `pr-review.md` (cwd-relative) with the `write` tool — do NOT print it to the thread (the `verdict` step reads the file; re-emitting the body burns the node's cost twice). The file's content, verbatim:
+      WRITE the review to `pr-review.md` (cwd-relative) with the `write` tool — do NOT print it to the thread (the `verdict` step reads the file; re-emitting the body burns the node's cost twice). Use the SAME severity-section shape as the full tier (one format for the `verdict` classifier to read). The file's content, headings exactly: `# Code Review` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
-      # Code Review
+      Per finding under its severity heading: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence. Drop a severity heading only if it has no findings; if everything is clean, replace the severity sections with `## All clear` (one sentence: what was reviewed, what you couldn't see).
 
-      ## Findings
-      One per line: `- [critical|high|medium|low] path:line — claim.` with `Why:` and `Fix:` each one sentence. If none, replace with `## All clear` + one sentence (what was reviewed, what you couldn't see).
-
-      ## Next steps
-      ≤2 concrete actions, or `No follow-up required.`
+      End with `## Next steps` — ≤2 concrete actions, or `No follow-up required.`
 
       Emit only `WROTE` (do NOT reprint the review).
 

@@ -40,6 +40,7 @@ import {
 import { BlobFS } from "./blob-fs.ts";
 import {
   assertBundleManifest,
+  assertSha256,
   BUNDLE_VERSION,
   type BundleManifest,
   blobPath,
@@ -1406,15 +1407,15 @@ export class SqliteStore implements IEventStore {
     }
 
     // Workflows: read the source + IR bytes each manifest entry declares. The
-    // bundle-supplied `name` is free text → clamp it (it's persisted + rendered).
+    // `name` length is rejected (not clamped) in assertBundleManifest — same
+    // reject discipline as the sha gates, no silent mutation at the boundary.
     const workflows = manifest.workflows.map((w) => {
       const source = byName.get(workflowSourcePath(w.sha));
       const ir = byName.get(workflowIrPath(w.sha));
       if (source == null || ir == null) {
         throw new Error(`importRunBundle: workflow ${w.sha} is in the manifest but its source/ir entry is absent`);
       }
-      const name = w.name.length > 512 ? w.name.slice(0, 512) : w.name;
-      return { ...w, name, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
+      return { ...w, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
     });
 
     // The format is multi-run by construction; a duplicate id would import the
@@ -1462,16 +1463,25 @@ export class SqliteStore implements IEventStore {
           throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq)`);
         }
       }
-      // Clear error if the genesis payload is missing required identity — else
-      // it surfaces as an opaque SQLITE_CONSTRAINT_NOTNULL deep in the txn.
+      // Shape-gate the genesis identity — same discipline as the manifest shas.
+      // A bare `!= null` sweep would let a wrong-typed value (workflowSha: 12345,
+      // projectId: "") through to insertRunState / deriveRunState / FK lookups;
+      // type each field at the boundary instead, and surface a clear error
+      // rather than an opaque SQLITE_CONSTRAINT deep in the txn.
       const genesis = events.find((e) => e.type === "intent.run_enqueued");
       if (genesis == null)
         throw new Error(`importRunBundle: run ${r.runId} has no genesis (intent.run_enqueued) event`);
       const gp = genesis.payload as Record<string, unknown> | null;
-      for (const f of ["workflowSha", "projectId", "projectName", "contractVersion", "routing"] as const) {
-        if (gp == null || gp[f] == null) {
-          throw new Error(`importRunBundle: run ${r.runId} genesis payload is missing ${f}`);
-        }
+      if (gp == null) throw new Error(`importRunBundle: run ${r.runId} genesis payload is missing`);
+      assertSha256(gp["workflowSha"], `run ${r.runId} genesis workflowSha`);
+      for (const f of ["projectId", "projectName"] as const) {
+        if (typeof gp[f] !== "string") throw new Error(`importRunBundle: run ${r.runId} genesis ${f} is not a string`);
+      }
+      if (typeof gp["contractVersion"] !== "number") {
+        throw new Error(`importRunBundle: run ${r.runId} genesis contractVersion is not a number`);
+      }
+      if (gp["routing"] == null || typeof gp["routing"] !== "object") {
+        throw new Error(`importRunBundle: run ${r.runId} genesis routing is not an object`);
       }
 
       const derived = deriveRunState(r.runId, events);

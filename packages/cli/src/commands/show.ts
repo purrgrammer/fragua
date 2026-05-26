@@ -120,7 +120,7 @@ export function showCommand(opts: ShowOptions): Promise<number> {
     }
   }
 
-  // A validate-before-import preflight must FAIL CLOSED — a malformed bundle
-  // import would reject must not exit 0 here.
+  // A validate-before-import preflight must fail closed — if import would reject
+  // this bundle, show must not exit 0.
   return Promise.resolve(versionOk && blobsBad === 0 && runsBad === 0 ? 0 : 1);
 }
