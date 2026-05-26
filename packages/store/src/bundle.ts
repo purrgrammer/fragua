@@ -53,7 +53,11 @@ export function assertSha256(sha: unknown, what: string): asserts sha is string 
   }
 }
 
-function asObject(v: unknown, what: string): Record<string, unknown> {
+/** Narrow to a non-null, non-array object or throw — `typeof x === "object"`
+ *  alone admits `null` and arrays, so any trust-boundary "is it an object?"
+ *  check must use this (an array slipping through reaches SQL as an opaque
+ *  failure, the thing the gate exists to prevent). */
+export function asObject(v: unknown, what: string): Record<string, unknown> {
   if (v == null || typeof v !== "object" || Array.isArray(v))
     throw new Error(`bundle manifest: ${what} is not an object`);
   return v as Record<string, unknown>;

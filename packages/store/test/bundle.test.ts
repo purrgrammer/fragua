@@ -257,13 +257,13 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
-  test("rejects a wrong-typed genesis workflowSha (not just non-null)", async () => {
+  // Tamper the genesis event's payload and assert the gate rejects it. `mutate`
+  // edits the parsed payload; `expectThrow` is the message the gate should emit.
+  async function genesisTamperRejects(mutate: (payload: Record<string, unknown>) => unknown, expectThrow: RegExp) {
     const src = freshStore();
     const runId = await seedTerminalRun(src);
     const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
     src.close();
-    // Tamper the genesis event's payload.workflowSha to a NUMBER — non-null, so
-    // the old `!= null` sweep accepted it; the typed gate must reject it.
     const entries = readTar(bytes);
     const evName = `runs/${runId}/events.jsonl`;
     const tampered = entries.map((e) => {
@@ -271,13 +271,29 @@ describe("importRunBundle", () => {
       const lines = new TextDecoder().decode(e.data).trim().split("\n");
       const i = lines.findIndex((l) => l.includes("intent.run_enqueued"));
       const ev = JSON.parse(lines[i]!);
-      ev.payload.workflowSha = 12345;
+      ev.payload = mutate(ev.payload) ?? ev.payload;
       lines[i] = JSON.stringify(ev);
       return { name: e.name, data: new TextEncoder().encode(`${lines.join("\n")}\n`) };
     });
     const dst = freshStore();
-    expect(() => dst.importRunBundle(writeTar(tampered))).toThrow(/sha256/);
+    expect(() => dst.importRunBundle(writeTar(tampered))).toThrow(expectThrow);
     dst.close();
+  }
+
+  test("rejects a wrong-typed genesis workflowSha (not just non-null)", async () => {
+    await genesisTamperRejects((p) => {
+      p["workflowSha"] = 12345;
+    }, /sha256/);
+  });
+
+  test("rejects an array genesis payload (typeof [] === 'object' must not slip)", async () => {
+    await genesisTamperRejects(() => [1, 2, 3], /genesis payload is not an object/);
+  });
+
+  test("rejects an array genesis routing", async () => {
+    await genesisTamperRejects((p) => {
+      p["routing"] = [];
+    }, /genesis routing is not an object/);
   });
 
   test("rejects a duplicate runId in the manifest", async () => {

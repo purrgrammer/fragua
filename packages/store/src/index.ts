@@ -1,4 +1,5 @@
 export {
+  asObject,
   assertBundleManifest,
   assertSha256,
   BUNDLE_VERSION,

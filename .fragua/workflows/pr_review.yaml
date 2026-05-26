@@ -23,7 +23,7 @@
 
 name: pr_review
 goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR with no human gate.
-budget: 6.75 # covers ONE verify retry: scope (0.40) + 2×(review_full 2.50 + verify 0.60) + verdict (0.10)
+budget: 10.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 2.50 + verify 0.60) + verdict (0.10) = 9.80, so a retry never halts mid-pass on the cap
 
 inputs:
   pr:
@@ -115,8 +115,8 @@ steps:
   verify:                              # full tier — automated evidence-quality gate
     type: llm
     thread: review
-    retry: review_full                 # REJECT ⇒ re-review (one retry; budget covers it)
-    max-retries: 1
+    retry: review_full                 # REJECT ⇒ re-review (capped; budget covers the full path)
+    max-retries: 2
     allowed-tools: [read, grep]
     max-cost: 0.60
     next: verdict
@@ -146,6 +146,9 @@ steps:
 
   # Three terminal posts — each a PURE TOOL node (no LLM): the body is already a file, so posting is
   # one deterministic gh call. A non-zero gh exit halts the run. Only `post_approve` lets auto-merge arm.
+  # Auto-merge arms on the APPROVED review *state* this sets — NOT on a counted
+  # approval (branch-protection "required approvals" ignore a bot review). The
+  # `state == "APPROVED"` filter in pr-review.yml is the actual merge signal.
   post_approve:
     type: tool
     run: gh pr review ${{ inputs.pr }} --approve --body-file pr-review.md

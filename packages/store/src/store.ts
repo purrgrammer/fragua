@@ -40,6 +40,7 @@ import {
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
 import {
+  asObject,
   assertBundleManifest,
   assertSha256,
   BUNDLE_VERSION,
@@ -1464,16 +1465,18 @@ export class SqliteStore implements IEventStore {
           throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq)`);
         }
       }
-      // Shape-gate the genesis identity — same discipline as the manifest shas.
-      // A bare `!= null` sweep would let a wrong-typed value (workflowSha: 12345,
-      // projectId: "") through to insertRunState / deriveRunState / FK lookups;
-      // type each field at the boundary instead, and surface a clear error
-      // rather than an opaque SQLITE_CONSTRAINT deep in the txn.
+      // Defense-in-depth: shape-gate the genesis identity fields BEFORE
+      // deriveRunState consumes them, same discipline as the manifest shas. A
+      // bare `!= null` sweep would admit a wrong-typed value (workflowSha:
+      // 12345) or an array (`typeof [] === "object"`) and let it reach
+      // insertRunState / FK lookups — type each field at the boundary (asObject
+      // rejects arrays) and surface a clear error, not an opaque SQLITE_CONSTRAINT
+      // in the txn. (deriveRunState re-finds genesis; this gate runs first so its
+      // clearer errors win.)
       const genesis = events.find((e) => e.type === "intent.run_enqueued");
       if (genesis == null)
         throw new Error(`importRunBundle: run ${r.runId} has no genesis (intent.run_enqueued) event`);
-      const gp = genesis.payload as Record<string, unknown> | null;
-      if (gp == null) throw new Error(`importRunBundle: run ${r.runId} genesis payload is missing`);
+      const gp = asObject(genesis.payload, `run ${r.runId} genesis payload`);
       assertSha256(gp["workflowSha"], `run ${r.runId} genesis workflowSha`);
       for (const f of ["projectId", "projectName"] as const) {
         if (typeof gp[f] !== "string") throw new Error(`importRunBundle: run ${r.runId} genesis ${f} is not a string`);
@@ -1481,9 +1484,7 @@ export class SqliteStore implements IEventStore {
       if (typeof gp["contractVersion"] !== "number") {
         throw new Error(`importRunBundle: run ${r.runId} genesis contractVersion is not a number`);
       }
-      if (gp["routing"] == null || typeof gp["routing"] !== "object") {
-        throw new Error(`importRunBundle: run ${r.runId} genesis routing is not an object`);
-      }
+      asObject(gp["routing"], `run ${r.runId} genesis routing`);
 
       const derived = deriveRunState(r.runId, events);
       return {
