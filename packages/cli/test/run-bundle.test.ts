@@ -171,4 +171,106 @@ describe("fragua runs export/import", () => {
       tgt.close();
     }
   });
+
+  // Everything travels: a run whose worktree has MULTIPLE commits (HEAD moved
+  // off base) PLUS uncommitted dirty changes. The snapshot folds committed +
+  // uncommitted into one tree, so rehydrate reproduces the exact paused state,
+  // and the moved-HEAD ref travels too.
+  test("export + rehydrate carries multiple commits + dirty changes", async () => {
+    const srcDir = freshDir();
+    const repo = join(srcDir, "repo");
+    mkdirSync(repo, { recursive: true });
+    const git = (args: string[], env?: Record<string, string>) =>
+      Bun.spawnSync({ cmd: ["git", ...args], cwd: repo, ...(env ? { env: { ...process.env, ...env } } : {}) });
+    const out = (args: string[], env?: Record<string, string>) =>
+      new TextDecoder().decode(git(args, env).stdout).trim();
+    const ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
+
+    git(["init", "-q"]);
+    writeFileSync(join(repo, "base.txt"), "base\n");
+    git(["add", "-A"]);
+    git([...ident, "commit", "-q", "-m", "base"]);
+    const baseSha = out(["rev-parse", "HEAD"]);
+
+    // Two commits on top of base — HEAD moves off base.
+    writeFileSync(join(repo, "c1.txt"), "one\n");
+    git(["add", "-A"]);
+    git([...ident, "commit", "-q", "-m", "c1"]);
+    writeFileSync(join(repo, "c2.txt"), "two\n");
+    git(["add", "-A"]);
+    git([...ident, "commit", "-q", "-m", "c2"]);
+    const headSha = out(["rev-parse", "HEAD"]);
+
+    // Uncommitted dirt: a new file + a modification of a tracked file.
+    writeFileSync(join(repo, "dirty.txt"), "dirty\n");
+    writeFileSync(join(repo, "base.txt"), "base-modified\n");
+
+    // Snapshot folds committed + uncommitted (add -A → write-tree → commit-tree).
+    const idx = join(srcDir, "sentinel-index");
+    git(["add", "-A"], { GIT_INDEX_FILE: idx });
+    const tree = out(["write-tree"], { GIT_INDEX_FILE: idx });
+    const snap = out([...ident, "commit-tree", tree, "-m", "snap"]);
+    const runId = "run_multi";
+    git(["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
+    git(["update-ref", `refs/fragua/heads/${runId}`, headSha]); // HEAD moved off base
+
+    const srcDb = join(srcDir, "store.db");
+    const s = new SqliteStore({ path: srcDb });
+    s.saveWorkflow("wf1", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
+    s.enqueueRun({ runId, workflowSha: "wf1", cwd: repo });
+    s.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf1", contractVersion: 1, startNode: "work", baseGitSha: baseSha },
+        },
+      ],
+      s.getState(runId)!.version,
+    );
+    s.appendObservabilityEvents(runId, [
+      {
+        type: "snapshot.captured",
+        payload: { runId, eventIdx: 1, nodeId: "work", treeSha: tree, commitSha: snap, parentSnap: "", headSha },
+      },
+    ]);
+    s.close();
+
+    const bundle = join(srcDir, "r.fragua");
+    expect(await exportCommand({ runId, to: bundle, dbPath: srcDb })).toBe(0);
+
+    const hostDir = freshDir();
+    const host = join(hostDir, "host");
+    const tgtDb = join(hostDir, "store.db");
+    new SqliteStore({ path: tgtDb }).close();
+    expect(await importCommand({ bundle, dbPath: tgtDb, rehydrate: true, into: host })).toBe(0);
+
+    // Worktree at the snapshot tip = committed files AND the dirt, byte-faithful.
+    const wt = join(host, ".fragua/worktrees", runId);
+    expect(readFileSync(join(wt, "c1.txt"), "utf8")).toBe("one\n"); // committed
+    expect(readFileSync(join(wt, "c2.txt"), "utf8")).toBe("two\n"); // committed
+    expect(readFileSync(join(wt, "dirty.txt"), "utf8")).toBe("dirty\n"); // uncommitted
+    expect(readFileSync(join(wt, "base.txt"), "utf8")).toBe("base-modified\n"); // uncommitted mod
+
+    // The moved-HEAD ref travelled too (resume needs it).
+    const hostHead = new TextDecoder()
+      .decode(Bun.spawnSync({ cmd: ["git", "rev-parse", "--verify", `refs/fragua/heads/${runId}`], cwd: host }).stdout)
+      .trim();
+    expect(hostHead).toBe(headSha);
+
+    // diff base→snapshot shows every change: the two commits + the dirty file + mod.
+    const tgt = new SqliteStore({ path: tgtDb, migrate: false });
+    try {
+      const rp = makeReadPlane({ store: tgt });
+      const snaps = rp.snapshots(runId);
+      const range = rp.diffRange(runId, snaps?.[snaps.length - 1]?.eventIdx ?? -1, "base");
+      expect(range.ok).toBe(true);
+      if (range.ok) {
+        const text = await gitDiff(defaultGitExec, range.cwd, range.fromSha, range.toSha);
+        for (const f of ["c1.txt", "c2.txt", "dirty.txt", "base.txt"]) expect(text).toContain(f);
+      }
+    } finally {
+      tgt.close();
+    }
+  });
 });

@@ -19,46 +19,13 @@ import { dirname, join, resolve } from "node:path";
 import { readTar } from "@fragua/store";
 import { defaultGitExec, type GitExec } from "@fragua/workspace";
 import chalk from "chalk";
+import { buildGitBundle } from "../git-bundle.ts";
 import { resolveStorePath, withStoreClient } from "../store-client.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 
 interface DiscoveryOpts {
   cwd?: string;
   dbPath?: string;
-}
-
-/** Build a self-contained git-bundle of a run's tree state, or `null` when the
- *  run has none (bare-cwd, or the repo / refs are gone). Best-effort: a missing
- *  snapshots ref means rows-only export. */
-async function buildGitBundle(
-  git: GitExec,
-  cwd: string,
-  runId: string,
-  baseGitSha: string | null,
-  diffBaseSha: string | null,
-): Promise<Uint8Array | null> {
-  const snapRef = `refs/fragua/snapshots/${runId}`;
-  const candidates = [
-    snapRef,
-    `refs/fragua/heads/${runId}`,
-    ...(baseGitSha != null ? [baseGitSha] : []),
-    ...(diffBaseSha != null && diffBaseSha !== baseGitSha ? [diffBaseSha] : []),
-  ];
-  const revs: string[] = [];
-  for (const c of candidates) {
-    const r = await git(cwd, ["rev-parse", "--verify", "--quiet", c]);
-    if (r.exitCode === 0 && r.stdout.trim() !== "") revs.push(c);
-  }
-  if (!revs.includes(snapRef)) return null; // no snapshots → no tree state
-
-  const tmp = join(tmpdir(), `fragua-export-${runId}-${process.pid}.gitbundle`);
-  try {
-    const r = await git(cwd, ["bundle", "create", tmp, ...revs]);
-    if (r.exitCode !== 0) return null;
-    return new Uint8Array(readFileSync(tmp));
-  } finally {
-    rmSync(tmp, { force: true });
-  }
 }
 
 export interface ExportOptions extends DiscoveryOpts {
