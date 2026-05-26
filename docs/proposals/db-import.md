@@ -9,6 +9,15 @@ parent: cli-topology.md
 
 # Run import & bundling
 
+> **Superseded in part by [`bundles.md`](bundles.md) (2026-05-26).** The bundle
+> *model* moved on: a bundle carries runs as raw event logs, workflows, and
+> blobs — `run_state` is derived on import, not carried — and tree-state /
+> `--rehydrate` / the `imported_runs` marker / `adopt` are dropped (an imported
+> run is inert by construction via `cwd = null`). What still holds here: the
+> identity collision-safety argument (§2), the table-by-table portability audit
+> (§4), and the cross-version resume gate (§5). Read `bundles.md` for the
+> current format and verbs; read this for the deeper portability rationale.
+
 > Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua runs
 > export` / `fragua runs import`); blocks nothing. Consumes the artifact a
 > CI run produces. Interlocks with project identity (shipped — cwd is
