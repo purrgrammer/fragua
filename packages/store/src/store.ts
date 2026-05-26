@@ -186,6 +186,7 @@ import {
   type IntentAppendResult,
   type IntentEvent,
   type IntentType,
+  isTerminal,
   MAX_BLOB_BYTES,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_MESSAGE_CONTENT_BYTES,
@@ -1320,14 +1321,23 @@ export class SqliteStore implements IEventStore {
    * daemon's resume gate would accept it — an incompatible run parks on resume,
    * never on inspect (db-import §5). Idempotent: re-importing is a no-op
    * (events/messages INSERT-OR-IGNORE, artifacts upsert, run_state inserted
-   * once). Per §4 the import rebinds `cwd → null` and resets local operator
-   * state (`inboxStatus → pending`, `acceptedSha → null`); tree state + resume
-   * are a later increment.
+   * once). Per §4 the import rebinds `cwd → null`, resets local operator state
+   * (`inboxStatus → pending`, `acceptedSha → null`), and **neutralizes a
+   * non-terminal status to `cancelled`** so the local daemon never claims (queued)
+   * or resumes (paused*) an inspect-only run into execution against the wrong
+   * tree (it has no cwd); the events keep the run's true elsewhere-history. Tree
+   * state + resume are a later increment.
    *
-   * Returns `imported: false` when the run was already present, and
+   * Returns `imported: false` when the run was already present,
    * `resumeCompatible: false` when the run's contract is outside this build's
-   * supported range. */
-  importRunBundle(bytes: Uint8Array): { runId: string; imported: boolean; resumeCompatible: boolean } {
+   * supported range, and `neutralized: true` when a non-terminal status was
+   * landed `cancelled` (terminal, inert — not a failure). */
+  importRunBundle(bytes: Uint8Array): {
+    runId: string;
+    imported: boolean;
+    resumeCompatible: boolean;
+    neutralized: boolean;
+  } {
     const entries = readTar(bytes);
     const manifestEntry = entries.find((e) => e.name === "manifest.json");
     if (manifestEntry == null) throw new Error("importRunBundle: manifest.json missing from bundle");
@@ -1367,6 +1377,13 @@ export class SqliteStore implements IEventStore {
     const wf = manifest.workflow;
     const already = this.getState(run.runId) != null;
     const now = this.now();
+
+    // db-import §4: an imported run is inspect-only here (no tree state, cwd=null),
+    // so a non-terminal source status is neutralized to terminal — the local
+    // daemon must never claim (queued) or resume (paused*) it into execution.
+    // Events keep the run's true elsewhere-history; only the projection is inert.
+    const landedStatus = isTerminal(run.status) ? run.status : "cancelled";
+    const neutralized = !already && landedStatus !== run.status;
 
     // Pre-serialize outside the write lock — I1 bans JSON.stringify (and any
     // allocation-heavy work) inside writeTxn.
@@ -1424,7 +1441,7 @@ export class SqliteStore implements IEventStore {
         writeRunStateProjection(this.db, {
           runId: run.runId,
           version: run.version,
-          status: run.status,
+          status: landedStatus,
           currentNode: run.currentNode,
           routingJson,
           metricsJson,
@@ -1468,7 +1485,7 @@ export class SqliteStore implements IEventStore {
       }
     });
 
-    return { runId: run.runId, imported: !already, resumeCompatible };
+    return { runId: run.runId, imported: !already, resumeCompatible, neutralized };
   }
 
   gcBlobs(maxRows?: number): { deleted: number } {

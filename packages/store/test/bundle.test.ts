@@ -125,7 +125,11 @@ describe("importRunBundle", () => {
     // The blob survived and reads back through the artifact ref.
     const art = dst.getArtifact({ runId, nodeId: "work", iteration: 0, key: "out" });
     expect(new TextDecoder().decode(art)).toBe("artifact-bytes");
-    // Local operator state was rebound / reset per db-import §4.
+    // Local operator state was rebound / reset per db-import §4, and the
+    // non-terminal source status (queued) was neutralized to terminal so the
+    // daemon can't claim/resume an inspect-only run.
+    expect(r.neutralized).toBe(true);
+    expect(state?.status).toBe("cancelled");
     expect(state?.cwd).toBeNull();
     expect(state?.inboxStatus).toBe("pending");
     expect(state?.acceptedSha).toBeNull();

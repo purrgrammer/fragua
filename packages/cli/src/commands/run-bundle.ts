@@ -64,12 +64,20 @@ export function importCommand(opts: ImportOptions): Promise<number> {
   const storePath = resolveStorePath(opts);
   return withStoreClient(opts, ({ store }) => {
     try {
-      const { runId, imported, resumeCompatible } = store.importRunBundle(bytes);
+      const { runId, imported, resumeCompatible, neutralized } = store.importRunBundle(bytes);
       console.log(
         imported
           ? chalk.green(`imported run ${runId} → ${storePath}`)
           : chalk.dim(`run ${runId} already present in ${storePath} (no-op)`),
       );
+      if (neutralized) {
+        console.warn(
+          chalk.yellow(
+            "  note: run was mid-flight at export; landed terminal here (inspect-only — " +
+              "resume-after-import is not yet supported)",
+          ),
+        );
+      }
       if (!resumeCompatible) {
         console.warn(
           chalk.yellow(
