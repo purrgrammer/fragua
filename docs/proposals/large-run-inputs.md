@@ -1,6 +1,6 @@
 ---
 title: Large run inputs — spill oversized routing to the blob CAS, reference by sha
-summary: "A run's inputs (free-form `routing.input` + typed `routing.inputs`) ride inside the genesis `intent.run_enqueued` event, which is subject to the 4 KB event-payload cap (MAX_EVENT_PAYLOAD_BYTES). So a run's inputs are silently capped at ~4 KB — a pasted spec, a long brief, or many typed inputs can't be enqueued. The cap is correct for events (they're folded, streamed, replayed — they must stay lean) but wrong as a ceiling on *content*. Fix: at enqueue, spill oversized routing string values to the content-addressed blob store and leave a `{ $fragua_blob: sha }` reference in the event; resolve on read (substitution, auto-title, UI, export). This preserves both invariants — events stay small AND events are truth (the ref is in the log; the blob is immutable CAS) — and makes input size unbounded. It reuses the existing blob CAS (the same store artifacts use) so spilled inputs already travel in bundles, and it composes with secret-scrubbing: a spilled input blob is scrubbed by the same blob path as any text artifact, so this MUST land after the scrubber's artifact re-CAS unit (else the scrubbed-content sha and the routing ref diverge)."
+summary: "A run's typed inputs (`routing.inputs`, the `${{ inputs.x }}` substitution source) ride inside the genesis `intent.run_enqueued` event, which is subject to the 4 KB event-payload cap (MAX_EVENT_PAYLOAD_BYTES). So a run's inputs are silently capped at ~4 KB — a pasted spec, a long brief, or several sizeable typed inputs can't be enqueued. The cap is correct for events (they're folded, streamed, replayed — they must stay lean) but wrong as a ceiling on *content*. Fix: at enqueue, spill oversized `routing.inputs` string values (lossless execution data) to the content-addressed blob store and leave a `{ $fragua_blob: sha }` reference in the event; resolve on read (substitution, auto-title, UI, export). The legacy free-form `routing.input` description is truncated, not spilled — it's not execution data and is a deprecation candidate. This preserves both invariants — events stay small AND events are truth (the ref is in the log; the blob is immutable CAS) — and makes input size unbounded. It reuses the existing blob CAS (the same store artifacts use) so spilled inputs already travel in bundles, and it composes with secret-scrubbing: a spilled input blob is scrubbed by the same blob path as any text artifact, so this MUST land after the scrubber's artifact re-CAS unit (else the scrubbed-content sha and the routing ref diverge)."
 status: sketch
 maturity: sketch
 last-reviewed: 2026-05-27
@@ -16,9 +16,21 @@ last-reviewed: 2026-05-27
 ## 1. The limitation
 
 A run's inputs live in the genesis `intent.run_enqueued` event's `routing`
-object (`events.ts:286`, `routing: Record<string, unknown>`): the free-form
-`routing.input` (description / auto-title seed) and the typed `routing.inputs`
-map (the `${{ inputs.x }}` substitution source). That event is validated against
+object (`events.ts:286`, `routing: Record<string, unknown>`). Two distinct things
+live there, and they have **opposite size-handling needs**:
+
+- **`routing.inputs`** — the typed input map, the `${{ inputs.x }}` substitution
+  source (`executor-helpers.ts:214`). This is **execution-critical and must be
+  lossless** — it is read back into the run. This is the real spill target.
+- **`routing.input`** — the legacy free-form positional description
+  (`fragua run wf "describe it"`). It is **not** substituted (CLAUDE.md rule 13),
+  not execution data; only the UI (run description / title fallback) and the
+  auto-titler seed read it — and the titler already falls back to composing from
+  `routing.inputs`. It predates typed inputs and is redundant with `--input` +
+  `--title`. It does **not** need lossless preservation — truncate it to a
+  title-seed length, or deprecate it; never spill it.
+
+That event is validated against
 `MAX_EVENT_PAYLOAD_BYTES = 4096` at `enqueueRun` (`store.ts:597`). So **the
 combined serialized size of a run's inputs is capped at ~4 KB**, minus the room
 taken by `routing`'s structural entries (`budget_override`,
@@ -52,15 +64,22 @@ reference**, leaving the genesis event small:
 // routing, inline (small run — unchanged, no blobs):
 { "input": "rename foo to bar", "inputs": { "task": "…short…" } }
 
-// routing, spilled (large run):
-{ "input": { "$fragua_blob": "<sha256>", "bytes": 18342 },
+// routing, spilled (large run): only the typed inputs spill; the description
+// is truncated, not spilled (it's not execution data).
+{ "input": "Implement the spec for the new export… [truncated]",
   "inputs": { "task": { "$fragua_blob": "<sha256>", "bytes": 9211 } } }
 ```
 
 - **Spill policy.** Inline as today when `routing` serializes under a margin
   (e.g. 3 KB) — the common case pays nothing (no blob write, no read
-  indirection). Only when over the margin, spill the largest string leaves until
-  under it. Structural entries (numbers, override objects) never spill.
+  indirection). Only when over the margin, spill the largest **`routing.inputs`**
+  string values until under it (these are lossless execution data). Structural
+  entries (numbers, override objects) never spill.
+- **`routing.input` is truncated, not spilled.** It's a description / title
+  seed, not execution data, so a long one is clipped to a title-seed length
+  (the auto-titler asks for short titles anyway) rather than blob-spilled. The
+  cleaner long-term move is to deprecate it in favor of typed inputs + `--title`
+  ([§7](#7-open-questions)); spilling it would be optimizing a legacy surface.
 - **Reference sentinel.** A distinctively-keyed object (`$fragua_blob`) that
   cannot collide with a legitimate JSON value the caller would pass. Carries the
   sha and original byte length (the length is non-secret structural metadata,
@@ -130,6 +149,12 @@ blobs.
 - **`fragua ci` parity.** CI seeds an ephemeral store; spilled blobs live there
   and export into the CI bundle. Confirm the ephemeral blob dir is wired the same
   as the persistent one.
+- **Deprecate `routing.input`?** It's a legacy free-form description, redundant
+  with typed inputs + `--title`, read only by the UI (description / title
+  fallback) and the auto-titler seed (which already falls back to composing from
+  `routing.inputs`). Removing it — point those two consumers at
+  `routing.inputs`/workflow name — would let this proposal ignore it entirely
+  rather than truncate it. Bounded cleanup, separate decision.
 
 ## 8. MVP order
 
