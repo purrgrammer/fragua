@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorktreeEnvironment } from "../src/worktree-env.ts";
@@ -218,7 +218,6 @@ describe("WorktreeEnvironment", () => {
     const fakeGitScript = join(fakeGitDir, "git");
     // The script appends the full env (newline-delimited KEY=VALUE lines)
     // to envLogFile on every invocation, then delegates to real git.
-    const { writeFileSync, chmodSync } = await import("node:fs");
     writeFileSync(fakeGitScript, `#!/bin/sh\nenv >> "${envLogFile}"\nexec "${realGit}" "$@"\n`);
     chmodSync(fakeGitScript, 0o755);
 
@@ -231,7 +230,6 @@ describe("WorktreeEnvironment", () => {
       const envWithout = new WorktreeEnvironment({ repoRoot: repo, runId: "deny-off" });
       await envWithout.init();
       await envWithout.dispose();
-      const { readFile, truncate } = await import("node:fs/promises");
       expect(await readFile(envLogFile, "utf8")).toContain(`${secretVarName}=supersecret`);
 
       // Reset log for the second run.
@@ -247,7 +245,8 @@ describe("WorktreeEnvironment", () => {
       await envWith.dispose();
       expect(await readFile(envLogFile, "utf8")).not.toContain(secretVarName);
     } finally {
-      process.env["PATH"] = originalPath;
+      if (originalPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = originalPath;
       delete process.env[secretVarName];
       await rm(fakeGitDir, { recursive: true, force: true });
     }
