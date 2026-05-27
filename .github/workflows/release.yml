@@ -5,7 +5,9 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write # create the release + upload binary assets
+  contents: write    # create the release + upload binary assets
+  id-token: write    # needed by actions/attest-build-provenance to mint an OIDC token
+  attestations: write # needed by actions/attest-build-provenance to write attestations
 
 jobs:
   # Create (or reuse) the GitHub Release first so the matrix jobs below race
@@ -90,3 +92,65 @@ jobs:
             dist/fragua-${{ matrix.target }} \
             dist/fragua-headless-${{ matrix.target }} \
             --clobber
+
+  # After all 8 binaries are uploaded, download them all, generate a single
+  # SHA256SUMS covering every asset, upload it to the release, and emit build
+  # provenance attestations via actions/attest-build-provenance (Sigstore).
+  # Running in one job after the matrix ensures a complete, authoritative
+  # checksum file rather than 4 partial ones racing to the release.
+  checksums-and-attest:
+    needs: binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download all release binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          for target in bun-linux-x64 bun-linux-arm64 bun-darwin-arm64 bun-darwin-x64; do
+            gh release download "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "fragua-$target" \
+              --pattern "fragua-headless-$target" \
+              --dir dist \
+              --clobber
+          done
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum fragua-bun-linux-x64 \
+                    fragua-headless-bun-linux-x64 \
+                    fragua-bun-linux-arm64 \
+                    fragua-headless-bun-linux-arm64 \
+                    fragua-bun-darwin-arm64 \
+                    fragua-headless-bun-darwin-arm64 \
+                    fragua-bun-darwin-x64 \
+                    fragua-headless-bun-darwin-x64 \
+            > SHA256SUMS
+
+      - name: Upload SHA256SUMS to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/SHA256SUMS \
+            --clobber
+
+      # Emit a Sigstore build provenance attestation for every binary.
+      # actions/attest-build-provenance links each file's digest to this
+      # workflow run via OIDC, so consumers can verify the binary wasn't
+      # tampered with after leaving GitHub Actions.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/fragua-bun-linux-x64
+            dist/fragua-headless-bun-linux-x64
+            dist/fragua-bun-linux-arm64
+            dist/fragua-headless-bun-linux-arm64
+            dist/fragua-bun-darwin-arm64
+            dist/fragua-headless-bun-darwin-arm64
+            dist/fragua-bun-darwin-x64
+            dist/fragua-headless-bun-darwin-x64

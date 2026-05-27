@@ -57,17 +57,38 @@ runs:
 
         dir="$RUNNER_TEMP/fragua-bin"
         mkdir -p "$dir"
+
+        # Download the chosen binary and the SHA256SUMS file together so we
+        # can verify integrity before making the binary executable.
         gh release download "$tag" \
           --repo "$FRAGUA_REPO" \
           --pattern "$asset" \
-          --output "$dir/fragua" \
+          --pattern "SHA256SUMS" \
+          --dir "$dir" \
           --clobber
+
+        # Verify the downloaded binary against the checksum file.
+        # Fail closed: missing entry or digest mismatch both exit 1.
+        if ! grep -qF "$asset" "$dir/SHA256SUMS"; then
+          echo "::error::setup-fragua: no checksum entry for $asset in SHA256SUMS"
+          exit 1
+        fi
+
+        # sha256sum --check expects lines in the form "<digest>  <filename>".
+        # Filter to only the line for this asset and run from the download dir
+        # so the embedded filename resolves correctly.
+        if ! (cd "$dir" && grep -F "$asset" SHA256SUMS | sha256sum --check --status); then
+          echo "::error::setup-fragua: SHA256 mismatch for $asset — binary may have been tampered with"
+          exit 1
+        fi
+
+        mv "$dir/$asset" "$dir/fragua"
         chmod +x "$dir/fragua"
         echo "$dir" >> "$GITHUB_PATH"
 
         echo "version=$tag" >> "$GITHUB_OUTPUT"
         echo "path=$dir" >> "$GITHUB_OUTPUT"
-        echo "setup-fragua: installed $asset ($tag) → $dir"
+        echo "setup-fragua: installed $asset ($tag) → $dir (checksum verified)"
 
     - shell: bash
       run: fragua --version

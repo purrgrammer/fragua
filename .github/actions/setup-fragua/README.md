@@ -6,25 +6,48 @@ runs a workflow to completion and exits with a code that reflects the outcome
 (0 completed, non-zero on halt/quarantine/pause) — so a fragua run gates a job
 the same way a test suite does.
 
+## Install
+
+> **Pin to a release tag — do not float `latest`.**
+>
+> Floating `latest` silently rolls your consumers onto every new fragua release
+> the moment it publishes, including any that change prompt behaviour, tool
+> surface, or agent reasoning. A code-review workflow that passes on one engine
+> may fail, produce different verdicts, or use a different tool on the next. Pin
+> the tag so the engine your team reviewed is the engine your CI runs.
+
 ```yaml
 steps:
   - uses: actions/checkout@v6
-  - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0
+  - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0   # ← pin the tag
   - run: fragua ci my-workflow
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+To upgrade, update the tag in one commit and review the diff the way you would
+any other dependency bump.
 
 `actions/checkout` must run first: `fragua ci` provisions a git worktree per run
 under the checkout, so it needs a git repository to work in. The workflow name
 resolves against `.fragua/workflows/<name>.yaml` in the checkout (and
 `~/.fragua/workflows/`), exactly as the local CLI resolves it.
 
+## Supply-chain integrity
+
+`setup-fragua` verifies the downloaded binary against the `SHA256SUMS` file
+published alongside every release before marking it executable. A digest
+mismatch or a missing checksum entry fails the step immediately (`exit 1`) —
+the binary is never executed if it cannot be verified. Every release binary is
+also covered by a [Sigstore](https://www.sigstore.dev/) build provenance
+attestation emitted via `actions/attest-build-provenance`, which ties each
+binary's digest to the specific workflow run that produced it.
+
 ## Inputs
 
 | Input | Default | Description |
 |---|---|---|
-| `version` | `latest` | Release tag to install (e.g. `v0.2.0`), or `latest` for the newest release. Pin it for reproducible CI. |
+| `version` | `latest` | Release tag to install (e.g. `v0.2.0`), or `latest` for the newest release. **Pin this** for reproducible CI. |
 | `web` | `false` | `false` installs the smaller **headless** binary (no `harness`/`serve` UI — fine for `fragua ci`). `true` installs the full binary with the web UI. |
 | `token` | `${{ github.token }}` | Token used to download the release asset. The default works when the consumer repo can read the fragua repo's releases. |
 
