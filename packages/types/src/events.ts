@@ -1030,4 +1030,11 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // Post-terminal operator actions (accept / discard)
   "fact.run_discarded",
   "fact.run_accepted",
+  // Terminal worktree snapshot: written AFTER fact.run_completed in the
+  // executor's finally-block dispose path. It sets inbox_status=pending on
+  // run_state, so the client's inbox=pending list query must refetch when
+  // this fact arrives. Without this entry the server silently drops the
+  // event before it reaches the browser and the completed run never
+  // appears in the Watchtower / /inbox Ready-to-land section.
+  "fact.snapshot_recorded",
 ];
