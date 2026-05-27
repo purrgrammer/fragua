@@ -150,12 +150,17 @@ steps:
       changes: {to: post_changes, label: "Request changes"}
 
   # Two terminal posts — each a PURE TOOL node (no LLM): the body is already a file, so posting is one
-  # deterministic gh call (the states a GITHUB_TOKEN bot can actually post). A non-zero gh exit halts.
+  # deterministic gh call (the states a GITHUB_TOKEN bot can actually post). A non-zero gh exit routes
+  # to exit gracefully rather than halting with aborted_exit.
   post_comment:
     type: tool
     run: gh pr review ${{ inputs.pr }} --comment --body-file pr-review.md
-    next: exit
+    on:
+      success: exit
+      fail: exit
   post_changes:
     type: tool
     run: gh pr review ${{ inputs.pr }} --request-changes --body-file pr-review.md
-    next: exit
+    on:
+      success: exit
+      fail: exit
