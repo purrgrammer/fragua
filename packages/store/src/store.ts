@@ -181,7 +181,7 @@ import {
   updateScheduleResumed,
   updateScheduleSkip,
 } from "./schedule-queries.ts";
-import { buildExportRegistry, scrubJsonStrings } from "./scrub/export-registry.ts";
+import { buildExportRegistry, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -1359,7 +1359,13 @@ export class SqliteStore implements IEventStore {
       {
         name: runEventsPath(runId),
         data: encodeJsonl(
-          events.map((e) => ({ seq: e.seq, type: e.type, writer: e.writer, payload: e.payload, ts: e.ts })),
+          events.map((e) => ({
+            seq: e.seq,
+            type: e.type,
+            writer: e.writer,
+            payload: scrubEventPayload(e.type, e.payload, registry),
+            ts: e.ts,
+          })),
         ),
       },
       {

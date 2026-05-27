@@ -71,6 +71,71 @@ export function buildExportRegistry(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Event payload free-text scrub
+// ---------------------------------------------------------------------------
+
+/** Top-level string keys in event payloads that carry free text and should
+ * be scrubbed. Structural keys (type, nodeId, runId, workflowSha, seq, …)
+ * are deliberately NOT listed — they drive deriveRunState replay and must
+ * never be altered. */
+const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "detail"]);
+
+/**
+ * Scrub an event payload without touching structural fields.
+ *
+ * Rules (applied in order, only to matching events):
+ *  1. For each key in FREE_TEXT_KEYS present at the top level with a string
+ *     value, replace the value with `scrubText(...)`.
+ *  2. When `type === "intent.run_enqueued"`, deep-scrub string VALUES in
+ *     `payload.routing` via `scrubJsonStrings` — catches cwd, input, inputs
+ *     while leaving structural numbers/objects and all keys untouched.
+ *  3. Everything else passes through unchanged.
+ *
+ * Returns a shallow-cloned object when modified; returns the original when
+ * there is nothing to scrub (no allocation on the hot path for unaffected
+ * events).
+ */
+export function scrubEventPayload(
+  type: string,
+  payload: unknown,
+  registry: CompiledRegistry,
+  opts?: ScrubOptions,
+): unknown {
+  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+
+  const src = payload as Record<string, unknown>;
+  let out: Record<string, unknown> | null = null;
+
+  // Rule 1: scrub free-text top-level string keys.
+  for (const key of FREE_TEXT_KEYS) {
+    const val = src[key];
+    if (typeof val === "string") {
+      const scrubbed = scrubText(val, registry, opts);
+      if (scrubbed !== val) {
+        if (out == null) out = { ...src };
+        out[key] = scrubbed;
+      }
+    }
+  }
+
+  // Rule 2: deep-scrub routing string values for the genesis event.
+  if (type === "intent.run_enqueued") {
+    const routing = src["routing"];
+    if (routing != null && typeof routing === "object" && !Array.isArray(routing)) {
+      const scrubbedRouting = scrubJsonStrings(routing, registry, opts);
+      if (scrubbedRouting !== routing) {
+        if (out == null) out = { ...src };
+        out["routing"] = scrubbedRouting;
+      }
+    }
+  }
+
+  return out ?? payload;
+}
+
+// ---------------------------------------------------------------------------
 // Deep JSON-string scrub
 // ---------------------------------------------------------------------------
 

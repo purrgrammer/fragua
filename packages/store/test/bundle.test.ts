@@ -1,6 +1,6 @@
 // Bundle export/import (docs/proposals/archive/bundles.md): the deterministic tar
 // round-trips through the system `tar`; `exportRunBundle` carries a FILTERED event
-// log (fact.* + intent.* + cost.recorded only — observability dropped) + transcript
+// log (fact.* + intent.* + cost.recorded only - observability dropped) + transcript
 // + blobs and NEVER the seeded credential; import re-DERIVES `run_state` by
 // replaying the log (no projection in the bundle), so an imported run reconstructs
 // faithfully and is inert (cwd null).
@@ -14,6 +14,7 @@ import {
   type BundleManifest,
   canonicalJson,
   type FactEvent,
+  type IntentEvent,
   newRunId,
   readTar,
   SCRUBBER_VERSION,
@@ -31,7 +32,7 @@ function untar(bytes: Uint8Array, dir: string): void {
 /** Enqueue (with cwd, so the import-drops-cwd invariant is observable), then
  *  drive a terminal run: started → snapshot → completed + a message + artifact. */
 async function seedTerminalRun(store: ReturnType<typeof freshStore>): Promise<string> {
-  // A realistic content-hash workflow sha — import shape-gates it as a sha256.
+  // A realistic content-hash workflow sha - import shape-gates it as a sha256.
   const sha = await seedWorkflow(store, "a".repeat(64));
   const runId = newRunId();
   store.enqueueRun({
@@ -78,7 +79,7 @@ describe("writeTar", () => {
     }
   });
 
-  test("is deterministic — same inputs, byte-identical output", () => {
+  test("is deterministic - same inputs, byte-identical output", () => {
     const d = new TextEncoder().encode("payload");
     const a = writeTar([{ name: "manifest.json", data: d }]);
     const b = writeTar([{ name: "manifest.json", data: d }]);
@@ -108,7 +109,7 @@ describe("exportRunBundle", () => {
 
     expect(manifest.bundleVersion).toBe(BUNDLE_VERSION);
     expect(manifest.fraguaVersion).toBe("0.0.0-test");
-    // Index-only manifest — no serialized projection.
+    // Index-only manifest - no serialized projection.
     expect(manifest).not.toHaveProperty("run");
     expect(manifest.runs).toEqual([
       { runId, workflowSha: manifest.workflows[0]!.sha, events: expect.any(Number), messages: 1 },
@@ -147,7 +148,7 @@ describe("importRunBundle", () => {
 
     const state = dst.getState(runId)!;
     expect(state).not.toBeNull();
-    // Derived projection matches the source's — modulo write bookkeeping, the
+    // Derived projection matches the source's - modulo write bookkeeping, the
     // out-of-band title, and the deliberately-dropped local cwd binding.
     expect(state.status).toBe("completed");
     expect(state.projectId).toBe("proj-id");
@@ -165,9 +166,9 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
-  test("an imported run is inert — never claimed, even when it derives to queued", async () => {
+  test("an imported run is inert - never claimed, even when it derives to queued", async () => {
     // A bundle of a NOT-yet-started source run derives to status `queued` with a
-    // null cwd. The marker — not the null cwd — is what holds it out of dispatch.
+    // null cwd. The marker - not the null cwd - is what holds it out of dispatch.
     const src = freshStore();
     const sha = await seedWorkflow(src, "a".repeat(64));
     const runId = newRunId();
@@ -178,13 +179,13 @@ describe("importRunBundle", () => {
     const dst = freshStore();
     dst.importRunBundle(bytes);
     expect(dst.getState(runId)?.status).toBe("queued"); // derived, non-terminal
-    // The daemon must never claim it — the inert marker excludes it from the
+    // The daemon must never claim it - the inert marker excludes it from the
     // queued selection (a native queued run WOULD be claimed).
     expect(dst.claimNextRun(10)).toBeNull();
     dst.close();
   });
 
-  test("idempotent — re-import is a no-op", async () => {
+  test("idempotent - re-import is a no-op", async () => {
     const src = freshStore();
     const runId = await seedTerminalRun(src);
     const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
@@ -321,7 +322,7 @@ describe("importRunBundle", () => {
       if (e.name !== msgName) return e;
       const lines = new TextDecoder().decode(e.data).trim().split("\n");
       const m = JSON.parse(lines[0]!);
-      m.ordinal = "1"; // string, not number — non-null, slips a bare sweep
+      m.ordinal = "1"; // string, not number - non-null, slips a bare sweep
       lines[0] = JSON.stringify(m);
       return { name: e.name, data: new TextEncoder().encode(`${lines.join("\n")}\n`) };
     });
@@ -372,7 +373,7 @@ describe("importRunBundle", () => {
     const runId = await seedTerminalRun(src);
     const bytes = src.exportRunBundle(runId, { fraguaVersion: "x" });
     src.close();
-    // Rebuild the tar with the blob entry's bytes tampered — its sha won't match.
+    // Rebuild the tar with the blob entry's bytes tampered - its sha won't match.
     const entries = readTar(bytes).map((e) =>
       e.name.startsWith("blobs/") ? { name: e.name, data: new TextEncoder().encode("TAMPERED") } : e,
     );
@@ -382,7 +383,7 @@ describe("importRunBundle", () => {
   });
 });
 
-describe("exportRunBundle — observability event filtering", () => {
+describe("exportRunBundle - observability event filtering", () => {
   /** Seed a terminal run and append several observability events of different
    * families, plus a cost.recorded event, before exporting. */
   async function seedWithObservability(store: ReturnType<typeof freshStore>): Promise<string> {
@@ -466,7 +467,7 @@ describe("exportRunBundle — observability event filtering", () => {
     expect(types).toContain("intent.run_enqueued");
   });
 
-  test("stored events are not mutated — getEvents still returns all families", async () => {
+  test("stored events are not mutated - getEvents still returns all families", async () => {
     const store = freshStore();
     const runId = await seedWithObservability(store);
     const allStored = store.getEvents(runId).map((e) => e.type);
@@ -496,7 +497,7 @@ describe("exportRunBundle — observability event filtering", () => {
   });
 });
 
-describe("exportRunBundle — message transcript scrubbing", () => {
+describe("exportRunBundle - message transcript scrubbing", () => {
   const CWD = "/home/dev/proj";
   const CRED_SECRET = "sk-ant-test-secretABCDEFGHIJ0123456789";
   const AKIA_SECRET = "AKIAIOSFODNN7EXAMPLE";
@@ -586,7 +587,7 @@ describe("exportRunBundle — message transcript scrubbing", () => {
     const content = JSON.stringify(extractFirstMessageContent(bytes, runId));
     expect(content).toContain("[REDACTED:cwd]");
 
-    // Event payloads are NOT scrubbed in this unit — fact payload strings (e.g.
+    // Event payloads are NOT scrubbed in this unit - fact payload strings (e.g.
     // workflowSha, nodeId in fact.run_completed) survive verbatim.
     const entries = readTar(bytes);
     const evEntry = entries.find((e) => e.name === `runs/${runId}/events.jsonl`);
@@ -677,7 +678,7 @@ describe("exportRunBundle — message transcript scrubbing", () => {
     expect(manifest.scrubberVersion).toBe("1");
   });
 
-  test("(g) importRunBundle round-trips a scrubbed run — status derives, messages present but redacted", async () => {
+  test("(g) importRunBundle round-trips a scrubbed run - status derives, messages present but redacted", async () => {
     const src = freshStore();
     const runId = await seedRunWithSecrets(src);
     const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
@@ -697,5 +698,274 @@ describe("exportRunBundle — message transcript scrubbing", () => {
     expect(msgText).not.toContain(CRED_SECRET);
     expect(msgText).not.toContain(AKIA_SECRET);
     dst.close();
+  });
+});
+
+describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
+  const CWD = "/home/dev/proj";
+  const CRED_SECRET = "sk-ant-evt-secretABCDEFGHIJ0123456789";
+  const AKIA_SECRET = "AKIAIOSFODNN7EXAMPLE";
+
+  /** Seed a run with events carrying secrets in every targeted surface. */
+  async function seedRunWithEventSecrets(store: ReturnType<typeof freshStore>): Promise<string> {
+    const sha = await seedWorkflow(store, "b".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: CWD,
+      projectId: "proj-id",
+      projectName: "proj",
+      workflowName: "wf",
+      workflowScope: "local",
+      // routing.input and routing.inputs carry secrets - surface 6.
+      initialRouting: { input: `run with secret ${CRED_SECRET}`, inputs: { apiKey: AKIA_SECRET } },
+    });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+
+    // fact.tool_completed.preview — surface 5.
+    v = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.tool_completed",
+          payload: { toolName: "bash", argsHash: "abc", artifactKey: "out", preview: `tool preview ${CRED_SECRET}` },
+        } as FactEvent,
+      ],
+      v,
+    ).newVersion;
+
+    // fact.run_paused with errorMessage — surface 5.
+    v = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_paused",
+          payload: {
+            reason: "provider_error",
+            nodeId: "work",
+            httpStatus: 500,
+            provider: "anthropic",
+            errorMessage: `error: ${CRED_SECRET} caused failure`,
+          },
+        } as FactEvent,
+      ],
+      v,
+    ).newVersion;
+
+    // fact.run_resumed to get back to running.
+    v = store.appendFact(runId, [{ type: "fact.run_resumed", payload: {} } as FactEvent], v).newVersion;
+
+    // intent.steering_requested.text — surface 5.
+    store.appendIntent(runId, {
+      type: "intent.steering_requested",
+      payload: { text: `steer with ${AKIA_SECRET}` },
+    } as IntentEvent);
+
+    // intent.human_input.note — surface 5.
+    store.appendIntent(runId, {
+      type: "intent.human_input",
+      payload: { route: "default", note: `human note ${CRED_SECRET}` },
+    } as IntentEvent);
+
+    // Terminal: fact.run_halted with detail — surface 5 (detail key).
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_halted", payload: { reason: "error", detail: `halted: ${AKIA_SECRET}` } } as FactEvent],
+      v,
+    );
+
+    return runId;
+  }
+
+  function extractEvents(bytes: Uint8Array, runId: string): Array<{ type: string; payload: Record<string, unknown> }> {
+    const entries = readTar(bytes);
+    const evEntry = entries.find((e) => e.name === `runs/${runId}/events.jsonl`);
+    if (evEntry == null) return [];
+    return new TextDecoder()
+      .decode(evEntry.data)
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
+  }
+
+  test("(a) CRED_SECRET absent from bundle bytes", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    expect(Buffer.from(bytes).includes(CRED_SECRET)).toBe(false);
+  });
+
+  test("(b) AKIA_SECRET absent from bundle bytes", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    expect(Buffer.from(bytes).includes(AKIA_SECRET)).toBe(false);
+  });
+
+  test("(c) fact.tool_completed.preview carries REDACTED marker", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const events = extractEvents(bytes, runId);
+    const ev = events.find((e) => e.type === "fact.tool_completed");
+    expect(ev).toBeDefined();
+    expect(typeof ev!.payload["preview"]).toBe("string");
+    expect(ev!.payload["preview"] as string).toContain("[REDACTED");
+    expect(ev!.payload["preview"] as string).not.toContain(CRED_SECRET);
+  });
+
+  test("(d) fact.run_paused errorMessage carries REDACTED marker", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const events = extractEvents(bytes, runId);
+    const ev = events.find((e) => e.type === "fact.run_paused");
+    expect(ev).toBeDefined();
+    expect(typeof ev!.payload["errorMessage"]).toBe("string");
+    expect(ev!.payload["errorMessage"] as string).toContain("[REDACTED");
+    expect(ev!.payload["errorMessage"] as string).not.toContain(CRED_SECRET);
+  });
+
+  test("(e) intent.steering_requested.text carries REDACTED marker", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const events = extractEvents(bytes, runId);
+    const ev = events.find((e) => e.type === "intent.steering_requested");
+    expect(ev).toBeDefined();
+    expect(typeof ev!.payload["text"]).toBe("string");
+    expect(ev!.payload["text"] as string).toContain("[REDACTED");
+    expect(ev!.payload["text"] as string).not.toContain(AKIA_SECRET);
+  });
+
+  test("(f) intent.human_input.note carries REDACTED marker", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const events = extractEvents(bytes, runId);
+    const ev = events.find((e) => e.type === "intent.human_input");
+    expect(ev).toBeDefined();
+    expect(typeof ev!.payload["note"]).toBe("string");
+    expect(ev!.payload["note"] as string).toContain("[REDACTED");
+    expect(ev!.payload["note"] as string).not.toContain(CRED_SECRET);
+  });
+
+  test("(g) fact.run_halted detail carries REDACTED marker", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const events = extractEvents(bytes, runId);
+    const ev = events.find((e) => e.type === "fact.run_halted");
+    expect(ev).toBeDefined();
+    expect(typeof ev!.payload["detail"]).toBe("string");
+    expect(ev!.payload["detail"] as string).toContain("[REDACTED");
+    expect(ev!.payload["detail"] as string).not.toContain(AKIA_SECRET);
+  });
+
+  test("(h) genesis intent.run_enqueued routing.input and routing.inputs values are scrubbed", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const events = extractEvents(bytes, runId);
+    const genesis = events.find((e) => e.type === "intent.run_enqueued");
+    expect(genesis).toBeDefined();
+    const routing = genesis!.payload["routing"] as Record<string, unknown>;
+    // routing.input contained CRED_SECRET.
+    expect(typeof routing["input"]).toBe("string");
+    expect(routing["input"] as string).toContain("[REDACTED");
+    expect(routing["input"] as string).not.toContain(CRED_SECRET);
+    // routing.inputs.apiKey contained AKIA_SECRET.
+    const inputs = routing["inputs"] as Record<string, unknown>;
+    expect(typeof inputs["apiKey"]).toBe("string");
+    expect(inputs["apiKey"] as string).toContain("[REDACTED");
+    expect(inputs["apiKey"] as string).not.toContain(AKIA_SECRET);
+  });
+
+  test("(i) structural fields survive untouched - nodeId/type/reason/route", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const events = extractEvents(bytes, runId);
+    // The genesis event type must survive.
+    const genesis = events.find((e) => e.type === "intent.run_enqueued");
+    expect(genesis).toBeDefined();
+    // fact.run_paused.reason must survive.
+    const paused = events.find((e) => e.type === "fact.run_paused");
+    expect(paused).toBeDefined();
+    expect(paused!.payload["reason"]).toBe("provider_error");
+    // intent.human_input.route must survive.
+    const hi = events.find((e) => e.type === "intent.human_input");
+    expect(hi).toBeDefined();
+    expect(hi!.payload["route"]).toBe("default");
+    // fact.tool_completed.toolName/argsHash/artifactKey must survive (structural strings).
+    const tc = events.find((e) => e.type === "fact.tool_completed");
+    expect(tc).toBeDefined();
+    expect(tc!.payload["toolName"]).toBe("bash");
+    expect(tc!.payload["argsHash"]).toBe("abc");
+    expect(tc!.payload["artifactKey"]).toBe("out");
+  });
+
+  test("(j) importRunBundle derives correct status after event payload scrub", async () => {
+    const src = freshStore();
+    const runId = await seedRunWithEventSecrets(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    const r = dst.importRunBundle(bytes);
+    expect(r.runs).toEqual([{ runId, imported: true }]);
+    // The run was halted as the last terminal event.
+    const state = dst.getState(runId)!;
+    expect(state.status).toBe("halted");
+    // routing on the derived state still has its (now-scrubbed) input -
+    // deriveRunState reads routing from the genesis payload which was scrubbed.
+    expect(state.routing).toBeDefined();
+    dst.close();
+  });
+
+  test("(k) stored events are NOT mutated by export", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithEventSecrets(store);
+    // Capture raw events before export.
+    const rawEvents = store.getEvents(runId);
+    const rawPayloads = rawEvents.map((e) => JSON.stringify(e.payload));
+    store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    // Captured events after export must be identical.
+    const afterEvents = store.getEvents(runId);
+    const afterPayloads = afterEvents.map((e) => JSON.stringify(e.payload));
+    expect(afterPayloads).toEqual(rawPayloads);
+    // The raw store must still have the original secret.
+    expect(afterPayloads.some((p) => p.includes(CRED_SECRET))).toBe(true);
+    store.close();
   });
 });
