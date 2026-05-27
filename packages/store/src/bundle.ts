@@ -20,10 +20,16 @@ import { assertSafeRunId } from "./run-id.ts";
 
 /** Bump when the bundle layout changes. Experimental — bumps freely, no
  *  migration path while the format is unstable (bundles.md). */
-export const BUNDLE_VERSION = 1;
+export const BUNDLE_VERSION = 2;
+
+/** Scrubber version stamp. Bumped when the registry/pattern-set/encoding-set
+ *  changes so an auditor knows which detector ran (secret-scrubbing.md §8). */
+export const SCRUBBER_VERSION = "1";
 
 export interface BundleManifest {
   bundleVersion: number;
+  /** Scrubber version that produced this bundle's redactions (secret-scrubbing.md §8). */
+  scrubberVersion: string;
   /** Version stamps for the import-time compatibility check (bundles.md §7). */
   fraguaVersion: string;
   contractVersion: number;
@@ -74,6 +80,8 @@ export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
   if (m == null || typeof m !== "object") throw new Error("bundle manifest is not an object");
   const o = m as Record<string, unknown>;
   if (typeof o["bundleVersion"] !== "number") throw new Error("bundle manifest: bundleVersion missing or not a number");
+  if (typeof o["scrubberVersion"] !== "string")
+    throw new Error("bundle manifest: scrubberVersion missing or not a string");
   for (const k of ["runs", "workflows", "blobs"] as const) {
     if (!Array.isArray(o[k])) throw new Error(`bundle manifest: ${k} missing or not an array`);
   }

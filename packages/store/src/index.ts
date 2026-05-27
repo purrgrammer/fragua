@@ -13,6 +13,7 @@ export {
   runArtifactsPath,
   runEventsPath,
   runMessagesPath,
+  SCRUBBER_VERSION,
   type TarEntry,
   workflowIrPath,
   workflowSourcePath,
@@ -28,6 +29,7 @@ export {
 } from "./pragmas.ts";
 export { applyFact, deriveRunState, emptyMetrics, foldFacts, genesisToInitialState } from "./reducers.ts";
 export { newRunId } from "./run-id.ts";
+export { buildExportRegistry, extractCredentialLiterals, scrubJsonStrings } from "./scrub/export-registry.ts";
 export { BASE_PATTERNS } from "./scrub/patterns.ts";
 export type { CompiledPattern, CompiledRegistry } from "./scrub/registry.ts";
 export { AhoCorasick, compileRegistry } from "./scrub/registry.ts";

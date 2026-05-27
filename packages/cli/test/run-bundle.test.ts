@@ -101,7 +101,8 @@ describe("fragua show", () => {
     // A manifest declaring a run with no runs/<id>/events.jsonl — import would
     // reject it, so `show` (the preflight) must not exit 0.
     const manifest = {
-      bundleVersion: 1,
+      bundleVersion: 2,
+      scrubberVersion: "1",
       fraguaVersion: "x",
       contractVersion: 1,
       schemaVersion: 1,

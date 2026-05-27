@@ -9,7 +9,16 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BundleManifest, canonicalJson, type FactEvent, newRunId, readTar, writeTar } from "../src/index.ts";
+import {
+  BUNDLE_VERSION,
+  type BundleManifest,
+  canonicalJson,
+  type FactEvent,
+  newRunId,
+  readTar,
+  SCRUBBER_VERSION,
+  writeTar,
+} from "../src/index.ts";
 import { freshStore, seedWorkflow } from "./helpers.ts";
 
 function untar(bytes: Uint8Array, dir: string): void {
@@ -97,7 +106,7 @@ describe("exportRunBundle", () => {
       new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
     ) as BundleManifest;
 
-    expect(manifest.bundleVersion).toBe(1);
+    expect(manifest.bundleVersion).toBe(BUNDLE_VERSION);
     expect(manifest.fraguaVersion).toBe("0.0.0-test");
     // Index-only manifest — no serialized projection.
     expect(manifest).not.toHaveProperty("run");
@@ -193,6 +202,7 @@ describe("importRunBundle", () => {
   test("fails closed on an unsupported bundleVersion", () => {
     const manifest = {
       bundleVersion: 999,
+      scrubberVersion: "1",
       fraguaVersion: "x",
       contractVersion: 1,
       schemaVersion: 1,
@@ -209,7 +219,8 @@ describe("importRunBundle", () => {
 
   test("rejects a workflow id that isn't a sha256 (shape gate on a path/SQL key)", () => {
     const manifest = {
-      bundleVersion: 1,
+      bundleVersion: BUNDLE_VERSION,
+      scrubberVersion: "1",
       fraguaVersion: "x",
       contractVersion: 1,
       schemaVersion: 1,
@@ -226,7 +237,8 @@ describe("importRunBundle", () => {
 
   test("rejects a workflow name over the cap (reject, not silent clamp)", () => {
     const manifest = {
-      bundleVersion: 1,
+      bundleVersion: BUNDLE_VERSION,
+      scrubberVersion: "1",
       fraguaVersion: "x",
       contractVersion: 1,
       schemaVersion: 1,
@@ -243,7 +255,8 @@ describe("importRunBundle", () => {
 
   test("rejects a non-numeric workflow irVersion (every SQL-bound field is gated)", () => {
     const manifest = {
-      bundleVersion: 1,
+      bundleVersion: BUNDLE_VERSION,
+      scrubberVersion: "1",
       fraguaVersion: "x",
       contractVersion: 1,
       schemaVersion: 1,
@@ -480,5 +493,209 @@ describe("exportRunBundle — observability event filtering", () => {
 
     const types = extractEventTypes(bytes, runId);
     expect(types.length).toBe(exportedCount);
+  });
+});
+
+describe("exportRunBundle — message transcript scrubbing", () => {
+  const CWD = "/home/dev/proj";
+  const CRED_SECRET = "sk-ant-test-secretABCDEFGHIJ0123456789";
+  const AKIA_SECRET = "AKIAIOSFODNN7EXAMPLE";
+
+  /** Seed a run whose single message contains all three secret varieties. */
+  async function seedRunWithSecrets(store: ReturnType<typeof freshStore>): Promise<string> {
+    const sha = await seedWorkflow(store, "a".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: CWD,
+      projectId: "proj-id",
+      projectName: "proj",
+      workflowName: "wf",
+      workflowScope: "local",
+      initialRouting: { input: "seed" },
+    });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    store.appendMessage(runId, {
+      content: {
+        role: "user" as const,
+        content: [
+          {
+            type: "text",
+            text: `cred=${CRED_SECRET} akia=${AKIA_SECRET} path=${CWD}`,
+          },
+        ],
+        timestamp: 1,
+      },
+      nodeId: "work",
+      iteration: 0,
+    });
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    return runId;
+  }
+
+  function extractFirstMessageContent(bytes: Uint8Array, runId: string): unknown {
+    const entries = readTar(bytes);
+    const msgEntry = entries.find((e) => e.name === `runs/${runId}/messages.jsonl`);
+    if (msgEntry == null) return null;
+    const line = new TextDecoder().decode(msgEntry.data).trim().split("\n")[0]!;
+    return (JSON.parse(line) as { content: unknown }).content;
+  }
+
+  test("(a) redacts literal provider-credential value from message content", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    expect(Buffer.from(bytes).includes(CRED_SECRET)).toBe(false);
+    const content = JSON.stringify(extractFirstMessageContent(bytes, runId));
+    expect(content).toContain("[REDACTED:provider_creds]");
+  });
+
+  test("(b) redacts AKIA pattern-shaped secret from message content", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    expect(Buffer.from(bytes).includes(AKIA_SECRET)).toBe(false);
+    const content = JSON.stringify(extractFirstMessageContent(bytes, runId));
+    expect(content).toContain("[REDACTED:pattern:aws_access_key_id]");
+  });
+
+  test("(c) redacts cwd path from message content; event payloads stay raw", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    // cwd must be absent from the bundle bytes (scrubbed from message content).
+    expect(Buffer.from(bytes).includes(CWD)).toBe(false);
+    const content = JSON.stringify(extractFirstMessageContent(bytes, runId));
+    expect(content).toContain("[REDACTED:cwd]");
+
+    // Event payloads are NOT scrubbed in this unit — fact payload strings (e.g.
+    // workflowSha, nodeId in fact.run_completed) survive verbatim.
+    const entries = readTar(bytes);
+    const evEntry = entries.find((e) => e.name === `runs/${runId}/events.jsonl`);
+    const evText = new TextDecoder().decode(evEntry!.data);
+    // fact.run_completed.finalNode="work" is a structural string in the event log
+    // that must not be redacted (even though "work" also appears as nodeId in messages).
+    expect(evText).toContain('"finalNode":"work"');
+    // The AKIA key embedded in message content does NOT appear in events.
+    expect(evText).not.toContain(AKIA_SECRET);
+  });
+
+  test("(d) scrubJsonStrings recurses into nested content arrays", async () => {
+    const sha = await seedWorkflow(freshStore(), "a".repeat(64));
+    const store = freshStore();
+    const sha2 = await seedWorkflow(store, "a".repeat(64));
+    void sha;
+    void sha2;
+    // Build a store with a deeply-nested tool_result message.
+    const store2 = freshStore();
+    const sha3 = await seedWorkflow(store2, "a".repeat(64));
+    const runId = newRunId();
+    store2.enqueueRun({
+      runId,
+      workflowSha: sha3,
+      cwd: CWD,
+      initialRouting: { input: "seed" },
+    });
+    store2.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    store2.appendMessage(runId, {
+      content: {
+        role: "user" as const,
+        content: [
+          { type: "text", text: `outer: ok` },
+          { type: "text", text: `nested secret: ${CRED_SECRET}` },
+        ],
+        timestamp: 1,
+      },
+      nodeId: "work",
+      iteration: 0,
+    });
+    let v = store2.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha3, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store2.appendFact(runId, [started], v).newVersion;
+    store2.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const bytes = store2.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store2.close();
+
+    expect(Buffer.from(bytes).includes(CRED_SECRET)).toBe(false);
+    const content = JSON.stringify(extractFirstMessageContent(bytes, runId));
+    expect(content).toContain("[REDACTED:provider_creds]");
+  });
+
+  test("(e) nodeId and iteration are not scrubbed (only content is deep-walked)", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const msgEntry = entries.find((e) => e.name === `runs/${runId}/messages.jsonl`);
+    const line = new TextDecoder().decode(msgEntry!.data).trim().split("\n")[0]!;
+    const row = JSON.parse(line) as { nodeId: string; iteration: number };
+    expect(row.nodeId).toBe("work");
+    expect(row.iteration).toBe(0);
+  });
+
+  test("(f) manifest carries bundleVersion 2 and scrubberVersion '1'", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
+    ) as BundleManifest;
+    expect(manifest.bundleVersion).toBe(BUNDLE_VERSION);
+    expect(manifest.bundleVersion).toBe(2);
+    expect(manifest.scrubberVersion).toBe(SCRUBBER_VERSION);
+    expect(manifest.scrubberVersion).toBe("1");
+  });
+
+  test("(g) importRunBundle round-trips a scrubbed run — status derives, messages present but redacted", async () => {
+    const src = freshStore();
+    const runId = await seedRunWithSecrets(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    const r = dst.importRunBundle(bytes);
+    expect(r.runs).toEqual([{ runId, imported: true }]);
+
+    const state = dst.getState(runId)!;
+    expect(state.status).toBe("completed");
+
+    const msgs = dst.getMessages(runId);
+    expect(msgs.length).toBe(1);
+    const msgText = JSON.stringify(msgs[0]!.content);
+    expect(msgText).toContain("[REDACTED:");
+    expect(msgText).not.toContain(CRED_SECRET);
+    expect(msgText).not.toContain(AKIA_SECRET);
+    dst.close();
   });
 });

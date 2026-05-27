@@ -54,6 +54,7 @@ import {
   runArtifactsPath,
   runEventsPath,
   runMessagesPath,
+  SCRUBBER_VERSION,
   type TarEntry,
   workflowIrPath,
   workflowSourcePath,
@@ -180,6 +181,7 @@ import {
   updateScheduleResumed,
   updateScheduleSkip,
 } from "./schedule-queries.ts";
+import { buildExportRegistry, scrubJsonStrings } from "./scrub/export-registry.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -1307,8 +1309,9 @@ export class SqliteStore implements IEventStore {
    * `tool.*`, `summary.*`, `control.*`, `steering.*`, `run.title_generated`,
    * `budget.*`, `snapshot.*`, etc.) are content-bearing observability and are
    * dropped. Stored events are never mutated — filtering is export-only.
-   * Full text scrubbing of the remaining content (steer/human-input payloads)
-   * is a separate later change; this export is not yet fully secret-free.
+   * Message content is scrubbed at export time (literal credentials + cwd path
+   * + known-format patterns). Event payloads, routing, and artifact bytes are
+   * NOT yet scrubbed (separate later unit — secret-scrubbing.md §14).
    *
    * `fraguaVersion` is stamped for the import-time compatibility check.
    * Single-run today (the `fragua ci --export` producer); the format is
@@ -1325,6 +1328,7 @@ export class SqliteStore implements IEventStore {
       (e) => e.type.startsWith("fact.") || e.type.startsWith("intent.") || e.type === "cost.recorded",
     );
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
+    const registry = buildExportRegistry({ providerCredentials: this.listProviderCredentials(), cwd: run.cwd });
     const artifacts = this.listArtifacts(runId).sort(
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
     );
@@ -1340,6 +1344,7 @@ export class SqliteStore implements IEventStore {
 
     const manifest: BundleManifest = {
       bundleVersion: BUNDLE_VERSION,
+      scrubberVersion: SCRUBBER_VERSION,
       fraguaVersion: opts.fraguaVersion,
       contractVersion: EVENT_CONTRACT_VERSION,
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -1360,7 +1365,12 @@ export class SqliteStore implements IEventStore {
       {
         name: runMessagesPath(runId),
         data: encodeJsonl(
-          messages.map((m) => ({ ordinal: m.ordinal, content: m.content, nodeId: m.nodeId, iteration: m.iteration })),
+          messages.map((m) => ({
+            ordinal: m.ordinal,
+            content: scrubJsonStrings(m.content, registry),
+            nodeId: m.nodeId,
+            iteration: m.iteration,
+          })),
         ),
       },
       { name: runArtifactsPath(runId), data: encodeJsonl(artifacts) },
