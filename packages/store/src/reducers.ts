@@ -254,6 +254,8 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
  * event seqs. `title` is not in the log (the summariser writes it out-of-band),
  * so it derives to `null`; the UI falls back to the workflow name.
  */
+// contract: no-bump — comment-only edit (routing.input removal); the fold reads
+// no new field and the contract-surface hash is unchanged.
 export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload, ts: number): RunState {
   return {
     runId,
