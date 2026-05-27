@@ -127,3 +127,67 @@ describe("LocalEnvironment", () => {
     });
   });
 });
+
+describe("LocalEnvironment.spawn", () => {
+  let scratch: string;
+  let env: LocalEnvironment;
+
+  beforeEach(async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-spawn-"));
+    env = new LocalEnvironment({ cwd: scratch });
+  });
+
+  afterEach(async () => {
+    await rm(scratch, { recursive: true, force: true });
+  });
+
+  test("executes argv vector with no shell interpretation", async () => {
+    const r = await env.spawn("printf", ["%s\n", "a;b|c$(whoami)"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("a;b|c$(whoami)");
+  });
+
+  test("exit 0 → exitCode 0; non-zero exit → non-zero exitCode", async () => {
+    const ok = await env.spawn("true", []);
+    expect(ok.exitCode).toBe(0);
+    const fail = await env.spawn("false", []);
+    expect(fail.exitCode).not.toBe(0);
+  });
+
+  test("refuses shell interpreter as cmd — returns exitCode 126", async () => {
+    const r = await env.spawn("bash", ["-c", "echo hi"]);
+    expect(r.exitCode).toBe(126);
+    expect(r.stderr).toContain("[fragua: blocked");
+    expect(r.stderr).toContain("shell interpreter");
+  });
+
+  test("refuses all five shell interpreters", async () => {
+    for (const shell of ["sh", "bash", "zsh", "dash", "fish"]) {
+      const r = await env.spawn(shell, []);
+      expect(r.exitCode).toBe(126);
+    }
+  });
+
+  test("applies blocklist to cmd only, not argv elements", async () => {
+    const ok = await env.spawn("echo", ["sudo", "rm -rf /"]);
+    expect(ok.exitCode).toBe(0);
+    expect(ok.stdout).toContain("sudo");
+  });
+
+  test("blocklist pattern matching cmd is refused", async () => {
+    const r = await env.spawn("sudo", ["ls"]);
+    expect(r.exitCode).toBe(126);
+  });
+
+  test("timeout kills the process", async () => {
+    const r = await env.spawn("sleep", ["10"], { timeoutMs: 150 });
+    expect(r.exitCode).toBe(124);
+    expect(r.stderr).toContain("timed out");
+  }, 5_000);
+
+  test("captures stdout", async () => {
+    const r = await env.spawn("printf", ["hello\n"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("hello");
+  });
+});

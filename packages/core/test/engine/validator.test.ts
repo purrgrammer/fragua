@@ -318,6 +318,143 @@ describe("validate — handler lints", () => {
     expect(codesOf(g)).toContain("E008");
   });
 
+  test("E033 tool node sets both run: and exec: (tool_command + tool_argv)", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        run: {
+          type: "tool",
+          attrs: { tool_command: "echo hi", tool_argv: { cmd: "echo", args: ["hi"] } } as NodeAttrs,
+        },
+        done: "exit",
+      },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    const e033 = validate(g).filter((d) => d.code === "E033");
+    expect(e033).toHaveLength(1);
+    expect(e033[0]?.severity).toBe("error");
+    expect(e033[0]?.nodeId).toBe("run");
+  });
+
+  test("E034 tool node with neither run: nor exec: emits E034", () => {
+    const g = mkGraph({
+      nodes: { s: "start", run: { type: "tool", attrs: {} as NodeAttrs }, done: "exit" },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    expect(codesOf(g)).toContain("E034");
+  });
+
+  test("E034 literal exec.cmd is a shell interpreter (bash)", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        run: { type: "tool", attrs: { tool_argv: { cmd: "bash", args: ["-c", "ls"] } } as NodeAttrs },
+        done: "exit",
+      },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    const e034 = validate(g).filter((d) => d.code === "E034");
+    expect(e034).toHaveLength(1);
+    expect(e034[0]?.nodeId).toBe("run");
+    expect(e034[0]?.message).toContain("bash");
+  });
+
+  test("E034 literal exec.cmd refused for all shell interpreters", () => {
+    for (const shell of ["sh", "bash", "zsh", "dash", "fish"]) {
+      const g = mkGraph({
+        nodes: {
+          s: "start",
+          run: { type: "tool", attrs: { tool_argv: { cmd: shell, args: [] } } as NodeAttrs },
+          done: "exit",
+        },
+        edges: [
+          ["s", "run"],
+          ["run", "done"],
+        ],
+      });
+      expect(codesOf(g)).toContain("E034");
+    }
+  });
+
+  test("E034 does NOT fire when exec.cmd is interpolated (runtime check handles it)", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        run: {
+          type: "tool",
+          attrs: { tool_argv: { cmd: "${{ inputs.bin }}", args: [] } } as NodeAttrs,
+        },
+        done: "exit",
+      },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E034");
+  });
+
+  test("tool node with exec: only and safe cmd is valid (no E033/E034)", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        run: { type: "tool", attrs: { tool_argv: { cmd: "jq", args: [".name"] } } as NodeAttrs },
+        done: "exit",
+      },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E033");
+    expect(codesOf(g)).not.toContain("E034");
+  });
+
+  test("E030 scans tool_argv.cmd and tool_argv.args for undeclared inputs", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        run: {
+          type: "tool",
+          attrs: { tool_argv: { cmd: "jq", args: ["${{ inputs.missing }}"] } } as NodeAttrs,
+        },
+        done: "exit",
+      },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    expect(codesOf(g)).toContain("E030");
+  });
+
+  test("E030 scans tool_argv.cmd for undeclared inputs", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        run: {
+          type: "tool",
+          attrs: { tool_argv: { cmd: "${{ inputs.missing }}", args: [] } } as NodeAttrs,
+        },
+        done: "exit",
+      },
+      edges: [
+        ["s", "run"],
+        ["run", "done"],
+      ],
+    });
+    expect(codesOf(g)).toContain("E030");
+  });
+
   test("E009 human node with no outgoing edges", () => {
     const g = mkGraph({
       nodes: { s: "start", gate: { type: "human", attrs: { kind: "human" } as NodeAttrs }, done: "exit" },

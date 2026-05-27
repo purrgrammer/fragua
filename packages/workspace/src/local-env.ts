@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { isBlockedCommand } from "./blocklist.ts";
+import { isBlockedCommand, isShellInterpreter } from "./blocklist.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
 
 /**
@@ -254,6 +254,144 @@ export class LocalEnvironment implements ExecutionEnvironment {
           }
           // Escalate to SIGKILL after a short grace window. If the
           // process already exited the second kill is harmless.
+          setTimeout(() => {
+            if (child.pid !== undefined) {
+              try {
+                process.kill(-child.pid, "SIGKILL");
+              } catch {
+                try {
+                  child.kill("SIGKILL");
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }, 2_000);
+        }
+      };
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        killTree("timeout");
+      }, timeoutMs);
+
+      const onAbort = () => {
+        if (settled) return;
+        killTree("abort");
+      };
+      if (opts.signal) {
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      child.stdout.on("data", (chunk) => {
+        const s = chunk.toString();
+        stdout += s;
+        opts.onData?.(s, "stdout");
+      });
+      child.stderr.on("data", (chunk) => {
+        const s = chunk.toString();
+        stderr += s;
+        opts.onData?.(s, "stderr");
+      });
+      child.on("close", (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+        if (killReason === "timeout") {
+          resolvePromise({
+            stdout,
+            stderr: `${stderr}\n[fragua: exec timed out after ${timeoutMs}ms]`,
+            exitCode: 124,
+            durationMs: Date.now() - start,
+          });
+          return;
+        }
+        if (killReason === "abort") {
+          resolvePromise({
+            stdout,
+            stderr: `${stderr}\n[fragua: exec aborted]`,
+            exitCode: 130,
+            durationMs: Date.now() - start,
+          });
+          return;
+        }
+        resolvePromise({ stdout, stderr, exitCode: code ?? 0, durationMs: Date.now() - start });
+      });
+      child.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+        resolvePromise({ stdout, stderr: err.message, exitCode: 127, durationMs: Date.now() - start });
+      });
+    });
+  }
+
+  /** Execute a binary directly with NO shell. Each element of `args` is a
+   * separate argv token — values containing spaces, newlines, `$()`, or any
+   * shell metacharacter are inert data at the child process. Blocklist
+   * patterns are applied to `cmd` only. Shell interpreters
+   * (sh/bash/zsh/dash/fish) are refused even if not in the blocklist, to
+   * preserve the invariant that all shell execution goes through `exec()`. */
+  async spawn(
+    cmd: string,
+    args: string[],
+    opts: {
+      cwd?: string;
+      timeoutMs?: number;
+      env?: Record<string, string>;
+      signal?: AbortSignal;
+      onData?: (chunk: string, kind: "stdout" | "stderr") => void;
+    } = {},
+  ): Promise<ExecResult> {
+    if (isShellInterpreter(cmd)) {
+      return {
+        stdout: "",
+        stderr: `[fragua: blocked command — exec.cmd "${cmd}" is a shell interpreter. Use \`run:\` for shell commands so the blocklist scan applies.]`,
+        exitCode: 126,
+        durationMs: 0,
+      };
+    }
+    const blocked = isBlockedCommand(cmd, this.extraBlocked);
+    if (blocked) {
+      return {
+        stdout: "",
+        stderr: `[fragua: blocked command — matched pattern "${blocked}". Edit .fragua/config.yaml blocklist to adjust.]`,
+        exitCode: 126,
+        durationMs: 0,
+      };
+    }
+    const cwd = opts.cwd ? this.resolvePath(opts.cwd) : this._cwd;
+    const timeoutMs = opts.timeoutMs ?? this.defaultTimeoutMs;
+    const start = Date.now();
+
+    return new Promise((resolvePromise) => {
+      const child = spawn(cmd, args, {
+        cwd,
+        env: { ...process.env, ...opts.env },
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
+        shell: false,
+      });
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      let killReason: "timeout" | "abort" | undefined;
+
+      const killTree = (reason: "timeout" | "abort") => {
+        killReason = reason;
+        if (child.pid !== undefined) {
+          try {
+            process.kill(-child.pid, "SIGTERM");
+          } catch {
+            try {
+              child.kill("SIGTERM");
+            } catch {
+              // ignore
+            }
+          }
           setTimeout(() => {
             if (child.pid !== undefined) {
               try {

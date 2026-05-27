@@ -28,14 +28,30 @@ export interface ExecutionEnvironment {
   writeFile(path: string, contents: string): Promise<void>;
   /** Check if a file exists. */
   exists(path: string): Promise<boolean>;
-  /** Execute a shell command. Returns stdout/stderr/exit code. The
-   * optional `onData` callback streams chunks as they arrive — tools
+  /** Execute a shell command via `sh -c`. Returns stdout/stderr/exit code.
+   * The optional `onData` callback streams chunks as they arrive — tools
    * use it to surface partial output to the UI during long commands.
    * `signal` triggers process-tree termination; backends should send
    * SIGTERM to the whole process group, then SIGKILL after a short
    * grace window, so stuck child processes don't leak past abort. */
   exec(
     command: string,
+    opts?: {
+      cwd?: string;
+      timeoutMs?: number;
+      env?: Record<string, string>;
+      signal?: AbortSignal;
+      onData?: (chunk: string, kind: "stdout" | "stderr") => void;
+    },
+  ): Promise<ExecResult>;
+  /** Execute a binary directly with NO shell. Each element of `args` is
+   * passed as a separate argv token — values containing spaces, newlines,
+   * `$()`, or shell metacharacters are inert data at the child process.
+   * `cmd` is checked against the blocklist and refused when it is a shell
+   * interpreter (sh/bash/zsh/dash/fish). */
+  spawn(
+    cmd: string,
+    args: string[],
     opts?: {
       cwd?: string;
       timeoutMs?: number;

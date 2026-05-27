@@ -134,6 +134,22 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
           />
         </Section>
       )}
+      {/* Tool (exec: argv-vector form) */}
+      {attrs.tool_argv !== undefined && (
+        <Section title="tool (exec)">
+          <Field
+            label="argv"
+            value={
+              <pre
+                className="whitespace-pre-wrap break-words rounded bg-sw-surface-muted p-sw-xs text-sw-xs text-sw-text"
+                data-testid="node-inspector-tool-argv"
+              >
+                {[attrs.tool_argv.cmd, ...attrs.tool_argv.args].join(" ")}
+              </pre>
+            }
+          />
+        </Section>
+      )}
 
       {/* Tools */}
       {(allowedTools.length > 0 || deniedTools.length > 0) && (

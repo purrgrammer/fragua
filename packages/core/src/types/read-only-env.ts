@@ -38,5 +38,8 @@ export function makeReadOnlyEnv(env: ExecutionEnvironment): ExecutionEnvironment
     exec: (_command: string): Promise<ExecResult> => {
       throw new ReadOnlyEnvError("exec");
     },
+    spawn: (_cmd: string, _args: string[]): Promise<ExecResult> => {
+      throw new ReadOnlyEnvError("spawn");
+    },
   };
 }

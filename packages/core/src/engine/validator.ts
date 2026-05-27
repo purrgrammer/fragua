@@ -1,9 +1,27 @@
 // Graph linter. Catches structural and semantic issues before execution.
 // See docs/SPEC.md §4.1 (validation phase).
 
+import { basename } from "node:path";
 import type { Edge, Graph } from "../types/graph.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
 import { inputReferences } from "./substitution.ts";
+
+/** Shell interpreters refused as `exec.cmd` (static check for literal values). */
+const SHELL_INTERPRETERS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash", "fish"]);
+
+/** True when a string is (or resolves to) a shell interpreter basename.
+ * Case-insensitive; strips `.exe` suffix. */
+function isShellInterpreterLiteral(cmd: string): boolean {
+  let name = basename(cmd).toLowerCase();
+  if (name.endsWith(".exe")) name = name.slice(0, -4);
+  return SHELL_INTERPRETERS.has(name);
+}
+
+/** True when a string contains `${{ inputs.* }}` — meaning it is interpolated
+ * and cannot be statically resolved at validate-time. */
+function isInterpolated(s: string): boolean {
+  return /\$\{\{\s*inputs\.[a-zA-Z][a-zA-Z0-9_-]*\s*\}\}/.test(s);
+}
 
 /** Whitelist of known node attribute names — the IR (snake_case) field set
  * the validator runs against, *after* the parser has lowered authoring keys
@@ -32,6 +50,7 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "retry_target",
   "fallback_retry_target",
   "tool_command",
+  "tool_argv",
   "max_cost_usd",
   "max_tokens",
   "skills",
@@ -269,11 +288,15 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // workflow's `inputs:` block. Substitution would silently collapse the
   // placeholder to "" at runtime, so catch the typo / missing declaration
   // at validate-time. Scans the substituted-string attrs (prompt / text /
-  // tool_command) on every node.
+  // tool_command / tool_argv.cmd / tool_argv.args[*]) on every node.
   {
     const declared = new Set((graph.attrs.inputs ?? []).map((d) => d.name));
     for (const n of nodes) {
-      const fields = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
+      const fields: (string | undefined)[] = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
+      if (n.attrs.tool_argv !== undefined) {
+        fields.push(n.attrs.tool_argv.cmd);
+        for (const arg of n.attrs.tool_argv.args) fields.push(arg);
+      }
       const seen = new Set<string>();
       for (const f of fields) {
         if (typeof f !== "string") continue;
@@ -311,19 +334,54 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E008: tool node (tool node) must carry a non-empty `tool_command`.
-  // Without it the executor has nothing to spawn and halts at dispatch.
+  // Tool node execution form checks.
+  //
+  // E033: both `run:` (tool_command) and `exec:` (tool_argv) set — mutually exclusive.
+  // E034: neither set (executor has nothing to spawn), OR `exec.cmd` is a literal
+  //       shell interpreter (sh/bash/zsh/dash/fish) which would bypass the run: path's
+  //       blocklist scan.
+  // E008: kept for backwards compat — fires the same as E034 (neither-set) so
+  //       existing tests relying on E008 continue to pass.
   for (const n of nodes) {
     if (n.type !== "tool") continue;
-    const cmd = n.attrs.tool_command;
-    if (typeof cmd !== "string" || cmd.trim().length === 0) {
+    const hasShell = typeof n.attrs.tool_command === "string" && n.attrs.tool_command.trim().length > 0;
+    const hasArgv = n.attrs.tool_argv !== undefined;
+
+    if (hasShell && hasArgv) {
       diags.push({
         severity: "error",
-        code: "E008",
-        message: `tool node "${n.id}" must define a non-empty \`tool_command\` attribute`,
+        code: "E033",
+        message: `tool node "${n.id}" sets both \`run:\` and \`exec:\` — they are mutually exclusive`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
+    } else if (!hasShell && !hasArgv) {
+      // E034 for the "neither" case; also emit E008 for backwards compat.
+      diags.push({
+        severity: "error",
+        code: "E008",
+        message: `tool node "${n.id}" must define either \`run:\` or \`exec:\``,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+      diags.push({
+        severity: "error",
+        code: "E034",
+        message: `tool node "${n.id}" must define either \`run:\` or \`exec:\``,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    } else if (hasArgv && n.attrs.tool_argv !== undefined) {
+      const argv = n.attrs.tool_argv;
+      if (!isInterpolated(argv.cmd) && isShellInterpreterLiteral(argv.cmd)) {
+        diags.push({
+          severity: "error",
+          code: "E034",
+          message: `tool node "${n.id}" exec.cmd is a shell interpreter ("${argv.cmd}") — all shell execution must go through \`run:\` so the blocklist scan applies`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      }
     }
   }
 

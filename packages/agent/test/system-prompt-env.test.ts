@@ -47,6 +47,7 @@ describe("renderRunEnvironment after RunEnvironment.cwd rename", () => {
       listDir: async () => [],
       glob: async () => [],
       exec: async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
+      spawn: async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
     };
     const out = deriveRunEnv(fakeWorktree, "fallback-run-id");
     expect(out.cwd).toBe("/wt/abc");

@@ -39,6 +39,7 @@ function stubEnv(cwd: string): ExecutionEnvironment {
     writeFile: async () => {},
     exists: async () => false,
     exec: async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
+    spawn: async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
     listDir: async () => [],
     glob: async () => [],
   };

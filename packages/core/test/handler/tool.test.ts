@@ -7,7 +7,13 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@fragua/types";
 import fc from "fast-check";
-import { makeToolHandler, runWithBun, type SpawnFn, type ToolRunResult } from "../../src/handler/handlers/tool.ts";
+import {
+  type ArgvSpawnFn,
+  makeToolHandler,
+  runWithBun,
+  type SpawnFn,
+  type ToolRunResult,
+} from "../../src/handler/handlers/tool.ts";
 import type { HandlerContext, SideEffectRecorder, ToolRegistry } from "../../src/handler/types.ts";
 import type { ExecutionEnvironment } from "../../src/types/execution.ts";
 
@@ -119,6 +125,7 @@ function makeStubEnv(opts: {
     },
     exists: async () => false,
     exec: async (command, options) => opts.exec(command, options),
+    spawn: async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
     listDir: async () => [],
     glob: async () => [],
   };
@@ -132,6 +139,13 @@ function fakeSpawner(run: Partial<ToolRunResult>): SpawnFn {
     durationMs: 1,
     ...run,
   });
+}
+
+function fakeArgvSpawner(run: Partial<ToolRunResult>, onCall?: (cmd: string, args: string[]) => void): ArgvSpawnFn {
+  return async (cmd, args) => {
+    onCall?.(cmd, args);
+    return { exitCode: 0, stdout: "", stderr: "", durationMs: 1, ...run };
+  };
 }
 
 describe("makeToolHandler — happy path", () => {
@@ -483,6 +497,141 @@ describe("makeToolHandler — synthetic tool_node message", () => {
     // Artifact has the full 200KB.
     const stdoutArt = ctx.__artifacts.find((a) => a.key === "build:stdout");
     expect(stdoutArt?.content.length).toBe(big.length);
+  });
+});
+
+describe("makeToolHandler — exec form (argv vector)", () => {
+  test("argv path calls argvSpawner with resolved cmd + args, not the shell spawner", async () => {
+    const calls: { cmd: string; args: string[] }[] = [];
+    const shellCalls: string[] = [];
+    const ctx = stubCtx({ nodeId: "fmt" });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "jq", args: [".name", "in.json"] },
+      argvSpawner: fakeArgvSpawner({ exitCode: 0 }, (cmd, args) => calls.push({ cmd, args })),
+      spawner: async (cmd) => {
+        shellCalls.push(cmd);
+        return { exitCode: 0, stdout: "", stderr: "", durationMs: 0 };
+      },
+    });
+    await spec.handler(ctx);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ cmd: "jq", args: [".name", "in.json"] });
+    expect(shellCalls).toHaveLength(0);
+  });
+
+  test("exit 0 → outcome=success", async () => {
+    const ctx = stubCtx({ nodeId: "fmt" });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "true", args: [] },
+      argvSpawner: fakeArgvSpawner({ exitCode: 0 }),
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") expect(result.outcomeStatus).toBe("success");
+  });
+
+  test("non-zero exit → outcome=fail", async () => {
+    const ctx = stubCtx({ nodeId: "fmt" });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "false", args: [] },
+      argvSpawner: fakeArgvSpawner({ exitCode: 1 }),
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") expect(result.outcomeStatus).toBe("fail");
+  });
+
+  test("per-element substitution: value with spaces becomes one argv element", async () => {
+    const calls: { cmd: string; args: string[] }[] = [];
+    const ctx = stubCtx({
+      nodeId: "fmt",
+      args: { inputs: { msg: "hello world\n$(rm -rf /)" } },
+    });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "echo", args: ["${{ inputs.msg }}"] },
+      argvSpawner: fakeArgvSpawner({ exitCode: 0 }, (cmd, args) => calls.push({ cmd, args })),
+    });
+    await spec.handler(ctx);
+    expect(calls[0]?.args).toHaveLength(1);
+    expect(calls[0]?.args[0]).toBe("hello world\n$(rm -rf /)");
+  });
+
+  test("runtime shell-interpreter refusal: resolved cmd=bash → halt", async () => {
+    const ctx = stubCtx({
+      nodeId: "fmt",
+      args: { inputs: { bin: "bash" } },
+    });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "${{ inputs.bin }}", args: ["-c", "echo hi"] },
+      argvSpawner: fakeArgvSpawner({ exitCode: 0 }),
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") expect(result.detail).toContain("shell interpreter");
+  });
+
+  test("runtime shell-interpreter refusal applies to all five names", async () => {
+    for (const shell of ["sh", "bash", "zsh", "dash", "fish"]) {
+      const ctx = stubCtx({ nodeId: "fmt", args: { inputs: { bin: shell } } });
+      const spec = makeToolHandler({
+        toolArgv: { cmd: "${{ inputs.bin }}", args: [] },
+        argvSpawner: fakeArgvSpawner({ exitCode: 0 }),
+      });
+      const result = await spec.handler(ctx);
+      expect(result.kind).toBe("halt");
+    }
+  });
+
+  test("no env + no argvSpawner → halt with clear error", async () => {
+    const ctx = stubCtx({ nodeId: "fmt" });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "jq", args: [] },
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") expect(result.detail).toContain("execution environment");
+  });
+
+  test("argv form stores stdout artifact and appends tool_node message", async () => {
+    const ctx = stubCtx({ nodeId: "fmt" });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "jq", args: [".name"] },
+      argvSpawner: fakeArgvSpawner({ exitCode: 0, stdout: '"Alice"', stderr: "" }),
+    });
+    await spec.handler(ctx);
+    const art = ctx.__artifacts.find((a) => a.key === "fmt:stdout");
+    expect(art?.content).toBe('"Alice"');
+    expect(ctx.__messages).toHaveLength(1);
+  });
+
+  test("env.spawn is called (not env.exec) on the argv path", async () => {
+    const spawnCalls: { cmd: string; args: string[] }[] = [];
+    const execCalls: string[] = [];
+    const env: ExecutionEnvironment = {
+      cwd: () => "/wt",
+      projectCwd: () => "/wt",
+      readFile: async () => "",
+      writeFile: async () => {},
+      exists: async () => false,
+      exec: async (cmd) => {
+        execCalls.push(cmd);
+        return { stdout: "", stderr: "", exitCode: 0, durationMs: 0 };
+      },
+      spawn: async (cmd, args) => {
+        spawnCalls.push({ cmd, args });
+        return { stdout: "", stderr: "", exitCode: 0, durationMs: 0 };
+      },
+      listDir: async () => [],
+      glob: async () => [],
+    };
+    const ctx = stubCtx({ nodeId: "fmt", env });
+    const spec = makeToolHandler({
+      toolArgv: { cmd: "jq", args: [".name"] },
+    });
+    await spec.handler(ctx);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]).toEqual({ cmd: "jq", args: [".name"] });
+    expect(execCalls).toHaveLength(0);
   });
 });
 

@@ -39,6 +39,30 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
   return template.replace(INPUT_REF_RE, (_whole, name: string) => fmt(inputs[name] ?? ""));
 }
 
+/** Substitute `${{ inputs.* }}` tokens in an argv vector, per-element.
+ *
+ * Each element (cmd and every args[i]) is substituted independently;
+ * the resolved value becomes exactly one argv token and is NEVER
+ * re-split on whitespace or shell-parsed. This is the injection-safety
+ * contract for the `exec:` tool-node form: metacharacters in input
+ * values (`$()`, backticks, spaces, newlines, quotes) are inert data
+ * at the child process boundary because no shell ever sees them.
+ *
+ * No shell-quoting is applied — the unescaped value goes straight into
+ * the argv vector passed to `child_process.spawn`. */
+export function substituteArgv(
+  parts: { cmd: string; args: string[] },
+  opts: { args?: SubstitutionArgs } = {},
+): { cmd: string; args: string[] } {
+  const inputs = opts.args?.inputs ?? {};
+  const replaceToken = (token: string): string =>
+    token.replace(INPUT_REF_RE, (_whole, name: string) => inputs[name] ?? "");
+  return {
+    cmd: replaceToken(parts.cmd),
+    args: parts.args.map(replaceToken),
+  };
+}
+
 /** Every `${{ inputs.X }}` reference name in a template. Used by the
  * validator (E030) to flag references to undeclared inputs. */
 export function inputReferences(template: string): string[] {

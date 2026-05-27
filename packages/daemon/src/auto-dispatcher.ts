@@ -184,6 +184,7 @@ function specForNode(
     text?: string;
     routes?: string[];
     tool_command?: string;
+    tool_argv?: { cmd: string; args: string[] };
   },
   resolvedMaxMs: number | undefined,
 ): HandlerSpec {
@@ -217,8 +218,12 @@ function specForNode(
       }
     }
     case "tool": {
-      const cmd = typeof attrs.tool_command === "string" ? attrs.tool_command : "";
-      const toolOpts: Parameters<typeof handler.makeToolHandler>[0] = { toolCommand: cmd };
+      const toolOpts: Parameters<typeof handler.makeToolHandler>[0] = {};
+      if (attrs.tool_argv !== undefined) {
+        toolOpts.toolArgv = attrs.tool_argv;
+      } else {
+        toolOpts.toolCommand = typeof attrs.tool_command === "string" ? attrs.tool_command : "";
+      }
       if (resolvedMaxMs !== undefined) toolOpts.maxMs = resolvedMaxMs;
       return handler.makeToolHandler(toolOpts);
     }

@@ -70,8 +70,15 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 |---|---|
 | `llm` | LLM call (the implicit default when `type:` is omitted) |
 | `human` | operator-gated routing |
-| `tool` | graph-level shell step (`run:`) |
+| `tool` | graph-level side-effect step (`run:` shell string **or** `exec:` argv vector) |
 | `exit` | reserved graceful-halt sink |
+
+**Tool steps — `run:` vs `exec:`.**  Tool steps are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. Two mutually-exclusive execution forms are supported (validator E033 / E034):
+
+- `run: <shell-string>` — passed verbatim to `sh -c`. The right choice for shell idioms (pipes, redirects, globs, multi-statement commands). `${{ inputs.* }}` values are POSIX-single-quote-escaped before substitution.
+- `exec: {cmd: <binary>, args: [<arg>, …]}` — invokes the binary directly with no shell. `${{ inputs.* }}` is substituted **per element** (`cmd` and each `args[i]` independently); the substituted value becomes exactly one argv token and is never re-split. A value containing spaces, newlines, `$()`, or backticks is inert data at the child process — no shell sees it. This is the injection-safe form for steps that interpolate dynamic or generated values. See `docs/proposals/tool-exec-variant.md` for the full decision record.
+
+For the `exec:` path: the resolved `cmd` is checked against the blocklist AND refused when it is a shell interpreter (`sh`, `bash`, `zsh`, `dash`, `fish`). The latter check is static (validator E034) for literal `cmd` values and runtime for interpolated ones. This preserves the invariant that all shell execution passes through the `run:` path.
 
 `start` is synthesized by the parser (the entry node pointing at the first declared step) and is never authored; `exit` is the reserved sink. Declaring a step named `start` or `exit` with a mismatched type is rejected (`E029` / `E028`).
 
@@ -211,7 +218,7 @@ The gate's `max_retries` bounds the chain so a perpetually-failing `retry_target
 
 ### 3.8 Substitution
 
-One token family expands in `prompt:`, `text:`, and `run:` strings before the handler sees them:
+One token family expands in `prompt:`, `text:`, `run:`, and `exec:` strings before the handler sees them:
 
 | Token | Meaning |
 |---|---|
@@ -221,7 +228,7 @@ The run's free-form positional (CLI trailing args, or `POST /runs` `input`) land
 
 Cross-node data transfer happens through **shared threads** (§3.3), not through prompt substitution. Two llm steps with the same `thread:` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. A receiving node may set `summary=low|medium|high` to see a summariser-compressed view of the prior thread instead of the raw history. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
 
-Tool nodes (`type: tool`, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. They do not feed data forward. Workflows that need to run a deterministic script and reason about its output should call the script from inside an llm step's `bash` tool instead of synthesising a tool-node-then-llm chain.
+Tool nodes (`type: tool`, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. For the `exec:` variant, substitution is per-element with no re-split (see §3.1). They do not feed data forward. Workflows that need to run a deterministic script and reason about its output should call the script from inside an llm step's `bash` tool instead of synthesising a tool-node-then-llm chain.
 
 ### 3.9 Budgets
 

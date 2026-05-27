@@ -134,6 +134,8 @@ const STEP_KEY_TO_IR: Readonly<Record<string, string>> = {
   "system-prompt": "system_prompt",
   "skills-disabled": "skills_disabled",
   run: "tool_command",
+  // `exec:` is a structured key handled separately (not via coerceScalar)
+  // and is added to STEP_RESERVED below.
   "retry-policy": "retry_policy",
   "retry-initial-delay-ms": "retry_initial_delay_ms",
   "retry-backoff-factor": "retry_backoff_factor",
@@ -151,7 +153,7 @@ const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
 };
 
 // Keys consumed by the parser at the step level (not stored in attrs):
-const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes"]);
+const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes", "exec"]);
 // Keys consumed at the graph level (not stored in attrs):
 const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults"]);
 
@@ -428,6 +430,46 @@ export function parseWorkflow(source: string): Graph {
     if (typeof retryTo === "string" && retryTo.length > 0) {
       attrs["goal_gate"] = true;
       attrs["retry_target"] = retryTo;
+    }
+    // `exec: {cmd, args}` → tool_argv. Structural key; not passed through
+    // coerceScalar. Mutex with `run:` (which lowers to tool_command) is
+    // enforced by validator E033 rather than here so the E-code pipeline
+    // is the single user-facing error surface.
+    const execNode = body.get("exec", true);
+    if (execNode !== undefined) {
+      if (!YAML.isMap(execNode)) {
+        throw new ParseError(
+          `step "${stepId}" exec: must be a mapping with cmd and args`,
+          ...locArr(locOf(execNode, lineCounter)),
+        );
+      }
+      const rawCmd = scalarValue(execNode.get("cmd", true));
+      if (typeof rawCmd !== "string" || rawCmd.trim().length === 0) {
+        throw new ParseError(
+          `step "${stepId}" exec.cmd must be a non-empty string`,
+          ...locArr(locOf(execNode, lineCounter)),
+        );
+      }
+      const rawArgs = execNode.get("args", true);
+      let parsedArgs: string[];
+      if (rawArgs === undefined || rawArgs === null) {
+        parsedArgs = [];
+      } else if (YAML.isSeq(rawArgs)) {
+        parsedArgs = [];
+        for (const item of rawArgs.items) {
+          const v = scalarValue(item);
+          if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {
+            throw new ParseError(
+              `step "${stepId}" exec.args must be a sequence of scalar values`,
+              ...locArr(locOf(item, lineCounter)),
+            );
+          }
+          parsedArgs.push(String(v));
+        }
+      } else {
+        throw new ParseError(`step "${stepId}" exec.args must be a sequence`, ...locArr(locOf(rawArgs, lineCounter)));
+      }
+      attrs["tool_argv"] = { cmd: rawCmd, args: parsedArgs };
     }
     // ---- edge synthesis ----
     const nextNode = scalarValue(body.get("next", true));

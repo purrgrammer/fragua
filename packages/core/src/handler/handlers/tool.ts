@@ -37,22 +37,28 @@
 //     quarantine a run whose daemon crashed mid-spawn.
 
 import type { ToolNodeMessage } from "@fragua/types";
-import { substitute } from "../../engine/substitution.ts";
+import { substitute, substituteArgv } from "../../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../../types/execution.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
 export interface ToolConfig {
-  /** Raw shell command; substituted at dispatch time. Required — an empty
-   * tool_command is a workflow authoring error. */
-  toolCommand: string;
+  /** Raw shell command; substituted at dispatch time. Mutually exclusive
+   * with `toolArgv`. An empty toolCommand is a workflow authoring error. */
+  toolCommand?: string;
+  /** argv-vector form (from `exec:` authoring). Mutually exclusive with
+   * `toolCommand`. Each element is substituted independently and passed
+   * as a single inert argv token to the child process (no shell). */
+  toolArgv?: { cmd: string; args: string[] };
   /** Next node on success (exit 0). When unset, defers to the executor's
    * edge selector (5-rule priority on unconditional outgoing edges). */
   nextNode?: string;
   /** Hard timeout. Defaults to 5 minutes — a shell step that needs more
    * should probably be broken up. */
   maxMs?: number;
-  /** Spawn function injection point for tests. Defaults to `runWithBun`. */
+  /** Spawn function injection point for tests (shell path). Defaults to `runWithBun`. */
   spawner?: SpawnFn;
+  /** Spawn function injection point for tests (argv/exec path). */
+  argvSpawner?: ArgvSpawnFn;
 }
 
 export interface ToolRunResult {
@@ -63,15 +69,22 @@ export interface ToolRunResult {
 }
 
 export type SpawnFn = (cmd: string, signal: AbortSignal) => Promise<ToolRunResult>;
+export type ArgvSpawnFn = (cmd: string, args: string[], signal: AbortSignal) => Promise<ToolRunResult>;
 
 const DEFAULT_MAX_MS = 5 * 60 * 1000;
 
 export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
   const explicitSpawner = cfg.spawner;
+  const explicitArgvSpawner = cfg.argvSpawner;
   const maxMs = cfg.maxMs ?? DEFAULT_MAX_MS;
 
   const handler: Handler = async (ctx) => {
-    const rawCommand = cfg.toolCommand;
+    // Dispatch on exec: (argv) vs run: (shell) form.
+    if (cfg.toolArgv !== undefined) {
+      return runArgvForm(cfg.toolArgv, ctx, maxMs, explicitArgvSpawner);
+    }
+
+    const rawCommand = cfg.toolCommand ?? "";
     if (rawCommand.trim().length === 0) {
       return {
         kind: "halt",
@@ -217,6 +230,134 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     maxMs,
     handler,
   };
+}
+
+/** Handle the `exec:` (argv-vector) path. Substitutes inputs per-element,
+ * refuses shell interpreters as cmd, and routes through env.spawn(). */
+async function runArgvForm(
+  rawArgv: { cmd: string; args: string[] },
+  ctx: Parameters<Handler>[0],
+  maxMs: number,
+  argvSpawner: ArgvSpawnFn | undefined,
+): Promise<HandlerResult> {
+  const resolved = substituteArgv(rawArgv, { args: ctx.args });
+
+  // Runtime shell-interpreter refusal (mirrors the static validator E034
+  // for interpolated cmd values that couldn't be checked at validate-time).
+  if (isShellInterpreterName(resolved.cmd)) {
+    return {
+      kind: "halt",
+      reason: "error",
+      detail: `tool exec: cmd "${resolved.cmd}" is a shell interpreter — use \`run:\` for shell commands`,
+    } satisfies HandlerResult;
+  }
+
+  if (ctx.env === undefined && argvSpawner === undefined) {
+    return {
+      kind: "halt",
+      reason: "error",
+      detail:
+        "tool handler: no execution environment wired (this is a bug — every dispatch must carry ctx.env or cfg.argvSpawner)",
+    } satisfies HandlerResult;
+  }
+  const cwd = ctx.env?.cwd() ?? "";
+
+  let stdoutChunkIndex = 0;
+  let stderrChunkIndex = 0;
+  const onData = (chunk: string, kind: "stdout" | "stderr"): void => {
+    if (chunk.length === 0) return;
+    const SLICE_BYTES = 3 * 1024;
+    for (let i = 0; i < chunk.length; i += SLICE_BYTES) {
+      const piece = chunk.slice(i, i + SLICE_BYTES);
+      const idx = kind === "stdout" ? stdoutChunkIndex++ : stderrChunkIndex++;
+      ctx.emit("tool.output_chunk", { kind, delta: piece, content_index: idx });
+    }
+  };
+
+  // Display form of the command for artifacts/messages — join with spaces for
+  // readability; this is informational only, not re-parsed.
+  const commandDisplay = [resolved.cmd, ...resolved.args].join(" ");
+
+  let ranResult: ToolRunResult | undefined;
+  try {
+    ranResult = await ctx.externalCall(
+      { toolName: "tool.exec", args: { cmd: resolved.cmd, args: resolved.args, cwd }, attempt: ctx.iteration + 1 },
+      () => runArgv(resolved.cmd, resolved.args, ctx.signal, ctx.env, argvSpawner, maxMs, onData),
+    );
+  } catch (err) {
+    if (isAbortError(err)) {
+      return { kind: "halt", reason: "error", detail: "tool aborted" } satisfies HandlerResult;
+    }
+    return {
+      kind: "halt",
+      reason: "error",
+      detail: `tool exec spawn failed: ${errorMessage(err)}`,
+    } satisfies HandlerResult;
+  }
+
+  const stdoutArtifactKey = `${ctx.nodeId}:stdout`;
+  ctx.artifacts.put(stdoutArtifactKey, ranResult.stdout, "text/plain", { replace: true });
+  if (ranResult.stderr.length > 0) {
+    ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain", { replace: true });
+  }
+
+  const stdoutTail = truncateTail(ranResult.stdout, INLINE_OUTPUT_BYTES);
+  const stderrTail = truncateTail(ranResult.stderr, INLINE_OUTPUT_BYTES);
+  const message: ToolNodeMessage = {
+    role: "tool_node",
+    command: commandDisplay,
+    cwd,
+    exitCode: ranResult.exitCode,
+    durationMs: ranResult.durationMs,
+    stdout: stdoutTail.text,
+    stderr: stderrTail.text,
+    ...(stdoutTail.truncated ? { stdoutTruncated: true } : {}),
+    ...(stderrTail.truncated ? { stderrTruncated: true } : {}),
+    outputArtifactKey: stdoutArtifactKey,
+    timestamp: Date.now(),
+  };
+  ctx.messages.append(message);
+
+  ctx.emit("tool.completed", {
+    command: commandDisplay,
+    cwd,
+    exitCode: ranResult.exitCode,
+    durationMs: ranResult.durationMs,
+    stdoutBytes: ranResult.stdout.length,
+    stderrBytes: ranResult.stderr.length,
+  });
+
+  const outcomeStatus: "success" | "fail" = ranResult.exitCode === 0 ? "success" : "fail";
+  return { kind: "transition", outcomeStatus, tokens: 0, costUsd: 0 } satisfies HandlerResult;
+}
+
+/** Basename-match shell interpreter check (runtime variant of the static validator E034). */
+function isShellInterpreterName(cmd: string): boolean {
+  const SHELLS = new Set(["sh", "bash", "zsh", "dash", "fish"]);
+  const name =
+    cmd
+      .split("/")
+      .at(-1)
+      ?.toLowerCase()
+      .replace(/\.exe$/, "") ?? "";
+  return SHELLS.has(name);
+}
+
+async function runArgv(
+  cmd: string,
+  args: string[],
+  signal: AbortSignal,
+  env: ExecutionEnvironment | undefined,
+  spawner: ArgvSpawnFn | undefined,
+  timeoutMs: number,
+  onData?: (chunk: string, kind: "stdout" | "stderr") => void,
+): Promise<ToolRunResult> {
+  if (spawner) return spawner(cmd, args, signal);
+  if (env) {
+    const r = await env.spawn(cmd, args, { signal, timeoutMs, ...(onData ? { onData } : {}) });
+    return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, durationMs: r.durationMs };
+  }
+  throw new Error("tool handler: unreachable — env-less dispatch without argvSpawner should have halted earlier");
 }
 
 /** Inline cap for stdout/stderr stored on the `tool_node` message row.

@@ -1,12 +1,17 @@
 ---
 title: Tool exec variant — injection-safe argv execution, with an idempotency marker
 summary: "The `tool` node executes only one way: `run:` → `sh -c <substituted string>`. Interpolating a value into that string is a shell-injection + tokenization hazard (the handler already carries a mitigation comment), it is non-reproducible (per-machine `/bin/sh` variance), and it mangles exit codes through the shell layer. Add a second, mutually-exclusive form — `exec: {cmd, args}` — that spawns argv directly with NO shell and substitutes per-element (a value becomes exactly one inert argv token, never re-parsed). This is the correct default for any step consuming generated/untrusted content — evals above all. Companion (independently shippable): an `idempotent:` marker that lets crash-recovery auto-re-run a tool instead of quarantining it. Both are additive over the source-hashed IR — zero freeze coupling; if workflow-ir (B) lands later they are clean `ir_version` bumps."
-status: proposed
+status: shipped
 maturity: designed
-last-reviewed: 2026-05-25
+last-reviewed: 2026-05-27
 ---
 
 # Tool exec variant
+
+> **Status: the `exec:` form shipped.** `tool` nodes now accept `exec: {cmd,
+> args}` with per-element substitution, no shell, and blocklist +
+> shell-interpreter refusal on `cmd` (validator E033/E034). The `idempotent:`
+> marker (§4) is the remaining deferred follow-up.
 
 > Sibling of [`structured-outputs.md`](structured-outputs.md) (it makes
 > `${{ steps.X.outputs.f }}` interpolation safe) and

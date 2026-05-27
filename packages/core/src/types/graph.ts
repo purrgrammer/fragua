@@ -58,8 +58,14 @@ export interface NodeAttrs {
    * (SPEC §3.4 chain). References a step id. */
   fallback_retry_target?: string;
   /** Tool-step config (type:tool). Shell command executed by the tool
-   * handler. */
+   * handler via `sh -c`. Mutually exclusive with `tool_argv`. */
   tool_command?: string;
+  /** Tool-step config (type:tool). argv-vector form (authoring: `exec:`).
+   * Executed with no shell — each element is a separate argv token.
+   * Per-element `${{ inputs.* }}` substitution: the substituted value
+   * becomes exactly one token, never re-split. Mutually exclusive with
+   * `tool_command`. */
+  tool_argv?: { cmd: string; args: string[] };
   /** Per-node cumulative cost ceiling in USD. Cumulative across all
    * iterations of this node within the run. */
   max_cost_usd?: number;

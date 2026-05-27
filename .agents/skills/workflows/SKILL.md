@@ -93,7 +93,7 @@ steps:
 
 ## 3. Inputs — structured, typed, validated
 
-Workflows take **typed inputs**, declared in `inputs:` and referenced as `${{ inputs.name }}` in any `prompt:`, `text:`, or tool `run:` string. This is the *only* substitution token — there is no free-form `$ARGUMENTS`; everything a run needs is a declared input.
+Workflows take **typed inputs**, declared in `inputs:` and referenced as `${{ inputs.name }}` in any `prompt:`, `text:`, `run:`, or `exec:` string. This is the *only* substitution token — there is no free-form `$ARGUMENTS`; everything a run needs is a declared input.
 
 ```yaml
 inputs:
@@ -244,6 +244,10 @@ Three tools are **force-included** and need not be listed — they're available 
 
 ### Tool steps
 
+Tool steps have two execution forms, mutually exclusive (E033 / E034):
+
+**`run:` — shell string** (pipes, redirects, globs, multi-statement):
+
 ```yaml
 ci:
   type: tool
@@ -251,7 +255,26 @@ ci:
   max-retries: 5
 ```
 
-Side-effect-only: exit 0 → `success`, non-zero → `fail`. The exit code is the entire result — **tool steps don't feed data forward**. stdout/stderr are kept as artifacts for debugging. If you need to run a script *and reason about its output*, call it from inside an `llm` step's `bash` tool instead (E008 rejects an empty `run`).
+`${{ inputs.* }}` values are POSIX-single-quote-escaped before the command is passed to `sh -c`.
+
+**`exec:` — argv vector** (injection-safe form for dynamic arguments):
+
+```yaml
+format:
+  type: tool
+  exec:
+    cmd: jq
+    args:
+      - .name
+      - ${{ inputs.file }}
+  next: done
+```
+
+`${{ inputs.* }}` is substituted **per element** — `cmd` and each `args[i]` independently — and the substituted value becomes exactly one argv token, never re-split. A value containing spaces, newlines, `$()`, or backticks is inert data; no shell sees it. Use `exec:` whenever a step interpolates user-provided or generated values, to prevent injection.
+
+Blocklist rules apply to both forms. Additionally, `exec.cmd` may not be a shell interpreter (`sh`, `bash`, `zsh`, `dash`, `fish`) — static reject (E034) for literal names, runtime reject for interpolated ones. This ensures all shell execution passes through the `run:` blocklist-scanned path.
+
+Side-effect-only: exit 0 → `success`, non-zero → `fail`. The exit code is the entire result — **tool steps don't feed data forward**. stdout/stderr are kept as artifacts for debugging. If you need to run a script *and reason about its output*, call it from inside an `llm` step's `bash` tool instead.
 
 ---
 

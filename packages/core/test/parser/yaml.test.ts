@@ -121,6 +121,112 @@ steps:
     expect(g.nodes["build"]?.attrs.tool_command).toBe("bun run build");
   });
 
+  test("`exec:` lowers to tool_argv with cmd + args[]", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  format:
+    type: tool
+    exec:
+      cmd: jq
+      args:
+        - .name
+        - in.json
+    next: done
+  done:
+    type: exit
+`);
+    const argv = g.nodes["format"]?.attrs.tool_argv;
+    expect(argv).toBeDefined();
+    expect(argv?.cmd).toBe("jq");
+    expect(argv?.args).toEqual([".name", "in.json"]);
+    expect(g.nodes["format"]?.attrs.tool_command).toBeUndefined();
+  });
+
+  test("`exec:` with no args parses to empty args array", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  format:
+    type: tool
+    exec:
+      cmd: jq
+    next: done
+  done:
+    type: exit
+`);
+    const argv = g.nodes["format"]?.attrs.tool_argv;
+    expect(argv?.cmd).toBe("jq");
+    expect(argv?.args).toEqual([]);
+  });
+
+  test("`exec:` with ${{ inputs.* }} tokens parses as-is (substitution is runtime)", () => {
+    // Use string concatenation to avoid JS template literal eating the ${{ }} token.
+    const source = [
+      "name: t",
+      "inputs:",
+      "  file:",
+      "    type: string",
+      "    required: true",
+      "steps:",
+      "  format:",
+      "    type: tool",
+      "    exec:",
+      "      cmd: jq",
+      "      args:",
+      "        - .name",
+      "        - ${{ inputs.file }}",
+      "    next: done",
+      "  done:",
+      "    type: exit",
+    ].join("\n");
+    const g = parseWorkflow(source);
+    const argv = g.nodes["format"]?.attrs.tool_argv;
+    expect(argv?.args).toEqual([".name", "${{ inputs.file }}"]);
+  });
+
+  test("`exec:` with missing cmd is a parse error", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+steps:
+  format:
+    type: tool
+    exec:
+      args: [foo]
+    next: done
+`),
+    ).toThrow();
+  });
+
+  test("`exec:` with non-mapping value is a parse error", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+steps:
+  format:
+    type: tool
+    exec: "jq .name in.json"
+    next: done
+`),
+    ).toThrow();
+  });
+
+  test("`exec:` with non-array args is a parse error", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+steps:
+  format:
+    type: tool
+    exec:
+      cmd: jq
+      args: not-a-sequence
+    next: done
+`),
+    ).toThrow();
+  });
+
   test("defaults: block populates llm steps when attr is absent", () => {
     const g = parseWorkflow(`
 name: t

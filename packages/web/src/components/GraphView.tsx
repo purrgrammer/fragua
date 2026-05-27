@@ -766,7 +766,12 @@ export function toFlowGraph(
       provider: isLlmHandler ? a?.provider : undefined,
       reasoningEffort: isLlmHandler ? a?.reasoning_effort : undefined,
       threadId: isLlmHandler && typeof a?.thread_id === "string" ? a.thread_id : undefined,
-      toolCommand: handler === "tool" && typeof a?.tool_command === "string" ? truncate(a.tool_command, 40) : undefined,
+      toolCommand:
+        handler === "tool" && typeof a?.tool_command === "string"
+          ? truncate(a.tool_command, 40)
+          : handler === "tool" && a?.tool_argv !== undefined
+            ? truncate([a.tool_argv.cmd, ...a.tool_argv.args].join(" "), 40)
+            : undefined,
       // goal_gate (and therefore the §3.4 retarget chain) is only meaningful
       // on llm nodes today — `typeStripTone` documents the precedence.
       retryTarget:

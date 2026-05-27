@@ -236,6 +236,20 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   ): Promise<ExecResult> {
     return this.local.exec(command, opts);
   }
+
+  spawn(
+    cmd: string,
+    args: string[],
+    opts?: {
+      cwd?: string;
+      timeoutMs?: number;
+      env?: Record<string, string>;
+      signal?: AbortSignal;
+      onData?: (chunk: string, kind: "stdout" | "stderr") => void;
+    },
+  ): Promise<ExecResult> {
+    return this.local.spawn(cmd, args, opts);
+  }
 }
 
 function runGit(cwd: string, args: string[], extraEnv?: Record<string, string>): Promise<void> {

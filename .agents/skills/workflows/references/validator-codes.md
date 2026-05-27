@@ -28,9 +28,11 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E027 | `summary: low\|medium\|high` set on a step without a `thread` — summarising nothing has no effect. |
 | E028 | Step id `exit` is reserved for the graceful sink — target it (`next: exit` / `on: {fail: exit}`), don't declare a regular step named `exit`. |
 | E029 | Step id `start` is reserved for the synthesized entry node — rename the step. |
-| E030 | `${{ inputs.x }}` references an input not declared in the workflow's `inputs:` block (scans `prompt` / `text` / `run`). Add it to `inputs:` or fix the typo. |
+| E030 | `${{ inputs.x }}` references an input not declared in the workflow's `inputs:` block (scans `prompt` / `text` / `run` / `exec.cmd` / `exec.args[*]`). Add it to `inputs:` or fix the typo. |
 | E031 | A goal-gate step (uses `retry:`) has no `max-retries:` — the per-gate retarget cap is required on every `retry:` gate. Add `max-retries: N` to the gate step. |
 | E032 | A step declares no success successor. Flow is explicit — there is no linear fall-through to the next declared step. Add `next:` / `on: {success: …}` / `routes:`, or `next: exit` to finish a branch. |
+| E033 | A `tool` step sets both `run:` and `exec:` — they are mutually exclusive. Remove one. |
+| E034 | A `tool` step has neither `run:` nor `exec:` (the executor has nothing to spawn), **or** `exec.cmd` is a literal shell interpreter (`sh`, `bash`, `zsh`, `dash`, `fish`). Shell interpreters are refused on the exec path to prevent bypassing the `run:` blocklist scan. |
 
 ## Warnings
 
