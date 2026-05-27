@@ -22,8 +22,7 @@
 //
 // Failures are intentionally silent: the summariser is a "nice to have"
 // — missing API keys, network blips, or an OFF config toggle all leave
-// the run with `title = null`, and the UI falls back to the raw
-// `routing.input` (the run's free-form description).
+// the run with `title = null`, and the UI falls back to the workflow name.
 
 import { type EventType, type SummariseInput, type SummariserBackend, titleSyntheticNodeId } from "@fragua/core";
 import type { IEventStore } from "@fragua/store";
@@ -48,9 +47,9 @@ export interface AutoTitlerOpts {
 export interface TitleRequest {
   runId: string;
   workflowSha: string;
-  /** Seed text for the summariser. May be the free-form `routing.input`,
-   * or a composed string of `name=value` lines from `routing.inputs` plus
-   * the workflow name. When empty, titling is skipped. */
+  /** Seed text for the summariser. A composed string of `name=value`
+   * lines from `routing.inputs` plus the workflow name. When empty,
+   * titling is skipped. */
   input: string;
   /** Workflow-level goal (graph.goal attr). Optional; passed to the
    * summariser to frame the title. */

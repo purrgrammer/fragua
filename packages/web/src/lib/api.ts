@@ -74,7 +74,6 @@ export interface RunSummary {
   cacheWriteTokens?: number;
   durationMs?: number;
   title?: string;
-  input?: string;
   /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
    * The wire key for `?project_id=` and `/projects/:id`. Optional only to
    * tolerate older/ephemeral payloads — present on every daemon run. */

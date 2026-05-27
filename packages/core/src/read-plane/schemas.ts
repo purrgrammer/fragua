@@ -63,7 +63,6 @@ export const RunSummary = Type.Object({
   cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
-  input: Type.Optional(Type.String()),
   /** Per-machine LOCATION — the resolved project root. Mirrors
    * `run_state.cwd`. Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
@@ -132,7 +131,6 @@ export const RunDetail = Type.Object({
   cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
-  input: Type.Optional(Type.String()),
   hitlNodeId: Type.Optional(Type.String()),
   /** Operator-facing question text from the paused human node's `text=`
    *  attr (when `runStatus === 'paused_human'`). */

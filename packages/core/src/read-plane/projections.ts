@@ -62,8 +62,6 @@ export function runStateToSummary(
   const ownTitle = state.title && state.title.length > 0 ? state.title : undefined;
   const title = ownTitle ?? pickTitle(events);
   if (title !== undefined) summary.title = title;
-  const input = pickInput(state.routing);
-  if (input !== undefined) summary.input = input;
   if (state.cwd != null) summary.cwd = state.cwd;
   summary.projectId = state.projectId;
   summary.projectName = state.projectName;
@@ -79,7 +77,6 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
     row.firstEventTs != null && row.lastEventTs != null && row.lastEventTs >= row.firstEventTs
       ? row.lastEventTs - row.firstEventTs
       : undefined;
-  const routing = JSON.parse(row.routing) as Record<string, unknown>;
   const summary: RunSummary = {
     runId: row.runId,
     startedAt: new Date(startedAtMs).toISOString(),
@@ -101,8 +98,6 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
   const title = ownTitle ?? eventTitle;
   if (title !== undefined) summary.title = title;
 
-  const input = pickInput(routing);
-  if (input !== undefined) summary.input = input;
   if (row.cwd != null) summary.cwd = row.cwd;
   summary.projectId = row.projectId;
   summary.projectName = row.projectName;
@@ -135,11 +130,6 @@ function pickTitle(events: StoredEvent[]): string | undefined {
     if (typeof payload.title === "string" && payload.title.length > 0) return payload.title;
   }
   return undefined;
-}
-
-function pickInput(routing: Record<string, unknown>): string | undefined {
-  const v = routing["input"];
-  return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
 /** Build a RunDetail from a run's projection + its full event log. */

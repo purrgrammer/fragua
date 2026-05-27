@@ -262,10 +262,6 @@ export function createRoutes(deps: ServerDeps): Hono {
       priority?: number;
       runId?: string;
       routing?: Record<string, unknown>;
-      /** Free-form run description — lands in `routing.input` and seeds
-       * the auto-title / UI fallback. Not substituted into prompts; use
-       * `inputs` for `${{ inputs.name }}` substitution. */
-      input?: string;
       /** Typed run inputs (`--input name=value`) — validated against the
        * workflow's `inputs:` block, then stored on `routing.inputs` for
        * `${{ inputs.name }}` substitution at dispatch. */
@@ -406,7 +402,6 @@ export function createRoutes(deps: ServerDeps): Hono {
     const enq = plane.buildEnqueue({
       workflowSha,
       ...(resolvedGraph !== undefined ? { inputDecls: resolvedGraph.attrs.inputs ?? [] } : {}),
-      ...(typeof body.input === "string" ? { input: body.input } : {}),
       ...(body.inputs != null ? { inputs: body.inputs } : {}),
       ...(body.routing != null ? { routing: body.routing } : {}),
       ...(body.priority !== undefined ? { priority: body.priority } : {}),

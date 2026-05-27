@@ -471,28 +471,27 @@ steps:
     }
   });
 
-  test("body.input lands on routing.input (run description / title seed)", async () => {
+  test("body.input is silently ignored (routing.input no longer exists)", async () => {
     const res = await req("POST", "/runs", { workflowSha: "wf", input: "rename foo to bar" });
     expect(res.status).toBe(200);
     const { runId } = (await res.json()) as { runId: string };
     const state = store.getState(runId);
     expect(state).not.toBeNull();
-    expect(state!.routing["input"]).toBe("rename foo to bar");
+    expect(state!.routing["input"]).toBeUndefined();
   });
 
-  test("explicit routing.input wins over body.input", async () => {
+  test("routing passed through body lands on routing (non-input keys preserved)", async () => {
     const res = await req("POST", "/runs", {
       workflowSha: "wf",
-      input: "ignored",
-      routing: { input: "explicit", start_node: "s" },
+      routing: { start_node: "s" },
     });
     const { runId } = (await res.json()) as { runId: string };
     const state = store.getState(runId);
-    expect(state!.routing["input"]).toBe("explicit");
     expect(state!.routing["start_node"]).toBe("s");
+    expect(state!.routing["input"]).toBeUndefined();
   });
 
-  test("no input → no routing.input key", async () => {
+  test("no input field on enqueue → routing.input is absent", async () => {
     const res = await req("POST", "/runs", { workflowSha: "wf" });
     const { runId } = (await res.json()) as { runId: string };
     const state = store.getState(runId);

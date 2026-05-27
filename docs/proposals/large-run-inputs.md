@@ -1,7 +1,8 @@
 ---
 title: Run inputs — remove the legacy free-form routing.input, spill oversized typed inputs to the blob CAS
 summary: "A run's typed inputs (`routing.inputs`, the `${{ inputs.x }}` substitution source) ride inside the genesis `intent.run_enqueued` event, which is subject to the 4 KB event-payload cap (MAX_EVENT_PAYLOAD_BYTES). So a run's inputs are silently capped at ~4 KB — a pasted spec, a long brief, or several sizeable typed inputs can't be enqueued. The cap is correct for events (they're folded, streamed, replayed — they must stay lean) but wrong as a ceiling on *content*. Fix: at enqueue, spill oversized `routing.inputs` string values (lossless execution data) to the content-addressed blob store and leave a `{ $fragua_blob: sha }` reference in the event; resolve on read (substitution, auto-title, UI, export). The legacy free-form `routing.input` description is truncated, not spilled — it's not execution data and is a deprecation candidate. This preserves both invariants — events stay small AND events are truth (the ref is in the log; the blob is immutable CAS) — and makes input size unbounded. It reuses the existing blob CAS (the same store artifacts use) so spilled inputs already travel in bundles, and it composes with secret-scrubbing: a spilled input blob is scrubbed by the same blob path as any text artifact, so this MUST land after the scrubber's artifact re-CAS unit (else the scrubbed-content sha and the routing ref diverge)."
-status: sketch
+status: in-progress
+part-a-status: shipped
 maturity: sketch
 last-reviewed: 2026-05-27
 ---

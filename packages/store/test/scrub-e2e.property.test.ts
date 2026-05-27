@@ -73,7 +73,7 @@ const patternSecretArb = fc
  *   - fact.run_halted.detail
  *   - intent.steering_requested.text
  *   - intent.human_input.note
- *   - genesis routing.input and routing.inputs value
+ *   - genesis routing.inputs value (+ stale routing.input key, still scrubbed)
  *   - text artifact (mime text/plain)
  */
 async function seedRunWithBothSecrets(

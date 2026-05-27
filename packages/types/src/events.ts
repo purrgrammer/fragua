@@ -894,7 +894,7 @@ export type DaemonEvent =
         cwd: string;
         intervalMs: number;
         intervalText: string;
-        input?: string;
+        title?: string;
         overlapPolicy: "skip" | "queue" | "concurrent";
         fireOnCreate: boolean;
       };

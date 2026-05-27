@@ -2,7 +2,7 @@
 // one-shot, no-tools compression call. Streaming so UIs can render
 // titles / narratives as they arrive. Used by:
 //
-//   - execute() to generate the async run title from `routing.input`
+//   - execute() to generate the async run title from typed inputs seed
 //   - PiLlmBackend to produce the tail for `summary=low|medium|high`
 //
 // Each call rides as a synthetic node (see @fragua/core/types/summariser.ts).

@@ -205,7 +205,7 @@ export interface RunState {
    * Populated by the daemon's auto-titler after `fact.run_started` via
    * `setRunTitle`. `null` until the summariser produces one; `null` is
    * also the terminal state when summarisation is disabled or failed —
-   * the UI falls back to `routing.input` in that case. */
+   * the UI falls back to the workflow name in that case. */
   title: string | null;
   /** HEAD sha of the worktree at provision time. Set by the executor on
    * `fact.run_started` when a `WorktreeProvisioner` is configured.
@@ -970,7 +970,9 @@ export interface Schedule {
   projectId: string;
   intervalMs: number;
   intervalText: string;
-  input: string | null;
+  /** Run title stamped on every fired run. `null` when the schedule has no
+   * description. Set by `--title` on `fragua schedule add`. */
+  title: string | null;
   overlapPolicy: ScheduleOverlapPolicy;
   nextFireAt: number;
   lastFireAt: number | null;
@@ -988,7 +990,7 @@ export interface CreateScheduleParams {
   projectId?: string;
   intervalMs: number;
   intervalText: string;
-  input?: string;
+  title?: string;
   overlapPolicy?: ScheduleOverlapPolicy;
   /** When true (default), `nextFireAt = now`. When false,
    * `nextFireAt = now + intervalMs` so the first fire waits a full

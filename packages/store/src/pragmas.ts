@@ -1,14 +1,14 @@
 import type { Database } from "bun:sqlite";
 
 /** Schema version this code emits for new DBs — the DB-migration counter.
- * 0.1.0 baseline — there is no walk-forward migration chain yet; the
- * first post-0.1.0 schema change bumps this and registers a step-delta
- * in `migrations.ts`. Note: it does NOT gate run resume — runs pin
- * `EVENT_CONTRACT_VERSION` for that (axis split, §3.1). */
-export const CURRENT_SCHEMA_VERSION = 1;
+ * v2 renames `schedules.input` → `schedules.title` (the run-input cleanup
+ * that drops free-form `routing.input`); the walk-forward step lives in
+ * `migrations.ts` (SCHEMA_MIGRATIONS). Note: it does NOT gate run resume —
+ * runs pin `EVENT_CONTRACT_VERSION` for that (axis split, §3.1). */
+export const CURRENT_SCHEMA_VERSION = 2;
 
-/** Lowest schema version `migrate()` accepts. Equal to the baseline
- * until the first migration lands. */
+/** Lowest schema version `migrate()` accepts and walks forward from. A v1
+ * store (the 0.1.0 baseline) migrates to current; nothing older exists. */
 export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
 
 /** Event-contract version a run pins at enqueue, and the executor's

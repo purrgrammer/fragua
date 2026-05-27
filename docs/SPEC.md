@@ -217,7 +217,7 @@ One token family expands in `prompt:`, `text:`, and `run:` strings before the ha
 |---|---|
 | `${{ inputs.<name> }}` | A typed run input declared in the workflow's `inputs:` block, bound per-run via `--input name=value`. Declared `default:` values apply when a binding is omitted; the validator (E030) flags references to undeclared inputs, and enqueue rejects a missing required input or an out-of-range `choice`. |
 
-The run's free-form positional (CLI trailing args, or `POST /runs` `input`) lands on `routing.input` as the run's description and auto-title seed — it is **not** substituted into prompts. Workflows take their substitutable values through declared `inputs:`.
+Workflows take their substitutable values through declared `inputs:`. The only run input surface is typed `routing.inputs`.
 
 Cross-node data transfer happens through **shared threads** (§3.3), not through prompt substitution. Two llm steps with the same `thread:` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. A receiving node may set `summary=low|medium|high` to see a summariser-compressed view of the prior thread instead of the raw history. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
 

@@ -1,7 +1,7 @@
 // AutoTitler — unit + integration sanity.
 //
 // Integration with the executor is covered by constructing a tiny
-// in-memory workflow, enqueuing a run with `routing.input`, and running
+// in-memory workflow, enqueuing a run with `routing.inputs`, and running
 // the executor for one turn so `fact.run_started` fires. The titler's
 // SummariserBackend is a stub so no pi-ai / network calls happen.
 
@@ -77,11 +77,7 @@ describe("AutoTitler — unit", () => {
 
   test("titleRun with a non-empty input projects title onto run_state", async () => {
     const r = rig();
-    r.store.enqueueRun({
-      runId: "r1",
-      workflowSha: r.workflowSha,
-      initialRouting: { input: "rename foo to bar" },
-    });
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha });
 
     const backend = new StubBackend(() => okOut("Rename foo → bar"));
     const titler = new AutoTitler({
@@ -117,7 +113,7 @@ describe("AutoTitler — unit", () => {
 
   test("backend failure leaves title null and no run.title_generated", async () => {
     const r = rig();
-    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha });
     const backend = new StubBackend(() => failOut);
     const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: abortCtrl.signal });
     titler.titleRun({ runId: "r1", workflowSha: r.workflowSha, input: "x" });
@@ -132,7 +128,7 @@ describe("AutoTitler — unit", () => {
 
   test("transient backend failure retries, then succeeds", async () => {
     const r = rig();
-    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha });
     // Fail the first call, succeed the second — exercises the bounded retry.
     const backend: StubBackend = new StubBackend(() => (backend.calls.length < 2 ? failOut : okOut("Recovered title")));
     const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: abortCtrl.signal });
@@ -146,7 +142,7 @@ describe("AutoTitler — unit", () => {
 
   test("disabled → fire-and-forget is a no-op", async () => {
     const r = rig();
-    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha });
     const backend = new StubBackend(() => okOut("unused"));
     const titler = new AutoTitler({
       backend,
@@ -162,7 +158,7 @@ describe("AutoTitler — unit", () => {
 
   test("title longer than maxTitleChars is clipped", async () => {
     const r = rig();
-    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha });
     const long = "a".repeat(500);
     const backend = new StubBackend(() => okOut(long));
     const titler = new AutoTitler({
@@ -199,7 +195,7 @@ describe("AutoTitler — unit", () => {
     r.store.close();
   });
 
-  test("empty input (no routing.input and no routing.inputs) → skip", async () => {
+  test("empty input (no routing.inputs) → skip", async () => {
     const r = rig();
     r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: {} });
     const backend = new StubBackend(() => okOut("never"));
@@ -213,8 +209,8 @@ describe("AutoTitler — unit", () => {
 
   test("drain awaits every in-flight title call", async () => {
     const r = rig();
-    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha, initialRouting: { input: "x" } });
-    r.store.enqueueRun({ runId: "r2", workflowSha: r.workflowSha, initialRouting: { input: "y" } });
+    r.store.enqueueRun({ runId: "r1", workflowSha: r.workflowSha });
+    r.store.enqueueRun({ runId: "r2", workflowSha: r.workflowSha });
 
     let resolveFirst: (() => void) | undefined;
     let resolveSecond: (() => void) | undefined;
@@ -249,7 +245,7 @@ describe("AutoTitler — executor integration", () => {
     const yaml = `name: wf\ngoal: "rename things"\nsteps:\n  work: {type: llm, prompt: hi}\n`;
     const r = rig({ yaml });
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
-    // r1 is enqueued with no input; the titler should skip it.
+    // r1 is enqueued with no typed inputs; the titler should skip it.
     enqueue(r, "r1", "start");
 
     const backend = new StubBackend((input) => okOut(`goal=${input.goal}`));
@@ -257,11 +253,11 @@ describe("AutoTitler — executor integration", () => {
     const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: ctrl.signal });
     const registry = new AbortRegistry();
 
-    // r2 has an explicit routing.input so the titler should summarise it.
+    // r2 has structured inputs so the titler should summarise it.
     r.store.enqueueRun({
       runId: "r2",
       workflowSha: r.workflowSha,
-      initialRouting: { start_node: "start", input: "please rename things" },
+      initialRouting: { start_node: "start", inputs: { task: "rename things" } },
     });
 
     const executorOpts: Parameters<typeof runOne>[1] = {
@@ -281,9 +277,9 @@ describe("AutoTitler — executor integration", () => {
     await runOne("r2", executorOpts);
     await titler.drain();
 
-    // r1 had no input → no backend call, no title
+    // r1 had no typed inputs → no backend call, no title
     expect(r.store.getState("r1")?.title).toBeNull();
-    // r2 had input → backend call fires, goal flows through, title set
+    // r2 had typed inputs → backend call fires, goal flows through, title set
     expect(r.store.getState("r2")?.title).toBe("goal=rename things");
     expect(backend.calls).toHaveLength(1);
 
@@ -296,11 +292,11 @@ describe("AutoTitler — executor integration", () => {
     const r = rig({ yaml });
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
 
-    // Enqueue with a routing.input so the titler would normally fire.
+    // Enqueue with typed inputs that would ordinarily trigger titling.
     r.store.enqueueRun({
       runId: "r-titled",
       workflowSha: r.workflowSha,
-      initialRouting: { start_node: "start", input: "please rename things" },
+      initialRouting: { start_node: "start", inputs: { task: "rename things" } },
     });
     // Pre-set a title (simulating what POST /runs does when body.title is present).
     r.store.setRunTitle("r-titled", "Pre-set title");

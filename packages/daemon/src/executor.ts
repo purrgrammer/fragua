@@ -521,24 +521,21 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
       onOccResolved(start, 0);
       if (opts.autoTitler && state.title == null) {
-        const freeFormInput = routingString(state.routing, "input") ?? "";
         const graph = graphFor(workflowSha);
         const goal = graph?.attrs.goal;
-        let seed = freeFormInput;
+        const structuredInputs = readStringMap(state.routing["inputs"]);
+        const inputLines = Object.entries(structuredInputs)
+          .map(([k, v]) => `${k}=${v}`)
+          .join("\n");
+        let seed = "";
         let workflowName: string | undefined;
-        if (seed === "") {
-          const structuredInputs = readStringMap(state.routing["inputs"]);
-          const inputLines = Object.entries(structuredInputs)
-            .map(([k, v]) => `${k}=${v}`)
-            .join("\n");
-          if (inputLines !== "") {
-            const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
-            workflowName = wf?.name;
-            const parts: string[] = [];
-            if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
-            parts.push(inputLines);
-            seed = parts.join("\n");
-          }
+        if (inputLines !== "") {
+          const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
+          workflowName = wf?.name;
+          const parts: string[] = [];
+          if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
+          parts.push(inputLines);
+          seed = parts.join("\n");
         }
         const req: TitleRequest = {
           runId,

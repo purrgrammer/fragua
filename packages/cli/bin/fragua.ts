@@ -848,7 +848,7 @@ cli
   .command("schedule [action] [target]", "Manage recurring workflow runs (run without args for help)")
   .option("--every <interval>", "`add` only: 30m | 1h | 6h | 24h | 3d | 7d (required)")
   .option("--cwd <dir>", "Project root for `add` / filter for `list`")
-  .option("--input <text>", "`add` only: free-form description for every fire (seeds the title)")
+  .option("--title <text>", "`add` only: run title applied to every fired run")
   .option("--on-overlap <policy>", "`add` only: skip | queue | concurrent (default skip)")
   .option("--no-fire-on-create", "`add` only: wait one full interval before the first fire")
   .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
@@ -876,7 +876,7 @@ cli
           every,
           ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
           ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-          ...(pick("input") !== undefined ? { input: pick("input")! } : {}),
+          ...(pick("title") !== undefined ? { title: pick("title")! } : {}),
           ...(pick("onOverlap") !== undefined ? { overlap: pick("onOverlap")! } : {}),
           // cac renders `--no-fire-on-create` as `options.fireOnCreate === false`.
           ...(options["fireOnCreate"] === false ? { noFireOnCreate: true } : {}),

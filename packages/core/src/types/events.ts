@@ -243,10 +243,10 @@ export interface SummaryCompletedData {
 
 /** Fires after the asynchronous run-title summary completes. The
  * run.started event is deliberately *not* held on the title — it
- * fires immediately with `routing.input` as the placeholder title, and this
- * event swaps in the generated title when it's ready. UI renders the
- * before/after transparently. Emitted with `node_id = "__summary.title"`
- * to stay co-located with its summariser events. */
+ * fires immediately with no title, and this event swaps in the generated
+ * title when it's ready. UI renders the before/after transparently.
+ * Emitted with `node_id = "__summary.title"` to stay co-located with
+ * its summariser events. */
 export interface RunTitleGeneratedData {
   title: string;
   /** References the `summary.completed` event by its synthetic node id so

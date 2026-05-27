@@ -170,13 +170,12 @@ describe("intent plane — buildEnqueue", () => {
 
   test("valid → params with minted runId + assembled routing", () => {
     const { plane } = rig();
-    const r = plane.buildEnqueue({ workflowSha: "sha1", input: "fix the bug", cwd: "/repo", projectId: "p1" });
+    const r = plane.buildEnqueue({ workflowSha: "sha1", cwd: "/repo", projectId: "p1" });
     if (!r.ok) throw new Error(r.error);
     expect(r.runId).toBe("run-1"); // injected counter minter
     expect(r.params).toEqual({
       runId: "run-1",
       workflowSha: "sha1",
-      initialRouting: { input: "fix the bug" },
       cwd: "/repo",
       projectId: "p1",
     });
@@ -208,7 +207,7 @@ describe("intent plane — buildEnqueue", () => {
   test("no inputDecls → no input validation (dispatcher path)", () => {
     const { plane } = rig();
     // A workflow with required inputs but no decls passed: enqueue succeeds.
-    const r = plane.buildEnqueue({ workflowSha: "sha1", input: "scheduled run" });
+    const r = plane.buildEnqueue({ workflowSha: "sha1" });
     expect(r.ok).toBe(true);
   });
 

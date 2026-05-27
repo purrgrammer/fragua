@@ -719,7 +719,8 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
       projectName: "proj",
       workflowName: "wf",
       workflowScope: "local",
-      // routing.input and routing.inputs carry secrets - surface 6.
+      // routing.inputs values carry secrets - surface 6. Include a stale
+      // routing.input key to verify the scrubber handles arbitrary routing keys.
       initialRouting: { input: `run with secret ${CRED_SECRET}`, inputs: { apiKey: AKIA_SECRET } },
     });
     store.upsertProviderCredential({
@@ -888,7 +889,7 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
     expect(ev!.payload["detail"] as string).not.toContain(AKIA_SECRET);
   });
 
-  test("(h) genesis intent.run_enqueued routing.input and routing.inputs values are scrubbed", async () => {
+  test("(h) genesis intent.run_enqueued routing values (input key + routing.inputs) are scrubbed", async () => {
     const store = freshStore();
     const runId = await seedRunWithEventSecrets(store);
     const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
@@ -898,7 +899,9 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
     const genesis = events.find((e) => e.type === "intent.run_enqueued");
     expect(genesis).toBeDefined();
     const routing = genesis!.payload["routing"] as Record<string, unknown>;
-    // routing.input contained CRED_SECRET.
+    // A stale routing["input"] key (arbitrary string) is still scrubbed
+    // by the generic scrubber even though the field is no longer part of
+    // the contract.
     expect(typeof routing["input"]).toBe("string");
     expect(routing["input"] as string).toContain("[REDACTED");
     expect(routing["input"] as string).not.toContain(CRED_SECRET);

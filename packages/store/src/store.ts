@@ -351,7 +351,7 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     projectId: row.project_id,
     intervalMs: row.interval_ms,
     intervalText: row.interval_text,
-    input: row.input,
+    title: row.title,
     overlapPolicy: row.overlap_policy,
     nextFireAt: row.next_fire_at,
     lastFireAt: row.last_fire_at,
@@ -1151,7 +1151,7 @@ export class SqliteStore implements IEventStore {
     const fireOnCreate = params.fireOnCreate ?? true;
     const overlapPolicy = params.overlapPolicy ?? "skip";
     const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
-    const input = params.input ?? null;
+    const title = params.title ?? null;
     const projectId = params.projectId ?? params.cwd;
     this.writeTxn(() => {
       insertSchedule(this.db, {
@@ -1161,7 +1161,7 @@ export class SqliteStore implements IEventStore {
         projectId,
         intervalMs: params.intervalMs,
         intervalText: params.intervalText,
-        input,
+        title,
         overlapPolicy,
         nextFireAt,
         createdAt: now,
@@ -1174,7 +1174,7 @@ export class SqliteStore implements IEventStore {
       projectId,
       intervalMs: params.intervalMs,
       intervalText: params.intervalText,
-      input,
+      title,
       overlapPolicy,
       nextFireAt,
       lastFireAt: null,

@@ -85,7 +85,6 @@ interface FakeRun {
   cacheWriteTokens?: number;
   durationMs?: number;
   title?: string;
-  input?: string;
   inboxStatus?: "pending" | "acted" | "discarded";
   changeStat?: { committed: { filesChanged: number; insertions: number; deletions: number } | null; uncommitted: null };
 }
