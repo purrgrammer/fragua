@@ -28,6 +28,10 @@ export {
 } from "./pragmas.ts";
 export { applyFact, deriveRunState, emptyMetrics, foldFacts, genesisToInitialState } from "./reducers.ts";
 export { newRunId } from "./run-id.ts";
+export type { CompiledPattern, CompiledRegistry } from "./scrub/registry.ts";
+export { AhoCorasick, compileRegistry } from "./scrub/registry.ts";
+export type { ScrubOptions } from "./scrub/scrub.ts";
+export { scrubText } from "./scrub/scrub.ts";
 export { sha256Hex } from "./sha256.ts";
 export { SqliteStore } from "./store.ts";
 export { startupSweep } from "./sweep.ts";
