@@ -63,7 +63,11 @@ Removing it (set at `plane.ts:214` from `EnqueueInput.input`):
 1. Drop `EnqueueInput.input` and the `initialRouting["input"]` assignment; stop
    threading it from `fragua run` / the server.
 2. Auto-titler seeds only from `routing.inputs` (+ workflow name/goal); drop the
-   `routing.input` branch.
+   `routing.input` branch. **Consequence (intended):** a run with no typed inputs
+   (a schedule fire, or `fragua run` with no `--input`) now has an empty seed, so
+   `run_state.title` stays `null` and the UI shows the workflow name. Titles are
+   effectively opt-in via typed inputs; this is the chosen behavior, not a
+   regression.
 3. Read-plane: drop `RunSummary.input`; the UI's description/fallback uses the
    generated title, else the workflow name + a compact `routing.inputs` render.
 4. Update CLAUDE.md rule 13 and SPEC §3 (the "free-form positional lands on
