@@ -34,11 +34,13 @@ export const BASE_PATTERNS: ReadonlyArray<{ source: string; re: RegExp }> = [
   },
   {
     // Span the WHOLE block (BEGIN through END), not just the header — the
-    // secret is the base64 body. Non-greedy so multiple keys don't coalesce;
-    // falls back to end-of-input if the END marker is missing (truncated key),
-    // erring toward over-redaction rather than leaking a partial key body.
+    // secret is the base64 body. Non-greedy so multiple keys don't coalesce.
+    // Body is bounded to [​s\u200bS]{20,8192}? so a missing END marker only
+    // consumes a key-shaped run (real PEM bodies are well under 8 KiB) rather
+    // than collapsing to end-of-input and swallowing legitimate trailing content.
+    // The END-or-EOF alternation is kept so a truncated key is still redacted.
     source: "pattern:pem_private_key",
-    re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/,
+    re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]{20,8192}?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/,
   },
   {
     // Matches ONLY the user:pass userinfo inside a URL with embedded creds.

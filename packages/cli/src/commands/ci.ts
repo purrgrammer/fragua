@@ -327,11 +327,12 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         // already disposed, or never provisioned — nothing to clean up.
       }
     }
-    // Bundle export is BEST-EFFORT and runs after the --db store has already
-    // been pruned to portable tables (above). A failed export leaves the pruned
-    // --db behind — that is by design: the operator still gets the raw
-    // inspection store, and re-running the export against --db reproduces the
-    // same bundle.
+    // Bundle export is BEST-EFFORT and runs BEFORE the --db store is pruned
+    // to portable tables (below) — it must read provider_credentials to build
+    // the scrub registry, so it must execute while those rows are still present.
+    // The prune happens after. A failed export leaves the unpruned --db behind
+    // — that is by design: the operator still gets the raw inspection store,
+    // and re-running the export against --db reproduces the same bundle.
     // CI profile: generic markers, env secrets as extra needles, fail the job
     // if a live secret sits verbatim in an un-scrubbed binary artifact.
     if (opts.exportPath != null && opts.exportPath.length > 0 && runId !== undefined) {

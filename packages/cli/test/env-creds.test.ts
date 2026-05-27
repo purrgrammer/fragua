@@ -431,3 +431,43 @@ describe("(bug-6) captureCiEnvSecrets applies value-length and whitespace floor"
     expect(captured.map((c) => c.name)).not.toContain("MY_TOKEN");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bug review-5/finding-5: captureCiEnvSecrets must NOT log the secret var
+// NAME when skipping a below-floor value — log a count instead.
+// ---------------------------------------------------------------------------
+
+describe("(review-5/finding-5) captureCiEnvSecrets — skip warning must not reveal the var name", () => {
+  test("the logged warning does NOT contain the secret variable name", () => {
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+    try {
+      // Two secret-named vars that fail the value-length floor.
+      captureCiEnvSecrets({ MY_SECRET_TOKEN: "short", MY_API_KEY: "tiny" });
+    } finally {
+      console.error = origError;
+    }
+    // The warning must exist (floor was hit).
+    expect(errors.length).toBeGreaterThan(0);
+    // BUG: current code logs the NAME verbatim: "secret env var MY_SECRET_TOKEN skipped".
+    // Fix: log a count only, e.g. "fragua: 2 secret env var(s) skipped (value below scrub floor)".
+    const combined = errors.join(" ");
+    expect(combined).not.toContain("MY_SECRET_TOKEN");
+    expect(combined).not.toContain("MY_API_KEY");
+  });
+
+  test("the logged warning contains a count of skipped vars", () => {
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+    try {
+      captureCiEnvSecrets({ MY_SECRET_TOKEN: "short", MY_API_KEY: "tiny" });
+    } finally {
+      console.error = origError;
+    }
+    const combined = errors.join(" ");
+    // A count ("2") must appear somewhere in the warning.
+    expect(combined).toMatch(/\d+/);
+  });
+});

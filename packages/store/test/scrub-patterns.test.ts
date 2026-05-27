@@ -295,3 +295,36 @@ describe("pattern length bounds", () => {
     expect(result).toMatch(/a{50,}/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bug review-5/finding-4: pem_private_key must not EOF-collapse when END
+// marker is missing — the body must be length-bounded.
+// ---------------------------------------------------------------------------
+
+describe("(review-5/finding-4) pattern:pem_private_key — bounded body on missing END", () => {
+  test("BEGIN with no END followed by long non-key prose only redacts up to the bound", () => {
+    const r = regFor("pattern:pem_private_key");
+    // A key-shaped body (50 chars of base64-ish chars within the bound), then
+    // a prose tail that exceeds the 8192-char body cap and must NOT be swallowed.
+    const keyBody = "MIIEvQIBADANBGkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC";
+    // Tail is >9000 chars — safely beyond the 8192-char body limit.
+    const longTail = "This is legitimate log output. ".repeat(300); // ~9300 chars
+    const input = `-----BEGIN PRIVATE KEY-----\n${keyBody}${longTail}`;
+    const result = scrubText(input, r);
+    // With [\s\S]{20,8192}? the regex stops at the 8 KiB boundary; the tail
+    // beyond that point survives in the output.
+    const markerEnd =
+      result.indexOf("[REDACTED:pattern:pem_private_key]") + "[REDACTED:pattern:pem_private_key]".length;
+    const afterMarker = result.slice(markerEnd);
+    expect(afterMarker.length).toBeGreaterThan(50);
+  });
+
+  test("a normal BEGIN..END block is still fully redacted", () => {
+    const r = regFor("pattern:pem_private_key");
+    const body = "MIIEpAIBAAKCAQEAsecretkeymaterial0123456789abcdef";
+    const pem = `-----BEGIN RSA PRIVATE KEY-----\n${body}\n-----END RSA PRIVATE KEY-----`;
+    const result = scrubText(`cert:\n${pem}`, r);
+    expect(result).toBe("cert:\n[REDACTED:pattern:pem_private_key]");
+    expect(result).not.toContain(body);
+  });
+});

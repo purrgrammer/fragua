@@ -236,14 +236,14 @@ export function compileRegistry(input: {
 
   const ac = buildAhoCorasick(needles);
 
-  // When the caller passes already-compiled patterns (e.g. memoised at module
-  // load via compilePatterns), reuse them directly — they already carry /g and
-  // a fresh RegExp allocation per-call is unnecessary.
-  const patterns: CompiledPattern[] = input.patterns.map((p) =>
-    p.re.flags.includes("g")
-      ? (p as CompiledPattern)
-      : { source: p.source, re: new RegExp(p.re.source, `${p.re.flags}g`) },
-  );
+  // Always allocate fresh RegExp instances so each compiled registry owns
+  // independent lastIndex state. COMPILED_BASE_PATTERNS (and any caller-side
+  // memoised pattern array) stores pattern SOURCES; constructing new RegExp
+  // objects here is cheap (~8 patterns) and makes concurrent/async exports safe.
+  const patterns: CompiledPattern[] = input.patterns.map((p) => ({
+    source: p.source,
+    re: new RegExp(p.re.source, p.re.flags.includes("g") ? p.re.flags : `${p.re.flags}g`),
+  }));
 
   return { ac, patterns };
 }

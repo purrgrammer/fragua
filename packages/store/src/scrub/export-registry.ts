@@ -4,47 +4,79 @@
 import { isBlobRef } from "../routing-blobs.ts";
 import type { ProviderCredentialRow } from "../types.ts";
 import { BASE_PATTERNS } from "./patterns.ts";
-import {
-  type CompiledPattern,
-  type CompiledRegistry,
-  compilePatterns,
-  compileRegistry,
-  MIN_LITERAL_LEN,
-} from "./registry.ts";
+import { type CompiledPattern, type CompiledRegistry, compileRegistry, MIN_LITERAL_LEN } from "./registry.ts";
 import { type ScrubOptions, scrubText } from "./scrub.ts";
 
-// Memoised: compileRegistry adds the /g flag and allocates new RegExp objects.
-// Building these once per module load avoids redundant allocations on every export.
-const COMPILED_BASE_PATTERNS: CompiledPattern[] = compilePatterns(BASE_PATTERNS);
+// Memoised as pattern SOURCES (source string + flags string) so compileRegistry
+// can allocate FRESH RegExp instances per call — each registry then owns its own
+// RegExp objects with independent lastIndex state. (~8 entries, cheap.)
+const BASE_PATTERN_SOURCES: ReadonlyArray<{ source: string; reSource: string; flags: string }> = BASE_PATTERNS.map(
+  (p) => ({
+    source: p.source,
+    reSource: p.re.source,
+    flags: p.re.flags.includes("g") ? p.re.flags : `${p.re.flags}g`,
+  }),
+);
+
+/** Returns a fresh CompiledPattern[] from the memoised base-pattern sources.
+ * Each call allocates new RegExp instances so registries have independent
+ * lastIndex state — safe for concurrent/async exports. */
+function freshBasePatterns(): CompiledPattern[] {
+  return BASE_PATTERN_SOURCES.map((p) => ({ source: p.source, re: new RegExp(p.reSource, p.flags) }));
+}
 
 // ---------------------------------------------------------------------------
 // Literal extraction from credential payloads
 // ---------------------------------------------------------------------------
 
 /**
+ * Structural payload keys that are never secret values. Excluded from the
+ * generic fallback in `extractCredentialLiterals` to prevent redacting
+ * short metadata values like provider="anthropic" that would clear the
+ * MIN_LITERAL_LEN floor and corrupt downstream text.
+ */
+const CREDENTIAL_STRUCTURAL_KEYS = new Set(["type", "kind", "provider", "name", "id", "createdAt", "updatedAt"]);
+
+/**
  * Extract the actual secret string(s) from a parsed provider-credential
  * payload. Returns only strings; non-string values are silently skipped.
  * The value-length floor in `compileRegistry` covers short or empty values.
  *
- * Supported shapes:
- *   api_key: { type: "api_key", key: "<secret>" }
- *   oauth:   { type: "oauth", accessToken: "...", refreshToken: "..." }
+ * Extraction strategy (applied in order, results deduplicated by insertion):
+ *   1. Explicit named picks for known shapes (api_key: key; oauth: accessToken,
+ *      refreshToken) — these run first so known fields are always covered.
+ *   2. Generic fallback: every string-valued field NOT in
+ *      CREDENTIAL_STRUCTURAL_KEYS — catches future credential shapes
+ *      (idToken, clientSecret, apiSecret, wrapped JWTs) that would otherwise
+ *      silently leak.
  */
 export function extractCredentialLiterals(row: ProviderCredentialRow): string[] {
   const p = row.payload;
   if (p == null || typeof p !== "object" || Array.isArray(p)) return [];
   const obj = p as Record<string, unknown>;
 
+  const seen = new Set<string>();
   const results: string[] = [];
-  const pick = (v: unknown): void => {
-    if (typeof v === "string" && v.length > 0) results.push(v);
+  const push = (v: unknown): void => {
+    if (typeof v === "string" && v.length > 0 && !seen.has(v)) {
+      seen.add(v);
+      results.push(v);
+    }
   };
 
+  // Step 1: explicit named picks for known credential shapes.
   if (row.kind === "api_key") {
-    pick(obj["key"]);
+    push(obj["key"]);
   } else if (row.kind === "oauth") {
-    pick(obj["accessToken"]);
-    pick(obj["refreshToken"]);
+    push(obj["accessToken"]);
+    push(obj["refreshToken"]);
+  }
+
+  // Step 2: generic fallback — every string field not in the structural denylist.
+  for (const [k, v] of Object.entries(obj)) {
+    if (!CREDENTIAL_STRUCTURAL_KEYS.has(k)) {
+      push(v);
+    }
   }
 
   return results;
@@ -97,7 +129,7 @@ export function buildExportRegistry(opts: {
   // to re-implement the filter.
   const literalValues = literals.map((l) => l.value).filter((v) => v.length >= MIN_LITERAL_LEN && !/\s/.test(v));
 
-  const registry = compileRegistry({ literals, patterns: COMPILED_BASE_PATTERNS });
+  const registry = compileRegistry({ literals, patterns: freshBasePatterns() });
   return { registry, literalValues };
 }
 

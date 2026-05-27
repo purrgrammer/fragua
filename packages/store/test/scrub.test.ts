@@ -9,11 +9,14 @@ import { pbtRuns } from "../../../test/pbt-runs.ts";
 import {
   buildExportRegistry,
   compileRegistry,
+  extractCredentialLiterals,
   isBlobRef,
   makeBlobRef,
   scrubJsonStrings,
   scrubText,
 } from "../src/index.ts";
+import { BASE_PATTERNS } from "../src/scrub/patterns.ts";
+import { compilePatterns } from "../src/scrub/registry.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -476,5 +479,73 @@ describe("(bug-5) zero-width pattern match produces no spurious REDACTED", () =>
     // Bug: current code pushes a 0-length span before the guard, emitting [REDACTED] at every char.
     const result = scrubText("hello", registry);
     expect(result).toBe("hello");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug review-5/finding-1: extractCredentialLiterals must include a generic
+// fallback for unknown secret fields — not just hardcoded 'key'/'accessToken'.
+// ---------------------------------------------------------------------------
+
+describe("(review-5/finding-1) extractCredentialLiterals — generic fallback for unknown fields", () => {
+  test("unknown secret field (idToken) is captured as a needle", () => {
+    const row = {
+      provider: "example",
+      kind: "oauth" as const,
+      payload: { type: "oauth", idToken: "a-long-secret-token-value-123456" },
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const literals = extractCredentialLiterals(row);
+    // BUG: currently only picks accessToken/refreshToken for oauth,
+    // so idToken is silently dropped and this assertion fails.
+    expect(literals).toContain("a-long-secret-token-value-123456");
+  });
+
+  test("structural fields (type, provider) are NOT included as needles", () => {
+    const row = {
+      provider: "anthropic",
+      kind: "api_key" as const,
+      payload: { type: "api_key", provider: "anthropic", key: "sk-ant-supersecretkeyvalue" },
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const literals = extractCredentialLiterals(row);
+    expect(literals).not.toContain("api_key");
+    expect(literals).not.toContain("anthropic");
+    expect(literals).toContain("sk-ant-supersecretkeyvalue");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug review-5/finding-3: compileRegistry must construct fresh RegExp
+// instances per call so each registry has independent lastIndex state.
+// ---------------------------------------------------------------------------
+
+describe("(review-5/finding-3) compileRegistry — fresh RegExp instances per call", () => {
+  test("two registries built from same base patterns have distinct RegExp objects", () => {
+    const compiled = compilePatterns(BASE_PATTERNS);
+    const r1 = compileRegistry({ literals: [], patterns: compiled });
+    const r2 = compileRegistry({ literals: [], patterns: compiled });
+    // BUG: compileRegistry currently reuses the same RegExp objects when they
+    // already carry /g — so r1.patterns[i].re === r2.patterns[i].re.
+    for (let i = 0; i < r1.patterns.length; i++) {
+      expect(r1.patterns[i]!.re).not.toBe(r2.patterns[i]!.re);
+    }
+  });
+
+  test("mutating lastIndex on one registry does not affect the other", () => {
+    const compiled = compilePatterns(BASE_PATTERNS);
+    const r1 = compileRegistry({ literals: [], patterns: compiled });
+    const r2 = compileRegistry({ literals: [], patterns: compiled });
+    // Force lastIndex to a non-zero value on r1's patterns.
+    for (const p of r1.patterns) {
+      p.re.lastIndex = 9999;
+    }
+    // r2's patterns must still have lastIndex = 0 (unaffected).
+    for (const p of r2.patterns) {
+      // BUG: if they share the same RegExp object, lastIndex will be 9999.
+      expect(p.re.lastIndex).toBe(0);
+    }
   });
 });

@@ -99,16 +99,18 @@ function isSecretEnvName(name: string, providerVars: Set<string>): boolean {
 export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array<{ name: string; value: string }> {
   const providerVars = knownProviderVarNames();
   const result: Array<{ name: string; value: string }> = [];
+  let skipped = 0;
   for (const [name, value] of Object.entries(env)) {
     if (!value) continue;
     if (!isSecretEnvName(name, providerVars)) continue;
     if (value.length < 8 || /\s/.test(value)) {
-      console.error(
-        `fragua: secret env var ${name} skipped (value too short or contains whitespace — will NOT be scrubbed)`,
-      );
+      skipped++;
       continue;
     }
     result.push({ name, value });
+  }
+  if (skipped > 0) {
+    console.error(`fragua: ${skipped} secret env var(s) skipped (value below scrub floor — will NOT be scrubbed)`);
   }
   return result;
 }
