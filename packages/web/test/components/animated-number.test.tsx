@@ -9,14 +9,12 @@
 // element renders its digits into shadow DOM, which happy-dom only
 // partially materialises).
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { AnimatedNumber } from "../../src/components/ui/animated-number.tsx";
 import { tokensCompactFormatOptions, usdFormatOptions } from "../../src/lib/format.ts";
-import { useDom } from "../setup.ts";
 
 describe("AnimatedNumber", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders the formatted currency value with usdFormatOptions", () => {

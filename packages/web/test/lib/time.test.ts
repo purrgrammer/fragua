@@ -1,7 +1,7 @@
 // Unit tests for the time helpers. We pin the locale to "en-US" so
 // assertions stay deterministic regardless of the host locale.
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { formatDate, formatDateTime, formatDuration, formatRelative, toDate, toIsoTitle } from "../../src/lib/time.ts";
 
 const L = { locale: "en-US" } as const;

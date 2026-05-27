@@ -1,12 +1,10 @@
 // Config-section tests for ProjectDetail — YAML resolution and rendering.
-// Kept in a separate file so useDom() lifecycle doesn't interfere with the
-// tabs describe block in ProjectDetail.test.tsx.
+// Kept in a separate file from the tabs describe block in ProjectDetail.test.tsx.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { useDom } from "../../test/setup.ts";
+import { afterEach, describe, expect, test } from "vitest";
 import { ProjectDetail } from "./ProjectDetail.tsx";
 
 const TEST_CWD = "/projects/alpha";
@@ -73,7 +71,6 @@ function renderAt(path: string): ReturnType<typeof render> {
 }
 
 describe("ProjectDetail · Config tab", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders summary from .fragua/config.yaml", async () => {

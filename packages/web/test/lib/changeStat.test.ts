@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { summarizeChangeStat } from "../../src/lib/changeStat.ts";
 
 describe("summarizeChangeStat", () => {

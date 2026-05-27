@@ -5,12 +5,11 @@
 // tail-truncated stdout/stderr. RunConversation renders it as a
 // CodeBlock (shell) + Terminal card inside the tool node's NodeSection.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { RunConversation } from "../../src/components/RunConversation.tsx";
 import type { NodeState, RunMessageRow } from "../../src/lib/api.ts";
 import { renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function toolNodeRow(opts: {
   ordinal: number;
@@ -44,7 +43,6 @@ function toolNodeRow(opts: {
 }
 
 describe("RunConversation — tool_node row", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders a CodeBlock for the command and a Terminal for the output, no cwd row, no terminal title", () => {

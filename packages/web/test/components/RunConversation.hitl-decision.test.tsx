@@ -6,12 +6,11 @@
 // map derived from the event log), so they render on reload and for any
 // observer — not just the operator who clicked.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { RunConversation } from "../../src/components/RunConversation.tsx";
 import type { NodeState, RunMessageRow } from "../../src/lib/api.ts";
 import { renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function userRow(ordinal: number, nodeId: string, text: string): RunMessageRow {
   return {
@@ -23,7 +22,6 @@ function userRow(ordinal: number, nodeId: string, text: string): RunMessageRow {
 }
 
 describe("RunConversation — HITL decision banner", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders the decision banner inside the matching node section", () => {

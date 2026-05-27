@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { barOuterBounds, STACK_RADIUS_PX } from "../../../src/components/analytics/chart-stack.tsx";
 
 const KEYS = ["a", "b", "c", "d"] as const;

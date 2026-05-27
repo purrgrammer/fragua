@@ -9,8 +9,8 @@
 // Otherwise the server silently drops the event before it reaches the
 // client and the invalidation never fires — stale UI.
 
-import { describe, expect, test } from "bun:test";
 import { FEED_EVENT_KINDS } from "@fragua/types";
+import { describe, expect, test } from "vitest";
 import { __invalidateKinds } from "../../src/lib/useGlobalEventStream.ts";
 
 describe("useGlobalEventStream — RUN_INVALIDATE_KINDS membership", () => {

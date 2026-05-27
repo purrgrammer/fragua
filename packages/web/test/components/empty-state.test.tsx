@@ -3,13 +3,11 @@
 // required text, accepts optional slots (icon, description, action), and
 // exposes the default `role="status"` for a11y.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { EmptyState } from "../../src/components/ui/empty-state.tsx";
-import { useDom } from "../setup.ts";
 
 describe("EmptyState", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders the required title with role=status", () => {

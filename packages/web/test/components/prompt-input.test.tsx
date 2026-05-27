@@ -8,18 +8,16 @@
 // Expectation: the footer renders the submit at the bottom-right of the
 // input, with equal horizontal and bottom inset from the corner.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   PromptInput,
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
 } from "../../src/components/ai-elements/prompt-input.tsx";
-import { useDom } from "../setup.ts";
 
 describe("PromptInput submit positioning", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("places the submit at the bottom-right of the input with equal x/y inset from the corner", () => {

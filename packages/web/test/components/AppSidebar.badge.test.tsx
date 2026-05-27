@@ -3,14 +3,13 @@
 // Verifies the badge appears next to the Inbox nav row when there are
 // pending worktree-inbox runs, and is absent when the inbox is empty.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { createMemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import { App } from "../../src/App.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function blockedRun(id: string): RunSummary {
   return {
@@ -66,7 +65,6 @@ const BLOCKED_URL = "/api/runs?status=paused%2Cpaused_human%2Cquarantined&order=
 const HEALTH_URL = "/api/health";
 
 describe("AppSidebar — Inbox pending-count badge", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders worktree-pending count when only worktree runs are pending", async () => {

@@ -1,7 +1,7 @@
 // Pure-reducer tests for `lib/useDetailOverlay.ts`.
 // No DOM, no React — plain function calls.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import type { RunDetail } from "../../src/lib/api.ts";
 import {
   type DetailOverlay,

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import type { StepSnapshot } from "../lib/api.ts";
 import { mergeStepsByNode } from "./CostInspector.tsx";
 

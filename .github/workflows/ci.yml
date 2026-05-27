@@ -30,7 +30,7 @@ jobs:
         run: bun run typecheck
 
       - name: Test
-        run: bun test ./packages
+        run: bun run test
 
       - name: Event-contract version touch-gate
         run: |
