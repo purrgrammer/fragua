@@ -16,7 +16,7 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * counter): it bumps ONLY when `FactEvent`/`IntentEvent` payload shapes or
  * reducer fold-semantics actually change — a rare event — so the resume gate
  * stops tripping on projection-only migrations. See
- * docs/proposals/event-contract-version.md §3.1. The contract-surface hash
+ * docs/proposals/archive/event-contract-version.md §3.1. The contract-surface hash
  * test (packages/store/test/contract-version.test.ts) forces a conscious
  * bump-or-resnapshot whenever the surface moves. */
 export const EVENT_CONTRACT_VERSION = 1;

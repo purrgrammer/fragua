@@ -19,8 +19,8 @@ last-reviewed: 2026-05-23
 > you're still growing — with the FK migration accepted as the cost. The key
 > correction to the original framing: **(A) and (B) are separable** — only (B)
 > changes the FK identity.
-> Interlocks with [`event-contract-version.md`](event-contract-version.md)
-> (the sibling versioning pattern), [`db-import.md`](db-import.md) (what a
+> Interlocks with `event-contract-version.md`
+> (the sibling versioning pattern), `db-import.md` (what a
 > bundle carries), and project identity (shipped).
 
 ## 1. Goal / why
@@ -176,7 +176,7 @@ recreated.
 converter-chain machinery before there's a v2 to convert from: ship the column
 + a loader guard (`ir_version > CURRENT` → refuse; `< CURRENT` → run the chain,
 which is empty today). The registry pattern (from
-[`event-contract-version.md`](event-contract-version.md)) arrives with the first
+`event-contract-version.md`) arrives with the first
 real bump. The `Graph ↔ JSON` codec (serialize at mint, deserialize on load)
 *is* needed now and must round-trip faithfully (modulo `loc`).
 
@@ -275,7 +275,7 @@ canonicalizers needed). The core rules, each a forever contract:
 - **Four version axes stay separate**: `schema_version` (store migrations),
   `ir_version` (IR contract), `sha` (content identity), and
   `EVENT_CONTRACT_VERSION` (fold contract —
-  [`event-contract-version.md`](event-contract-version.md)). The proposal's whole
+  `event-contract-version.md`). The proposal's whole
   value is not collapsing them — and the pairing that bites is `ir_version` vs
   `EVENT_CONTRACT_VERSION`: a new node type / attr / default is an **`ir_version`**
   bump + an up-converter (§5), *not* an event-contract bump, because the executor
@@ -285,5 +285,5 @@ canonicalizers needed). The core rules, each a forever contract:
   a `sha` is whichever upload won; not byte-equal to every author's input. Fine
   for execution; note it for any "show original" UI.
 - **Sequencing**: (C) done. (A) + the `ir_version` scaffold ship now. (B) lands
-  at freeze iff §8.1 is ready, ideally alongside [`db-import.md`](db-import.md)
+  at freeze iff §8.1 is ready, ideally alongside `db-import.md`
   (the bundle carries `{ ir, ir_version, source, sha }`).

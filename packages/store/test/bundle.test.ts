@@ -1,4 +1,4 @@
-// Bundle export/import (docs/proposals/bundles.md): the deterministic tar
+// Bundle export/import (docs/proposals/archive/bundles.md): the deterministic tar
 // round-trips through the system `tar`; `exportRunBundle` carries the run's raw
 // event log + transcript + blobs and NEVER the seeded credential; import
 // re-DERIVES `run_state` by replaying the log (no projection in the bundle), so

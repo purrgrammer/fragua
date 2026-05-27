@@ -46,7 +46,7 @@ one case. An argv form is the *general* fix.
 `/bin/sh` is a different program across machines/distros/CI (dash vs bash, IFS,
 glob, brace expansion). The same `run:` line is not guaranteed to tokenize
 identically everywhere — bad for deterministic evals and for resume-after-import
-([`db-import.md`](db-import.md)).
+(`db-import.md`).
 
 ### 1.3 Exit codes pass through a shell layer
 
@@ -217,6 +217,6 @@ instead of quarantine** — the author has declared re-running is safe.
   rides exec unchanged.
 - [`workflow-ir.md`](workflow-ir.md) — both attrs are IR-core; §8.1
   canonicalization must cover `exec.args` ordering + `idempotent` if (B) freezes.
-- [`event-contract-version.md`](event-contract-version.md) — neither addition
+- `event-contract-version.md` — neither addition
   touches the fold contract (tool execution produces `fact.node_completed` with
   the same shape; the reducer folds `nextNode`/metrics, not exec internals).

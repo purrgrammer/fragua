@@ -1,4 +1,4 @@
-// Phase 0 (bundles.impl.plan.md) — the keystone: a complete `run_state` is
+// Phase 0 (docs/proposals/archive/bundles.md §2) — the keystone: a complete `run_state` is
 // derivable by replaying the event log. The genesis `intent.run_enqueued` event
 // now carries the whole enqueue identity, so `genesisToInitialState` + folding
 // the facts (each at its own stored ts, exactly as `appendFact` applied it)

@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
   -- Event-contract version pinned at enqueue (EVENT_CONTRACT_VERSION). The
   -- executor's run-resume gate, DISTINCT from the singleton `schema_version`
-  -- DB-migration counter above — see docs/proposals/event-contract-version.md.
+  -- DB-migration counter above — see docs/proposals/archive/event-contract-version.md.
   contract_version INTEGER NOT NULL,
   routing TEXT NOT NULL CHECK (length(routing) < 8192),
   metrics TEXT NOT NULL,
