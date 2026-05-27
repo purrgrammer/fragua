@@ -16,7 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 import { getFeedEvents, getFeedStreamUrl } from "./api.ts";
-import { appendFeedEventsAtom, feedLoadingAtom, feedSseStatusAtom } from "./globalFeed.ts";
+import { appendFeedEventsAtom, FEED_HIDDEN_KINDS, feedLoadingAtom, feedSseStatusAtom } from "./globalFeed.ts";
 import { queries } from "./queries.ts";
 import { useEventSource } from "./useEventSource.ts";
 
@@ -129,7 +129,9 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
       if (typeof (parsed as FeedEvent).runId !== "string" || typeof (parsed as FeedEvent).seq !== "number") return;
       const evt = parsed as FeedEvent;
 
-      appendFeed(evt);
+      if (!FEED_HIDDEN_KINDS.has(evt.type)) {
+        appendFeed(evt);
+      }
 
       // Invalidate just the queries that *this* event's lifecycle
       // change actually affects. Blanket-invalidating queries.runs.all

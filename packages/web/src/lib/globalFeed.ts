@@ -98,3 +98,15 @@ export const appendFeedEventsAtom = atom(null, (get, set, incoming: FeedEvent | 
 export const resetFeedAtom = atom(null, (_get, set) => {
   set(feedAtom, []);
 });
+
+/**
+ * Event kinds that flow over SSE and trigger query invalidation but
+ * must NOT appear as rendered rows in the Activity feed.
+ *
+ * `fact.snapshot_recorded` is the terminal-snapshot fact written after
+ * `fact.run_completed` that sets `inbox_status=pending`. It must remain
+ * in both `FEED_EVENT_KINDS` (SSE delivery) and `RUN_INVALIDATE_KINDS`
+ * (inbox live-update) but is noise in the Activity timeline — the Inbox
+ * section already surfaces the run as landable.
+ */
+export const FEED_HIDDEN_KINDS = new Set<string>(["fact.snapshot_recorded"]);
