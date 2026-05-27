@@ -16,6 +16,8 @@
 //   workflows/<sha>/ir.json           — its compiled IR
 //   blobs/<sha256>                    — content-addressed bytes (artifacts)
 
+import { assertSafeRunId } from "./run-id.ts";
+
 /** Bump when the bundle layout changes. Experimental — bumps freely, no
  *  migration path while the format is unstable (bundles.md). */
 export const BUNDLE_VERSION = 1;
@@ -35,16 +37,71 @@ export interface BundleManifest {
   blobs: { sha256: string; size: number }[];
 }
 
-/** Type-narrow a parsed manifest before any heavy work: confirm the required
- *  top-level fields are present and well-shaped, so a tampered/malformed bundle
- *  fails with a clear error instead of a deep `TypeError` partway through the
- *  blob-integrity loop or the import txn (bundles.md). */
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+/** Upper bound on a bundle-supplied workflow `name` (persisted + UI-rendered).
+ *  Rejected past this, not clamped — no silent mutation at the trust boundary. */
+export const MAX_WORKFLOW_NAME_CHARS = 512;
+
+/** A bundle-supplied identifier that flows into a filesystem path
+ *  (`blobs/<sha>`, `workflows/<sha>/…`) or a SQL key MUST be a real sha256 —
+ *  64 lowercase hex chars — before it goes anywhere. The blob-integrity check
+ *  (`sha256Hex(data) === sha`) incidentally enforces this for blobs, but that
+ *  makes integrity load-bearing for path safety; this is the explicit gate
+ *  (bundles.md trust boundary). */
+export function assertSha256(sha: unknown, what: string): asserts sha is string {
+  if (typeof sha !== "string" || !SHA256_RE.test(sha)) {
+    throw new Error(`bundle manifest: ${what} is not a sha256 (expected 64 lowercase hex chars)`);
+  }
+}
+
+/** Narrow to a non-null, non-array object or throw — `typeof x === "object"`
+ *  alone admits `null` and arrays, so any trust-boundary "is it an object?"
+ *  check must use this (an array slipping through reaches SQL as an opaque
+ *  failure, the thing the gate exists to prevent). */
+export function asObject(v: unknown, what: string): Record<string, unknown> {
+  if (v == null || typeof v !== "object" || Array.isArray(v))
+    throw new Error(`bundle manifest: ${what} is not an object`);
+  return v as Record<string, unknown>;
+}
+
+/** Type-narrow a parsed manifest before any heavy work: confirm every field a
+ *  caller dereferences — and every bundle-supplied sha that reaches a path or a
+ *  SQL key — is present and well-shaped, so a tampered/malformed bundle fails
+ *  with a clear error instead of a deep `TypeError` or an opaque SQLite
+ *  constraint partway through the import txn (bundles.md trust boundary). */
 export function assertBundleManifest(m: unknown): asserts m is BundleManifest {
   if (m == null || typeof m !== "object") throw new Error("bundle manifest is not an object");
   const o = m as Record<string, unknown>;
   if (typeof o["bundleVersion"] !== "number") throw new Error("bundle manifest: bundleVersion missing or not a number");
   for (const k of ["runs", "workflows", "blobs"] as const) {
     if (!Array.isArray(o[k])) throw new Error(`bundle manifest: ${k} missing or not an array`);
+  }
+  for (const [i, r] of (o["runs"] as unknown[]).entries()) {
+    const run = asObject(r, `runs[${i}]`);
+    // Full ULID-shape gate (not just `typeof string`): runId flows into worktree
+    // paths + git refspecs, and this manifest gate is `show`'s ONLY preflight —
+    // so it must reject a traversal-shaped id here, matching what import enforces.
+    assertSafeRunId(run["runId"]);
+    assertSha256(run["workflowSha"], `runs[${i}].workflowSha`);
+    for (const c of ["events", "messages"] as const) {
+      if (typeof run[c] !== "number") throw new Error(`bundle manifest: runs[${i}].${c} is not a number`);
+    }
+  }
+  for (const [i, w] of (o["workflows"] as unknown[]).entries()) {
+    const wf = asObject(w, `workflows[${i}]`);
+    assertSha256(wf["sha"], `workflows[${i}].sha`);
+    if (typeof wf["name"] !== "string") throw new Error(`bundle manifest: workflows[${i}].name is not a string`);
+    if ((wf["name"] as string).length > MAX_WORKFLOW_NAME_CHARS) {
+      throw new Error(`bundle manifest: workflows[${i}].name exceeds ${MAX_WORKFLOW_NAME_CHARS} chars`);
+    }
+    if (typeof wf["irVersion"] !== "number")
+      throw new Error(`bundle manifest: workflows[${i}].irVersion is not a number`);
+  }
+  for (const [i, b] of (o["blobs"] as unknown[]).entries()) {
+    const blob = asObject(b, `blobs[${i}]`);
+    assertSha256(blob["sha256"], `blobs[${i}].sha256`);
+    if (typeof blob["size"] !== "number") throw new Error(`bundle manifest: blobs[${i}].size is not a number`);
   }
 }
 

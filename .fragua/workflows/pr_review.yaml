@@ -1,24 +1,29 @@
 # pr_review.yaml — unattended PR review for CI: scope-and-classify → review
-# scaled to the change → post the review back to the PR. NO human gate.
+# scaled to the change → classify the verdict → post the review back to the PR.
+# NO human gate.
 #
 # The non-HITL sibling of `review`. Where `review` ends at a `signoff` human
-# step that authorizes the PR action, `pr_review` runs to completion under
-# `fragua ci pr_review --input pr=<n>` and posts the review itself:
-# `gh pr review --request-changes` when the pass surfaces a Critical or High
-# finding, `--comment` otherwise. The classifier still scales depth
-# (skip/quick/full) so a typo PR never draws an Opus full pass.
+# step, `pr_review` runs to completion under `fragua ci pr_review --input pr=<n>`
+# and posts the review itself. A dedicated `verdict` route node reads the written
+# review and classifies it by WORST severity into one of two terminal posts:
+#   changes  — any Critical or High finding   (gh pr review --request-changes)
+#   comment  — everything else (incl. clean)   (gh pr review --comment)
+# The verdict is a first-class routing decision (auditable in the event log),
+# not a `$(cat verdict.txt)` shell hack. There is NO `approve` post and NO
+# auto-merge: a bot using GITHUB_TOKEN cannot post an APPROVED review state, so
+# the verdict is a human-facing signal — a human merges. (CHANGES_REQUESTED can
+# still gate a merge via branch protection; that's the operator's choice.)
 #
-# Runs in the CI checkout's worktree: the PR's files are already on disk (read
-# them directly) and `gh pr diff <n>` gives the diff. Needs GH_TOKEN in env for
-# the gh calls (pr-review.yml sets it) plus a provider credential. There is no
-# human to authorize the post — that is the whole point of this variant, and
-# why it only ever requests-changes or comments (never approves).
+# The classifier still scales depth (skip/quick/full) so a typo PR never draws
+# an Opus full pass. Runs in the CI checkout's worktree: the PR's files are on
+# disk (read them directly) and `gh pr diff <n>` gives the diff. Needs GH_TOKEN
+# in env (pr-review.yml sets it) plus a provider credential.
 #
 #   fragua ci pr_review --input pr=128
 
 name: pr_review
-goal: Unattended PR review for CI — review scaled to the change, posted back to the PR with no human gate.
-budget: 3.50 # ≥ scope (0.40) + review_full (2.50) + verify (0.60) so the node caps are reachable
+goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR (comment or request-changes) with no human gate.
+budget: 10.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 2.50 + verify 0.60) + verdict (0.15) = 9.85, so a retry never halts mid-pass on the cap
 
 inputs:
   pr:
@@ -54,32 +59,32 @@ steps:
         quick — small, single-concern change (a contained fix or minor change)
         full  — feature-scale, cross-cutting, or risk-bearing (auth / input parsing / data layer / shared contracts / large diff)
 
-      For `skip`: write `pr-review.md` (cwd-relative, `write` tool) containing a clean `LGTM: <reason>` as the whole review, and write `pr-verdict.txt` containing exactly `comment`, before you route skip — `post` reads those files.
+      For `skip`: write `pr-review.md` (cwd-relative, `write` tool) containing a clean `LGTM: <reason>` as the whole review, before you route skip — the `verdict` node reads it (LGTM ⇒ approve).
     routes:
-      skip:  {to: post,         label: "Trivial"}
+      skip:  {to: verdict,      label: "Trivial"}
       quick: {to: review_quick, label: "Quick review"}
       full:  {to: review_full,  label: "Full review"}
 
   review_quick:                        # quick tier — one focused pass
+    # Intentionally routes straight to `verdict` with NO `verify` gate: this tier
+    # only fires for small, single-concern changes (low blast radius), so the
+    # verdict classifier is the sole gate. Only the `full` tier — feature-scale,
+    # risk-bearing — earns the evidence-quality gate (and its retry cost).
     type: llm
     thread: review
     allowed-tools: [read, grep, bash, write]
     max-cost: 0.40
-    next: post
+    next: verdict
     prompt: |
       Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). One focused pass over correctness and any obvious security or clarity issue — it's a small change, keep it to a single pass.
 
-      WRITE the review to `pr-review.md` (cwd-relative) with the `write` tool — do NOT print it to the thread (the `post` step reads the file; re-emitting the body burns the node's cost twice). The file's content, verbatim:
+      WRITE the review to `pr-review.md` (cwd-relative) with the `write` tool — do NOT print it to the thread (the `verdict` step reads the file; re-emitting the body burns the node's cost twice). Use the SAME severity-section shape as the full tier (one format for the `verdict` classifier to read). The file's content, headings exactly: `# Code Review` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
-      # Code Review
+      Per finding under its severity heading: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence. Drop a severity heading only if it has no findings; if everything is clean, replace the severity sections with `## All clear` (one sentence: what was reviewed, what you couldn't see).
 
-      ## Findings
-      One per line: `- [critical|high|medium|low] path:line — claim.` with `Why:` and `Fix:` each one sentence. If none, replace with `## All clear` + one sentence (what was reviewed, what you couldn't see).
+      End with `## Next steps` — ≤2 concrete actions, or `No follow-up required.`
 
-      ## Next steps
-      ≤2 concrete actions, or `No follow-up required.`
-
-      Then write `pr-verdict.txt` (cwd-relative, `write` tool) containing exactly one word — `request-changes` if any finding is critical or high, else `comment`. Emit only `WROTE` (do NOT reprint the review).
+      Emit only `WROTE` (do NOT reprint the review).
 
   review_full:                         # full tier — one deep pass over the implicated lenses
     type: llm
@@ -97,7 +102,7 @@ steps:
         performance (iff hot paths / data layer / loops / large payloads touched) — complexity surprises (O(n²) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads; confidence ∝ evidence; no cold-path constant-factor nits.
         architecture (iff cross-package coupling / public surface / abstraction boundaries change) — coupling crossing boundaries, leaky abstractions, SRP violations, drift-inviting duplication, misleading naming, public surface exposing internals, half-finished work, scope creep.
 
-      Then WRITE one ranked review to `pr-review.md` (cwd-relative, `write` tool) — do NOT print it to the thread; `post` reads the file, and re-emitting the body burns cost twice. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
+      Then WRITE one ranked review to `pr-review.md` (cwd-relative, `write` tool) — do NOT print it to the thread; the `verdict` step reads the file, and re-emitting the body burns cost twice. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
       ## Scope: one paragraph naming the touched packages/areas and the change type; name which lenses you applied and why.
 
@@ -109,16 +114,16 @@ steps:
 
       End the file with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
 
-      Then write `pr-verdict.txt` (cwd-relative, `write` tool) containing exactly one word — `request-changes` if there is any Critical or High finding, else `comment`. After both files are written, emit only `WROTE`.
+      After the file is written, emit only `WROTE`.
 
   verify:                              # full tier — automated evidence-quality gate
     type: llm
     thread: review
-    retry: review_full                 # REJECT ⇒ re-review (capped)
+    retry: review_full                 # REJECT ⇒ re-review (capped; budget covers the full path)
     max-retries: 2
     allowed-tools: [read, grep]
     max-cost: 0.60
-    next: post
+    next: verdict
     prompt: |
       Read `pr-review.md` (the review under gate). Judge on its own merits.
         1. Every finding's path:line is verifiable — spot-check 2-3 by reading the cited path.
@@ -126,9 +131,31 @@ steps:
         3. Schema followed — Scope present; severities ordered or replaced by All clear; Next steps present.
       All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>`.
 
-  post:                                # auto-post the review — a PURE TOOL node, no LLM. The body
-    # (pr-review.md) and verdict (pr-verdict.txt) are already files, so posting is one deterministic
-    # gh call: no body re-emit, no LLM cost, no budget spiral. A non-zero gh exit halts the run.
+  verdict:                             # classify the written review → route to one of two posts.
+    # A cheap isolated classifier (no thread): reads pr-review.md fresh and decides the GitHub review
+    # action by worst severity. The route is the verdict — first-class + auditable, no verdict file.
+    # Only `changes` and `comment` — a GITHUB_TOKEN bot cannot post an APPROVED state, so a clean
+    # review is a `comment` (its body says All clear / LGTM); there is no approve post.
+    type: llm
+    model: claude-haiku-4-5
+    allowed-tools: [read]
+    max-cost: 0.15
+    prompt: |
+      Read `pr-review.md`. Classify it by its WORST finding and call `route` once (state the deciding severity in one line first):
+        changes  — there is any Critical or High finding
+        comment  — everything else (only Medium/Low findings, an `All clear`, or an `LGTM`)
+      You MUST end by calling the `route` tool exactly once. Do not reply with prose instead of routing.
+    routes:
+      comment: {to: post_comment, label: "Comment"}
+      changes: {to: post_changes, label: "Request changes"}
+
+  # Two terminal posts — each a PURE TOOL node (no LLM): the body is already a file, so posting is one
+  # deterministic gh call (the states a GITHUB_TOKEN bot can actually post). A non-zero gh exit halts.
+  post_comment:
     type: tool
-    run: gh pr review ${{ inputs.pr }} --$(cat pr-verdict.txt) --body-file pr-review.md
+    run: gh pr review ${{ inputs.pr }} --comment --body-file pr-review.md
+    next: exit
+  post_changes:
+    type: tool
+    run: gh pr review ${{ inputs.pr }} --request-changes --body-file pr-review.md
     next: exit

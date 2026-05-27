@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
+import { VALID_WRITERS } from "@fragua/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -39,7 +40,9 @@ import {
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
 import {
+  asObject,
   assertBundleManifest,
+  assertSha256,
   BUNDLE_VERSION,
   type BundleManifest,
   blobPath,
@@ -1405,7 +1408,9 @@ export class SqliteStore implements IEventStore {
       blobs.push({ sha256: b.sha256, size: data.length, data });
     }
 
-    // Workflows: read the source + IR bytes each manifest entry declares.
+    // Workflows: read the source + IR bytes each manifest entry declares. The
+    // `name` length is rejected (not clamped) in assertBundleManifest — same
+    // reject discipline as the sha gates, no silent mutation at the boundary.
     const workflows = manifest.workflows.map((w) => {
       const source = byName.get(workflowSourcePath(w.sha));
       const ir = byName.get(workflowIrPath(w.sha));
@@ -1414,6 +1419,14 @@ export class SqliteStore implements IEventStore {
       }
       return { ...w, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
     });
+
+    // The format is multi-run by construction; a duplicate id would import the
+    // first run then fail the second on a PK conflict (opaque SQLite error).
+    const seenIds = new Set<string>();
+    for (const r of manifest.runs) {
+      if (seenIds.has(r.runId)) throw new Error(`importRunBundle: duplicate runId ${r.runId} in manifest`);
+      seenIds.add(r.runId);
+    }
 
     // Decode + derive every run OUTSIDE the write txn (I1: no JSON / alloc work
     // inside). Each run's `run_state` is reconstructed from its event log.
@@ -1437,6 +1450,69 @@ export class SqliteStore implements IEventStore {
       }[];
       const artData = byName.get(runArtifactsPath(r.runId));
       const artifacts = (artData == null ? [] : decodeJsonl(artData)) as ArtifactListRow[];
+
+      // Untrusted event rows: reject a non-object row (a `null` line decodes to
+      // null and would TypeError on `.writer`), gate the provenance `writer` to
+      // the known set (the column has no CHECK, by design — but the import trust
+      // boundary does), and require a string `type`/numeric `seq` so a malformed
+      // row can't reach the events table.
+      for (const ev of events) {
+        if (ev == null || typeof ev !== "object") {
+          throw new Error(`importRunBundle: run ${r.runId} carries a non-object event row`);
+        }
+        // Primitive-shape gate FIRST — so a non-string writer (e.g. `{}`) is
+        // rejected as a malformed row, not mislabeled "invalid writer" by the
+        // membership test below (which only ever sees strings after this).
+        if (typeof ev.type !== "string" || typeof ev.seq !== "number" || typeof ev.writer !== "string") {
+          throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq/writer)`);
+        }
+        if (!VALID_WRITERS.has(ev.writer)) {
+          throw new Error(
+            `importRunBundle: run ${r.runId} event seq ${ev.seq} has invalid writer ${JSON.stringify(ev.writer)}`,
+          );
+        }
+      }
+      // Scope note: we shape-gate the row envelope (writer/type/seq) and the
+      // GENESIS payload (below), but NOT every other event's `payload` — the
+      // reducer is intentionally tolerant, an imported run is inert (never
+      // executes here), and event payloads are INSERT OR IGNORE'd verbatim for
+      // inspection. Gating every fact/intent payload shape would duplicate the
+      // event-contract surface; it's deliberately out of scope.
+      //
+      // Same gate for transcript rows — `ordinal`/`iteration` numeric, `nodeId`
+      // string-or-null — so a tampered messages.jsonl fails clearly here, not as
+      // an opaque SQLITE_CONSTRAINT in the txn.
+      for (const m of messages) {
+        if (m == null || typeof m !== "object") {
+          throw new Error(`importRunBundle: run ${r.runId} carries a non-object message row`);
+        }
+        if (typeof m.ordinal !== "number" || typeof m.iteration !== "number") {
+          throw new Error(`importRunBundle: run ${r.runId} message has non-numeric ordinal/iteration`);
+        }
+        if (m.nodeId !== null && typeof m.nodeId !== "string") {
+          throw new Error(`importRunBundle: run ${r.runId} message has a non-string nodeId`);
+        }
+      }
+      // Defense-in-depth: shape-gate the genesis identity fields BEFORE
+      // deriveRunState consumes them, same discipline as the manifest shas. A
+      // bare `!= null` sweep would admit a wrong-typed value (workflowSha:
+      // 12345) or an array (`typeof [] === "object"`) and let it reach
+      // insertRunState / FK lookups — type each field at the boundary (asObject
+      // rejects arrays) and surface a clear error, not an opaque SQLITE_CONSTRAINT
+      // in the txn. (deriveRunState re-finds genesis; this gate runs first so its
+      // clearer errors win.)
+      const genesis = events.find((e) => e.type === "intent.run_enqueued");
+      if (genesis == null)
+        throw new Error(`importRunBundle: run ${r.runId} has no genesis (intent.run_enqueued) event`);
+      const gp = asObject(genesis.payload, `run ${r.runId} genesis payload`);
+      assertSha256(gp["workflowSha"], `run ${r.runId} genesis workflowSha`);
+      for (const f of ["projectId", "projectName"] as const) {
+        if (typeof gp[f] !== "string") throw new Error(`importRunBundle: run ${r.runId} genesis ${f} is not a string`);
+      }
+      if (typeof gp["contractVersion"] !== "number") {
+        throw new Error(`importRunBundle: run ${r.runId} genesis contractVersion is not a number`);
+      }
+      asObject(gp["routing"], `run ${r.runId} genesis routing`);
 
       const derived = deriveRunState(r.runId, events);
       return {

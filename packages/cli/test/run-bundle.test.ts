@@ -5,10 +5,10 @@
 // error paths (missing run, absent target store, missing bundle).
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newRunId, SqliteStore } from "@fragua/store";
+import { canonicalJson, newRunId, SqliteStore, writeTar } from "@fragua/store";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 import { showCommand } from "../src/commands/show.ts";
 
@@ -26,9 +26,10 @@ function freshDir(): string {
 function seedStore(dir: string): { dbPath: string; runId: string } {
   const dbPath = join(dir, "store.db");
   const store = new SqliteStore({ path: dbPath });
-  store.saveWorkflow("wf1", "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
+  const sha = "a".repeat(64); // realistic content-hash sha — import shape-gates it
+  store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
   const runId = newRunId();
-  store.enqueueRun({ runId, workflowSha: "wf1", priority: 0 });
+  store.enqueueRun({ runId, workflowSha: sha, priority: 0 });
   store.putArtifact({ runId, nodeId: "work", iteration: 0, key: "out" }, new TextEncoder().encode("hello-bytes"));
   store.close();
   return { dbPath, runId };
@@ -94,5 +95,26 @@ describe("fragua show", () => {
 
   test("errors on a missing bundle (exit 1)", async () => {
     expect(await showCommand({ bundle: join(freshDir(), "nope.fragua") })).toBe(1);
+  });
+
+  test("fails closed (exit 1) when a manifest run is missing its events.jsonl", async () => {
+    // A manifest declaring a run with no runs/<id>/events.jsonl — import would
+    // reject it, so `show` (the preflight) must not exit 0.
+    const manifest = {
+      bundleVersion: 1,
+      fraguaVersion: "x",
+      contractVersion: 1,
+      schemaVersion: 1,
+      irVersion: 1,
+      runs: [{ runId: newRunId(), workflowSha: "a".repeat(64), events: 0, messages: 0 }],
+      workflows: [],
+      blobs: [],
+    };
+    const bundle = join(freshDir(), "broken.fragua");
+    writeFileSync(
+      bundle,
+      writeTar([{ name: "manifest.json", data: new TextEncoder().encode(canonicalJson(manifest)) }]),
+    );
+    expect(await showCommand({ bundle })).toBe(1);
   });
 });

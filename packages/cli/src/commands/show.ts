@@ -93,9 +93,11 @@ export function showCommand(opts: ShowOptions): Promise<number> {
     ) + (blobsBad > 0 ? chalk.red(`  ✗ ${blobsBad} corrupt`) : ""),
   );
 
+  let runsBad = 0;
   for (const r of manifest.runs) {
     const evData = byName.get(runEventsPath(r.runId));
     if (evData == null) {
+      runsBad++;
       console.log(`  ${chalk.red("✗")} ${r.runId}  ${chalk.dim("(no events.jsonl)")}`);
       continue;
     }
@@ -113,9 +115,12 @@ export function showCommand(opts: ShowOptions): Promise<number> {
           ),
       );
     } catch (err) {
+      runsBad++;
       console.log(`  ${chalk.red("✗")} ${r.runId}  ${chalk.red(`(replay failed: ${(err as Error).message})`)}`);
     }
   }
 
-  return Promise.resolve(versionOk && blobsBad === 0 ? 0 : 1);
+  // A validate-before-import preflight must fail closed — if import would reject
+  // this bundle, show must not exit 0.
+  return Promise.resolve(versionOk && blobsBad === 0 && runsBad === 0 ? 0 : 1);
 }

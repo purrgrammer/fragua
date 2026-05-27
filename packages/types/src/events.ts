@@ -228,6 +228,12 @@ export const AUTO_WAKE_PAUSE_REASONS: ReadonlySet<PauseReason> = new Set<PauseRe
  * actions); the daemon writes facts (run lifecycle, observability). */
 export type EventWriter = "daemon" | "client";
 
+/** The closed set of `EventWriter` values — the single source of truth for any
+ *  runtime gate (e.g. the bundle-import trust boundary validates an untrusted
+ *  `writer` against this) or future SQL CHECK. Adding a writer here is the one
+ *  edit; consumers reference the set, never a hardcoded literal pair. */
+export const VALID_WRITERS: ReadonlySet<EventWriter> = new Set<EventWriter>(["daemon", "client"]);
+
 /** Terminal halt reasons. After Stage 3 of recoverable-budget-pause.md
  * the previously-recoverable-class halts (`max_loops`, `abort_loop`,
  * `goal_gate_unsatisfied`, `max_retries_exceeded`, `provider_exhausted`)
