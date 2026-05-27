@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthStorage } from "@fragua/agent";
 import { SqliteStore } from "@fragua/store";
-import { captureCiEnvSecrets, seedCredsFromEnv, seedCredsFromGlobalStore } from "../src/env-creds.ts";
+import { captureCiEnvSecrets, ciEnvDenyNames, seedCredsFromEnv, seedCredsFromGlobalStore } from "../src/env-creds.ts";
 
 // Every env var the seed could read, scrubbed before each test so the
 // operator's own shell creds can't leak into assertions.
@@ -288,5 +288,46 @@ describe("captureCiEnvSecrets", () => {
     const extraLiterals = captured.map((s) => ({ value: s.value, source: `env:${s.name}` }));
     // Verify the extraLiterals shape is correct for downstream consumption
     expect(extraLiterals).toContainEqual({ value: TOKEN_VAL, source: "env:MY_TOKEN" });
+  });
+});
+
+describe("ciEnvDenyNames", () => {
+  test("(d-name) returns the same name set as captureCiEnvSecrets for non-empty values — one list, two consumers", () => {
+    const env: NodeJS.ProcessEnv = {
+      MY_THING_TOKEN: "token-value-12345678",
+      MY_API_KEY: "key-value-12345678",
+      NODE_ENV: "production",
+      PATH: "/usr/bin:/bin",
+      GITHUB_REPOSITORY: "acme/repo",
+    };
+    const denySet = ciEnvDenyNames(env);
+    const capturedNames = captureCiEnvSecrets(env)
+      .map((c) => c.name)
+      .sort();
+    expect([...denySet].sort()).toEqual(capturedNames);
+  });
+
+  test("(d-strip) deny set includes secret-named vars with empty values that capture would skip", () => {
+    const env: NodeJS.ProcessEnv = { MY_TOKEN: "", MY_SECRET: "real-secret-value-12345678" };
+    const denySet = ciEnvDenyNames(env);
+    const capturedNames = captureCiEnvSecrets(env).map((c) => c.name);
+    expect(denySet.has("MY_TOKEN")).toBe(true);
+    expect(capturedNames).not.toContain("MY_TOKEN");
+    expect(denySet.has("MY_SECRET")).toBe(true);
+    expect(capturedNames).toContain("MY_SECRET");
+  });
+
+  test("(d-deny) NODE_ENV / PATH / GITHUB_REPOSITORY are NOT in the deny set", () => {
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: "production",
+      PATH: "/usr/bin:/bin",
+      GITHUB_REPOSITORY: "acme/repo",
+      SOME_RANDOM_VAR: "hello",
+    };
+    const denySet = ciEnvDenyNames(env);
+    expect(denySet.has("NODE_ENV")).toBe(false);
+    expect(denySet.has("PATH")).toBe(false);
+    expect(denySet.has("GITHUB_REPOSITORY")).toBe(false);
+    expect(denySet.has("SOME_RANDOM_VAR")).toBe(false);
   });
 });

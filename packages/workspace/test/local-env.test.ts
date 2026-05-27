@@ -126,4 +126,63 @@ describe("LocalEnvironment", () => {
       }
     });
   });
+
+  describe("envDenyNames", () => {
+    const TEST_VAR = "MY_SECRET_TOKEN";
+    const TEST_VAR_VALUE = "leak-canary-value-xyz";
+    let savedVars: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      savedVars = {};
+      for (const k of [TEST_VAR, "PUBLIC_VAR_NOTASECRET", "DENY_ME"] as const) {
+        savedVars[k] = process.env[k];
+        delete process.env[k];
+      }
+    });
+
+    afterEach(() => {
+      for (const [k, v] of Object.entries(savedVars)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+
+    test("(a) deny-listed var is absent from the spawned subprocess env", async () => {
+      process.env[TEST_VAR] = TEST_VAR_VALUE;
+      const denyEnv = new LocalEnvironment({
+        cwd: scratch,
+        envDenyNames: new Set([TEST_VAR]),
+      });
+      const r = await denyEnv.exec(`echo "X=${"$"}{${TEST_VAR}:-MISSING}"`);
+      expect(r.stdout).toContain("X=MISSING");
+      expect(r.stdout).not.toContain(TEST_VAR_VALUE);
+    });
+
+    test("(b) non-denied vars stay visible — PATH is intact, opts.env extras pass through", async () => {
+      const denyEnv = new LocalEnvironment({
+        cwd: scratch,
+        envDenyNames: new Set([TEST_VAR]),
+      });
+      const r = await denyEnv.exec("echo P=$PATH F=${FOO:-NONE}", { env: { FOO: "bar" } });
+      expect(r.stdout).toContain("F=bar");
+      expect(r.stdout).toMatch(/P=[^/\s]*\//);
+    });
+
+    test("(b') opts.env leak of a deny-listed name is also stripped (delete-after-merge)", async () => {
+      const denyEnv = new LocalEnvironment({
+        cwd: scratch,
+        envDenyNames: new Set(["DENY_ME"]),
+      });
+      const r = await denyEnv.exec("echo D=${DENY_ME:-GONE}", { env: { DENY_ME: "should-not-survive" } });
+      expect(r.stdout).toContain("D=GONE");
+      expect(r.stdout).not.toContain("should-not-survive");
+    });
+
+    test("(c) default LocalEnvironment (no envDenyNames) inherits the full env", async () => {
+      process.env["PUBLIC_VAR_NOTASECRET"] = "kept";
+      const plainEnv = new LocalEnvironment({ cwd: scratch });
+      const r = await plainEnv.exec("echo $PUBLIC_VAR_NOTASECRET");
+      expect(r.stdout).toContain("kept");
+    });
+  });
 });

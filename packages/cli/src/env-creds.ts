@@ -59,6 +59,16 @@ function knownProviderVarNames(): Set<string> {
   return names;
 }
 
+/** Returns true when an env var NAME indicates it is secret, regardless
+ * of the value. Shared predicate for both `captureCiEnvSecrets` (which
+ * also checks the value is non-empty) and `ciEnvDenyNames` (strip by
+ * name unconditionally — an attacker could set the var later). */
+function isSecretEnvName(name: string, providerVars: Set<string>): boolean {
+  const isSecretSuffix = CI_ENV_SECRET_SUFFIXES.some((suffix) => name.endsWith(suffix));
+  const isProviderVar = providerVars.has(name);
+  return isSecretSuffix || isProviderVar;
+}
+
 /**
  * Capture env entries whose NAME indicates a secret (default-deny by name).
  * Returns `{ name, value }` pairs; empty values are excluded. The registry's
@@ -77,11 +87,29 @@ export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array
   const result: Array<{ name: string; value: string }> = [];
   for (const [name, value] of Object.entries(env)) {
     if (!value) continue;
-    const isSecretSuffix = CI_ENV_SECRET_SUFFIXES.some((suffix) => name.endsWith(suffix));
-    const isProviderVar = providerVars.has(name);
-    if (isSecretSuffix || isProviderVar) {
+    if (isSecretEnvName(name, providerVars)) {
       result.push({ name, value });
     }
+  }
+  return result;
+}
+
+/**
+ * Build the set of env var NAMES that should be stripped from bash-tool
+ * subprocesses in `fragua ci` (proposal §6 unit 9b — perimeter env-strip).
+ *
+ * Uses the same predicate as `captureCiEnvSecrets` so the strip set ≡ the
+ * scrub-needle name set ("one list, two consumers"). Unlike `captureCiEnvSecrets`,
+ * empty-value vars ARE included — the strip is name-based, unconditional,
+ * because an attacker could later assign a value to a secret-named var.
+ *
+ * @param env - defaults to `process.env`; injectable for tests.
+ */
+export function ciEnvDenyNames(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const providerVars = knownProviderVarNames();
+  const result = new Set<string>();
+  for (const name of Object.keys(env)) {
+    if (isSecretEnvName(name, providerVars)) result.add(name);
   }
   return result;
 }

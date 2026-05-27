@@ -30,7 +30,7 @@ import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
-import { captureCiEnvSecrets, seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
+import { captureCiEnvSecrets, ciEnvDenyNames, seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
@@ -129,7 +129,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const onSig = () => shutdown.abort();
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
-  const provisioner = new WorktreeProvisioner();
+  const provisioner = new WorktreeProvisioner({ envDenyNames: ciEnvDenyNames() });
   let runId: string | undefined;
   // Captured at seed time so mid-run rotation can't desync the registry.
   let ciEnvSecrets: Array<{ name: string; value: string }> = [];

@@ -4,7 +4,7 @@ summary: "Bundles are the only thing that leaves the machine, so they are the on
 status: partial-implemented
 maturity: sketch
 last-reviewed: 2026-05-27
-implemented-units: "§5-§8 (unit 9a: CI profile + env-name capture + liveLiteralHit + return-shape change)"
+implemented-units: "§5-§8 (unit 9a: CI profile + env-name capture + liveLiteralHit + return-shape change); unit 9b: bash-subprocess perimeter env-strip"
 ---
 
 # Secret scrubbing for run bundles
@@ -155,7 +155,7 @@ A single transform in `exportRunBundle` that, per run:
 `!e.type.startsWith("fact.")` continue), so dropping
 observability from the bundle does not affect replay on import.
 
-> **Status: unit 9a implemented** (§5–§8). `exportRunBundle` now returns
+> **Status: units 9a + 9b implemented** (§5–§8). `exportRunBundle` now returns
 > `{ bytes: Uint8Array; liveLiteralHit: boolean }` (was `Uint8Array`). Options:
 > `labelMode: "source" | "generic"` and `extraLiterals: Array<{value, source}>`.
 > `ScrubOptions.onLiteralHit` fires on `provider_creds` or `env:*` span hits.
@@ -163,8 +163,13 @@ observability from the bundle does not affect replay on import.
 > `fragua ci` uses the CI profile (`labelMode: "generic"`, env-secrets as extra
 > literals, job-fails on `liveLiteralHit`). `fragua runs export` uses the export
 > profile (`labelMode: "source"`, warns on `liveLiteralHit`, non-fatal).
-> Still sketch/open: unit 9b (bash-subprocess perimeter env-strip), `scrubber:`
-> config block, binary-artifact scan.
+> `ciEnvDenyNames()` returns the set of secret-named env var NAMES (same
+> predicate as `captureCiEnvSecrets`, one list / two consumers); `fragua ci`
+> passes it as `envDenyNames` into `WorktreeProvisioner` so every bash-tool
+> subprocess never inherits secret-named vars from the runner env (proposal §6
+> perimeter). The daemon path does NOT set `envDenyNames` — operator-trusted
+> behavior unchanged.
+> Still sketch/open: `scrubber:` config block, binary-artifact scan.
 
 ## 5. The `ci` profile vs the export profile
 
@@ -495,7 +500,8 @@ without a new axis:
 5. **`ci` profile** — fail-closed, env-seed registry, job-fails on `provider_creds`,
    generic markers, perimeter env-strip on the bash subprocess. **[unit 9a
    implemented: scrub-profile options + liveLiteralHit + captureCiEnvSecrets;
-   unit 9b still open: bash-subprocess perimeter env-strip]**
+   unit 9b implemented: bash-subprocess perimeter env-strip via `ciEnvDenyNames` +
+   `WorktreeProvisioner.envDenyNames` + `LocalEnvironment.envDenyNames`]**
 6. **PBT** end-to-end (§12) — the gate for the "secret-free" claim; asserts the
    *declared encoding set* only.
 7. Allowlist + name-list config — a `scrubber:` block in the global

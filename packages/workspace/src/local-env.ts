@@ -46,6 +46,12 @@ export interface LocalEnvironmentOptions {
   defaultTimeoutMs?: number;
   /** Additional blocklist patterns appended to the built-in defaults. */
   extraBlockedPatterns?: string[];
+  /** CI-profile only (proposal §6 unit 9b). When set, every named env var is
+   * deleted from the spawned subprocess env AFTER the `{ ...process.env,
+   * ...opts.env }` merge — so even a caller-supplied opts.env override of a
+   * denied name is stripped. When unset (the default — operator-trusted local
+   * runs), behavior is unchanged: the subprocess inherits the full env. */
+  envDenyNames?: ReadonlySet<string>;
 }
 
 /** Walk up `absolutePath` until a path component exists on disk, realpath
@@ -72,11 +78,13 @@ export class LocalEnvironment implements ExecutionEnvironment {
   private readonly _cwd: string;
   private readonly defaultTimeoutMs: number;
   private readonly extraBlocked: string[];
+  private readonly envDenyNames: ReadonlySet<string> | undefined;
 
   constructor(opts: LocalEnvironmentOptions = {}) {
     this._cwd = resolve(opts.cwd ?? process.cwd());
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 30_000;
     this.extraBlocked = opts.extraBlockedPatterns ?? [];
+    if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
   }
 
   /** Memoised realpath(_cwd). Computed lazily because WorktreeEnvironment
@@ -230,7 +238,13 @@ export class LocalEnvironment implements ExecutionEnvironment {
       // sent only to the shell.
       const child = spawn("/bin/sh", ["-c", command], {
         cwd,
-        env: { ...process.env, ...opts.env },
+        env: (() => {
+          const merged: Record<string, string | undefined> = { ...process.env, ...opts.env };
+          if (this.envDenyNames !== undefined) {
+            for (const name of this.envDenyNames) delete merged[name];
+          }
+          return merged as NodeJS.ProcessEnv;
+        })(),
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
       });

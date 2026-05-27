@@ -85,6 +85,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
       cwd: this.worktreePath,
       ...(opts.defaultTimeoutMs !== undefined ? { defaultTimeoutMs: opts.defaultTimeoutMs } : {}),
       ...(opts.extraBlockedPatterns !== undefined ? { extraBlockedPatterns: opts.extraBlockedPatterns } : {}),
+      ...(opts.envDenyNames !== undefined ? { envDenyNames: opts.envDenyNames } : {}),
     });
   }
 
