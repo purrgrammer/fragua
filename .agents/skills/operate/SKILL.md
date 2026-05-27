@@ -64,6 +64,8 @@ fragua run <workflow>  \
 
 `<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or ending `.yaml` is a literal path. `--input name=value` binds typed inputs (`${{ inputs.name }}`; a value `@path`/`@-` reads a file/stdin); a missing required input or out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts stream colorised (follow by default; `--no-follow` to opt out).
 
+> **A multi-line or punctuation-heavy value → `@file`/`@-`, never an inline `--input x="…"`.** Your *shell* expands the quoted string before `fragua` sees it: backticks run as command substitution (silently deleting the wrapped words), `$(…)` / `$VAR` get evaluated, and embedded quotes truncate it — so a long task prompt arrives mangled, and the run executes against corrupted text. Write the prompt to a file and pass `--input task=@prompt.txt` (or pipe it via `--input task=@-`). This is purely about getting the bytes past the shell intact; the workflow's `${{ inputs.x }}` substitution is a separate, safe step.
+
 ---
 
 ## 3. Watch a run
