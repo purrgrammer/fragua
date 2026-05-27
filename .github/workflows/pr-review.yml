@@ -1,7 +1,7 @@
 name: PR review
 
-# Unattended review on every push to a PR: builds fragua from THIS PR's checkout
-# (bun) and runs the `pr_review` workflow (`.fragua/workflows/pr_review.yaml`)
+# Unattended review on every push to a PR: installs the released fragua binary
+# (setup-fragua) and runs the `pr_review` workflow (`.fragua/workflows/pr_review.yaml`)
 # with `fragua ci`, posting the result back to the PR as a `comment` or
 # `request-changes` review. Read-only: it runs LLM tool-calls over an untrusted
 # diff, so it must NOT hold `contents: write` (prompt-injection surface).
@@ -10,11 +10,13 @@ name: PR review
 # using GITHUB_TOKEN cannot post an APPROVED review state anyway, so there is no
 # bot verdict that could safely gate a merge; CI remains the hard required gate.)
 #
-# The review runs fragua FROM SOURCE (not setup-fragua's released binary) so it
-# exercises the code under review — including `fragua ci --export`, which lands
-# the run as a secret-free `.fragua` bundle. The trust boundary is unchanged: a
-# same-repo PR already controls pr_review.yaml and this file, and fork PRs (no
-# secrets) are skipped.
+# The review pins a released fragua (setup-fragua@<tag>) for a reproducible
+# review engine; `fragua ci --export` (shipped in 0.2.0) lands the run as a
+# secret-free `.fragua` bundle. The engine is pinned, but the binary still reads
+# THIS PR's `.fragua/workflows/pr_review.yaml` from the checkout, so workflow
+# changes are still exercised. The trust boundary is unchanged: a same-repo PR
+# already controls pr_review.yaml and this file, and fork PRs (no secrets) are
+# skipped.
 
 on:
   pull_request:
@@ -44,16 +46,10 @@ jobs:
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      # Build fragua from the PR's checkout (not setup-fragua's released binary)
-      # so the review runs the code under review AND `fragua ci --export`. Mirror
-      # ci.yml's bun setup.
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.2.17"
-      - run: bun install --frozen-lockfile
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0
 
       - name: "Review PR #${{ github.event.pull_request.number }}"
-        run: bun run fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --export "$RUNNER_TEMP/pr-review.fragua"
+        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --export "$RUNNER_TEMP/pr-review.fragua"
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).

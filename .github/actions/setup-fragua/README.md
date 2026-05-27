@@ -9,7 +9,7 @@ the same way a test suite does.
 ```yaml
 steps:
   - uses: actions/checkout@v6
-  - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.1.0
+  - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0
   - run: fragua ci my-workflow
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -24,7 +24,7 @@ resolves against `.fragua/workflows/<name>.yaml` in the checkout (and
 
 | Input | Default | Description |
 |---|---|---|
-| `version` | `latest` | Release tag to install (e.g. `v0.1.0`), or `latest` for the newest release. Pin it for reproducible CI. |
+| `version` | `latest` | Release tag to install (e.g. `v0.2.0`), or `latest` for the newest release. Pin it for reproducible CI. |
 | `web` | `false` | `false` installs the smaller **headless** binary (no `harness`/`serve` UI — fine for `fragua ci`). `true` installs the full binary with the web UI. |
 | `token` | `${{ github.token }}` | Token used to download the release asset. The default works when the consumer repo can read the fragua repo's releases. |
 
@@ -104,7 +104,7 @@ fragua import run.fragua                   # merge into a store (default: the ha
 fragua runs status|events|messages <run-id>
 ```
 
-> `--export` is available from the fragua release that ships it. On an older
+> `--export` ships in fragua **0.2.0** and later. On an older
 > binary, `--db <path>` pins the raw store — but it can carry secrets (a tool that
 > echoes a key into an event lands in it), so scrub the provider tables and verify
 > before uploading. Prefer the bundle: it's secret-free by construction.
