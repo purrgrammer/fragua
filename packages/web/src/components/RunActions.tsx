@@ -212,7 +212,7 @@ function ConfirmDialog({
         )}
         <AlertDialogFooter>
           <AlertDialogCancel asChild>
-            <Button type="button" variant="ghost" size="xs" disabled={pending}>
+            <Button type="button" variant="ghost" size="xs" disabled={pending} data-testid={`${testId}-cancel`}>
               Cancel
             </Button>
           </AlertDialogCancel>

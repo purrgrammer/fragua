@@ -114,11 +114,7 @@ describe("RunActions", () => {
     test("Cancel dismisses the dialog", async () => {
       const { restore } = renderActions(RUN_PENDING, {}, "discard");
       try {
-        const cancel = await waitFor(() => {
-          const btn = [...document.body.querySelectorAll("button")].find((b) => b.textContent === "Cancel");
-          if (!btn) throw new Error("Cancel button not found");
-          return btn;
-        });
+        const cancel = await findInBody<HTMLButtonElement>("discard-dialog-cancel");
         fireEvent.click(cancel);
         await waitFor(() => {
           if (inBody("discard-dialog")) throw new Error("dialog still open after Cancel");

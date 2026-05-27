@@ -36,7 +36,10 @@ const urlCtor = globalThis.URL as unknown as {
 urlCtor.createObjectURL ??= () => "blob:mock";
 urlCtor.revokeObjectURL ??= () => {};
 
-(globalThis as { matchMedia?: unknown }).matchMedia ??= (query: string) =>
+// Unconditional (not `??=`): jsdom may ship a matchMedia stub that returns
+// matches:false, which would push NumberFlow onto its animated path. Overwrite
+// it so prefers-reduced-motion is actually pinned.
+const matchMedia = (query: string) =>
   ({
     matches: query === "(prefers-reduced-motion: reduce)",
     media: query,
@@ -47,5 +50,15 @@ urlCtor.revokeObjectURL ??= () => {};
     removeEventListener: () => {},
     dispatchEvent: () => false,
   }) as MediaQueryList;
+(globalThis as { matchMedia?: unknown }).matchMedia = matchMedia;
+if (typeof window !== "undefined") window.matchMedia = matchMedia;
 
-afterEach(() => cleanup());
+// Vitest isolates test files but not individual tests within a file. A suite
+// whose installFetchMock caller skips restore() (e.g. a bail before its
+// try/finally) would leak the mock to the next test — restore the pristine
+// fetch after every test as a guard.
+const ORIGINAL_FETCH = globalThis.fetch;
+afterEach(() => {
+  cleanup();
+  globalThis.fetch = ORIGINAL_FETCH;
+});
