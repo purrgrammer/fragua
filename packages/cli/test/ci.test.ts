@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import { SqliteStore } from "@fragua/store";
+import { CLI_EXIT } from "../src/cli-exit.ts";
 import { type CiCommandOptions, ciCommand } from "../src/commands/ci.ts";
 
 let dir: string;
@@ -115,7 +116,7 @@ describe("ciCommand", () => {
         inputs: { secret_input: secretVal },
         json: true,
       });
-      expect(code).not.toBe(0);
+      expect(code).toBe(CLI_EXIT.scrubLeak);
     } finally {
       if (prevToken === undefined) delete process.env["FRAGUA_CI_TEST_TOKEN"];
       else process.env["FRAGUA_CI_TEST_TOKEN"] = prevToken;

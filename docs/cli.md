@@ -174,10 +174,12 @@ code map (`packages/cli/src/cli-exit.ts` `cliExitCode`), so a script can
 | `50`–`51` | `quarantined` — `orphan_side_effect` 50, `other` 51 |
 | `60` | `paused_human` — the workflow asked a question (no responder) |
 | `70` | a non-terminal status reached as a stop-state (a driver bug) |
+| `80` | `ci` bundle still carried a live secret value (scrubber perimeter leak) — fails closed |
 | `130` | `cancelled`, or a SIGINT/SIGTERM interrupt |
 
 Pipelines branch on these: retry on `13`/`14` (transient), top up on `32`,
-escalate to a human on `60`. Each engine reason is a public code — the per-reason
+escalate to a human on `60`, hard-fail + alert on `80` (a live secret reached a
+published bundle). Each engine reason is a public code — the per-reason
 maps are exhaustive over the type unions, so adding a reason is a deliberate CLI
 contract change.
 

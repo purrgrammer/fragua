@@ -34,6 +34,12 @@ export const CLI_EXIT = {
   /** A non-terminal status (`queued` / `running` / `paused_auto`) observed
    * as a STOP-state — a `ci` driver bug, not a workflow outcome. */
   internal: 70,
+  /** `ci`'s exported bundle still carried a LIVE secret value (a
+   * provider-credential or `env:*` literal reached the egress path) — the
+   * scrubber's perimeter-failure alarm. The run may have completed, but the
+   * job FAILS CLOSED: a leaky bundle must never be published. Distinct from
+   * `usage` so CI can branch on "secret leak" specifically. */
+  scrubLeak: 80,
   /** `cancelled`, or a SIGINT/SIGTERM-interrupted drive. 128 + SIGINT(2). */
   cancelled: 130,
 } as const;

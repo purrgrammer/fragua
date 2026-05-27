@@ -335,7 +335,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
               `ci: a live secret value reached the bundle path \u2014 perimeter leak. Review the bundle before publishing.`,
             ),
           );
-          computedExitCode = CLI_EXIT.usage;
+          computedExitCode = CLI_EXIT.scrubLeak;
         }
       } catch (e) {
         console.error(chalk.yellow(`ci: bundle export failed: ${(e as Error).message}`));
