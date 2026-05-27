@@ -456,11 +456,15 @@ without a new axis:
 - **The exact `scrubber:` YAML schema** — the resolution above settles *where* the
   config lives and its trust rules, not the key shape (one block vs separate
   `registry` / `perimeter` sub-blocks, glob syntax for the name allowlist, …).
-- **Binary artifacts ship un-inspected.** A secret embedded in a binary blob
-  ([§4](#4-what-the-egress-pass-does)) is not caught. ASCII needles *are* findable
-  in a byte buffer, so a scan-then-drop (don't redact-in-place — exclude the blob
-  on a hit) is the likely answer, but it is deferred until the leaner egress
-  filter + registry ship.
+- **Binary artifacts ship un-inspected (implemented residual).** Text-ish blobs
+  (`text/*`, `application/json`, `application/x-yaml`, `application/xml`,
+  `application/javascript`) are decoded, scrubbed, and re-CASed by
+  `exportRunBundle` as of §4.4. Binary blobs (`application/octet-stream` and
+  anything not in the text allowlist) are exported unchanged under their original
+  sha. ASCII needles *are* findable in a byte buffer, so a scan-then-drop
+  (don't redact-in-place — exclude the blob on a hit) is the likely answer, but
+  it remains deferred. Operators with binary artifacts that may contain secrets
+  should treat the exported bundle as sensitive.
 
 ## 14. MVP order
 

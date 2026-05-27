@@ -181,7 +181,7 @@ import {
   updateScheduleResumed,
   updateScheduleSkip,
 } from "./schedule-queries.ts";
-import { buildExportRegistry, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
+import { buildExportRegistry, isTextMime, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -1309,9 +1309,13 @@ export class SqliteStore implements IEventStore {
    * `tool.*`, `summary.*`, `control.*`, `steering.*`, `run.title_generated`,
    * `budget.*`, `snapshot.*`, etc.) are content-bearing observability and are
    * dropped. Stored events are never mutated — filtering is export-only.
-   * Message content is scrubbed at export time (literal credentials + cwd path
-   * + known-format patterns). Event payloads, routing, and artifact bytes are
-   * NOT yet scrubbed (separate later unit — secret-scrubbing.md §14).
+   * Message content and event payload free-text fields are scrubbed at export
+   * time (literal credentials + cwd path + known-format patterns). Text-ish
+   * artifact blobs (mime `text/*` or `application/json|x-yaml|xml|javascript`)
+   * are decoded, scrubbed, and re-CASed — the new sha replaces the original in
+   * the artifacts JSONL, blob tar entry, and manifest blobs[] consistently.
+   * Binary blobs ship as-is under their original sha; a secret in a binary
+   * artifact is a known residual (see docs/proposals/secret-scrubbing.md §13).
    *
    * `fraguaVersion` is stamped for the import-time compatibility check.
    * Single-run today (the `fragua ci --export` producer); the format is
@@ -1333,13 +1337,38 @@ export class SqliteStore implements IEventStore {
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
     );
 
-    const shas = [...new Set(artifacts.map((a) => a.blobSha))].sort();
+    // Re-CAS map: original blobSha → exported sha (may differ for text blobs).
+    // Built before assembling the tar so artifact rows and blob entries are
+    // consistent in all three places (artifacts JSONL, blob tar entry, manifest).
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const reCasMap = new Map<string, { exportSha: string; exportBytes: Uint8Array }>();
+    for (const artifact of artifacts) {
+      const origSha = artifact.blobSha;
+      if (reCasMap.has(origSha)) continue;
+      const origBytes = this.blobs.get(origSha);
+      if (isTextMime(artifact.mime)) {
+        const text = dec.decode(origBytes);
+        const scrubbed = scrubJsonStrings(text, registry) as string;
+        const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
+        const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
+        reCasMap.set(origSha, { exportSha, exportBytes });
+      } else {
+        // Binary blobs ship as-is. A secret embedded in binary bytes is a known
+        // residual; see docs/proposals/secret-scrubbing.md §13.
+        reCasMap.set(origSha, { exportSha: origSha, exportBytes: origBytes });
+      }
+    }
+
+    // Collect unique export shas (deduped CAS — two artifacts that scrub to the
+    // same bytes share one blob entry).
+    const exportShas = [...new Set([...reCasMap.values()].map((v) => v.exportSha))].sort();
     const blobEntries: TarEntry[] = [];
     const blobManifest: { sha256: string; size: number }[] = [];
-    for (const sha of shas) {
-      const bytes = this.blobs.get(sha);
-      blobEntries.push({ name: blobPath(sha), data: bytes });
-      blobManifest.push({ sha256: sha, size: bytes.length });
+    for (const exportSha of exportShas) {
+      const entry = [...reCasMap.values()].find((v) => v.exportSha === exportSha)!;
+      blobEntries.push({ name: blobPath(exportSha), data: entry.exportBytes });
+      blobManifest.push({ sha256: exportSha, size: entry.exportBytes.length });
     }
 
     const manifest: BundleManifest = {
@@ -1379,7 +1408,15 @@ export class SqliteStore implements IEventStore {
           })),
         ),
       },
-      { name: runArtifactsPath(runId), data: encodeJsonl(artifacts) },
+      {
+        name: runArtifactsPath(runId),
+        data: encodeJsonl(
+          artifacts.map((a) => ({
+            ...a,
+            blobSha: reCasMap.get(a.blobSha)?.exportSha ?? a.blobSha,
+          })),
+        ),
+      },
       { name: workflowSourcePath(wf.sha), data: new TextEncoder().encode(wf.source) },
       { name: workflowIrPath(wf.sha), data: new TextEncoder().encode(wf.ir) },
       ...blobEntries,

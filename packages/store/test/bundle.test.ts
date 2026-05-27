@@ -969,3 +969,279 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
     store.close();
   });
 });
+
+describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
+  const CRED_SECRET = "sk-ant-artifact-secretABCDEFGHIJ0123456789";
+  const AKIA_SECRET = "AKIAIOSFODNN7EXAMPLE";
+
+  /** Seed a run with two artifacts: one text (mime text/plain), one binary
+   * (mime application/octet-stream), both containing the secret. */
+  async function seedRunWithArtifactSecrets(
+    store: ReturnType<typeof freshStore>,
+  ): Promise<{ runId: string; origTextSha: string; origBinSha: string }> {
+    const sha = await seedWorkflow(store, "c".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id",
+      projectName: "proj",
+      workflowName: "wf",
+      workflowScope: "local",
+      initialRouting: { input: "seed" },
+    });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+
+    const textContent = `secret=${CRED_SECRET} akia=${AKIA_SECRET} other=ok`;
+    const textRef = store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "report.txt" },
+      new TextEncoder().encode(textContent),
+      "text/plain",
+    );
+
+    const binContent = `secret=${CRED_SECRET} akia=${AKIA_SECRET} bytes=\x00\x01\x02`;
+    const binRef = store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "data.bin" },
+      new TextEncoder().encode(binContent),
+      "application/octet-stream",
+    );
+
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    return { runId, origTextSha: textRef.sha256, origBinSha: binRef.sha256 };
+  }
+
+  function extractArtifactRows(
+    bytes: Uint8Array,
+    runId: string,
+  ): Array<{ key: string; blobSha: string; mime: string | null }> {
+    const entries = readTar(bytes);
+    const artEntry = entries.find((e) => e.name === `runs/${runId}/artifacts.jsonl`);
+    if (artEntry == null) return [];
+    return new TextDecoder()
+      .decode(artEntry.data)
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { key: string; blobSha: string; mime: string | null });
+  }
+
+  test("(a) secret is absent from the text blob tar entry after scrub", async () => {
+    const store = freshStore();
+    const { runId } = await seedRunWithArtifactSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    // The text artifact's blob entry must not contain the secrets.
+    const entries = readTar(bytes);
+    const rows = extractArtifactRows(bytes, runId);
+    const textRow = rows.find((r) => r.key === "report.txt");
+    expect(textRow).toBeDefined();
+    const textBlobEntry = entries.find((e) => e.name === `blobs/${textRow!.blobSha}`);
+    expect(textBlobEntry).toBeDefined();
+    expect(Buffer.from(textBlobEntry!.data).includes(CRED_SECRET)).toBe(false);
+    expect(Buffer.from(textBlobEntry!.data).includes(AKIA_SECRET)).toBe(false);
+
+    // The text artifact's blob entry must contain the redaction marker.
+    const blobContent = new TextDecoder().decode(textBlobEntry!.data);
+    expect(blobContent).toContain("[REDACTED");
+
+    // The binary artifact ships unchanged, so CRED_SECRET may still be in the
+    // bundle (documented residual — see docs/proposals/secret-scrubbing.md §13).
+    const binRow = rows.find((r) => r.key === "data.bin");
+    expect(binRow).toBeDefined();
+    const binBlobEntry = entries.find((e) => e.name === `blobs/${binRow!.blobSha}`);
+    expect(binBlobEntry).toBeDefined();
+    // Binary blob content is unchanged.
+    const binContent = new TextDecoder().decode(binBlobEntry!.data);
+    expect(binContent).toContain(CRED_SECRET);
+  });
+
+  test("(b) text artifact blobSha changes to new sha in artifact row", async () => {
+    const store = freshStore();
+    const { runId, origTextSha } = await seedRunWithArtifactSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const rows = extractArtifactRows(bytes, runId);
+    const textRow = rows.find((r) => r.key === "report.txt");
+    expect(textRow).toBeDefined();
+    expect(textRow!.blobSha).not.toBe(origTextSha);
+  });
+
+  test("(c) manifest blobs[] uses the new sha; tar entry uses the same sha (consistency)", async () => {
+    const store = freshStore();
+    const { runId, origTextSha } = await seedRunWithArtifactSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
+    ) as BundleManifest;
+
+    const rows = extractArtifactRows(bytes, runId);
+    const textRow = rows.find((r) => r.key === "report.txt");
+    expect(textRow).toBeDefined();
+    const newSha = textRow!.blobSha;
+
+    // The new sha must NOT be the original.
+    expect(newSha).not.toBe(origTextSha);
+
+    // The manifest blobs[] entry must list the new sha.
+    const manifestBlob = manifest.blobs.find((b) => b.sha256 === newSha);
+    expect(manifestBlob).toBeDefined();
+
+    // The tar must have a blob entry under the new sha.
+    const tarEntry = entries.find((e) => e.name === `blobs/${newSha}`);
+    expect(tarEntry).toBeDefined();
+
+    // The original sha must NOT appear as a blob tar entry.
+    const origTarEntry = entries.find((e) => e.name === `blobs/${origTextSha}`);
+    expect(origTarEntry).toBeUndefined();
+  });
+
+  test("(d) importRunBundle succeeds and imported artifact content shows [REDACTED", async () => {
+    const src = freshStore();
+    const { runId } = await seedRunWithArtifactSecrets(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    const r = dst.importRunBundle(bytes);
+    expect(r.runs).toEqual([{ runId, imported: true }]);
+
+    const art = dst.getArtifact({ runId, nodeId: "work", iteration: 0, key: "report.txt" });
+    const content = new TextDecoder().decode(art);
+    expect(content).toContain("[REDACTED");
+    expect(content).not.toContain(CRED_SECRET);
+    expect(content).not.toContain(AKIA_SECRET);
+    dst.close();
+  });
+
+  test("(e) binary artifact ships unchanged under its original sha (known residual)", async () => {
+    const store = freshStore();
+    const { runId, origBinSha } = await seedRunWithArtifactSecrets(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const rows = extractArtifactRows(bytes, runId);
+    const binRow = rows.find((r) => r.key === "data.bin");
+    expect(binRow).toBeDefined();
+    // Binary blob sha is preserved as-is.
+    expect(binRow!.blobSha).toBe(origBinSha);
+
+    // The tar entry for the binary blob exists under the original sha.
+    const entries = readTar(bytes);
+    const tarEntry = entries.find((e) => e.name === `blobs/${origBinSha}`);
+    expect(tarEntry).toBeDefined();
+  });
+
+  test("(f) application/json artifact is treated as text-ish and scrubbed", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store, "d".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, initialRouting: { input: "x" } });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    const jsonContent = JSON.stringify({ result: "ok", key: CRED_SECRET });
+    const ref = store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "result.json" },
+      new TextEncoder().encode(jsonContent),
+      "application/json",
+    );
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    // Secret is absent.
+    expect(Buffer.from(bytes).includes(CRED_SECRET)).toBe(false);
+
+    // The artifact row sha changed.
+    const rows = extractArtifactRows(bytes, runId);
+    const jsonRow = rows.find((r) => r.key === "result.json");
+    expect(jsonRow).toBeDefined();
+    expect(jsonRow!.blobSha).not.toBe(ref.sha256);
+  });
+
+  test("(g) two text artifacts scrubbing to the same bytes dedupe to one blob", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store, "e".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, initialRouting: { input: "x" } });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    // Both artifacts have the same secret content but stored under different keys
+    // (so they have the same sha before scrubbing and still dedup after).
+    const content = `key=${CRED_SECRET}`;
+    const encoded = new TextEncoder().encode(content);
+    store.putArtifact({ runId, nodeId: "work", iteration: 0, key: "a.txt" }, encoded, "text/plain");
+    // putArtifact is CAS-deduped on same sha — use replace to force a second row
+    // pointing at the same blob (same sha, same key content).
+    store.putArtifact({ runId, nodeId: "work", iteration: 1, key: "b.txt" }, encoded, "text/plain");
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const blobEntries = entries.filter((e) => e.name.startsWith("blobs/"));
+    // Only one blob entry despite two artifact rows (CAS dedup).
+    expect(blobEntries.length).toBe(1);
+
+    const manifest = JSON.parse(
+      new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
+    ) as BundleManifest;
+    // Manifest lists only one blob.
+    expect(manifest.blobs.length).toBe(1);
+  });
+
+  test("(h) stored blobs are NOT mutated by export", async () => {
+    const store = freshStore();
+    const { runId, origTextSha } = await seedRunWithArtifactSecrets(store);
+    // Read original bytes before export.
+    const origBytes = store.getArtifact({ runId, nodeId: "work", iteration: 0, key: "report.txt" });
+    const origContent = new TextDecoder().decode(origBytes);
+    store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    // After export, the stored bytes are unchanged.
+    const afterBytes = store.getArtifact({ runId, nodeId: "work", iteration: 0, key: "report.txt" });
+    const afterContent = new TextDecoder().decode(afterBytes);
+    expect(afterContent).toBe(origContent);
+    expect(afterContent).toContain(CRED_SECRET);
+    // The stored artifact row still has the original sha.
+    const ref = store.getArtifactRef({ runId, nodeId: "work", iteration: 0, key: "report.txt" });
+    expect(ref!.sha256).toBe(origTextSha);
+    store.close();
+  });
+});

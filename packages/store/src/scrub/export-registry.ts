@@ -71,6 +71,32 @@ export function buildExportRegistry(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Artifact mime-type classification
+// ---------------------------------------------------------------------------
+
+const TEXT_APPLICATION_MIMES = new Set([
+  "application/json",
+  "application/x-yaml",
+  "application/xml",
+  "application/javascript",
+]);
+
+/**
+ * Returns true when the artifact's mime type is text-ish and its bytes can
+ * be decoded as UTF-8, scrubbed, and re-CASed consistently.
+ *
+ * Text-ish = `text/*` or the application sub-types above.
+ * Everything else (binary, unknown, null) is skipped — a known residual;
+ * see docs/proposals/secret-scrubbing.md §13.
+ */
+export function isTextMime(mime: string | null): boolean {
+  if (mime == null) return false;
+  if (mime.startsWith("text/")) return true;
+  const base = mime.split(";")[0]!.trim();
+  return TEXT_APPLICATION_MIMES.has(base);
+}
+
+// ---------------------------------------------------------------------------
 // Event payload free-text scrub
 // ---------------------------------------------------------------------------
 
