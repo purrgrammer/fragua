@@ -1,5 +1,5 @@
 ---
-title: Large run inputs — spill oversized routing to the blob CAS, reference by sha
+title: Run inputs — remove the legacy free-form routing.input, spill oversized typed inputs to the blob CAS
 summary: "A run's typed inputs (`routing.inputs`, the `${{ inputs.x }}` substitution source) ride inside the genesis `intent.run_enqueued` event, which is subject to the 4 KB event-payload cap (MAX_EVENT_PAYLOAD_BYTES). So a run's inputs are silently capped at ~4 KB — a pasted spec, a long brief, or several sizeable typed inputs can't be enqueued. The cap is correct for events (they're folded, streamed, replayed — they must stay lean) but wrong as a ceiling on *content*. Fix: at enqueue, spill oversized `routing.inputs` string values (lossless execution data) to the content-addressed blob store and leave a `{ $fragua_blob: sha }` reference in the event; resolve on read (substitution, auto-title, UI, export). The legacy free-form `routing.input` description is truncated, not spilled — it's not execution data and is a deprecation candidate. This preserves both invariants — events stay small AND events are truth (the ref is in the log; the blob is immutable CAS) — and makes input size unbounded. It reuses the existing blob CAS (the same store artifacts use) so spilled inputs already travel in bundles, and it composes with secret-scrubbing: a spilled input blob is scrubbed by the same blob path as any text artifact, so this MUST land after the scrubber's artifact re-CAS unit (else the scrubbed-content sha and the routing ref diverge)."
 status: sketch
 maturity: sketch
@@ -8,10 +8,13 @@ last-reviewed: 2026-05-27
 
 # Large run inputs
 
-> **Sketch.** Run inputs are content stored in a structural event. Move the bulk
-> to the blob CAS (where messages/artifacts already put bulk), keep a
-> content-addressed reference in the genesis event. Common small runs are
-> untouched (no spill, no blob, zero overhead); only oversized inputs spill.
+> **Sketch.** Two coupled cleanups of the same surface (a run's inputs):
+> **(A)** remove the legacy free-form `routing.input` description entirely, and
+> **(B)** spill oversized typed `routing.inputs` to the blob CAS (where
+> messages/artifacts already put bulk), keeping a content-addressed reference in
+> the genesis event. Doing (A) first removes a confusing, redundant field and
+> shrinks what (B) must handle; (B) then makes typed-input size unbounded. Common
+> small runs are untouched.
 
 ## 1. The limitation
 
@@ -42,6 +45,40 @@ The mismatch: inputs are **content** (potentially large, agent-read), stored in
 a **structural event**. The 4 KB cap is right for events — they are folded into
 state, streamed over SSE, and replayed; they must stay lean. It is wrong as a
 ceiling on input content.
+
+## 1a. Part A — remove `routing.input` entirely
+
+`routing.input` is the legacy free-form positional description, predating typed
+inputs. It is **not execution data** (never substituted — CLAUDE.md rule 13), and
+its only consumers are cosmetic:
+
+- the **auto-titler** seeds from it (`auto-titler.ts:51`) — but already falls back
+  to composing a title from `routing.inputs` `name=value` lines;
+- the **UI** shows it as the run description / null-title fallback
+  (`read-plane/projections.ts:141`, `RunDetail.tsx`, `reducers.ts:255`).
+
+Removing it (set at `plane.ts:214` from `EnqueueInput.input`):
+
+1. Drop `EnqueueInput.input` and the `initialRouting["input"]` assignment; stop
+   threading it from `fragua run` / the server.
+2. Auto-titler seeds only from `routing.inputs` (+ workflow name/goal); drop the
+   `routing.input` branch.
+3. Read-plane: drop `RunSummary.input`; the UI's description/fallback uses the
+   generated title, else the workflow name + a compact `routing.inputs` render.
+4. Update CLAUDE.md rule 13 and SPEC §3 (the "free-form positional lands on
+   `routing.input`" wording goes away).
+
+**The one real entanglement — schedules.** `fragua schedule add --input <text>` is
+a *free-form description for every fire* (`schedule.ts:221`, `schedule_create`
+payload `input?`, `events.ts:897`) → becomes `routing.input` on each fired run.
+Schedules have **no typed-input path** today — their `--input` is the description,
+semantically opposite to `fragua run`'s typed `--input name=value`. So removing
+`routing.input` forces resolving schedule inputs. The clean fix, which *also* closes
+a real gap (you currently can't schedule a workflow that needs typed inputs):
+**give `fragua schedule add` the same typed `--input name=value` as `fragua run`**,
+store them in the `schedule_create` payload, and pass them as `routing.inputs` on
+each fire. The free-form description field is dropped with `routing.input`. This is
+the load-bearing part of Part A — sequence it first.
 
 ## 2. The load-bearing principles
 
@@ -149,24 +186,34 @@ blobs.
 - **`fragua ci` parity.** CI seeds an ephemeral store; spilled blobs live there
   and export into the CI bundle. Confirm the ephemeral blob dir is wired the same
   as the persistent one.
-- **Deprecate `routing.input`?** It's a legacy free-form description, redundant
-  with typed inputs + `--title`, read only by the UI (description / title
-  fallback) and the auto-titler seed (which already falls back to composing from
-  `routing.inputs`). Removing it — point those two consumers at
-  `routing.inputs`/workflow name — would let this proposal ignore it entirely
-  rather than truncate it. Bounded cleanup, separate decision.
+- **Schedule input migration.** Adding typed `--input name=value` to
+  `fragua schedule add` (Part A) changes the `schedule_create` payload shape. No
+  back-compat is required pre-release, but confirm no existing schedule rows in a
+  dev store rely on the old free-form `input` (or accept that they re-create).
 
 ## 8. MVP order
 
-1. **Spill at enqueue** — intent-plane commit: serialize `routing`, spill string
-   leaves over the margin to blobs, write refs. Inline path unchanged for small
-   runs.
-2. **`materializeRouting`** — one resolver; wire into substitution, auto-title,
+**Part A — remove `routing.input`** (do first; it shrinks Part B's surface):
+
+1. **Schedules get typed inputs** — add `--input name=value` to
+   `fragua schedule add`, store in the `schedule_create` payload, pass as
+   `routing.inputs` on fire. Drop the free-form `--input <text>` description.
+2. **Drop `routing.input`** — remove `EnqueueInput.input` + the
+   `initialRouting["input"]` write; re-point the auto-titler (seed from
+   `routing.inputs`) and the read-plane/UI (title → workflow-name+inputs); drop
+   `RunSummary.input`. Update CLAUDE.md rule 13 + SPEC §3.
+
+**Part B — spill oversized typed inputs:**
+
+3. **Spill at enqueue** — intent-plane commit: serialize `routing`, spill
+   `routing.inputs` string leaves over the margin to blobs, write refs. Inline
+   path unchanged for small runs.
+4. **`materializeRouting`** — one resolver; wire into substitution, auto-title,
    read-plane.
-3. **GC roots** — `gc-blobs` counts routing blob refs as roots. (Data-loss
+5. **GC roots** — `gc-blobs` counts routing blob refs as roots. (Data-loss
    guard; do not defer.)
-4. **Bundle export/import** — add routing-referenced blobs to the bundle blob
+6. **Bundle export/import** — add routing-referenced blobs to the bundle blob
    set; resolution works on import.
-5. **Scrubber composition** — spilled input blobs scrub via the artifact re-CAS
+7. **Scrubber composition** — spilled input blobs scrub via the artifact re-CAS
    path; routing ref sha rewritten to the scrubbed sha. PBT: a secret in a
    *spilled* input is absent from the export.
