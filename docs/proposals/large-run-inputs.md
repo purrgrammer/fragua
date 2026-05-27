@@ -68,17 +68,21 @@ Removing it (set at `plane.ts:214` from `EnqueueInput.input`):
 4. Update CLAUDE.md rule 13 and SPEC §3 (the "free-form positional lands on
    `routing.input`" wording goes away).
 
-**The one real entanglement — schedules.** `fragua schedule add --input <text>` is
-a *free-form description for every fire* (`schedule.ts:221`, `schedule_create`
-payload `input?`, `events.ts:897`) → becomes `routing.input` on each fired run.
-Schedules have **no typed-input path** today — their `--input` is the description,
-semantically opposite to `fragua run`'s typed `--input name=value`. So removing
-`routing.input` forces resolving schedule inputs. The clean fix, which *also* closes
-a real gap (you currently can't schedule a workflow that needs typed inputs):
-**give `fragua schedule add` the same typed `--input name=value` as `fragua run`**,
-store them in the `schedule_create` payload, and pass them as `routing.inputs` on
-each fire. The free-form description field is dropped with `routing.input`. This is
-the load-bearing part of Part A — sequence it first.
+**The one entanglement — schedules (minimal resolution).**
+`fragua schedule add --input <text>` is a *free-form description for every fire*
+(`schedule.ts:221`, `schedule_create` payload `input?`, `events.ts:897`) → becomes
+`routing.input` on each fired run. Removing `routing.input` means that description
+needs a new home. The **minimal** fix — and the one that keeps this a single
+focused removal — is to route the schedule's description to the fired run's
+**title** (the existing `--title` mechanism, which already suppresses
+auto-titling) instead of `routing.input`. Schedules keep a human label; nothing
+gains a new input system.
+
+> **Decoupled, not bundled:** schedules having **no typed-input path** (you can't
+> schedule a workflow that needs non-default typed inputs) is a real *separate*
+> gap — orthogonal to this removal, and a feature, not a cleanup. Track it on its
+> own; do **not** fold a typed-input-for-schedules system into the
+> `routing.input` removal.
 
 ## 2. The load-bearing principles
 
@@ -193,27 +197,27 @@ blobs.
 
 ## 8. MVP order
 
-**Part A — remove `routing.input`** (do first; it shrinks Part B's surface):
+**Part A — remove `routing.input`** (one focused unit; shrinks Part B's surface):
 
-1. **Schedules get typed inputs** — add `--input name=value` to
-   `fragua schedule add`, store in the `schedule_create` payload, pass as
-   `routing.inputs` on fire. Drop the free-form `--input <text>` description.
-2. **Drop `routing.input`** — remove `EnqueueInput.input` + the
+1. **Drop `routing.input`** — remove `EnqueueInput.input` + the
    `initialRouting["input"]` write; re-point the auto-titler (seed from
-   `routing.inputs`) and the read-plane/UI (title → workflow-name+inputs); drop
-   `RunSummary.input`. Update CLAUDE.md rule 13 + SPEC §3.
+   `routing.inputs` + workflow name) and the read-plane/UI (drop
+   `RunSummary.input`; title fallback → workflow name); route the schedule
+   description to the fired run's **title** instead of `routing.input`. Update
+   CLAUDE.md rule 13 + SPEC §3. (Typed-inputs-for-schedules is a separate gap,
+   not part of this.)
 
 **Part B — spill oversized typed inputs:**
 
-3. **Spill at enqueue** — intent-plane commit: serialize `routing`, spill
+2. **Spill at enqueue** — intent-plane commit: serialize `routing`, spill
    `routing.inputs` string leaves over the margin to blobs, write refs. Inline
    path unchanged for small runs.
-4. **`materializeRouting`** — one resolver; wire into substitution, auto-title,
+3. **`materializeRouting`** — one resolver; wire into substitution, auto-title,
    read-plane.
-5. **GC roots** — `gc-blobs` counts routing blob refs as roots. (Data-loss
+4. **GC roots** — `gc-blobs` counts routing blob refs as roots. (Data-loss
    guard; do not defer.)
-6. **Bundle export/import** — add routing-referenced blobs to the bundle blob
+5. **Bundle export/import** — add routing-referenced blobs to the bundle blob
    set; resolution works on import.
-7. **Scrubber composition** — spilled input blobs scrub via the artifact re-CAS
+6. **Scrubber composition** — spilled input blobs scrub via the artifact re-CAS
    path; routing ref sha rewritten to the scrubbed sha. PBT: a secret in a
    *spilled* input is absent from the export.
