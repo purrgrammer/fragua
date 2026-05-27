@@ -56,6 +56,31 @@ describe("pattern:openai_key", () => {
     expect(result).toContain("prefix ");
     expect(result).toContain(" suffix");
   });
+
+  test("does NOT match sk-ant- (Anthropic key — caught by anthropic_key pattern instead)", () => {
+    const r = regFor("pattern:openai_key");
+    const antKey = "sk-ant-api03-ABCDEFGHIJ1234567890abcde";
+    const result = scrubText(antKey, r);
+    expect(result).toBe(antKey);
+  });
+
+  test("sk-proj- key is still matched by openai_key", () => {
+    const r = regFor("pattern:openai_key");
+    const result = scrubText("key=sk-proj-ABCDEFGHIJKLMNOPQRST1234567890ab", r);
+    expect(result).toContain("[REDACTED:pattern:openai_key]");
+  });
+
+  test("plain sk- key (non-ant) is still matched by openai_key", () => {
+    const r = regFor("pattern:openai_key");
+    const result = scrubText("key=sk-ABCDEFGHIJKLMNOPQRSTUabcdefghij", r);
+    expect(result).toContain("[REDACTED:pattern:openai_key]");
+  });
+
+  test("anthropic_key pattern catches sk-ant- with the correct label", () => {
+    const r = regFor("pattern:anthropic_key");
+    const result = scrubText("sk-ant-api03-ABCDEFGHIJ1234567890abcde", r);
+    expect(result).toBe("[REDACTED:pattern:anthropic_key]");
+  });
 });
 
 // ---------------------------------------------------------------------------

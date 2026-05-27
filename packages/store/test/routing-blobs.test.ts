@@ -296,3 +296,89 @@ describe("collectRoutingBlobShas", () => {
     expect(collectRoutingBlobShas(routing)).toContain(sha);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Incremental-size determinism: spill result is identical to the pre-fix
+// re-stringify behaviour across a range of routing shapes.
+// ---------------------------------------------------------------------------
+
+describe("spillRoutingInputs — incremental-size determinism", () => {
+  function runSpill(routing: Record<string, unknown>) {
+    const shas: string[] = [];
+    const result = spillRoutingInputs(routing, (sha) => shas.push(sha));
+    return {
+      routing: result.routing,
+      spilled: result.spilled,
+      shas,
+    };
+  }
+
+  test("(a) no-spill routing produces identical result across two calls", () => {
+    const routing = { inputs: { x: "short", y: "also short" } };
+    const r1 = runSpill(routing);
+    const r2 = runSpill(routing);
+    expect(r1.spilled).toHaveLength(0);
+    expect(r2.spilled).toHaveLength(0);
+    expect(r1.routing).toBe(routing);
+    expect(r2.routing).toBe(routing);
+  });
+
+  test("(b) single large value spill: sha and ref are identical on repeated calls", () => {
+    const bigVal = "x".repeat(PER_VALUE_SPILL_BYTES + 100);
+    const routing = { inputs: { task: bigVal } };
+    const r1 = runSpill(routing);
+    const r2 = runSpill(routing);
+    expect(r1.spilled).toHaveLength(1);
+    expect(r1.spilled[0]!.sha).toBe(r2.spilled[0]!.sha);
+    expect(r1.spilled[0]!.key).toBe("task");
+    expect(isBlobRef((r1.routing["inputs"] as Record<string, unknown>)["task"])).toBe(true);
+    expect(isBlobRef((r2.routing["inputs"] as Record<string, unknown>)["task"])).toBe(true);
+    const ref1 = (r1.routing["inputs"] as Record<string, Record<string, unknown>>)["task"]!;
+    const ref2 = (r2.routing["inputs"] as Record<string, Record<string, unknown>>)["task"]!;
+    expect(ref1[BLOB_REF_SENTINEL]).toBe(ref2[BLOB_REF_SENTINEL]);
+  });
+
+  test("(c) margin-driven multi-spill: spill order and shas are stable", () => {
+    const valA = "a".repeat(PER_VALUE_SPILL_BYTES - 1);
+    const valB = "b".repeat(PER_VALUE_SPILL_BYTES - 1);
+    const valC = "c".repeat(PER_VALUE_SPILL_BYTES - 1);
+    const valD = "d".repeat(PER_VALUE_SPILL_BYTES - 1);
+    const routing = { inputs: { a: valA, b: valB, c: valC, d: valD } };
+    const r1 = runSpill(routing);
+    const r2 = runSpill(routing);
+    expect(r1.spilled.length).toBeGreaterThan(0);
+    expect(r1.spilled.map((s) => s.key)).toEqual(r2.spilled.map((s) => s.key));
+    expect(r1.spilled.map((s) => s.sha)).toEqual(r2.spilled.map((s) => s.sha));
+    // Result routing is under the margin.
+    expect(JSON.stringify(r1.routing).length).toBeLessThan(ROUTING_SPILL_MARGIN_BYTES);
+    expect(JSON.stringify(r2.routing).length).toBeLessThan(ROUTING_SPILL_MARGIN_BYTES);
+  });
+
+  test("(d) mixed per-value and margin spill: refs match original test expectations", () => {
+    const bigVal = "x".repeat(PER_VALUE_SPILL_BYTES + 1);
+    const routing = { inputs: { z_big: bigVal, a_med: "y".repeat(PER_VALUE_SPILL_BYTES + 50) } };
+    const r1 = runSpill(routing);
+    const r2 = runSpill(routing);
+    expect(r1.spilled[0]!.key).toBe("a_med"); // largest first: a_med (PER+50) > z_big (PER+1)
+    expect(r1.spilled.map((s) => s.key)).toEqual(r2.spilled.map((s) => s.key));
+    expect(r1.spilled.map((s) => s.sha)).toEqual(r2.spilled.map((s) => s.sha));
+  });
+
+  test("(e) routing stays under margin after incremental tracking (same as full re-stringify)", () => {
+    // Build routing just over the margin so exactly some values get spilled.
+    const smallish = "x".repeat(PER_VALUE_SPILL_BYTES - 1);
+    const inputs: Record<string, string> = {
+      a: `a${smallish.slice(1)}`,
+      b: `b${smallish.slice(1)}`,
+      c: `c${smallish.slice(1)}`,
+      d: `d${smallish.slice(1)}`,
+    };
+    const routing = { inputs };
+    const r = runSpill(routing);
+    // Result must be under the margin.
+    expect(JSON.stringify(r.routing).length).toBeLessThan(ROUTING_SPILL_MARGIN_BYTES);
+    // All spilled shas must be stable across calls.
+    const r2 = runSpill(routing);
+    expect(r.spilled.map((s) => s.sha)).toEqual(r2.spilled.map((s) => s.sha));
+  });
+});

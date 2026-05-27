@@ -198,9 +198,21 @@ function buildAhoCorasick(needles: Needle[]): AhoCorasick {
 const WHITESPACE_RE = /\s/;
 const MIN_LITERAL_LEN = 8;
 
+/**
+ * Compile a raw pattern array to `CompiledPattern[]` (adds the `/g` flag).
+ * Callers may memoize the result at module load to avoid re-creating RegExp
+ * objects on every `compileRegistry` call.
+ */
+export function compilePatterns(patterns: ReadonlyArray<{ source: string; re: RegExp }>): CompiledPattern[] {
+  return patterns.map((p) => ({
+    source: p.source,
+    re: new RegExp(p.re.source, p.re.flags.includes("g") ? p.re.flags : `${p.re.flags}g`),
+  }));
+}
+
 export function compileRegistry(input: {
   literals: Array<{ value: string; source: string }>;
-  patterns: Array<{ source: string; re: RegExp }>;
+  patterns: Array<{ source: string; re: RegExp }> | CompiledPattern[];
 }): CompiledRegistry {
   const needles: Needle[] = [];
 
@@ -220,10 +232,14 @@ export function compileRegistry(input: {
 
   const ac = buildAhoCorasick(needles);
 
-  const patterns: CompiledPattern[] = input.patterns.map((p) => ({
-    source: p.source,
-    re: new RegExp(p.re.source, p.re.flags.includes("g") ? p.re.flags : `${p.re.flags}g`),
-  }));
+  // When the caller passes already-compiled patterns (e.g. memoised at module
+  // load via compilePatterns), reuse them directly — they already carry /g and
+  // a fresh RegExp allocation per-call is unnecessary.
+  const patterns: CompiledPattern[] = input.patterns.map((p) =>
+    p.re.flags.includes("g")
+      ? (p as CompiledPattern)
+      : { source: p.source, re: new RegExp(p.re.source, `${p.re.flags}g`) },
+  );
 
   return { ac, patterns };
 }

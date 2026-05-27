@@ -10,7 +10,7 @@ export const BASE_PATTERNS: ReadonlyArray<{ source: string; re: RegExp }> = [
   },
   {
     source: "pattern:openai_key",
-    re: /sk-(proj-)?[A-Za-z0-9_-]{20,}/,
+    re: /sk-(?!ant-)(proj-)?[A-Za-z0-9_-]{20,}/,
   },
   {
     source: "pattern:github_token",

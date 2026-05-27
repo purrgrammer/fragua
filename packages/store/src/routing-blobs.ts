@@ -108,10 +108,19 @@ export function spillRoutingInputs(
   const newInputs: Record<string, unknown> = { ...inputs };
   const spilled: SpillResult["spilled"] = [];
 
-  for (const { key, encoded } of candidates) {
+  // Track serialised routing size incrementally: start with the full routing
+  // JSON length, then on each spill subtract the spilled value's JSON bytes
+  // and add the blob-ref JSON bytes. This avoids re-serialising the whole
+  // routing object on every iteration (O(n) total vs O(n²) before).
+  // The blob-ref shape is { "$fragua_blob": "<64-char sha>", "bytes": <n> },
+  // whose JSON length is constant at PER_VALUE_SPILL_BYTES or less in practice
+  // but we compute it exactly once here to stay precise.
+  const BLOB_REF_JSON_LEN = JSON.stringify(makeBlobRef("0".repeat(64), 0)).length;
+  let currentJsonLen = JSON.stringify({ ...routing, inputs: newInputs }).length;
+
+  for (const { key, value, encoded } of candidates) {
     const alreadySmall = encoded.length <= PER_VALUE_SPILL_BYTES;
-    const routingJson = JSON.stringify({ ...routing, inputs: newInputs });
-    const underMargin = routingJson.length < ROUTING_SPILL_MARGIN_BYTES;
+    const underMargin = currentJsonLen < ROUTING_SPILL_MARGIN_BYTES;
 
     if (alreadySmall && underMargin) break; // remaining candidates are also small and we're under margin
 
@@ -119,6 +128,10 @@ export function spillRoutingInputs(
     putBlob(sha, encoded);
     newInputs[key] = makeBlobRef(sha, encoded.length);
     spilled.push({ key, sha, bytes: encoded.length });
+    // Adjust size: remove the old JSON-encoded value, add the blob-ref JSON.
+    // JSON.stringify(value) is the exact contribution of this string to the JSON.
+    currentJsonLen -= JSON.stringify(value).length;
+    currentJsonLen += BLOB_REF_JSON_LEN;
   }
 
   if (spilled.length === 0) return { routing, spilled: [] };

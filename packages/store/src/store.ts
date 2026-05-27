@@ -1501,12 +1501,17 @@ export class SqliteStore implements IEventStore {
     }
 
     // Collect unique export shas (deduped CAS — two artifacts that scrub to the
-    // same bytes share one blob entry).
-    const exportShas = [...new Set([...reCasMap.values()].map((v) => v.exportSha))].sort();
+    // same bytes share one blob entry). Build a sha → entry map in one pass to
+    // avoid the O(n²) .find() per sha.
+    const exportShaMap = new Map<string, { exportSha: string; exportBytes: Uint8Array }>();
+    for (const entry of reCasMap.values()) {
+      if (!exportShaMap.has(entry.exportSha)) exportShaMap.set(entry.exportSha, entry);
+    }
+    const exportShas = [...exportShaMap.keys()].sort();
     const blobEntries: TarEntry[] = [];
     const blobManifest: { sha256: string; size: number }[] = [];
     for (const exportSha of exportShas) {
-      const entry = [...reCasMap.values()].find((v) => v.exportSha === exportSha)!;
+      const entry = exportShaMap.get(exportSha)!;
       blobEntries.push({ name: blobPath(exportSha), data: entry.exportBytes });
       blobManifest.push({ sha256: exportSha, size: entry.exportBytes.length });
     }

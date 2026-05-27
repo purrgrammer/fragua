@@ -39,8 +39,21 @@ const COPILOT_AMBIENT_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
 
 /** Name suffixes that mark an env var as a likely secret (default-deny list).
  * Only names matching one of these suffixes (or in the known-provider-var set)
- * are captured as needles. Everything else is NOT a needle. */
-const CI_ENV_SECRET_SUFFIXES = ["_KEY", "_SECRET", "_TOKEN", "_PASSWORD", "_CREDENTIAL"] as const;
+ * are captured as needles. Everything else is NOT a needle.
+ *
+ * Matching is case-insensitive (checked via name.toUpperCase()). Do NOT add
+ * broad suffixes like _URL — DATABASE_URL is covered by the conn_string_userinfo
+ * pattern; a blanket _URL would over-strip non-secret variables. */
+const CI_ENV_SECRET_SUFFIXES = [
+  "_KEY",
+  "_SECRET",
+  "_TOKEN",
+  "_PASSWORD",
+  "_CREDENTIAL",
+  "_PASS",
+  "_AUTH",
+  "_PASSPHRASE",
+] as const;
 
 /** Build the set of known provider env-var names from pi-ai's registry.
  * Memoised: called once at capture time, not on every check. */
@@ -64,7 +77,8 @@ function knownProviderVarNames(): Set<string> {
  * also checks the value is non-empty) and `ciEnvDenyNames` (strip by
  * name unconditionally — an attacker could set the var later). */
 function isSecretEnvName(name: string, providerVars: Set<string>): boolean {
-  const isSecretSuffix = CI_ENV_SECRET_SUFFIXES.some((suffix) => name.endsWith(suffix));
+  const upper = name.toUpperCase();
+  const isSecretSuffix = CI_ENV_SECRET_SUFFIXES.some((suffix) => upper.endsWith(suffix));
   const isProviderVar = providerVars.has(name);
   return isSecretSuffix || isProviderVar;
 }

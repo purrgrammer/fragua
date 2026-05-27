@@ -1596,3 +1596,117 @@ describe("exportRunBundle - export profile (default)", () => {
     expect(bundleText).not.toContain(CRED_SECRET);
   });
 });
+
+// ---------------------------------------------------------------------------
+// exportRunBundle — reason + route free-text scrubbing (gap fix)
+// ---------------------------------------------------------------------------
+
+describe("exportRunBundle — reason and route fields are scrubbed", () => {
+  // A real secret shape that the scrubber will catch via pattern:anthropic_key.
+  const SECRET = "sk-ant-api03-ReasonRouteTest0123456789abcdef";
+
+  function extractEvents(bytes: Uint8Array, runId: string): Array<{ type: string; payload: Record<string, unknown> }> {
+    const entries = readTar(bytes);
+    const evEntry = entries.find((e) => e.name === `runs/${runId}/events.jsonl`);
+    if (evEntry == null) return [];
+    return new TextDecoder()
+      .decode(evEntry.data)
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
+  }
+
+  async function seedRunWithReasonRoute(store: ReturnType<typeof freshStore>): Promise<string> {
+    const sha = await seedWorkflow(store, "f".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      cwd: "/home/dev/proj",
+      initialRouting: { input: "seed" },
+    });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: SECRET }),
+    });
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+
+    // intent.cancel_requested.payload.reason — free-form operator text.
+    store.appendIntent(runId, {
+      type: "intent.cancel_requested",
+      payload: { reason: `cancelling because ${SECRET}` },
+    } as IntentEvent);
+
+    // intent.human_input.payload.route — operator-supplied route name.
+    store.appendIntent(runId, {
+      type: "intent.human_input",
+      payload: { route: `route-${SECRET}`, note: "plain note" },
+    } as IntentEvent);
+
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_halted", payload: { reason: "error", detail: "done" } } as FactEvent],
+      v,
+    );
+    return runId;
+  }
+
+  test("(a) secret in intent.cancel_requested.reason is absent from bundle", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithReasonRoute(store);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    expect(Buffer.from(bytes).includes(SECRET)).toBe(false);
+  });
+
+  test("(b) intent.cancel_requested.reason shows [REDACTED in bundle events", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithReasonRoute(store);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    const events = extractEvents(bytes, runId);
+    const cancel = events.find((e) => e.type === "intent.cancel_requested");
+    expect(cancel).toBeDefined();
+    expect(cancel!.payload["reason"] as string).toContain("[REDACTED");
+    expect(cancel!.payload["reason"] as string).not.toContain(SECRET);
+  });
+
+  test("(c) secret in intent.human_input.route is absent from bundle", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithReasonRoute(store);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    expect(Buffer.from(bytes).includes(SECRET)).toBe(false);
+  });
+
+  test("(d) intent.human_input.route shows [REDACTED in bundle events", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithReasonRoute(store);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    const events = extractEvents(bytes, runId);
+    const hi = events.find((e) => e.type === "intent.human_input");
+    expect(hi).toBeDefined();
+    expect(hi!.payload["route"] as string).toContain("[REDACTED");
+    expect(hi!.payload["route"] as string).not.toContain(SECRET);
+  });
+
+  test("(e) fact.run_halted.reason (structural enum value) survives scrub unchanged", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithReasonRoute(store);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    const events = extractEvents(bytes, runId);
+    const halted = events.find((e) => e.type === "fact.run_halted");
+    expect(halted).toBeDefined();
+    // "error" is an enum value, not a secret — it must survive.
+    expect(halted!.payload["reason"]).toBe("error");
+  });
+});

@@ -289,6 +289,45 @@ describe("captureCiEnvSecrets", () => {
     // Verify the extraLiterals shape is correct for downstream consumption
     expect(extraLiterals).toContainEqual({ value: TOKEN_VAL, source: "env:MY_TOKEN" });
   });
+
+  test("(new-suffixes) _PASS / _AUTH / _PASSPHRASE are captured", () => {
+    const env: NodeJS.ProcessEnv = {
+      DB_PASS: "db-pass-value-12345678",
+      SMTP_AUTH: "smtp-auth-value-12345678",
+      GPG_PASSPHRASE: "gpg-passphrase-value-12345678",
+      UNRELATED_VAR: "not-a-secret",
+    };
+    const captured = captureCiEnvSecrets(env);
+    const names = captured.map((c) => c.name);
+    expect(names).toContain("DB_PASS");
+    expect(names).toContain("SMTP_AUTH");
+    expect(names).toContain("GPG_PASSPHRASE");
+    expect(names).not.toContain("UNRELATED_VAR");
+  });
+
+  test("(case-insensitive) lowercase secret-named vars are captured", () => {
+    const env: NodeJS.ProcessEnv = {
+      my_service_token: "lowercase-token-value-12345678",
+      my_api_key: "lowercase-key-value-12345678",
+      not_a_secret_var: "ignored",
+    };
+    const captured = captureCiEnvSecrets(env);
+    const names = captured.map((c) => c.name);
+    expect(names).toContain("my_service_token");
+    expect(names).toContain("my_api_key");
+    expect(names).not.toContain("not_a_secret_var");
+  });
+
+  test("(case-insensitive) mixed-case suffix variants are captured", () => {
+    const env: NodeJS.ProcessEnv = {
+      My_Api_Key: "mixed-key-value-12345678",
+      MY_DB_Pass: "mixed-pass-value-12345678",
+    };
+    const captured = captureCiEnvSecrets(env);
+    const names = captured.map((c) => c.name);
+    expect(names).toContain("My_Api_Key");
+    expect(names).toContain("MY_DB_Pass");
+  });
 });
 
 describe("ciEnvDenyNames", () => {
@@ -329,5 +368,27 @@ describe("ciEnvDenyNames", () => {
     expect(denySet.has("PATH")).toBe(false);
     expect(denySet.has("GITHUB_REPOSITORY")).toBe(false);
     expect(denySet.has("SOME_RANDOM_VAR")).toBe(false);
+  });
+
+  test("(new-suffixes) _PASS / _AUTH / _PASSPHRASE appear in deny set", () => {
+    const env: NodeJS.ProcessEnv = {
+      DB_PASS: "",
+      SMTP_AUTH: "smtp-auth-value-12345678",
+      GPG_PASSPHRASE: "",
+    };
+    const denySet = ciEnvDenyNames(env);
+    expect(denySet.has("DB_PASS")).toBe(true);
+    expect(denySet.has("SMTP_AUTH")).toBe(true);
+    expect(denySet.has("GPG_PASSPHRASE")).toBe(true);
+  });
+
+  test("(case-insensitive) lowercase secret-named vars are in deny set", () => {
+    const env: NodeJS.ProcessEnv = {
+      my_service_token: "lowercase-token-value-12345678",
+      my_api_key: "lowercase-key-value-12345678",
+    };
+    const denySet = ciEnvDenyNames(env);
+    expect(denySet.has("my_service_token")).toBe(true);
+    expect(denySet.has("my_api_key")).toBe(true);
   });
 });

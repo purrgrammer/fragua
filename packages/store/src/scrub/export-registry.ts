@@ -3,8 +3,12 @@
 
 import type { ProviderCredentialRow } from "../types.ts";
 import { BASE_PATTERNS } from "./patterns.ts";
-import { type CompiledRegistry, compileRegistry } from "./registry.ts";
+import { type CompiledPattern, type CompiledRegistry, compilePatterns, compileRegistry } from "./registry.ts";
 import { type ScrubOptions, scrubText } from "./scrub.ts";
+
+// Memoised: compileRegistry adds the /g flag and allocates new RegExp objects.
+// Building these once per module load avoids redundant allocations on every export.
+const COMPILED_BASE_PATTERNS: CompiledPattern[] = compilePatterns(BASE_PATTERNS);
 
 // ---------------------------------------------------------------------------
 // Literal extraction from credential payloads
@@ -75,7 +79,7 @@ export function buildExportRegistry(opts: {
     }
   }
 
-  return compileRegistry({ literals, patterns: [...BASE_PATTERNS] });
+  return compileRegistry({ literals, patterns: COMPILED_BASE_PATTERNS });
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +116,7 @@ export function isTextMime(mime: string | null): boolean {
  * be scrubbed. Structural keys (type, nodeId, runId, workflowSha, seq, …)
  * are deliberately NOT listed — they drive deriveRunState replay and must
  * never be altered. */
-const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "detail"]);
+const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "detail", "reason", "route"]);
 
 /**
  * Scrub an event payload without touching structural fields.
