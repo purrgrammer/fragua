@@ -8,7 +8,6 @@ import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -114,7 +113,6 @@ function prepare(id: string, detail: RunDetailT) {
 }
 
 describe("RunDetail", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("fetches the run for the :id from the URL and renders the conversation region", async () => {

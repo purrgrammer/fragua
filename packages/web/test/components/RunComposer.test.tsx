@@ -12,7 +12,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RunComposer } from "../../src/components/RunComposer.tsx";
 import type { WorkflowSummary } from "../../src/lib/api.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function workflow(name: string, opts: Partial<WorkflowSummary> = {}): WorkflowSummary {
   return {
@@ -27,7 +26,6 @@ function workflow(name: string, opts: Partial<WorkflowSummary> = {}): WorkflowSu
 const PROJECT_CWD = "/work/proj-a";
 
 describe("RunComposer", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("groups project-local workflows under 'This project' and globals under 'Global'", async () => {

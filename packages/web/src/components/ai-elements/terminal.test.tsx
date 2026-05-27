@@ -5,11 +5,9 @@
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../../test/setup.ts";
 import { Terminal } from "./terminal.tsx";
 
 describe("Terminal", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("body surface adapts to light/dark mode (no hard-coded dark utility)", () => {

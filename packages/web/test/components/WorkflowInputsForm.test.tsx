@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WorkflowInputsForm } from "../../src/components/WorkflowInputsForm.tsx";
 import type { WorkflowInputDecl } from "../../src/lib/api.ts";
 import { renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function decl(name: string, type: WorkflowInputDecl["type"], opts: Partial<WorkflowInputDecl> = {}): WorkflowInputDecl {
   return {
@@ -20,7 +19,6 @@ function decl(name: string, type: WorkflowInputDecl["type"], opts: Partial<Workf
 }
 
 describe("WorkflowInputsForm", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders one labeled field per InputDecl with type-appropriate control", () => {

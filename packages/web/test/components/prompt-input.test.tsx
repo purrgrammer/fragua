@@ -16,10 +16,8 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
 } from "../../src/components/ai-elements/prompt-input.tsx";
-import { useDom } from "../setup.ts";
 
 describe("PromptInput submit positioning", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("places the submit at the bottom-right of the input with equal x/y inset from the corner", () => {

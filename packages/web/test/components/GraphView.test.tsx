@@ -31,7 +31,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
 import type { RunDetail } from "../../src/lib/api.ts";
 import { renderWithClient as render } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 // start → middle → exit (middle is the only declared step; the parser
 // synthesises the `start` entry node and the `exit` sink).
@@ -215,7 +214,6 @@ steps:
 });
 
 describe("GraphView — rendering", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders a data-node-id per node", async () => {

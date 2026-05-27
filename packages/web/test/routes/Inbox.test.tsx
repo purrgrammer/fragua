@@ -11,7 +11,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { InboxPage } from "../../src/routes/Inbox.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 // ── Query URLs ────────────────────────────────────────────────────────
 // Must exactly match what listRuns() builds for each filter.
@@ -66,7 +65,6 @@ function renderPage(mocks: Record<string, () => Response | Promise<Response>>) {
 // ── Tests ─────────────────────────────────────────────────────────────
 
 describe("InboxPage", () => {
-  useDom();
   afterEach(() => cleanup());
 
   describe("two-section layout", () => {

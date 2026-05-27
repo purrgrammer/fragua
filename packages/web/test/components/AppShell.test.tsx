@@ -10,7 +10,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { crumbsFor } from "../../src/components/AppShell.tsx";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function mount(path: string) {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
@@ -18,7 +17,6 @@ function mount(path: string) {
 }
 
 describe("AppShell + AppSidebar", () => {
-  useDom();
   afterEach(() => {
     cleanup();
     // Reset the persisted sidebar state so each test starts from

@@ -6,7 +6,6 @@ import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { RunPausedNotice } from "../../src/components/RunPausedNotice.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const EVENTS_URL = "/api/runs/run-1/events.json";
 const RESUME_URL = "/api/runs/run-1/resume";
@@ -30,7 +29,6 @@ const PROVIDER_ERROR_EVENTS = [
 ];
 
 describe("RunPausedNotice", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders the alert with provider label (verbatim), HTTP code, and reason", async () => {

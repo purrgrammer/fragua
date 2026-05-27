@@ -76,6 +76,7 @@ function RunActionsInner({
   _testInitialOpenAction: RunActionsTestOpenAction;
 }): JSX.Element {
   const qc = useQueryClient();
+  // _testInitialOpenAction seeds the initial state only (read once on mount).
   const [openAction, setOpenAction] = useState<ActionKind | null>(_testInitialOpenAction);
 
   const invalidateInbox = (): Promise<void> => qc.invalidateQueries({ queryKey: queries.runs.lists() });

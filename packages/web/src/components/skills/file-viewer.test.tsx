@@ -6,7 +6,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../../test/setup.ts";
 import { FileViewer } from "./file-viewer.tsx";
 
 function installFileFetch(bytes: Uint8Array, contentType: string): void {
@@ -26,7 +25,6 @@ function renderWithClient(ui: JSX.Element) {
 const enc = new TextEncoder();
 
 describe("FileViewer", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("shows a placeholder when no file is selected", () => {

@@ -25,7 +25,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useGlobalEventStream } from "../../src/lib/useGlobalEventStream.ts";
 import { Home } from "../../src/routes/Home.tsx";
 import { createTestQueryClient, installFetchMock, json } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 // Minimal fake EventSource — same shape as the one in useEventSource.test.ts.
 class FakeEventSource {
@@ -199,7 +198,6 @@ function emit(
 }
 
 describe("Control Center live updates", () => {
-  useDom();
   let mock: ReturnType<typeof installFetchMock>;
   const state: { runs: FakeRun[] } = { runs: [] };
 

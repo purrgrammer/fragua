@@ -10,7 +10,6 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { RunControls } from "../../src/components/RunControls.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const PAUSE_URL = "/api/runs/run-99/pause";
 const RESUME_URL = "/api/runs/run-99/resume";
@@ -69,8 +68,6 @@ function renderControls(
 }
 
 describe("RunControls — toast feedback", () => {
-  useDom();
-
   beforeEach(() => {
     successSpy.mockReset();
     errorSpy.mockReset();

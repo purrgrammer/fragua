@@ -2,7 +2,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { useDom } from "../../test/setup.ts";
 import { Schedules } from "./Schedules.tsx";
 
 const { successSpy, errorSpy } = vi.hoisted(() => ({
@@ -95,7 +94,6 @@ function renderWithClient(ui: JSX.Element) {
 }
 
 describe("Schedules", () => {
-  useDom();
   beforeEach(() => {
     successSpy.mockReset();
     errorSpy.mockReset();

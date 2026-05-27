@@ -12,11 +12,9 @@
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../../test/setup.ts";
 import { Toaster } from "./sonner.tsx";
 
 describe("Toaster", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders a live region (aria-live) in the DOM", () => {

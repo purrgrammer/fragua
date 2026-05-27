@@ -20,7 +20,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../src/App.tsx";
 import { createRoutes } from "../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json } from "./helpers/with-query-client.tsx";
-import { useDom } from "./setup.ts";
 
 function mountApp(mocks: Record<string, () => Response | Promise<Response>>, path = "/") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
@@ -31,8 +30,6 @@ function mountApp(mocks: Record<string, () => Response | Promise<Response>>, pat
 }
 
 describe("App", () => {
-  useDom();
-
   afterEach(() => {
     cleanup();
   });

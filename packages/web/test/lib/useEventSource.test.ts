@@ -4,7 +4,6 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useEventSource } from "../../src/lib/useEventSource.ts";
-import { useDom } from "../setup.ts";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -47,7 +46,6 @@ class FakeEventSource {
 }
 
 describe("useEventSource", () => {
-  useDom();
   afterEach(() => {
     cleanup();
     FakeEventSource.instances = [];

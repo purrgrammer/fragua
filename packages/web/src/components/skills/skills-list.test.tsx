@@ -7,7 +7,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../../test/setup.ts";
 import { SkillsList } from "./skills-list.tsx";
 
 function captureFetch(): { last: () => string | undefined } {
@@ -48,7 +47,6 @@ function renderWithProviders(ui: JSX.Element) {
 }
 
 describe("SkillsList", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("passes ?project_cwd= when scoped to a single project", async () => {

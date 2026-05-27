@@ -8,7 +8,6 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RunMessageRow } from "../../src/lib/api.ts";
 import { usePendingSteers } from "../../src/lib/usePendingSteers.ts";
-import { useDom } from "../setup.ts";
 
 let nextOrdinal = 1;
 
@@ -49,7 +48,6 @@ function assistantMsg(text: string): RunMessageRow {
 }
 
 describe("usePendingSteers", () => {
-  useDom();
   afterEach(() => {
     cleanup();
     nextOrdinal = 1;

@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../../test/setup.ts";
 import {
   ALL_WORKFLOWS_VALUE,
   WorkflowSelector,
@@ -36,7 +35,6 @@ function renderWithClient(ui: JSX.Element) {
 }
 
 describe("WorkflowSelector", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders the trigger with the right contract regardless of fetch state", async () => {

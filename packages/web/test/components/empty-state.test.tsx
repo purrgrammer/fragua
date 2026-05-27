@@ -6,10 +6,8 @@
 import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { EmptyState } from "../../src/components/ui/empty-state.tsx";
-import { useDom } from "../setup.ts";
 
 describe("EmptyState", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders the required title with role=status", () => {

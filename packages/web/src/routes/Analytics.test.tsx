@@ -6,7 +6,6 @@
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { useEffect, useMemo, useState } from "react";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../test/setup.ts";
 import { filterWindowOptions } from "../components/analytics/WindowSelector.tsx";
 import type { WindowKey } from "../lib/analytics.ts";
 import { getAnalytics, getAnalyticsRuns } from "../lib/api.ts";
@@ -150,8 +149,6 @@ function Wrapper({ initialFirstRunAt }: { initialFirstRunAt: number | null }) {
 }
 
 describe("Analytics window auto-fallback", () => {
-  useDom();
-
   test("when firstRunMs narrows past the current windowKey, the selector emits 'all'", async () => {
     // Start with 90-day span so 'last30' is valid
     const { container } = render(<Wrapper initialFirstRunAt={Date.now() - 90 * DAY_MS} />);

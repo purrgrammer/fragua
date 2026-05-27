@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../test/setup.ts";
 import { RunsList } from "./RunsList.tsx";
 
 // Stub fetch so the runs list query resolves to an empty array — that's
@@ -22,7 +21,6 @@ function renderWithClient(ui: JSX.Element) {
 }
 
 describe("RunsList — empty state", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders an icon inside the empty state, mirroring the /inbox empty-state structure", async () => {

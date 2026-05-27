@@ -15,7 +15,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { RunActionsRun } from "../../src/components/RunActions.tsx";
 import { RunActions } from "../../src/components/RunActions.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const { successSpy, errorSpy } = vi.hoisted(() => ({
   successSpy: vi.fn(() => "t1"),
@@ -68,7 +67,6 @@ function inBody(testId: string): Element | null {
 }
 
 describe("RunActions", () => {
-  useDom();
   beforeEach(() => {
     successSpy.mockReset();
     errorSpy.mockReset();

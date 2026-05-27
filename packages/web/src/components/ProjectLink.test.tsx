@@ -1,7 +1,6 @@
 import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../test/setup.ts";
 import { ProjectLink } from "./ProjectLink.tsx";
 
 const PROJECT_ID = "019e4f5b-b2c8-7d7b-b413-10896ad2d708";
@@ -11,7 +10,6 @@ function renderLink(ui: JSX.Element) {
 }
 
 describe("ProjectLink", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders a Link to /projects/:projectId using the literal project id", () => {

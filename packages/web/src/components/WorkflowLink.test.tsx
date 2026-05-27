@@ -1,7 +1,6 @@
 import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
-import { useDom } from "../../test/setup.ts";
 import { WorkflowLink } from "./WorkflowLink.tsx";
 
 function renderLink(ui: JSX.Element) {
@@ -9,7 +8,6 @@ function renderLink(ui: JSX.Element) {
 }
 
 describe("WorkflowLink", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders a Link to /workflows/:name with the name URL-encoded", () => {

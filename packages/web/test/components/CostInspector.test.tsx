@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CostInspector } from "../../src/components/CostInspector.tsx";
 import type { ProviderDetail, ProviderModel, StepSnapshot } from "../../src/lib/api.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
   return {
@@ -25,7 +24,6 @@ function mount(runId: string, steps: StepSnapshot[], opts: { isLive?: boolean } 
 }
 
 describe("CostInspector", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("shows a loading indicator, then renders one row per LLM call", async () => {

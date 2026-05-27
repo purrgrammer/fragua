@@ -7,10 +7,10 @@
 // Do NOT drift to { files, additions, deletions } — that divergence
 // caused a real bug in the past.
 //
-// Note: Radix UI DropdownMenu portals content outside the container
-// in happy-dom, so dropdown item tests are delegated to RunActions.test.tsx
-// which uses _testOpenAction. WorktreeInbox tests focus on list rendering
-// and the action trigger presence.
+// Note: Radix UI DropdownMenu portals content to document.body, so dropdown
+// item tests are delegated to RunActions.test.tsx (which uses
+// _testInitialOpenAction). WorktreeInbox tests focus on list rendering and the
+// action trigger presence.
 
 import { cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -18,7 +18,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import { WorktreeInbox } from "../../src/components/WorktreeInbox.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 // ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -73,10 +72,7 @@ function renderInbox(mocks: Record<string, () => Response | Promise<Response>>) 
   return { ...result, restore, calls };
 }
 
-// ── All tests under one useDom() to avoid DOM setup issues ───────────
-
 describe("WorktreeInbox", () => {
-  useDom();
   afterEach(() => cleanup());
 
   // ── Listing ────────────────────────────────────────────────────────
@@ -193,7 +189,7 @@ describe("WorktreeInbox", () => {
   });
 
   // ── Happy-path action: Commit ───────────────────────────────────────
-  // The commit action is tested through RunActions directly (with _testOpenAction)
+  // The commit action is tested through RunActions directly (with _testInitialOpenAction)
   // in RunActions.test.tsx. Here we test the integration: the row disappears
   // after a successful commit that invalidates the inbox query.
 

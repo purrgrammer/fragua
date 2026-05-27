@@ -10,7 +10,6 @@ import { App } from "../../src/App.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function blockedRun(id: string): RunSummary {
   return {
@@ -66,7 +65,6 @@ const BLOCKED_URL = "/api/runs?status=paused%2Cpaused_human%2Cquarantined&order=
 const HEALTH_URL = "/api/health";
 
 describe("AppSidebar — Inbox pending-count badge", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders worktree-pending count when only worktree runs are pending", async () => {

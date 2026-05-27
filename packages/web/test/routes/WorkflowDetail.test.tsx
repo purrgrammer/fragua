@@ -16,7 +16,6 @@ import type { WorkflowDetail as WorkflowDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const WORKFLOW_SOURCE = `name: demo
 description: demo
@@ -41,7 +40,6 @@ function seedDetail(client: ReturnType<typeof createTestQueryClient>, name: stri
 }
 
 describe("WorkflowDetail route", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders header with label, name, and short sha", async () => {

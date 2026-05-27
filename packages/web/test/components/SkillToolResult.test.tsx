@@ -9,7 +9,6 @@ import type { ToolResultMessage } from "@fragua/types";
 import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { SkillToolResult } from "../../src/components/run-conversation/SkillToolResult.tsx";
-import { useDom } from "../setup.ts";
 
 function makeResult(opts: {
   data?: { name?: string; description?: string; path?: string; content?: string; available?: string[] };
@@ -28,7 +27,6 @@ function makeResult(opts: {
 }
 
 describe("SkillToolResult", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders skill name and description from result.details.data", () => {

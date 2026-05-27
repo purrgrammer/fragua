@@ -12,7 +12,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import SteerInput from "../../src/components/SteerInput.tsx";
 import type { RunMessageRow } from "../../src/lib/api.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const STEER_URL = "/api/runs/run-1/steer";
 
@@ -26,7 +25,6 @@ function userMsg(ordinal: number, text: string): RunMessageRow {
 }
 
 describe("SteerInput", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("submits a message, calls steerRun once, and renders a pending row", async () => {
