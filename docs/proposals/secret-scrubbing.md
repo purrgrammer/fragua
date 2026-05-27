@@ -269,7 +269,7 @@ that also shreds the bundle. Drop any literal needle below a minimum length
 independent of the name allowlist — a secret-*named* var with a junk short value
 still must not become a needle.
 
-## 8. Disclosure: inline markers, no manifest in the bundle
+## 8. Disclosure: inline markers + a perimeter alarm, no tally
 
 Redactions do **not** travel in the tar. Disclosure rides the inline
 `[REDACTED:source]` markers — self-locating (the reviewer sees the redaction
@@ -278,29 +278,39 @@ markers themselves), so a separate `redactions` table in the bundle would be bot
 redundant *and* a side channel (handing the recipient a "this run touched N keys
 of these types" map). It is dropped.
 
-**Markers in the tar are advisory, not evidence.** An untrusted agent can emit the
-literal string `[REDACTED:provider_creds]` in its own output — inflating a
-recipient's grep-census, or worse, camouflaging a real leak as "already handled."
-So the **authoritative** disclosure is the count the *scrubber itself* computed at
-egress (it knows what it replaced), surfaced on the exporter's stdout — never a
-grep of the shipped bundle. The grep-census is a convenience for recipients, not a
-guarantee.
+**No redaction *count*, anywhere — not in the tar, not on stdout.** The obvious
+move is to print `redacted 5 hits — 4×pattern:github_token, 1×provider_creds` at
+export. We don't, for two reasons. First, a count *contradicts* the scrubber's own
+contract ([§1](#1-the-two-load-bearing-principles), principle 2): "redacted 5
+hits" reads as a complete inventory — *5 secrets, all caught, clean* — but the
+scrubber catches accidents, not attacks, and a transformed secret sails through
+**uncounted**. A tally manufactures exactly the false confidence the threat model
+([§6](#6-threat-model-ci-pr-review-is-adversarial)) spends a section disclaiming;
+no number is more honest than a misleading one. Second, it is **redundant** — the
+`[REDACTED]` markers are in the content, read better in context than as a tally,
+and are grep-recomputable by anyone who wants a census. The PBT
+([§12](#12-assurance-an-end-to-end-pbt)), not a count, is the actual "secret-free"
+assurance.
 
-The manifest's real audience is the **exporter**, not the recipient: "what did I
-just publish, and what did the scrubber catch?" — especially the
-perimeter-failure signal of a `provider_creds` hit. So the redaction summary is
-**output of the `export`/`ci` command** (stdout, e.g.
-`redacted 5 hits — 4×pattern:github_token, 1×provider_creds ⚠`), and in `ci` a
-`provider_creds` hit fails the job. No tar entry, no format change, no outbound
-side channel — for the *census*. (The single `scrubberVersion` stamp added to the
-existing `manifest.json` in [§13](#13-resolved-decisions-was-open-questions) is
-*not* a census: it is one version string with no per-secret information, so it
-carries no "which/how-many keys" side channel — it is an audit pin, and it does
-bump `bundleVersion`.)
+What *does* survive is a **single perimeter-failure signal**, which is detection,
+not enumeration: *did a live `provider_creds` value reach the egress path?* That is
+a boolean, not a count — a noisy warning on `export` (the operator's perimeter
+leaked a live key into the bundle path), and a **job failure** in `ci`. `ci`
+already gates on this; it never needed a tally to do so.
 
-`source` examples: `provider_creds | env:NAME | pattern:anthropic_key |
-pattern:jwt | …`. Marker *granularity* is the real disclosure dial (see
-[§11](#11-open-questions)).
+**Why not even a stdout count, since stdout stays local?** Because the failure mode
+isn't exfiltration — it's false confidence, and that bites the operator on their
+own machine just as hard. The thing worth surfacing is the alarm, and the alarm is
+binary.
+
+The one structural field that *is* added is `scrubberVersion` on the existing
+`manifest.json` ([§13](#13-resolved-decisions-was-open-questions)) — one version
+string, no per-secret information, so no "which/how-many keys" side channel. It is
+an audit pin, not a census, and it bumps `bundleVersion`.
+
+`source` examples (in `export`, where labels are kept): `provider_creds | env:NAME
+| pattern:anthropic_key | pattern:jwt | …`. Marker *granularity* is the real
+disclosure dial — resolved per profile in [§13](#13-resolved-decisions-was-open-questions).
 
 ## 9. Snapshots: not an egress surface
 
@@ -426,18 +436,26 @@ without a new axis:
   encoding-set version) so an auditor knows which detector ran and a future
   reproducibility check has a pin. Remaining V2 work is purely the tar envelope
   (zero mtime/uid/gid, sorted entries, fixed compression) — none of it security.
+- **Config lives in the global `~/.fragua/config.yaml` `scrubber:` block** (not a
+  separate `scrubber.yaml`) — one cascade, sitting next to `blocklist` /
+  `concurrency`, feeding both the scrub registry and the `ci` perimeter env-strip
+  from one place. **The trust subtlety is load-bearing:** the cascade is global ⊕
+  project with *project keys winning*, and in `ci` the project layer
+  (`<cwd>/.fragua/config.yaml`) is **attacker-controlled** — a malicious PR could
+  ship a `scrubber:` block that deletes the patterns catching its own exfil (the
+  exact [§6](#6-threat-model-ci-pr-review-is-adversarial) adversary). So: **MVP
+  reads the global block only** (no project merge), sidestepping it entirely; when
+  project override later lands it is **additive-only for security keys** (a project
+  may *add* needles/patterns, never remove) and **`ci` ignores the project layer
+  outright** — the perimeter does not trust the repo, same as it never inherits the
+  runner's env. `export` (operator's own machine + project) may trust its project
+  config.
 
 ### Genuinely still open
 
-- **Where the shared scrubber config lives** (`~/.fragua/scrubber.yaml` vs the
-  existing config cascade) and whether the `ci` perimeter env-strip list and the
-  scrub registry read from one block or two — MVP item 7 sketches one file; the
-  exact schema is unsettled.
-- **Re-export of an *imported* run.** An imported run's messages already carry
-  `[REDACTED]` and its env-literal registry is gone (only patterns re-apply). This
-  is acceptable (idempotent on already-redacted text), but the disclosure summary
-  on re-export will under-count vs the original — confirm that's tolerable or stamp
-  provenance.
+- **The exact `scrubber:` YAML schema** — the resolution above settles *where* the
+  config lives and its trust rules, not the key shape (one block vs separate
+  `registry` / `perimeter` sub-blocks, glob syntax for the name allowlist, …).
 - **Binary artifacts ship un-inspected.** A secret embedded in a binary blob
   ([§4](#4-what-the-egress-pass-does)) is not caught. ASCII needles *are* findable
   in a byte buffer, so a scan-then-drop (don't redact-in-place — exclude the blob
@@ -461,8 +479,9 @@ without a new axis:
    generic markers, perimeter env-strip on the bash subprocess.
 6. **PBT** end-to-end (§12) — the gate for the "secret-free" claim; asserts the
    *declared encoding set* only.
-7. Allowlist + name-list config (`~/.fragua/scrubber.yaml`), shared by the
-   perimeter env-strip and the scrub registry.
+7. Allowlist + name-list config — a `scrubber:` block in the global
+   `~/.fragua/config.yaml` ([§13](#13-resolved-decisions-was-open-questions)),
+   global-only at MVP, shared by the perimeter env-strip and the scrub registry.
 
 **Out of this proposal** (tracked, not done here): the **snapshot deny-list**
 ([§9](#9-snapshots-not-an-egress-surface)) — snapshots don't egress via the bundle;
