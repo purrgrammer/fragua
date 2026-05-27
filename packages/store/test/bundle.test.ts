@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   BUNDLE_VERSION,
   type BundleManifest,
+  buildExportRegistry,
   canonicalJson,
   type FactEvent,
   type IntentEvent,
@@ -20,6 +21,7 @@ import {
   newRunId,
   readTar,
   SCRUBBER_VERSION,
+  scrubEventPayload,
   writeTar,
 } from "../src/index.ts";
 import { freshStore, seedWorkflow } from "./helpers.ts";
@@ -1598,7 +1600,7 @@ describe("exportRunBundle - export profile (default)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// exportRunBundle — reason + route free-text scrubbing (gap fix)
+// exportRunBundle — reason/route structural preservation (fix 4)
 // ---------------------------------------------------------------------------
 
 describe("exportRunBundle — reason and route fields are scrubbed", () => {
@@ -1644,10 +1646,11 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
       payload: { reason: `cancelling because ${SECRET}` },
     } as IntentEvent);
 
-    // intent.human_input.payload.route — operator-supplied route name.
+    // intent.human_input.payload.route — structural node-id, must NOT be scrubbed.
+    // The note field carries free text; route is deliberately clean here.
     store.appendIntent(runId, {
       type: "intent.human_input",
-      payload: { route: `route-${SECRET}`, note: "plain note" },
+      payload: { route: "node-default", note: `human note with ${SECRET}` },
     } as IntentEvent);
 
     store.appendFact(
@@ -1658,7 +1661,7 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
     return runId;
   }
 
-  test("(a) secret in intent.cancel_requested.reason is absent from bundle", async () => {
+  test("(a) secret in intent.cancel_requested.reason and intent.human_input.note is absent from bundle", async () => {
     const store = freshStore();
     const runId = await seedRunWithReasonRoute(store);
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
@@ -1678,15 +1681,7 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
     expect(cancel!.payload["reason"] as string).not.toContain(SECRET);
   });
 
-  test("(c) secret in intent.human_input.route is absent from bundle", async () => {
-    const store = freshStore();
-    const runId = await seedRunWithReasonRoute(store);
-    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
-    store.close();
-    expect(Buffer.from(bytes).includes(SECRET)).toBe(false);
-  });
-
-  test("(d) intent.human_input.route shows [REDACTED in bundle events", async () => {
+  test("(c) intent.human_input.note carries REDACTED marker", async () => {
     const store = freshStore();
     const runId = await seedRunWithReasonRoute(store);
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
@@ -1694,8 +1689,20 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
     const events = extractEvents(bytes, runId);
     const hi = events.find((e) => e.type === "intent.human_input");
     expect(hi).toBeDefined();
-    expect(hi!.payload["route"] as string).toContain("[REDACTED");
-    expect(hi!.payload["route"] as string).not.toContain(SECRET);
+    expect(hi!.payload["note"] as string).toContain("[REDACTED");
+    expect(hi!.payload["note"] as string).not.toContain(SECRET);
+  });
+
+  test("(d) intent.human_input.route (structural node-id) is NOT altered by scrub", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithReasonRoute(store);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    const events = extractEvents(bytes, runId);
+    const hi = events.find((e) => e.type === "intent.human_input");
+    expect(hi).toBeDefined();
+    // route is a structural node-id — must survive verbatim.
+    expect(hi!.payload["route"]).toBe("node-default");
   });
 
   test("(e) fact.run_halted.reason (structural enum value) survives scrub unchanged", async () => {
@@ -1708,5 +1715,214 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
     expect(halted).toBeDefined();
     // "error" is an enum value, not a secret — it must survive.
     expect(halted!.payload["reason"]).toBe("error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug-4: reason on structural events must not be scrubbed via FREE_TEXT_KEYS
+// ---------------------------------------------------------------------------
+
+describe("(bug-4) scrubEventPayload: reason only scrubbed on intent.cancel_requested", () => {
+  // A value that is both plausible as a secret needle AND matches what an enum could look like.
+  const NEEDLE = "timeout_exhausted_secret_val"; // >=8 chars, no ws
+
+  test("fact.run_halted.reason is NOT scrubbed even when it matches a literal needle", () => {
+    const registry = buildExportRegistry({
+      providerCredentials: [],
+      cwd: null,
+      extraLiterals: [{ value: NEEDLE, source: "env:TEST" }],
+    });
+    // Bug: 'reason' is in FREE_TEXT_KEYS so it is scrubbed on any event type.
+    // Fix: remove 'reason' from FREE_TEXT_KEYS; only scrub on intent.cancel_requested.
+    const payload = { reason: NEEDLE, detail: "done" };
+    const result = scrubEventPayload("fact.run_halted", payload, registry) as Record<string, unknown>;
+    expect(result["reason"]).toBe(NEEDLE);
+  });
+
+  test("intent.cancel_requested.reason IS scrubbed (free-text cancel message)", () => {
+    const registry = buildExportRegistry({
+      providerCredentials: [],
+      cwd: null,
+      extraLiterals: [{ value: NEEDLE, source: "env:TEST" }],
+    });
+    const payload = { reason: `cancelling because: ${NEEDLE}` };
+    const result = scrubEventPayload("intent.cancel_requested", payload, registry) as Record<string, unknown>;
+    expect(result["reason"] as string).toContain("[REDACTED");
+    expect(result["reason"] as string).not.toContain(NEEDLE);
+  });
+
+  test("intent.human_input.route is NOT scrubbed (structural node-id)", () => {
+    const registry = buildExportRegistry({
+      providerCredentials: [],
+      cwd: null,
+      extraLiterals: [{ value: NEEDLE, source: "env:TEST" }],
+    });
+    // Bug: 'route' is in FREE_TEXT_KEYS so it is scrubbed.
+    // Fix: remove 'route' from FREE_TEXT_KEYS.
+    const payload = { route: NEEDLE, note: "ok" };
+    const result = scrubEventPayload("intent.human_input", payload, registry) as Record<string, unknown>;
+    expect(result["route"]).toBe(NEEDLE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug-7: application/json artifact must scrub VALUES only (not keys)
+// ---------------------------------------------------------------------------
+
+describe("(bug-7) application/json artifact scrubs values, keeps keys and valid JSON", () => {
+  const JSON_SECRET = "sk-ant-json-secretABCDEFGHIJ012345";
+
+  test("JSON artifact: secret in value is scrubbed; key is preserved; result is valid JSON", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store, "g".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: "/tmp/proj",
+      projectId: "p",
+      projectName: "p",
+      workflowName: "wf",
+      workflowScope: "local",
+      initialRouting: { input: "x" },
+    });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: JSON_SECRET }),
+    });
+
+    // JSON artifact whose VALUE contains the secret.
+    const jsonContent = JSON.stringify({ k: JSON_SECRET, other: "safe" });
+    store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "result.json" },
+      new TextEncoder().encode(jsonContent),
+      "application/json",
+    );
+
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "b", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const artifacts = entries.find((e) => e.name === `runs/${runId}/artifacts.jsonl`);
+    const rows: Array<{ key: string; blobSha: string; mime: string | null }> = artifacts
+      ? new TextDecoder()
+          .decode(artifacts.data)
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as { key: string; blobSha: string; mime: string | null })
+      : [];
+
+    const jsonRow = rows.find((r) => r.key === "result.json");
+    expect(jsonRow).toBeDefined();
+
+    const blobEntry = entries.find((e) => e.name === `blobs/${jsonRow!.blobSha}`);
+    expect(blobEntry).toBeDefined();
+
+    const blobText = new TextDecoder().decode(blobEntry!.data);
+
+    // The secret must be scrubbed from the VALUE.
+    expect(blobText).not.toContain(JSON_SECRET);
+
+    // The result must be valid JSON.
+    let parsed: Record<string, unknown>;
+    expect(() => {
+      parsed = JSON.parse(blobText) as Record<string, unknown>;
+    }).not.toThrow();
+
+    // The KEY "k" must survive (only values are scrubbed, not keys).
+    // Bug: current flat-string scrub redacts the key too when it matches a pattern.
+    // With the JSON_SECRET only in the value, the key 'k' is fine — the bug is
+    // that the value gets redacted correctly but the key is also touched if it matched.
+    // Verify the key 'k' is present and the value contains [REDACTED.
+    expect(Object.keys(parsed!)).toContain("k");
+    expect(parsed!["k"] as string).toContain("[REDACTED");
+    expect(parsed!["other"]).toBe("safe");
+  });
+
+  test("JSON artifact: secret that is also the JSON KEY is scrubbed from value; key form is NOT altered", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store, "h".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: "/tmp/proj",
+      projectId: "p",
+      projectName: "p",
+      workflowName: "wf",
+      workflowScope: "local",
+      initialRouting: { input: "x" },
+    });
+    // Use a literal secret that is BOTH a key and a value in the JSON artifact.
+    const KEY_SECRET = "mysecretkey12345";
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: KEY_SECRET }),
+    });
+
+    // The JSON artifact has the secret as a KEY. The fix should scrub values only.
+    const jsonContent = JSON.stringify({ [KEY_SECRET]: "somevalue", other: KEY_SECRET });
+    store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "result.json" },
+      new TextEncoder().encode(jsonContent),
+      "application/json",
+    );
+
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "b", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const artifacts = entries.find((e) => e.name === `runs/${runId}/artifacts.jsonl`);
+    const rows: Array<{ key: string; blobSha: string; mime: string | null }> = artifacts
+      ? new TextDecoder()
+          .decode(artifacts.data)
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as { key: string; blobSha: string; mime: string | null })
+      : [];
+
+    const jsonRow = rows.find((r) => r.key === "result.json");
+    expect(jsonRow).toBeDefined();
+
+    const blobEntry = entries.find((e) => e.name === `blobs/${jsonRow!.blobSha}`);
+    expect(blobEntry).toBeDefined();
+
+    const blobText = new TextDecoder().decode(blobEntry!.data);
+
+    // Result must be valid JSON.
+    let parsed: Record<string, unknown>;
+    expect(() => {
+      parsed = JSON.parse(blobText) as Record<string, unknown>;
+    }).not.toThrow();
+
+    // Bug: current flat-string scrub redacts the KEY, changing structure.
+    // Fix: parse the JSON, scrub values only, re-serialize.
+    // With the fix: key KEY_SECRET stays as-is; value is redacted.
+    // We assert the key is present (not redacted to [REDACTED...]).
+    expect(Object.keys(parsed!)).toContain(KEY_SECRET);
+    // The value for 'other' (which equals KEY_SECRET) must be redacted.
+    expect(parsed!["other"] as string).toContain("[REDACTED");
   });
 });

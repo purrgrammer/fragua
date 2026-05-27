@@ -80,11 +80,13 @@ export function scrubText(text: string, registry: CompiledRegistry, opts?: Scrub
     cp.re.lastIndex = 0;
     let m = cp.re.exec(text);
     while (m !== null) {
-      spans.push({ start: m.index, end: m.index + m[0].length, source: cp.source });
       if (m[0].length === 0) {
-        // Zero-width match guard — advance to avoid infinite loop.
+        // Zero-width match — skip without pushing a 0-length span.
         cp.re.lastIndex++;
+        m = cp.re.exec(text);
+        continue;
       }
+      spans.push({ start: m.index, end: m.index + m[0].length, source: cp.source });
       m = cp.re.exec(text);
     }
   }

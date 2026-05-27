@@ -154,6 +154,19 @@ describe("pattern:slack_token", () => {
     expect(result).toContain("[REDACTED:pattern:slack_token]");
     expect(result).toContain(" done");
   });
+
+  test("(bug-1) adversarial dashed input does not over-consume trailing natural text", () => {
+    const r = regFor("pattern:slack_token");
+    // Many dash-separated segments followed by normal English text that must NOT be swallowed.
+    const adversarial = "xoxb-1-a-b-c-d-e-f-g-h-i-j-k-natural-text-is-here word2 word3";
+    const result = scrubText(adversarial, r);
+    // The redacted span must be short — natural text after the token should survive.
+    const markerIdx = result.indexOf("[REDACTED:pattern:slack_token]");
+    expect(markerIdx).toBeGreaterThanOrEqual(0);
+    // Everything after the marker must contain the trailing natural text.
+    const afterMarker = result.slice(markerIdx + "[REDACTED:pattern:slack_token]".length);
+    expect(afterMarker).toContain("natural-text-is-here");
+  });
 });
 
 // ---------------------------------------------------------------------------

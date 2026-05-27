@@ -392,3 +392,42 @@ describe("ciEnvDenyNames", () => {
     expect(denySet.has("my_api_key")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bug-6: captureCiEnvSecrets must apply the value-length/whitespace floor
+// ---------------------------------------------------------------------------
+
+describe("(bug-6) captureCiEnvSecrets applies value-length and whitespace floor", () => {
+  test("a 7-char *_TOKEN value is NOT captured (below the 8-char floor)", () => {
+    const env: NodeJS.ProcessEnv = { MY_TOKEN: "abc1234" }; // 7 chars
+    const captured = captureCiEnvSecrets(env);
+    // Bug: current code captures the value without checking the floor.
+    // Fix: apply value.length >= 8 && !/\s/.test(value) at capture time.
+    expect(captured.map((c) => c.name)).not.toContain("MY_TOKEN");
+  });
+
+  test("a 7-char value emits a console.error warning", () => {
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+    try {
+      captureCiEnvSecrets({ MY_TOKEN: "abc1234" });
+    } finally {
+      console.error = origError;
+    }
+    // Bug: no warning is emitted currently.
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  test("an 8-char *_TOKEN value IS captured", () => {
+    const env: NodeJS.ProcessEnv = { MY_TOKEN: "abc12345" }; // exactly 8 chars
+    const captured = captureCiEnvSecrets(env);
+    expect(captured.map((c) => c.name)).toContain("MY_TOKEN");
+  });
+
+  test("a value with whitespace is NOT captured", () => {
+    const env: NodeJS.ProcessEnv = { MY_TOKEN: "abc 12345" }; // has a space
+    const captured = captureCiEnvSecrets(env);
+    expect(captured.map((c) => c.name)).not.toContain("MY_TOKEN");
+  });
+});

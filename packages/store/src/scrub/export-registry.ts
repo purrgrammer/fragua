@@ -1,6 +1,7 @@
 // Registry assembly and JSON-string deep-scrub for exportRunBundle.
 // Pure, deterministic — no I/O, no clock, no random.
 
+import { isBlobRef } from "../routing-blobs.ts";
 import type { ProviderCredentialRow } from "../types.ts";
 import { BASE_PATTERNS } from "./patterns.ts";
 import { type CompiledPattern, type CompiledRegistry, compilePatterns, compileRegistry } from "./registry.ts";
@@ -116,7 +117,7 @@ export function isTextMime(mime: string | null): boolean {
  * be scrubbed. Structural keys (type, nodeId, runId, workflowSha, seq, …)
  * are deliberately NOT listed — they drive deriveRunState replay and must
  * never be altered. */
-const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "detail", "reason", "route"]);
+const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "detail"]);
 
 /**
  * Scrub an event payload without touching structural fields.
@@ -158,6 +159,18 @@ export function scrubEventPayload(
     }
   }
 
+  // Rule 1b: scrub reason only for intent.cancel_requested (free-text operator message).
+  if (type === "intent.cancel_requested") {
+    const val = src["reason"];
+    if (typeof val === "string") {
+      const scrubbed = scrubText(val, registry, opts);
+      if (scrubbed !== val) {
+        if (out == null) out = { ...src };
+        out["reason"] = scrubbed;
+      }
+    }
+  }
+
   // Rule 2: deep-scrub routing string values for the genesis event.
   if (type === "intent.run_enqueued") {
     const routing = src["routing"];
@@ -193,6 +206,10 @@ export function scrubJsonStrings<T>(value: T, registry: CompiledRegistry, opts?:
     return value.map((v) => scrubJsonStrings(v, registry, opts)) as unknown as T;
   }
   if (value != null && typeof value === "object") {
+    // Short-circuit BlobRef objects — never scrub the sha sentinel or bytes field.
+    // A future sha-shaped literal needle would otherwise corrupt the routing ref,
+    // causing rewriteRoutingRefs to point at an absent tar blob.
+    if (isBlobRef(value)) return value;
     const src = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const k of Object.keys(src)) {

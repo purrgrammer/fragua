@@ -215,6 +215,16 @@ describe("spillRoutingInputs — margin-driven spill", () => {
 });
 
 describe("materializeRouting", () => {
+  test("(bug-3) ref-free routing is returned as the SAME object reference (no clone)", () => {
+    const routing = { inputs: { x: "plain", y: "text" }, priority: 1 };
+    // Bug: current deepResolve always constructs a new object even with no BlobRefs.
+    // Fix: fast-path when collectRoutingBlobShas returns empty — return original.
+    const result = materializeRouting(routing as unknown as Record<string, unknown>, () => {
+      throw new Error("getBlob must not be called for ref-free routing");
+    });
+    expect(result).toBe(routing);
+  });
+
   test("(b) round-trips a BlobRef back to the exact original string", () => {
     const original = "hello world this is a test value with unicode: \u{1F600}";
     const encoded = enc.encode(original);

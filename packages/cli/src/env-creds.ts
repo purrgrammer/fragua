@@ -101,9 +101,14 @@ export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array
   const result: Array<{ name: string; value: string }> = [];
   for (const [name, value] of Object.entries(env)) {
     if (!value) continue;
-    if (isSecretEnvName(name, providerVars)) {
-      result.push({ name, value });
+    if (!isSecretEnvName(name, providerVars)) continue;
+    if (value.length < 8 || /\s/.test(value)) {
+      console.error(
+        `fragua: secret env var ${name} skipped (value too short or contains whitespace — will NOT be scrubbed)`,
+      );
+      continue;
     }
+    result.push({ name, value });
   }
   return result;
 }

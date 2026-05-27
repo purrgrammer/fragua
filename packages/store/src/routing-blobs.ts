@@ -158,6 +158,8 @@ export function materializeRouting(
   routing: Record<string, unknown>,
   getBlob: (sha: string) => Uint8Array,
 ): Record<string, unknown> {
+  // Fast-path: avoid deep-cloning on every executor turn when there are no refs.
+  if (collectRoutingBlobShas(routing).length === 0) return routing;
   return deepResolve(routing, getBlob) as Record<string, unknown>;
 }
 

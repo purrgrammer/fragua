@@ -1489,7 +1489,19 @@ export class SqliteStore implements IEventStore {
       const origBytes = this.blobs.get(origSha);
       if (isTextMime(artifact.mime)) {
         const text = dec.decode(origBytes);
-        const scrubbed = scrubJsonStrings(text, registry, scrubOpts) as string;
+        let scrubbed: string;
+        const mimeBase = (artifact.mime ?? "").split(";")[0]!.trim();
+        if (mimeBase === "application/json") {
+          try {
+            const parsed: unknown = JSON.parse(text);
+            const scrubbedObj = scrubJsonStrings(parsed, registry, scrubOpts);
+            scrubbed = JSON.stringify(scrubbedObj);
+          } catch {
+            scrubbed = scrubJsonStrings(text, registry, scrubOpts) as string;
+          }
+        } else {
+          scrubbed = scrubJsonStrings(text, registry, scrubOpts) as string;
+        }
         const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
         const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
         reCasMap.set(origSha, { exportSha, exportBytes });

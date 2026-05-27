@@ -21,8 +21,10 @@ export const BASE_PATTERNS: ReadonlyArray<{ source: string; re: RegExp }> = [
     re: /AKIA[0-9A-Z]{16}/,
   },
   {
+    // Bound to realistic Slack token shape: prefix + 1–5 alphanumeric segments
+    // separated by single dashes. Avoids over-consuming trailing dashed prose.
     source: "pattern:slack_token",
-    re: /xox[bpars]-[A-Za-z0-9-]{10,}/,
+    re: /xox[bpars]-[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,4}/,
   },
   {
     source: "pattern:jwt",

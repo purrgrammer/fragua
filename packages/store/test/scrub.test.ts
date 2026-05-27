@@ -6,7 +6,14 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
-import { compileRegistry, scrubText } from "../src/index.ts";
+import {
+  buildExportRegistry,
+  compileRegistry,
+  isBlobRef,
+  makeBlobRef,
+  scrubJsonStrings,
+  scrubText,
+} from "../src/index.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -433,5 +440,41 @@ describe("large registry (sparse representation)", () => {
       expect(result).not.toContain(l.value);
     }
     expect((result.match(/\[REDACTED/g) ?? []).length).toBe(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug-2: scrubJsonStrings must not recurse into BlobRef objects
+// ---------------------------------------------------------------------------
+
+describe("(bug-2) scrubJsonStrings leaves BlobRef sha untouched", () => {
+  test("a BlobRef whose sha is also a literal needle is returned unchanged", () => {
+    const sha = "abcdef1234567890".repeat(4); // valid 64-hex sha
+    const registry = buildExportRegistry({
+      providerCredentials: [],
+      cwd: null,
+      extraLiterals: [{ value: sha, source: "env:SHA_NEEDLE" }],
+    });
+    const ref = makeBlobRef(sha, 100);
+    const result = scrubJsonStrings(ref, registry) as typeof ref;
+    // Bug: currently the sha inside the BlobRef is redacted.
+    // Fix: isBlobRef short-circuit should return the object unchanged.
+    expect(isBlobRef(result)).toBe(true);
+    expect((result as unknown as Record<string, unknown>)["$fragua_blob"]).toBe(sha);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug-5: zero-width regex match must not emit a spurious [REDACTED]
+// ---------------------------------------------------------------------------
+
+describe("(bug-5) zero-width pattern match produces no spurious REDACTED", () => {
+  test("a pattern that can match zero-width does not redact clean text", () => {
+    const zeroWidthPattern = { source: "pattern:zero", re: /a*/ };
+    const registry = compileRegistry({ literals: [], patterns: [zeroWidthPattern] });
+    // 'hello' contains no 'a', so every position zero-width matches /a*/ = empty string.
+    // Bug: current code pushes a 0-length span before the guard, emitting [REDACTED] at every char.
+    const result = scrubText("hello", registry);
+    expect(result).toBe("hello");
   });
 });
