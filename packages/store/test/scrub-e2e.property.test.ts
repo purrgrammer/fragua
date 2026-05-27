@@ -73,7 +73,7 @@ const patternSecretArb = fc
  *   - fact.run_halted.detail
  *   - intent.steering_requested.text
  *   - intent.human_input.note
- *   - genesis routing.inputs value (+ stale routing.input key, still scrubbed)
+ *   - genesis routing.inputs value spilled to blob (> 1 KiB, blob-scrub path)
  *   - text artifact (mime text/plain)
  */
 async function seedRunWithBothSecrets(
@@ -85,13 +85,17 @@ async function seedRunWithBothSecrets(
   const runId = newRunId();
   const combined = `${literal} ${pattern}`;
 
+  // Pad the spilled input to > PER_VALUE_SPILL_BYTES (1024) so B1 spills it to
+  // the blob CAS. The secrets sit in the blob; the e2e gate must scrub the blob.
+  const spilledValue = `${"a".repeat(1100)} ${combined} ${"b".repeat(200)}`;
+
   store.enqueueRun({
     runId,
     workflowSha: sha,
     cwd: "/home/dev/proj",
     initialRouting: {
       input: `input contains ${combined}`,
-      inputs: { secret: combined },
+      inputs: { secret: spilledValue },
     },
   });
 

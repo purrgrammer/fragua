@@ -15,6 +15,8 @@ import {
   canonicalJson,
   type FactEvent,
   type IntentEvent,
+  isBlobRef,
+  materializeRouting,
   newRunId,
   readTar,
   SCRUBBER_VERSION,
@@ -1245,6 +1247,213 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
     // The stored artifact row still has the original sha.
     const ref = store.getArtifactRef({ runId, nodeId: "work", iteration: 0, key: "report.txt" });
     expect(ref!.sha256).toBe(origTextSha);
+    store.close();
+  });
+});
+
+describe("exportRunBundle — spilled routing.inputs blob scrub + travel", () => {
+  const CRED_SECRET = "sk-ant-spilled-secretABCDEFGH012345678";
+  const AKIA_SECRET = "AKIAIOSFODNN7EXAMPLE";
+  // Padding to ensure the value exceeds PER_VALUE_SPILL_BYTES (1024) so B1 spills it.
+  const PADDING = "x".repeat(1100);
+  const LARGE_VALUE = `${PADDING} cred=${CRED_SECRET} akia=${AKIA_SECRET} ${PADDING}`;
+
+  async function seedRunWithSpilledInput(
+    store: ReturnType<typeof freshStore>,
+  ): Promise<{ runId: string; origRefSha: string }> {
+    const sha = await seedWorkflow(store, "f".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id",
+      projectName: "proj",
+      workflowName: "wf",
+      workflowScope: "local",
+      initialRouting: { inputs: { brief: LARGE_VALUE } },
+    });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    // Capture the original spilled blob sha from the stored genesis event.
+    const events = store.getEvents(runId);
+    const genesis = events.find((e) => e.type === "intent.run_enqueued")!;
+    const gp = genesis.payload as Record<string, unknown>;
+    const routing = gp["routing"] as Record<string, unknown>;
+    const inputs = routing["inputs"] as Record<string, unknown>;
+    const ref = inputs["brief"] as { $fragua_blob: string };
+    return { runId, origRefSha: ref["$fragua_blob"] };
+  }
+
+  function extractGenesisRouting(bytes: Uint8Array, runId: string): Record<string, unknown> {
+    const entries = readTar(bytes);
+    const evEntry = entries.find((e) => e.name === `runs/${runId}/events.jsonl`)!;
+    const lines = new TextDecoder().decode(evEntry.data).trim().split("\n");
+    const genesis = lines
+      .map((l) => JSON.parse(l) as { type: string; payload: Record<string, unknown> })
+      .find((e) => e.type === "intent.run_enqueued")!;
+    return genesis.payload["routing"] as Record<string, unknown>;
+  }
+
+  test("(a) B1 actually spills — genesis routing.inputs.brief is a blob ref pre-export", async () => {
+    const store = freshStore();
+    const { runId } = await seedRunWithSpilledInput(store);
+    const events = store.getEvents(runId);
+    const genesis = events.find((e) => e.type === "intent.run_enqueued")!;
+    const gp = genesis.payload as Record<string, unknown>;
+    const inputs = (gp["routing"] as Record<string, unknown>)["inputs"] as Record<string, unknown>;
+    expect(isBlobRef(inputs["brief"])).toBe(true);
+    store.close();
+  });
+
+  test("(b) provider-credential secret is absent from the full bundle bytes", async () => {
+    const store = freshStore();
+    const { runId } = await seedRunWithSpilledInput(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    expect(Buffer.from(bytes).includes(CRED_SECRET)).toBe(false);
+  });
+
+  test("(c) AKIA pattern secret is absent from the full bundle bytes", async () => {
+    const store = freshStore();
+    const { runId } = await seedRunWithSpilledInput(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+    expect(Buffer.from(bytes).includes(AKIA_SECRET)).toBe(false);
+  });
+
+  test("(d) genesis routing ref sha is rewritten to the scrubbed sha in the export", async () => {
+    const store = freshStore();
+    const { runId, origRefSha } = await seedRunWithSpilledInput(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const routing = extractGenesisRouting(bytes, runId);
+    const inputs = routing["inputs"] as Record<string, unknown>;
+    expect(isBlobRef(inputs["brief"])).toBe(true);
+    const exportedSha = (inputs["brief"] as { $fragua_blob: string })["$fragua_blob"];
+    expect(exportedSha).not.toBe(origRefSha);
+  });
+
+  test("(e) manifest blobs[], tar entry, and routing ref all agree on the new sha", async () => {
+    const store = freshStore();
+    const { runId, origRefSha } = await seedRunWithSpilledInput(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
+    ) as BundleManifest;
+
+    const routing = extractGenesisRouting(bytes, runId);
+    const inputs = routing["inputs"] as Record<string, unknown>;
+    const newSha = (inputs["brief"] as { $fragua_blob: string })["$fragua_blob"];
+
+    // New sha is in manifest blobs[].
+    expect(manifest.blobs.some((b) => b.sha256 === newSha)).toBe(true);
+    // New sha has a tar entry.
+    expect(entries.some((e) => e.name === `blobs/${newSha}`)).toBe(true);
+    // Original sha has NO tar entry.
+    expect(entries.some((e) => e.name === `blobs/${origRefSha}`)).toBe(false);
+  });
+
+  test("(f) importRunBundle succeeds and the spilled blob resolves via materializeRouting", async () => {
+    const src = freshStore();
+    const { runId } = await seedRunWithSpilledInput(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    const r = dst.importRunBundle(bytes);
+    expect(r.runs).toEqual([{ runId, imported: true }]);
+
+    const state = dst.getState(runId)!;
+    const inputs = state.routing["inputs"] as Record<string, unknown>;
+    // The ref is present in the imported state.
+    expect(isBlobRef(inputs["brief"])).toBe(true);
+    const exportedSha = (inputs["brief"] as { $fragua_blob: string })["$fragua_blob"];
+    // The blob is resolvable in the imported store.
+    const blobBytes = dst.readBlob(exportedSha);
+    expect(blobBytes).not.toBeNull();
+    // materializeRouting resolves to a scrubbed string (contains [REDACTED, not secrets).
+    const materialized = materializeRouting(state.routing, (sha) => {
+      const b = dst.readBlob(sha);
+      if (b == null) throw new Error(`blob missing: ${sha}`);
+      return b;
+    });
+    const resolved = (materialized["inputs"] as Record<string, unknown>)["brief"] as string;
+    expect(typeof resolved).toBe("string");
+    expect(resolved).toContain("[REDACTED");
+    expect(resolved).not.toContain(CRED_SECRET);
+    expect(resolved).not.toContain(AKIA_SECRET);
+    dst.close();
+  });
+
+  test("(g) routing blob and same-content artifact blob deduplicate to one tar entry", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store, "g".repeat(64));
+    const runId = newRunId();
+    // Use LARGE_VALUE as both the spilled routing input AND the artifact content
+    // so they hash to the same orig sha before scrubbing.
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      initialRouting: { inputs: { brief: LARGE_VALUE } },
+    });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "out.txt" },
+      new TextEncoder().encode(LARGE_VALUE),
+      "text/plain",
+    );
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const blobEntries = entries.filter((e) => e.name.startsWith("blobs/"));
+    const manifest = JSON.parse(
+      new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
+    ) as BundleManifest;
+    // One blob entry and one manifest row despite two sources (routing + artifact).
+    expect(blobEntries.length).toBe(1);
+    expect(manifest.blobs.length).toBe(1);
+  });
+
+  test("(h) stored routing is NOT mutated by export — original blob still contains the secret", async () => {
+    const store = freshStore();
+    const { runId, origRefSha } = await seedRunWithSpilledInput(store);
+    const routingBefore = JSON.stringify(store.getState(runId)!.routing);
+    store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    const routingAfter = JSON.stringify(store.getState(runId)!.routing);
+    expect(routingAfter).toBe(routingBefore);
+    const origBlobBytes = store.readBlob(origRefSha);
+    expect(origBlobBytes).not.toBeNull();
+    expect(new TextDecoder().decode(origBlobBytes!)).toContain(CRED_SECRET);
     store.close();
   });
 });

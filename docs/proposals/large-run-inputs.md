@@ -3,9 +3,9 @@ title: Run inputs — remove the legacy free-form routing.input, spill oversized
 summary: "A run's typed inputs (`routing.inputs`, the `${{ inputs.x }}` substitution source) ride inside the genesis `intent.run_enqueued` event, which is subject to the 4 KB event-payload cap (MAX_EVENT_PAYLOAD_BYTES). So a run's inputs are silently capped at ~4 KB — a pasted spec, a long brief, or several sizeable typed inputs can't be enqueued. The cap is correct for events (they're folded, streamed, replayed — they must stay lean) but wrong as a ceiling on *content*. Fix: at enqueue, spill oversized `routing.inputs` string values (lossless execution data) to the content-addressed blob store and leave a `{ $fragua_blob: sha }` reference in the event; resolve on read (substitution, auto-title, UI, export). The legacy free-form `routing.input` description is truncated, not spilled — it's not execution data and is a deprecation candidate. This preserves both invariants — events stay small AND events are truth (the ref is in the log; the blob is immutable CAS) — and makes input size unbounded. It reuses the existing blob CAS (the same store artifacts use) so spilled inputs already travel in bundles, and it composes with secret-scrubbing: a spilled input blob is scrubbed by the same blob path as any text artifact, so this MUST land after the scrubber's artifact re-CAS unit (else the scrubbed-content sha and the routing ref diverge)."
 status: in-progress
 part-a-status: shipped
-part-b-status: core-shipped (B1 — local-store mechanics; B5 bundle export/import and B6 scrubber composition pending)
+part-b-status: shipped (B1 — local-store mechanics; B5 bundle export/import + B6 scrubber composition shipped)
 maturity: sketch
-last-reviewed: 2026-05-27
+last-reviewed: 2026-05-28
 ---
 
 # Large run inputs
@@ -219,8 +219,11 @@ blobs.
 4. ✅ (B1) **GC roots** — `gcBlobs` collects routing blob shas from all `run_state.routing`
    rows and passes them as a protected set to both GC passes (SQL anti-join +
    file-sweep skip). Single reachability decision point extended.
-5. ⏳ **Bundle export/import** — add routing-referenced blobs to the bundle blob
-   set; resolution works on import. (pending B5)
-6. ⏳ **Scrubber composition** — spilled input blobs scrub via the artifact re-CAS
-   path; routing ref sha rewritten to the scrubbed sha. PBT: a secret in a
-   *spilled* input is absent from the export.
+5. ✅ **Bundle export/import** — routing-referenced blobs seeded into `reCasMap`
+   alongside artifact blobs; blob travels in the bundle, integrity-checked on
+   import; `materializeRouting` resolves cleanly in the imported store.
+6. ✅ **Scrubber composition** — spilled input blobs scrub via `scrubText` (the
+   re-CAS path); routing ref sha rewritten to the scrubbed sha; shared `reCasMap`
+   deduplicates routing/artifact blobs consistently. PBT (`scrub-e2e.property`)
+   now seeds a large (>1 KiB) spilled routing input so the spilled-blob path is
+   covered by the §12 capstone gate.

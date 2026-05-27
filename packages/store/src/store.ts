@@ -127,7 +127,7 @@ import {
   selectProviderCredential,
 } from "./provider-credentials-queries.ts";
 import { applyFact, deriveRunState, emptyMetrics } from "./reducers.ts";
-import { collectRoutingBlobShas, spillRoutingInputs } from "./routing-blobs.ts";
+import { collectRoutingBlobShas, isBlobRef, spillRoutingInputs } from "./routing-blobs.ts";
 import { assertSafeRunId } from "./run-id.ts";
 import {
   bumpRunSeq,
@@ -184,6 +184,7 @@ import {
   updateScheduleSkip,
 } from "./schedule-queries.ts";
 import { buildExportRegistry, isTextMime, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
+import { scrubText } from "./scrub/scrub.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -361,6 +362,56 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     pausedAt: row.paused_at,
     createdAt: row.created_at,
   };
+}
+
+/**
+ * Walk an exported event payload and rewrite every `$fragua_blob` sha in the
+ * genesis routing to the export sha from `reCasMap`. Called after
+ * `scrubEventPayload` so free-text string values are already scrubbed; only
+ * the ref object's sha field needs to change. Returns the original when there
+ * is nothing to rewrite (no allocation on the hot path for non-genesis events).
+ */
+function rewriteRoutingRefs(
+  payload: unknown,
+  reCasMap: Map<string, { exportSha: string; exportBytes: Uint8Array }>,
+): unknown {
+  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const src = payload as Record<string, unknown>;
+  const routing = src["routing"];
+  if (routing == null || typeof routing !== "object" || Array.isArray(routing)) return payload;
+  const newRouting = deepRewriteRefs(routing, reCasMap);
+  if (newRouting === routing) return payload;
+  return { ...src, routing: newRouting };
+}
+
+function deepRewriteRefs(v: unknown, reCasMap: Map<string, { exportSha: string; exportBytes: Uint8Array }>): unknown {
+  if (isBlobRef(v)) {
+    const origSha = v["$fragua_blob"];
+    const mapped = reCasMap.get(origSha);
+    if (mapped == null || mapped.exportSha === origSha) return v;
+    return { ...v, $fragua_blob: mapped.exportSha };
+  }
+  if (Array.isArray(v)) {
+    let changed = false;
+    const out = v.map((item) => {
+      const r = deepRewriteRefs(item, reCasMap);
+      if (r !== item) changed = true;
+      return r;
+    });
+    return changed ? out : v;
+  }
+  if (v !== null && typeof v === "object") {
+    const src = v as Record<string, unknown>;
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(src)) {
+      const r = deepRewriteRefs(val, reCasMap);
+      if (r !== val) changed = true;
+      out[k] = r;
+    }
+    return changed ? out : v;
+  }
+  return v;
 }
 
 export interface SqliteStoreOpts {
@@ -1369,9 +1420,32 @@ export class SqliteStore implements IEventStore {
     // Re-CAS map: original blobSha → exported sha (may differ for text blobs).
     // Built before assembling the tar so artifact rows and blob entries are
     // consistent in all three places (artifacts JSONL, blob tar entry, manifest).
+    // Routing blobs are seeded FIRST so they share the map with artifact blobs
+    // and deduplicate consistently (a routing blob and an artifact blob with the
+    // same content produce one tar entry, one manifest row, one mapping entry).
     const enc = new TextEncoder();
     const dec = new TextDecoder();
     const reCasMap = new Map<string, { exportSha: string; exportBytes: Uint8Array }>();
+
+    // Seed routing blobs: spilled routing.inputs values are always text.
+    // Scrub via scrubText (single string, not nested JSON) and re-CAS.
+    const genesisEvent = events.find((e) => e.type === "intent.run_enqueued");
+    if (genesisEvent != null) {
+      const gp = genesisEvent.payload as Record<string, unknown>;
+      const routingForBlobs = gp["routing"] as Record<string, unknown> | undefined;
+      if (routingForBlobs != null) {
+        for (const origSha of collectRoutingBlobShas(routingForBlobs)) {
+          if (reCasMap.has(origSha)) continue;
+          const origBytes = this.blobs.get(origSha);
+          const text = dec.decode(origBytes);
+          const scrubbed = scrubText(text, registry);
+          const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
+          const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
+          reCasMap.set(origSha, { exportSha, exportBytes });
+        }
+      }
+    }
+
     for (const artifact of artifacts) {
       const origSha = artifact.blobSha;
       if (reCasMap.has(origSha)) continue;
@@ -1417,13 +1491,16 @@ export class SqliteStore implements IEventStore {
       {
         name: runEventsPath(runId),
         data: encodeJsonl(
-          events.map((e) => ({
-            seq: e.seq,
-            type: e.type,
-            writer: e.writer,
-            payload: scrubEventPayload(e.type, e.payload, registry),
-            ts: e.ts,
-          })),
+          events.map((e) => {
+            const scrubbedPayload = scrubEventPayload(e.type, e.payload, registry);
+            // Rewrite $fragua_blob shas in the genesis routing so the exported
+            // ref points at the scrubbed blob's new sha. scrubEventPayload leaves
+            // ref objects (non-string values) untouched — only the sha needs
+            // updating to match what we put in the tar and manifest.
+            const exportPayload =
+              e.type === "intent.run_enqueued" ? rewriteRoutingRefs(scrubbedPayload, reCasMap) : scrubbedPayload;
+            return { seq: e.seq, type: e.type, writer: e.writer, payload: exportPayload, ts: e.ts };
+          }),
         ),
       },
       {
