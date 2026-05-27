@@ -23,10 +23,13 @@ Bun ≥ 1.2 (Node ≥ 20 compat) · TypeScript strict (`strict`, `noUncheckedInd
 ```sh
 bun install
 bun run typecheck                        # tsc --noEmit across workspace
-bun test                                 # all package suites
+bun run test                             # all suites: test:node (bun) + test:web (vitest)
+bun run test:node                        # node packages only, via `bun test`
+bun run test:web                         # @fragua/web only, via vitest (jsdom)
+bun test ./packages/<pkg>                # one node package directly (NOT @fragua/web — see below)
 bun run lint                             # biome check
 bun run format                           # biome format --write
-bun run ci                               # lint + typecheck + tests, pass-noise filtered
+bun run ci                               # lint + typecheck + both test runs, pass-noise filtered
 
 bun run fragua harness                    # default entry point: daemon + HTTP, ~/.fragua/fragua.db, default :6767, auto-builds web bundle
 bun run fragua daemon --db <path>         # CI primitive: executor only against an explicit DB
@@ -74,7 +77,7 @@ Skills (domain context loaded on demand) come from two layers: `~/.agents/skills
 1. **Spec-first.** Code uncovered by `docs/SPEC.md` / `docs/ARCHITECTURE.md` / `docs/handler-contract.md` — stop, update the docs first or check in. Half-baked is fine — mark it (`> Status: in-progress` or `> Status: sketch`). An honest known-rough section beats silence; we revisit as the design firms up.
 
    **Enum-literal consumers.** Adding or removing a literal in a contract union (`RunStatus`, `HaltReason`, `IntentEvent['type']`, `FactEvent['type']`, etc.) requires a grep across `packages/` for every consumer — many use string-literal sets (`Set<RunStatus>`, hardcoded `WHERE status IN (…)` SQL, label maps in `web/src/lib/humanize.ts`, allowed-status arrays in `server/src/store/runs-routes.ts:VALID_STATUSES`) that don't trip TypeScript exhaustiveness checks. The typecheck pass is necessary but not sufficient — when in doubt, `rg '"<old-literal>"' packages/` and update each.
-2. **Tests before done.** `bun test` green + monorepo typecheck clean are table stakes.
+2. **Tests before done.** `bun run test` green (both `test:node` + `test:web` — bare `bun test` skips the web suite) + monorepo typecheck clean are table stakes.
 3. **No silent deps.** Every runtime dep through `package.json` with an exact pin and a one-line rationale in the commit message.
 4. **One coordination surface.** `@fragua/store` is the only place state transitions land. No filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
 5. **Events are truth.** Every state transition is `intent.*` (writer: web) or `fact.*` (writer: daemon). The `run_state` projection is updated in the same transaction.
