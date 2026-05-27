@@ -5,20 +5,33 @@
 // uncommitted tail to commit) and Discard. Neither takes input — accept's
 // target is the operator's current branch and the commit message is theirs.
 //
-// The confirm dialog is rendered inline (not portaled) so it is accessible to
-// tests and to keyboard/focus management in the host tree.
+// The confirm step is the AlertDialog primitive: it portals to document.body,
+// traps focus, dismisses on Escape / overlay-click, and carries the
+// `alertdialog` ARIA role — none of which we hand-roll. A refusal (e.g. an
+// accept that doesn't merge cleanly) is shown inline and the dialog stays
+// open, so the confirm button is a plain Button rather than AlertDialogAction
+// (which would auto-close); the mutation's success handler does the closing.
 //
 // Two-component split: RunActions is the public guard (returns null when not
 // pending); RunActionsInner holds all hooks so React Rules-of-Hooks are
 // satisfied — hooks can never appear after an early return.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Trash2, X } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { RunSummary } from "../lib/api.ts";
 import { acceptRun, discardRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { extractErrorMessage, toast } from "../lib/toast.ts";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog.tsx";
 import { Button } from "./ui/button.tsx";
 import {
   DropdownMenu,
@@ -95,8 +108,13 @@ function RunActionsInner({
     setOpenAction(kind);
   }
 
+  // Escape / overlay-click / Cancel all route here via Radix's onOpenChange.
+  const closeOnDismiss = (open: boolean): void => {
+    if (!open) setOpenAction(null);
+  };
+
   return (
-    <div className="contents">
+    <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="xs" disabled={busy} data-testid={`run-actions-trigger-${row.runId}`}>
@@ -120,84 +138,95 @@ function RunActionsInner({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {openAction !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" data-testid={`${openAction}-dialog`}>
-          <div className="absolute inset-0 bg-[var(--sw-text)]/10" onClick={() => setOpenAction(null)} aria-hidden />
-          <div className="relative z-10 flex w-full max-w-sm flex-col gap-4 rounded-[var(--sw-radius-card)] border border-[var(--sw-border)] bg-[var(--sw-surface)] p-6 text-[length:var(--sw-text-sm)]">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="absolute right-2 top-2"
-              onClick={() => setOpenAction(null)}
-              aria-label="Close"
-            >
-              <X className="size-4" />
+      <ConfirmDialog
+        open={openAction === "accept"}
+        onOpenChange={closeOnDismiss}
+        testId="accept-dialog"
+        title="Accept changes"
+        description="Replays this run's commits onto your current branch and stages the uncommitted tail for you to commit. A conflict leaves your branch untouched."
+        confirmLabel="Accept"
+        confirmTestId={`accept-confirm-btn-${row.runId}`}
+        error={acceptM.error ? errorMsg(acceptM.error) : null}
+        pending={acceptM.isPending}
+        onConfirm={() => acceptM.mutate()}
+      />
+      <ConfirmDialog
+        open={openAction === "discard"}
+        onOpenChange={closeOnDismiss}
+        testId="discard-dialog"
+        title="Discard changes"
+        description="Permanently discard all changes for this run. This cannot be undone."
+        confirmLabel="Discard"
+        confirmTestId={`discard-confirm-btn-${row.runId}`}
+        destructive
+        error={discardM.error ? errorMsg(discardM.error) : null}
+        pending={discardM.isPending}
+        onConfirm={() => discardM.mutate()}
+      />
+    </>
+  );
+}
+
+/** Shared confirm shell for both inbox actions. The confirm button is a plain
+ * Button (not AlertDialogAction) so a failed mutation keeps the dialog open to
+ * show `error` inline; Cancel / Escape / overlay-click close via onOpenChange. */
+function ConfirmDialog({
+  open,
+  onOpenChange,
+  testId,
+  title,
+  description,
+  confirmLabel,
+  confirmTestId,
+  destructive = false,
+  error,
+  pending,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  testId: string;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  confirmTestId: string;
+  destructive?: boolean;
+  error: string | null;
+  pending: boolean;
+  onConfirm: () => void;
+}): JSX.Element {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent data-testid={testId}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {error !== null && (
+          <p
+            className="text-[length:var(--sw-text-xs)] text-[var(--sw-accent-error)]"
+            data-testid="worktree-action-error"
+          >
+            {error}
+          </p>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild>
+            <Button type="button" variant="ghost" size="xs" disabled={pending}>
+              Cancel
             </Button>
-
-            {openAction === "accept" && (
-              <div className="flex flex-col gap-3" data-testid="accept-confirm">
-                <p className="font-medium text-[length:var(--sw-text-md)]">Accept changes</p>
-                <p className="text-[length:var(--sw-text-sm)] text-sw-muted">
-                  Replays this run's commits onto your current branch and stages the uncommitted tail for you to commit.
-                  A conflict leaves your branch untouched.
-                </p>
-                {acceptM.error && (
-                  <p
-                    className="text-[length:var(--sw-text-xs)] text-[var(--sw-accent-error)]"
-                    data-testid="worktree-action-error"
-                  >
-                    {errorMsg(acceptM.error)}
-                  </p>
-                )}
-                <div className="flex justify-end gap-1 border-t border-[var(--sw-border)] pt-3">
-                  <Button type="button" variant="ghost" size="xs" onClick={() => setOpenAction(null)} disabled={busy}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="xs"
-                    disabled={acceptM.isPending}
-                    onClick={() => acceptM.mutate()}
-                    data-testid={`accept-confirm-btn-${row.runId}`}
-                  >
-                    Accept
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {openAction === "discard" && (
-              <div className="flex flex-col gap-3" data-testid="discard-confirm">
-                <p className="font-medium text-[length:var(--sw-text-md)]">Discard changes</p>
-                <p className="text-[length:var(--sw-text-sm)] text-sw-muted">
-                  Permanently discard all changes for this run. This cannot be undone.
-                </p>
-                {discardM.error && (
-                  <p
-                    className="text-[length:var(--sw-text-xs)] text-[var(--sw-accent-error)]"
-                    data-testid="worktree-action-error"
-                  >
-                    {errorMsg(discardM.error)}
-                  </p>
-                )}
-                <div className="flex justify-end gap-1 border-t border-[var(--sw-border)] pt-3">
-                  <Button type="button" variant="ghost" size="xs" onClick={() => setOpenAction(null)} disabled={busy}>
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="xs"
-                    disabled={discardM.isPending}
-                    onClick={() => discardM.mutate()}
-                    data-testid={`discard-confirm-btn-${row.runId}`}
-                  >
-                    Discard
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+          </AlertDialogCancel>
+          <Button
+            variant={destructive ? "destructive" : "default"}
+            size="xs"
+            disabled={pending}
+            onClick={onConfirm}
+            data-testid={confirmTestId}
+          >
+            {confirmLabel}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

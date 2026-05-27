@@ -2,18 +2,18 @@
 //
 // Covers: render guard (only when inboxStatus === "pending"); the accept
 // happy-path (POST + invalidate + close); an accept refusal surfaced inline
-// with the dialog kept open; and the discard confirmation toast.
+// with the dialog kept open; the discard confirmation toast; and Cancel
+// dismissal.
 //
-// Note: Radix UI DropdownMenu portals content outside the container in
-// happy-dom, so dialog contents are opened via the component's
-// _testOpenAction prop (which bypasses the portal) while the trigger
-// presence/absence confirms top-level render behaviour.
+// The confirm step uses the AlertDialog primitive, which portals its content
+// to document.body. The dropdown trigger lives in `container`; everything
+// inside an open dialog is queried from document.body.
 
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { RunActions } from "../../src/components/RunActions.tsx";
 import type { RunActionsRun } from "../../src/components/RunActions.tsx";
+import { RunActions } from "../../src/components/RunActions.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
@@ -23,10 +23,13 @@ const { successSpy, errorSpy } = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({
-  toast: Object.assign(vi.fn(() => "t0"), {
-    success: successSpy,
-    error: errorSpy,
-  }),
+  toast: Object.assign(
+    vi.fn(() => "t0"),
+    {
+      success: successSpy,
+      error: errorSpy,
+    },
+  ),
 }));
 
 // ── Fixtures ──────────────────────────────────────────────────────────
@@ -49,6 +52,19 @@ function renderActions(
     </MemoryRouter>,
   );
   return { ...result, restore, calls };
+}
+
+/** Wait for a portaled element — open-dialog content lives under document.body. */
+function findInBody<T extends Element = HTMLElement>(testId: string): Promise<T> {
+  return waitFor(() => {
+    const el = document.body.querySelector(`[data-testid="${testId}"]`) as T | null;
+    if (!el) throw new Error(`"${testId}" not found in document.body`);
+    return el;
+  });
+}
+
+function inBody(testId: string): Element | null {
+  return document.body.querySelector(`[data-testid="${testId}"]`);
 }
 
 describe("RunActions", () => {
@@ -83,19 +99,41 @@ describe("RunActions", () => {
     });
   });
 
+  describe("confirm dialog", () => {
+    test("opens portaled with the alertdialog role and the action's title", async () => {
+      const { restore } = renderActions(RUN_PENDING, {}, "discard");
+      try {
+        const dialog = await findInBody("discard-dialog");
+        expect(dialog.getAttribute("role")).toBe("alertdialog");
+        expect(dialog.textContent).toContain("Discard changes");
+      } finally {
+        restore();
+      }
+    });
+
+    test("Cancel dismisses the dialog", async () => {
+      const { restore } = renderActions(RUN_PENDING, {}, "discard");
+      try {
+        const cancel = await waitFor(() => {
+          const btn = [...document.body.querySelectorAll("button")].find((b) => b.textContent === "Cancel");
+          if (!btn) throw new Error("Cancel button not found");
+          return btn;
+        });
+        fireEvent.click(cancel);
+        await waitFor(() => {
+          if (inBody("discard-dialog")) throw new Error("dialog still open after Cancel");
+        });
+      } finally {
+        restore();
+      }
+    });
+  });
+
   describe("accept", () => {
     test("POSTs accept + invalidates lists + closes dialog on success", async () => {
-      const { container, restore, calls } = renderActions(
-        RUN_PENDING,
-        { [ACCEPT_URL]: () => json({ seq: 1 }) },
-        "accept",
-      );
+      const { restore, calls } = renderActions(RUN_PENDING, { [ACCEPT_URL]: () => json({ seq: 1 }) }, "accept");
       try {
-        const confirmBtn = await waitFor(() => {
-          const el = container.querySelector(`[data-testid="accept-confirm-btn-run-1"]`) as HTMLButtonElement | null;
-          if (!el) throw new Error("accept confirm button not found");
-          return el;
-        });
+        const confirmBtn = await findInBody<HTMLButtonElement>("accept-confirm-btn-run-1");
         fireEvent.click(confirmBtn);
 
         await waitFor(() => {
@@ -105,9 +143,7 @@ describe("RunActions", () => {
         });
 
         await waitFor(() => {
-          if (container.querySelector(`[data-testid="accept-dialog"]`)) {
-            throw new Error("dialog still open after success");
-          }
+          if (inBody("accept-dialog")) throw new Error("dialog still open after success");
         });
       } finally {
         restore();
@@ -122,25 +158,14 @@ describe("RunActions", () => {
             headers: { "content-type": "application/json" },
           }),
       };
-      const { container, restore } = renderActions(RUN_PENDING, mocks, "accept");
+      const { restore } = renderActions(RUN_PENDING, mocks, "accept");
       try {
-        const confirmBtn = await waitFor(() => {
-          const el = container.querySelector(`[data-testid="accept-confirm-btn-run-1"]`) as HTMLButtonElement | null;
-          if (!el) throw new Error("accept confirm button not found");
-          return el;
-        });
+        const confirmBtn = await findInBody<HTMLButtonElement>("accept-confirm-btn-run-1");
         fireEvent.click(confirmBtn);
 
-        await waitFor(() => {
-          const errorEl = container.querySelector(`[data-testid="worktree-action-error"]`);
-          if (!errorEl) throw new Error("error message not found");
-          if (!errorEl.textContent?.includes("run does not merge cleanly")) {
-            throw new Error(`unexpected error text: ${errorEl.textContent}`);
-          }
-          return errorEl;
-        });
-
-        expect(container.querySelector(`[data-testid="accept-dialog"]`)).not.toBeNull();
+        const errorEl = await findInBody("worktree-action-error");
+        expect(errorEl.textContent).toContain("run does not merge cleanly");
+        expect(inBody("accept-dialog")).not.toBeNull();
       } finally {
         restore();
       }
@@ -149,13 +174,9 @@ describe("RunActions", () => {
 
   describe("discard", () => {
     test("success fires a discard-confirmation toast and closes the dialog", async () => {
-      const { container, restore } = renderActions(RUN_PENDING, { [DISCARD_URL]: () => json({ seq: 1 }) }, "discard");
+      const { restore } = renderActions(RUN_PENDING, { [DISCARD_URL]: () => json({ seq: 1 }) }, "discard");
       try {
-        const confirmBtn = await waitFor(() => {
-          const el = container.querySelector(`[data-testid="discard-confirm-btn-run-1"]`) as HTMLButtonElement | null;
-          if (!el) throw new Error("discard confirm button not found");
-          return el;
-        });
+        const confirmBtn = await findInBody<HTMLButtonElement>("discard-confirm-btn-run-1");
         fireEvent.click(confirmBtn);
 
         await waitFor(() => {
@@ -167,9 +188,7 @@ describe("RunActions", () => {
         });
 
         await waitFor(() => {
-          if (container.querySelector(`[data-testid="discard-confirm"]`)) {
-            throw new Error("discard confirm dialog still open after success");
-          }
+          if (inBody("discard-dialog")) throw new Error("discard dialog still open after success");
         });
       } finally {
         restore();
