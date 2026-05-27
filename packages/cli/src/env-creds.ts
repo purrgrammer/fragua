@@ -134,6 +134,22 @@ export function ciEnvDenyNames(env: NodeJS.ProcessEnv = process.env): Set<string
 }
 
 /**
+ * Returns a PREDICATE `(name: string) => boolean` that returns `true` when an
+ * env var name should be stripped from a bash subprocess. Uses the same rule
+ * as `ciEnvDenyNames` / `captureCiEnvSecrets` (`isSecretEnvName`) so strip
+ * and needle-set share one definition.
+ *
+ * Unlike `ciEnvDenyNames` (a Set captured at call time), this predicate is
+ * applied at SPAWN TIME against the live env, catching any secret-named var
+ * set AFTER the Set was built. The provider-var set is memoised in the closure
+ * so the predicate is cheap to call on every spawn.
+ */
+export function ciEnvDenyPredicate(): (name: string) => boolean {
+  const providerVars = knownProviderVarNames();
+  return (name: string) => isSecretEnvName(name, providerVars);
+}
+
+/**
  * Seed `store`'s `provider_credentials` rows from the conventional credential
  * env vars. Returns the providers that were seeded (had a usable token in
  * env), so the caller can surface "running against anthropic (from env)" or

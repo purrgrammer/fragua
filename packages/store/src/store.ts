@@ -184,7 +184,7 @@ import {
   updateScheduleSkip,
 } from "./schedule-queries.ts";
 import { buildExportRegistry, isTextMime, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
-import { scrubText } from "./scrub/scrub.ts";
+import { type ScrubOptions, scrubText } from "./scrub/scrub.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -442,9 +442,12 @@ export interface ExportBundleOptions {
 /** Return value of {@link SqliteStore.exportRunBundle}. */
 export interface ExportBundleResult {
   bytes: Uint8Array;
-  /** `true` when at least one provider-credential or `env:*` literal needle
-   * matched in the bundle content (i.e. a live secret was found and redacted).
-   * Pattern-only matches do NOT set this flag. */
+  /** `true` when a live secret value (provider-credential or `env:*` literal)
+   * was found VERBATIM in an UN-SCRUBBED binary artifact blob. Text surfaces
+   * are always scrubbed, so a literal hit there is non-fatal by design. Binary
+   * blobs ship as-is (§13 residual) and are scanned — a hit means the secret
+   * reached an egress surface the scrubber does NOT redact. Pattern-only
+   * matches never set this flag. */
   liveLiteralHit: boolean;
 }
 
@@ -1440,7 +1443,7 @@ export class SqliteStore implements IEventStore {
       (e) => e.type.startsWith("fact.") || e.type.startsWith("intent.") || e.type === "cost.recorded",
     );
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
-    const registry = buildExportRegistry({
+    const { registry, literalValues } = buildExportRegistry({
       providerCredentials: this.listProviderCredentials(),
       cwd: run.cwd,
       ...(opts.extraLiterals !== undefined ? { extraLiterals: opts.extraLiterals } : {}),
@@ -1449,12 +1452,12 @@ export class SqliteStore implements IEventStore {
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
     );
 
+    // Text surfaces are always scrubbed; the live-literal gate fires only on
+    // binary artifacts (the §13 residual — shipped as-is). The scrub pass itself
+    // never needs a callback: hits in text mean the secret was REDACTED = safe.
     let liveLiteralHit = false;
-    const scrubOpts = {
+    const scrubOpts: ScrubOptions = {
       labels: opts.labelMode ?? "source",
-      onLiteralHit: (_src: string) => {
-        liveLiteralHit = true;
-      },
     };
 
     // Re-CAS map: original blobSha → exported sha (may differ for text blobs).
@@ -1469,6 +1472,10 @@ export class SqliteStore implements IEventStore {
 
     // Seed routing blobs: spilled routing.inputs values are always text.
     // Scrub via scrubText (single string, not nested JSON) and re-CAS.
+    // ASSUMPTION: only `intent.run_enqueued` carries routing blob refs.
+    // Routing is set once at enqueue and never mutated by any subsequent intent;
+    // if a future intent ever mutates routing.inputs this loop must enumerate
+    // every such event, not just the genesis.
     const genesisEvent = events.find((e) => e.type === "intent.run_enqueued");
     if (genesisEvent != null) {
       const gp = genesisEvent.payload as Record<string, unknown>;
@@ -1509,9 +1516,32 @@ export class SqliteStore implements IEventStore {
         const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
         reCasMap.set(origSha, { exportSha, exportBytes });
       } else {
-        // Binary blobs ship as-is. A secret embedded in binary bytes is a known
-        // residual; see docs/proposals/secret-scrubbing.md §13.
+        // Binary blobs ship as-is — scanned below for verbatim live-literal hits
+        // (the §13 residual gate). A hit sets liveLiteralHit; the blob is still
+        // exported unchanged (we scan-and-alarm, not redact-in-place).
         reCasMap.set(origSha, { exportSha: origSha, exportBytes: origBytes });
+      }
+    }
+
+    // Binary-artifact residual gate: scan every binary blob for verbatim
+    // live-literal values. Text blobs are always scrubbed, so only binary ones
+    // can contain a live secret. A single hit flips liveLiteralHit=true — the
+    // blob is still exported unchanged (scan-and-alarm, not redact-in-place).
+    if (literalValues.length > 0) {
+      for (const artifact of artifacts) {
+        if (isTextMime(artifact.mime)) continue;
+        const entry = reCasMap.get(artifact.blobSha);
+        if (entry == null) continue;
+        const buf = Buffer.isBuffer(entry.exportBytes)
+          ? entry.exportBytes
+          : Buffer.from(entry.exportBytes.buffer, entry.exportBytes.byteOffset, entry.exportBytes.byteLength);
+        for (const literal of literalValues) {
+          if (buf.includes(literal)) {
+            liveLiteralHit = true;
+            break;
+          }
+        }
+        if (liveLiteralHit) break;
       }
     }
 

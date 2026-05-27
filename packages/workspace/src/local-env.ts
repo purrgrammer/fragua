@@ -52,6 +52,14 @@ export interface LocalEnvironmentOptions {
    * denied name is stripped. When unset (the default — operator-trusted local
    * runs), behavior is unchanged: the subprocess inherits the full env. */
   envDenyNames?: ReadonlySet<string>;
+  /** Applied at SPAWN TIME over the live merged env (every `exec` call). Strips
+   * any name for which it returns true — so a secret-named var set AFTER the
+   * environment was constructed is still stripped. Composes with `envDenyNames`:
+   * a name is denied when EITHER the set contains it OR the predicate returns
+   * true. Keep the set for value capture (scrub needles); add the predicate for
+   * the live-rule path. No-predicate default: local operator runs inherit the
+   * full env unchanged. */
+  envDenyPredicate?: (name: string) => boolean;
 }
 
 /** Walk up `absolutePath` until a path component exists on disk, realpath
@@ -79,12 +87,14 @@ export class LocalEnvironment implements ExecutionEnvironment {
   private readonly defaultTimeoutMs: number;
   private readonly extraBlocked: string[];
   private readonly envDenyNames: ReadonlySet<string> | undefined;
+  private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
 
   constructor(opts: LocalEnvironmentOptions = {}) {
     this._cwd = resolve(opts.cwd ?? process.cwd());
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 30_000;
     this.extraBlocked = opts.extraBlockedPatterns ?? [];
     if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
+    if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
   }
 
   /** Memoised realpath(_cwd). Computed lazily because WorktreeEnvironment
@@ -242,6 +252,13 @@ export class LocalEnvironment implements ExecutionEnvironment {
           const merged: Record<string, string | undefined> = { ...process.env, ...opts.env };
           if (this.envDenyNames !== undefined) {
             for (const name of this.envDenyNames) delete merged[name];
+          }
+          // Predicate applied at SPAWN TIME over the live merged env: strips any
+          // name matching the secret-name rule regardless of when it was set.
+          if (this.envDenyPredicate !== undefined) {
+            for (const name of Object.keys(merged)) {
+              if (this.envDenyPredicate(name)) delete merged[name];
+            }
           }
           return merged as NodeJS.ProcessEnv;
         })(),

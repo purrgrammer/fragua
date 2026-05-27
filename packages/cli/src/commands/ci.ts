@@ -32,7 +32,13 @@ import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
-import { captureCiEnvSecrets, ciEnvDenyNames, seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
+import {
+  captureCiEnvSecrets,
+  ciEnvDenyNames,
+  ciEnvDenyPredicate,
+  seedCredsFromEnv,
+  seedCredsFromGlobalStore,
+} from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
@@ -133,7 +139,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const onSig = () => shutdown.abort();
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
-  const provisioner = new WorktreeProvisioner({ envDenyNames: ciEnvDenyNames() });
+  const provisioner = new WorktreeProvisioner({
+    envDenyNames: ciEnvDenyNames(),
+    envDenyPredicate: ciEnvDenyPredicate(),
+  });
   let runId: string | undefined;
   // Captured at seed time so mid-run rotation can't desync the registry.
   let ciEnvSecrets: Array<{ name: string; value: string }> = [];
@@ -318,9 +327,13 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         // already disposed, or never provisioned — nothing to clean up.
       }
     }
-    // Export a portable, secret-free `.fragua` bundle before the store
-    // closes/vanishes — CI profile: generic markers, env secrets as extra
-    // needles, fail the job if a live secret reached the bundle path.
+    // Bundle export is BEST-EFFORT and runs after the --db store has already
+    // been pruned to portable tables (above). A failed export leaves the pruned
+    // --db behind — that is by design: the operator still gets the raw
+    // inspection store, and re-running the export against --db reproduces the
+    // same bundle.
+    // CI profile: generic markers, env secrets as extra needles, fail the job
+    // if a live secret sits verbatim in an un-scrubbed binary artifact.
     if (opts.exportPath != null && opts.exportPath.length > 0 && runId !== undefined) {
       try {
         const dest = resolve(opts.exportPath);
@@ -335,9 +348,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         console.log(chalk.dim(`bundle \u2192 ${dest}`));
         if (liveLiteralHit) {
           console.error(
-            chalk.red(
-              `ci: a live secret value reached the bundle path \u2014 perimeter leak. Review the bundle before publishing.`,
-            ),
+            chalk.red(`ci: a live secret reached an UNSCRUBBED binary artifact — review/exclude it before publishing.`),
           );
           computedExitCode = CLI_EXIT.scrubLeak;
         }

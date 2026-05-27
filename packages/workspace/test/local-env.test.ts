@@ -185,4 +185,59 @@ describe("LocalEnvironment", () => {
       expect(r.stdout).toContain("kept");
     });
   });
+
+  describe("envDenyPredicate", () => {
+    const LATE_VAR = "LATE_CI_TOKEN";
+    let savedLate: string | undefined;
+
+    beforeEach(() => {
+      savedLate = process.env[LATE_VAR];
+      delete process.env[LATE_VAR];
+    });
+
+    afterEach(() => {
+      if (savedLate === undefined) delete process.env[LATE_VAR];
+      else process.env[LATE_VAR] = savedLate;
+    });
+
+    test("(d) a secret-named var SET AFTER LocalEnvironment construction is still stripped from a spawned subprocess", async () => {
+      // Construct the environment BEFORE setting the late var.
+      const denyEnv = new LocalEnvironment({
+        cwd: scratch,
+        envDenyPredicate: (n) => n.endsWith("_TOKEN"),
+      });
+      // Set the var AFTER construction — a fixed Set would have missed this.
+      process.env[LATE_VAR] = "late-secret-value-abcdef";
+      const r = await denyEnv.exec(`echo "V=${"$"}{${LATE_VAR}:-MISSING}"`);
+      expect(r.stdout).toContain("V=MISSING");
+      expect(r.stdout).not.toContain("late-secret-value-abcdef");
+    });
+
+    test("(e) envDenyPredicate composes with envDenyNames — a name in either is stripped", async () => {
+      process.env[LATE_VAR] = "late-secret-value-abcdef";
+      const ALSO_DENY = "ALSO_DENY_ME_STATIC";
+      process.env[ALSO_DENY] = "name-set-value";
+      const saved = process.env[ALSO_DENY];
+      try {
+        const denyEnv = new LocalEnvironment({
+          cwd: scratch,
+          envDenyNames: new Set([ALSO_DENY]),
+          envDenyPredicate: (n) => n.endsWith("_TOKEN"),
+        });
+        const r = await denyEnv.exec(`echo "T=${"$"}{${LATE_VAR}:-MISSING} S=${"$"}{${ALSO_DENY}:-MISSING}"`);
+        expect(r.stdout).toContain("T=MISSING");
+        expect(r.stdout).toContain("S=MISSING");
+      } finally {
+        if (saved === undefined) delete process.env[ALSO_DENY];
+        else process.env[ALSO_DENY] = saved;
+      }
+    });
+
+    test("(f) default LocalEnvironment (no predicate, no names) still inherits the full env", async () => {
+      process.env[LATE_VAR] = "visible-value";
+      const plainEnv = new LocalEnvironment({ cwd: scratch });
+      const r = await plainEnv.exec(`echo "V=${"$"}{${LATE_VAR}:-MISSING}"`);
+      expect(r.stdout).toContain("V=visible-value");
+    });
+  });
 });

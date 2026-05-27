@@ -174,7 +174,7 @@ code map (`packages/cli/src/cli-exit.ts` `cliExitCode`), so a script can
 | `50`–`51` | `quarantined` — `orphan_side_effect` 50, `other` 51 |
 | `60` | `paused_human` — the workflow asked a question (no responder) |
 | `70` | a non-terminal status reached as a stop-state (a driver bug) |
-| `80` | `ci` bundle still carried a live secret value (scrubber perimeter leak) — fails closed |
+| `80` | `ci` bundle's binary artifact contains a live secret value verbatim (scrubber perimeter — text surfaces are always scrubbed; binary artifacts are scanned-and-fail-closed) |
 | `130` | `cancelled`, or a SIGINT/SIGTERM interrupt |
 
 Pipelines branch on these: retry on `13`/`14` (transient), top up on `32`,

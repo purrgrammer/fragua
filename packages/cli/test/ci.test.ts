@@ -95,12 +95,11 @@ describe("ciCommand", () => {
     expect(code).toBe(1);
   });
 
-  test("exits non-zero when a live env secret reaches the bundle (perimeter leak)", async () => {
-    // Strategy: set a *_TOKEN env var whose value is also passed as a run
-    // input. The CI profile captures the env secret at seed time and adds it
-    // as an extraLiteral to the registry. The input value is embedded in the
-    // genesis event routing, so exportRunBundle finds the literal, sets
-    // liveLiteralHit=true, and ciCommand returns non-zero.
+  test("a live env secret in a TEXT surface (routing input) is scrubbed — does NOT fail CI (exit 80)", async () => {
+    // Text surfaces (genesis routing, messages, events) are always scrubbed by
+    // exportRunBundle. A literal hit there is non-fatal — liveLiteralHit is
+    // reserved for the binary-artifact residual (§13). The binary-gate itself
+    // is exercised in packages/store/test/bundle.test.ts (ci profile, tests d/b2).
     const secretVal = "fragua-test-secret-token-ABCDE12345678";
     const exportPath = join(dir, "run.fragua");
     // Declare the input in the workflow so buildEnqueue accepts it.
@@ -116,12 +115,13 @@ describe("ciCommand", () => {
         inputs: { secret_input: secretVal },
         json: true,
       });
-      expect(code).toBe(CLI_EXIT.scrubLeak);
+      // Text surface — scrubbed, non-fatal: must NOT produce exit 80.
+      expect(code).not.toBe(CLI_EXIT.scrubLeak);
     } finally {
       if (prevToken === undefined) delete process.env["FRAGUA_CI_TEST_TOKEN"];
       else process.env["FRAGUA_CI_TEST_TOKEN"] = prevToken;
     }
-    // The bundle was still written even on a leak — verify it exists.
+    // The bundle was written — verify it exists.
     expect(existsSync(exportPath)).toBe(true);
   });
 });

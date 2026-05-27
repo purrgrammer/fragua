@@ -159,21 +159,22 @@ A single transform in `exportRunBundle` that, per run:
 `!e.type.startsWith("fact.")` continue), so dropping
 observability from the bundle does not affect replay on import.
 
-> **Status: units 9a + 9b implemented** (§5–§8). `exportRunBundle` now returns
-> `{ bytes: Uint8Array; liveLiteralHit: boolean }` (was `Uint8Array`). Options:
+> **Status: units 9a + 9b implemented + round-4 hardening** (§5–§8).
+> `exportRunBundle` returns `{ bytes: Uint8Array; liveLiteralHit: boolean }`. Options:
 > `labelMode: "source" | "generic"` and `extraLiterals: Array<{value, source}>`.
-> `ScrubOptions.onLiteralHit` fires on `provider_creds` or `env:*` span hits.
-> `captureCiEnvSecrets()` captures env by name allowlist at seed time.
-> `fragua ci` uses the CI profile (`labelMode: "generic"`, env-secrets as extra
-> literals, job-fails on `liveLiteralHit`). `fragua runs export` uses the export
-> profile (`labelMode: "source"`, warns on `liveLiteralHit`, non-fatal).
-> `ciEnvDenyNames()` returns the set of secret-named env var NAMES (same
-> predicate as `captureCiEnvSecrets`, one list / two consumers); `fragua ci`
-> passes it as `envDenyNames` into `WorktreeProvisioner` so every bash-tool
-> subprocess never inherits secret-named vars from the runner env (proposal §6
-> perimeter). The daemon path does NOT set `envDenyNames` — operator-trusted
-> behavior unchanged.
-> Still sketch/open: `scrubber:` config block, binary-artifact scan.
+> `buildExportRegistry` now returns `{ registry, literalValues }` (verbatim literal
+> strings for the binary scan). `ScrubOptions.onLiteralHit` **removed** — text hits
+> are non-fatal by design.
+> `liveLiteralHit` is now the **binary-artifact residual gate** (§13): it fires when a
+> verbatim live-literal value is found in an un-scrubbed binary blob, not on text-surface
+> hits. Text surfaces are always scrubbed; binary blobs are scanned-and-fail-closed in `ci`.
+> `fragua runs export` warns (non-fatal).
+> `captureCiEnvSecrets()` captures env by name allowlist at seed time (scrub needles).
+> `ciEnvDenyPredicate()` returns the same rule as a live PREDICATE applied at spawn time,
+> so a secret-named var set after the Set was captured is still stripped from subprocess env.
+> `ciEnvDenyNames()` + `ciEnvDenyPredicate()` both wired into `WorktreeProvisioner`.
+> The daemon path does NOT set either — operator-trusted behavior unchanged.
+> Still sketch/open: `scrubber:` config block.
 
 ## 5. The `ci` profile vs the export profile
 
@@ -314,10 +315,12 @@ and are grep-recomputable by anyone who wants a census. The PBT
 assurance.
 
 What *does* survive is a **single perimeter-failure signal**, which is detection,
-not enumeration: *did a live `provider_creds` value reach the egress path?* That is
-a boolean, not a count — a noisy warning on `export` (the operator's perimeter
-leaked a live key into the bundle path), and a **job failure** in `ci`. `ci`
-already gates on this; it never needed a tally to do so.
+not enumeration: *did a live `provider_creds` or `env:*` literal value reach an
+UN-SCRUBBED binary artifact blob (the §13 residual)?* That is a boolean, not a
+count. Text surfaces are always scrubbed, so a literal hit there is non-fatal by
+design — only binary blobs (shipped as-is) can trip the alarm. A noisy warning on
+`export`; a **job failure** in `ci`. `ci` already gates on this; it never needed a
+tally to do so.
 
 **Why not even a stdout count, since stdout stays local?** Because the failure mode
 isn't exfiltration — it's false confidence, and that bites the operator on their
@@ -482,15 +485,17 @@ without a new axis:
   three additive-only fields (`extra-patterns` / `extra-literals` /
   `env-allow-names`), no weakening knobs, so a bad config can't cause a leak.
   Leaves only bikeshed-level naming.
-- **Binary artifacts ship un-inspected (implemented residual).** Text-ish blobs
-  (`text/*`, `application/json`, `application/x-yaml`, `application/xml`,
-  `application/javascript`) are decoded, scrubbed, and re-CASed by
-  `exportRunBundle` as of §4.4. Binary blobs (`application/octet-stream` and
+- **Binary artifacts ship as-is, scanned for live literals (§13 residual gate).**
+  Text-ish blobs (`text/*`, `application/json`, `application/x-yaml`,
+  `application/xml`, `application/javascript`) are decoded, scrubbed, and re-CASed
+  by `exportRunBundle` as of §4.4. Binary blobs (`application/octet-stream` and
   anything not in the text allowlist) are exported unchanged under their original
-  sha. ASCII needles *are* findable in a byte buffer, so a scan-then-drop
-  (don't redact-in-place — exclude the blob on a hit) is the likely answer, but
-  it remains deferred. Operators with binary artifacts that may contain secrets
-  should treat the exported bundle as sensitive.
+  sha. `exportRunBundle` now **scans** each binary blob for verbatim live-literal
+  values (same literals fed to the registry, same length floor); a hit sets
+  `liveLiteralHit=true` without redacting the blob (scan-and-alarm, not
+  redact-in-place). In `ci` this is fail-closed (exit 80); `fragua runs export`
+  warns but continues. Operators whose binary artifacts may embed secrets should
+  exclude or replace those artifacts before publishing a bundle.
 - **Per-export override flags not built.** Label mode shipped as a *profile
   default* (`export`=source, `ci`=generic); the `--redaction-labels=source|generic`
   override and the `--keep-cwd-path` flag from earlier drafts were never wired —
@@ -499,9 +504,10 @@ without a new axis:
 ## 14. MVP order
 
 > **Status:** items 1–6 shipped (+ the ci profile, units 9a/9b — env-seed,
-> generic markers, fail-closed exit 80, perimeter env-strip). Item 7 (config
-> block, §15) not started. All shipped behind the experimental flag — see the
-> frontmatter; nothing here is a frozen contract yet.
+> generic markers, fail-closed exit 80, perimeter env-strip; + round-4 hardening —
+> binary-artifact scan gate, predicate env-strip, `ScrubOptions.onLiteralHit`
+> removed). Item 7 (config block, §15) not started. All shipped behind the
+> experimental flag — see the frontmatter; nothing here is a frozen contract yet.
 
 1. **Egress filter in `exportRunBundle`** — drop content-bearing observability,
    keep `cost.recorded`; **correct the false "credential-free by construction"

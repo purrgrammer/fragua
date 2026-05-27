@@ -47,7 +47,9 @@ export function exportCommand(opts: ExportOptions): Promise<number> {
     }
     writeFileSync(dest, bytes);
     if (liveLiteralHit) {
-      console.warn(chalk.yellow(`export: bundle contains a provider-credential literal — review before sharing`));
+      console.warn(
+        chalk.yellow(`export: bundle's binary artifacts contain a live secret value verbatim — review before sharing`),
+      );
     }
     console.log(chalk.green(`exported run ${opts.runId} → ${dest}`));
     return 0;

@@ -49,11 +49,6 @@ function mergeSpans(spans: Span[]): Span[] {
 
 export interface ScrubOptions {
   labels?: "source" | "generic";
-  /** Called once per merged span whose source is `provider_creds` or starts
-   * with `env:` (i.e. a literal needle matched, not a pattern). Pattern hits
-   * do NOT fire this callback — patterns catch accidents and are expected in
-   * reviewed diffs. */
-  onLiteralHit?: (source: string) => void;
 }
 
 /**
@@ -106,12 +101,6 @@ export function scrubText(text: string, registry: CompiledRegistry, opts?: Scrub
     const marker = labelMode === "generic" ? "[REDACTED]" : `[REDACTED:${span.source}]`;
     out += marker;
     pos = span.end;
-    if (opts?.onLiteralHit !== undefined) {
-      const src = span.source;
-      if (src === "provider_creds" || src.startsWith("env:")) {
-        opts.onLiteralHit(src);
-      }
-    }
   }
 
   if (pos < text.length) {

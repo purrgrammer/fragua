@@ -1524,7 +1524,7 @@ describe("exportRunBundle - ci profile", () => {
     expect(bundleText).not.toContain("[REDACTED:");
   });
 
-  test("(b) redacts a CI env secret fed as extraLiterals and reports liveLiteralHit=true", async () => {
+  test("(b) a CI env secret in a TEXT surface is scrubbed and liveLiteralHit stays false", async () => {
     const store = freshStore();
     const runId = await seedRunWithMessage(store, `token=${ENV_TOKEN}`);
     const { bytes, liveLiteralHit } = store.exportRunBundle(runId, {
@@ -1534,7 +1534,38 @@ describe("exportRunBundle - ci profile", () => {
     });
     store.close();
 
+    // Text surfaces are always scrubbed — secret must not appear in bundle.
     expect(Buffer.from(bytes).includes(ENV_TOKEN)).toBe(false);
+    // A text-surface hit is non-fatal: liveLiteralHit is for binary residuals only.
+    expect(liveLiteralHit).toBe(false);
+  });
+
+  test("(b2) liveLiteralHit=true when a CI env secret is verbatim in a BINARY artifact", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store, "a".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, cwd: CWD, initialRouting: { input: "seed" } });
+    // Seed the env secret as an extraLiteral needle.
+    const extraLiterals = [{ value: ENV_TOKEN, source: "env:MY_TOKEN" }];
+    // Write a binary artifact whose bytes contain the secret verbatim.
+    store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "data.bin" },
+      new TextEncoder().encode(`prefix-${ENV_TOKEN}-suffix`),
+      "application/octet-stream",
+    );
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    const { liveLiteralHit } = store.exportRunBundle(runId, {
+      fraguaVersion: "0.0.0-test",
+      labelMode: "generic",
+      extraLiterals,
+    });
+    store.close();
     expect(liveLiteralHit).toBe(true);
   });
 
@@ -1550,6 +1581,95 @@ describe("exportRunBundle - ci profile", () => {
     expect(Buffer.from(bytes).includes(AKIA_SECRET)).toBe(false);
     const bundleText = new TextDecoder().decode(bytes);
     expect(bundleText).toContain("[REDACTED]");
+    expect(liveLiteralHit).toBe(false);
+  });
+
+  test("(d) liveLiteralHit=true when a provider-cred value is verbatim in a BINARY artifact blob", async () => {
+    const store = freshStore();
+    // Seed the provider cred as the literal needle (same as CRED_SECRET in seedRunWithMessage).
+    const sha = await seedWorkflow(store, "a".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, cwd: CWD, initialRouting: { input: "seed" } });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    // Binary artifact whose raw bytes contain the provider-cred value.
+    store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "model.bin" },
+      Buffer.from(`weights-header-${CRED_SECRET}-end`),
+      "application/octet-stream",
+    );
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const { liveLiteralHit } = store.exportRunBundle(runId, {
+      fraguaVersion: "0.0.0-test",
+      labelMode: "generic",
+    });
+    store.close();
+    expect(liveLiteralHit).toBe(true);
+  });
+
+  test("(e) liveLiteralHit=false when the SAME secret appears only in a TEXT surface (scrubbed)", async () => {
+    const store = freshStore();
+    // Secret is in a message (text surface) — always scrubbed, never triggers binary gate.
+    const runId = await seedRunWithMessage(store, `cred=${CRED_SECRET}`);
+    const { liveLiteralHit } = store.exportRunBundle(runId, {
+      fraguaVersion: "0.0.0-test",
+      labelMode: "generic",
+    });
+    store.close();
+    expect(liveLiteralHit).toBe(false);
+  });
+
+  test("(f) liveLiteralHit=false when there are no binary artifacts at all", async () => {
+    const store = freshStore();
+    const runId = await seedRunWithMessage(store, `cred=${CRED_SECRET}`);
+    const { liveLiteralHit } = store.exportRunBundle(runId, {
+      fraguaVersion: "0.0.0-test",
+      labelMode: "generic",
+      extraLiterals: [{ value: CRED_SECRET, source: "env:MY_CRED" }],
+    });
+    store.close();
+    expect(liveLiteralHit).toBe(false);
+  });
+
+  test("(g) liveLiteralHit=false when the binary blob is clean", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store, "a".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, cwd: CWD, initialRouting: { input: "seed" } });
+    store.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: CRED_SECRET }),
+    });
+    // Binary artifact with completely clean bytes (no secret).
+    store.putArtifact(
+      { runId, nodeId: "work", iteration: 0, key: "clean.bin" },
+      Buffer.from("\x00\x01\x02\x03totally-clean-binary-data"),
+      "application/octet-stream",
+    );
+    let v = store.getState(runId)!.version;
+    const started: FactEvent = {
+      type: "fact.run_started",
+      payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
+    };
+    v = store.appendFact(runId, [started], v).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+
+    const { liveLiteralHit } = store.exportRunBundle(runId, {
+      fraguaVersion: "0.0.0-test",
+      labelMode: "generic",
+    });
+    store.close();
     expect(liveLiteralHit).toBe(false);
   });
 });
@@ -1736,7 +1856,7 @@ describe("(bug-4) scrubEventPayload: reason only scrubbed on intent.cancel_reque
   const NEEDLE = "timeout_exhausted_secret_val"; // >=8 chars, no ws
 
   test("fact.run_halted.reason is NOT scrubbed even when it matches a literal needle", () => {
-    const registry = buildExportRegistry({
+    const { registry } = buildExportRegistry({
       providerCredentials: [],
       cwd: null,
       extraLiterals: [{ value: NEEDLE, source: "env:TEST" }],
@@ -1749,7 +1869,7 @@ describe("(bug-4) scrubEventPayload: reason only scrubbed on intent.cancel_reque
   });
 
   test("intent.cancel_requested.reason IS scrubbed (free-text cancel message)", () => {
-    const registry = buildExportRegistry({
+    const { registry } = buildExportRegistry({
       providerCredentials: [],
       cwd: null,
       extraLiterals: [{ value: NEEDLE, source: "env:TEST" }],
@@ -1761,7 +1881,7 @@ describe("(bug-4) scrubEventPayload: reason only scrubbed on intent.cancel_reque
   });
 
   test("intent.human_input.route is NOT scrubbed (structural node-id)", () => {
-    const registry = buildExportRegistry({
+    const { registry } = buildExportRegistry({
       providerCredentials: [],
       cwd: null,
       extraLiterals: [{ value: NEEDLE, source: "env:TEST" }],

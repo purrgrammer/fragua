@@ -450,7 +450,7 @@ describe("large registry (sparse representation)", () => {
 describe("(bug-2) scrubJsonStrings leaves BlobRef sha untouched", () => {
   test("a BlobRef whose sha is also a literal needle is returned unchanged", () => {
     const sha = "abcdef1234567890".repeat(4); // valid 64-hex sha
-    const registry = buildExportRegistry({
+    const { registry } = buildExportRegistry({
       providerCredentials: [],
       cwd: null,
       extraLiterals: [{ value: sha, source: "env:SHA_NEEDLE" }],

@@ -179,6 +179,10 @@ function buildAhoCorasick(needles: Needle[]): AhoCorasick {
         f = fail[f]!;
       }
       const cand = gotoArr[f]!.get(ch);
+      // `cand !== s` is a depth-1 belt-and-braces: a root goto can point back
+      // to a single-char-prefix needle whose own state is s (e.g. needle "aa",
+      // state-1 has a self-edge for 'a'). Deeper links can't self-cycle — the
+      // BFS depth invariant means fail[s] always points strictly shallower than s.
       fail[s] = cand !== undefined && cand !== s ? cand : 0;
       // Merge output sets: out[s] ∪= out[fail[s]].
       const fs = fail[s]!;
@@ -196,7 +200,7 @@ function buildAhoCorasick(needles: Needle[]): AhoCorasick {
 // ---------------------------------------------------------------------------
 
 const WHITESPACE_RE = /\s/;
-const MIN_LITERAL_LEN = 8;
+export const MIN_LITERAL_LEN = 8;
 
 /**
  * Compile a raw pattern array to `CompiledPattern[]` (adds the `/g` flag).

@@ -4,7 +4,13 @@
 import { isBlobRef } from "../routing-blobs.ts";
 import type { ProviderCredentialRow } from "../types.ts";
 import { BASE_PATTERNS } from "./patterns.ts";
-import { type CompiledPattern, type CompiledRegistry, compilePatterns, compileRegistry } from "./registry.ts";
+import {
+  type CompiledPattern,
+  type CompiledRegistry,
+  compilePatterns,
+  compileRegistry,
+  MIN_LITERAL_LEN,
+} from "./registry.ts";
 import { type ScrubOptions, scrubText } from "./scrub.ts";
 
 // Memoised: compileRegistry adds the /g flag and allocates new RegExp objects.
@@ -54,14 +60,20 @@ export function extractCredentialLiterals(row: ProviderCredentialRow): string[] 
  *   - The run's `cwd` path as a `cwd` literal (when present).
  *   - The full `BASE_PATTERNS` set.
  *
- * Build once per export, then pass to `scrubJsonStrings` for each message.
+ * Returns `{ registry, literalValues }` where `literalValues` is the set of
+ * verbatim secret strings (filtered by the same length/whitespace floor as
+ * `compileRegistry`) exposed for callers that need to scan UN-SCRUBBED
+ * surfaces (e.g. binary artifact blobs) for a residual leak.
+ *
+ * Build once per export, then pass `registry` to `scrubJsonStrings` for each
+ * message.
  */
 export function buildExportRegistry(opts: {
   providerCredentials: ProviderCredentialRow[];
   cwd: string | null;
   /** Extra literal needles merged in before compilation (e.g. CI env secrets). */
   extraLiterals?: Array<{ value: string; source: string }>;
-}): CompiledRegistry {
+}): { registry: CompiledRegistry; literalValues: string[] } {
   const literals: Array<{ value: string; source: string }> = [];
 
   for (const row of opts.providerCredentials) {
@@ -80,7 +92,13 @@ export function buildExportRegistry(opts: {
     }
   }
 
-  return compileRegistry({ literals, patterns: COMPILED_BASE_PATTERNS });
+  // Derive the verbatim literal values using the same floor as compileRegistry
+  // (MIN_LITERAL_LEN + no-whitespace) so callers scanning raw bytes don't need
+  // to re-implement the filter.
+  const literalValues = literals.map((l) => l.value).filter((v) => v.length >= MIN_LITERAL_LEN && !/\s/.test(v));
+
+  const registry = compileRegistry({ literals, patterns: COMPILED_BASE_PATTERNS });
+  return { registry, literalValues };
 }
 
 // ---------------------------------------------------------------------------
