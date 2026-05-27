@@ -1460,13 +1460,16 @@ export class SqliteStore implements IEventStore {
         if (ev == null || typeof ev !== "object") {
           throw new Error(`importRunBundle: run ${r.runId} carries a non-object event row`);
         }
+        // Primitive-shape gate FIRST — so a non-string writer (e.g. `{}`) is
+        // rejected as a malformed row, not mislabeled "invalid writer" by the
+        // membership test below (which only ever sees strings after this).
+        if (typeof ev.type !== "string" || typeof ev.seq !== "number" || typeof ev.writer !== "string") {
+          throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq/writer)`);
+        }
         if (!VALID_WRITERS.has(ev.writer)) {
           throw new Error(
             `importRunBundle: run ${r.runId} event seq ${ev.seq} has invalid writer ${JSON.stringify(ev.writer)}`,
           );
-        }
-        if (typeof ev.type !== "string" || typeof ev.seq !== "number") {
-          throw new Error(`importRunBundle: run ${r.runId} carries a malformed event (type/seq)`);
         }
       }
       // Scope note: we shape-gate the row envelope (writer/type/seq) and the
