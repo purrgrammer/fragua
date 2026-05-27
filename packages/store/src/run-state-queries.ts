@@ -19,6 +19,20 @@ import type { Database } from "bun:sqlite";
 import type { InboxStatus, RunStatus } from "@fragua/types";
 
 // ─────────────────────────────────────────────────────────────────────
+// Shared SQL fragments
+// ─────────────────────────────────────────────────────────────────────
+
+/** A run is actionable in the inbox — acceptable or discardable — only if it
+ *  has a local worktree, i.e. a non-null `cwd`. This is the negation of the
+ *  accept/discard gate (`checkGate` in `@fragua/workspace` refuses `cwd == null`
+ *  with `no_worktree`), so the inbox surfaces exactly what those verbs permit.
+ *  Imported runs are inert (`cwd` is null) yet re-derive `inbox_status='pending'`
+ *  from their folded log; without this they'd appear READY TO LAND but refuse
+ *  both accept and discard. Reused by every inbox-scoped query, qualified with
+ *  the caller's table alias. */
+const LANDABLE_HERE = "cwd IS NOT NULL";
+
+// ─────────────────────────────────────────────────────────────────────
 // Row types
 // ─────────────────────────────────────────────────────────────────────
 
@@ -238,6 +252,7 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
   if (inbox !== undefined) {
     clauses.push("r.inbox_status = ?");
     args.push(inbox);
+    clauses.push(`r.${LANDABLE_HERE}`);
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -403,6 +418,7 @@ const SELECT_INBOX_ACTION_CANDIDATES_SQL = `
          rs.status           AS status
     FROM run_state rs
    WHERE rs.inbox_status IN ('pending', 'acted')
+     AND rs.${LANDABLE_HERE}
      AND EXISTS (
        SELECT 1 FROM events e
         WHERE e.run_id = rs.run_id
@@ -417,7 +433,9 @@ const SELECT_INBOX_ACTION_CANDIDATES_SQL = `
  *  operator-action intent (branch / commit / merge / discard). Scoped by
  *  the `inbox_status` partial index + an EXISTS over the run's events so the
  *  daemon sweep never walks every terminal run — only those an operator
- *  acted on. Mirrors `selectWakeCandidates`' OCC-ready row shape. */
+ *  acted on. The `LANDABLE_HERE` guard excludes inert imported runs (the gate
+ *  refuses their accept/discard before any intent is written, so this is
+ *  defensive). Mirrors `selectWakeCandidates`' OCC-ready row shape. */
 export function selectInboxActionCandidates(db: Database): WakeCandidateRow[] {
   return db.query<WakeCandidateRow, []>(SELECT_INBOX_ACTION_CANDIDATES_SQL).all();
 }
