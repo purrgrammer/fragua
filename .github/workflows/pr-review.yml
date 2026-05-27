@@ -56,26 +56,15 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }} # gh pr diff / view / review
 
-      # The `.fragua` bundle is secret-free BY CONSTRUCTION — it never carries the
-      # provider_credentials / provider_config tables (no scrub needed). Residual
-      # guard: a tool that printed the key could have recorded it into an
-      # event/message, which DOES travel — so FAIL CLOSED if the literal key
-      # appears in the bundle bytes; delete it so the always() upload can't
-      # publish a leak.
-      - name: Verify bundle is secret-free (fail closed)
-        if: always()
-        env:
-          BUNDLE: ${{ runner.temp }}/pr-review.fragua
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          set -euo pipefail
-          [ -f "$BUNDLE" ] || { echo "no bundle at $BUNDLE — nothing to upload"; exit 0; }
-          if [ -n "${ANTHROPIC_API_KEY:-}" ] && grep -qaF "$ANTHROPIC_API_KEY" "$BUNDLE"; then
-            rm -f "$BUNDLE"
-            echo "::error::provider key found in bundle bytes — a tool likely recorded it into events/messages"
-            exit 1
-          fi
-          echo "bundle is secret-free → $BUNDLE"
+      # No manual scrubbing step: `fragua ci`'s CI profile scrubs the bundle at
+      # export — it redacts provider-credential values + secret-named env vars
+      # (DEPLOY_KEY, *_TOKEN, …) + known credential patterns from the events /
+      # messages / artifacts, with generic `[REDACTED]` markers — and FAILS the
+      # job (exit 80) if a live secret value reached the bundle path (the
+      # perimeter-leak alarm). So the review step's exit code IS the fail-closed
+      # gate, and the uploaded bundle is scrubbed regardless of outcome. This is
+      # strictly stronger than the old single-key grep (all creds + env + patterns,
+      # and it redacts rather than just detecting one literal).
 
       # Post-mortem locally: `fragua show <download>` to summarize, then
       # `fragua import <download>` + `fragua runs status|events|messages <run-id>`.
