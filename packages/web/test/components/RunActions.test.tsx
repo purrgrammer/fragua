@@ -48,7 +48,7 @@ function renderActions(
   const { restore, calls } = installFetchMock(mocks);
   const result = renderWithClient(
     <MemoryRouter>
-      <RunActions row={row} _testOpenAction={testOpenAction ?? null} />
+      <RunActions row={row} _testInitialOpenAction={testOpenAction ?? null} />
     </MemoryRouter>,
   );
   return { ...result, restore, calls };

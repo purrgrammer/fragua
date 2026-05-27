@@ -12,7 +12,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "bun run --silent test:node && bun run --silent test:web",
-    "test:node": "bun test ./packages/types ./packages/store ./packages/core ./packages/agent ./packages/daemon ./packages/server ./packages/workspace ./packages/cli",
+    "test:node": "bun run scripts/test-node.ts",
     "test:web": "bun run --filter=@fragua/web test",
     "ci": "bun run --silent lint && bun run --silent typecheck && bash -c 'set -o pipefail; bun run --silent test:node 2>&1 | grep -v \"^(pass) \"' && bun run --silent test:web",
     "fragua": "bun run packages/cli/bin/fragua.ts",

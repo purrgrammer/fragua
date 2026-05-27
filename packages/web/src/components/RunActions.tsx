@@ -45,8 +45,8 @@ type ActionKind = "accept" | "discard";
 
 export type RunActionsRun = Pick<RunSummary, "runId" | "inboxStatus">;
 
-/** Test-only prop: directly open one of the confirm dialogs without going
- * through the dropdown (Radix portals are invisible in happy-dom). */
+/** Test-only prop: seed the initially-open confirm dialog without going
+ * through the dropdown. Read once into state — it does NOT track changes. */
 export type RunActionsTestOpenAction = ActionKind | null;
 
 function errorMsg(err: unknown): string {
@@ -58,25 +58,25 @@ function errorMsg(err: unknown): string {
  * hook-heavy logic lives in RunActionsInner to keep hooks unconditional. */
 export function RunActions({
   row,
-  _testOpenAction,
+  _testInitialOpenAction,
 }: {
   row: RunActionsRun;
-  /** @internal test-only: bypass dropdown and directly open a form. */
-  _testOpenAction?: RunActionsTestOpenAction;
+  /** @internal test-only: bypass dropdown and open a dialog on mount. */
+  _testInitialOpenAction?: RunActionsTestOpenAction;
 }): JSX.Element | null {
   if (row.inboxStatus !== "pending") return null;
-  return <RunActionsInner row={row} _testOpenAction={_testOpenAction ?? null} />;
+  return <RunActionsInner row={row} _testInitialOpenAction={_testInitialOpenAction ?? null} />;
 }
 
 function RunActionsInner({
   row,
-  _testOpenAction,
+  _testInitialOpenAction,
 }: {
   row: RunActionsRun;
-  _testOpenAction: RunActionsTestOpenAction;
+  _testInitialOpenAction: RunActionsTestOpenAction;
 }): JSX.Element {
   const qc = useQueryClient();
-  const [openAction, setOpenAction] = useState<ActionKind | null>(_testOpenAction);
+  const [openAction, setOpenAction] = useState<ActionKind | null>(_testInitialOpenAction);
 
   const invalidateInbox = (): Promise<void> => qc.invalidateQueries({ queryKey: queries.runs.lists() });
 
