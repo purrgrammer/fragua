@@ -44,6 +44,16 @@ fragua run work --input task="add a touch tool to @fragua/workspace"
 
 run discovery is automatic (via the global DB), so `fragua run` works from any directory. point it at a `.yaml` path or a bare name resolved under `~/.fragua/workflows/` then `<cwd>/.fragua/workflows/`. inputs: `-i name=value` (repeatable, `@path` reads a file, `@-` reads stdin). `--title` names the run, `--no-follow` prints the id and exits.
 
+## Install in CI
+
+Pin the action to a release tag in consumer repos:
+
+```yaml
+- uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0
+```
+
+See [`.github/actions/setup-fragua/README.md`](.github/actions/setup-fragua/README.md) for inputs, credential wiring, and artifact export.
+
 ## workflows
 
 ships under `.fragua/workflows/` — run from the repo, or copy into `~/.fragua/workflows/` to use anywhere.
