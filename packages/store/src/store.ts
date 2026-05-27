@@ -1379,7 +1379,12 @@ export class SqliteStore implements IEventStore {
    * and instance-scoped (`daemon_lock`, `server_endpoint`, `daemon_events`,
    * `schedules`) ones — then VACUUM + checkpoint so the dropped bytes are truly
    * gone (no freelist or WAL residue). `fragua ci` calls this before leaving a
-   * `--db` artifact, so an exported store can never carry a credential.
+   * `--db` artifact, so the pruned store carries no credential TABLE.
+   *
+   * NOT a scrub: the retained `events`/`messages` keep the RAW transcript +
+   * observability deltas, which can hold secret values verbatim. The pruned
+   * `--db` store is a raw inspection record, NOT secret-free — the scrubbed,
+   * safe-to-publish artifact is `exportRunBundle` (the `.fragua` bundle).
    *
    * An ALLOWLIST, not a denylist: a table is dropped unless it's explicitly
    * part of the portable record, so a future table can't silently ride along.

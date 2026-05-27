@@ -480,7 +480,10 @@ cli
       "the artifact to upload/import.",
   )
   .option("-i, --input <name=value>", "Run input; repeat for multiple. Value @path reads a file, @- reads stdin")
-  .option("--db <path>", "Pin the raw store here (pruned to portable tables on exit; default: a temp dir, discarded)")
+  .option(
+    "--db <path>",
+    "Pin the RAW store here for local inspection/resume (credential table dropped, transcript NOT scrubbed — not safe to publish; use --export for that). Default: a temp dir, discarded.",
+  )
   .option("--export <path>", "Export a portable, secret-free .fragua bundle here — the safe artifact to upload/import")
   .option("--json", "Emit the event log as JSONL instead of the human render")
   .option("--provider <id>", "LLM provider override (else config defaults, else env-autodetect)")

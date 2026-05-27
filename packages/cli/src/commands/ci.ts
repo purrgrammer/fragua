@@ -5,7 +5,9 @@
 // save + enqueue the workflow, drive the run to a
 // stop-state, render the event log, and exit with a code that reflects the
 // outcome (see `../cli-exit.ts` for the total status → exit-code map). The
-// `.db` is a portable artifact.
+// `--db` store is a RAW local-inspection artifact (event log + transcript,
+// credential TABLE dropped but content NOT scrubbed); the `--export` bundle is
+// the scrubbed, safe-to-publish egress.
 //
 // Pause policy: the drive loop CONTINUES the `paused_auto` arm — the
 // daemon-owed clock tick (provider_retry / handler_retry / timeout_retry) —
@@ -43,7 +45,9 @@ const BATCH = 500;
 export interface CiCommandOptions {
   workflow: string;
   /** Ephemeral store path. Default: a temp dir (discarded on exit). Pin with
-   * `--db` to keep the raw store (pruned to portable tables on exit). */
+   * `--db` to keep the RAW store (credential table dropped, but the event log +
+   * transcript are NOT scrubbed — local inspection / HITL resume only, not safe
+   * to publish; use `--export` for the scrubbed artifact). */
   dbPath?: string;
   /** Export a portable, secret-free `.fragua` bundle on exit — the safe CI
    * artifact (carries only the portable run record; credentials never travel). */
@@ -341,10 +345,14 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         console.error(chalk.yellow(`ci: bundle export failed: ${(e as Error).message}`));
       }
     }
-    // A persisted `--db` store is left behind as a portable artifact, but the
-    // run seeded provider credentials into it — prune to the portable tables
-    // so the exported store is secret-free. (The temp store, `storeDir` set,
-    // is removed below, so there's nothing to scrub there.)
+    // A persisted `--db` store is left behind for LOCAL inspection / HITL
+    // resume. Prune to the portable tables — drops the `provider_credentials`
+    // table + instance-scoped tables. This is NOT a scrub: the retained
+    // `events`/`messages` still hold the RAW transcript + observability deltas,
+    // which can contain secrets verbatim. `--db` is a raw artifact, NOT
+    // safe to publish — the secret-free egress is the `--export` bundle
+    // (scrubbed in `exportRunBundle`). (The temp store, `storeDir` set, is
+    // removed below.)
     if (storeDir === undefined) {
       try {
         store.retainPortableTables();
