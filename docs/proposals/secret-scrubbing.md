@@ -1,9 +1,10 @@
 ---
 title: Secret scrubbing for run bundles — egress-time redaction, not ingress
 summary: "Bundles are the only thing that leaves the machine, so they are the only thing that must be secret-free. The scrubber runs ONCE, at the egress boundary (`exportRunBundle`), over a terminal run — NOT at store-write time. This is forced by correctness: persisted `messages` and `routing.inputs` are read back into execution (shared-thread hydration, `${{ inputs.x }}` substitution, resume), so redacting them in place would feed `[REDACTED]` to the LLM. The local store stays RAW (execution truth); the bundle is REDACTED (publication truth) — and that is fully compatible with I3, which forbids rewriting a committed fact, not transforming a read into a new artifact. `fragua ci` gets a distinct high-assurance profile (fail-closed, job-fails on a live-cred hit, env-seed registry) because its bundle is the least-trusted destination and the threat model there is adversarial. Disclosure rides inline `[REDACTED:source]` markers, not a manifest that travels in the tar."
-status: sketch
+status: partial-implemented
 maturity: sketch
 last-reviewed: 2026-05-27
+implemented-units: "§5-§8 (unit 9a: CI profile + env-name capture + liveLiteralHit + return-shape change)"
 ---
 
 # Secret scrubbing for run bundles
@@ -153,6 +154,17 @@ A single transform in `exportRunBundle` that, per run:
 `deriveRunState` skips all non-fact events (`reducers.ts:302`, the
 `!e.type.startsWith("fact.")` continue), so dropping
 observability from the bundle does not affect replay on import.
+
+> **Status: unit 9a implemented** (§5–§8). `exportRunBundle` now returns
+> `{ bytes: Uint8Array; liveLiteralHit: boolean }` (was `Uint8Array`). Options:
+> `labelMode: "source" | "generic"` and `extraLiterals: Array<{value, source}>`.
+> `ScrubOptions.onLiteralHit` fires on `provider_creds` or `env:*` span hits.
+> `captureCiEnvSecrets()` captures env by name allowlist at seed time.
+> `fragua ci` uses the CI profile (`labelMode: "generic"`, env-secrets as extra
+> literals, job-fails on `liveLiteralHit`). `fragua runs export` uses the export
+> profile (`labelMode: "source"`, warns on `liveLiteralHit`, non-fatal).
+> Still sketch/open: unit 9b (bash-subprocess perimeter env-strip), `scrubber:`
+> config block, binary-artifact scan.
 
 ## 5. The `ci` profile vs the export profile
 
@@ -481,7 +493,9 @@ without a new axis:
 4. **Re-CAS consistency** (skip binary, scrub text-ish) + **`scrubberVersion`
    manifest stamp** (bumps `bundleVersion`).
 5. **`ci` profile** — fail-closed, env-seed registry, job-fails on `provider_creds`,
-   generic markers, perimeter env-strip on the bash subprocess.
+   generic markers, perimeter env-strip on the bash subprocess. **[unit 9a
+   implemented: scrub-profile options + liveLiteralHit + captureCiEnvSecrets;
+   unit 9b still open: bash-subprocess perimeter env-strip]**
 6. **PBT** end-to-end (§12) — the gate for the "secret-free" claim; asserts the
    *declared encoding set* only.
 7. Allowlist + name-list config — a `scrubber:` block in the global

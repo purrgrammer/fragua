@@ -33,6 +33,59 @@ import { findEnvKeys, getEnvApiKey, getProviders } from "@mariozechner/pi-ai";
 // dedicated COPILOT_GITHUB_TOKEN is what resolved.
 const COPILOT_AMBIENT_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
 
+// ---------------------------------------------------------------------------
+// CI env secret capture
+// ---------------------------------------------------------------------------
+
+/** Name suffixes that mark an env var as a likely secret (default-deny list).
+ * Only names matching one of these suffixes (or in the known-provider-var set)
+ * are captured as needles. Everything else is NOT a needle. */
+const CI_ENV_SECRET_SUFFIXES = ["_KEY", "_SECRET", "_TOKEN", "_PASSWORD", "_CREDENTIAL"] as const;
+
+/** Build the set of known provider env-var names from pi-ai's registry.
+ * Memoised: called once at capture time, not on every check. */
+function knownProviderVarNames(): Set<string> {
+  const names = new Set<string>();
+  for (const provider of getProviders()) {
+    for (const name of findEnvKeys(provider) ?? []) {
+      // Apply the same COPILOT_AMBIENT_ENV denial as seedCredsFromEnv so we
+      // don't accidentally admit GH_TOKEN / GITHUB_TOKEN as needles when the
+      // caller hasn't set COPILOT_GITHUB_TOKEN.
+      if (!COPILOT_AMBIENT_ENV.has(name)) {
+        names.add(name);
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * Capture env entries whose NAME indicates a secret (default-deny by name).
+ * Returns `{ name, value }` pairs; empty values are excluded. The registry's
+ * own value-length floor (8 chars + no whitespace) handles very-short values.
+ *
+ * Rules (applied in order):
+ *  1. Name suffix matches one of `CI_ENV_SECRET_SUFFIXES`.
+ *  2. Name appears in the pi-ai known-provider-var set (minus COPILOT_AMBIENT_ENV).
+ * Default-DENY: names that match neither rule are NOT captured regardless of
+ * their value (GITHUB_REPOSITORY, NODE_ENV, PATH, etc.).
+ *
+ * @param env - defaults to `process.env`; injectable for tests.
+ */
+export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array<{ name: string; value: string }> {
+  const providerVars = knownProviderVarNames();
+  const result: Array<{ name: string; value: string }> = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (!value) continue;
+    const isSecretSuffix = CI_ENV_SECRET_SUFFIXES.some((suffix) => name.endsWith(suffix));
+    const isProviderVar = providerVars.has(name);
+    if (isSecretSuffix || isProviderVar) {
+      result.push({ name, value });
+    }
+  }
+  return result;
+}
+
 /**
  * Seed `store`'s `provider_credentials` rows from the conventional credential
  * env vars. Returns the providers that were seeded (had a usable token in

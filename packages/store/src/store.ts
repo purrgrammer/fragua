@@ -428,6 +428,26 @@ export interface SqliteStoreOpts {
   migrate?: boolean;
 }
 
+/** Options for {@link SqliteStore.exportRunBundle}. */
+export interface ExportBundleOptions {
+  fraguaVersion: string;
+  /** `"source"` (default): markers are `[REDACTED:source]`. `"generic"`:
+   * markers are `[REDACTED]` with no source label (CI bundles). */
+  labelMode?: "source" | "generic";
+  /** Extra literal needles merged into the registry before compilation.
+   * Used by the CI profile to inject captured env secrets. */
+  extraLiterals?: Array<{ value: string; source: string }>;
+}
+
+/** Return value of {@link SqliteStore.exportRunBundle}. */
+export interface ExportBundleResult {
+  bytes: Uint8Array;
+  /** `true` when at least one provider-credential or `env:*` literal needle
+   * matched in the bundle content (i.e. a live secret was found and redacted).
+   * Pattern-only matches do NOT set this flag. */
+  liveLiteralHit: boolean;
+}
+
 export class SqliteStore implements IEventStore {
   private readonly db: Database;
   private readonly blobs: BlobFS;
@@ -1401,7 +1421,7 @@ export class SqliteStore implements IEventStore {
    * Single-run today (the `fragua ci --export` producer); the format is
    * multi-run by construction. Rows are canonically ordered (events by seq,
    * messages by ordinal, artifacts/blobs by sha) for re-export determinism. */
-  exportRunBundle(runId: string, opts: { fraguaVersion: string }): Uint8Array {
+  exportRunBundle(runId: string, opts: ExportBundleOptions): ExportBundleResult {
     const run = this.getState(runId);
     if (run == null) throw new Error(`exportRunBundle: run not found: ${runId}`);
     const wf = this.getWorkflow(run.workflowSha);
@@ -1412,10 +1432,22 @@ export class SqliteStore implements IEventStore {
       (e) => e.type.startsWith("fact.") || e.type.startsWith("intent.") || e.type === "cost.recorded",
     );
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
-    const registry = buildExportRegistry({ providerCredentials: this.listProviderCredentials(), cwd: run.cwd });
+    const registry = buildExportRegistry({
+      providerCredentials: this.listProviderCredentials(),
+      cwd: run.cwd,
+      ...(opts.extraLiterals !== undefined ? { extraLiterals: opts.extraLiterals } : {}),
+    });
     const artifacts = this.listArtifacts(runId).sort(
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
     );
+
+    let liveLiteralHit = false;
+    const scrubOpts = {
+      labels: opts.labelMode ?? "source",
+      onLiteralHit: (_src: string) => {
+        liveLiteralHit = true;
+      },
+    };
 
     // Re-CAS map: original blobSha → exported sha (may differ for text blobs).
     // Built before assembling the tar so artifact rows and blob entries are
@@ -1438,7 +1470,7 @@ export class SqliteStore implements IEventStore {
           if (reCasMap.has(origSha)) continue;
           const origBytes = this.blobs.get(origSha);
           const text = dec.decode(origBytes);
-          const scrubbed = scrubText(text, registry);
+          const scrubbed = scrubText(text, registry, scrubOpts);
           const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
           const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
           reCasMap.set(origSha, { exportSha, exportBytes });
@@ -1452,7 +1484,7 @@ export class SqliteStore implements IEventStore {
       const origBytes = this.blobs.get(origSha);
       if (isTextMime(artifact.mime)) {
         const text = dec.decode(origBytes);
-        const scrubbed = scrubJsonStrings(text, registry) as string;
+        const scrubbed = scrubJsonStrings(text, registry, scrubOpts) as string;
         const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
         const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
         reCasMap.set(origSha, { exportSha, exportBytes });
@@ -1486,13 +1518,13 @@ export class SqliteStore implements IEventStore {
       blobs: blobManifest,
     };
 
-    return writeTar([
+    const bytes = writeTar([
       { name: MANIFEST_ENTRY, data: new TextEncoder().encode(canonicalJson(manifest)) },
       {
         name: runEventsPath(runId),
         data: encodeJsonl(
           events.map((e) => {
-            const scrubbedPayload = scrubEventPayload(e.type, e.payload, registry);
+            const scrubbedPayload = scrubEventPayload(e.type, e.payload, registry, scrubOpts);
             // Rewrite $fragua_blob shas in the genesis routing so the exported
             // ref points at the scrubbed blob's new sha. scrubEventPayload leaves
             // ref objects (non-string values) untouched — only the sha needs
@@ -1508,7 +1540,7 @@ export class SqliteStore implements IEventStore {
         data: encodeJsonl(
           messages.map((m) => ({
             ordinal: m.ordinal,
-            content: scrubJsonStrings(m.content, registry),
+            content: scrubJsonStrings(m.content, registry, scrubOpts),
             nodeId: m.nodeId,
             iteration: m.iteration,
           })),
@@ -1527,6 +1559,7 @@ export class SqliteStore implements IEventStore {
       { name: workflowIrPath(wf.sha), data: new TextEncoder().encode(wf.ir) },
       ...blobEntries,
     ]);
+    return { bytes, liveLiteralHit };
   }
 
   /** Merge a `.fragua` bundle into this store so its runs are inspectable here

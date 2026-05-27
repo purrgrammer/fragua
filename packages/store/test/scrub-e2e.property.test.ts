@@ -232,7 +232,7 @@ describe("P-scrub-e2e — secret-free bundle (§12 capstone gate)", () => {
         const store = freshStore();
         const runId = await seedRunWithBothSecrets(store, literal, pattern);
 
-        const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+        const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
         const buf = Buffer.from(bytes);
 
         // --- Literal secret: verbatim + declared encoding set ---

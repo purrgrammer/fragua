@@ -52,6 +52,7 @@ export { AhoCorasick, compileRegistry } from "./scrub/registry.ts";
 export type { ScrubOptions } from "./scrub/scrub.ts";
 export { scrubText } from "./scrub/scrub.ts";
 export { sha256Hex } from "./sha256.ts";
+export type { ExportBundleOptions, ExportBundleResult } from "./store.ts";
 export { SqliteStore } from "./store.ts";
 export { startupSweep } from "./sweep.ts";
 export * from "./types.ts";

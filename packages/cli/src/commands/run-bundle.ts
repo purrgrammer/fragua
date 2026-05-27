@@ -37,11 +37,17 @@ export function exportCommand(opts: ExportOptions): Promise<number> {
     }
     const dest = resolve(opts.to);
     mkdirSync(dirname(dest), { recursive: true });
+    let bytes: Uint8Array;
+    let liveLiteralHit: boolean;
     try {
-      writeFileSync(dest, store.exportRunBundle(opts.runId, { fraguaVersion: FRAGUA_VERSION }));
+      ({ bytes, liveLiteralHit } = store.exportRunBundle(opts.runId, { fraguaVersion: FRAGUA_VERSION }));
     } catch (err) {
       console.error(chalk.red(`export: ${(err as Error).message}`));
       return 1;
+    }
+    writeFileSync(dest, bytes);
+    if (liveLiteralHit) {
+      console.warn(chalk.yellow(`export: bundle contains a provider-credential literal — review before sharing`));
     }
     console.log(chalk.green(`exported run ${opts.runId} → ${dest}`));
     return 0;

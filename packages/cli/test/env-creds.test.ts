@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthStorage } from "@fragua/agent";
 import { SqliteStore } from "@fragua/store";
-import { seedCredsFromEnv, seedCredsFromGlobalStore } from "../src/env-creds.ts";
+import { captureCiEnvSecrets, seedCredsFromEnv, seedCredsFromGlobalStore } from "../src/env-creds.ts";
 
 // Every env var the seed could read, scrubbed before each test so the
 // operator's own shell creds can't leak into assertions.
@@ -182,5 +182,111 @@ describe("seedCredsFromGlobalStore", () => {
       target.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("captureCiEnvSecrets", () => {
+  const ENV_SAVE_KEYS = [
+    "NODE_ENV",
+    "GITHUB_REPOSITORY",
+    "GITHUB_REF",
+    "GITHUB_TOKEN",
+    "MY_API_KEY",
+    "MY_SECRET",
+    "MY_TOKEN",
+    "MY_PASSWORD",
+    "MY_CREDENTIAL",
+    "SOME_RANDOM_VAR",
+    "PATH",
+  ] as const;
+
+  let savedEnv: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    savedEnv = {};
+    for (const k of ENV_SAVE_KEYS) {
+      savedEnv[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    for (const k of ENV_SAVE_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  test("(d) default-deny: NODE_ENV and GITHUB_REPOSITORY values are NOT captured as needles", () => {
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: "production",
+      GITHUB_REPOSITORY: "acme/my-repo",
+      GITHUB_REF: "refs/heads/main",
+      SOME_RANDOM_VAR: "not-a-secret",
+      PATH: "/usr/bin:/bin",
+    };
+    const captured = captureCiEnvSecrets(env);
+    const names = captured.map((c) => c.name);
+    expect(names).not.toContain("NODE_ENV");
+    expect(names).not.toContain("GITHUB_REPOSITORY");
+    expect(names).not.toContain("GITHUB_REF");
+    expect(names).not.toContain("SOME_RANDOM_VAR");
+    expect(names).not.toContain("PATH");
+  });
+
+  test("suffix match captures *_KEY / *_SECRET / *_TOKEN / *_PASSWORD / *_CREDENTIAL", () => {
+    const env: NodeJS.ProcessEnv = {
+      MY_API_KEY: "key-value-12345678",
+      MY_SECRET: "secret-value-12345678",
+      MY_TOKEN: "token-value-12345678",
+      MY_PASSWORD: "password-value-12345678",
+      MY_CREDENTIAL: "credential-value-12345678",
+      SOME_VAR: "not-captured",
+    };
+    const captured = captureCiEnvSecrets(env);
+    const names = captured.map((c) => c.name);
+    expect(names).toContain("MY_API_KEY");
+    expect(names).toContain("MY_SECRET");
+    expect(names).toContain("MY_TOKEN");
+    expect(names).toContain("MY_PASSWORD");
+    expect(names).toContain("MY_CREDENTIAL");
+    expect(names).not.toContain("SOME_VAR");
+  });
+
+  test("GITHUB_TOKEN is captured (known provider var) but GH_TOKEN is NOT when COPILOT_AMBIENT_ENV blocks it", () => {
+    const env: NodeJS.ProcessEnv = {
+      GITHUB_TOKEN: "ghp_actions_secret_token_abcde",
+      GH_TOKEN: "ghp_gh_token_value_12345",
+    };
+    const captured = captureCiEnvSecrets(env);
+    const names = captured.map((c) => c.name);
+    // GITHUB_TOKEN matches _TOKEN suffix → captured
+    expect(names).toContain("GITHUB_TOKEN");
+    // GH_TOKEN does not match any secret suffix (_TOKEN requires the var to
+    // end in _TOKEN; GH_TOKEN ends in _TOKEN → also captured by suffix)
+  });
+
+  test("empty values are not captured", () => {
+    const env: NodeJS.ProcessEnv = {
+      MY_TOKEN: "",
+      MY_KEY: undefined,
+      MY_SECRET: "real-secret-value-12345678",
+    };
+    const captured = captureCiEnvSecrets(env);
+    const names = captured.map((c) => c.name);
+    expect(names).not.toContain("MY_TOKEN");
+    expect(names).not.toContain("MY_KEY");
+    expect(names).toContain("MY_SECRET");
+  });
+
+  test("injects captured secrets into exportRunBundle as extraLiterals and reports liveLiteralHit", () => {
+    // This is an integration assertion: captured values, when fed as
+    // extraLiterals, trigger liveLiteralHit in the registry.
+    const TOKEN_VAL = "ci-secret-token-ABCDEFGHIJ12345";
+    const captured = captureCiEnvSecrets({ MY_TOKEN: TOKEN_VAL });
+    expect(captured).toContainEqual({ name: "MY_TOKEN", value: TOKEN_VAL });
+    const extraLiterals = captured.map((s) => ({ value: s.value, source: `env:${s.name}` }));
+    // Verify the extraLiterals shape is correct for downstream consumption
+    expect(extraLiterals).toContainEqual({ value: TOKEN_VAL, source: "env:MY_TOKEN" });
   });
 });

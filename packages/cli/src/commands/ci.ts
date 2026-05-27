@@ -30,7 +30,7 @@ import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
-import { seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
+import { captureCiEnvSecrets, seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
@@ -131,6 +131,9 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   process.once("SIGTERM", onSig);
   const provisioner = new WorktreeProvisioner();
   let runId: string | undefined;
+  // Captured at seed time so mid-run rotation can't desync the registry.
+  let ciEnvSecrets: Array<{ name: string; value: string }> = [];
+  let computedExitCode: number = CLI_EXIT.usage;
 
   try {
     // Seed credentials: the global store's configured providers (what
@@ -140,6 +143,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // from this store's provider_credentials, the same path the daemon uses.
     const seededGlobal = await seedCredsFromGlobalStore(store, storePath);
     const seededEnv = seedCredsFromEnv(store);
+    ciEnvSecrets = captureCiEnvSecrets();
     const seeded = [...new Set([...seededGlobal, ...seededEnv])];
     const config = await loadConfig(cwd);
     let timeouts: ReturnType<typeof resolveTimeouts>;
@@ -270,7 +274,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
 
     // A SIGINT/SIGTERM-interrupted drive is a cancellation regardless of the
     // status the run happened to be parked in when the signal fired.
-    if (shutdown.signal.aborted) return CLI_EXIT.cancelled;
+    if (shutdown.signal.aborted) {
+      computedExitCode = CLI_EXIT.cancelled;
+      return computedExitCode;
+    }
 
     const status = store.getState(rid)?.status ?? "halted";
     const code = cliExitCode(status, stopReason);
@@ -289,10 +296,12 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     } else if (status === "queued" || status === "running" || status === "paused_auto") {
       console.error(chalk.red(`ci: driver stopped on a non-terminal status (${status}) — this is a ci bug`));
     }
-    return code;
+    computedExitCode = code;
+    // computedExitCode may be overridden to CLI_EXIT.usage in `finally` if a
+    // live secret was detected in the bundle export.
   } catch (err) {
     console.error(chalk.red(`ci: ${(err as Error).message}`));
-    return CLI_EXIT.usage;
+    computedExitCode = CLI_EXIT.usage;
   } finally {
     process.removeListener("SIGINT", onSig);
     process.removeListener("SIGTERM", onSig);
@@ -306,14 +315,28 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       }
     }
     // Export a portable, secret-free `.fragua` bundle before the store
-    // closes/vanishes — the safe CI artifact (carries only the portable run
-    // record; provider tables are never read into it, so no scrub needed).
+    // closes/vanishes — CI profile: generic markers, env secrets as extra
+    // needles, fail the job if a live secret reached the bundle path.
     if (opts.exportPath != null && opts.exportPath.length > 0 && runId !== undefined) {
       try {
         const dest = resolve(opts.exportPath);
         mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, store.exportRunBundle(runId, { fraguaVersion: FRAGUA_VERSION }));
-        console.log(chalk.dim(`bundle → ${dest}`));
+        const extraLiterals = ciEnvSecrets.map((s) => ({ value: s.value, source: `env:${s.name}` }));
+        const { bytes, liveLiteralHit } = store.exportRunBundle(runId, {
+          fraguaVersion: FRAGUA_VERSION,
+          labelMode: "generic",
+          extraLiterals,
+        });
+        writeFileSync(dest, bytes);
+        console.log(chalk.dim(`bundle \u2192 ${dest}`));
+        if (liveLiteralHit) {
+          console.error(
+            chalk.red(
+              `ci: a live secret value reached the bundle path \u2014 perimeter leak. Review the bundle before publishing.`,
+            ),
+          );
+          computedExitCode = CLI_EXIT.usage;
+        }
       } catch (e) {
         console.error(chalk.yellow(`ci: bundle export failed: ${(e as Error).message}`));
       }
@@ -332,4 +355,5 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     store.close();
     if (storeDir !== undefined) rmSync(storeDir, { recursive: true, force: true });
   }
+  return computedExitCode;
 }

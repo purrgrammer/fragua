@@ -8,7 +8,7 @@
 // assert on.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
@@ -92,5 +92,35 @@ describe("ciCommand", () => {
     writeFileSync(wfPath, "this: is: not: a: valid: workflow\n");
     const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
     expect(code).toBe(1);
+  });
+
+  test("exits non-zero when a live env secret reaches the bundle (perimeter leak)", async () => {
+    // Strategy: set a *_TOKEN env var whose value is also passed as a run
+    // input. The CI profile captures the env secret at seed time and adds it
+    // as an extraLiteral to the registry. The input value is embedded in the
+    // genesis event routing, so exportRunBundle finds the literal, sets
+    // liveLiteralHit=true, and ciCommand returns non-zero.
+    const secretVal = "fragua-test-secret-token-ABCDE12345678";
+    const exportPath = join(dir, "run.fragua");
+    // Declare the input in the workflow so buildEnqueue accepts it.
+    writeFileSync(wfPath, "name: ci-leak\ninputs:\n  secret_input:\n    type: string\nsteps:\n  done: {type: exit}\n");
+    const prevToken = process.env["FRAGUA_CI_TEST_TOKEN"];
+    try {
+      process.env["FRAGUA_CI_TEST_TOKEN"] = secretVal;
+      const code = await runCi({
+        workflow: wfPath,
+        cwd: dir,
+        dbPath,
+        exportPath,
+        inputs: { secret_input: secretVal },
+        json: true,
+      });
+      expect(code).not.toBe(0);
+    } finally {
+      if (prevToken === undefined) delete process.env["FRAGUA_CI_TEST_TOKEN"];
+      else process.env["FRAGUA_CI_TEST_TOKEN"] = prevToken;
+    }
+    // The bundle was still written even on a leak — verify it exists.
+    expect(existsSync(exportPath)).toBe(true);
   });
 });

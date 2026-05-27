@@ -54,6 +54,8 @@ export function extractCredentialLiterals(row: ProviderCredentialRow): string[] 
 export function buildExportRegistry(opts: {
   providerCredentials: ProviderCredentialRow[];
   cwd: string | null;
+  /** Extra literal needles merged in before compilation (e.g. CI env secrets). */
+  extraLiterals?: Array<{ value: string; source: string }>;
 }): CompiledRegistry {
   const literals: Array<{ value: string; source: string }> = [];
 
@@ -65,6 +67,12 @@ export function buildExportRegistry(opts: {
 
   if (opts.cwd != null) {
     literals.push({ value: opts.cwd, source: "cwd" });
+  }
+
+  if (opts.extraLiterals != null) {
+    for (const lit of opts.extraLiterals) {
+      literals.push(lit);
+    }
   }
 
   return compileRegistry({ literals, patterns: [...BASE_PATTERNS] });
