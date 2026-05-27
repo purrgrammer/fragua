@@ -137,22 +137,13 @@ export interface InboxOptions extends DiscoveryOpts {
 const BLOCKED_STATUSES: RunStatus[] = ["paused_human", "paused", "paused_auto", "quarantined"];
 
 /** Display label for a run, mirroring the web's `displayTitle` fallback
- * (RunRow.tsx): generated title → raw `routing.input` (clamped) → workflow
- * name. `run_state.title` is only materialised once the summariser runs, so
- * a run with no auto-title (no summariser configured, blip, or `auto-title:
- * false`) falls back to its input or workflow rather than reading
- * "(untitled)". */
+ * (RunRow.tsx): generated title → workflow name. `run_state.title` is only
+ * materialised once the summariser runs, so a run with no auto-title (no
+ * summariser configured, blip, or `auto-title: false`) falls back to the
+ * workflow name rather than reading "(untitled)". */
 function titleOf(r: InboxRunRow): string {
   if (r.title != null && r.title.length > 0) return r.title;
-  if (r.input != null && r.input.length > 0) return clampInline(r.input, MAX_TITLE_FALLBACK_CHARS);
   return r.workflowName ?? r.workflow ?? chalk.dim("(untitled)");
-}
-
-const MAX_TITLE_FALLBACK_CHARS = 80;
-
-function clampInline(s: string, max: number): string {
-  const collapsed = s.replace(/\s+/g, " ").trim();
-  return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max - 1).trimEnd()}…`;
 }
 
 function changeBadge(r: InboxRunRow): string {

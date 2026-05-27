@@ -72,7 +72,7 @@ function makeSchedule(overrides: Partial<Record<string, unknown>> = {}): Record<
     cwd: "/Users/dev/repo",
     intervalMs: 60 * 60 * 1000,
     intervalText: "1h",
-    input: null,
+    title: null,
     overlapPolicy: "skip",
     nextFireAt: Date.now() + 60_000,
     lastFireAt: Date.now() - 60_000,

@@ -294,6 +294,61 @@ describe("schedule-dispatcher", () => {
     expect(f.store.getSchedule("sch_t")!.pausedAt).toBeNull();
   });
 
+  test("schedule with title stamps run title on fired run (not routing.input)", () => {
+    f.writeWorkflow("wf", TRIVIAL_YAML);
+    f.store.createSchedule(
+      {
+        id: "sch_titled",
+        workflowRef: "wf",
+        cwd: f.cwd,
+        intervalMs: HOUR_MS,
+        intervalText: "1h",
+        title: "nightly cleanup",
+      },
+      f.now,
+    );
+
+    const out = f.tick();
+    expect(out.fired).toBe(1);
+
+    const sched = f.store.getSchedule("sch_titled")!;
+    const runId = sched.lastRunId!;
+    expect(runId).toBeDefined();
+
+    const state = f.store.getState(runId)!;
+    expect(state.title).toBe("nightly cleanup");
+    expect(state.routing["input"]).toBeUndefined();
+  });
+
+  test("schedule without title leaves run title null (auto-titler path unchanged)", () => {
+    f.writeWorkflow("wf", TRIVIAL_YAML);
+    f.store.createSchedule(
+      { id: "sch_notitle", workflowRef: "wf", cwd: f.cwd, intervalMs: HOUR_MS, intervalText: "1h" },
+      f.now,
+    );
+
+    f.tick();
+
+    const sched = f.store.getSchedule("sch_notitle")!;
+    const state = f.store.getState(sched.lastRunId!)!;
+    expect(state.title).toBeNull();
+    expect(state.routing["input"]).toBeUndefined();
+  });
+
+  test("enqueued run never carries routing.input regardless of initialRouting", () => {
+    f.writeWorkflow("wf", TRIVIAL_YAML);
+    const sha = "wf_sha_bare";
+    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML, serializeGraph(parseWorkflow(TRIVIAL_YAML)), CURRENT_IR_VERSION);
+    f.store.enqueueRun({
+      runId: "run_check",
+      workflowSha: sha,
+      initialRouting: { inputs: { key: "val" } },
+    });
+    const state = f.store.getState("run_check")!;
+    expect(state.routing["input"]).toBeUndefined();
+    expect((state.routing["inputs"] as Record<string, string>)["key"]).toBe("val");
+  });
+
   test("wall-clock backwards jump leaves the schedule waiting (no double-fire)", () => {
     f.writeWorkflow("wf", TRIVIAL_YAML);
     f.store.createSchedule(

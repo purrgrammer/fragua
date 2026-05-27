@@ -96,31 +96,23 @@ export function shortenRunId(runId: string): string {
 
 /** Display priority for the row's primary label:
  *   1. `title` — auto-generated summariser title
- *   2. `input` — raw `routing.input` (free-form description), clamped
- *   3. `workflowName` / `workflow` — fallback
- *   4. runId — last resort so we never render an empty link */
+ *   2. `workflowName` / `workflow` — fallback
+ *   3. runId — last resort so we never render an empty link */
 export function displayTitle(row: RunSummary): string {
   if (row.title && row.title.length > 0) return row.title;
-  if (row.input && row.input.length > 0) return clampInline(row.input, 80);
   return row.workflowName ?? row.workflow ?? row.runId;
 }
 
-/** Tooltip with the untruncated input + workflow + runId — so hovering
- *  reveals everything the row hid (including the full runId, which is
- *  no longer shown as a cell). */
+/** Tooltip with the title + workflow + runId — so hovering reveals
+ *  everything the row hid (including the full runId, which is no
+ *  longer shown as a cell). */
 export function displayTooltip(row: RunSummary): string {
   const parts: string[] = [];
   if (row.title) parts.push(`title: ${row.title}`);
-  if (row.input) parts.push(`input: ${row.input}`);
   const wf = row.workflowName ?? row.workflow;
   if (wf) parts.push(`workflow: ${wf}`);
   parts.push(`runId: ${row.runId}`);
   return parts.join("\n");
-}
-
-function clampInline(s: string, cap: number): string {
-  const singleLine = s.replace(/\s+/g, " ").trim();
-  return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
 }
 
 /** @deprecated Import `RunStatusBadge` from `./RunStatusBadge.tsx` directly.

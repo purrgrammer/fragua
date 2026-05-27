@@ -45,6 +45,18 @@ export function feedEventKey(e: Pick<FeedEvent, "runId" | "seq">): string {
 }
 
 /**
+ * Event kinds that flow over SSE and trigger query invalidation but
+ * must NOT appear as rendered rows in the Activity feed.
+ *
+ * `fact.snapshot_recorded` is the terminal-snapshot fact written after
+ * `fact.run_completed` that sets `inbox_status=pending`. It must remain
+ * in both `FEED_EVENT_KINDS` (SSE delivery) and `RUN_INVALIDATE_KINDS`
+ * (inbox live-update) but is noise in the Activity timeline — the Inbox
+ * section already surfaces the run as landable.
+ */
+export const FEED_HIDDEN_KINDS = new Set<string>(["fact.snapshot_recorded"]);
+
+/**
  * Write-only atom that appends events to the feed, deduping by
  * `(runId, seq)` and trimming to {@link FEED_MAX_EVENTS}. Accepts a
  * single event or an array (backfill batches).
@@ -55,6 +67,10 @@ export function feedEventKey(e: Pick<FeedEvent, "runId" | "seq">): string {
  * at cursor.ts on reconnect" case — already-seen events at the
  * boundary are filtered, anything new at the same ts gets inserted at
  * the right position.
+ *
+ * Hidden kinds (see {@link FEED_HIDDEN_KINDS}) are dropped before
+ * appending — this is the single chokepoint for both backfill and live
+ * SSE so no caller needs its own guard.
  */
 export const appendFeedEventsAtom = atom(null, (get, set, incoming: FeedEvent | FeedEvent[]) => {
   const arr = Array.isArray(incoming) ? incoming : [incoming];
@@ -64,6 +80,7 @@ export const appendFeedEventsAtom = atom(null, (get, set, incoming: FeedEvent | 
   const seen = new Set<string>(prev.map(feedEventKey));
   const additions: FeedEvent[] = [];
   for (const e of arr) {
+    if (FEED_HIDDEN_KINDS.has(e.type)) continue;
     const key = feedEventKey(e);
     if (seen.has(key)) continue;
     seen.add(key);

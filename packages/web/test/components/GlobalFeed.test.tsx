@@ -3,6 +3,7 @@
 import type { FeedEvent } from "@fragua/types";
 import { describe, expect, test } from "vitest";
 import { metaForEvent } from "../../src/components/GlobalFeed.tsx";
+import { FEED_HIDDEN_KINDS } from "../../src/lib/globalFeed.ts";
 
 function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
   return { runId: "r", seq: 1, type, writer: "client", payload, ts: 0 } as unknown as FeedEvent;
@@ -77,6 +78,19 @@ describe("metaForEvent", () => {
       }),
     );
     expect(handlerRetry.iconClass).toBe("text-sw-accent-pause-auto");
+  });
+});
+
+describe("FEED_HIDDEN_KINDS", () => {
+  test("fact.snapshot_recorded is in FEED_HIDDEN_KINDS so it never appears as an Activity row", () => {
+    expect(FEED_HIDDEN_KINDS.has("fact.snapshot_recorded")).toBe(true);
+  });
+
+  test("common lifecycle facts are NOT in FEED_HIDDEN_KINDS — they must render as Activity rows", () => {
+    expect(FEED_HIDDEN_KINDS.has("fact.run_completed")).toBe(false);
+    expect(FEED_HIDDEN_KINDS.has("fact.run_started")).toBe(false);
+    expect(FEED_HIDDEN_KINDS.has("fact.run_halted")).toBe(false);
+    expect(FEED_HIDDEN_KINDS.has("fact.run_paused_human")).toBe(false);
   });
 });
 

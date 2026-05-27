@@ -52,7 +52,7 @@ export function createScheduleRoutes(deps: ScheduleRoutesDeps): Hono {
         cwd?: string;
         projectId?: string;
         every?: string;
-        input?: string;
+        title?: string;
         overlap?: string;
         fireOnCreate?: boolean;
       }>(c)) ?? {};
@@ -89,7 +89,7 @@ export function createScheduleRoutes(deps: ScheduleRoutesDeps): Hono {
         ...(typeof body.projectId === "string" && body.projectId.length > 0 ? { projectId: body.projectId } : {}),
         intervalMs: interval.ms,
         intervalText: interval.text,
-        ...(typeof body.input === "string" ? { input: body.input } : {}),
+        ...(typeof body.title === "string" ? { title: body.title } : {}),
         overlapPolicy: overlap,
         fireOnCreate,
       },
@@ -104,7 +104,7 @@ export function createScheduleRoutes(deps: ScheduleRoutesDeps): Hono {
         cwd: body.cwd,
         intervalMs: interval.ms,
         intervalText: interval.text,
-        ...(typeof body.input === "string" ? { input: body.input } : {}),
+        ...(typeof body.title === "string" ? { title: body.title } : {}),
         overlapPolicy: overlap,
         fireOnCreate,
       },

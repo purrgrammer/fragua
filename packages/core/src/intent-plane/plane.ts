@@ -45,12 +45,10 @@ export type WorkflowMint =
  * bindings, assembles `initialRouting`, mints the run id, and builds the
  * store params. `inputDecls` (the workflow's `inputs:` block) is supplied
  * only when the caller wants typed-input validation — the server does;
- * the schedule dispatcher omits it (schedules carry only the free-form
- * `input`). */
+ * the schedule dispatcher omits it. */
 export interface EnqueueInput {
   workflowSha: string;
   inputDecls?: readonly InputDecl[] | undefined;
-  input?: string | undefined;
   inputs?: Record<string, string> | undefined;
   routing?: Record<string, unknown> | undefined;
   priority?: number | undefined;
@@ -211,9 +209,6 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         }
       }
       const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
-      if (typeof input.input === "string" && initialRouting["input"] === undefined) {
-        initialRouting["input"] = input.input;
-      }
       if (input.inputs != null && initialRouting["inputs"] === undefined) {
         initialRouting["inputs"] = input.inputs;
       }

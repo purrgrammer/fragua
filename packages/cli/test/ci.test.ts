@@ -8,11 +8,12 @@
 // assert on.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import { SqliteStore } from "@fragua/store";
+import { CLI_EXIT } from "../src/cli-exit.ts";
 import { type CiCommandOptions, ciCommand } from "../src/commands/ci.ts";
 
 let dir: string;
@@ -92,5 +93,35 @@ describe("ciCommand", () => {
     writeFileSync(wfPath, "this: is: not: a: valid: workflow\n");
     const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
     expect(code).toBe(1);
+  });
+
+  test("a live env secret in a TEXT surface (routing input) is scrubbed — does NOT fail CI (exit 80)", async () => {
+    // Text surfaces (genesis routing, messages, events) are always scrubbed by
+    // exportRunBundle. A literal hit there is non-fatal — liveLiteralHit is
+    // reserved for the binary-artifact residual (§13). The binary-gate itself
+    // is exercised in packages/store/test/bundle.test.ts (ci profile, tests d/b2).
+    const secretVal = "fragua-test-secret-token-ABCDE12345678";
+    const exportPath = join(dir, "run.fragua");
+    // Declare the input in the workflow so buildEnqueue accepts it.
+    writeFileSync(wfPath, "name: ci-leak\ninputs:\n  secret_input:\n    type: string\nsteps:\n  done: {type: exit}\n");
+    const prevToken = process.env["FRAGUA_CI_TEST_TOKEN"];
+    try {
+      process.env["FRAGUA_CI_TEST_TOKEN"] = secretVal;
+      const code = await runCi({
+        workflow: wfPath,
+        cwd: dir,
+        dbPath,
+        exportPath,
+        inputs: { secret_input: secretVal },
+        json: true,
+      });
+      // Text surface — scrubbed, non-fatal: must NOT produce exit 80.
+      expect(code).not.toBe(CLI_EXIT.scrubLeak);
+    } finally {
+      if (prevToken === undefined) delete process.env["FRAGUA_CI_TEST_TOKEN"];
+      else process.env["FRAGUA_CI_TEST_TOKEN"] = prevToken;
+    }
+    // The bundle was written — verify it exists.
+    expect(existsSync(exportPath)).toBe(true);
   });
 });

@@ -146,9 +146,11 @@ steps:
 
   apply:
     thread: drift
-    next: exit
     allowed-tools: [read, edit]
     max-cost: 0.60
+    on:
+      success: exit
+      fail: exit
     prompt: |
       Apply each surviving `### Edit` block (the verified set above) to its doc using the `edit` tool — one call per block, OLD as `old_string`, NEW as `new_string`, verbatim.
 

@@ -114,7 +114,7 @@ export const FraguaConfigSchema = Type.Object(
     // and per-node `summary=low|medium|high` transcript compression. Always
     // cheaper than the primary coding model. Omit to disable both paths.
     summariser: Type.Optional(Summariser),
-    // Auto-generated run titles from the run's description (routing.input).
+    // Auto-generated run titles from the run's typed inputs + workflow name.
     // true (default) kicks off
     // a fire-and-forget summariser call at run start. false disables.
     // CLI flag --no-auto-title wins over this.

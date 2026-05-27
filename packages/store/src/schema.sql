@@ -260,7 +260,7 @@ CREATE INDEX IF NOT EXISTS idx_daemon_events_type ON daemon_events(type, ts);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_run ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
 
 -- Recurring-run primitive.
--- `(workflow_ref, cwd, interval_ms, optional input)` triple plus a
+-- `(workflow_ref, cwd, interval_ms, optional title)` triple plus a
 -- `next_fire_at` cursor; the daemon's `schedule-dispatcher` fiber
 -- selects rows where `next_fire_at <= now AND paused_at IS NULL` once
 -- per minute, fires runs by calling `enqueueRun` with `schedule_id` set,
@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   project_id      TEXT NOT NULL,
   interval_ms     INTEGER NOT NULL,
   interval_text   TEXT NOT NULL,
-  input           TEXT,
+  title           TEXT,
   overlap_policy  TEXT NOT NULL DEFAULT 'skip'
                   CHECK (overlap_policy IN ('skip','queue','concurrent')),
   next_fire_at    INTEGER NOT NULL,

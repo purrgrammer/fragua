@@ -34,6 +34,14 @@ export const CLI_EXIT = {
   /** A non-terminal status (`queued` / `running` / `paused_auto`) observed
    * as a STOP-state — a `ci` driver bug, not a workflow outcome. */
   internal: 70,
+  /** A live secret value (provider-credential or `env:*` literal) was found
+   * VERBATIM in an UN-SCRUBBED binary artifact shipped in the bundle (text
+   * surfaces are always scrubbed; binary artifacts ship as-is and are scanned
+   * at export — see docs/proposals/secret-scrubbing.md §13). The run may have
+   * completed, but the job FAILS CLOSED: a leaky bundle must never be
+   * published. Distinct from `usage` so CI can branch on "secret leak"
+   * specifically. */
+  scrubLeak: 80,
   /** `cancelled`, or a SIGINT/SIGTERM-interrupted drive. 128 + SIGINT(2). */
   cancelled: 130,
 } as const;

@@ -318,23 +318,16 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
  * which case we fall back to the runId prefix). */
 function displayRunTitle(runId: string, run: RunDetail | undefined): string {
   if (run?.title && run.title.length > 0) return run.title;
-  if (run?.input && run.input.length > 0) return clampInline(run.input, 80);
-  return shortRunId(runId);
+  return run?.workflowName ?? shortRunId(runId);
 }
 
 function runTitleTooltip(runId: string, run: RunDetail | undefined): string {
   const parts: string[] = [];
   if (run?.title) parts.push(`title: ${run.title}`);
-  if (run?.input) parts.push(`input: ${run.input}`);
   const wf = run?.workflowName ?? run?.workflow;
   if (wf) parts.push(`workflow: ${wf}`);
   parts.push(`runId: ${runId}`);
   return parts.join("\n");
-}
-
-function clampInline(s: string, cap: number): string {
-  const singleLine = s.replace(/\s+/g, " ").trim();
-  return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
 }
 
 /** Placeholder row used during the initial feed backfill. Mirrors the

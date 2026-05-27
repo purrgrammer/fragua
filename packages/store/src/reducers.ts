@@ -252,8 +252,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
  * seq/version bookkeeping (`version`, `nextSeq`, `lastAppliedSeq`) is the
  * write-path's, not the reducer's — the import path sets it from the actual
  * event seqs. `title` is not in the log (the summariser writes it out-of-band),
- * so it derives to `null`; the UI falls back to `routing.input`.
+ * so it derives to `null`; the UI falls back to the workflow name.
  */
+// contract: no-bump — comment-only edit (routing.input removal); the fold reads
+// no new field and the contract-surface hash is unchanged.
 export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload, ts: number): RunState {
   return {
     runId,

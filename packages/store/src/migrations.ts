@@ -6,20 +6,32 @@ import { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION } from "./pragmas
 // breaks in compiled mode — `/$bunfs/root/schema.sql` doesn't exist.
 import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 
+/** Walk-forward schema migrations, keyed by the TARGET version they produce.
+ * Each step runs inside the bootstrap transaction, after the idempotent
+ * `schema.sql` re-run, when an existing store is below that target. A fresh
+ * DB skips these entirely — `schema.sql` already emits the current shape.
+ *
+ * `schema.sql`'s `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table,
+ * so a column rename MUST be an explicit `ALTER` here; the bootstrap re-run
+ * alone never reshapes an existing table. */
+const SCHEMA_MIGRATIONS: Record<number, (db: Database) => void> = {
+  // v1 → v2: the run-input cleanup renamed the schedules description column.
+  2: (db) => {
+    db.exec("ALTER TABLE schedules RENAME COLUMN input TO title");
+  },
+};
+
 /**
  * Create the schema on `db` and pin `schema_version`.
  *
- * 0.1.0 baseline: `schema.sql` is the only shape, so there is no
- * walk-forward chain. The first post-0.1.0 schema change reintroduces a
- * step-delta map keyed by target version and the walk that consumes it.
- *
- * - Fresh DB (no `schema_version` table): run `schema.sql`, pin to
- *   `CURRENT_SCHEMA_VERSION`.
- * - Existing DB at `version === CURRENT_SCHEMA_VERSION`: idempotent
- *   re-run of `schema.sql` to pick up any `IF NOT EXISTS` index/table.
+ * - Fresh DB (no `schema_version` table): run `schema.sql` (current shape),
+ *   pin to `CURRENT_SCHEMA_VERSION`. No migration steps run.
+ * - Existing DB in `[MIN_COMPATIBLE, CURRENT]`: idempotent re-run of
+ *   `schema.sql` (picks up any new `IF NOT EXISTS` index/table), then walk
+ *   `SCHEMA_MIGRATIONS[version+1 … CURRENT]` to reshape existing tables, then
+ *   pin the new version. A store already at `CURRENT` walks zero steps.
  * - Existing DB at `version > CURRENT_SCHEMA_VERSION` or
- *   `< MIN_COMPATIBLE_SCHEMA_VERSION`: refuse — the store predates this
- *   baseline (or is a downgrade), and there is no migration path.
+ *   `< MIN_COMPATIBLE_SCHEMA_VERSION`: refuse (downgrade / pre-baseline).
  */
 export function migrate(db: Database): void {
   const version = readVersion(db);
@@ -33,11 +45,25 @@ export function migrate(db: Database): void {
   }
 
   checkVersion(version);
+  if (version === CURRENT_SCHEMA_VERSION) {
+    // Idempotent bootstrap re-run to land any new `IF NOT EXISTS` index/table.
+    db.transaction(() => {
+      db.exec(SCHEMA_SQL);
+    })();
+    return;
+  }
 
-  // Already in the compatible band: re-run the bootstrap so any `IF NOT EXISTS`
-  // index/table declared in `schema.sql` lands on the existing DB.
+  // Walk forward: bootstrap (no-op on existing tables), apply each step delta
+  // from the store's version up to current, then pin. One transaction so a
+  // failed step rolls back the whole walk.
   db.transaction(() => {
     db.exec(SCHEMA_SQL);
+    for (let target = version + 1; target <= CURRENT_SCHEMA_VERSION; target++) {
+      const step = SCHEMA_MIGRATIONS[target];
+      if (step == null) throw new Error(`no schema migration registered for target version ${target}`);
+      step(db);
+    }
+    db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(CURRENT_SCHEMA_VERSION);
   })();
 }
 

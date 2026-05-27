@@ -1,6 +1,6 @@
-// Migration policy — 0.1.0 baseline, fresh DB only.
-// `migrate()` creates `schema.sql` and pins `schema_version` to the
-// baseline; there is no walk-forward chain yet. See
+// Migration policy — fresh DB bootstrap + walk-forward step deltas.
+// `migrate()` creates `schema.sql` on a fresh DB, and walks an existing store
+// forward through SCHEMA_MIGRATIONS up to CURRENT_SCHEMA_VERSION. See
 // packages/store/src/migrations.ts + pragmas.ts.
 
 import { Database } from "bun:sqlite";
@@ -55,6 +55,39 @@ describe("migrate — schema version handling", () => {
     migrate(db);
     db.query("UPDATE schema_version SET version = ?").run(CURRENT_SCHEMA_VERSION + 100);
     expect(() => migrate(db)).toThrow(/downgrade refused/i);
+    db.close();
+  });
+
+  test("v1 → v2 walk: renames schedules.input → title, preserving data", () => {
+    const db = freshDb();
+    migrate(db); // current shape (schedules.title)
+
+    // Simulate a v1 store: rename the column back to `input`, seed a row with a
+    // value under `input`, and pin the version to 1.
+    db.query("ALTER TABLE schedules RENAME COLUMN title TO input").run();
+    db.query(
+      "INSERT INTO schedules (id, workflow_ref, cwd, project_id, interval_ms, interval_text, input, next_fire_at, created_at) " +
+        "VALUES ('s1', 'wf', '/p', 'p', 3600000, '1h', 'nightly dep sweep', 0, 0)",
+    ).run();
+    db.query("UPDATE schema_version SET version = 1").run();
+
+    migrate(db);
+
+    // Version advanced to current.
+    const ver = db.query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1").get();
+    expect(ver?.version).toBe(CURRENT_SCHEMA_VERSION);
+
+    // Column renamed: `title` present, `input` gone.
+    const cols = db
+      .query<{ name: string }, []>("PRAGMA table_info(schedules)")
+      .all()
+      .map((c) => c.name);
+    expect(cols).toContain("title");
+    expect(cols).not.toContain("input");
+
+    // The row's value survived the rename under the new column name.
+    const row = db.query<{ title: string }, []>("SELECT title FROM schedules WHERE id = 's1'").get();
+    expect(row?.title).toBe("nightly dep sweep");
     db.close();
   });
 });

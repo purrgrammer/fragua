@@ -223,16 +223,17 @@ describe("fragua operator verbs", () => {
     expect(code).toBe(1);
   });
 
-  // ─── title fallback: no auto-title → input → workflow name, never "(untitled)"
+  // ─── title fallback: no auto-title → workflow name, never "(untitled)"
 
-  test("status: untitled run falls back to routing.input, then workflow name", async () => {
-    // No summariser ran → run_state.title is null. With an input we show it.
+  test("status: untitled run falls back to workflow name", async () => {
+    // No summariser ran → run_state.title is null. Falls back to workflow name
+    // (the read-plane resolves the name from the workflow table, which stores
+    // the name as 'noop' in the test rig).
     r.store.enqueueRun({
       runId: "rwn",
       workflowSha: "wf",
       cwd: "/tmp/repo",
-      workflowName: "ship-it",
-      initialRouting: { input: "fix the flaky login test" },
+      initialRouting: {},
     });
     const logs: string[] = [];
     (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
@@ -242,7 +243,8 @@ describe("fragua operator verbs", () => {
     const code = await statusCommand({ runId: "rwn", dbPath: r.dbPath });
     expect(code).toBe(0);
     const out = logs.join("\n");
-    expect(out).toContain("fix the flaky login test");
+    // 'noop' is the workflow name stored in the test rig's workflow table.
+    expect(out).toContain("noop");
     expect(out).not.toContain("(untitled)");
   });
 

@@ -15,6 +15,7 @@ import {
   type FactEvent,
   type IEventStore,
   MIN_COMPATIBLE_CONTRACT_VERSION,
+  materializeRouting,
 } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
@@ -411,8 +412,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // post-handler commit, resume loops indefinitely. Compute once so
     // every per-turn reader (budget overrides, max_retries override,
     // max_loops override, etc.) sees the same view.
-    const effectiveRouting: Readonly<Record<string, unknown>> =
+    const rawEffectiveRouting: Readonly<Record<string, unknown>> =
       Object.keys(decision.routingDelta).length > 0 ? { ...state.routing, ...decision.routingDelta } : state.routing;
+    // Resolve any $fragua_blob refs in routing.inputs so downstream readers
+    // (substitution, auto-titler seed) see the full string values. Structural
+    // keys (budget_override, max_retries_override, …) never carry blob refs,
+    // so materialization is a shallow no-op for the vast majority of turns.
+    const effectiveRouting: Readonly<Record<string, unknown>> = materializeRouting(
+      rawEffectiveRouting as Record<string, unknown>,
+      (sha) => {
+        const bytes = opts.store.readBlob(sha);
+        if (bytes == null) throw new Error(`routing blob missing: ${sha}`);
+        return bytes;
+      },
+    );
 
     if (decision.shouldPause) {
       await tryAppendFact(
@@ -521,25 +534,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
       onOccResolved(start, 0);
       if (opts.autoTitler && state.title == null) {
-        const freeFormInput = routingString(state.routing, "input") ?? "";
         const graph = graphFor(workflowSha);
         const goal = graph?.attrs.goal;
-        let seed = freeFormInput;
-        let workflowName: string | undefined;
-        if (seed === "") {
-          const structuredInputs = readStringMap(state.routing["inputs"]);
-          const inputLines = Object.entries(structuredInputs)
-            .map(([k, v]) => `${k}=${v}`)
-            .join("\n");
-          if (inputLines !== "") {
-            const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
-            workflowName = wf?.name;
-            const parts: string[] = [];
-            if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
-            parts.push(inputLines);
-            seed = parts.join("\n");
-          }
-        }
+        // Use effectiveRouting (already materialized) so spilled inputs appear
+        // in the title seed as their full string values.
+        const structuredInputs = readStringMap(effectiveRouting["inputs"]);
+        const inputLines = Object.entries(structuredInputs)
+          .map(([k, v]) => `${k}=${v}`)
+          .join("\n");
+        const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
+        const workflowName = wf?.name;
+        const parts: string[] = [];
+        if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
+        if (inputLines !== "") parts.push(inputLines);
+        const seed = parts.join("\n");
         const req: TitleRequest = {
           runId,
           workflowSha,

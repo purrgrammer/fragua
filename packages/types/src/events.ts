@@ -894,7 +894,10 @@ export type DaemonEvent =
         cwd: string;
         intervalMs: number;
         intervalText: string;
-        input?: string;
+        // Renamed from `input` in schema v2 (routing.input removal). Pre-v2
+        // `daemon_events` rows persist the legacy `input` key — tooling mining
+        // historic audit rows should tolerate both.
+        title?: string;
         overlapPolicy: "skip" | "queue" | "concurrent";
         fireOnCreate: boolean;
       };

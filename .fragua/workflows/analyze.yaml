@@ -47,7 +47,7 @@ steps:
 
       First: run `bun .fragua/scripts/analyze/collect.ts --workflow=${{ inputs.workflow }} --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }}` via the bash tool and read its JSON report. Fields: `totals`, `by_workflow[]` (aggregates + `node_profiles[]`), `runs[]` (per-run records + `per_node[]`). Trust its numbers; quote only them; never invent fields.
 
-      Field caveats: `partial`/`partial_in_runs` figures are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap.
+      Field caveats: `partial`/`partial_in_runs` figures are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`human`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap (`human` nodes are HITL waits; `llm` is the only token-bearing type).
 
       Emit a markdown report as your FINAL message verbatim — no file writes, no preamble, no postscript. Headings, exactly:
 

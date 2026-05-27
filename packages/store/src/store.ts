@@ -54,6 +54,7 @@ import {
   runArtifactsPath,
   runEventsPath,
   runMessagesPath,
+  SCRUBBER_VERSION,
   type TarEntry,
   workflowIrPath,
   workflowSourcePath,
@@ -126,6 +127,7 @@ import {
   selectProviderCredential,
 } from "./provider-credentials-queries.ts";
 import { applyFact, deriveRunState, emptyMetrics } from "./reducers.ts";
+import { collectRoutingBlobShas, isBlobRef, spillRoutingInputs } from "./routing-blobs.ts";
 import { assertSafeRunId } from "./run-id.ts";
 import {
   bumpRunSeq,
@@ -150,6 +152,7 @@ import {
   type RunStateRow,
   type RunSummaryRow,
   type StepAggregateRow,
+  selectAllRoutings,
   selectCwds,
   selectGcEligibleSnapshotRuns,
   selectGlobalMetricsTotals,
@@ -180,6 +183,8 @@ import {
   updateScheduleResumed,
   updateScheduleSkip,
 } from "./schedule-queries.ts";
+import { buildExportRegistry, isTextMime, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
+import { type ScrubOptions, scrubText } from "./scrub/scrub.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -349,7 +354,7 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     projectId: row.project_id,
     intervalMs: row.interval_ms,
     intervalText: row.interval_text,
-    input: row.input,
+    title: row.title,
     overlapPolicy: row.overlap_policy,
     nextFireAt: row.next_fire_at,
     lastFireAt: row.last_fire_at,
@@ -357,6 +362,56 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     pausedAt: row.paused_at,
     createdAt: row.created_at,
   };
+}
+
+/**
+ * Walk an exported event payload and rewrite every `$fragua_blob` sha in the
+ * genesis routing to the export sha from `reCasMap`. Called after
+ * `scrubEventPayload` so free-text string values are already scrubbed; only
+ * the ref object's sha field needs to change. Returns the original when there
+ * is nothing to rewrite (no allocation on the hot path for non-genesis events).
+ */
+function rewriteRoutingRefs(
+  payload: unknown,
+  reCasMap: Map<string, { exportSha: string; exportBytes: Uint8Array }>,
+): unknown {
+  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const src = payload as Record<string, unknown>;
+  const routing = src["routing"];
+  if (routing == null || typeof routing !== "object" || Array.isArray(routing)) return payload;
+  const newRouting = deepRewriteRefs(routing, reCasMap);
+  if (newRouting === routing) return payload;
+  return { ...src, routing: newRouting };
+}
+
+function deepRewriteRefs(v: unknown, reCasMap: Map<string, { exportSha: string; exportBytes: Uint8Array }>): unknown {
+  if (isBlobRef(v)) {
+    const origSha = v["$fragua_blob"];
+    const mapped = reCasMap.get(origSha);
+    if (mapped == null || mapped.exportSha === origSha) return v;
+    return { ...v, $fragua_blob: mapped.exportSha };
+  }
+  if (Array.isArray(v)) {
+    let changed = false;
+    const out = v.map((item) => {
+      const r = deepRewriteRefs(item, reCasMap);
+      if (r !== item) changed = true;
+      return r;
+    });
+    return changed ? out : v;
+  }
+  if (v !== null && typeof v === "object") {
+    const src = v as Record<string, unknown>;
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(src)) {
+      const r = deepRewriteRefs(val, reCasMap);
+      if (r !== val) changed = true;
+      out[k] = r;
+    }
+    return changed ? out : v;
+  }
+  return v;
 }
 
 export interface SqliteStoreOpts {
@@ -371,6 +426,29 @@ export interface SqliteStoreOpts {
    * store-client (no daemon up) uses this so a stray open can't mutate schema.
    * Default true — the fact-writer owners (harness/daemon) auto-migrate. */
   migrate?: boolean;
+}
+
+/** Options for {@link SqliteStore.exportRunBundle}. */
+export interface ExportBundleOptions {
+  fraguaVersion: string;
+  /** `"source"` (default): markers are `[REDACTED:source]`. `"generic"`:
+   * markers are `[REDACTED]` with no source label (CI bundles). */
+  labelMode?: "source" | "generic";
+  /** Extra literal needles merged into the registry before compilation.
+   * Used by the CI profile to inject captured env secrets. */
+  extraLiterals?: Array<{ value: string; source: string }>;
+}
+
+/** Return value of {@link SqliteStore.exportRunBundle}. */
+export interface ExportBundleResult {
+  bytes: Uint8Array;
+  /** `true` when a live secret value (provider-credential or `env:*` literal)
+   * was found VERBATIM in an UN-SCRUBBED binary artifact blob. Text surfaces
+   * are always scrubbed, so a literal hit there is non-fatal by design. Binary
+   * blobs ship as-is (§13 residual) and are scanned — a hit means the secret
+   * reached an egress surface the scrubber does NOT redact. Pattern-only
+   * matches never set this flag. */
+  liveLiteralHit: boolean;
 }
 
 export class SqliteStore implements IEventStore {
@@ -560,7 +638,22 @@ export class SqliteStore implements IEventStore {
 
   enqueueRun(params: EnqueueRunParams): void {
     const now = this.now();
-    const routing = JSON.stringify(params.initialRouting ?? {});
+
+    // Spill oversized routing.inputs string values to the blob CAS before
+    // the size checks. Blobs are written before the transaction so
+    // crash-between-put-and-row leaves an orphan file (GC sweeps it), which
+    // is safer than the inverse. The rows are inserted inside writeTxn below.
+    let effectiveRouting = params.initialRouting ?? {};
+    let spilledBlobs: Array<{ key: string; sha: string; bytes: number }> = [];
+    if (effectiveRouting["inputs"] != null) {
+      const result = spillRoutingInputs(effectiveRouting, (sha, bytes) => {
+        this.blobs.put(sha, bytes);
+      });
+      effectiveRouting = result.routing;
+      spilledBlobs = result.spilled;
+    }
+
+    const routing = JSON.stringify(effectiveRouting);
     if (routing.length >= MAX_ROUTING_BYTES) {
       throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
     }
@@ -579,12 +672,13 @@ export class SqliteStore implements IEventStore {
     // The genesis event carries the whole enqueue identity so `run_state` is
     // derivable by replaying the log (no `cwd` — its absence keeps an imported
     // run inert). Bounded by the 4 KiB event cap, tighter than routing's 8 KiB.
+    // Use effectiveRouting (post-spill) so blob refs appear in the genesis event.
     const genesisPayload = JSON.stringify({
       workflowSha: params.workflowSha,
       priority: params.priority ?? 0,
       projectId,
       projectName,
-      routing: params.initialRouting ?? {},
+      routing: effectiveRouting,
       contractVersion: EVENT_CONTRACT_VERSION,
       ...(params.workflowName != null ? { workflowName: params.workflowName } : {}),
       ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
@@ -598,6 +692,12 @@ export class SqliteStore implements IEventStore {
     this.writeTxn(() => {
       if (!workflowExists(this.db, params.workflowSha)) {
         throw new Error(`unknown workflow sha ${params.workflowSha}`);
+      }
+      // Insert blob rows for any values spilled to the CAS. The BlobFS.put()
+      // calls happened before this transaction; the row insert is the
+      // durability barrier that makes them reachable to reads and GC-protected.
+      for (const { sha, bytes } of spilledBlobs) {
+        insertBlobIfAbsent(this.db, sha, bytes, now);
       }
 
       insertRunState(this.db, {
@@ -942,6 +1042,11 @@ export class SqliteStore implements IEventStore {
     };
   }
 
+  readBlob(sha: string): Uint8Array | null {
+    if (!this.blobs.has(sha)) return null;
+    return this.blobs.get(sha);
+  }
+
   getArtifact(scope: ArtifactScope): Uint8Array {
     const ref = this.getArtifactRef(scope);
     if (ref == null) {
@@ -1149,7 +1254,7 @@ export class SqliteStore implements IEventStore {
     const fireOnCreate = params.fireOnCreate ?? true;
     const overlapPolicy = params.overlapPolicy ?? "skip";
     const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
-    const input = params.input ?? null;
+    const title = params.title ?? null;
     const projectId = params.projectId ?? params.cwd;
     this.writeTxn(() => {
       insertSchedule(this.db, {
@@ -1159,7 +1264,7 @@ export class SqliteStore implements IEventStore {
         projectId,
         intervalMs: params.intervalMs,
         intervalText: params.intervalText,
-        input,
+        title,
         overlapPolicy,
         nextFireAt,
         createdAt: now,
@@ -1172,7 +1277,7 @@ export class SqliteStore implements IEventStore {
       projectId,
       intervalMs: params.intervalMs,
       intervalText: params.intervalText,
-      input,
+      title,
       overlapPolicy,
       nextFireAt,
       lastFireAt: null,
@@ -1277,7 +1382,12 @@ export class SqliteStore implements IEventStore {
    * and instance-scoped (`daemon_lock`, `server_endpoint`, `daemon_events`,
    * `schedules`) ones — then VACUUM + checkpoint so the dropped bytes are truly
    * gone (no freelist or WAL residue). `fragua ci` calls this before leaving a
-   * `--db` artifact, so an exported store can never carry a credential.
+   * `--db` artifact, so the pruned store carries no credential TABLE.
+   *
+   * NOT a scrub: the retained `events`/`messages` keep the RAW transcript +
+   * observability deltas, which can hold secret values verbatim. The pruned
+   * `--db` store is a raw inspection record, NOT secret-free — the scrubbed,
+   * safe-to-publish artifact is `exportRunBundle` (the `.fragua` bundle).
    *
    * An ALLOWLIST, not a denylist: a table is dropped unless it's explicitly
    * part of the portable record, so a future table can't silently ride along.
@@ -1298,39 +1408,162 @@ export class SqliteStore implements IEventStore {
   }
 
   /** Export `runId` as a portable `.fragua` bundle (bundles.md): a
-   * manifest-first tar carrying the run's raw EVENT LOG (genesis + facts),
-   * transcript, artifact rows, the content-addressed workflow, and the
-   * referenced blob bytes. There is NO `run_state` — it is re-derived on import
-   * by replaying the log. Secret + machine-local tables are never read, so the
-   * artifact is credential-free by construction. `fraguaVersion` is stamped for
-   * the import-time compatibility check.
+   * manifest-first tar carrying a FILTERED EVENT LOG, transcript, artifact
+   * rows, the content-addressed workflow, and the referenced blob bytes. There
+   * is NO `run_state` — it is re-derived on import by replaying the log.
    *
+   * Event filtering (allowlist): only `fact.*`, `intent.*`, and `cost.recorded`
+   * are written into the tar. All other event families (`agent.*`, `llm.*`,
+   * `tool.*`, `summary.*`, `control.*`, `steering.*`, `run.title_generated`,
+   * `budget.*`, `snapshot.*`, etc.) are content-bearing observability and are
+   * dropped. Stored events are never mutated — filtering is export-only.
+   * Message content and event payload free-text fields are scrubbed at export
+   * time (literal credentials + cwd path + known-format patterns). To build the
+   * literal needle set this reads `provider_credentials` payloads into the
+   * registry in memory for the duration of the call — cleartext secrets never
+   * enter the bundle, but the egress path does touch them. Text-ish
+   * artifact blobs (mime `text/*` or `application/json|x-yaml|xml|javascript`)
+   * are decoded, scrubbed, and re-CASed — the new sha replaces the original in
+   * the artifacts JSONL, blob tar entry, and manifest blobs[] consistently.
+   * Binary blobs ship as-is under their original sha; a secret in a binary
+   * artifact is a known residual (see docs/proposals/secret-scrubbing.md §13).
+   *
+   * `fraguaVersion` is stamped for the import-time compatibility check.
    * Single-run today (the `fragua ci --export` producer); the format is
    * multi-run by construction. Rows are canonically ordered (events by seq,
    * messages by ordinal, artifacts/blobs by sha) for re-export determinism. */
-  exportRunBundle(runId: string, opts: { fraguaVersion: string }): Uint8Array {
+  exportRunBundle(runId: string, opts: ExportBundleOptions): ExportBundleResult {
     const run = this.getState(runId);
     if (run == null) throw new Error(`exportRunBundle: run not found: ${runId}`);
     const wf = this.getWorkflow(run.workflowSha);
     if (wf == null) throw new Error(`exportRunBundle: workflow ${run.workflowSha} missing for run ${runId}`);
 
-    const events = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
+    const allEvents = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
+    const events = allEvents.filter(
+      (e) => e.type.startsWith("fact.") || e.type.startsWith("intent.") || e.type === "cost.recorded",
+    );
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
+    const { registry, literalValues } = buildExportRegistry({
+      providerCredentials: this.listProviderCredentials(),
+      cwd: run.cwd,
+      ...(opts.extraLiterals !== undefined ? { extraLiterals: opts.extraLiterals } : {}),
+    });
     const artifacts = this.listArtifacts(runId).sort(
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
     );
 
-    const shas = [...new Set(artifacts.map((a) => a.blobSha))].sort();
+    // Text surfaces are always scrubbed; the live-literal gate fires only on
+    // binary artifacts (the §13 residual — shipped as-is). The scrub pass itself
+    // never needs a callback: hits in text mean the secret was REDACTED = safe.
+    let liveLiteralHit = false;
+    const scrubOpts: ScrubOptions = {
+      labels: opts.labelMode ?? "source",
+    };
+
+    // Re-CAS map: original blobSha → exported sha (may differ for text blobs).
+    // Built before assembling the tar so artifact rows and blob entries are
+    // consistent in all three places (artifacts JSONL, blob tar entry, manifest).
+    // Routing blobs are seeded FIRST so they share the map with artifact blobs
+    // and deduplicate consistently (a routing blob and an artifact blob with the
+    // same content produce one tar entry, one manifest row, one mapping entry).
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const reCasMap = new Map<string, { exportSha: string; exportBytes: Uint8Array }>();
+
+    // Seed routing blobs: spilled routing.inputs values are always text.
+    // Scrub via scrubText (single string, not nested JSON) and re-CAS.
+    // ASSUMPTION: only `intent.run_enqueued` carries routing blob refs.
+    // Routing is set once at enqueue and never mutated by any subsequent intent;
+    // if a future intent ever mutates routing.inputs this loop must enumerate
+    // every such event, not just the genesis.
+    const genesisEvent = events.find((e) => e.type === "intent.run_enqueued");
+    if (genesisEvent != null) {
+      const gp = genesisEvent.payload as Record<string, unknown>;
+      const routingForBlobs = gp["routing"] as Record<string, unknown> | undefined;
+      if (routingForBlobs != null) {
+        for (const origSha of collectRoutingBlobShas(routingForBlobs)) {
+          if (reCasMap.has(origSha)) continue;
+          const origBytes = this.blobs.get(origSha);
+          const text = dec.decode(origBytes);
+          const scrubbed = scrubText(text, registry, scrubOpts);
+          const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
+          const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
+          reCasMap.set(origSha, { exportSha, exportBytes });
+        }
+      }
+    }
+
+    for (const artifact of artifacts) {
+      const origSha = artifact.blobSha;
+      if (reCasMap.has(origSha)) continue;
+      const origBytes = this.blobs.get(origSha);
+      if (isTextMime(artifact.mime)) {
+        const text = dec.decode(origBytes);
+        let scrubbed: string;
+        const mimeBase = (artifact.mime ?? "").split(";")[0]!.trim();
+        if (mimeBase === "application/json") {
+          try {
+            const parsed: unknown = JSON.parse(text);
+            const scrubbedObj = scrubJsonStrings(parsed, registry, scrubOpts);
+            scrubbed = JSON.stringify(scrubbedObj);
+          } catch {
+            scrubbed = scrubJsonStrings(text, registry, scrubOpts) as string;
+          }
+        } else {
+          scrubbed = scrubJsonStrings(text, registry, scrubOpts) as string;
+        }
+        const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
+        const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
+        reCasMap.set(origSha, { exportSha, exportBytes });
+      } else {
+        // Binary blobs ship as-is — scanned below for verbatim live-literal hits
+        // (the §13 residual gate). A hit sets liveLiteralHit; the blob is still
+        // exported unchanged (we scan-and-alarm, not redact-in-place).
+        reCasMap.set(origSha, { exportSha: origSha, exportBytes: origBytes });
+      }
+    }
+
+    // Binary-artifact residual gate: scan every binary blob for verbatim
+    // live-literal values. Text blobs are always scrubbed, so only binary ones
+    // can contain a live secret. A single hit flips liveLiteralHit=true — the
+    // blob is still exported unchanged (scan-and-alarm, not redact-in-place).
+    if (literalValues.length > 0) {
+      for (const artifact of artifacts) {
+        if (isTextMime(artifact.mime)) continue;
+        const entry = reCasMap.get(artifact.blobSha);
+        if (entry == null) continue;
+        const buf = Buffer.isBuffer(entry.exportBytes)
+          ? entry.exportBytes
+          : Buffer.from(entry.exportBytes.buffer, entry.exportBytes.byteOffset, entry.exportBytes.byteLength);
+        for (const literal of literalValues) {
+          if (buf.includes(literal)) {
+            liveLiteralHit = true;
+            break;
+          }
+        }
+        if (liveLiteralHit) break;
+      }
+    }
+
+    // Collect unique export shas (deduped CAS — two artifacts that scrub to the
+    // same bytes share one blob entry). Build a sha → entry map in one pass to
+    // avoid the O(n²) .find() per sha.
+    const exportShaMap = new Map<string, { exportSha: string; exportBytes: Uint8Array }>();
+    for (const entry of reCasMap.values()) {
+      if (!exportShaMap.has(entry.exportSha)) exportShaMap.set(entry.exportSha, entry);
+    }
+    const exportShas = [...exportShaMap.keys()].sort();
     const blobEntries: TarEntry[] = [];
     const blobManifest: { sha256: string; size: number }[] = [];
-    for (const sha of shas) {
-      const bytes = this.blobs.get(sha);
-      blobEntries.push({ name: blobPath(sha), data: bytes });
-      blobManifest.push({ sha256: sha, size: bytes.length });
+    for (const exportSha of exportShas) {
+      const entry = exportShaMap.get(exportSha)!;
+      blobEntries.push({ name: blobPath(exportSha), data: entry.exportBytes });
+      blobManifest.push({ sha256: exportSha, size: entry.exportBytes.length });
     }
 
     const manifest: BundleManifest = {
       bundleVersion: BUNDLE_VERSION,
+      scrubberVersion: SCRUBBER_VERSION,
       fraguaVersion: opts.fraguaVersion,
       contractVersion: EVENT_CONTRACT_VERSION,
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -1340,25 +1573,48 @@ export class SqliteStore implements IEventStore {
       blobs: blobManifest,
     };
 
-    return writeTar([
+    const bytes = writeTar([
       { name: MANIFEST_ENTRY, data: new TextEncoder().encode(canonicalJson(manifest)) },
       {
         name: runEventsPath(runId),
         data: encodeJsonl(
-          events.map((e) => ({ seq: e.seq, type: e.type, writer: e.writer, payload: e.payload, ts: e.ts })),
+          events.map((e) => {
+            const scrubbedPayload = scrubEventPayload(e.type, e.payload, registry, scrubOpts);
+            // Rewrite $fragua_blob shas in the genesis routing so the exported
+            // ref points at the scrubbed blob's new sha. scrubEventPayload leaves
+            // ref objects (non-string values) untouched — only the sha needs
+            // updating to match what we put in the tar and manifest.
+            const exportPayload =
+              e.type === "intent.run_enqueued" ? rewriteRoutingRefs(scrubbedPayload, reCasMap) : scrubbedPayload;
+            return { seq: e.seq, type: e.type, writer: e.writer, payload: exportPayload, ts: e.ts };
+          }),
         ),
       },
       {
         name: runMessagesPath(runId),
         data: encodeJsonl(
-          messages.map((m) => ({ ordinal: m.ordinal, content: m.content, nodeId: m.nodeId, iteration: m.iteration })),
+          messages.map((m) => ({
+            ordinal: m.ordinal,
+            content: scrubJsonStrings(m.content, registry, scrubOpts),
+            nodeId: m.nodeId,
+            iteration: m.iteration,
+          })),
         ),
       },
-      { name: runArtifactsPath(runId), data: encodeJsonl(artifacts) },
+      {
+        name: runArtifactsPath(runId),
+        data: encodeJsonl(
+          artifacts.map((a) => ({
+            ...a,
+            blobSha: reCasMap.get(a.blobSha)?.exportSha ?? a.blobSha,
+          })),
+        ),
+      },
       { name: workflowSourcePath(wf.sha), data: new TextEncoder().encode(wf.source) },
       { name: workflowIrPath(wf.sha), data: new TextEncoder().encode(wf.ir) },
       ...blobEntries,
     ]);
+    return { bytes, liveLiteralHit };
   }
 
   /** Merge a `.fragua` bundle into this store so its runs are inspectable here
@@ -1642,21 +1898,43 @@ export class SqliteStore implements IEventStore {
 
   gcBlobs(maxRows?: number): { deleted: number } {
     const limit = maxRows ?? 1000;
-    // Pass 1: drop `blobs` rows with no artifact referent. RETURNING feeds
-    // the file-delete pass so row-without-file is impossible mid-sweep.
-    const orphanShas = deleteOrphanBlobs(this.db, limit);
+
+    // Collect routing-referenced blob shas as GC roots so spilled input blobs
+    // are never collected while the run is still live. This is the single place
+    // that decides blob reachability; routing roots extend artifact reachability.
+    const routingStrings = selectAllRoutings(this.db);
+    const routingRootShas = new Set<string>();
+    for (const routingJson of routingStrings) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(routingJson);
+      } catch {
+        continue;
+      }
+      for (const sha of collectRoutingBlobShas(parsed)) {
+        routingRootShas.add(sha);
+      }
+    }
+    const protectedShasJson = JSON.stringify([...routingRootShas]);
+
+    // Pass 1: drop `blobs` rows with no artifact referent AND not a routing
+    // root. RETURNING feeds the file-delete pass so row-without-file is
+    // impossible mid-sweep.
+    const orphanShas = deleteOrphanBlobs(this.db, limit, protectedShasJson);
     for (const sha of orphanShas) this.blobs.delete(sha);
 
     // Pass 2: remove blob files with no matching row. Catches files left
     // behind when a row was deleted directly (cascade) or when a crash
     // between put() and INSERT orphaned the file. Bounded by the same
-    // per-sweep limit to keep tail latency predictable.
+    // per-sweep limit to keep tail latency predictable. Routing-root files
+    // (even those without a row, e.g., mid-write crash) are preserved.
     let extraDeleted = 0;
     const budget = limit - orphanShas.length;
     if (budget > 0) {
       const shas = this.blobs.listAllShas();
       for (const sha of shas) {
         if (extraDeleted >= budget) break;
+        if (routingRootShas.has(sha)) continue;
         if (!blobRowExists(this.db, sha)) {
           this.blobs.delete(sha);
           extraDeleted++;

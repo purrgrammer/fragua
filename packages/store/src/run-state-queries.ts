@@ -874,3 +874,14 @@ const SELECT_GLOBAL_MODEL_BREAKDOWN_SQL = `
 export function selectGlobalModelBreakdown(db: Database, sinceMs: number): GlobalModelBreakdownRow[] {
   return db.query<GlobalModelBreakdownRow, [number]>(SELECT_GLOBAL_MODEL_BREAKDOWN_SQL).all(sinceMs);
 }
+
+const SELECT_ALL_ROUTINGS_SQL = `SELECT routing FROM run_state`;
+
+/** Return the raw routing JSON strings for every run — used by gcBlobs to
+ *  collect routing-referenced blob shas as GC roots. */
+export function selectAllRoutings(db: Database): string[] {
+  return db
+    .query<{ routing: string }, []>(SELECT_ALL_ROUTINGS_SQL)
+    .all()
+    .map((r) => r.routing);
+}

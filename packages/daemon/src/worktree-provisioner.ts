@@ -78,6 +78,16 @@ export interface WorktreeProvisionerOptions {
    * this run. Lets one daemon honour `<project>/.fragua/config.yaml`
    * for runs from many projects, with no global default leaking in. */
   resolveRunBootstrap?: (cwd: string) => Promise<ResolvedRunBootstrap>;
+  /** Set ONLY by `fragua ci` (proposal §6 unit 9b — perimeter env-strip).
+   * Forwarded into each fresh `LocalEnvironment` / `WorktreeEnvironment` so
+   * the bash-tool subprocess never inherits secret-named env vars. Unset for
+   * the daemon (normal runs) — behavior unchanged. */
+  envDenyNames?: ReadonlySet<string>;
+  /** Set ONLY by `fragua ci` alongside `envDenyNames`. Applied at SPAWN TIME
+   * over the live merged env so a secret-named var set AFTER `envDenyNames`
+   * was captured is still stripped. `envDenyNames` is the value-capture path
+   * (drives scrub needles); this predicate is the live-rule path. */
+  envDenyPredicate?: (name: string) => boolean;
 }
 
 export interface ProvisionOpts {
@@ -118,6 +128,8 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly bootstrapTimeoutMs: number | undefined;
   private readonly defaultShellTimeoutMs: number | undefined;
   private readonly resolveRunBootstrap: ((cwd: string) => Promise<ResolvedRunBootstrap>) | undefined;
+  private readonly envDenyNames: ReadonlySet<string> | undefined;
+  private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
   /** Lineage cursor per run: the last recorded snapshot's commit + tree shas.
@@ -134,6 +146,8 @@ export class WorktreeProvisioner implements Provisioner {
     if (opts.bootstrapTimeoutMs !== undefined) this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs;
     if (opts.defaultShellTimeoutMs !== undefined) this.defaultShellTimeoutMs = opts.defaultShellTimeoutMs;
     if (opts.resolveRunBootstrap !== undefined) this.resolveRunBootstrap = opts.resolveRunBootstrap;
+    if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
+    if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
   }
 
   /** Resolve the bootstrap pair for a fresh worktree at `cwd`. When
@@ -228,6 +242,8 @@ export class WorktreeProvisioner implements Provisioner {
     if (!(await isGitRepo(repoRoot))) {
       const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: repoRoot };
       if (this.defaultShellTimeoutMs !== undefined) localOpts.defaultTimeoutMs = this.defaultShellTimeoutMs;
+      if (this.envDenyNames !== undefined) localOpts.envDenyNames = this.envDenyNames;
+      if (this.envDenyPredicate !== undefined) localOpts.envDenyPredicate = this.envDenyPredicate;
       return new LocalEnvironment(localOpts);
     }
 
@@ -241,6 +257,8 @@ export class WorktreeProvisioner implements Provisioner {
     if (bootstrap !== undefined) opts.bootstrap = bootstrap;
     if (bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = bootstrapTimeoutMs;
     if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
+    if (this.envDenyNames !== undefined) opts.envDenyNames = this.envDenyNames;
+    if (this.envDenyPredicate !== undefined) opts.envDenyPredicate = this.envDenyPredicate;
     const env = new WorktreeEnvironment(opts);
     await env.init();
     return env;

@@ -68,6 +68,8 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   private readonly bootstrap: BootstrapSpec | undefined;
   private readonly bootstrapTimeoutMs: number;
   private readonly local: LocalEnvironment;
+  private readonly envDenyNames: ReadonlySet<string> | undefined;
+  private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
   private initialized = false;
   private disposed = false;
 
@@ -81,10 +83,14 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
     this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs ?? 10 * 60 * 1000;
     if (typeof opts.bootstrap === "string") this.bootstrapCommand = opts.bootstrap;
+    if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
+    if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
     this.local = new LocalEnvironment({
       cwd: this.worktreePath,
       ...(opts.defaultTimeoutMs !== undefined ? { defaultTimeoutMs: opts.defaultTimeoutMs } : {}),
       ...(opts.extraBlockedPatterns !== undefined ? { extraBlockedPatterns: opts.extraBlockedPatterns } : {}),
+      ...(opts.envDenyNames !== undefined ? { envDenyNames: opts.envDenyNames } : {}),
+      ...(opts.envDenyPredicate !== undefined ? { envDenyPredicate: opts.envDenyPredicate } : {}),
     });
   }
 
@@ -106,17 +112,27 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (!alreadyProvisioned) {
       const args = ["worktree", "add", "--detach", this.worktreePath];
       if (this.baseRef !== undefined) args.push(this.baseRef);
-      await runGit(this.repoRoot, args);
+      await runGit(this.repoRoot, args, undefined, this.envDenyNames, this.envDenyPredicate);
     }
 
-    const { stdout: headStdout } = await runGitCapture(this.worktreePath, ["rev-parse", "HEAD"]);
+    const { stdout: headStdout } = await runGitCapture(
+      this.worktreePath,
+      ["rev-parse", "HEAD"],
+      this.envDenyNames,
+      this.envDenyPredicate,
+    );
     this.baseGitSha = headStdout.trim();
 
     // Branch the source repo is on at provision — the post-run merge/commit
     // target default. The worktree is detached, so this is read from the
     // source repo, not the worktree. Detached / tag / unborn → null.
     try {
-      const { stdout: refStdout } = await runGitCapture(this.repoRoot, ["symbolic-ref", "--short", "HEAD"]);
+      const { stdout: refStdout } = await runGitCapture(
+        this.repoRoot,
+        ["symbolic-ref", "--short", "HEAD"],
+        this.envDenyNames,
+        this.envDenyPredicate,
+      );
       this.baseGitRef = refStdout.trim() || null;
     } catch {
       this.baseGitRef = null;
@@ -159,7 +175,12 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
       return false;
     }
     try {
-      const { stdout } = await runGitCapture(this.repoRoot, ["worktree", "list", "--porcelain"]);
+      const { stdout } = await runGitCapture(
+        this.repoRoot,
+        ["worktree", "list", "--porcelain"],
+        this.envDenyNames,
+        this.envDenyPredicate,
+      );
       // `--porcelain` emits records separated by blank lines; each
       // starts with `worktree <path>`. Compare realpaths — on macOS
       // `/var/...` is a symlink to `/private/var/...` and git emits
@@ -194,7 +215,13 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (this.disposed || this.keepAfterDispose) return;
     this.disposed = true;
     try {
-      await runGit(this.repoRoot, ["worktree", "remove", "--force", this.worktreePath]);
+      await runGit(
+        this.repoRoot,
+        ["worktree", "remove", "--force", this.worktreePath],
+        undefined,
+        this.envDenyNames,
+        this.envDenyPredicate,
+      );
     } catch {
       // worktree may already be gone (removed out of band)
     }
@@ -238,9 +265,33 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   }
 }
 
-function runGit(cwd: string, args: string[], extraEnv?: Record<string, string>): Promise<void> {
+function buildGitEnv(
+  extraEnv?: Record<string, string>,
+  envDenyNames?: ReadonlySet<string>,
+  envDenyPredicate?: (name: string) => boolean,
+): NodeJS.ProcessEnv {
+  const merged: Record<string, string | undefined> =
+    extraEnv != null ? { ...process.env, ...extraEnv } : { ...process.env };
+  if (envDenyNames !== undefined) {
+    for (const name of envDenyNames) delete merged[name];
+  }
+  if (envDenyPredicate !== undefined) {
+    for (const name of Object.keys(merged)) {
+      if (envDenyPredicate(name)) delete merged[name];
+    }
+  }
+  return merged as NodeJS.ProcessEnv;
+}
+
+function runGit(
+  cwd: string,
+  args: string[],
+  extraEnv?: Record<string, string>,
+  envDenyNames?: ReadonlySet<string>,
+  envDenyPredicate?: (name: string) => boolean,
+): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const env = extraEnv != null ? { ...process.env, ...extraEnv } : process.env;
+    const env = buildGitEnv(extraEnv, envDenyNames, envDenyPredicate);
     const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
@@ -254,9 +305,15 @@ function runGit(cwd: string, args: string[], extraEnv?: Record<string, string>):
   });
 }
 
-function runGitCapture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+function runGitCapture(
+  cwd: string,
+  args: string[],
+  envDenyNames?: ReadonlySet<string>,
+  envDenyPredicate?: (name: string) => boolean,
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const env = buildGitEnv(undefined, envDenyNames, envDenyPredicate);
+    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => {

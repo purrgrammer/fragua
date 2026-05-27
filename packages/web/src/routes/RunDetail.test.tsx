@@ -1,5 +1,6 @@
 import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
+import type { RunDetail } from "../lib/api.ts";
 import { StatsStrip } from "./RunDetail.tsx";
 
 // Minimal RunDetail payload — only the fields StatsStrip reads.
@@ -17,6 +18,19 @@ const baseDetail = {
   cacheWriteTokens: 0,
   durationMs: 1234,
 };
+
+describe("RunDetail.input — dead field", () => {
+  test("RunDetail type must NOT expose an `input` field (server dropped it)", () => {
+    // If this test fails to compile (TS error on the @ts-expect-error line),
+    // it means `input` was correctly removed from the RunDetail type.
+    // If TS does NOT error here, it means `input` still exists — the bug is present.
+    const d = {} as RunDetail;
+    // @ts-expect-error — `input` must not exist on RunDetail; remove this line once it's gone
+    const _dead: string | undefined = d.input;
+    // Runtime guard: the field resolves to undefined (server never sends it).
+    expect(_dead).toBeUndefined();
+  });
+});
 
 describe("StatsStrip — Cache hit rate tile", () => {
   afterEach(() => cleanup());

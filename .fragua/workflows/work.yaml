@@ -4,7 +4,7 @@
 # operator to accept (apply + commit) from the inbox.
 #
 # A pure classifier (`triage`) dispatches to a preamble that frames the work;
-# a shared spine then implements, reviews, gates, and lands it:
+# a shared spine then implements, reviews, and lands it:
 #
 #   small   → (no preamble)              → implement
 #   feature → plan (deep, cross-package) → implement
@@ -17,8 +17,9 @@
 #     cheap. `triage` reads the task; `gate` reads the diff.
 #   - One thread (`build`) for the one real conversation (plan / reproduce ↔
 #     implement ↔ review). Every classifier and mechanical step is stateless.
-#   - `gate` decides human review from the DIFF, never from how triage classified.
-#   - `feedback` (signoff) and REJECT (review) are revision LOOPS to implement.
+#   - Review happens at accept time (operator reviews the diff before landing);
+#     `bun run ci` is read-only, so the run promotes to it without a human gate.
+#   - REJECT (review) is a revision LOOP back to implement (capped).
 #
 #   bun run fragua run work --input task="add a --json flag to the list command"
 #   bun run fragua run work --input task="fix: bash tool hangs when a command writes to stdin"
@@ -118,29 +119,7 @@ steps:
   format:
     type: tool
     run: bun run format
-    next: gate
-
-  gate:                                # pure classifier — isolated, diff-only
-    type: llm
-    model: claude-sonnet-4-6
-    allowed-tools: [bash, read]
-    prompt: |
-      Read `git diff HEAD`, then classify it by calling the `route` tool.
-        auto  — contained change, no contract surface.
-        human — touches shared contracts (public APIs, persisted schemas, cross-package boundaries), security-sensitive, or breaks a public API.
-
-      You MUST end by calling `route` exactly once. Do not reply with prose or
-      end your turn without routing — a turn with no `route` call fails the run.
-    routes:
-      auto:  {to: ci,      label: "Auto-promote"}
-      human: {to: signoff, label: "Needs review"}
-
-  signoff:
-    type: human
-    text: "Approve this change for CI?"
-    routes:
-      approve:  {to: ci,        label: "Approve"}
-      feedback: {to: implement, label: "Request changes"}
+    next: ci
 
   ci:
     type: tool

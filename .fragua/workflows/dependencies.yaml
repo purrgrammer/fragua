@@ -103,4 +103,6 @@ steps:
       A dependency bump broke the build. Re-run the failing check (`bun run typecheck`, then `bun run ci`), read the failure, and make the MINIMAL source change to adapt to the new dependency APIs — the bumps in this thread tell you what moved.
 
       Never downgrade a pin, loosen it to a range, disable a test, lower an assertion, or relax a linter to make a check pass. If a bump can only be made to pass by reverting it, `abort` with `incompatible bump: <pkg> <reason>`. Stop once the check you ran is green.
-    next: typecheck
+    on:
+      success: typecheck
+      fail: exit

@@ -112,16 +112,10 @@ describe("runStateToSummary — title + input", () => {
     expect(runStateToSummary(s, events, undefined).title).toBeUndefined();
   });
 
-  test("input comes from routing.input when set", () => {
+  test("routing.input in routing is not surfaced on summary (field removed)", () => {
     const s = makeState({ routing: { input: "rename foo() to bar()" } });
     const summary = runStateToSummary(s, [], undefined);
-    expect(summary.input).toBe("rename foo() to bar()");
-  });
-
-  test("missing / empty / non-string routing.input → summary.input undefined", () => {
-    expect(runStateToSummary(makeState({ routing: {} }), [], undefined).input).toBeUndefined();
-    expect(runStateToSummary(makeState({ routing: { input: "" } }), [], undefined).input).toBeUndefined();
-    expect(runStateToSummary(makeState({ routing: { input: 42 } }), [], undefined).input).toBeUndefined();
+    expect((summary as Record<string, unknown>)["input"]).toBeUndefined();
   });
 });
 

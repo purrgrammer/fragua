@@ -244,7 +244,6 @@ export function RunDetail(): JSX.Element {
                 isLive={isLive}
                 isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
-                userInput={detail?.input ?? null}
                 hitl={
                   detail?.runStatus === "paused_human" && detail.hitlNodeId
                     ? {
@@ -610,20 +609,12 @@ const shortenRunId = shortRunId;
 
 function headingText(detail: RunDetailT): string {
   if (detail.title && detail.title.length > 0) return detail.title;
-  if (detail.input && detail.input.length > 0) {
-    const single = detail.input.replace(/\s+/g, " ").trim();
-    return single.length > 80 ? `${single.slice(0, 79)}…` : single;
-  }
-  return shortenRunId(detail.runId);
+  return detail.workflowName ?? shortenRunId(detail.runId);
 }
 
 function headingTitle(detail: RunDetailT): string {
   if (detail.title && detail.title.length > 0) return detail.title;
-  if (detail.input && detail.input.length > 0) {
-    const single = detail.input.replace(/\s+/g, " ").trim();
-    return single.length > 80 ? `${single.slice(0, 79)}…` : single;
-  }
-  return detail.runId;
+  return detail.workflowName ?? detail.runId;
 }
 
 function projectBasename(p: string): string {

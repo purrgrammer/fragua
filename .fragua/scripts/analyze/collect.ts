@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { HANDLER_BY_SHAPE, parseDotSource } from "@fragua/core";
+import { deserializeGraph, handlerOf } from "@fragua/core";
 
 interface Args {
   storePath: string;
@@ -64,7 +64,7 @@ interface RunRow {
   run_id: string;
   workflow_name: string;
   workflow_sha: string;
-  dot_source: string;
+  ir: string;
   status: string;
   current_node: string | null;
   enqueued_at: number;
@@ -75,19 +75,19 @@ interface RunRow {
   title: string | null;
 }
 
-// nodeId -> handler type ("codergen" | "tool" | "start" | "exit" | ...),
-// derived from the workflow DOT. Cached per workflow_sha — the same graph
-// underlies every run on that sha. Unparseable workflows yield an empty
+// nodeId -> handler type ("llm" | "tool" | "human" | "start" | "exit"),
+// resolved from the workflow's canonical IR. Cached per workflow_sha — the
+// same graph underlies every run on that sha. Unparseable IR yields an empty
 // map; affected nodes get handler_type: null.
 const handlerTypesByWorkflowSha = new Map<string, Map<string, string>>();
-function handlerTypesFor(sha: string, dotSource: string): Map<string, string> {
+function handlerTypesFor(sha: string, ir: string): Map<string, string> {
   const cached = handlerTypesByWorkflowSha.get(sha);
   if (cached) return cached;
   const map = new Map<string, string>();
   try {
-    const graph = parseDotSource(dotSource);
+    const graph = deserializeGraph(ir);
     for (const [id, node] of Object.entries(graph.nodes)) {
-      map.set(id, HANDLER_BY_SHAPE[node.shape]);
+      map.set(id, handlerOf(node));
     }
   } catch {
     // leave empty — handler_type falls back to null downstream
@@ -135,7 +135,7 @@ const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
 const runs = db.prepare(`
   SELECT
-    rs.run_id, w.name AS workflow_name, rs.workflow_sha, w.dot_source,
+    rs.run_id, w.name AS workflow_name, rs.workflow_sha, w.ir,
     rs.status, rs.current_node,
     rs.enqueued_at, rs.updated_at, rs.node_started_at,
     rs.metrics, rs.routing, rs.title
@@ -180,17 +180,11 @@ interface SteerSummary {
 interface RunSummary {
   run_id: string;
   workflow: string;
-  workflow_sha: string;
   status: string;
   current_node: string | null;
-  enqueued_at: number;
-  updated_at: number;
   duration_seconds: number;
   total_cost_usd: number;
   billed_tokens: number;
-  fresh_tokens: number;
-  cache_read_tokens: number;
-  active_seconds: number;
   models: string[];
   terminal_fact: { type: string; payload: unknown } | null;
   intent_counts: Record<string, number>;
@@ -199,7 +193,6 @@ interface RunSummary {
   per_node: PerNodeSummary[];
   steers: SteerSummary[];
   tool_call_total: number;
-  input_preview: string | null;
 }
 
 const summaries: RunSummary[] = [];
@@ -430,7 +423,7 @@ for (const r of runs) {
     return { seq: s.seq, ts: s.ts, text: (p.text ?? "").slice(0, 500) };
   });
 
-  const handlerTypes = handlerTypesFor(r.workflow_sha, r.dot_source);
+  const handlerTypes = handlerTypesFor(r.workflow_sha, r.ir);
 
   const perNode: PerNodeSummary[] = [];
   const allNodeIds = new Set<string>([
@@ -452,22 +445,17 @@ for (const r of runs) {
           .map(([tool, v]) => ({ tool, n: v.n, n_errors: v.n_errors }))
           .sort((a, b) => b.n - a.n)
       : [];
-    // Sub-agent execution contexts ("__subagent:<hash>") aren't DOT nodes:
-    // their cost.recorded rolls into the parent's fact.node_completed and
-    // never projects to metrics.nodeCosts. The cost.recorded sum is their
-    // only — and final — accounting, so they're never "partial".
-    const isSubagent = nid.startsWith("__subagent:");
     // metrics.nodeCosts projects on fact.node_completed / fact.node_aborted.
     // Absent there but present in cost.recorded => the node is still running;
     // fall back to the live sums and flag the figures partial.
     const flushed = metrics.nodeCosts?.[nid];
-    const partial = !isSubagent && flushed === undefined && liveTokensByNode.has(nid);
+    const partial = flushed === undefined && liveTokensByNode.has(nid);
     const wall = Math.round((wallMsByNode.get(nid) ?? 0) / 1000);
     const llm = Math.round((llmMsByNode.get(nid) ?? 0) / 1000);
     const tool = Math.round((toolMsByNode.get(nid) ?? 0) / 1000);
     perNode.push({
       node_id: nid,
-      handler_type: isSubagent ? "subagent" : handlerTypes.get(nid) ?? null,
+      handler_type: handlerTypes.get(nid) ?? null,
       loop_count: metrics.loopCounts?.[nid] ?? 0,
       tokens: flushed?.tokens ?? liveTokensByNode.get(nid) ?? 0,
       cost_usd: flushed?.costUsd ?? liveCostByNode.get(nid) ?? 0,
@@ -485,24 +473,14 @@ for (const r of runs) {
   }
   perNode.sort((a, b) => b.cost_usd - a.cost_usd);
 
-  const billed = metrics.billedTokens ?? 0;
-  const fresh = (metrics.totalInputTokens ?? 0) + (metrics.totalOutputTokens ?? 0);
-  const cacheRead = metrics.totalCacheReadTokens ?? 0;
-
   summaries.push({
     run_id: r.run_id,
     workflow: r.workflow_name,
-    workflow_sha: r.workflow_sha,
     status: r.status,
     current_node: r.current_node,
-    enqueued_at: r.enqueued_at,
-    updated_at: r.updated_at,
     duration_seconds: Math.round((r.updated_at - r.enqueued_at) / 1000),
     total_cost_usd: metrics.totalCostUsd ?? 0,
-    billed_tokens: billed,
-    fresh_tokens: fresh,
-    cache_read_tokens: cacheRead,
-    active_seconds: Math.round((metrics.activeMs ?? 0) / 1000),
+    billed_tokens: metrics.billedTokens ?? 0,
     models: Object.keys(metrics.models ?? {}),
     terminal_fact: terminalRow
       ? { type: terminalRow.type, payload: JSON.parse(terminalRow.payload) }
@@ -513,9 +491,6 @@ for (const r of runs) {
     per_node: perNode,
     steers,
     tool_call_total: runToolTotal,
-    input_preview: typeof routing.input === "string"
-      ? (routing.input as string).slice(0, 240)
-      : null,
   });
 }
 
@@ -737,6 +712,37 @@ for (const [wf, runs] of byWorkflow) {
 
 aggregates.sort((a, b) => b.n_runs - a.n_runs);
 
+// Output projection for `runs[]`. `summaries` carries the full per-run detail
+// the workflow aggregator needs; what we emit is trimmed to what the analysis
+// prompt actually cites — run_ids plus the handful of numbers used as per-run
+// outlier evidence. Everything dropped here is already aggregated per workflow
+// in `node_profiles` / the aggregate fields (handler_type→node_type, models,
+// cache tokens, tool_calls→top_tools, intent_counts→total_*, steers→
+// steer_messages), so omitting it loses no signal, only duplication.
+const runsOut = summaries.map(s => ({
+  run_id: s.run_id,
+  workflow: s.workflow,
+  status: s.status,
+  current_node: s.current_node,
+  duration_seconds: s.duration_seconds,
+  total_cost_usd: s.total_cost_usd,
+  billed_tokens: s.billed_tokens,
+  terminal_fact: s.terminal_fact,
+  node_aborts: s.node_aborts,
+  goal_gate_retries: s.goal_gate_retries,
+  per_node: s.per_node.map(n => ({
+    node_id: n.node_id,
+    loop_count: n.loop_count,
+    tokens: n.tokens,
+    cost_usd: n.cost_usd,
+    partial: n.partial,
+    wall_seconds: n.wall_seconds,
+    llm_seconds: n.llm_seconds,
+    tool_seconds: n.tool_seconds,
+    dispatch_seconds: n.dispatch_seconds,
+  })),
+}));
+
 const report = {
   collected_at: new Date().toISOString(),
   store_path: args.storePath,
@@ -752,7 +758,7 @@ const report = {
     sum_billed_tokens: summaries.reduce((a, r) => a + r.billed_tokens, 0),
   },
   by_workflow: aggregates,
-  runs: summaries,
+  runs: runsOut,
 };
 
 process.stdout.write(JSON.stringify(report));

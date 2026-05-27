@@ -172,13 +172,12 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
 
     // Fire. The mint + enqueue both route through the plane; the dispatcher
     // passes NO inputDecls, so schedules keep their no-typed-input-validation
-    // behavior (only the free-form `input` lands on routing).
+    // behavior.
     plane.commitSaveWorkflow({ sha: mint.sha, name: resolved.name, source, ir: mint.ir, irVersion: mint.irVersion });
     const enq = plane.buildEnqueue({
       workflowSha: mint.sha,
       cwd: spawnCwd,
       projectId: row.projectId,
-      ...(row.input != null && row.input.length > 0 ? { input: row.input } : {}),
       ...(resolved.scope === "global" || resolved.scope === "local"
         ? { workflowName: resolved.name, workflowScope: resolved.scope }
         : { workflowScope: "path" as const, workflowPath: resolved.dotPath }),
@@ -188,6 +187,7 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
     plane.commitEnqueue(enq.params);
     const runId = enq.runId;
     opts.store.recordScheduleFire(row.id, runId, now);
+    if (row.title != null && row.title.length > 0) opts.store.setRunTitle(runId, row.title);
     opts.store.appendDaemonEvent(
       {
         type: "fact.schedule_fired",

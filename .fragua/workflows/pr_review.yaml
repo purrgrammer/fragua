@@ -23,7 +23,7 @@
 
 name: pr_review
 goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR (comment or request-changes) with no human gate.
-budget: 10.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 2.50 + verify 0.60) + verdict (0.15) = 9.85, so a retry never halts mid-pass on the cap
+budget: 21.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 6.00 + verify 0.60) + verdict (0.15) = 20.35, so a retry never halts mid-pass on the cap. review_full bumped 2.50→6.00 so a large (multi-kLoC) diff finishes one deep pass; the real fix for huge diffs (chunked/scoped review) is tracked separately.
 
 inputs:
   pr:
@@ -92,7 +92,7 @@ steps:
     effort: high
     thread: review
     allowed-tools: [read, grep, bash, write]
-    max-cost: 2.50
+    max-cost: 6.00 # one deep pass; raised from 2.50 so a large multi-kLoC diff finishes (huge-diff chunking tracked separately)
     next: verify
     prompt: |
       Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
@@ -150,12 +150,17 @@ steps:
       changes: {to: post_changes, label: "Request changes"}
 
   # Two terminal posts — each a PURE TOOL node (no LLM): the body is already a file, so posting is one
-  # deterministic gh call (the states a GITHUB_TOKEN bot can actually post). A non-zero gh exit halts.
+  # deterministic gh call (the states a GITHUB_TOKEN bot can actually post). A non-zero gh exit routes
+  # to exit gracefully rather than halting with aborted_exit.
   post_comment:
     type: tool
     run: gh pr review ${{ inputs.pr }} --comment --body-file pr-review.md
-    next: exit
+    on:
+      success: exit
+      fail: exit
   post_changes:
     type: tool
     run: gh pr review ${{ inputs.pr }} --request-changes --body-file pr-review.md
-    next: exit
+    on:
+      success: exit
+      fail: exit

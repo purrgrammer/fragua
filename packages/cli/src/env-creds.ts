@@ -33,6 +33,124 @@ import { findEnvKeys, getEnvApiKey, getProviders } from "@mariozechner/pi-ai";
 // dedicated COPILOT_GITHUB_TOKEN is what resolved.
 const COPILOT_AMBIENT_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
 
+// ---------------------------------------------------------------------------
+// CI env secret capture
+// ---------------------------------------------------------------------------
+
+/** Name suffixes that mark an env var as a likely secret (default-deny list).
+ * Only names matching one of these suffixes (or in the known-provider-var set)
+ * are captured as needles. Everything else is NOT a needle.
+ *
+ * Matching is case-insensitive (checked via name.toUpperCase()). Do NOT add
+ * broad suffixes like _URL — DATABASE_URL is covered by the conn_string_userinfo
+ * pattern; a blanket _URL would over-strip non-secret variables. */
+const CI_ENV_SECRET_SUFFIXES = [
+  "_KEY",
+  "_SECRET",
+  "_TOKEN",
+  "_PASSWORD",
+  "_CREDENTIAL",
+  "_PASS",
+  "_AUTH",
+  "_PASSPHRASE",
+] as const;
+
+/** Build the set of known provider env-var names from pi-ai's registry.
+ * Memoised: called once at capture time, not on every check. */
+function knownProviderVarNames(): Set<string> {
+  const names = new Set<string>();
+  for (const provider of getProviders()) {
+    for (const name of findEnvKeys(provider) ?? []) {
+      // Apply the same COPILOT_AMBIENT_ENV denial as seedCredsFromEnv so we
+      // don't accidentally admit GH_TOKEN / GITHUB_TOKEN as needles when the
+      // caller hasn't set COPILOT_GITHUB_TOKEN.
+      if (!COPILOT_AMBIENT_ENV.has(name)) {
+        names.add(name);
+      }
+    }
+  }
+  return names;
+}
+
+/** Returns true when an env var NAME indicates it is secret, regardless
+ * of the value. Shared predicate for both `captureCiEnvSecrets` (which
+ * also checks the value is non-empty) and `ciEnvDenyNames` (strip by
+ * name unconditionally — an attacker could set the var later). */
+function isSecretEnvName(name: string, providerVars: Set<string>): boolean {
+  const upper = name.toUpperCase();
+  const isSecretSuffix = CI_ENV_SECRET_SUFFIXES.some((suffix) => upper.endsWith(suffix));
+  const isProviderVar = providerVars.has(name);
+  return isSecretSuffix || isProviderVar;
+}
+
+/**
+ * Capture env entries whose NAME indicates a secret (default-deny by name).
+ * Returns `{ name, value }` pairs; empty values are excluded. The registry's
+ * own value-length floor (8 chars + no whitespace) handles very-short values.
+ *
+ * Rules (applied in order):
+ *  1. Name suffix matches one of `CI_ENV_SECRET_SUFFIXES`.
+ *  2. Name appears in the pi-ai known-provider-var set (minus COPILOT_AMBIENT_ENV).
+ * Default-DENY: names that match neither rule are NOT captured regardless of
+ * their value (GITHUB_REPOSITORY, NODE_ENV, PATH, etc.).
+ *
+ * @param env - defaults to `process.env`; injectable for tests.
+ */
+export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array<{ name: string; value: string }> {
+  const providerVars = knownProviderVarNames();
+  const result: Array<{ name: string; value: string }> = [];
+  let skipped = 0;
+  for (const [name, value] of Object.entries(env)) {
+    if (!value) continue;
+    if (!isSecretEnvName(name, providerVars)) continue;
+    if (value.length < 8 || /\s/.test(value)) {
+      skipped++;
+      continue;
+    }
+    result.push({ name, value });
+  }
+  if (skipped > 0) {
+    console.error(`fragua: ${skipped} secret env var(s) skipped (value below scrub floor — will NOT be scrubbed)`);
+  }
+  return result;
+}
+
+/**
+ * Build the set of env var NAMES that should be stripped from bash-tool
+ * subprocesses in `fragua ci` (proposal §6 unit 9b — perimeter env-strip).
+ *
+ * Uses the same predicate as `captureCiEnvSecrets` so the strip set ≡ the
+ * scrub-needle name set ("one list, two consumers"). Unlike `captureCiEnvSecrets`,
+ * empty-value vars ARE included — the strip is name-based, unconditional,
+ * because an attacker could later assign a value to a secret-named var.
+ *
+ * @param env - defaults to `process.env`; injectable for tests.
+ */
+export function ciEnvDenyNames(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const providerVars = knownProviderVarNames();
+  const result = new Set<string>();
+  for (const name of Object.keys(env)) {
+    if (isSecretEnvName(name, providerVars)) result.add(name);
+  }
+  return result;
+}
+
+/**
+ * Returns a PREDICATE `(name: string) => boolean` that returns `true` when an
+ * env var name should be stripped from a bash subprocess. Uses the same rule
+ * as `ciEnvDenyNames` / `captureCiEnvSecrets` (`isSecretEnvName`) so strip
+ * and needle-set share one definition.
+ *
+ * Unlike `ciEnvDenyNames` (a Set captured at call time), this predicate is
+ * applied at SPAWN TIME against the live env, catching any secret-named var
+ * set AFTER the Set was built. The provider-var set is memoised in the closure
+ * so the predicate is cheap to call on every spawn.
+ */
+export function ciEnvDenyPredicate(): (name: string) => boolean {
+  const providerVars = knownProviderVarNames();
+  return (name: string) => isSecretEnvName(name, providerVars);
+}
+
 /**
  * Seed `store`'s `provider_credentials` rows from the conventional credential
  * env vars. Returns the providers that were seeded (had a usable token in

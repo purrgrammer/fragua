@@ -18,7 +18,7 @@ describe("schedule queries", () => {
     );
     expect(created.overlapPolicy).toBe("skip");
     expect(created.pausedAt).toBeNull();
-    expect(created.input).toBeNull();
+    expect(created.title).toBeNull();
     expect(created.nextFireAt).toBe(1_700_000_000_000);
 
     const fetched = store.getSchedule("sch_a");

@@ -5,7 +5,9 @@
 // save + enqueue the workflow, drive the run to a
 // stop-state, render the event log, and exit with a code that reflects the
 // outcome (see `../cli-exit.ts` for the total status → exit-code map). The
-// `.db` is a portable artifact.
+// `--db` store is a RAW local-inspection artifact (event log + transcript,
+// credential TABLE dropped but content NOT scrubbed); the `--export` bundle is
+// the scrubbed, safe-to-publish egress.
 //
 // Pause policy: the drive loop CONTINUES the `paused_auto` arm — the
 // daemon-owed clock tick (provider_retry / handler_retry / timeout_retry) —
@@ -30,7 +32,13 @@ import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
-import { seedCredsFromEnv, seedCredsFromGlobalStore } from "../env-creds.ts";
+import {
+  captureCiEnvSecrets,
+  ciEnvDenyNames,
+  ciEnvDenyPredicate,
+  seedCredsFromEnv,
+  seedCredsFromGlobalStore,
+} from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
@@ -43,7 +51,9 @@ const BATCH = 500;
 export interface CiCommandOptions {
   workflow: string;
   /** Ephemeral store path. Default: a temp dir (discarded on exit). Pin with
-   * `--db` to keep the raw store (pruned to portable tables on exit). */
+   * `--db` to keep the RAW store (credential table dropped, but the event log +
+   * transcript are NOT scrubbed — local inspection / HITL resume only, not safe
+   * to publish; use `--export` for the scrubbed artifact). */
   dbPath?: string;
   /** Export a portable, secret-free `.fragua` bundle on exit — the safe CI
    * artifact (carries only the portable run record; credentials never travel). */
@@ -129,8 +139,14 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const onSig = () => shutdown.abort();
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
-  const provisioner = new WorktreeProvisioner();
+  const provisioner = new WorktreeProvisioner({
+    envDenyNames: ciEnvDenyNames(),
+    envDenyPredicate: ciEnvDenyPredicate(),
+  });
   let runId: string | undefined;
+  // Captured at seed time so mid-run rotation can't desync the registry.
+  let ciEnvSecrets: Array<{ name: string; value: string }> = [];
+  let computedExitCode: number = CLI_EXIT.usage;
 
   try {
     // Seed credentials: the global store's configured providers (what
@@ -140,6 +156,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // from this store's provider_credentials, the same path the daemon uses.
     const seededGlobal = await seedCredsFromGlobalStore(store, storePath);
     const seededEnv = seedCredsFromEnv(store);
+    ciEnvSecrets = captureCiEnvSecrets();
     const seeded = [...new Set([...seededGlobal, ...seededEnv])];
     const config = await loadConfig(cwd);
     let timeouts: ReturnType<typeof resolveTimeouts>;
@@ -270,7 +287,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
 
     // A SIGINT/SIGTERM-interrupted drive is a cancellation regardless of the
     // status the run happened to be parked in when the signal fired.
-    if (shutdown.signal.aborted) return CLI_EXIT.cancelled;
+    if (shutdown.signal.aborted) {
+      computedExitCode = CLI_EXIT.cancelled;
+      return computedExitCode;
+    }
 
     const status = store.getState(rid)?.status ?? "halted";
     const code = cliExitCode(status, stopReason);
@@ -289,10 +309,12 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     } else if (status === "queued" || status === "running" || status === "paused_auto") {
       console.error(chalk.red(`ci: driver stopped on a non-terminal status (${status}) — this is a ci bug`));
     }
-    return code;
+    computedExitCode = code;
+    // computedExitCode may be overridden to CLI_EXIT.usage in `finally` if a
+    // live secret was detected in the bundle export.
   } catch (err) {
     console.error(chalk.red(`ci: ${(err as Error).message}`));
-    return CLI_EXIT.usage;
+    computedExitCode = CLI_EXIT.usage;
   } finally {
     process.removeListener("SIGINT", onSig);
     process.removeListener("SIGTERM", onSig);
@@ -305,23 +327,44 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
         // already disposed, or never provisioned — nothing to clean up.
       }
     }
-    // Export a portable, secret-free `.fragua` bundle before the store
-    // closes/vanishes — the safe CI artifact (carries only the portable run
-    // record; provider tables are never read into it, so no scrub needed).
+    // Bundle export is BEST-EFFORT and runs BEFORE the --db store is pruned
+    // to portable tables (below) — it must read provider_credentials to build
+    // the scrub registry, so it must execute while those rows are still present.
+    // The prune happens after. A failed export leaves the unpruned --db behind
+    // — that is by design: the operator still gets the raw inspection store,
+    // and re-running the export against --db reproduces the same bundle.
+    // CI profile: generic markers, env secrets as extra needles, fail the job
+    // if a live secret sits verbatim in an un-scrubbed binary artifact.
     if (opts.exportPath != null && opts.exportPath.length > 0 && runId !== undefined) {
       try {
         const dest = resolve(opts.exportPath);
         mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, store.exportRunBundle(runId, { fraguaVersion: FRAGUA_VERSION }));
-        console.log(chalk.dim(`bundle → ${dest}`));
+        const extraLiterals = ciEnvSecrets.map((s) => ({ value: s.value, source: `env:${s.name}` }));
+        const { bytes, liveLiteralHit } = store.exportRunBundle(runId, {
+          fraguaVersion: FRAGUA_VERSION,
+          labelMode: "generic",
+          extraLiterals,
+        });
+        writeFileSync(dest, bytes);
+        console.log(chalk.dim(`bundle \u2192 ${dest}`));
+        if (liveLiteralHit) {
+          console.error(
+            chalk.red(`ci: a live secret reached an UNSCRUBBED binary artifact — review/exclude it before publishing.`),
+          );
+          computedExitCode = CLI_EXIT.scrubLeak;
+        }
       } catch (e) {
         console.error(chalk.yellow(`ci: bundle export failed: ${(e as Error).message}`));
       }
     }
-    // A persisted `--db` store is left behind as a portable artifact, but the
-    // run seeded provider credentials into it — prune to the portable tables
-    // so the exported store is secret-free. (The temp store, `storeDir` set,
-    // is removed below, so there's nothing to scrub there.)
+    // A persisted `--db` store is left behind for LOCAL inspection / HITL
+    // resume. Prune to the portable tables — drops the `provider_credentials`
+    // table + instance-scoped tables. This is NOT a scrub: the retained
+    // `events`/`messages` still hold the RAW transcript + observability deltas,
+    // which can contain secrets verbatim. `--db` is a raw artifact, NOT
+    // safe to publish — the secret-free egress is the `--export` bundle
+    // (scrubbed in `exportRunBundle`). (The temp store, `storeDir` set, is
+    // removed below.)
     if (storeDir === undefined) {
       try {
         store.retainPortableTables();
@@ -332,4 +375,5 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     store.close();
     if (storeDir !== undefined) rmSync(storeDir, { recursive: true, force: true });
   }
+  return computedExitCode;
 }
