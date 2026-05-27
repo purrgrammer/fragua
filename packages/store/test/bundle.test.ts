@@ -1,8 +1,9 @@
 // Bundle export/import (docs/proposals/archive/bundles.md): the deterministic tar
-// round-trips through the system `tar`; `exportRunBundle` carries the run's raw
-// event log + transcript + blobs and NEVER the seeded credential; import
-// re-DERIVES `run_state` by replaying the log (no projection in the bundle), so
-// an imported run reconstructs faithfully and is inert (cwd null).
+// round-trips through the system `tar`; `exportRunBundle` carries a FILTERED event
+// log (fact.* + intent.* + cost.recorded only — observability dropped) + transcript
+// + blobs and NEVER the seeded credential; import re-DERIVES `run_state` by
+// replaying the log (no projection in the bundle), so an imported run reconstructs
+// faithfully and is inert (cwd null).
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -365,5 +366,119 @@ describe("importRunBundle", () => {
     const dst = freshStore();
     expect(() => dst.importRunBundle(writeTar(entries))).toThrow(/integrity check/);
     dst.close();
+  });
+});
+
+describe("exportRunBundle — observability event filtering", () => {
+  /** Seed a terminal run and append several observability events of different
+   * families, plus a cost.recorded event, before exporting. */
+  async function seedWithObservability(store: ReturnType<typeof freshStore>): Promise<string> {
+    const runId = await seedTerminalRun(store);
+    store.appendObservabilityEvents(runId, [
+      { type: "llm.text_delta", payload: { delta: "secret token here" } },
+      { type: "agent.turn_start", payload: { nodeId: "work", iteration: 0 } },
+      { type: "tool.execution_start", payload: { name: "bash", nodeId: "work" } },
+      { type: "summary.text_delta", payload: { delta: "summarised thread content" } },
+      { type: "control.pause_requested", payload: { reason: "human" } },
+      { type: "steering.message_sent", payload: { text: "steer text" } },
+      { type: "run.title_generated", payload: { title: "My secret run" } },
+      { type: "budget.warning", payload: { threshold: 0.8 } },
+      { type: "cost.recorded", payload: { inputTokens: 100, outputTokens: 50, costUsd: 0.001 } },
+    ]);
+    return runId;
+  }
+
+  function extractEventTypes(bytes: Uint8Array, runId: string): string[] {
+    const entries = readTar(bytes);
+    const evEntry = entries.find((e) => e.name === `runs/${runId}/events.jsonl`);
+    if (evEntry == null) return [];
+    return new TextDecoder()
+      .decode(evEntry.data)
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as { type: string }).type);
+  }
+
+  test("(a) content-bearing observability families are absent from the exported events.jsonl", async () => {
+    const store = freshStore();
+    const runId = await seedWithObservability(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const types = extractEventTypes(bytes, runId);
+    const droppedPrefixes = ["llm.", "agent.", "tool.execution", "summary.", "control.", "steering.", "budget."];
+    const droppedLiterals = ["run.title_generated"];
+    for (const prefix of droppedPrefixes) {
+      const leaked = types.filter((t) => t.startsWith(prefix));
+      expect(leaked).toEqual([]);
+    }
+    for (const lit of droppedLiterals) {
+      expect(types).not.toContain(lit);
+    }
+  });
+
+  test("(b) cost.recorded survives the filter", async () => {
+    const store = freshStore();
+    const runId = await seedWithObservability(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const types = extractEventTypes(bytes, runId);
+    expect(types).toContain("cost.recorded");
+  });
+
+  test("(c) fact.* events survive and importRunBundle derives status=completed", async () => {
+    const src = freshStore();
+    const runId = await seedWithObservability(src);
+    const bytes = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const types = extractEventTypes(bytes, runId);
+    expect(types.some((t) => t.startsWith("fact."))).toBe(true);
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    expect(dst.getState(runId)?.status).toBe("completed");
+    dst.close();
+  });
+
+  test("(d) genesis intent.run_enqueued survives so import works", async () => {
+    const store = freshStore();
+    const runId = await seedWithObservability(store);
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const types = extractEventTypes(bytes, runId);
+    expect(types).toContain("intent.run_enqueued");
+  });
+
+  test("stored events are not mutated — getEvents still returns all families", async () => {
+    const store = freshStore();
+    const runId = await seedWithObservability(store);
+    const allStored = store.getEvents(runId).map((e) => e.type);
+    store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    const allAfter = store.getEvents(runId).map((e) => e.type);
+    expect(allAfter).toEqual(allStored);
+    expect(allStored).toContain("llm.text_delta");
+    store.close();
+  });
+
+  test("manifest events count reflects filtered count, not total stored", async () => {
+    const store = freshStore();
+    const runId = await seedWithObservability(store);
+    const totalStored = store.getEvents(runId).length;
+    const bytes = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const entries = readTar(bytes);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
+    ) as BundleManifest;
+    const exportedCount = manifest.runs[0]!.events;
+    expect(exportedCount).toBeLessThan(totalStored);
+
+    const types = extractEventTypes(bytes, runId);
+    expect(types.length).toBe(exportedCount);
   });
 });

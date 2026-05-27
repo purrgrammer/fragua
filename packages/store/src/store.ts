@@ -1298,13 +1298,19 @@ export class SqliteStore implements IEventStore {
   }
 
   /** Export `runId` as a portable `.fragua` bundle (bundles.md): a
-   * manifest-first tar carrying the run's raw EVENT LOG (genesis + facts),
-   * transcript, artifact rows, the content-addressed workflow, and the
-   * referenced blob bytes. There is NO `run_state` — it is re-derived on import
-   * by replaying the log. Secret + machine-local tables are never read, so the
-   * artifact is credential-free by construction. `fraguaVersion` is stamped for
-   * the import-time compatibility check.
+   * manifest-first tar carrying a FILTERED EVENT LOG, transcript, artifact
+   * rows, the content-addressed workflow, and the referenced blob bytes. There
+   * is NO `run_state` — it is re-derived on import by replaying the log.
    *
+   * Event filtering (allowlist): only `fact.*`, `intent.*`, and `cost.recorded`
+   * are written into the tar. All other event families (`agent.*`, `llm.*`,
+   * `tool.*`, `summary.*`, `control.*`, `steering.*`, `run.title_generated`,
+   * `budget.*`, `snapshot.*`, etc.) are content-bearing observability and are
+   * dropped. Stored events are never mutated — filtering is export-only.
+   * Full text scrubbing of the remaining content (steer/human-input payloads)
+   * is a separate later change; this export is not yet fully secret-free.
+   *
+   * `fraguaVersion` is stamped for the import-time compatibility check.
    * Single-run today (the `fragua ci --export` producer); the format is
    * multi-run by construction. Rows are canonically ordered (events by seq,
    * messages by ordinal, artifacts/blobs by sha) for re-export determinism. */
@@ -1314,7 +1320,10 @@ export class SqliteStore implements IEventStore {
     const wf = this.getWorkflow(run.workflowSha);
     if (wf == null) throw new Error(`exportRunBundle: workflow ${run.workflowSha} missing for run ${runId}`);
 
-    const events = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
+    const allEvents = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
+    const events = allEvents.filter(
+      (e) => e.type.startsWith("fact.") || e.type.startsWith("intent.") || e.type === "cost.recorded",
+    );
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
     const artifacts = this.listArtifacts(runId).sort(
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
