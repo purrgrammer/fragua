@@ -1,22 +1,26 @@
 ---
 title: Secret scrubbing for run bundles — egress-time redaction, not ingress
 summary: "Bundles are the only thing that leaves the machine, so they are the only thing that must be secret-free. The scrubber runs ONCE, at the egress boundary (`exportRunBundle`), over a terminal run — NOT at store-write time. This is forced by correctness: persisted `messages` and `routing.inputs` are read back into execution (shared-thread hydration, `${{ inputs.x }}` substitution, resume), so redacting them in place would feed `[REDACTED]` to the LLM. The local store stays RAW (execution truth); the bundle is REDACTED (publication truth) — and that is fully compatible with I3, which forbids rewriting a committed fact, not transforming a read into a new artifact. `fragua ci` gets a distinct high-assurance profile (fail-closed, job-fails on a live-cred hit, env-seed registry) because its bundle is the least-trusted destination and the threat model there is adversarial. Disclosure rides inline `[REDACTED:source]` markers, not a manifest that travels in the tar."
-status: partial-implemented
-maturity: sketch
-last-reviewed: 2026-05-27
-implemented-units: "§5-§8 (unit 9a: CI profile + env-name capture + liveLiteralHit + return-shape change); unit 9b: bash-subprocess perimeter env-strip"
+status: implemented-experimental
+maturity: experimental
+last-reviewed: 2026-05-28
+implemented-units: "Export scrubber shipped — §4 egress filter, §7 registry (Aho-Corasick), §8 disclosure (no tally + perimeter alarm), §10 base patterns, §12 end-to-end PBT; ci profile §5/§6 (9a env-seed + generic markers + fail-closed exit 80, 9b bash-subprocess env-strip); composes with the run-input spill (large-run-inputs.md). REMAINING: config block §15 (unit 8), V2 (§13)."
+experimental: "EXPERIMENTAL until a v1 contract is cut. The bundle format (BUNDLE_VERSION, scrubberVersion, manifest shape), the scrubber's behaviour, the ci exit code (80), and the open calls below (cwd handling, label/keep-cwd flags) are NOT frozen and may change. Do not depend on bundle byte-stability or marker text across versions yet."
 ---
 
 # Secret scrubbing for run bundles
 
-> **Sketch — egress-only, correctness-forced.** The scrubber is an export-time
-> filter in `exportRunBundle`, not a store-write interceptor. The local SQLite
-> stays raw because the executor reads persisted `messages` / `routing` back into
-> execution; the bundle (the only artifact that leaves the machine) is the thing
-> that gets redacted. `fragua ci` runs a stricter, fail-closed profile of the
-> same engine. The former open knobs (marker granularity, entropy, `cwd`, tar
-> reproducibility) now resolve onto the two-profile trust split — see
-> [§13](#13-resolved-decisions-was-open-questions).
+> **Implemented, but EXPERIMENTAL — the contract is not frozen.** The scrubber is
+> an export-time filter in `exportRunBundle`, not a store-write interceptor. The
+> local SQLite stays raw because the executor reads persisted `messages` /
+> `routing` back into execution; the bundle (the only artifact that leaves the
+> machine) is the thing that gets redacted. `fragua ci` runs a stricter,
+> fail-closed profile of the same engine. The export scrubber + ci profile ship
+> today, **but bundles + scrubbing stay experimental until a v1 contract is
+> settled** — the bundle format, marker text, exit codes, and the open calls in
+> [§13](#13-resolved-decisions-was-open-questions) (notably `cwd` handling) are
+> deliberately NOT locked. Several knobs (marker granularity, entropy, tar
+> reproducibility) resolve onto the two-profile split; `cwd` does not yet — see §13.
 
 ## 1. The two load-bearing principles
 
@@ -379,20 +383,21 @@ absent fields (a new correctness surface) and gains little:
   text scrub. A credential in the title is caught; the field stays present (a
   string), so derive is unaffected. The residual *semantic* paraphrase risk is the
   same irreducible thinking-block problem, on a short, prompt-controlled surface.
-- **`cwd`** is **basename-normalized by default** at egress (`--keep-cwd-path` to
-  retain), and is additionally a literal needle so embedded path occurrences in
-  tool output redact too ([§7](#7-the-registry)). The anti-correlation argument
-  (`ci`/public cwd is a boring runner path; a sensitive local path only ships in a
-  deliberate low-exposure share) is why this is *normalize*, not *strip* — but it
-  is not strong enough to justify shipping `/Users/alice/clients/acme-merger`
-  verbatim to a colleague, so the basename default wins.
+- **`cwd` — OPEN, not yet settled (see [§13](#13-resolved-decisions-was-open-questions)).**
+  As *implemented*, `cwd` is a literal **needle** ([§7](#7-the-registry)): every
+  occurrence — the genesis `routing.cwd` and any embedded path in tool output —
+  is fully redacted to `[REDACTED:cwd]`. The earlier idea of *basename-normalizing*
+  instead (keep `acme-merger`, drop `/Users/alice/clients/…` for review context)
+  is **not implemented** and is deliberately left undecided for the v1 contract.
+  Full redaction is simpler and stronger; whether the lost basename context is
+  worth softening to is the open call.
 
 Both `cwd` and `title` live in the **event log** (genesis `routing.cwd`; the
 titling fact), not only `manifest.json`, and import re-derives state from the log
-— so transforming the manifest copy alone would not be enough. Scrub-in-place of
-the titling fact covers the title in both places; the `cwd` basename-normalization
-must likewise be applied to the genesis `routing.cwd` in the exported event log,
-not just the manifest field, or import re-derives the full path.
+— so transforming the manifest copy alone would not be enough. Both are handled
+at the event-log level: the title rides the event-payload text scrub, and `cwd`
+is a needle so the genesis `routing.cwd` is redacted in the exported log (not
+just the manifest field) — import then re-derives a redacted `cwd`.
 
 ## 12. Assurance: an end-to-end PBT
 
@@ -441,11 +446,14 @@ without a new axis:
   `ci`:** unattended, no one catches a false positive that silently degrades the
   artifact, and `ci`'s known secret set is already covered by patterns + env
   literals.
-- **`cwd` normalization → basename-normalize by default.** Strip to the final path
-  component at egress (`acme-merger` not `/Users/alice/clients/acme-merger`);
-  `--keep-cwd-path` retains the full path for trusted local shares. Independently,
-  cwd is a *needle* ([§7](#7-the-registry)) so embedded path occurrences in tool
-  output are redacted regardless of the manifest-field choice.
+- **`cwd` handling → STILL OPEN (deferred to the v1 contract).** *Implemented:*
+  `cwd` is a literal needle ([§7](#7-the-registry)), so every occurrence — genesis
+  `routing.cwd` + embedded paths in tool output — is fully redacted to
+  `[REDACTED:cwd]`. The alternative *basename-normalize* (`acme-merger`, dropping
+  `/Users/alice/clients/…`) with a `--keep-cwd-path` flag is **not built** and the
+  call is left for the v1 contract — full redaction is simpler/stronger; softening
+  for review context is the open question. (Listed here because the earlier draft
+  pre-decided it; that decision is withdrawn pending v1.)
 - **Tar reproducibility → deferred to V2, prerequisites landed now.** Byte-identical
   re-export (→ content-addressed/dedup bundles) is V2, but its two enablers are
   *required by this proposal already*: `scrub` is pure/deterministic ([§7](#7-the-registry)),
@@ -483,8 +491,17 @@ without a new axis:
   (don't redact-in-place — exclude the blob on a hit) is the likely answer, but
   it remains deferred. Operators with binary artifacts that may contain secrets
   should treat the exported bundle as sensitive.
+- **Per-export override flags not built.** Label mode shipped as a *profile
+  default* (`export`=source, `ci`=generic); the `--redaction-labels=source|generic`
+  override and the `--keep-cwd-path` flag from earlier drafts were never wired —
+  open for the v1 CLI surface.
 
 ## 14. MVP order
+
+> **Status:** items 1–6 shipped (+ the ci profile, units 9a/9b — env-seed,
+> generic markers, fail-closed exit 80, perimeter env-strip). Item 7 (config
+> block, §15) not started. All shipped behind the experimental flag — see the
+> frontmatter; nothing here is a frozen contract yet.
 
 1. **Egress filter in `exportRunBundle`** — drop content-bearing observability,
    keep `cost.recorded`; **correct the false "credential-free by construction"
