@@ -1415,7 +1415,10 @@ export class SqliteStore implements IEventStore {
    * `budget.*`, `snapshot.*`, etc.) are content-bearing observability and are
    * dropped. Stored events are never mutated — filtering is export-only.
    * Message content and event payload free-text fields are scrubbed at export
-   * time (literal credentials + cwd path + known-format patterns). Text-ish
+   * time (literal credentials + cwd path + known-format patterns). To build the
+   * literal needle set this reads `provider_credentials` payloads into the
+   * registry in memory for the duration of the call — cleartext secrets never
+   * enter the bundle, but the egress path does touch them. Text-ish
    * artifact blobs (mime `text/*` or `application/json|x-yaml|xml|javascript`)
    * are decoded, scrubbed, and re-CASed — the new sha replaces the original in
    * the artifacts JSONL, blob tar entry, and manifest blobs[] consistently.
