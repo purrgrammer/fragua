@@ -1,4 +1,4 @@
-// Bundle format — the portable `.fragua` artifact (docs/proposals/bundles.md).
+// Bundle format — the portable `.fragua` artifact (docs/proposals/archive/bundles.md).
 //
 // A bundle is its own ENTITY: one or more runs (as raw event logs), the
 // workflows they reference, and the content-addressed blobs they produced.

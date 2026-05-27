@@ -24,7 +24,7 @@ supersedes: "db-import.md §3 (tree-state/git-bundle), §3.2 (--rehydrate), §4.
 > of the tree-state / `--rehydrate` / `adopt` surface (§8). Deferred as written:
 > message-content-as-blobs (§5 north star) and resume of an imported run.
 
-> Child of [`cli-topology.md`](cli-topology.md). Additive; blocks nothing.
+> Child of [`cli-topology.md`](../cli-topology.md). Additive; blocks nothing.
 > Consumes the artifact a CI run produces.
 >
 > **Supersedes the tree-state path of [`db-import.md`](db-import.md).** That

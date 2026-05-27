@@ -330,7 +330,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // The payload carries the window, so the operator/UI infers too-new
     // (`pinnedVersion > supportedMax`) vs too-old (`< supportedMin`) without a
     // second reason. Capability-gated auto-wake for the too-new arm is deferred
-    // — see docs/proposals/event-contract-version.md §3.2.
+    // — see docs/proposals/archive/event-contract-version.md §3.2.
     if (state.contractVersion < MIN_COMPATIBLE_CONTRACT_VERSION || state.contractVersion > EVENT_CONTRACT_VERSION) {
       await tryAppendFact(opts.store, runId, state.version, [
         {

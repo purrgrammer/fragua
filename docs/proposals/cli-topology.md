@@ -56,9 +56,9 @@ the intent to the store directly.
 | 1 | intent plane — **shipped** (design doc removed) | shared validate/construct/mint surface, many ports | ✅ shipped |
 | 2 | fragua ci — **shipped** (design doc removed) | embedded executor over an ephemeral, portable store | ✅ shipped |
 | 3 | cli-store-client — **shipped** (design doc removed) | CLI as a direct store-client; `run` enqueues + tails; log UX; `--url` dropped; `db migrate`; run/runs share the `cliExitCode` taxonomy | ✅ shipped |
-| 4 | [`hitl-channel.md`](hitl-channel.md) | pluggable HITL — the interviewer pattern over pause-fact/answer-intent | sketch |
-| 5 | [`db-import.md`](db-import.md) | cross-machine import of a run's events into another store | sketch |
-| 6 | [`event-contract-version.md`](event-contract-version.md) | gate resume on an event-contract version, not the DB counter; make mismatch a recoverable pause not a terminal halt | partial — §3.2 shipped, §3.1 axis split open |
+| 4 | [`hitl-channel.md`](hitl-channel.md) | pluggable HITL — the interviewer pattern over pause-fact/answer-intent | sketch — **the only child still open** |
+| 5 | run import — **shipped** (archived as `bundles.md`) | cross-machine import of a run's events into another store, reshaped to a portable `.fragua` bundle (run_state derived on import) | ✅ shipped |
+| 6 | event-contract version — **shipped** (archived) | gate resume on an event-contract version, not the DB counter; mismatch is a recoverable pause, not a terminal halt | ✅ shipped |
 
 ## 4. Dependency DAG + ship order
 

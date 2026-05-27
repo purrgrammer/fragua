@@ -27,7 +27,7 @@ back down as a portable `.fragua` bundle for local inspection and aggregation.
   `provider_credentials` / `provider_config`). The format is **experimental** and
   release-gated: `bundleVersion` bumps freely with no migration path while
   unstable — treat a bundle as a throwaway inspection artifact, not durable
-  storage. See [`docs/proposals/bundles.md`](docs/proposals/bundles.md).
+  storage.
 - **Genesis identity in the event log.** `intent.run_enqueued` now carries the
   whole run identity (project, workflow link, routing seed, contract version), so
   a complete `run_state` is derivable by replaying a run's events — the keystone

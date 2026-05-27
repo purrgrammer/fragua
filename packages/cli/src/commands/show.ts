@@ -1,5 +1,5 @@
 // `fragua show <file.fragua>` — validate a bundle and summarize it WITHOUT a
-// store (docs/proposals/bundles.md §4). Structural + per-blob integrity checks,
+// store (docs/proposals/archive/bundles.md §4). Structural + per-blob integrity checks,
 // then replay each run's event log into a derived `run_state` for a one-line
 // summary. Read-only, no `--db`.
 

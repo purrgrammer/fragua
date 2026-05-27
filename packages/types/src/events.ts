@@ -185,7 +185,7 @@ export function isTerminal(status: RunStatus): boolean {
  *   "too old" (floor ratcheted past it, needs an operator rebuild). Both
  *   project to `paused`; the arm is inferred from the payload. (Splitting
  *   this into a `paused_auto` auto-wake for the too-new arm is deferred to
- *   `docs/proposals/event-contract-version.md` §3.1, where it rides the
+ *   `docs/proposals/archive/event-contract-version.md` §3.1, where it rides the
  *   contract-version bump.)
  *
  * **→ `paused_auto` (daemon owes a clock tick)**
@@ -240,7 +240,7 @@ export const VALID_WRITERS: ReadonlySet<EventWriter> = new Set<EventWriter>(["da
  * have moved to {@link PauseReason} so operators can grant N more
  * attempts. Version/engine mismatch is likewise not here — it is the
  * recoverable `engine_incompatible` pause, not a terminal halt
- * (`docs/proposals/event-contract-version.md` §3.2). What remains
+ * (`docs/proposals/archive/event-contract-version.md` §3.2). What remains
  * here is genuinely terminal: the workflow author's `<abort>` sentinel,
  * the opt-in `budget_policy="stop"` path, OCC exhaustion, and the
  * watchdog-cap exhaustion that paused-class `timeout_retry` escalates to. */

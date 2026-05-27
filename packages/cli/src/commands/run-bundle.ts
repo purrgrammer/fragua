@@ -1,6 +1,6 @@
 // `fragua runs export <id> --to <f.fragua>` / `fragua import <f.fragua>` —
 // move runs between stores as a portable, secret-free `.fragua` bundle
-// (docs/proposals/bundles.md).
+// (docs/proposals/archive/bundles.md).
 //
 // Both are migrate:false store-clients (the harness/daemon owns migration, so a
 // client never upgrades a schema): export reads a run that must already exist;

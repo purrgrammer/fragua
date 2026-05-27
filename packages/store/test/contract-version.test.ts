@@ -1,4 +1,4 @@
-// Event-contract version discipline — docs/proposals/event-contract-version.md §3.3/§3.4.
+// Event-contract version discipline — docs/proposals/archive/event-contract-version.md §3.3/§3.4.
 //
 // The fold contract is precisely the events `foldFacts` reads and how it folds
 // them: the `FactEvent`/`IntentEvent` variant set + each variant's shape, and

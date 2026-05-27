@@ -18,10 +18,10 @@ parent: cli-topology.md
 > (§4), and the cross-version resume gate (§5). Read `bundles.md` for the
 > current format and verbs; read this for the deeper portability rationale.
 
-> Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua runs
+> Child of [`cli-topology.md`](../cli-topology.md). Additive (`fragua runs
 > export` / `fragua runs import`); blocks nothing. Consumes the artifact a
 > CI run produces. Interlocks with project identity (shipped — cwd is
-> a local binding, rebound on import), [`workflow-ir.md`](workflow-ir.md)
+> a local binding, rebound on import), [`workflow-ir.md`](../workflow-ir.md)
 > (the workflow link), and [`event-contract-version.md`](event-contract-version.md)
 > (the resume gate across versions).
 
@@ -58,7 +58,7 @@ parallel-sub-run columns are gone). Importing run `R` copies, verbatim:
 
 - its `run_state` row (with local fields rebound — §4);
 - the content-addressed `workflows` row by `sha` (identical content ⇒ identical
-  sha ⇒ idempotent; with [`workflow-ir.md`](workflow-ir.md) the sha is an IR hash,
+  sha ⇒ idempotent; with [`workflow-ir.md`](../workflow-ir.md) the sha is an IR hash,
   making the link parser-version-independent);
 - its `events` and `messages` rows, unchanged (each event payload `< 4096` B,
   each message `< 1 MiB`, by column CHECK);
@@ -320,7 +320,7 @@ machine-local field is nullable or excludable. The only pre-freeze items are
    construction —
    the incoming `cwd` is advisory and rebound (§4). The **workflows `ir` /
    `ir_version`** half of this freeze-window question remains the only open column
-   decision, pending [`workflow-ir.md`](workflow-ir.md).
+   decision, pending [`workflow-ir.md`](../workflow-ir.md).
 3. **Verify** (done — none found) that no `NOT NULL` local-binding column blocks
    importing a stripped run.
 

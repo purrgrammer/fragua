@@ -14,7 +14,7 @@
 // (operator action), `paused_human` (HITL), `quarantined`. CI has no responder
 // for those. Run in the checkout via a per-run worktree (git cwd) /
 // LocalEnvironment (non-git cwd). Pluggable HITL and cross-machine import are
-// deferred (docs/proposals/hitl-channel.md, db-import.md).
+// deferred (docs/proposals/hitl-channel.md, docs/proposals/archive/db-import.md).
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";

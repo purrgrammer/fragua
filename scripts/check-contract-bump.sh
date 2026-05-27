@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Event-contract touch-gate — docs/proposals/event-contract-version.md §3.3.
+# Event-contract touch-gate — docs/proposals/archive/event-contract-version.md §3.3.
 #
 # The contract-surface hash test (packages/store/test/contract-version.test.ts)
 # catches every STRUCTURAL change to the fold contract (fact/intent shapes,
@@ -52,6 +52,6 @@ Choose one:
     inline marker to the reducers.ts diff:
       // contract: no-bump — <reason>
 
-See docs/proposals/event-contract-version.md §3.3.
+See docs/proposals/archive/event-contract-version.md §3.3.
 MSG
 exit 1
