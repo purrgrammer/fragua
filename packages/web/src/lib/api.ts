@@ -157,7 +157,6 @@ export interface RunDetail {
   cacheWriteTokens?: number;
   durationMs?: number;
   title?: string;
-  input?: string;
   hitlNodeId?: string;
   hitlLabel?: string;
   /** Declared route names from the paused human node's `routes=` attr;

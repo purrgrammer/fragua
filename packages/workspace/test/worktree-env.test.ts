@@ -209,6 +209,50 @@ describe("WorktreeEnvironment", () => {
     }
   });
 
+  test("envDenyNames: denied var is absent from git subprocess env, present when unset", async () => {
+    // Place a fake `git` script at the front of PATH that logs its env
+    // to a temp file, then delegates to the real git so init() still works.
+    const fakeGitDir = await mkdtemp(join(tmpdir(), "fragua-fakegit-"));
+    const envLogFile = join(fakeGitDir, "env.log");
+    const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+    const fakeGitScript = join(fakeGitDir, "git");
+    // The script appends the full env (newline-delimited KEY=VALUE lines)
+    // to envLogFile on every invocation, then delegates to real git.
+    const { writeFileSync, chmodSync } = await import("node:fs");
+    writeFileSync(fakeGitScript, `#!/bin/sh\nenv >> "${envLogFile}"\nexec "${realGit}" "$@"\n`);
+    chmodSync(fakeGitScript, 0o755);
+
+    const secretVarName = `FRAGUA_TEST_SECRET_${Date.now()}`;
+    const originalPath = process.env["PATH"];
+    process.env[secretVarName] = "supersecret";
+    process.env["PATH"] = `${fakeGitDir}:${originalPath ?? ""}`;
+    try {
+      // Without envDenyNames: secret IS inherited.
+      const envWithout = new WorktreeEnvironment({ repoRoot: repo, runId: "deny-off" });
+      await envWithout.init();
+      await envWithout.dispose();
+      const { readFile, truncate } = await import("node:fs/promises");
+      expect(await readFile(envLogFile, "utf8")).toContain(`${secretVarName}=supersecret`);
+
+      // Reset log for the second run.
+      await truncate(envLogFile, 0);
+
+      // With envDenyNames containing the secret: secret must NOT appear.
+      const envWith = new WorktreeEnvironment({
+        repoRoot: repo,
+        runId: "deny-on",
+        envDenyNames: new Set([secretVarName]),
+      });
+      await envWith.init();
+      await envWith.dispose();
+      expect(await readFile(envLogFile, "utf8")).not.toContain(secretVarName);
+    } finally {
+      process.env["PATH"] = originalPath;
+      delete process.env[secretVarName];
+      await rm(fakeGitDir, { recursive: true, force: true });
+    }
+  });
+
   test("init is idempotent across process restarts — reuses existing worktree", async () => {
     // Simulate a daemon restart: the first env init()s, then a fresh
     // env instance (no shared state) calls init() against the same

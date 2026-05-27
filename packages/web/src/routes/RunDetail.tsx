@@ -244,7 +244,6 @@ export function RunDetail(): JSX.Element {
                 isLive={isLive}
                 isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
-                userInput={detail?.input ?? null}
                 hitl={
                   detail?.runStatus === "paused_human" && detail.hitlNodeId
                     ? {
