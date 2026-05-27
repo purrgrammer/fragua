@@ -780,13 +780,11 @@ export async function cancelJob(id: string): Promise<{ status: string; jobId: st
 
 export async function enqueueJob(input: {
   workflow: string;
-  input?: string;
   model?: string;
   priority?: number;
 }): Promise<{ jobId: string; runId: string }> {
   const body = {
     workflow: input.workflow,
-    ...(input.input !== undefined ? { input: input.input } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.priority !== undefined ? { priority: input.priority } : {}),
   };
@@ -822,7 +820,6 @@ export interface CreateRunInput {
   projectId?: string;
   workflowName: string;
   workflowScope?: "global" | "local" | "path" | "ephemeral";
-  input?: string;
   /** Typed input bindings for the workflow's `inputs:` block. Keys are
    *  input names; values are string-coerced values (booleans/numbers
    *  serialise as "true" / "42" etc.). Forwarded as `inputs` on POST /runs. */
@@ -837,7 +834,6 @@ export async function createRun(args: CreateRunInput): Promise<{ runId: string }
   };
   if (args.projectId !== undefined) body["projectId"] = args.projectId;
   if (args.workflowScope !== undefined) body["workflowScope"] = args.workflowScope;
-  if (args.input !== undefined) body["input"] = args.input;
   if (args.inputs !== undefined) body["inputs"] = args.inputs;
   if (args.priority !== undefined) body["priority"] = args.priority;
   return postJson(
@@ -943,7 +939,7 @@ export interface Schedule {
   cwd: string;
   intervalMs: number;
   intervalText: string;
-  input: string | null;
+  title: string | null;
   overlapPolicy: ScheduleOverlapPolicy;
   nextFireAt: number;
   lastFireAt: number | null;
@@ -1441,7 +1437,7 @@ function isSchedule(v: unknown): v is Schedule {
     typeof o["cwd"] === "string" &&
     typeof o["intervalMs"] === "number" &&
     typeof o["intervalText"] === "string" &&
-    (o["input"] === null || typeof o["input"] === "string") &&
+    (o["title"] === null || typeof o["title"] === "string") &&
     (o["overlapPolicy"] === "skip" || o["overlapPolicy"] === "queue" || o["overlapPolicy"] === "concurrent") &&
     typeof o["nextFireAt"] === "number" &&
     (o["lastFireAt"] === null || typeof o["lastFireAt"] === "number") &&

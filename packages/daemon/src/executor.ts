@@ -542,16 +542,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const inputLines = Object.entries(structuredInputs)
           .map(([k, v]) => `${k}=${v}`)
           .join("\n");
-        let seed = "";
-        let workflowName: string | undefined;
-        if (inputLines !== "") {
-          const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
-          workflowName = wf?.name;
-          const parts: string[] = [];
-          if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
-          parts.push(inputLines);
-          seed = parts.join("\n");
-        }
+        const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
+        const workflowName = wf?.name;
+        const parts: string[] = [];
+        if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
+        if (inputLines !== "") parts.push(inputLines);
+        const seed = parts.join("\n");
         const req: TitleRequest = {
           runId,
           workflowSha,

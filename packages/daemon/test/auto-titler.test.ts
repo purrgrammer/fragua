@@ -241,11 +241,12 @@ describe("AutoTitler — unit", () => {
 });
 
 describe("AutoTitler — executor integration", () => {
-  test("titleRun fires once per run right after fact.run_started", async () => {
+  test("titleRun fires for every run with a workflow name, regardless of typed inputs", async () => {
     const yaml = `name: wf\ngoal: "rename things"\nsteps:\n  work: {type: llm, prompt: hi}\n`;
     const r = rig({ yaml });
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
-    // r1 is enqueued with no typed inputs; the titler should skip it.
+    // r1 is enqueued with no typed inputs; the titler should still fire because
+    // the workflow name alone provides a non-empty seed.
     enqueue(r, "r1", "start");
 
     const backend = new StubBackend((input) => okOut(`goal=${input.goal}`));
@@ -253,7 +254,7 @@ describe("AutoTitler — executor integration", () => {
     const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: ctrl.signal });
     const registry = new AbortRegistry();
 
-    // r2 has structured inputs so the titler should summarise it.
+    // r2 has structured inputs — titler fires for it too.
     r.store.enqueueRun({
       runId: "r2",
       workflowSha: r.workflowSha,
@@ -277,11 +278,13 @@ describe("AutoTitler — executor integration", () => {
     await runOne("r2", executorOpts);
     await titler.drain();
 
-    // r1 had no typed inputs → no backend call, no title
-    expect(r.store.getState("r1")?.title).toBeNull();
-    // r2 had typed inputs → backend call fires, goal flows through, title set
+    // r1 had no typed inputs but has a workflow name → backend fires, seed contains "workflow="
+    expect(r.store.getState("r1")?.title).not.toBeNull();
+    const r1Seed = backend.calls.find((c) => c.run_id === "r1")?.input;
+    expect(r1Seed).toMatch(/^workflow=\S+/);
+    // r2 had typed inputs → backend fires, goal flows through, title set
     expect(r.store.getState("r2")?.title).toBe("goal=rename things");
-    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls).toHaveLength(2);
 
     ctrl.abort();
     r.store.close();
@@ -376,17 +379,17 @@ describe("AutoTitler — executor integration", () => {
     r.store.close();
   });
 
-  test("no routing.input and no routing.inputs (scheduled run): skip titling", async () => {
+  test("no routing.inputs (bare/scheduled run): titler fires with workflow name as seed", async () => {
     const yaml = `name: health-check\nsteps:\n  work: {type: llm, prompt: hi}\n`;
     const r = rig({ yaml, name: "health-check" });
     registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
 
-    const backend = new StubBackend(() => okOut("never"));
+    const backend = new StubBackend((inp) => okOut(`titled:${inp.input}`));
     const ctrl = new AbortController();
     const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: ctrl.signal });
     const registry = new AbortRegistry();
 
-    // scheduled run: no routing.input, no routing.inputs
+    // bare/scheduled run: no routing.inputs, but workflow name is known
     r.store.enqueueRun({
       runId: "r1",
       workflowSha: r.workflowSha,
@@ -408,8 +411,10 @@ describe("AutoTitler — executor integration", () => {
     await runOne("r1", executorOpts);
     await titler.drain();
 
-    expect(backend.calls).toHaveLength(0);
-    expect(r.store.getState("r1")?.title).toBeNull();
+    // workflow name is known → backend fires with seed = "workflow=health-check"
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls[0]!.input).toBe("workflow=health-check");
+    expect(r.store.getState("r1")?.title).toMatch(/titled:/);
 
     ctrl.abort();
     r.store.close();
