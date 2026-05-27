@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../test/setup.ts";
 import { StatsStrip } from "./RunDetail.tsx";
 

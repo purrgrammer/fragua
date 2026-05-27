@@ -1,10 +1,10 @@
 // SkillDetail back-link smoke test. The detail page must offer a way
 // back to /skills — same affordance as RunDetail's "← all runs".
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../test/setup.ts";
 import { SkillDetail } from "./SkillDetail.tsx";
 

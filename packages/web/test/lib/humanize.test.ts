@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { humanizeHaltReason, humanizeNodeCompletedSuffix, humanizeRouteName } from "../../src/lib/humanize.ts";
 
 describe("humanizeHaltReason", () => {

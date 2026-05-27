@@ -1,7 +1,7 @@
 // Pure unit tests for the DAG layout. Exercises the two orientations +
 // cycle-safe depth walk + stable per-layer ordering.
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { layoutDag } from "../../src/lib/graph-layout.ts";
 
 describe("layoutDag", () => {

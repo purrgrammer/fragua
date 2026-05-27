@@ -8,7 +8,7 @@
 //   - avgDurationMs excludes running runs and is omitted when no
 //     terminal runs exist.
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { computeStats } from "../../src/lib/stats.ts";
 

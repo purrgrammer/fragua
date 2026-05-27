@@ -8,8 +8,8 @@
 // Expectation: the footer renders the submit at the bottom-right of the
 // input, with equal horizontal and bottom inset from the corner.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   PromptInput,
   PromptInputFooter,

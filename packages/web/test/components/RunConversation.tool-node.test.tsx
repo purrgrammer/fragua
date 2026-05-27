@@ -5,8 +5,8 @@
 // tail-truncated stdout/stderr. RunConversation renders it as a
 // CodeBlock (shell) + Terminal card inside the tool node's NodeSection.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { RunConversation } from "../../src/components/RunConversation.tsx";
 import type { NodeState, RunMessageRow } from "../../src/lib/api.ts";
 import { renderWithClient } from "../helpers/with-query-client.tsx";

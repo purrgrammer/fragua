@@ -1,8 +1,8 @@
 // Tests for useEventSource. Inject a fake EventSource so the hook's
 // lifecycle can be driven synchronously (no real network, no timers).
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { useEventSource } from "../../src/lib/useEventSource.ts";
 import { useDom } from "../setup.ts";
 

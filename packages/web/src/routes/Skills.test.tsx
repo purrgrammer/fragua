@@ -3,10 +3,10 @@
 // only confirm the row shape so a contract regression on the server
 // surfaces in CI.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../test/setup.ts";
 import { Skills } from "./Skills.tsx";
 

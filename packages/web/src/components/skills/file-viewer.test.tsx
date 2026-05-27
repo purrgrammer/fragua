@@ -3,9 +3,9 @@
 // regression. Each test stubs `fetch` so the per-file query resolves
 // to canned bytes + content-type.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../../test/setup.ts";
 import { FileViewer } from "./file-viewer.tsx";
 

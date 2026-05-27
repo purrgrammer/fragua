@@ -3,8 +3,8 @@
 // implementation hard-coded `bg-zinc-950 text-zinc-100` on
 // `TerminalContent`, which ignores the `.dark` class on <html>.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../../test/setup.ts";
 import { Terminal } from "./terminal.tsx";
 

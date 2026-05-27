@@ -3,9 +3,9 @@
 //   2. Window auto-fallback — when firstRunAt narrows past the active
 //      windowKey, the component resets to 'all' via a useEffect.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { useEffect, useMemo, useState } from "react";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../test/setup.ts";
 import { filterWindowOptions } from "../components/analytics/WindowSelector.tsx";
 import type { WindowKey } from "../lib/analytics.ts";

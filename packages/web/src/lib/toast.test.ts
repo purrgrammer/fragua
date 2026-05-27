@@ -1,27 +1,25 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "./api.ts";
 import { extractErrorMessage, mutationToast } from "./toast.ts";
 
-let successSpy: ReturnType<typeof mock>;
-let errorSpy: ReturnType<typeof mock>;
+const { successSpy, errorSpy } = vi.hoisted(() => ({
+  successSpy: vi.fn(() => undefined),
+  errorSpy: vi.fn(() => undefined),
+}));
+
+vi.mock("sonner", () => ({
+  toast: Object.assign(
+    vi.fn(() => undefined),
+    {
+      success: successSpy,
+      error: errorSpy,
+    },
+  ),
+}));
 
 beforeEach(() => {
-  successSpy = mock(() => undefined);
-  errorSpy = mock(() => undefined);
-
-  mock.module("sonner", () => ({
-    toast: Object.assign(
-      mock(() => undefined),
-      {
-        success: successSpy,
-        error: errorSpy,
-      },
-    ),
-  }));
-});
-
-afterEach(() => {
-  mock.restore();
+  successSpy.mockReset();
+  errorSpy.mockReset();
 });
 
 describe("extractErrorMessage", () => {

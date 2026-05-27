@@ -5,9 +5,9 @@
 // arguments pill / collapsible body / error variant render conditionally
 // against the proposal's contract.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import type { ToolResultMessage } from "@fragua/types";
 import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { SkillToolResult } from "../../src/components/run-conversation/SkillToolResult.tsx";
 import { useDom } from "../setup.ts";
 

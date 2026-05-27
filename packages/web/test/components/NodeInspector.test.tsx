@@ -2,9 +2,9 @@
 // parsed `Node` and an optional `NodeState` — so we exercise it outside
 // the router.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { type Node as GraphNode, parseWorkflow } from "@fragua/core";
 import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { NodeInspector } from "../../src/components/NodeInspector.tsx";
 import { useDom } from "../setup.ts";
 

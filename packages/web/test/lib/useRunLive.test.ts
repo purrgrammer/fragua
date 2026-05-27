@@ -9,8 +9,8 @@
 // 18 strict-mode dev double-invoke). The hook now defers the bootstrap
 // fetch until `terminal` is a boolean.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { useRunLive } from "../../src/lib/useRunLive.ts";
 import { installFetchMock } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";

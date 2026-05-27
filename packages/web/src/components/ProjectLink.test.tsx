@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../test/setup.ts";
 import { ProjectLink } from "./ProjectLink.tsx";
 

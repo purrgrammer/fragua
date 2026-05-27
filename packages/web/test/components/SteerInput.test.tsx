@@ -4,11 +4,11 @@
 // SteerInput imports `steerRun` from `lib/api.ts`, which POSTs to
 // `/api/runs/:id/steer` and expects `{ seq }` back.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 // Simulate is the only way to get React 18's synthetic onChange to fire
 // on a controlled textarea under happy-dom.
 import { Simulate } from "react-dom/test-utils";
+import { afterEach, describe, expect, it } from "vitest";
 import SteerInput from "../../src/components/SteerInput.tsx";
 import type { RunMessageRow } from "../../src/lib/api.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";

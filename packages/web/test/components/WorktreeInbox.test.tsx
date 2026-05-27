@@ -12,9 +12,9 @@
 // which uses _testOpenAction. WorktreeInbox tests focus on list rendering
 // and the action trigger presence.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import { WorktreeInbox } from "../../src/components/WorktreeInbox.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";

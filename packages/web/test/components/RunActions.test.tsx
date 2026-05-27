@@ -9,25 +9,24 @@
 // _testOpenAction prop (which bypasses the portal) while the trigger
 // presence/absence confirms top-level render behaviour.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { RunActionsRun } from "../../src/components/RunActions.tsx";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RunActions } from "../../src/components/RunActions.tsx";
+import type { RunActionsRun } from "../../src/components/RunActions.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-const successSpy = mock(() => "t1");
-const errorSpy = mock(() => "t2");
+const { successSpy, errorSpy } = vi.hoisted(() => ({
+  successSpy: vi.fn(() => "t1"),
+  errorSpy: vi.fn(() => "t2"),
+}));
 
-mock.module("sonner", () => ({
-  toast: Object.assign(
-    mock(() => "t0"),
-    {
-      success: successSpy,
-      error: errorSpy,
-    },
-  ),
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(() => "t0"), {
+    success: successSpy,
+    error: errorSpy,
+  }),
 }));
 
 // ── Fixtures ──────────────────────────────────────────────────────────

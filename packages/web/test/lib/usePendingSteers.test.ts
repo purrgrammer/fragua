@@ -4,8 +4,8 @@
 // the run's messages array. We drive it via `renderHook` and rerender
 // with a growing messages array to simulate the conversation arriving.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import type { RunMessageRow } from "../../src/lib/api.ts";
 import { usePendingSteers } from "../../src/lib/usePendingSteers.ts";
 import { useDom } from "../setup.ts";

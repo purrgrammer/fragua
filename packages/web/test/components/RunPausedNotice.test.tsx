@@ -2,8 +2,8 @@
 // carry a `fact.run_paused` and dispatches body / actions on the
 // payload's `reason`.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { RunPausedNotice } from "../../src/components/RunPausedNotice.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";

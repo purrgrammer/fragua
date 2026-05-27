@@ -25,9 +25,9 @@
 // `toFlowGraph` unit tests cover the data path; visual regressions get
 // caught by the running dev server + Playwright (future).
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { parseWorkflow } from "@fragua/core";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
 import type { RunDetail } from "../../src/lib/api.ts";
 import { renderWithClient as render } from "../helpers/with-query-client.tsx";

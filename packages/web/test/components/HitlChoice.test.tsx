@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { HitlChoice } from "../../src/components/HitlChoice.tsx";
 import { installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";

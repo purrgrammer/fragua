@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../test/setup.ts";
 import { RunsList } from "./RunsList.tsx";
 

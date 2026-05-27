@@ -14,9 +14,9 @@
 //   which doesn't match any route; React Router then throws via its
 //   default error boundary and the layout never mounts.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../src/App.tsx";
 import { createRoutes } from "../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json } from "./helpers/with-query-client.tsx";

@@ -7,8 +7,8 @@
 // SelectValue text isn't populated until the menu is opened), which is
 // the more behavioural check anyway.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { RunComposer } from "../../src/components/RunComposer.tsx";
 import type { WorkflowSummary } from "../../src/lib/api.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";

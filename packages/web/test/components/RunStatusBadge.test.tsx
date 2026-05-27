@@ -8,8 +8,8 @@
 // the rendered Tailwind classes — drift in the badge would shift
 // colours silently otherwise.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { RunStatusBadge } from "../../src/components/RunStatusBadge.tsx";
 import { useDom } from "../setup.ts";
 

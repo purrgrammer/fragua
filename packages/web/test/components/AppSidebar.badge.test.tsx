@@ -3,9 +3,9 @@
 // Verifies the badge appears next to the Inbox nav row when there are
 // pending worktree-inbox runs, and is absent when the inbox is empty.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { createMemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import { App } from "../../src/App.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { createRoutes } from "../../src/lib/router.tsx";

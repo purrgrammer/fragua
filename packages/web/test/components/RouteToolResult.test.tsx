@@ -5,9 +5,9 @@
 // `result.details.data.route`. These tests assert that the card surfaces the
 // chosen route clearly and degrades gracefully in every state.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import type { ToolResultMessage } from "@fragua/types";
 import { cleanup, render, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { RouteToolResult } from "../../src/components/run-conversation/RouteToolResult.tsx";
 import { useDom } from "../setup.ts";
 

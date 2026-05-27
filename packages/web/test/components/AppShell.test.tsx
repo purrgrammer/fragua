@@ -4,9 +4,9 @@
 //   - ⌘+B / Ctrl+B toggles the collapsed state, persisted via cookie.
 //   - Breadcrumb derivation matches the current route.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, describe, expect, it } from "vitest";
 import { crumbsFor } from "../../src/components/AppShell.tsx";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { renderWithClient } from "../helpers/with-query-client.tsx";

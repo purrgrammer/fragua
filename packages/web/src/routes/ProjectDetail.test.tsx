@@ -3,10 +3,10 @@
 // workflow links carry the project cwd (LOCATION, resolved from the
 // project identity).
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import { useDom } from "../../test/setup.ts";
 import { ProjectDetail } from "./ProjectDetail.tsx";
 
@@ -123,7 +123,7 @@ describe("ProjectDetail · tabs", () => {
     });
     const { container } = renderAt(`/projects/${TEST_PROJECT_ID}?tab=workflows`);
     const wfSection = await waitFor(() => within(container).getByTestId("project-workflows-section"));
-    expect(within(wfSection).getByTestId("project-workflows-table")).not.toBeNull();
+    await waitFor(() => expect(within(wfSection).getByTestId("project-workflows-table")).not.toBeNull());
     expect(within(container).queryByTestId("project-runs-table")).toBeNull();
   });
 

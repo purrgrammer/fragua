@@ -5,9 +5,9 @@
 //  - Combined empty state when both are empty
 //  - Per-section empty state when only one side has data
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, test } from "vitest";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { InboxPage } from "../../src/routes/Inbox.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";

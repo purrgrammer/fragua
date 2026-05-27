@@ -1,8 +1,8 @@
 // WorkflowInputsForm — unit tests covering field rendering, default seeding,
 // required-field validation, and choice validation.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, fireEvent } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { WorkflowInputsForm } from "../../src/components/WorkflowInputsForm.tsx";
 import type { WorkflowInputDecl } from "../../src/lib/api.ts";
 import { renderWithClient } from "../helpers/with-query-client.tsx";

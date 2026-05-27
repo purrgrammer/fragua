@@ -1,7 +1,7 @@
 // Pure-aggregator tests for `lib/useLiveCostAggregate.ts`.
 // No DOM, no React — these are plain function calls.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import {
   aggregateLiveFrames,
   EMPTY_COST_AGGREGATE,

@@ -5,9 +5,9 @@
 // round-trip. A `never`-resolving fetch is installed when we need to
 // observe the loading-skeleton state.
 
-import { afterEach, describe, expect, it, test } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, describe, expect, it, test } from "vitest";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
