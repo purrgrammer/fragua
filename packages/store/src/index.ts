@@ -28,6 +28,17 @@ export {
   MIN_COMPATIBLE_SCHEMA_VERSION,
 } from "./pragmas.ts";
 export { applyFact, deriveRunState, emptyMetrics, foldFacts, genesisToInitialState } from "./reducers.ts";
+export {
+  BLOB_REF_SENTINEL,
+  type BlobRef,
+  collectRoutingBlobShas,
+  isBlobRef,
+  makeBlobRef,
+  materializeRouting,
+  PER_VALUE_SPILL_BYTES,
+  ROUTING_SPILL_MARGIN_BYTES,
+  spillRoutingInputs,
+} from "./routing-blobs.ts";
 export { newRunId } from "./run-id.ts";
 export {
   buildExportRegistry,

@@ -116,11 +116,15 @@ export function selectArtifactsForRun(db: Database, runId: string): ArtifactList
 // ─────────────────────────────────────────────────────────────────────
 
 const DELETE_ORPHAN_BLOBS_SQL = `
-  WITH orphans AS (
+  WITH protected AS (
+    SELECT value AS sha256 FROM json_each(?)
+  ),
+  orphans AS (
     SELECT b.sha256
       FROM blobs b
       LEFT JOIN artifacts a ON a.blob_sha = b.sha256
      WHERE a.blob_sha IS NULL
+       AND b.sha256 NOT IN (SELECT sha256 FROM protected)
      LIMIT ?
   )
   DELETE FROM blobs
@@ -128,14 +132,18 @@ const DELETE_ORPHAN_BLOBS_SQL = `
   RETURNING sha256
 `;
 
-/** Delete up to `limit` orphan blob rows (no artifact referent) and
- *  return their sha256s so the file-side delete pass can drop the
- *  on-disk content. RETURNING ensures row-without-file is impossible
- *  mid-sweep. */
-export function deleteOrphanBlobs(db: Database, limit: number): string[] {
+/** Delete up to `limit` orphan blob rows (no artifact referent AND not a
+ *  routing-referenced blob root) and return their sha256s so the file-side
+ *  delete pass can drop the on-disk content. RETURNING ensures row-without-file
+ *  is impossible mid-sweep.
+ *
+ *  `protectedShasJson` is a JSON array string of sha256 hex strings that must
+ *  not be collected — routing-spilled input blobs live here. Pass `"[]"` when
+ *  no routing roots are known. */
+export function deleteOrphanBlobs(db: Database, limit: number, protectedShasJson: string): string[] {
   return db
-    .query<{ sha256: string }, [number]>(DELETE_ORPHAN_BLOBS_SQL)
-    .all(limit)
+    .query<{ sha256: string }, [string, number]>(DELETE_ORPHAN_BLOBS_SQL)
+    .all(protectedShasJson, limit)
     .map((r) => r.sha256);
 }
 

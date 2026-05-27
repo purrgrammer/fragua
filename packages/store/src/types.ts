@@ -873,6 +873,12 @@ export interface IEventReader {
    */
   getRunCostTotals(runId: string): RunCostTotalsRow;
 
+  // ─── Blobs (raw read)
+  /** Read a blob by sha256. Returns `null` when the file is absent (not yet
+   *  written or already GC'd). Used by `materializeRouting` callers to resolve
+   *  `$fragua_blob` refs in `routing.inputs`. */
+  readBlob(sha: string): Uint8Array | null;
+
   // ─── Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;

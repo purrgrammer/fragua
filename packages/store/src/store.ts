@@ -127,6 +127,7 @@ import {
   selectProviderCredential,
 } from "./provider-credentials-queries.ts";
 import { applyFact, deriveRunState, emptyMetrics } from "./reducers.ts";
+import { collectRoutingBlobShas, spillRoutingInputs } from "./routing-blobs.ts";
 import { assertSafeRunId } from "./run-id.ts";
 import {
   bumpRunSeq,
@@ -151,6 +152,7 @@ import {
   type RunStateRow,
   type RunSummaryRow,
   type StepAggregateRow,
+  selectAllRoutings,
   selectCwds,
   selectGcEligibleSnapshotRuns,
   selectGlobalMetricsTotals,
@@ -562,7 +564,22 @@ export class SqliteStore implements IEventStore {
 
   enqueueRun(params: EnqueueRunParams): void {
     const now = this.now();
-    const routing = JSON.stringify(params.initialRouting ?? {});
+
+    // Spill oversized routing.inputs string values to the blob CAS before
+    // the size checks. Blobs are written before the transaction so
+    // crash-between-put-and-row leaves an orphan file (GC sweeps it), which
+    // is safer than the inverse. The rows are inserted inside writeTxn below.
+    let effectiveRouting = params.initialRouting ?? {};
+    let spilledBlobs: Array<{ key: string; sha: string; bytes: number }> = [];
+    if (effectiveRouting["inputs"] != null) {
+      const result = spillRoutingInputs(effectiveRouting, (sha, bytes) => {
+        this.blobs.put(sha, bytes);
+      });
+      effectiveRouting = result.routing;
+      spilledBlobs = result.spilled;
+    }
+
+    const routing = JSON.stringify(effectiveRouting);
     if (routing.length >= MAX_ROUTING_BYTES) {
       throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
     }
@@ -581,12 +598,13 @@ export class SqliteStore implements IEventStore {
     // The genesis event carries the whole enqueue identity so `run_state` is
     // derivable by replaying the log (no `cwd` — its absence keeps an imported
     // run inert). Bounded by the 4 KiB event cap, tighter than routing's 8 KiB.
+    // Use effectiveRouting (post-spill) so blob refs appear in the genesis event.
     const genesisPayload = JSON.stringify({
       workflowSha: params.workflowSha,
       priority: params.priority ?? 0,
       projectId,
       projectName,
-      routing: params.initialRouting ?? {},
+      routing: effectiveRouting,
       contractVersion: EVENT_CONTRACT_VERSION,
       ...(params.workflowName != null ? { workflowName: params.workflowName } : {}),
       ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
@@ -600,6 +618,12 @@ export class SqliteStore implements IEventStore {
     this.writeTxn(() => {
       if (!workflowExists(this.db, params.workflowSha)) {
         throw new Error(`unknown workflow sha ${params.workflowSha}`);
+      }
+      // Insert blob rows for any values spilled to the CAS. The BlobFS.put()
+      // calls happened before this transaction; the row insert is the
+      // durability barrier that makes them reachable to reads and GC-protected.
+      for (const { sha, bytes } of spilledBlobs) {
+        insertBlobIfAbsent(this.db, sha, bytes, now);
       }
 
       insertRunState(this.db, {
@@ -942,6 +966,11 @@ export class SqliteStore implements IEventStore {
       sizeBytes: bytes,
       mime: mime ?? null,
     };
+  }
+
+  readBlob(sha: string): Uint8Array | null {
+    if (!this.blobs.has(sha)) return null;
+    return this.blobs.get(sha);
   }
 
   getArtifact(scope: ArtifactScope): Uint8Array {
@@ -1704,21 +1733,43 @@ export class SqliteStore implements IEventStore {
 
   gcBlobs(maxRows?: number): { deleted: number } {
     const limit = maxRows ?? 1000;
-    // Pass 1: drop `blobs` rows with no artifact referent. RETURNING feeds
-    // the file-delete pass so row-without-file is impossible mid-sweep.
-    const orphanShas = deleteOrphanBlobs(this.db, limit);
+
+    // Collect routing-referenced blob shas as GC roots so spilled input blobs
+    // are never collected while the run is still live. This is the single place
+    // that decides blob reachability; routing roots extend artifact reachability.
+    const routingStrings = selectAllRoutings(this.db);
+    const routingRootShas = new Set<string>();
+    for (const routingJson of routingStrings) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(routingJson);
+      } catch {
+        continue;
+      }
+      for (const sha of collectRoutingBlobShas(parsed)) {
+        routingRootShas.add(sha);
+      }
+    }
+    const protectedShasJson = JSON.stringify([...routingRootShas]);
+
+    // Pass 1: drop `blobs` rows with no artifact referent AND not a routing
+    // root. RETURNING feeds the file-delete pass so row-without-file is
+    // impossible mid-sweep.
+    const orphanShas = deleteOrphanBlobs(this.db, limit, protectedShasJson);
     for (const sha of orphanShas) this.blobs.delete(sha);
 
     // Pass 2: remove blob files with no matching row. Catches files left
     // behind when a row was deleted directly (cascade) or when a crash
     // between put() and INSERT orphaned the file. Bounded by the same
-    // per-sweep limit to keep tail latency predictable.
+    // per-sweep limit to keep tail latency predictable. Routing-root files
+    // (even those without a row, e.g., mid-write crash) are preserved.
     let extraDeleted = 0;
     const budget = limit - orphanShas.length;
     if (budget > 0) {
       const shas = this.blobs.listAllShas();
       for (const sha of shas) {
         if (extraDeleted >= budget) break;
+        if (routingRootShas.has(sha)) continue;
         if (!blobRowExists(this.db, sha)) {
           this.blobs.delete(sha);
           extraDeleted++;
