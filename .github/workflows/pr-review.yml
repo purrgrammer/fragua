@@ -11,10 +11,10 @@ name: PR review
 # bot verdict that could safely gate a merge; CI remains the hard required gate.)
 #
 # The review runs fragua FROM SOURCE (not setup-fragua's released binary) so it
-# exercises the code under review — and `fragua ci --export`, which lands the run
-# as a secret-free `.fragua` bundle (the flag is newer than any release). The
-# trust boundary is unchanged: a same-repo PR already controls pr_review.yaml and
-# this file, and fork PRs (no secrets) are skipped.
+# exercises the code under review — including `fragua ci --export`, which lands
+# the run as a secret-free `.fragua` bundle. The trust boundary is unchanged: a
+# same-repo PR already controls pr_review.yaml and this file, and fork PRs (no
+# secrets) are skipped.
 
 on:
   pull_request:

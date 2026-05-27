@@ -16,13 +16,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Notes come from the matching CHANGELOG.md section (e.g. tag v0.2.0 →
+      # the `## [0.2.0]` block), not auto-generated commit lists — the curated
+      # entry is the release note. Fall back to --generate-notes if the version
+      # has no section yet, so a tag never fails to publish on a missing block.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { inblock = 1; next }
+            inblock && /^## \[/    { exit }
+            inblock                { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ -s release-notes.md ]; then
+            notes=(--notes-file release-notes.md)
+          else
+            notes=(--generate-notes)
+          fi
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" \
-                 --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+                 --title "$GITHUB_REF_NAME" "${notes[@]}" --verify-tag
 
   binaries:
     needs: create-release

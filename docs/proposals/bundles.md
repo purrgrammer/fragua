@@ -18,7 +18,7 @@ supersedes: "db-import.md §3 (tree-state/git-bundle), §3.2 (--rehydrate), §4.
 > experimental. Treat a bundle as a throwaway inspection artifact, not durable
 > storage. Do not wire production CI to depend on the format yet.
 
-> **Status: implemented** on branch `run-bundle-import` — genesis enrichment (§2),
+> **Status: shipped** on `main` in 0.2.0 (#3, #5) — genesis enrichment (§2),
 > the bundle format (§3), `ci --export` / `show` / `import` (§4), derive-on-import
 > (run_state is replayed, not carried), inline messages (§5 v1), and the removal
 > of the tree-state / `--rehydrate` / `adopt` surface (§8). Deferred as written:
