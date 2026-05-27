@@ -2,15 +2,14 @@
 //
 // Verifies that pause/resume/cancel mutations fire the correct toast on
 // success and error. We spy on `toast.success` and `toast.error` at the
-// module boundary using `mock.module("sonner", ...)` so the spies are in
+// module boundary using `vi.mock("sonner", ...)` so the spies are in
 // place before the component's module resolves its import.
 
-import { afterEach, beforeEach, describe, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { RunControls } from "../../src/components/RunControls.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const PAUSE_URL = "/api/runs/run-99/pause";
 const RESUME_URL = "/api/runs/run-99/resume";
@@ -18,12 +17,14 @@ const CANCEL_URL = "/api/runs/run-99/cancel";
 const DETAIL_URL = "/api/runs/run-99";
 const EVENTS_URL = "/api/runs/run-99/events";
 
-const successSpy = mock(() => "t1");
-const errorSpy = mock(() => "t2");
+const { successSpy, errorSpy } = vi.hoisted(() => ({
+  successSpy: vi.fn(() => "t1"),
+  errorSpy: vi.fn(() => "t2"),
+}));
 
-mock.module("sonner", () => ({
+vi.mock("sonner", () => ({
   toast: Object.assign(
-    mock(() => "t0"),
+    vi.fn(() => "t0"),
     {
       success: successSpy,
       error: errorSpy,
@@ -67,8 +68,6 @@ function renderControls(
 }
 
 describe("RunControls — toast feedback", () => {
-  useDom();
-
   beforeEach(() => {
     successSpy.mockReset();
     errorSpy.mockReset();

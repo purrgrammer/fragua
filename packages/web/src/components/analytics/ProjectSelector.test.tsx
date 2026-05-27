@@ -1,7 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor } from "@testing-library/react";
-import { useDom } from "../../../test/setup.ts";
+import { afterEach, describe, expect, test } from "vitest";
 import {
   ALL_PROJECTS_VALUE,
   ProjectSelector,
@@ -40,7 +39,6 @@ function renderWithClient(ui: JSX.Element) {
 }
 
 describe("ProjectSelector", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders 'All projects' as the default option and emits null on selecting it", async () => {

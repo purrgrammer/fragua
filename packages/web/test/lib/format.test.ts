@@ -1,7 +1,7 @@
 // Tests for the number/currency formatters. Locale pinned to en-US so
 // assertions stay deterministic across ICU versions / host locales.
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { formatTokensCompact, formatTokensLong, formatUsd } from "../../src/lib/format.ts";
 
 const L = { locale: "en-US" } as const;

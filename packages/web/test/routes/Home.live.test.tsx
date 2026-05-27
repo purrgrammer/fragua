@@ -17,15 +17,14 @@
 //   - burst: many events in one batch all invalidate the cache exactly
 //     once (no events dropped, no infinite refetch loops)
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useGlobalEventStream } from "../../src/lib/useGlobalEventStream.ts";
 import { Home } from "../../src/routes/Home.tsx";
 import { createTestQueryClient, installFetchMock, json } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 // Minimal fake EventSource — same shape as the one in useEventSource.test.ts.
 class FakeEventSource {
@@ -198,7 +197,6 @@ function emit(
 }
 
 describe("Control Center live updates", () => {
-  useDom();
   let mock: ReturnType<typeof installFetchMock>;
   const state: { runs: FakeRun[] } = { runs: [] };
 
@@ -234,8 +232,10 @@ describe("Control Center live updates", () => {
 
     await waitFor(() => {
       expect(container.textContent).toContain("01rinbox001".slice(0, 4));
+      // The inbox row arrives via the runs-list refetch the SSE event triggers,
+      // which lands a tick after the event shows in the Activity feed.
+      expect(container.textContent).not.toContain("All clear");
     });
-    expect(container.textContent).not.toContain("All clear");
   });
 
   it("fact.run_started pushes a row into Running without a reload", async () => {

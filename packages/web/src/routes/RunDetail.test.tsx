@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, within } from "@testing-library/react";
-import { useDom } from "../../test/setup.ts";
+import { afterEach, describe, expect, test } from "vitest";
 import { StatsStrip } from "./RunDetail.tsx";
 
 // Minimal RunDetail payload — only the fields StatsStrip reads.
@@ -20,7 +19,6 @@ const baseDetail = {
 };
 
 describe("StatsStrip — Cache hit rate tile", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders detail-cache-tile with correct percentage (400/1000 = 40%)", () => {

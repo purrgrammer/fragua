@@ -3,11 +3,10 @@
 // only confirm the row shape so a contract regression on the server
 // surfaces in CI.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { useDom } from "../../test/setup.ts";
+import { afterEach, describe, expect, test } from "vitest";
 import { Skills } from "./Skills.tsx";
 
 function installSkillsFetch(payload: unknown): void {
@@ -30,7 +29,6 @@ function renderWithProviders(ui: JSX.Element) {
 }
 
 describe("Skills", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("renders the empty-state banner when discovery returns no skills", async () => {

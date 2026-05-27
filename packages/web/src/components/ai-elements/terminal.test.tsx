@@ -3,13 +3,11 @@
 // implementation hard-coded `bg-zinc-950 text-zinc-100` on
 // `TerminalContent`, which ignores the `.dark` class on <html>.
 
-import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
-import { useDom } from "../../../test/setup.ts";
+import { afterEach, describe, expect, test } from "vitest";
 import { Terminal } from "./terminal.tsx";
 
 describe("Terminal", () => {
-  useDom();
   afterEach(() => cleanup());
 
   test("body surface adapts to light/dark mode (no hard-coded dark utility)", () => {

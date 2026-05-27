@@ -3,14 +3,13 @@
 // routing fake `fetch` when a test needs to exercise the loading or
 // error paths.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, describe, expect, it } from "vitest";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function mount(client = createTestQueryClient(), path = "/runs") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
@@ -18,7 +17,6 @@ function mount(client = createTestQueryClient(), path = "/runs") {
 }
 
 describe("RunsList", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders a three-column header: Title / Workflow / Status (nothing else)", async () => {

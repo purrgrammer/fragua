@@ -21,11 +21,11 @@
 // Implementation note: we parse globals.css with plain regex — no postcss
 // dependency required.
 
-import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 
-const CSS_PATH = join(import.meta.dir, "../../src/styles/globals.css");
+const CSS_PATH = join(import.meta.dirname, "../../src/styles/globals.css");
 const css = readFileSync(CSS_PATH, "utf8");
 
 // ---------------------------------------------------------------------------

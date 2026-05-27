@@ -9,7 +9,7 @@
 //     point for "no absolute URLs in the client" — absolute URLs would
 //     land on Vite's dev server at 5173 instead of the fragua server).
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "vitest";
 import * as api from "../src/lib/api.ts";
 import { installFetchMock, json } from "./helpers/with-query-client.tsx";
 

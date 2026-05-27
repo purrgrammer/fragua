@@ -11,8 +11,10 @@
     "typecheck": "bun run --filter='*' typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "test": "bun test ./packages",
-    "ci": "bun run --silent lint && bun run --silent typecheck && bash -c 'set -o pipefail; bun test ./packages 2>&1 | grep -v \"^(pass) \"'",
+    "test": "bun run --silent test:node && bun run --silent test:web",
+    "test:node": "bun run scripts/test-node.ts",
+    "test:web": "bun run --filter=@fragua/web test",
+    "ci": "bun run --silent lint && bun run --silent typecheck && bash -c 'set -o pipefail; bun run --silent test:node 2>&1 | grep -v \"^(pass) \"' && bun run --silent test:web",
     "fragua": "bun run packages/cli/bin/fragua.ts",
     "serve": "bun --hot packages/cli/bin/fragua.ts serve",
     "dev:web": "bun run --filter=@fragua/web dev",
@@ -25,6 +27,6 @@
   },
   "engines": {
     "bun": ">=1.2.0",
-    "node": ">=20.0.0"
+    "node": ">=20.11.0"
   }
 }

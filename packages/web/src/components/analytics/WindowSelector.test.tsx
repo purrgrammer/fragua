@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { filterWindowOptions } from "./WindowSelector.tsx";
 
 const DAY_MS = 86_400_000;

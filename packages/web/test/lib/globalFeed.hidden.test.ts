@@ -4,9 +4,9 @@
 // by appendFeedEventsAtom. This is a pure atom test — no DOM, no React, no
 // fetch mocks required.
 
-import { describe, expect, test } from "bun:test";
 import type { FeedEvent } from "@fragua/types";
 import { createStore } from "jotai";
+import { describe, expect, test } from "vitest";
 import { appendFeedEventsAtom, FEED_HIDDEN_KINDS, feedAtom } from "../../src/lib/globalFeed.ts";
 
 function makeEvent(type: string, seq = 1): FeedEvent {

@@ -1,14 +1,15 @@
 // Route-level tests for RunDetail.
 
-import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { act, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { snapshotLabel } from "../../src/components/RunDiffTab.tsx";
 import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── FakeEventSource ─────────────────────────────────────────────
 // Minimal EventSource stand-in for injecting SSE frames into useRunLive.
@@ -112,7 +113,6 @@ function prepare(id: string, detail: RunDetailT) {
 }
 
 describe("RunDetail", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("fetches the run for the :id from the URL and renders the conversation region", async () => {
@@ -264,9 +264,11 @@ describe("RunDetail", () => {
   });
 
   it("duration tile ticks every second while run is live (running)", async () => {
-    // Fix the system clock to a known point.
+    // Fake only Date so the component's real 1s setInterval still fires and
+    // RTL's waitFor (real timers) keeps working; vi.setSystemTime moves the clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const base = new Date("2024-06-01T12:00:00.000Z");
-    setSystemTime(base);
+    vi.setSystemTime(base);
 
     // startedAt is 5 seconds before the frozen clock.
     const startedAt = new Date(base.getTime() - 5_000).toISOString();
@@ -293,7 +295,7 @@ describe("RunDetail", () => {
 
       // Advance fake clock by 2 seconds — the next setInterval tick will
       // read Date.now() = base + 2000, giving base+2000 - (base-5000) = 7000ms.
-      setSystemTime(new Date(base.getTime() + 2_000));
+      vi.setSystemTime(new Date(base.getTime() + 2_000));
 
       // Wait for the 1-second interval to fire and re-render.
       await waitFor(
@@ -304,15 +306,15 @@ describe("RunDetail", () => {
       );
     } finally {
       mock.restore();
-      // Reset system time so other tests are unaffected.
-      setSystemTime(new Date());
+      // Restore real timers so other tests are unaffected.
+      vi.useRealTimers();
     }
   });
 
   it("duration tile is frozen at server durationMs for terminal (success) runs", async () => {
-    // Fix the system clock to a known point.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const base = new Date("2024-06-01T12:00:00.000Z");
-    setSystemTime(base);
+    vi.setSystemTime(base);
 
     const startedAt = new Date(base.getTime() - 5_000).toISOString();
     const detail: RunDetailT = {
@@ -339,16 +341,16 @@ describe("RunDetail", () => {
       });
 
       // Advance fake clock by 10 seconds — terminal runs must NOT drift.
-      setSystemTime(new Date(base.getTime() + 10_000));
+      vi.setSystemTime(new Date(base.getTime() + 10_000));
 
       // Give the component time to potentially (incorrectly) re-render.
-      await Bun.sleep(1_200);
+      await sleep(1_200);
 
       // Value must still be the server-supplied 3s.
       expect(q.getByTestId("detail-duration-tile").textContent).toContain("3s");
     } finally {
       mock.restore();
-      setSystemTime(new Date());
+      vi.useRealTimers();
     }
   });
 
@@ -499,7 +501,7 @@ describe("RunDetail", () => {
       await act(async () => {
         client.setQueryData(queries.runs.detail("run-cost-overlap").queryKey, detailV2);
       });
-      await Bun.sleep(50);
+      await sleep(50);
       const costText = q.getByTestId("detail-cost-tile").textContent ?? "";
       expect(costText).not.toContain("$0.20");
       expect(costText).toContain("$0.10");

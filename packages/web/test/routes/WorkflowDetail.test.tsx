@@ -9,14 +9,13 @@
 //
 // Error paths install a URL-routing fake fetch to exercise 404 and 500.
 
-import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, describe, expect, it } from "vitest";
 import type { WorkflowDetail as WorkflowDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 const WORKFLOW_SOURCE = `name: demo
 description: demo
@@ -41,7 +40,6 @@ function seedDetail(client: ReturnType<typeof createTestQueryClient>, name: stri
 }
 
 describe("WorkflowDetail route", () => {
-  useDom();
   afterEach(() => cleanup());
 
   it("renders header with label, name, and short sha", async () => {

@@ -1,16 +1,17 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { useDom } from "../../test/setup.ts";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Schedules } from "./Schedules.tsx";
 
-const successSpy = mock(() => "t1");
-const errorSpy = mock(() => "t2");
+const { successSpy, errorSpy } = vi.hoisted(() => ({
+  successSpy: vi.fn(() => "t1"),
+  errorSpy: vi.fn(() => "t2"),
+}));
 
-mock.module("sonner", () => ({
+vi.mock("sonner", () => ({
   toast: Object.assign(
-    mock(() => "t0"),
+    vi.fn(() => "t0"),
     {
       success: successSpy,
       error: errorSpy,
@@ -60,7 +61,7 @@ function installFetch(opts: StubOpts = {}): { calls: FetchCall[] } {
     }
     return new Response("not found", { status: 404 });
   };
-  globalThis.fetch = mock(stub) as unknown as typeof fetch;
+  globalThis.fetch = vi.fn(stub) as unknown as typeof fetch;
   return { calls };
 }
 
@@ -93,7 +94,6 @@ function renderWithClient(ui: JSX.Element) {
 }
 
 describe("Schedules", () => {
-  useDom();
   beforeEach(() => {
     successSpy.mockReset();
     errorSpy.mockReset();

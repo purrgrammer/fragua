@@ -10,7 +10,7 @@
 // assertions live in this file too so a future reorder of tone vs sign
 // gets caught immediately.
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { resolveWindow } from "../../src/lib/analytics.ts";
 import { computeDelta } from "../../src/lib/humanize.ts";
 

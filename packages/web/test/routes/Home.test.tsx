@@ -5,14 +5,13 @@
 // round-trip. A `never`-resolving fetch is installed when we need to
 // observe the loading-skeleton state.
 
-import { afterEach, describe, expect, it, test } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, describe, expect, it, test } from "vitest";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
-import { useDom } from "../setup.ts";
 
 function row(overrides: Partial<RunSummary> = {}): RunSummary {
   return {
@@ -74,8 +73,6 @@ function withRows(rows: RunSummary[]) {
 // Single top-level DOM registration shared across every describe in
 // this file. Registering in each nested block would race the previous
 // block's async afterAll teardown.
-// biome-ignore lint/correctness/useHookAtTopLevel: useDom is a test-harness helper, not a React hook — it just wraps beforeAll/afterAll.
-useDom();
 
 describe("Home route", () => {
   afterEach(() => cleanup());
