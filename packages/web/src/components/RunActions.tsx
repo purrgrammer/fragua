@@ -104,14 +104,17 @@ function RunActionsInner({
   const busy = acceptM.isPending || discardM.isPending;
 
   function openDialog(kind: ActionKind): void {
-    acceptM.reset();
-    discardM.reset();
+    // Reset only the mutation we're opening — clearing the other would discard
+    // an in-flight request's bookkeeping while its fetch is still resolving.
+    (kind === "accept" ? acceptM : discardM).reset();
     setOpenAction(kind);
   }
 
-  // Escape / overlay-click / Cancel all route here via Radix's onOpenChange.
+  // Escape / overlay-click / Cancel route here via Radix's onOpenChange. Ignore
+  // dismissals while a mutation is in flight so we don't abandon a dialog whose
+  // request is still resolving (its onSuccess closes the dialog itself).
   const closeOnDismiss = (open: boolean): void => {
-    if (!open) setOpenAction(null);
+    if (!open && !busy) setOpenAction(null);
   };
 
   return (

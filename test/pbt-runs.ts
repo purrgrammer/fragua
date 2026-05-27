@@ -2,8 +2,8 @@
 // daemon). Each property passes its baseline iteration count through
 // `pbtRuns(base)`; the `FRAGUA_PBT_RUNS` env var multiplies it (default 1×).
 //
-//   bun test ./packages                  # baseline — fast per-PR CI
-//   FRAGUA_PBT_RUNS=20 bun test ./packages   # deep nightly stress pass
+//   bun run test:node                        # baseline — fast per-PR CI
+//   FRAGUA_PBT_RUNS=20 bun run test:node      # deep nightly stress pass
 //
 // A MULTIPLIER (not an absolute override) so the baselines stay meaningful:
 // suites differ wildly in per-run cost — a pure tier-1 planner property runs

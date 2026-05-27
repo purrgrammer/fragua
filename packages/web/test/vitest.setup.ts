@@ -53,13 +53,8 @@ const matchMedia = (query: string) =>
 (globalThis as { matchMedia?: unknown }).matchMedia = matchMedia;
 if (typeof window !== "undefined") window.matchMedia = matchMedia;
 
-// Defensive stability guard: Vitest isolates test files but not individual
-// tests within a file, and installFetchMock callers restore in their own
-// try/finally. Restoring the pristine fetch here too means a future test that
-// forgets to restore can't poison its neighbours. (No current suite relies on
-// this — it's a guardrail, not a fix for an existing leak.)
-const ORIGINAL_FETCH = globalThis.fetch;
-afterEach(() => {
-  cleanup();
-  globalThis.fetch = ORIGINAL_FETCH;
-});
+// Vitest isolates each test file in its own environment, and suites that mock
+// globalThis.fetch restore it themselves (installFetchMock's try/finally, or a
+// per-test beforeEach reinstall). No global fetch restore here — a blanket
+// afterEach restore would clobber a beforeEach-installed mock between tests.
+afterEach(cleanup);
