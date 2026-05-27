@@ -439,23 +439,24 @@ without a new axis:
 - **Config lives in the global `~/.fragua/config.yaml` `scrubber:` block** (not a
   separate `scrubber.yaml`) — one cascade, sitting next to `blocklist` /
   `concurrency`, feeding both the scrub registry and the `ci` perimeter env-strip
-  from one place. **The trust subtlety is load-bearing:** the cascade is global ⊕
-  project with *project keys winning*, and in `ci` the project layer
-  (`<cwd>/.fragua/config.yaml`) is **attacker-controlled** — a malicious PR could
-  ship a `scrubber:` block that deletes the patterns catching its own exfil (the
-  exact [§6](#6-threat-model-ci-pr-review-is-adversarial) adversary). So: **MVP
-  reads the global block only** (no project merge), sidestepping it entirely; when
-  project override later lands it is **additive-only for security keys** (a project
-  may *add* needles/patterns, never remove) and **`ci` ignores the project layer
-  outright** — the perimeter does not trust the repo, same as it never inherits the
-  runner's env. `export` (operator's own machine + project) may trust its project
+  from one place. **The schema is additive-only ([§15](#15-the-scrubber-config-block))
+  — no field can reduce coverage** — which is what defuses the project-layer
+  trust concern: the cascade is global ⊕ project with *project keys winning*, and
+  in `ci` the project layer (`<cwd>/.fragua/config.yaml`) is attacker-controlled,
+  but with no `disable-patterns`/`deny`/floor-override knob a malicious PR has
+  nothing to switch off — the worst a hostile `scrubber:` block does is *add*
+  redaction. MVP still **reads the global block only** (no project merge) for
+  simplicity; if a project overlay ever lands it is safe by construction (additive
+  merge), and `ci` can still ignore the project layer for least-privilege.
+  `export` (operator's own machine + project) may trust its project
   config.
 
 ### Genuinely still open
 
-- **The exact `scrubber:` YAML schema** — sketched in [§15](#15-the-scrubber-config-block);
-  the field set + the hardening/weakening trust split are settled there, leaving
-  only bikeshed-level naming.
+- **The exact `scrubber:` YAML schema** — sketched in [§15](#15-the-scrubber-config-block):
+  three additive-only fields (`extra-patterns` / `extra-literals` /
+  `env-allow-names`), no weakening knobs, so a bad config can't cause a leak.
+  Leaves only bikeshed-level naming.
 - **Binary artifacts ship un-inspected (implemented residual).** Text-ish blobs
   (`text/*`, `application/json`, `application/x-yaml`, `application/xml`,
   `application/javascript`) are decoded, scrubbed, and re-CASed by
@@ -501,11 +502,11 @@ tar-envelope reproducibility (§13), `ctx.artifacts.putRaw()` opt-out.
 Lives in the global `~/.fragua/config.yaml` ([§13](#13-resolved-decisions-was-open-questions)).
 Every field is optional — the built-in defaults (`BASE_PATTERNS`, the
 `provider_credentials` + `cwd` literals, the ci env-name allowlist, the 8-char
-value floor) stand alone. The block only *extends* or *tunes* them.
+value floor) stand alone. **The block is additive-only: it can only *add*
+coverage, never reduce it.** Three fields, all hardening:
 
 ```yaml
 scrubber:
-  # ── Hardening (additive; a project layer could safely contribute these later) ──
   extra-patterns:                 # org/site credential shapes beyond the base set
     - { source: pattern:acme_token, regex: 'acme_[A-Za-z0-9]{32}' }
   extra-literals:                 # project secrets not in any provider table or env
@@ -513,39 +514,33 @@ scrubber:
   env-allow-names:                # extra EXACT env var names treated as secrets —
     - DEPLOY_KEY                  #   extends the built-in suffix set (*_KEY / *_SECRET
     - INTERNAL_PAT                #   / *_TOKEN / *_PASSWORD / *_CREDENTIAL + provider vars)
-
-  # ── Weakening (GLOBAL-ONLY, never honored from a project layer) ──
-  disable-patterns:               # silence a base pattern that false-positives
-    - pattern:jwt
-  env-deny-names:                 # exempt a non-secret *_KEY-shaped name
-    - PUBLIC_API_KEY
-  min-literal-length: 8           # value floor; raising it skips short secrets
 ```
 
-Two rules keep it safe:
+Two properties keep it non-dangerous:
 
+- **Additive-only — no field weakens.** There is deliberately no
+  `disable-patterns`, no `env-deny-names`, no floor override. A config can only
+  *strengthen* scrubbing, so a wrong or even malicious config **cannot create a
+  leak** — the worst it does is over-redact (a needless pattern shreds some
+  bundle content), which is annoying, not unsafe. This also dissolves the
+  project-layer trust problem ([§6](#6-threat-model-ci-pr-review-is-adversarial)):
+  since nothing here can reduce coverage, a future project overlay would be
+  trivially safe (additive merge) — MVP stays global-only regardless. (A
+  false-positive *base* pattern is fixed in code — by tuning `BASE_PATTERNS` —
+  not by an operator-facing off switch; the floor stays fixed at 8.)
 - **Names and patterns, never values.** The config names *which* env vars are
   secret and *what shapes* to catch — it never contains a secret value. Values
-  come from `provider_credentials` and live `process.env` at runtime.
-- **Hardening vs weakening split — the trust boundary
-  ([§6](#6-threat-model-ci-pr-review-is-adversarial),
-  [§13](#13-resolved-decisions-was-open-questions)).** The `ci` project layer is
-  attacker-controlled, so the *weakening* fields (`disable-patterns`,
-  `env-deny-names`, raising `min-literal-length`) are **global-only forever** — a
-  malicious repo must never switch off a pattern or exempt a var on its own
-  bundle. The *hardening* fields (`extra-patterns`, `extra-literals`,
-  `env-allow-names`) are additive and are the only ones a project overlay could
-  contribute when project-merge eventually lands. (MVP: global-only for all of
-  them; this split is what makes a future project overlay tractable.)
+  come from `provider_credentials` and live `process.env` at runtime, so the
+  config file itself is safe to commit and share.
 
 **One list, two consumers ([§6](#6-threat-model-ci-pr-review-is-adversarial)).**
-`env-allow-names` (⊕ the built-in suffix set, ⊖ `env-deny-names`) is the single
-source for *both* the `ci` scrub registry (whose env *values* become literal
-needles) and the perimeter env-strip (which removes exactly those vars from the
-bash subprocess so they never reach a tool). Strip-list and needle-list are the
-same secret set viewed two ways, derived from one config.
+`env-allow-names` (⊕ the built-in suffix set) is the single source for *both* the
+`ci` scrub registry (whose env *values* become literal needles) and the perimeter
+env-strip (which removes exactly those vars from the bash subprocess so they never
+reach a tool). Strip-list and needle-list are the same secret set viewed two ways,
+derived from one config.
 
 Out of scope for the block: `labels` (source/generic) and `entropy` are
 profile-defaulted + flag-driven ([§13](#13-resolved-decisions-was-open-questions)),
-not config keys — a config *default* for them could be added later but earns
-nothing now.
+not config keys; and **disabling a base pattern or lowering the floor are
+deliberately not expressible** (they would be weakening).
