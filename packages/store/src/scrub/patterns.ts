@@ -5,16 +5,18 @@
 
 export const BASE_PATTERNS: ReadonlyArray<{ source: string; re: RegExp }> = [
   {
+    // Upper-bounded so a key embedded in a longer alphanumeric token (CSV row,
+    // slug) doesn't greedily consume trailing text; covers real key lengths.
     source: "pattern:anthropic_key",
-    re: /sk-ant-[A-Za-z0-9_-]{20,}/,
+    re: /sk-ant-[A-Za-z0-9_-]{20,200}/,
   },
   {
     source: "pattern:openai_key",
-    re: /sk-(?!ant-)(proj-)?[A-Za-z0-9_-]{20,}/,
+    re: /sk-(?!ant-)(proj-)?[A-Za-z0-9_-]{20,200}/,
   },
   {
     source: "pattern:github_token",
-    re: /gh[posu]_[A-Za-z0-9]{36,}/,
+    re: /gh[posu]_[A-Za-z0-9]{36,255}/,
   },
   {
     source: "pattern:aws_access_key_id",

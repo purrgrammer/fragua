@@ -273,3 +273,25 @@ describe("BASE_PATTERNS no-op", () => {
     expect(scrubText(text, r)).toBe(text);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bounded tails — a key embedded in a long alphanumeric run must not greedily
+// consume past its realistic length (CSV row / slug / dense token).
+// ---------------------------------------------------------------------------
+
+describe("pattern length bounds", () => {
+  test("openai_key does not consume an unbounded alnum tail (capped at 200)", () => {
+    const r = regFor("pattern:openai_key");
+    const result = scrubText(`sk-${"x".repeat(400)}`, r);
+    expect(result).toContain("[REDACTED:pattern:openai_key]");
+    // The tail beyond the cap survives — pre-bound this would be one big redaction.
+    expect(result).toMatch(/x{50,}/);
+  });
+
+  test("github_token does not consume an unbounded alnum tail", () => {
+    const r = regFor("pattern:github_token");
+    const result = scrubText(`ghp_${"a".repeat(400)}`, r);
+    expect(result).toContain("[REDACTED:pattern:github_token]");
+    expect(result).toMatch(/a{50,}/);
+  });
+});

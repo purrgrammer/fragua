@@ -746,7 +746,13 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
       [
         {
           type: "fact.tool_completed",
-          payload: { toolName: "bash", argsHash: "abc", artifactKey: "out", preview: `tool preview ${CRED_SECRET}` },
+          payload: {
+            toolName: "bash",
+            argsHash: "abc",
+            artifactKey: "out",
+            preview: `tool preview ${CRED_SECRET}`,
+            summary: `tool summary ${CRED_SECRET}`,
+          },
         } as FactEvent,
       ],
       v,
@@ -835,6 +841,9 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
     expect(typeof ev!.payload["preview"]).toBe("string");
     expect(ev!.payload["preview"] as string).toContain("[REDACTED");
     expect(ev!.payload["preview"] as string).not.toContain(CRED_SECRET);
+    // summary is a free-text fact field too (events.ts:551) — must be scrubbed.
+    expect(ev!.payload["summary"] as string).toContain("[REDACTED");
+    expect(ev!.payload["summary"] as string).not.toContain(CRED_SECRET);
   });
 
   test("(d) fact.run_paused errorMessage carries REDACTED marker", async () => {

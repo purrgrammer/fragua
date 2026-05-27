@@ -117,7 +117,7 @@ export function isTextMime(mime: string | null): boolean {
  * be scrubbed. Structural keys (type, nodeId, runId, workflowSha, seq, …)
  * are deliberately NOT listed — they drive deriveRunState replay and must
  * never be altered. */
-const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "detail"]);
+const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "detail", "summary"]);
 
 /**
  * Scrub an event payload without touching structural fields.
