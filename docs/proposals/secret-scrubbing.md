@@ -4,8 +4,9 @@ summary: "Bundles are the only thing that leaves the machine, so they are the on
 status: implemented-experimental
 maturity: experimental
 last-reviewed: 2026-05-28
-implemented-units: "Export scrubber shipped — §4 egress filter, §7 registry (Aho-Corasick), §8 disclosure (no tally + perimeter alarm), §10 base patterns, §12 end-to-end PBT; ci profile §5/§6 (9a env-seed + generic markers + fail-closed exit 80, 9b bash-subprocess env-strip); composes with the run-input spill (large-run-inputs.md). REMAINING: config block §15 (unit 8), V2 (§13)."
-experimental: "EXPERIMENTAL until a v1 contract is cut. The bundle format (BUNDLE_VERSION, scrubberVersion, manifest shape), the scrubber's behaviour, the ci exit code (80), and the open calls below (cwd handling, label/keep-cwd flags) are NOT frozen and may change. Do not depend on bundle byte-stability or marker text across versions yet."
+shipped: "§4 egress filter · §5–§6 ci profile (env-seed registry, generic markers, fail-closed exit 80, bash-subprocess env-strip via name + live predicate) · §7 registry (Aho-Corasick, encoding-expanded literals, cwd needle, value-length floor) · §8 disclosure (no tally, perimeter alarm = `liveLiteralHit` on un-scrubbed binary blobs) · §10 base patterns (incl. promoted connection-string userinfo) · §11 cwd as literal needle (basename-normalize alternative not built) · §12 end-to-end PBT (declared encoding set). Composes with the run-input spill (archived: [`archive/large-run-inputs.md`](archive/large-run-inputs.md))."
+open: "§15 `scrubber:` config block (additive-only YAML schema — bikeshed-level naming only) · §13 cwd v1 contract (full-redact vs basename-normalize) · per-export label / `--keep-cwd-path` override flags · V2 items (URL-token pattern, opt-in entropy on `export`, tar-envelope reproducibility, `ctx.artifacts.putRaw()` opt-out)."
+experimental: "EXPERIMENTAL until a v1 contract is cut. The bundle format (BUNDLE_VERSION, scrubberVersion, manifest shape), the scrubber's behaviour, the ci exit code (80), and the open calls are NOT frozen and may change. Do not depend on bundle byte-stability or marker text across versions yet."
 ---
 
 # Secret scrubbing for run bundles
@@ -159,22 +160,16 @@ A single transform in `exportRunBundle` that, per run:
 `!e.type.startsWith("fact.")` continue), so dropping
 observability from the bundle does not affect replay on import.
 
-> **Status: units 9a + 9b implemented + round-4 hardening** (§5–§8).
-> `exportRunBundle` returns `{ bytes: Uint8Array; liveLiteralHit: boolean }`. Options:
-> `labelMode: "source" | "generic"` and `extraLiterals: Array<{value, source}>`.
-> `buildExportRegistry` now returns `{ registry, literalValues }` (verbatim literal
-> strings for the binary scan). `ScrubOptions.onLiteralHit` **removed** — text hits
-> are non-fatal by design.
-> `liveLiteralHit` is now the **binary-artifact residual gate** (§13): it fires when a
-> verbatim live-literal value is found in an un-scrubbed binary blob, not on text-surface
-> hits. Text surfaces are always scrubbed; binary blobs are scanned-and-fail-closed in `ci`.
-> `fragua runs export` warns (non-fatal).
-> `captureCiEnvSecrets()` captures env by name allowlist at seed time (scrub needles).
-> `ciEnvDenyPredicate()` returns the same rule as a live PREDICATE applied at spawn time,
-> so a secret-named var set after the Set was captured is still stripped from subprocess env.
-> `ciEnvDenyNames()` + `ciEnvDenyPredicate()` both wired into `WorktreeProvisioner`.
-> The daemon path does NOT set either — operator-trusted behavior unchanged.
-> Still sketch/open: `scrubber:` config block.
+> **Shipped surface.** `exportRunBundle` returns `{ bytes: Uint8Array;
+> liveLiteralHit: boolean }`; options `labelMode: "source" | "generic"` +
+> `extraLiterals`. `buildExportRegistry` returns `{ registry, literalValues }`.
+> Text surfaces are always scrubbed; `liveLiteralHit` is the binary-artifact
+> residual gate (§13) — fail-closed in `ci`, warn-and-continue in
+> `fragua runs export`. `captureCiEnvSecrets()` seeds env-name-allowlisted
+> needles at capture time; `ciEnvDenyPredicate()` strips them from the bash
+> subprocess at spawn time (live rule, so vars set after capture are still
+> stripped). Daemon path leaves env alone — operator-trusted. Open: the
+> `scrubber:` config block (§15).
 
 ## 5. The `ci` profile vs the export profile
 
@@ -503,11 +498,8 @@ without a new axis:
 
 ## 14. MVP order
 
-> **Status:** items 1–6 shipped (+ the ci profile, units 9a/9b — env-seed,
-> generic markers, fail-closed exit 80, perimeter env-strip; + round-4 hardening —
-> binary-artifact scan gate, predicate env-strip, `ScrubOptions.onLiteralHit`
-> removed). Item 7 (config block, §15) not started. All shipped behind the
-> experimental flag — see the frontmatter; nothing here is a frozen contract yet.
+> **Status:** items 1–6 shipped behind the experimental flag (see frontmatter).
+> Item 7 — the `scrubber:` config block (§15) — is the one MVP item left.
 
 1. **Egress filter in `exportRunBundle`** — drop content-bearing observability,
    keep `cost.recorded`; **correct the false "credential-free by construction"

@@ -4,7 +4,7 @@ summary: "Export a run from one store (a CI artifact, an ephemeral fragua-ci .db
 status: proposed
 maturity: designed
 last-reviewed: 2026-05-22
-parent: cli-topology.md
+parent: cli-topology.md (archived)
 ---
 
 # Run import & bundling
@@ -18,7 +18,7 @@ parent: cli-topology.md
 > (§4), and the cross-version resume gate (§5). Read `bundles.md` for the
 > current format and verbs; read this for the deeper portability rationale.
 
-> Child of [`cli-topology.md`](../cli-topology.md). Additive (`fragua runs
+> Child of [`cli-topology.md`](cli-topology.md). Additive (`fragua runs
 > export` / `fragua runs import`); blocks nothing. Consumes the artifact a
 > CI run produces. Interlocks with project identity (shipped — cwd is
 > a local binding, rebound on import), [`workflow-ir.md`](../workflow-ir.md)

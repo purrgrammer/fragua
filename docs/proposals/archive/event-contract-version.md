@@ -4,12 +4,12 @@ summary: "The per-run schema_version gate conflates two things and over-punishes
 status: shipped
 maturity: shipped
 last-reviewed: 2026-05-25
-parent: cli-topology.md
+parent: cli-topology.md (archived)
 ---
 
 # Event-contract version
 
-> Child of [`cli-topology.md`](../cli-topology.md). Spun out of
+> Child of [`cli-topology.md`](cli-topology.md). Spun out of
 > [`db-import.md`](db-import.md) §4 (option 2). Touches SPEC §282 and
 > ARCHITECTURE §143 — a contract change, not just code.
 

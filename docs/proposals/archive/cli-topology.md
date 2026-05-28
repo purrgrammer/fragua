@@ -1,12 +1,19 @@
 ---
 title: CLI topology — umbrella roadmap (store-client CLI, intent plane, embedded CI, pluggable HITL)
 summary: "Umbrella over four independently-shippable proposals, unified by one principle: the daemon is the sole fact-writer; everything else is a store-client. Holds the shared cut, the dependency DAG + ship order, and the cross-cutting decisions log. Detail lives in the child proposals."
-status: proposed
-maturity: sketch
-last-reviewed: 2026-05-21
+status: archived
+maturity: shipped
+last-reviewed: 2026-05-28
 ---
 
 # CLI topology — umbrella
+
+> **Archived.** Five of six children shipped (intent-plane, fragua-ci,
+> cli-store-client, bundles, event-contract-version). The remaining child —
+> [`hitl-channel.md`](../hitl-channel.md) — is the only live work; the
+> principle ("sole fact-writer + store-clients") is now documented in
+> [CLAUDE.md](../../../CLAUDE.md) and the package map. Kept here as a design
+> record.
 
 > **This is an index, not a spec.** The design is decomplected into four child
 > proposals, each built/tested/shipped on its own. This file holds only what is
@@ -56,7 +63,7 @@ the intent to the store directly.
 | 1 | intent plane — **shipped** (design doc removed) | shared validate/construct/mint surface, many ports | ✅ shipped |
 | 2 | fragua ci — **shipped** (design doc removed) | embedded executor over an ephemeral, portable store | ✅ shipped |
 | 3 | cli-store-client — **shipped** (design doc removed) | CLI as a direct store-client; `run` enqueues + tails; log UX; `--url` dropped; `db migrate`; run/runs share the `cliExitCode` taxonomy | ✅ shipped |
-| 4 | [`hitl-channel.md`](hitl-channel.md) | pluggable HITL — the interviewer pattern over pause-fact/answer-intent | sketch — **the only child still open** |
+| 4 | [`hitl-channel.md`](../hitl-channel.md) | pluggable HITL — the interviewer pattern over pause-fact/answer-intent | sketch — **the only child still open** |
 | 5 | run import — **shipped** (archived as `bundles.md`) | cross-machine import of a run's events into another store, reshaped to a portable `.fragua` bundle (run_state derived on import) | ✅ shipped |
 | 6 | event-contract version — **shipped** (archived) | gate resume on an event-contract version, not the DB counter; mismatch is a recoverable pause, not a terminal halt | ✅ shipped |
 

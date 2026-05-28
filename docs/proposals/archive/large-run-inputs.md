@@ -157,7 +157,7 @@ blobs.
   delete a live run's inputs. This is the one place the change is a *latent
   data-loss bug* if missed — call it out in the implementation.
 - **Secret-scrubbing (ordering constraint).** The scrubber deep-scrubs
-  `routing`'s string values at export ([secret-scrubbing.md](secret-scrubbing.md)
+  `routing`'s string values at export ([secret-scrubbing.md](../secret-scrubbing.md)
   §unit-5). But once an input is spilled, `routing.input` is a **ref object, not
   a string** — so the routing-scrub pass sees no content to scrub; the secret
   sits in the blob. The blob must therefore be scrubbed by the **blob/artifact

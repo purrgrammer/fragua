@@ -3,15 +3,22 @@ title: Pluggable HITL channel — the interviewer pattern over pause-fact/answer
 summary: "Make the human-in-the-loop channel pluggable, porting attractor's Interviewer pattern mutatis mutandis. fragua's HITL is already event-sourced (fact.run_paused{reason:human} parks the run; intent.human_input answers it), so the port is an async resolver — observe the pause fact, write the answer intent — not a blocking ask(). Built-ins: auto-approve (CI), console (TTY), web (exists), queue (tests); recording is subsumed by the event log."
 status: proposed
 maturity: sketch
-last-reviewed: 2026-05-21
-parent: cli-topology.md
+last-reviewed: 2026-05-28
+parent: cli-topology.md (archived)
 ---
 
 # Pluggable HITL channel
 
-> Child of [`cli-topology.md`](cli-topology.md). An additive tail; blocks
-> nothing. The resolver seam + queue resolver can land alone; concrete channels
-> host on fragua ci (shipped) and cli-store-client (shipped).
+> Child of [`cli-topology.md`](archive/cli-topology.md) (archived). An additive
+> tail; blocks nothing. The resolver seam + queue resolver can land alone;
+> concrete channels host on fragua ci (shipped) and cli-store-client (shipped).
+>
+> **What's already done.** `fact.run_paused_human` already carries `routes:
+> string[]` and `routeLabels?` (see `packages/types/src/events.ts`) — the §5.2
+> "route options ride on the pause fact" piece is shipped. The §4 open note
+> about reconstructing the Question is therefore closed. What remains is the
+> `fragua ci --on-pause=auto|fail|first|emit` flag, `fragua ci --resume`, and
+> the console resolver for `fragua watch` in a TTY.
 
 ## 1. What already exists
 
@@ -62,10 +69,8 @@ a function return to a store intent.
 ## 4. Open notes
 
 - ~~The Question presented to a channel is reconstructed from the pause fact +
-  the node's outgoing edges / route options; settle exactly what the pause fact
-  carries vs. what the channel re-derives from the workflow.~~ **Settled in §5:**
-  the route options ride on the pause fact, so no channel re-derives them from
-  the workflow YAML.
+  the node's outgoing edges / route options.~~ **Closed:** `fact.run_paused_human`
+  ships `routes` + `routeLabels` (see §5.2).
 - Timeout/default handling (attractor §6.5) maps onto the existing `paused_auto`
   / `auto_resume_at` machinery — decide whether a human-gate timeout reuses it or
   stays channel-local.
@@ -108,15 +113,14 @@ $ fragua ci ship.yaml --db "$RUNNER_TEMP/ci.db" --on-pause=emit
 In GHA these fields are mirrored to step outputs (`steps.drive.outputs.paused`,
 `…run_id`, `…routes`) so later `if:`-guarded steps can branch on them.
 
-### 5.2 Route options ride on the pause fact
+### 5.2 Route options ride on the pause fact — **shipped**
 
-`fact.run_paused{reason:human}` gains a `routes: { route, label }[]` field,
-folded by the recorder at park time from the parked node's outgoing edges. This
-resolves the §4 open note: the channel reads the renderable Question straight off
-the fact (and off `fragua runs status --json`) instead of re-parsing the workflow
-YAML. Route labels are small and well inside the 4 KB payload cap (I-…); if a
-node ever carries enough routes to threaten the cap, the fact stores route *keys*
-only and the renderer falls back to keys-as-labels.
+`fact.run_paused_human.payload` already carries `routes: string[]` plus a
+sparse `routeLabels?: Record<string, string>` for `label=` overrides
+(`packages/types/src/events.ts`). The channel reads the renderable Question
+straight off the fact instead of re-parsing the workflow YAML. Nothing left
+to do here; the remaining §5 work is the `--on-pause=emit` switch + `--resume`,
+not the fact shape.
 
 ### 5.3 Resume
 
