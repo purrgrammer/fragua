@@ -1,8 +1,8 @@
 {
   "name": "@fragua/workspace",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "fragua execution environments — local, worktree, blocklist, env-leak gate",
+  "description": "fragua execution environments \u2014 local, worktree, blocklist, env-leak gate",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

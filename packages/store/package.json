@@ -1,8 +1,8 @@
 {
   "name": "@fragua/store",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "SQLite-backed event store — single coordination surface for fragua",
+  "description": "SQLite-backed event store \u2014 single coordination surface for fragua",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

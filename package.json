@@ -18,7 +18,9 @@
     "fragua": "bun run packages/cli/bin/fragua.ts",
     "serve": "bun --hot packages/cli/bin/fragua.ts serve",
     "dev:web": "bun run --filter=@fragua/web dev",
-    "build:bin": "bun run packages/cli/scripts/build-bin.ts"
+    "build:bin": "bun run packages/cli/scripts/build-bin.ts",
+    "sync-version": "bun run scripts/sync-version.ts",
+    "check-version": "bun run scripts/sync-version.ts --check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",

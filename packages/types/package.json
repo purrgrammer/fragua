@@ -1,8 +1,8 @@
 {
   "name": "@fragua/types",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "fragua shared types — pi-agent-core AgentMessage plus fragua-specific declaration merges",
+  "description": "fragua shared types \u2014 pi-agent-core AgentMessage plus fragua-specific declaration merges",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

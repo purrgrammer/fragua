@@ -1,8 +1,8 @@
 {
   "name": "@fragua/server",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "fragua HTTP server — SSE event stream, REST API for the web UI",
+  "description": "fragua HTTP server \u2014 SSE event stream, REST API for the web UI",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
