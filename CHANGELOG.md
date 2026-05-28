@@ -8,75 +8,30 @@ guarantee.
 
 ## [0.3.1] — 2026-05-28
 
-Bugfix release. One executor fix + the pinning tests that should have caught it
-+ the drift on the same surface, subtracted + a small UX additive (CLAUDE.md
-fallback) + the pre-existing web-test infra fix that was hiding under a wrapper
-exit-code.
-
 ### Added
 
-- **`CLAUDE.md` falls back when `AGENTS.md` is missing.** `loadContextFiles`
-  auto-prepends `AGENTS.md` as the project primer on every llm step; many
-  projects only have `CLAUDE.md` (no AGENTS.md, no symlink). The loader now
-  tries `CLAUDE.md` when `AGENTS.md` ENOENTs and `CLAUDE.md` isn't already
-  declared in the path list — first-found wins, no double-load, the original
-  error is preserved in the warning when both are missing. Project-level only:
-  no global `~/.claude/CLAUDE.md` probe (always-on context is the wrong shape
-  for autonomous workflows; named opt-in surfaces like skills are what's safe
-  to globalize). (e497fa9e)
+- **`CLAUDE.md` fallback for the project primer.** `loadContextFiles` falls
+  back to `CLAUDE.md` when the auto-prepended `AGENTS.md` is missing and
+  `CLAUDE.md` isn't already in the path list. Project-level only; no global
+  `~/.claude/CLAUDE.md` probe.
 
 ### Fixed
 
-- **Goal-gate retarget stole non-gate fails at terminal, causing silent retry
-  loops.** Once a `goal_gate` node had failed and its outcome lived in routing
-  state, any *downstream non-gate* node terminating via `outcome=fail` — an
-  `abort` tool call, retry-exhausted, any unrecovered failure — was being
-  intercepted by the §3.4 terminal-arrival check and retargeted to the gate's
-  `retry_target` (often the failing node itself), looping until the
-  operator-raised cap exhausted. Observed on run `01kspxc14ktygz3grtevey53kp`
-  (audit description optimize): a propose-step called `abort` three times after
-  a paused-gate cap raise; each abort dispatched another propose iteration
-  under the still-unsatisfied gate. **~$1.15 burned before the operator paused
-  the run manually.** Also silently overrode the documented `on: {fail: exit}`
-  sanctioned-landing escape hatch under any unsatisfied gate. Fix in
-  `transition-planner.ts`: skip the §3.4 check when the completed node is
-  non-gate and its outcome is `fail` — the node's own terminal decision.
-  (eea93348)
-
-### Tests
-
-- Pinning tests in `executor.goal-gate.test.ts` whose names quote the SPEC §3
-  and workflows-skill lines they enforce: *"a node that fails with no fail
-  route halts the run with `aborted_exit`"* and *"an explicit edge to the `exit`
-  sink on failure is a sanctioned landing — the run *completes*"*, both
-  asserted under a prior-failed-gate state. A grep from SKILL.md or SPEC.md
-  now lands on the test that pins each claim.
+- **Goal-gate retarget no longer steals non-gate fail terminals.** When a
+  `goal_gate` node had failed and its outcome was in routing state, a
+  downstream non-gate node terminating via `outcome=fail` (abort,
+  retry-exhausted, any unrecovered failure) was being retargeted to the
+  gate's `retry_target` instead of halting. Also silently overrode an
+  explicit `on: {fail: exit}` route. The §3.4 terminal-arrival check now
+  skips when the completed node is non-gate and its outcome is `fail`.
 
 ### Removed
 
 - **`fallback_retry_target` (node attr) and graph-level `retry_target` /
-  `fallback_retry_target` attrs.** SPEC §3.7 + SKILL §182 + two source
-  comments described a 4-step goal-gate retarget chain
-  (`gate.retry_target → gate.fallback_retry_target → graph.retry_target →
-  graph.fallback_retry_target`), but the runtime only walked step 1; the other
-  three fields were accepted by the validator (E011) and silently ignored.
-  Surfaced during the drift sweep for the bug above. Pre-1.0 subtraction: the
-  unwired fields are removed from the schema, the validator's E011 + W007
-  wording, the SPEC, the SKILL, and the policy/planner header comments. The
-  goal-gate retarget is now single-step — the failing gate's own `retry_target`
-  — and the docs say so. A workflow that previously declared an unwired field
-  will now get W013 (unrecognised attribute).
-
-### Test infrastructure
-
-- **vitest `Request` patch for jsdom AbortSignals.** 18 RunDetail.test.tsx
-  tests had been silently failing under `bun run test` (jsdom installs its
-  own AbortController; undici's Request brand-checks `signal` and rejects
-  jsdom's; react-router 7's navigation crashed on every `<Navigate>`).
-  Setup file now wraps `globalThis.Request` to strip an offending signal
-  rather than crash. Surfaced during the 0.3.1 release sweep — the earlier
-  CI "exit 0" notifications were the wrapper bash's exit, not the underlying
-  CI's. (2d8a61b1)
+  `fallback_retry_target` attrs.** Accepted by the validator but ignored at
+  runtime. Goal-gate retarget is single-step — the failing gate's own
+  `retry_target`. A workflow that previously declared one of these attrs
+  now warns W013 (unrecognised attribute).
 
 ## [0.3.0] — 2026-05-28
 
