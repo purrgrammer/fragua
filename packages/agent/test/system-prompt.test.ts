@@ -91,6 +91,53 @@ describe("loadContextFiles", () => {
   test("default cap is 32 KiB", () => {
     expect(CONTEXT_FILES_MAX_BYTES).toBe(32 * 1024);
   });
+
+  describe("AGENTS.md → CLAUDE.md fallback", () => {
+    test("AGENTS.md missing + CLAUDE.md present → loads CLAUDE.md, no warning", async () => {
+      const env = stubEnv({ "CLAUDE.md": "claude rules" });
+      const res = await loadContextFiles(env, ["AGENTS.md"]);
+      expect(res.warnings).toEqual([]);
+      expect(res.text).toContain(`<project-conventions source="CLAUDE.md">`);
+      expect(res.text).toContain("claude rules");
+      expect(res.files).toHaveLength(1);
+      expect(res.files[0]).toMatchObject({ path: "CLAUDE.md", status: "ok" });
+    });
+
+    test("AGENTS.md present → loads it (no fallback probe, no double-load)", async () => {
+      const env = stubEnv({ "AGENTS.md": "agents rules", "CLAUDE.md": "claude rules" });
+      const res = await loadContextFiles(env, ["AGENTS.md"]);
+      expect(res.warnings).toEqual([]);
+      expect(res.text).toContain(`<project-conventions source="AGENTS.md">`);
+      expect(res.text).toContain("agents rules");
+      expect(res.text).not.toContain("claude rules");
+      expect(res.files).toHaveLength(1);
+      expect(res.files[0]).toMatchObject({ path: "AGENTS.md", status: "ok" });
+    });
+
+    test("AGENTS.md missing + CLAUDE.md missing → original AGENTS.md warning", async () => {
+      const res = await loadContextFiles(stubEnv({}), ["AGENTS.md"]);
+      expect(res.warnings).toHaveLength(1);
+      expect(res.warnings[0]).toContain("AGENTS.md");
+      // The warning quotes the requested path (AGENTS.md), not the fallback —
+      // the user asked for AGENTS.md; CLAUDE.md is an internal recovery attempt.
+      expect(res.warnings[0]).not.toContain("CLAUDE.md");
+      expect(res.files).toHaveLength(1);
+      expect(res.files[0]).toMatchObject({ path: "AGENTS.md", status: "missing" });
+    });
+
+    test("explicit list includes CLAUDE.md → no fallback (CLAUDE.md loads on its own iteration)", async () => {
+      // Author asked for both. AGENTS.md is missing → recorded missing (not
+      // shadowed by the fallback). CLAUDE.md loads normally on its own turn.
+      const env = stubEnv({ "CLAUDE.md": "claude rules" });
+      const res = await loadContextFiles(env, ["AGENTS.md", "CLAUDE.md"]);
+      expect(res.files).toHaveLength(2);
+      expect(res.files[0]).toMatchObject({ path: "AGENTS.md", status: "missing" });
+      expect(res.files[1]).toMatchObject({ path: "CLAUDE.md", status: "ok" });
+      // CLAUDE.md content appears exactly once — no double-load.
+      const matches = res.text.match(/claude rules/g) ?? [];
+      expect(matches).toHaveLength(1);
+    });
+  });
 });
 
 describe("applyDefaultContextFiles", () => {

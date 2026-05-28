@@ -54,7 +54,13 @@ export function applyDefaultContextFiles(declared: readonly string[]): string[] 
 
 /** Read each path from the environment and wrap it in a single
  * `<project-conventions>` block. Missing files produce a warning and are
- * skipped. Truncates the final text to `CONTEXT_FILES_MAX_BYTES`. */
+ * skipped. Truncates the final text to `CONTEXT_FILES_MAX_BYTES`.
+ *
+ * Project-primer fallback: when the literal path "AGENTS.md" is requested
+ * and missing, fall back to "CLAUDE.md" (many projects use CLAUDE.md as the
+ * canonical primer with no AGENTS.md). The fallback only fires when
+ * "CLAUDE.md" isn't already present elsewhere in `paths` — never a
+ * double-load. The resolved file's path is what gets recorded in `files[]`. */
 export async function loadContextFiles(
   env: Pick<ExecutionEnvironment, "readFile">,
   paths: readonly string[],
@@ -68,20 +74,36 @@ export async function loadContextFiles(
   for (const raw of paths) {
     const path = raw.trim();
     if (!path) continue;
-    try {
-      const contents = await env.readFile(path);
-      parts.push(`<project-conventions source="${escapeAttr(path)}">\n${contents}\n</project-conventions>`);
-      files.push({
-        path,
-        sha256: sha256Hex(contents),
-        bytes: Buffer.byteLength(contents, "utf8"),
-        truncated: false,
-        status: "ok",
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      warnings.push(`context_files: could not read "${path}" — ${msg}`);
-      files.push({ path, sha256: "", bytes: 0, truncated: false, status: "missing", error: msg });
+    // Build the candidate list: usually just `path`, but for the auto-prepended
+    // `AGENTS.md` (when no explicit `CLAUDE.md` is in play) try `CLAUDE.md`
+    // as a fallback. First-success wins; the resolved path is recorded.
+    const candidates: readonly string[] =
+      path === "AGENTS.md" && !paths.includes("CLAUDE.md") ? ["AGENTS.md", "CLAUDE.md"] : [path];
+    let loaded = false;
+    // Capture only the FIRST candidate's error — the warning quotes the
+    // path the caller asked for, never the internal fallback.
+    let originalError = "";
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i]!;
+      try {
+        const contents = await env.readFile(candidate);
+        parts.push(`<project-conventions source="${escapeAttr(candidate)}">\n${contents}\n</project-conventions>`);
+        files.push({
+          path: candidate,
+          sha256: sha256Hex(contents),
+          bytes: Buffer.byteLength(contents, "utf8"),
+          truncated: false,
+          status: "ok",
+        });
+        loaded = true;
+        break;
+      } catch (err) {
+        if (i === 0) originalError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    if (!loaded) {
+      warnings.push(`context_files: could not read "${path}" — ${originalError}`);
+      files.push({ path, sha256: "", bytes: 0, truncated: false, status: "missing", error: originalError });
     }
   }
   if (parts.length === 0) return { text: "", warnings, files };
