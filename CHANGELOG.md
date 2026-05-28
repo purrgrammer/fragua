@@ -9,7 +9,21 @@ guarantee.
 ## [0.3.1] — 2026-05-28
 
 Bugfix release. One executor fix + the pinning tests that should have caught it
-+ the drift on the same surface, subtracted.
++ the drift on the same surface, subtracted + a small UX additive (CLAUDE.md
+fallback) + the pre-existing web-test infra fix that was hiding under a wrapper
+exit-code.
+
+### Added
+
+- **`CLAUDE.md` falls back when `AGENTS.md` is missing.** `loadContextFiles`
+  auto-prepends `AGENTS.md` as the project primer on every llm step; many
+  projects only have `CLAUDE.md` (no AGENTS.md, no symlink). The loader now
+  tries `CLAUDE.md` when `AGENTS.md` ENOENTs and `CLAUDE.md` isn't already
+  declared in the path list — first-found wins, no double-load, the original
+  error is preserved in the warning when both are missing. Project-level only:
+  no global `~/.claude/CLAUDE.md` probe (always-on context is the wrong shape
+  for autonomous workflows; named opt-in surfaces like skills are what's safe
+  to globalize). (e497fa9e)
 
 ### Fixed
 
@@ -52,6 +66,17 @@ Bugfix release. One executor fix + the pinning tests that should have caught it
   goal-gate retarget is now single-step — the failing gate's own `retry_target`
   — and the docs say so. A workflow that previously declared an unwired field
   will now get W013 (unrecognised attribute).
+
+### Test infrastructure
+
+- **vitest `Request` patch for jsdom AbortSignals.** 18 RunDetail.test.tsx
+  tests had been silently failing under `bun run test` (jsdom installs its
+  own AbortController; undici's Request brand-checks `signal` and rejects
+  jsdom's; react-router 7's navigation crashed on every `<Navigate>`).
+  Setup file now wraps `globalThis.Request` to strip an offending signal
+  rather than crash. Surfaced during the 0.3.1 release sweep — the earlier
+  CI "exit 0" notifications were the wrapper bash's exit, not the underlying
+  CI's. (2d8a61b1)
 
 ## [0.3.0] — 2026-05-28
 
