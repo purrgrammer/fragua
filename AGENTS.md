@@ -72,6 +72,10 @@ Skills (domain context loaded on demand) come from two layers: `~/.agents/skills
 - Every non-trivial change updates a test. If infeasible, say so in the commit body.
 - `git commit --no-verify` is banned. Fix the hook.
 
+## Changelog
+
+`CHANGELOG.md` describes **functionality only** — what changed, how authored workflows are affected. No anecdotes (run ids, dollar costs, "surfaced during X", who found it), no commit hashes (git has them), no internal test-infra notes the user never sees, no release-process narrative. Keep the same Keep-a-Changelog sections (`Added` / `Changed` / `Fixed` / `Removed`) tight; one or two sentences per entry. The commit body is where the *why* and the *how* live; the changelog is the *what*.
+
 ## Ground rules
 
 1. **Spec-first.** Code uncovered by `docs/SPEC.md` / `docs/ARCHITECTURE.md` / `docs/handler-contract.md` — stop, update the docs first or check in. Half-baked is fine — mark it (`> Status: in-progress` or `> Status: sketch`). An honest known-rough section beats silence; we revisit as the design firms up.
