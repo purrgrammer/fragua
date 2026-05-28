@@ -120,7 +120,13 @@ function RunActionsInner({
     // Reset only the mutation we're opening — clearing the other would discard
     // an in-flight request's bookkeeping while its fetch is still resolving.
     (kind === "accept" ? acceptM : discardM).reset();
-    setOpenAction(kind);
+    // Defer the dialog open by one task so the DropdownMenu's own onSelect-
+    // driven close commit (with its DismissableLayer body-style cleanup)
+    // lands before the AlertDialog opens. Without this defer, the dropdown
+    // close + dialog open stack two DismissableLayer ops in a single render;
+    // Radix's layer-counter accounting drifts and a later Cancel leaves
+    // `body { pointer-events: none }` set, making the whole page unclickable.
+    setTimeout(() => setOpenAction(kind), 0);
   }
 
   // Escape / overlay-click / Cancel route here via Radix's onOpenChange. Ignore
