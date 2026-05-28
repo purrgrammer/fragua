@@ -127,7 +127,7 @@ Authoritative source: `FactEvent` union in `packages/types/src/fragua-events.ts`
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Handler exceeded `maxMs + LEAK_GRACE_MS` (30s) without honoring `ctx.signal`. Handler bug per `docs/handler-contract.md` §4 rule 1. Per-process leak counter advances; daemon shuts down at `LEAK_LIMIT`. |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Another daemon reclaimed a stale lock. Expect `fact.run_requeued_after_crash` rows on in-flight runs nearby. |
 | `fact.run_discarded` | `refs[]` | Operator (`fragua runs discard`): deleted the run's `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded`. Now in `FEED_EVENT_KINDS`. |
-| `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (worktrees.md). Once per worktree-backed run, after the terminal status fact; projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event (no fact). |
+| `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (`docs/execution-model.md` §3–§4). Once per worktree-backed run, after the terminal status fact; projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event (no fact). |
 
 ---
 
@@ -208,6 +208,11 @@ fragua runs diff "$RUN"             # base..tip diff; survives worktree disposal
 ```
 
 It sits on top of the run's `.fragua/worktrees/<run_id>/` directory and the preserved `refs/fragua/heads/<run_id>` branch.
+
+**`diff` shows nothing on a completed run** — two causes, both expected (`docs/execution-model.md` §4–§5):
+
+- **Read-only step → delta-suppressed.** A `step`-boundary snapshot is skipped when the worktree tree is byte-identical to the prior snapshot, so a step that only read files records no snapshot event and contributes no selectable diff point. Not a bug; cost control.
+- **Work written outside the worktree.** Files written to the main repo root, `/tmp`, or any absolute path outside `.fragua/worktrees/<run_id>/` are invisible to snapshots and to accept/discard — they have no refs. The tool layer guards against this (`PathEscapeError`), but a `bash` step that shells out to an absolute path can still escape.
 
 ### Provider config + credentials
 
