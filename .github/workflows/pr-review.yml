@@ -46,7 +46,7 @@ jobs:
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.3.1
 
       - name: "Review PR #${{ github.event.pull_request.number }}"
         run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --export "$RUNNER_TEMP/pr-review.fragua"
