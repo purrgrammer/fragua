@@ -1,9 +1,9 @@
 ---
 title: Structured step outputs — typed `outputs:` on `llm` steps (scalars, records, arrays)
-summary: "One-directional typed data flow: `llm` steps declare `outputs:` over a restricted JSON-Schema profile (scalars + records + arrays), emit them via a single force-included `emit_output` tool, and downstream steps consume them by `${{ outputs.X.f }}` interpolation — gated by dominance-by-success so a reference can never read an unpopulated field. Collapses the data-plumbing half of shared-thread usage into typed, validated hand-offs. STRICTLY ADDITIVE and llm-only-production: keeps the `tool` kind, keeps `routes:`/`on:` routing and the `route` tool unchanged; tools and humans CONSUME outputs but do not produce them. Tool output production, transparent spill for oversized structures, fact-routing, and binary blobs are deferred. Post-0.1.0, via an `ir_version` bump."
+summary: "One-directional typed data flow: `llm` steps declare `outputs:` over a restricted JSON-Schema profile (scalars + records + arrays), emit them via a single force-included `emit_output` tool, and downstream steps consume them by `${{ outputs.X.f }}` interpolation — reads fail closed, so referencing a field its producer never emitted halts loudly (a recorded, replayable fact) instead of silently collapsing to \"\". Collapses the data-plumbing half of shared-thread usage into typed, validated hand-offs. STRICTLY ADDITIVE and llm-only-production: keeps the `tool` kind, keeps `routes:`/`on:` routing and the `route` tool unchanged; tools and humans CONSUME outputs but do not produce them. Tool output production, transparent spill for oversized structures, fact-routing, and binary blobs are deferred. Post-0.1.0, via an `ir_version` bump."
 status: proposed
 maturity: designed
-last-reviewed: 2026-05-26
+last-reviewed: 2026-05-28
 ---
 
 # Structured step outputs
@@ -29,11 +29,18 @@ bone, keep these:
   compositions trustworthy. **This cut ships the first half** — `llm` produces,
   `tool` consumes; the second (`tool` produces structured evidence) waits on tool
   output production (§2.1).
-- **Why a reference is safe.** *Dominance-by-success makes every output
-  reference total* — a consumer can never read an unpopulated field, because the
-  validator only admits `${{ outputs.X.f }}` where X is guaranteed to have
-  emitted `f` before N runs. That populated-guarantee is exactly what the old
-  `$node.output` hand-wave lacked, and why this is allowed where that was banned.
+- **Why a reference is safe.** *Reading an unpopulated output is a loud,
+  recoverable, replayable halt — never a silent `""`.* If `${{ outputs.X.f }}`
+  resolves and X emitted nothing (it never ran on the taken path, or it failed
+  before `emit_output`), the consuming node **fails closed**: it halts to the
+  operator, it does not substitute the empty string. That halt is itself a
+  recorded `fact.*`, so it folds back identically on every replay. This is the
+  populated-guarantee the old `$node.output` hand-wave lacked — that token
+  silently collapsed to `""`. We get the same safety *without* proving totality
+  statically, because fragua's determinism is a property of the folded log, not
+  of re-execution (SPEC §1, *Testable*): a faithfully-recorded runtime fault is
+  exactly as trustworthy as a compile-time impossibility, and it doesn't freeze
+  the graph into being fully static.
 
 ## 2. Problem
 
@@ -50,9 +57,9 @@ steps. That's two smells wearing one coat:
   cosplaying as prose — carried at full transcript cost, read nondeterministically.
 
 Today the only substitution token is `${{ inputs.<name> }}` (ground rule 13).
-`$node.output` was banned because the old hand-wave had no guarantee the
-referenced output was populated. A typed schema + dominance-by-success (§3) is
-exactly what retires that reason.
+`$node.output` was banned because the old hand-wave silently collapsed an
+unpopulated reference to `""`. A typed schema + fail-closed reads (§3) is exactly
+what retires that reason — the unpopulated case now halts loudly instead.
 
 **The material win is step elimination, not context trimming** — collapsing the
 data-hand-off threads into typed, validated outputs, and letting bare `tool`
@@ -67,13 +74,15 @@ Additive; breaks nothing already authored.
   JSON-Schema profile**: scalars (`string`/`number`/`boolean`/`choice`),
   **records** (`object` with typed fields), and **arrays** (`array` of a type).
   See §3 for the profile boundary and *why a profile, not full JSON Schema*.
-- `${{ outputs.X.f }}` substitution token (new token, dominance-gated): a scalar
+- `${{ outputs.X.f }}` substitution token (new token, fail-closed): a scalar
   leaf interpolates as its value; a record/array interpolates as JSON; dotted
-  leaf access reaches a scalar inside a structure.
+  leaf access reaches a scalar inside a structure. An unpopulated reference is a
+  node failure, not an empty string.
 - **`emit_output`** — a single force-included tool whose schema is the node's
   whole `outputs:` profile; one call closes the turn (the only emission
   mechanism).
-- A dominance-by-success validator E-code.
+- Fail-closed reads, plus a static reachability **W-code** (an undeclared field
+  or an entirely-unreachable producer stays a hard error).
 
 **Out (deferred / non-goal):**
 - **Tool output production.** Tools and humans **consume** outputs (interpolation
@@ -98,8 +107,8 @@ Three step kinds:
 
 All three **consume** `${{ inputs.* }}` / `${{ outputs.X.f }}` by interpolation —
 `tool` in `run:`, `llm` in `prompt:`, `human` in its operator-facing `text:`
-(the gate shows dominating context at first paint). **Only `llm` steps produce**
-`outputs:`. Data flows **forward only**, typed, gated by dominance.
+(the gate shows upstream context at first paint). **Only `llm` steps produce**
+`outputs:`. Data flows **forward only**, typed, fail-closed on read.
 
 ```yaml
   scope:                                    # llm — produces a record
@@ -150,23 +159,33 @@ everything outside the profile (`pattern`/`format`/min·max, `oneOf`/`if`/`allOf
 3. **Logic belongs in steps.** Combinators, regexes, numeric bounds are
    predicates — they compute in the producing step, not in the type.
 
-### Enforcement — two layers
+### Enforcement — runtime totality, static warning
 
-1. **Runtime — `emit_output` forces emission.** A single force-included tool
+1. **`emit_output` forces emission.** A single force-included tool
    (ground rule 12) whose schema is the node's whole `outputs:` profile;
    one call, validated as a unit, closes the turn. Never partial. Synthesised
    *additively* — the existing `route` tool is untouched; a node declaring both
    `routes:` and `outputs:` carries both. A node that declares `outputs:` and ends
    without a valid `emit_output` is a node failure, not a silent `""`.
-2. **Static — dominance-by-success in the validator.** `${{ outputs.X.f }}` at
-   node N is valid iff (a) X declares output `f`, and (b) **X dominates N by
-   successful completion** — every entry→N path crosses X *and* reaches N only via
-   X's success disposition. A node that fails emits no outputs, so a
-   `fail → … → N` edge bypassing X's emission leaves the field unpopulated. New
-   E-code, composing with the `inputReferences()` → E030 machinery.
+2. **Fail-closed reads.** `${{ outputs.X.f }}` resolving to an unpopulated field
+   — X never ran on the path taken, or ran and failed before `emit_output` — is a
+   **node failure**, not a silent `""`. The fault halts to the operator and is
+   recorded as a `fact.*`, so it folds back identically on replay. The
+   populated-guarantee is enforced *at read time*, not proven at validate time —
+   the half the old `$node.output` hand-wave got wrong.
+3. **Static reachability — a warning, not a gate.** The validator extracts every
+   `${{ outputs.X.f }}` (the same machinery as `inputReferences()` → E030) and
+   hard-errors when X doesn't declare `f`, or when X is unreachable from entry on
+   *any* path (a dead reference — always a typo). When X is reachable on some
+   paths to N but not all, it emits a **W-code**: "X may not have run on every
+   path to N; the reference fails closed at runtime if it didn't." No dominator
+   analysis, no disposition-edge colouring — authoring keeps its typo-catch, the
+   graph keeps its freedom.
 
-**Dominance-by-success is the populated-guarantee, and it is *total*** because the
-graph is fully static (no `agent` tool spawns runtime topology).
+**The populated-guarantee is enforced at read time and total over the log** —
+every fault is a recorded fact, so it survives replay identically. That is why
+outputs carry no static-graph assumption and compose with future runtime-spawned
+topology, rather than locking the engine into a fully-static graph.
 
 ### Consumption and size
 
@@ -196,7 +215,7 @@ rule 5), last-write-wins for re-entry (§7), **off the `run_state` fold** (like
 
 ## 4. Consuming outputs — the step-elimination win
 
-A `tool` or downstream `llm` consuming a dominating output replaces an `llm` step
+A `tool` or downstream `llm` consuming an upstream output replaces an `llm` step
 that would otherwise scrape data from a thread:
 
 - **`gh pr merge ${{ outputs.scope.pr_number }}`** — `scope`'s text block becomes
@@ -214,7 +233,7 @@ The GHA correspondence, way less general (data-flow only):
 |---|---|
 | `outputs:` on a step | `jobs.<id>.outputs` |
 | `${{ outputs.X.f }}` | `${{ needs.<job>.outputs.<name> }}` |
-| **dominance-by-success** | **the `needs:` DAG** |
+| fail-closed read at runtime | the `needs:` DAG (a *static* gate) — fragua deliberately diverges here |
 | typed `inputs` = the trigger event | `github.event.*` |
 
 ## 5. The seams are already the right shape
@@ -223,7 +242,8 @@ The GHA correspondence, way less general (data-flow only):
   outcome/route model are unchanged.
 - **Substitution is already a tokenizer** — `INPUT_REF_RE` handles
   `${{ inputs.x }}`; `${{ outputs.X.f }}` is a sibling regex, and
-  `inputReferences()` → E030 is the pattern for the output-ref + dominance E-code.
+  `inputReferences()` → E030 is the pattern for output-ref extraction + the
+  reachability W-code. No dominator pass is needed — that greenfield is avoided.
 - **`emit_output` mirrors the `route` tool's synthesis** — `backend.ts` already
   builds a per-node provider-validated schema at dispatch; `emit_output` builds
   the (profile) struct schema the same way.
@@ -231,7 +251,7 @@ The GHA correspondence, way less general (data-flow only):
 ## 6. Generalisation, non-goals, and what it changes
 
 **SDLC sweep:** the recurring data-flow vocabulary is `inputs` (event) +
-dominating `outputs` (record/array hand-off) + bare-`tool` action, with `thread:`
+forward `outputs` (record/array hand-off) + bare-`tool` action, with `thread:`
 reserved for genuine conversations. The `llm`-produces compositions land now
 (scope records, dependency-bump arrays, drift's findings/edits pipeline). The
 *gather→judge* composition (a `tool` emits structured evidence an `llm` judges —
@@ -242,21 +262,25 @@ blobs (§2.1); dynamic graph multiplicity (in-node or cross-run); deep loops
 (`llm`-node-internal); durable cross-run state (external + re-derived).
 
 **What it changes (all additive):** evolves ground rule 13 (cross-node
-substitution allowed iff the producer dominates the consumer *by successful
-completion* and the field is declared); rewrites the "No `$node.output`" SKILL
-teaching → allowed under dominance. `tool` steps still feed nothing downstream
-(only `llm` steps declare `outputs:`) — so that teaching is unchanged, and the
-kind is not renamed.
+substitution allowed when the field is declared, with the read failing closed if
+the producer didn't run on the taken path); rewrites the "No `$node.output`"
+SKILL teaching → allowed, with unpopulated reads halting loudly instead of
+silently resolving to `""`. `tool` steps still feed nothing downstream (only
+`llm` steps declare `outputs:`) — so that teaching is unchanged, and the kind is
+not renamed.
 
 ## 7. Open questions + freeze-facts
 
 - **The `work::review` REJECT loop.** Detaching `review` from the `build` thread
-  (to judge `${{ outputs.implement.plan_realised }}` fresh) forces the back-edge
-  question: `review` doesn't dominate `implement`, so the REJECT reason can't ride
-  a dominated output — it travels via the retarget mechanism. Settle before
-  touching `work.yaml`.
+  (to judge `${{ outputs.implement.plan_realised }}` fresh) used to force a
+  back-edge question under dominance. Fail-closed reads dissolve the safety half:
+  a back-edge reading an output that *was* populated on the taken path just works;
+  one that wasn't fails closed. What remains is a design call, not a correctness
+  one — whether `review`'s REJECT reason rides an output or the existing retarget
+  mechanism. Settle before touching `work.yaml`.
 - **Re-entry semantics.** A re-entered node re-emits and overwrites its outputs;
-  `${{ outputs.X.f }}` reads "most recent X" (correct across revision loops).
+  `${{ outputs.X.f }}` reads "most recent X" — correct across revision loops, and
+  natural once reads are a runtime fold rather than a static promise.
 - **The deferred layers, in likely order:** (1) **tool output production**
   (`$FRAGUA_OUTPUT` + the gather→judge half of §1) — highest corpus value
   (drift's `collect`, anti-hallucination); (2) **transparent spill** for oversized
@@ -277,7 +301,7 @@ IR):
 
 - **The `route` tool + two-case edge selector** (SPEC §3.6; `edge-selection.ts`;
   synthesis in `packages/agent/src/backend.ts`) — shipped and **unchanged**; this
-  adds typed/dominated outputs *alongside* it.
+  adds typed, fail-closed outputs *alongside* it.
 - [`tool-exec-variant.md`](tool-exec-variant.md) — the `exec:` argv form that
   makes interpolating outputs into commands injection-safe.
 - [`workflow-ir.md`](workflow-ir.md) — `outputs:` (and the shared input/output

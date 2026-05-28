@@ -17,7 +17,7 @@ durable, portable execution for engineering workflows. drive LLM agents with a d
 - superb observability
 - a run is a portable artifact
 
-built on the assumption that the **control plane** is worth being deterministic even when the LLM bodies are not.
+built on one bet: the **control plane** is worth making deterministic even when the LLM bodies are not — so a recorded run replays by folding its event log, not by re-running the model.
 
 ## what you get
 
