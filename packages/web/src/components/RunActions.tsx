@@ -79,14 +79,27 @@ function RunActionsInner({
   // _testInitialOpenAction seeds the initial state only (read once on mount).
   const [openAction, setOpenAction] = useState<ActionKind | null>(_testInitialOpenAction);
 
-  const invalidateInbox = (): Promise<void> => qc.invalidateQueries({ queryKey: queries.runs.lists() });
+  // Defer the inbox refetch by one microtask after a successful mutation.
+  // Without this, `setOpenAction(null)` and `invalidateQueries(...)` batch
+  // into one React 18 render: the dialog goes open→closed AND this row
+  // unmounts (the run is no longer inbox=pending) in the same commit, so
+  // Radix's DismissableLayer cleanup races the row's tree removal — the
+  // layer-stack decrement that restores `body { pointer-events: none }`
+  // misses, and the whole page goes unclickable until the next mount.
+  // queueMicrotask splits the two updates across commits: close commits
+  // first, body styles restore, then the refetch drops the row cleanly.
+  const invalidateInboxDeferred = (): void => {
+    queueMicrotask(() => {
+      void qc.invalidateQueries({ queryKey: queries.runs.lists() });
+    });
+  };
 
   const acceptM = useMutation({
     mutationFn: () => acceptRun(row.runId),
     onSuccess: () => {
       toast.success("Accepted — replayed onto your branch; tail staged to commit");
       setOpenAction(null);
-      return invalidateInbox();
+      invalidateInboxDeferred();
     },
     onError: (err) => toast.error(errorMsg(err)),
   });
@@ -96,7 +109,7 @@ function RunActionsInner({
     onSuccess: () => {
       toast.success("Changes discarded");
       setOpenAction(null);
-      return invalidateInbox();
+      invalidateInboxDeferred();
     },
     onError: (err) => toast.error(errorMsg(err)),
   });
