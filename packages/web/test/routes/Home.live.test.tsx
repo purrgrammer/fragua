@@ -333,12 +333,12 @@ describe("Control Center live updates", () => {
     expect(container.textContent).toContain("Build widget");
 
     // fact.snapshot_recorded must NOT appear as an Activity feed row.
-    // The feed shows verbs (e.g. "started", "completed") — snapshot_recorded
-    // has no verb in KIND_META and would fall through to FALLBACK_META's
-    // empty verb, rendering a bare Inbox icon with no label. Confirm no
-    // such row was added: the Activity section still shows only the
-    // "completed" row from fact.run_completed (emitted above), not an extra
-    // blank row from the snapshot fact.
+    // It's filtered at two layers: (1) FEED_HIDDEN_KINDS drops it before
+    // it lands in feedAtom, and (2) metaForEvent returns null for any
+    // event without a KIND_META entry so FeedRow skips render. Confirm
+    // no such row was added: the Activity section still shows only the
+    // "completed" row from fact.run_completed (emitted above), not an
+    // extra blank row from the snapshot fact.
     const feedEl = container.querySelector("[data-testid='global-feed']");
     const feedRows = feedEl?.querySelectorAll("li") ?? [];
     // All rendered rows have a non-empty verb span (hidden kinds have verb="").

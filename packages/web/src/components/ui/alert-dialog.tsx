@@ -38,7 +38,7 @@ const AlertDialogOverlay = React.forwardRef<
     className={cn(
       [
         "fixed inset-0 isolate z-50",
-        "bg-[var(--sw-text)]/10",
+        "bg-[var(--sw-text)]/40",
         "supports-backdrop-filter:backdrop-blur-xs",
         "duration-[var(--sw-duration-enter)] ease-out",
         "data-open:animate-in data-open:fade-in-0",

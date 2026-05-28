@@ -30,8 +30,11 @@ function DialogOverlay({ className, ...props }: React.ComponentProps<typeof Dial
           "fixed inset-0 isolate z-50",
 
           // scrim: --sw-text at low opacity reads as a designed dim in
-          // both themes (inverts naturally), no hex literal.
-          "bg-[var(--sw-text)]/10",
+          // both themes (inverts naturally), no hex literal. /40 carries
+          // the elevation work — the design rule is scrim + hairline, and
+          // /10 was too faint to separate the drawer from same-surface
+          // cards beneath it.
+          "bg-[var(--sw-text)]/40",
           "supports-backdrop-filter:backdrop-blur-xs",
 
           // motion: paired with content — 200ms ease-out, fade only

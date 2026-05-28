@@ -53,6 +53,12 @@ export function feedEventKey(e: Pick<FeedEvent, "runId" | "seq">): string {
  * in both `FEED_EVENT_KINDS` (SSE delivery) and `RUN_INVALIDATE_KINDS`
  * (inbox live-update) but is noise in the Activity timeline — the Inbox
  * section already surfaces the run as landable.
+ *
+ * Belt-and-braces: dropping the event here at the atom seam keeps it
+ * out of the feed even if a future caller forgets the FeedRow null
+ * guard (`metaForEvent` returns null for kinds without a KIND_META
+ * entry, and FeedRow skips render). Either layer alone would suffice;
+ * both make the invariant cheap to keep correct under refactors.
  */
 export const FEED_HIDDEN_KINDS = new Set<string>(["fact.snapshot_recorded"]);
 

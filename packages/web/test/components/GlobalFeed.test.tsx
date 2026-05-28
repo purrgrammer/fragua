@@ -9,74 +9,89 @@ function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
   return { runId: "r", seq: 1, type, writer: "client", payload, ts: 0 } as unknown as FeedEvent;
 }
 
+/** Asserts metaForEvent returned a non-null meta — for tests that exercise
+ *  a known KIND_META entry. Keeps the call sites terse without sprinkling
+ *  `!` non-null assertions on every `.verb` access. */
+function meta(type: string, payload: Record<string, unknown> = {}) {
+  const m = metaForEvent(evt(type, payload));
+  if (m == null) throw new Error(`metaForEvent returned null for ${type}`);
+  return m;
+}
+
 describe("metaForEvent", () => {
   test("fact.run_resumed verb varies by fromStatus", () => {
-    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_human" })).verb).toBe("resumed");
-    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused" })).verb).toBe("retrying");
-    expect(metaForEvent(evt("fact.run_resumed", {})).verb).toBe("resumed");
+    expect(meta("fact.run_resumed", { fromStatus: "paused_human" }).verb).toBe("resumed");
+    expect(meta("fact.run_resumed", { fromStatus: "paused" }).verb).toBe("retrying");
+    expect(meta("fact.run_resumed", {}).verb).toBe("resumed");
   });
 
   test("static verbs pass through unchanged", () => {
-    expect(metaForEvent(evt("fact.run_started")).verb).toBe("started");
-    expect(metaForEvent(evt("fact.run_completed")).verb).toBe("completed");
-    expect(metaForEvent(evt("fact.run_paused_human")).verb).toBe("needs input");
+    expect(meta("fact.run_started").verb).toBe("started");
+    expect(meta("fact.run_completed").verb).toBe("completed");
+    expect(meta("fact.run_paused_human").verb).toBe("needs input");
   });
 
-  test("unknown event types fall back to empty verb", () => {
-    expect(metaForEvent(evt("never.heard.of.it")).verb).toBe("");
+  test("unknown event types return null so FeedRow skips render", () => {
+    // Facts the server delivers over SSE for cache-invalidation only
+    // (e.g. fact.snapshot_recorded flipping inbox_status=pending) must
+    // never appear as a ghost row with a bare icon and an empty verb.
+    // Returning null forces the row to skip rendering entirely.
+    expect(metaForEvent(evt("never.heard.of.it"))).toBe(null);
+    expect(metaForEvent(evt("fact.snapshot_recorded"))).toBe(null);
   });
 
   test("fact.run_paused honours pause-family palette: operator → yellow, hitl → orange, halted → red", () => {
     // operator-resumable reasons → paused (yellow)
-    const opMeta = metaForEvent(evt("fact.run_paused", { reason: "operator", nodeId: "n" }));
+    const opMeta = meta("fact.run_paused", { reason: "operator", nodeId: "n" });
     expect(opMeta.iconClass).toBe("text-sw-accent-pause");
     expect(opMeta.borderVar).toBe("var(--sw-accent-pause)");
     expect(opMeta.verb).toBe("paused");
     expect(opMeta.attention).toBe(true);
 
-    const budgetMeta = metaForEvent(
-      evt("fact.run_paused", { reason: "budget", nodeId: "n", scope: "run", metric: "cost", limit: 1, actual: 2 }),
-    );
+    const budgetMeta = meta("fact.run_paused", {
+      reason: "budget",
+      nodeId: "n",
+      scope: "run",
+      metric: "cost",
+      limit: 1,
+      actual: 2,
+    });
     expect(budgetMeta.iconClass).toBe("text-sw-accent-pause");
 
     // workflow-asks → hitl (orange)
-    const hitlMeta = metaForEvent(evt("fact.run_paused_human", { nodeId: "n", label: "?", options: [] }));
+    const hitlMeta = meta("fact.run_paused_human", { nodeId: "n", label: "?", options: [] });
     expect(hitlMeta.iconClass).toBe("text-sw-accent-pause-hitl");
     expect(hitlMeta.borderVar).toBe("var(--sw-accent-pause-hitl)");
 
     // terminal halt → destructive (red), strip + icon
-    const haltedMeta = metaForEvent(evt("fact.run_halted", { reason: "error" }));
+    const haltedMeta = meta("fact.run_halted", { reason: "error" });
     expect(haltedMeta.iconClass).toBe("text-sw-accent-error");
     expect(haltedMeta.borderVar).toBe("var(--sw-accent-error)");
     expect(haltedMeta.attention).toBe(true);
   });
 
   test("fact.run_paused with auto-wake reason → paused_auto (blue) via reason peek", () => {
-    const providerRetry = metaForEvent(
-      evt("fact.run_paused", {
-        reason: "provider_retry",
-        nodeId: "n",
-        httpStatus: 429,
-        provider: "anthropic",
-        errorMessage: "429 Too Many Requests",
-        attempt: 1,
-        resumeAt: Date.now() + 30_000,
-      }),
-    );
+    const providerRetry = meta("fact.run_paused", {
+      reason: "provider_retry",
+      nodeId: "n",
+      httpStatus: 429,
+      provider: "anthropic",
+      errorMessage: "429 Too Many Requests",
+      attempt: 1,
+      resumeAt: Date.now() + 30_000,
+    });
     expect(providerRetry.iconClass).toBe("text-sw-accent-pause-auto");
     expect(providerRetry.borderVar).toBe("var(--sw-accent-pause-auto)");
     expect(providerRetry.verb).toBe("auto-retry");
 
-    const handlerRetry = metaForEvent(
-      evt("fact.run_paused", {
-        reason: "handler_retry",
-        nodeId: "verify",
-        attempt: 2,
-        delayMs: 1000,
-        resumeAt: Date.now() + 1_000,
-        maxRetries: 3,
-      }),
-    );
+    const handlerRetry = meta("fact.run_paused", {
+      reason: "handler_retry",
+      nodeId: "verify",
+      attempt: 2,
+      delayMs: 1000,
+      resumeAt: Date.now() + 1_000,
+      maxRetries: 3,
+    });
     expect(handlerRetry.iconClass).toBe("text-sw-accent-pause-auto");
   });
 });
@@ -96,19 +111,19 @@ describe("FEED_HIDDEN_KINDS", () => {
 
 describe("metaForEvent — operator-action git-centric verbs", () => {
   test("fact.run_accepted → short verb 'accepted'", () => {
-    const m = metaForEvent(evt("fact.run_accepted", { sha: "tip1", replayed: 0, tailStaged: true }));
+    const m = meta("fact.run_accepted", { sha: "tip1", replayed: 0, tailStaged: true });
     expect(m.verb).toBe("accepted");
     expect(m.attention).toBeFalsy();
   });
 
   test("fact.run_discarded → 'discarded'", () => {
-    const m = metaForEvent(evt("fact.run_discarded", { refs: [] }));
+    const m = meta("fact.run_discarded", { refs: [] });
     expect(m.verb).toBe("discarded");
     expect(m.attention).toBeFalsy();
   });
 
   test("operator-action facts always return single-word verbs regardless of payload", () => {
-    expect(metaForEvent(evt("fact.run_accepted", {})).verb).toBe("accepted");
-    expect(metaForEvent(evt("fact.run_discarded", {})).verb).toBe("discarded");
+    expect(meta("fact.run_accepted", {}).verb).toBe("accepted");
+    expect(meta("fact.run_discarded", {}).verb).toBe("discarded");
   });
 });

@@ -20,7 +20,6 @@ import {
   AlertTriangle,
   Check,
   Clock,
-  Inbox,
   Pause,
   Play,
   RotateCcw,
@@ -143,16 +142,20 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_discarded": { Icon: Trash2, verb: "discarded", iconClass: "text-sw-accent-error" },
 };
 
-const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
-
-/** Resolve the row's icon + verb. For most kinds the static
- *  {@link KIND_META} is enough; `fact.run_paused` peeks at
- *  `payload.reason` to differentiate operator-resumable (yellow) from
- *  auto-wake (blue), and `fact.run_resumed` peeks at `fromStatus` so
- *  the operator can tell at a glance what kind of pause was just
- *  lifted. Exported for unit tests. */
-export function metaForEvent(event: FeedEvent): FeedKindMeta {
-  const base = KIND_META[event.type] ?? FALLBACK_META;
+/** Resolve the row's icon + verb. Returns `null` for event types
+ *  without an explicit {@link KIND_META} entry — those are facts the
+ *  server delivers over SSE for cache-invalidation purposes only
+ *  (e.g. `fact.snapshot_recorded` flipping `inbox_status=pending`),
+ *  not operator-relevant timeline rows. Callers must skip rendering
+ *  when this returns null. For most kinds the static {@link KIND_META}
+ *  is enough; `fact.run_paused` peeks at `payload.reason` to
+ *  differentiate operator-resumable (yellow) from auto-wake (blue),
+ *  and `fact.run_resumed` peeks at `fromStatus` so the operator can
+ *  tell at a glance what kind of pause was just lifted. Exported for
+ *  unit tests. */
+export function metaForEvent(event: FeedEvent): FeedKindMeta | null {
+  const base = KIND_META[event.type];
+  if (base == null) return null;
   if (event.type === "fact.run_paused") {
     const reason = (event.payload as { reason?: unknown } | null)?.reason;
     if (typeof reason === "string" && AUTO_WAKE_PAUSE_REASONS.has(reason as PauseReason)) {
@@ -236,8 +239,8 @@ interface FeedRowProps {
   reduce: boolean;
 }
 
-const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Element {
-  const { Icon, verb, iconClass, attention, borderVar } = metaForEvent(event);
+const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Element | null {
+  const meta = metaForEvent(event);
 
   // Dedicated detail query per runId. TanStack dedupes concurrent
   // reads of the same id, so 30 feed rows pointing at 12 distinct
@@ -248,6 +251,9 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
   const { data: run } = useQuery(queries.runs.detail(event.runId));
 
   const { initial, animate, exit, transition } = rowEnterFromTop(reduce);
+
+  if (meta == null) return null;
+  const { Icon, verb, iconClass, attention, borderVar } = meta;
 
   // The strip color follows the row's mood: meta.borderVar when set
   // (carried by attention-class kinds — paused, halted, quarantined
