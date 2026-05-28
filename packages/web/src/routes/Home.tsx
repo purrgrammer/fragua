@@ -61,8 +61,10 @@ export function Home(): JSX.Element {
 // ── Unified inbox section (Watchtower) ───────────────────────────────
 //
 // Single flat list of: blocked runs (paused/HITL/quarantine) +
-// git-ready runs (inbox_status=pending). Oldest-first, capped at
-// INBOX_HOME_LIMIT with a "View all →" link when there's overflow.
+// git-ready runs (inbox_status=pending). Matches the /inbox detail
+// order — blocked (needs input) first, then worktree (ready to land);
+// within each group the server already returns oldest-first. Capped
+// at INBOX_HOME_LIMIT with a "View all →" link when there's overflow.
 // One empty state, one count badge.
 
 function UnifiedInboxSection(): JSX.Element {
@@ -76,12 +78,10 @@ function UnifiedInboxSection(): JSX.Element {
 
   const loading = isPending || blockedPending || worktreePending;
 
-  // Merge both lists, sort oldest-first by startedAt.
-  const merged = useMemo(() => {
-    const all = [...(blockedData ?? []), ...(worktreeData ?? [])];
-    all.sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));
-    return all;
-  }, [blockedData, worktreeData]);
+  const merged = useMemo(
+    () => [...(blockedData ?? []), ...(worktreeData ?? [])],
+    [blockedData, worktreeData],
+  );
 
   const hasOverflow = merged.length > INBOX_HOME_LIMIT;
   const rows = hasOverflow ? merged.slice(0, INBOX_HOME_LIMIT) : merged;

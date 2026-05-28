@@ -3,7 +3,8 @@
 // Covers:
 //  - Both sections render ("Needs input" before "Ready to land")
 //  - Combined empty state when both are empty
-//  - Per-section empty state when only one side has data
+//  - Empty section is hidden (NOT stubbed with a per-section EmptyState)
+//    when the other side has data
 
 import { cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -115,37 +116,41 @@ describe("InboxPage", () => {
       }
     });
 
-    test("shows worktree-inbox per-section empty when only blocked section has data", async () => {
+    test("hides the worktree section entirely when only the blocked section has data", async () => {
       const { container, restore } = renderPage({
         [BLOCKED_URL]: () => json([blockedRun("b1")]),
         [WORKTREE_URL]: () => json([]),
       });
       try {
         await waitFor(() => {
-          const el = container.querySelector('[data-testid="worktree-inbox-empty"]');
-          if (!el) throw new Error("worktree-inbox-empty not found");
-          return el;
+          if (!container.querySelector('[data-testid="inbox-needs-input"]')) {
+            throw new Error("inbox-needs-input section not found");
+          }
         });
-        // Combined empty state must NOT show when only one side is empty.
+        // Worktree section (and its per-section empty state) must not render.
+        expect(container.querySelector('[data-testid="worktree-inbox"]')).toBeNull();
+        expect(container.querySelector('[data-testid="worktree-inbox-empty"]')).toBeNull();
+        // Combined empty state must NOT show when one side has data.
         expect(container.querySelector('[data-testid="inbox-empty-combined"]')).toBeNull();
       } finally {
         restore();
       }
     });
 
-    test("shows inbox per-section empty when only worktree section has data", async () => {
+    test("hides the blocked section entirely when only the worktree section has data", async () => {
       const { container, restore } = renderPage({
         [BLOCKED_URL]: () => json([]),
         [WORKTREE_URL]: () => json([pendingRun("w1")]),
       });
       try {
         await waitFor(() => {
-          // The blocked-runs section's own empty state is keyed "inbox-empty"
-          // (default testId from the Inbox component).
-          const el = container.querySelector('[data-testid="inbox-empty"]');
-          if (!el) throw new Error("inbox-empty not found");
-          return el;
+          if (!container.querySelector('[data-testid="worktree-inbox"]')) {
+            throw new Error("worktree-inbox section not found");
+          }
         });
+        // Blocked section (and its per-section empty state) must not render.
+        expect(container.querySelector('[data-testid="inbox-needs-input"]')).toBeNull();
+        expect(container.querySelector('[data-testid="inbox-empty"]')).toBeNull();
         expect(container.querySelector('[data-testid="inbox-empty-combined"]')).toBeNull();
       } finally {
         restore();

@@ -6,7 +6,9 @@
 //                        git work needs a Branch / Commit / Merge / Discard
 //                        decision.
 //
-// When both sections are empty a single combined empty state is shown.
+// Only sections that have items render — an empty section is hidden,
+// not stubbed out with a per-section "All clear" / "No recoverable work"
+// EmptyState. When BOTH are empty a single combined empty state shows.
 // Home renders capped previews of both with "View all → /inbox".
 
 import { ShieldCheck } from "lucide-react";
@@ -35,8 +37,8 @@ export function InboxPage(): JSX.Element {
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-6">
-      <Inbox title="Needs input" testId="inbox-needs-input" />
-      <WorktreeInbox title="Ready to land" />
+      {blocked > 0 ? <Inbox title="Needs input" testId="inbox-needs-input" /> : null}
+      {worktree > 0 ? <WorktreeInbox title="Ready to land" /> : null}
     </section>
   );
 }

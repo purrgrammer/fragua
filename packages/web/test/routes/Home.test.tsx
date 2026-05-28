@@ -305,6 +305,39 @@ describe("Home route", () => {
       expect(container.textContent).not.toContain("Ready to land");
     });
 
+    test("orders blocked rows before worktree rows, matching the /inbox detail page", async () => {
+      // Worktree rows are OLDER (would win a global oldest-first sort) — but
+      // the Watchtower must still surface blocked ("needs input") first, then
+      // worktree ("ready to land"), matching the /inbox detail order.
+      const olderWorktreeRun = row({
+        runId: "worktree-old",
+        status: "success",
+        runStatus: "completed",
+        startedAt: "2024-01-01T00:00:00Z",
+        inboxStatus: "pending",
+        changeStat: { committed: null, uncommitted: { filesChanged: 1, insertions: 1, deletions: 0 } },
+      });
+      const newerBlockedRun = row({
+        runId: "blocked-new",
+        status: "paused",
+        runStatus: "paused_human",
+        startedAt: "2024-02-01T00:00:00Z",
+      });
+      const client = withRows([olderWorktreeRun, newerBlockedRun]);
+      const { container } = mount(client);
+      const q = within(container);
+
+      await waitFor(() => {
+        expect(q.getByTestId("inbox-list")).toBeTruthy();
+      });
+
+      const list = q.getByTestId("inbox-list");
+      const blockedEl = within(list).getByTestId("inbox-run-blocked-new");
+      const worktreeEl = within(list).getByTestId("worktree-inbox-row-worktree-old");
+      // DOCUMENT_POSITION_FOLLOWING == 4 → blocked is before worktree in DOM order.
+      expect(blockedEl.compareDocumentPosition(worktreeEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
     test("shows the combined count badge when there are items in either list", async () => {
       const blockedRun = row({
         runId: "blocked-x",
