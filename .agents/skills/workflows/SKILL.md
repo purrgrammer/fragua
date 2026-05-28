@@ -16,7 +16,7 @@ Reach for a workflow when:
 
 Reach for a **single `llm` step** (no extra structure) when subtasks aren't known upfront, the task is one bounded tool-use loop, or the shape isn't worth pinning. When in doubt start with one step; promote to a multi-step workflow once you find yourself encoding the flow in prose.
 
-Authoritative: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITECTURE.md` §3 (events). Validator codes: `references/validator-codes.md`. Retry presets + advanced attrs: `references/advanced-attrs.md`.
+Authoritative: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITECTURE.md` §3 (events), `docs/execution-model.md` (filesystem layout — where files land, worktree lifecycle, snapshot delta-suppression, accept/discard). Validator codes: `references/validator-codes.md`. Retry presets + advanced attrs: `references/advanced-attrs.md`.
 
 ---
 

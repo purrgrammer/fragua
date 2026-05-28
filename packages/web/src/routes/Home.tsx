@@ -78,10 +78,7 @@ function UnifiedInboxSection(): JSX.Element {
 
   const loading = isPending || blockedPending || worktreePending;
 
-  const merged = useMemo(
-    () => [...(blockedData ?? []), ...(worktreeData ?? [])],
-    [blockedData, worktreeData],
-  );
+  const merged = useMemo(() => [...(blockedData ?? []), ...(worktreeData ?? [])], [blockedData, worktreeData]);
 
   const hasOverflow = merged.length > INBOX_HOME_LIMIT;
   const rows = hasOverflow ? merged.slice(0, INBOX_HOME_LIMIT) : merged;

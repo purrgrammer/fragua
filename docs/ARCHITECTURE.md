@@ -1,6 +1,6 @@
 # fragua — Architecture
 
-> **Authoritative.** The design the codebase implements. Companion to [`SPEC.md`](./SPEC.md) (goals) and [`handler-contract.md`](./handler-contract.md) (writing handlers).
+> **Authoritative.** The design the codebase implements. Companion to [`SPEC.md`](./SPEC.md) (goals), [`handler-contract.md`](./handler-contract.md) (writing handlers), and [`execution-model.md`](./execution-model.md) (filesystem layout for workflow authors).
 >
 > SQLite-backed event store with projection-in-transaction, intent/fact split, hard-abort semantics, content-addressed blob storage. No filesystem coordination surface.
 
