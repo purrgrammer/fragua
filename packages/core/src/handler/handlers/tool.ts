@@ -38,6 +38,7 @@
 
 import type { ToolNodeMessage } from "@fragua/types";
 import { substitute } from "../../engine/substitution.ts";
+import { DEFAULT_TOOL_MAX_MS } from "../../parser/yaml.ts";
 import type { ExecutionEnvironment } from "../../types/execution.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
@@ -64,11 +65,9 @@ export interface ToolRunResult {
 
 export type SpawnFn = (cmd: string, signal: AbortSignal) => Promise<ToolRunResult>;
 
-const DEFAULT_MAX_MS = 5 * 60 * 1000;
-
 export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
   const explicitSpawner = cfg.spawner;
-  const maxMs = cfg.maxMs ?? DEFAULT_MAX_MS;
+  const maxMs = cfg.maxMs ?? DEFAULT_TOOL_MAX_MS;
 
   const handler: Handler = async (ctx) => {
     const rawCommand = cfg.toolCommand;

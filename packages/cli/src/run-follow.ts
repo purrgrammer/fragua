@@ -98,6 +98,17 @@ async function promptHumanGate(client: StoreClient, runId: string, ev: StoredEve
 }
 
 export function renderEvent(ev: StoredEvent): void {
+  if (ev.type === "budget.warn") {
+    const p = ev.payload as { scope?: unknown; metric?: unknown; actual?: unknown; limit?: unknown; ratio?: unknown };
+    const scope = typeof p.scope === "string" ? p.scope : "?";
+    const metric = typeof p.metric === "string" ? p.metric : "?";
+    const pct = typeof p.ratio === "number" ? `${Math.round(p.ratio * 100)}%` : "80%";
+    console.log(
+      `${chalk.dim(`[${ev.seq}]`)} ${chalk.yellow(`⚠ ${ev.type}`)} ` +
+        chalk.yellow(`${pct} of ${scope}:${metric} budget (actual ${p.actual ?? "?"}, limit ${p.limit ?? "?"})`),
+    );
+    return;
+  }
   const color = ev.type.startsWith("fact.run_completed")
     ? chalk.green
     : ev.type.startsWith("fact.run_halted") || ev.type.startsWith("fact.run_cancelled")

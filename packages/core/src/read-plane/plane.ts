@@ -24,6 +24,7 @@ import {
   type NarrowMessage,
   type StoredEvent,
 } from "@fragua/store";
+import { buildExplanation, type RunExplanation } from "./explain.ts";
 import { runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
 import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
@@ -78,6 +79,12 @@ export interface ReadPlane {
    *  event. Backs `GET /runs/:id/events` and the `/runs/:id/stream`
    *  drain loop. */
   eventsSince(runId: string, sinceSeq: number, limit?: number): StoredEvent[];
+  /** Synthesise a human/machine-readable narrative from the run's full event
+   *  log: path taken, per-step outcome + cost, snapshots, diff-vs-base
+   *  summary, terminal status + halt/pause reason, and any unconsumed soft
+   *  budget warnings. Returns `null` when the run does not exist. Pure
+   *  read-plane projection — no writes. */
+  explain(runId: string): RunExplanation | null;
   /** Global cross-run feed backfill: most-recent `limit` allow-listed
    *  events, oldest-first. `FEED_EVENT_KINDS` is baked in. Backs
    *  `GET /events`. */
@@ -180,6 +187,23 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     },
     eventsSince(runId, sinceSeq, limit) {
       return store.getEvents(runId, limit === undefined ? { sinceSeq } : { sinceSeq, limit });
+    },
+    explain(runId) {
+      const state = store.getState(runId);
+      if (state == null) return null;
+      const events = store.getEvents(runId);
+      const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
+      const detail = runStateToDetail(state, events, wf?.name, wf?.source);
+      detail.lastEventSeq = events.at(-1)?.seq ?? 0;
+      const snapshots = store.getSnapshotEvents(runId).map(toScrubberRow);
+      const rawSteps = eventsToSteps(events);
+      const aggregated = attachStepAggregates(rawSteps, store.getStepAggregates(runId));
+      const lastEventTs = events.length > 0 ? Math.max(...events.map((e) => e.ts)) : undefined;
+      const stepsFull = fillOrphanDurations(aggregated, {
+        lastEventTs,
+        runIsTerminal: isTerminalStatus(state.status),
+      });
+      return buildExplanation(detail, events, snapshots, stepsFull);
     },
     globalFeedLatest(limit) {
       return store.getGlobalEventsLatest({ kindIn: FEED_EVENT_KINDS, limit });

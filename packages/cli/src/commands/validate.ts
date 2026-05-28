@@ -4,7 +4,7 @@
 
 import { readFile } from "node:fs/promises";
 import { validateWorkflowModels } from "@fragua/agent";
-import { parseWorkflow, validate } from "@fragua/core";
+import { DEFAULT_TOOL_MAX_MS, parseWorkflow, validate } from "@fragua/core";
 import chalk from "chalk";
 import { resolveWorkflow } from "../workflow-path.ts";
 
@@ -25,6 +25,28 @@ export async function validateCommand(workflow: string): Promise<number> {
   const modelCheck = validateWorkflowModels(source);
 
   const modelErrorCount = modelCheck.ok ? 0 : modelCheck.offenders.length;
+
+  // Info: surface the default tool timeout for any tool step without an
+  // explicit `timeout-minutes`. This is a silent killer for long scripts.
+  const toolTimeoutInfos: string[] = [];
+  for (const [nodeId, node] of Object.entries(graph.nodes)) {
+    if (node.type === "tool" && node.attrs.max_ms === undefined) {
+      const mins = DEFAULT_TOOL_MAX_MS / 60_000;
+      toolTimeoutInfos.push(
+        chalk.dim(
+          `[timeout] info: step "${nodeId}" uses the default tool timeout (${mins} min); set \`timeout-minutes: <n>\` to override`,
+        ),
+      );
+    }
+  }
+
+  if (diags.length === 0 && modelErrorCount === 0 && toolTimeoutInfos.length === 0) {
+    console.log(chalk.green("ok — no diagnostics"));
+    return 0;
+  }
+  for (const info of toolTimeoutInfos) {
+    console.log(info);
+  }
   if (diags.length === 0 && modelErrorCount === 0) {
     console.log(chalk.green("ok — no diagnostics"));
     return 0;

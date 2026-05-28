@@ -57,14 +57,16 @@ store-client; control verbs append an `intent.*` the daemon folds on its next
 tick (always-appendable, so they succeed even with the daemon down).
 
 ```sh
-fragua runs ls [--status running,paused_human] [--limit N]   # one line per run
-fragua runs inbox                                            # runs needing attention (2 sections)
-fragua runs status <id>                                      # lifecycle + outcome + the "why"
-fragua runs tail <id>                                        # follow an existing run's log to terminal (live)
+fragua runs ls [--status running,paused_human] [--limit N] [--json]  # one line per run (--json: array)
+fragua runs inbox [--json]                                           # runs needing attention (2 sections)
+fragua runs status <id> [--json]                                     # lifecycle + outcome + warnings
+fragua runs tail <id>                                                # follow an existing run's log to terminal (live)
+fragua runs explain <id> [--json]                                    # narrative: path, per-step cost/outcome, diff, reason
+fragua runs worktree <id>                                            # print the absolute worktree path (exit 1 if cleaned up)
 
 # disposition — nothing touches your git until you ask
 fragua runs diff    <id> [--against base|previous|<idx>] [--snap <idx>] [--path <p>]
-fragua runs accept  <id>                          # replay commits onto your branch + stage the tail
+fragua runs accept  <id>                          # replay the run's commits onto your branch + stage the tail
 fragua runs discard <id>                          # drop the run's fragua refs
 
 # lifecycle + control
@@ -89,6 +91,11 @@ fragua runs messages  <id> [--node <id>] [--json] # the LLM-visible transcript
 fragua runs artifacts <id>                        # list a run's artifacts
 fragua runs artifact  <id> <nodeId> --key <k> [--iteration N]   # one artifact's bytes to stdout
 ```
+
+`fragua runs status` surfaces any active soft budget warning (the 80% mark
+before the hard pause); `fragua runs tail` prefixes the same event with ⚠ in
+the live log. `fragua runs explain` synthesises the full narrative: path taken,
+per-step outcome and cost, diff-vs-base summary, and the terminal reason.
 
 Discovery flags on the `runs` verbs: `--cwd` (scopes `ls`/`inbox`, resolves
 `diff` worktrees) and `--db` (default: the harness store `~/.fragua/fragua.db`).
@@ -142,7 +149,7 @@ row — there is no `serve.json` file and no localhost default.
 ## maintenance & authoring
 
 ```sh
-fragua validate <workflow.yaml>          # parse + lint, no execution
+fragua validate <workflow.yaml>          # parse + lint, no execution; reports tool steps using the default 5-min timeout
 fragua init [--cwd <path>]               # write <cwd>/.fragua/config.yaml
 fragua doctor                            # liveness: store path, daemon lock, server endpoint, providers
 fragua gc --snapshots [--older-than 30d] [--dry-run]

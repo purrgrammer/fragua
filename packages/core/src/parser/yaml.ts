@@ -150,6 +150,11 @@ const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
   "default-retry-policy": "default_retry_policy",
 };
 
+/** Default wall-clock cap for `tool` steps that don't set `timeout-minutes`.
+ * Long shell scripts WILL be killed when they exceed this. Surface it in
+ * `fragua validate` so the silent kill is visible before execution. */
+export const DEFAULT_TOOL_MAX_MS = 5 * 60 * 1000;
+
 // Keys consumed by the parser at the step level (not stored in attrs):
 const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes"]);
 // Keys consumed at the graph level (not stored in attrs):

@@ -27,6 +27,7 @@ import {
   diffCommand,
   discardCommand,
   eventsCommand,
+  explainCommand,
   goalGateCommand,
   inboxCommand,
   lsCommand,
@@ -42,6 +43,7 @@ import {
   stepsCommand,
   tailCommand,
   unquarantineCommand,
+  worktreeCommand,
 } from "../src/commands/operator.ts";
 import {
   providersAddCommand,
@@ -553,10 +555,12 @@ function runsHelp(): void {
     max-loops   <id> <n>             raise the per-run dispatch ceiling
 
   Listing:
-    inbox                             runs needing attention (2 sections)
-    ls [--status a,b] [--limit N]     list runs
-    status <id>                       one run's state + the why (pause/halt reason, quarantine orphans)
+    inbox               [--json]      runs needing attention (2 sections)
+    ls [--status a,b] [--limit N] [--json]  list runs
+    status <id>         [--json]      one run's state + the why + active budget warnings
     tail   <id>                       follow a run's event log to terminal (live, like \`run\` without --no-follow)
+    explain <id>        [--json]      narrative: path taken, per-step outcome/cost, diff summary, terminal reason
+    worktree <id>                     print the absolute worktree path (exit 1 if cleaned up)
 
   Inspect (forensics — dissect a run, no raw SQL):
     events    <id> [--type <prefix>] [--limit N] [--json]   the event log (default last 50, oldest-first)
@@ -586,7 +590,7 @@ cli
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
   .option("--limit <n>", "ls/inbox/events: cap results")
   .option("--type <prefix>", "events: filter by event-type prefix (e.g. fact.)")
-  .option("--json", "events/steps/messages: emit full JSON instead of one-line render")
+  .option("--json", "events/steps/messages/ls/status/inbox/explain: emit full JSON instead of one-line render")
   .option("--key <k>", "artifact: the artifact key to fetch")
   .option("--iteration <n>", "artifact: node iteration (default 0)")
   .option("--to <path>", "export: destination path for the .fragua bundle")
@@ -620,13 +624,20 @@ cli
           process.exit(0);
           break;
         case "inbox":
-          process.exit(await inboxCommand({ ...limitOpt, ...discovery(options) }));
+          process.exit(
+            await inboxCommand({
+              ...limitOpt,
+              ...(options["json"] === true ? { json: true } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         case "ls":
           process.exit(
             await lsCommand({
               ...(pickStr(options, "status") !== undefined ? { status: pickStr(options, "status")! } : {}),
               ...limitOpt,
+              ...(options["json"] === true ? { json: true } : {}),
               ...discovery(options),
             }),
           );
@@ -638,7 +649,13 @@ cli
           process.exit(await discardCommand({ runId: needId(), ...discovery(options) }));
           break;
         case "status":
-          process.exit(await statusCommand({ runId: needId(), ...discovery(options) }));
+          process.exit(
+            await statusCommand({
+              runId: needId(),
+              ...(options["json"] === true ? { json: true } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         case "tail":
           process.exit(await tailCommand({ runId: needId(), ...discovery(options) }));
@@ -839,6 +856,18 @@ cli
           process.exit(await exportCommand({ runId: needId(), to, ...discovery(options) }));
           break;
         }
+        case "explain":
+          process.exit(
+            await explainCommand({
+              runId: needId(),
+              ...(options["json"] === true ? { json: true } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        case "worktree":
+          process.exit(await worktreeCommand({ runId: needId(), ...discovery(options) }));
+          break;
         default:
           console.error(chalk.red(`unknown runs action: ${action}`));
           runsHelp();

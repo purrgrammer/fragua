@@ -221,7 +221,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 | `summary` | `low\|medium\|high` | Compress the shared thread for this step (§6). |
 | `skills` | string[] | Scope the skills catalogue for this step. |
 | `run` | string | Shell command (`tool` steps only). |
-| `timeout-minutes` | number | Wall-clock backstop (→ `max_ms`). |
+| `timeout-minutes` | number | Wall-clock backstop (→ `max_ms`). **`tool` steps default to 5 minutes when this is unset** — long shell scripts WILL be killed silently. Set it explicitly for any command that may run longer than 5 min. `fragua validate` flags every `tool` step relying on the default so the silent kill is visible before the run. |
 
 Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-prompt`, `skills-disabled`. Full attribute list: `packages/core/src/types/graph.ts` (`NodeAttrs`). W013 flags an unrecognised key (typo).
 

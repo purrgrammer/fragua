@@ -6,6 +6,31 @@ All notable changes to fragua are recorded here. The format follows
 changes, and anything marked **experimental** can change shape without a compat
 guarantee.
 
+## [Unreleased]
+
+### Added
+
+- **`fragua runs explain <id>`** — new read-plane verb that synthesises a run's
+  event log into a narrative: path taken (nodes + edges), per-step outcome and
+  cost, snapshots captured, diff-vs-base summary (files / insertions /
+  deletions), terminal status + halt/pause reason, and active soft budget
+  warnings. `--json` emits the structured `RunExplanation` projection.
+- **`--json` on `fragua runs ls`, `status`, and `inbox`** — human output
+  stays the default; `--json` prints the structured read-plane projection.
+  `status --json` also includes a `budgetWarns` field.
+- **`fragua runs worktree <id>`** — prints the absolute worktree path for a
+  run (`.fragua/worktrees/<runId>/` under the run's cwd). Exits non-zero with
+  a clear message when the worktree has been cleaned up.
+- **Soft budget warning surfacing in `status` and `tail`** — the existing
+  `budget.warn` event (80% of a budget ceiling) is now shown in
+  `fragua runs status <id>` under a yellow `warn:` line, and prefixed with
+  `⚠` in `fragua runs tail`. Warnings suppressed by a later `budget.stop`
+  for the same (scope, metric) do not appear.
+- **Tool-step timeout default surfaced in `fragua validate`** — any `tool`
+  step without an explicit `timeout-minutes:` now gets an info-level diagnostic
+  naming the step and the 5-minute default. Documented in `docs/cli.md` and
+  the workflows skill.
+
 ## [0.3.1] — 2026-05-28
 
 ### Added

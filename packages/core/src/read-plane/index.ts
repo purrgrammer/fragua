@@ -1,4 +1,12 @@
 export {
+  type BudgetWarnEntry,
+  buildExplanation,
+  type ExplainDiffSummary,
+  type ExplainOutcome,
+  type ExplainStep,
+  type RunExplanation,
+} from "./explain.ts";
+export {
   type ArtifactListRow,
   type ArtifactScope,
   type GlobalFeedAtFloorCursor,

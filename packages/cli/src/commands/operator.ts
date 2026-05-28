@@ -10,9 +10,10 @@
 // resolves the commit range through `readPlane.diffRange` and runs the git diff
 // inline with the same `@fragua/workspace` `gitDiff` the server uses.
 
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import type { DiffRange, RunDetail, StepSnapshot } from "@fragua/core/read-plane";
+import type { DiffRange, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
 import type { ArtifactScope, NarrowMessage, RunStatus, SqliteStore, StoredEvent } from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
@@ -87,9 +88,6 @@ export function acceptCommand(opts: AcceptOptions): Promise<number> {
       console.error(chalk.red("accept: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    // Replay synchronously against the local worktree, then record the result
-    // as intent.accept_run via the plane (the daemon folds it into the inbox
-    // projection). The state gate is inside applyAccept (§3.7).
     const res = await applyAccept(defaultGitExec, gate);
     if (!res.ok) {
       console.error(chalk.red(`accept: ${res.detail}`) + chalk.dim(` [${res.reason}]`));
@@ -132,6 +130,7 @@ interface InboxRunRow {
 
 export interface InboxOptions extends DiscoveryOpts {
   limit?: number;
+  json?: boolean;
 }
 
 const BLOCKED_STATUSES: RunStatus[] = ["paused_human", "paused", "paused_auto", "quarantined"];
@@ -172,6 +171,10 @@ export function inboxCommand(opts: InboxOptions): Promise<number> {
     const common = { cwd, order: "oldest" as const, ...(opts.limit != null ? { limit: opts.limit } : {}) };
     const blocked = readPlane.runSummaries({ ...common, statuses: BLOCKED_STATUSES });
     const ready = readPlane.runSummaries({ ...common, inbox: "pending" });
+    if (opts.json === true) {
+      console.log(JSON.stringify({ needsInput: blocked, readyToLand: ready }, null, 2));
+      return 0;
+    }
     return renderInbox(blocked, ready);
   });
 }
@@ -202,11 +205,13 @@ function renderInbox(blocked: InboxRunRow[], ready: InboxRunRow[]): number {
 
 export interface StatusOptions extends DiscoveryOpts {
   runId: string;
+  json?: boolean;
 }
 
 /** Single-run detail: lifecycle + outcome, workflow, cost/tokens, change-stat,
  * and the "why" — the pause reason (+ which cap to raise), halt reason, or
- * quarantine orphans — read off the run's events. */
+ * quarantine orphans — read off the run's events. Also surfaces any active
+ * soft budget warnings (80% mark, before the hard pause). */
 export function statusCommand(opts: StatusOptions): Promise<number> {
   return withStoreClient(opts, ({ readPlane }) => {
     const detail = readPlane.runDetail(opts.runId);
@@ -214,9 +219,48 @@ export function statusCommand(opts: StatusOptions): Promise<number> {
       console.error(chalk.red("status: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    renderStatus(detail, readPlane.events(opts.runId) ?? []);
+    const events = readPlane.events(opts.runId) ?? [];
+    if (opts.json === true) {
+      const budgetWarns = collectActiveBudgetWarns(events);
+      console.log(JSON.stringify({ ...detail, budgetWarns }, null, 2));
+      return 0;
+    }
+    renderStatus(detail, events);
     return 0;
   });
+}
+
+/** Collect budget.warn events that have no later budget.stop for the same
+ * (scope, metric) pair — still-active soft budget warnings. */
+function collectActiveBudgetWarns(
+  events: StoredEvent[],
+): Array<{ scope: string; metric: string; limit: number; actual: number; ratio: number }> {
+  const stopSeqByTag = new Map<string, number>();
+  for (const ev of events) {
+    if (ev.type === "budget.stop") {
+      const p = ev.payload as { scope?: unknown; metric?: unknown };
+      if (typeof p.scope === "string" && typeof p.metric === "string") {
+        stopSeqByTag.set(`${p.scope}:${p.metric}`, ev.seq);
+      }
+    }
+  }
+  const warns: Array<{ scope: string; metric: string; limit: number; actual: number; ratio: number }> = [];
+  for (const ev of events) {
+    if (ev.type !== "budget.warn") continue;
+    const p = ev.payload as { scope?: unknown; metric?: unknown; limit?: unknown; actual?: unknown; ratio?: unknown };
+    if (typeof p.scope !== "string" || typeof p.metric !== "string") continue;
+    const tag = `${p.scope}:${p.metric}`;
+    const stopSeq = stopSeqByTag.get(tag);
+    if (stopSeq !== undefined && stopSeq > ev.seq) continue;
+    warns.push({
+      scope: p.scope,
+      metric: p.metric,
+      limit: typeof p.limit === "number" ? p.limit : 0,
+      actual: typeof p.actual === "number" ? p.actual : 0,
+      ratio: typeof p.ratio === "number" ? p.ratio : 0,
+    });
+  }
+  return warns;
 }
 
 function renderStatus(d: RunDetail, events: StoredEvent[]): void {
@@ -228,6 +272,14 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
   if (d.cwd != null) console.log(`  cwd:      ${d.cwd}`);
   console.log(`  cost:     $${d.costUsd.toFixed(4)} ${chalk.dim(`(${d.inputTokens}+${d.outputTokens} tok)`)}`);
   if (d.durationMs != null) console.log(`  duration: ${(d.durationMs / 1000).toFixed(1)}s`);
+
+  // Surface any active soft budget warnings (80% mark).
+  for (const w of collectActiveBudgetWarns(events)) {
+    const pct = Math.round(w.ratio * 100);
+    console.log(
+      chalk.yellow(`  warn: ${pct}% of ${w.scope}:${w.metric} budget (actual ${w.actual}, limit ${w.limit})`),
+    );
+  }
 
   // The "why" for a blocked/terminal run — the last relevant fact.
   for (let i = events.length - 1; i >= 0; i--) {
@@ -269,6 +321,146 @@ export function tailCommand(opts: TailOptions): Promise<number> {
       return 1;
     }
     return followRun(client, opts.runId);
+  });
+}
+
+export interface ExplainOptions extends DiscoveryOpts {
+  runId: string;
+  json?: boolean;
+}
+
+/** Synthesise a human-readable narrative of what a run did. `--json` emits the
+ * full `RunExplanation` structure; the default is a narrative render. */
+export function explainCommand(opts: ExplainOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const explanation = readPlane.explain(opts.runId);
+    if (explanation == null) {
+      console.error(chalk.red("explain: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (opts.json === true) {
+      console.log(JSON.stringify(explanation, null, 2));
+      return 0;
+    }
+    renderExplanation(explanation);
+    return 0;
+  });
+}
+
+function renderExplanation(e: RunExplanation): void {
+  const outcomeColor =
+    e.outcome.kind === "completed"
+      ? chalk.green
+      : e.outcome.kind === "halted" || e.outcome.kind === "quarantined"
+        ? chalk.red
+        : chalk.yellow;
+
+  console.log(chalk.bold(e.runId));
+
+  // ── Outcome ─────────────────────────────────────────────────────────────
+  const outcomeLabel =
+    e.outcome.kind === "completed"
+      ? "completed"
+      : e.outcome.kind === "halted"
+        ? `halted (${e.outcome.reason}${
+            "detail" in e.outcome && e.outcome.detail != null ? ` — ${e.outcome.detail}` : ""
+          })`
+        : e.outcome.kind === "cancelled"
+          ? `cancelled${"reason" in e.outcome && e.outcome.reason != null ? ` — ${e.outcome.reason}` : ""}`
+          : e.outcome.kind === "paused"
+            ? `paused (${e.outcome.reason})`
+            : e.outcome.kind === "paused_human"
+              ? `awaiting human${"label" in e.outcome && e.outcome.label != null ? `: ${e.outcome.label}` : ""}`
+              : e.outcome.kind === "quarantined"
+                ? `quarantined (${e.outcome.reason})`
+                : "running";
+  console.log(`  outcome:  ${outcomeColor(outcomeLabel)}`);
+
+  // ── Budget warnings ──────────────────────────────────────────────────────
+  for (const w of e.budgetWarnings) {
+    const pct = Math.round(w.ratio * 100);
+    console.log(
+      chalk.yellow(`  ⚠ warn:   ${pct}% of ${w.scope}:${w.metric} budget (actual ${w.actual}, limit ${w.limit})`),
+    );
+  }
+
+  // ── Totals ───────────────────────────────────────────────────────────────
+  console.log(
+    `  cost:     $${e.totals.costUsd.toFixed(4)} ${chalk.dim(`(${e.totals.inputTokens}+${e.totals.outputTokens} tok)`)}`,
+  );
+  if (e.totals.durationMs != null) {
+    console.log(`  duration: ${(e.totals.durationMs / 1000).toFixed(1)}s`);
+  }
+
+  // ── Path ────────────────────────────────────────────────────────────────
+  if (e.path.length > 0) {
+    const pathStr = e.path.map((p) => `${p.from}→${p.to}${p.iteration > 0 ? `#${p.iteration}` : ""}`).join("  ");
+    console.log(`  path:     ${chalk.dim(pathStr)}`);
+  }
+
+  // ── Steps ────────────────────────────────────────────────────────────────
+  if (e.steps.length > 0) {
+    console.log(`  steps:    ${e.steps.length}`);
+    for (const s of e.steps) {
+      const outcomeGlyph =
+        s.outcome === "success" ? chalk.green("✓") : s.outcome === "fail" ? chalk.red("✗") : chalk.dim("?");
+      const model = s.model ? chalk.dim(` ${s.model}`) : "";
+      console.log(
+        `    ${chalk.dim(`#${s.stepIdx}`)} ${outcomeGlyph} ${chalk.cyan(s.nodeId)}${model}` +
+          `  $${s.costUsd.toFixed(4)}` +
+          (s.durationMs != null ? `  ${(s.durationMs / 1000).toFixed(1)}s` : ""),
+      );
+    }
+  }
+
+  // ── Snapshots ─────────────────────────────────────────────────────────────
+  if (e.snapshots.length > 0) {
+    console.log(`  snapshots: ${e.snapshots.length}`);
+    for (const s of e.snapshots) {
+      const stat = s.committed ?? s.uncommitted;
+      const statStr =
+        stat != null
+          ? ` ${stat.filesChanged} file${stat.filesChanged === 1 ? "" : "s"} ${chalk.green(`+${stat.insertions}`)}${chalk.dim("/")}${chalk.red(`-${stat.deletions}`)}`
+          : "";
+      console.log(`    ${chalk.dim(`[${s.label}]`)} ${s.nodeId ?? "(run)"}${statStr}`);
+    }
+  }
+
+  // ── Diff summary ──────────────────────────────────────────────────────────
+  if (e.diffSummary != null) {
+    console.log(
+      `  diff:     ${e.diffSummary.filesChanged} file${e.diffSummary.filesChanged === 1 ? "" : "s"} ` +
+        `${chalk.green(`+${e.diffSummary.insertions}`)} ${chalk.red(`-${e.diffSummary.deletions}`)}`,
+    );
+  }
+}
+
+export interface WorktreeOptions extends DiscoveryOpts {
+  runId: string;
+}
+
+/** Print the absolute worktree path for a run. Exit non-zero when the
+ * worktree no longer exists (cleaned up by GC after the terminal snapshot). */
+export function worktreeCommand(opts: WorktreeOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const detail = readPlane.runDetail(opts.runId);
+    if (detail == null) {
+      console.error(chalk.red("worktree: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    if (detail.cwd == null) {
+      console.error(chalk.red("worktree: run has no worktree (bare-cwd or ephemeral)") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    const wt = join(detail.cwd, ".fragua", "worktrees", opts.runId);
+    if (!existsSync(wt)) {
+      console.error(
+        chalk.yellow(`worktree: worktree no longer exists — likely cleaned up by GC`) + chalk.dim(` (${wt})`),
+      );
+      return 1;
+    }
+    console.log(wt);
+    return 0;
   });
 }
 
@@ -497,6 +689,7 @@ export function maxLoopsCommand(opts: MaxLoopsOptions): Promise<number> {
 export interface LsOptions extends DiscoveryOpts {
   status?: string;
   limit?: number;
+  json?: boolean;
 }
 
 /** List runs (optionally filtered by lifecycle status). */
@@ -516,6 +709,10 @@ export function lsCommand(opts: LsOptions): Promise<number> {
       limit: opts.limit ?? 30,
       ...(statuses !== undefined ? { statuses } : {}),
     });
+    if (opts.json === true) {
+      console.log(JSON.stringify(rows, null, 2));
+      return 0;
+    }
     if (rows.length === 0) {
       console.log(chalk.dim("ls: no runs"));
       return 0;
