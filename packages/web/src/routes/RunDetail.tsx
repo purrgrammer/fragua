@@ -250,6 +250,7 @@ export function RunDetail(): JSX.Element {
                 isLive={isLive}
                 isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
+                {...(detail?.workflowSource ? { workflowSource: detail.workflowSource } : {})}
                 hitl={
                   detail?.runStatus === "paused_human" && detail.hitlNodeId
                     ? {

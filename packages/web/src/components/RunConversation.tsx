@@ -23,6 +23,7 @@
 //   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
 
+import { handlerOf, parseWorkflow } from "@fragua/core";
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import {
@@ -101,6 +102,14 @@ export interface RunConversationProps {
    * answered. The currently-open gate (`hitl.nodeId`) is suppressed: its
    * card takes precedence until the answer lands. */
   hitlDecisions?: Record<string, { route: string; note?: string }> | null;
+  /** Workflow YAML, used to identify tool-type nodes so we can render an
+   * empty Terminal placeholder while a tool node is running but hasn't
+   * emitted any `tool.output_chunk` yet. Without this, a tool node that
+   * sits silently for minutes (waiting on HTTP / a subprocess) shows as
+   * an empty conversation — no persisted row, no streaming buffer, no
+   * live stream. Passing the source means we can synthesize a "running"
+   * Terminal so the operator can see the run is making progress. */
+  workflowSource?: string;
   className?: string;
 }
 
@@ -115,6 +124,7 @@ export function RunConversation({
   toolStreams,
   hitl = null,
   hitlDecisions = null,
+  workflowSource,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -175,6 +185,51 @@ export function RunConversation({
     return out;
   }, [toolStreams, persistedToolNodeIds]);
 
+  // Set of every tool-type nodeId in the workflow. Parsed once per source
+  // change (the source is captured at run.started and never moves during a
+  // run). Used to render an empty Terminal placeholder when a tool node is
+  // running but hasn't emitted any output yet — without this, a long-silent
+  // tool node shows as an empty conversation.
+  const toolNodeIds = useMemo<ReadonlySet<string>>(() => {
+    if (!workflowSource) return EMPTY_TOOL_NODE_IDS;
+    try {
+      const g = parseWorkflow(workflowSource);
+      const out = new Set<string>();
+      for (const node of Object.values(g.nodes)) {
+        if (handlerOf(node) === "tool") out.add(node.id);
+      }
+      return out;
+    } catch {
+      return EMPTY_TOOL_NODE_IDS;
+    }
+  }, [workflowSource]);
+
+  // Tool nodes that are running but have no other representation yet:
+  // no persisted message, no live `tool.output_chunk` accumulator, no
+  // streaming buffer. We surface them so the operator can see the run
+  // is making progress instead of staring at an empty conversation.
+  const placeholderToolNodes = useMemo<string[]>(() => {
+    if (toolNodeIds.size === 0 || !nodeStates || nodeStates.length === 0) return [];
+    const liveStreamIds = new Set<string>();
+    if (toolStreams) {
+      for (const id of toolStreams.keys()) liveStreamIds.add(id);
+    }
+    const streamingNode = streaming?.nodeId ?? null;
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const n of nodeStates) {
+      if (n.state !== "running") continue;
+      if (!toolNodeIds.has(n.nodeId)) continue;
+      if (persistedToolNodeIds.has(n.nodeId)) continue;
+      if (liveStreamIds.has(n.nodeId)) continue;
+      if (streamingNode === n.nodeId) continue;
+      if (seen.has(n.nodeId)) continue;
+      seen.add(n.nodeId);
+      out.push(n.nodeId);
+    }
+    return out;
+  }, [toolNodeIds, nodeStates, toolStreams, streaming, persistedToolNodeIds]);
+
   // Decided human gates with no message rows of their own (the common
   // case — human nodes emit none) render as standalone banner sections.
   // Slot them into node-EXECUTION order so a mid-flow signoff appears
@@ -221,6 +276,7 @@ export function RunConversation({
     visibleSections.length === 0 &&
     streaming == null &&
     liveToolNodes.length === 0 &&
+    placeholderToolNodes.length === 0 &&
     hitl == null &&
     !hasDecisions;
 
@@ -306,6 +362,17 @@ export function RunConversation({
                 isPaused={isPaused}
               >
                 <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
+              </NodeSection>
+            ))}
+            {placeholderToolNodes.map((nodeId) => (
+              <NodeSection
+                key={`tool-pending-${nodeId}`}
+                nodeId={nodeId}
+                state={stateByNodeId.get(nodeId)}
+                isLive={isLive}
+                isPaused={isPaused}
+              >
+                <ToolNodePendingRow testid={`tool-pending-${nodeId}`} />
               </NodeSection>
             ))}
           </ConversationContent>
@@ -600,6 +667,23 @@ function ToolNodeStreamingRow({ stream, testid }: { stream: ToolStream; testid: 
     </div>
   );
 }
+
+/** Pre-output placeholder for a tool node that has been dispatched but
+ * hasn't emitted any `tool.output_chunk` yet. A bash step waiting on an
+ * HTTP call or a subprocess startup may sit silent for minutes; without
+ * this card the conversation reads as "nothing happening" even though
+ * the run is making progress. Identical Terminal shell to
+ * `ToolNodeStreamingRow` so the live stream slots in seamlessly once
+ * chunks start arriving. */
+function ToolNodePendingRow({ testid }: { testid: string }): JSX.Element {
+  return (
+    <div data-testid={testid} className="flex flex-col gap-2">
+      <Terminal status="running" tone="thinking" output="" isStreaming />
+    </div>
+  );
+}
+
+const EMPTY_TOOL_NODE_IDS: ReadonlySet<string> = new Set<string>();
 
 function composeTerminalBody(stdout: string, stderr: string): string {
   if (stderr.length === 0) return stdout;
