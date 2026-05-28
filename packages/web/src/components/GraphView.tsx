@@ -648,15 +648,52 @@ export function toFlowGraph(
   // overwriting by nodeId keeps the latest iteration's state — the
   // default "show me where this node ended up" behaviour for loops.
   const stateById = new Map(detail?.nodes.map((n) => [n.nodeId, n]) ?? []);
-  // `selectedEdges` is an ordered log of every (from,to,iteration) triple
-  // the executor traversed. We aggregate by (from,to) into a count so the
-  // renderer can both (a) tell taken from un-taken (count > 0) and
-  // (b) show how many times each edge fired — the load-bearing signal for
-  // back-edges, self-loops, and goal-gate retargets that fire repeatedly.
-  const traversalCounts = new Map<string, number>();
-  for (const e of detail?.selectedEdges ?? []) {
+  // Per-(nodeId, iteration) state lookup. `selectedEdges` carries iteration
+  // alongside (from, to), so we can disambiguate parallel-edge traversals
+  // (e.g. `on: {success: score, fail: score}` emits two graph edges sharing
+  // the same from→to pair) by matching the source's outcome at that iteration.
+  const stateByNodeIter = new Map<string, NodeState>();
+  for (const n of detail?.nodes ?? []) {
+    stateByNodeIter.set(`${n.nodeId}#${n.iteration}`, n);
+  }
+  // Group workflow edges by (from, to) so the dispatch below can find every
+  // candidate when multiple edges share an endpoint pair.
+  const edgesByPair = new Map<string, number[]>();
+  graph.edges.forEach((e, idx) => {
     const k = edgeKey(e.from, e.to);
-    traversalCounts.set(k, (traversalCounts.get(k) ?? 0) + 1);
+    const arr = edgesByPair.get(k);
+    if (arr) arr.push(idx);
+    else edgesByPair.set(k, [idx]);
+  });
+  // `selectedEdges` is an ordered log of every (from,to,iteration) triple
+  // the executor traversed. We aggregate per *graph-edge index* (not per
+  // (from,to)) so parallel edges with distinct `outcome=`/`route=` attrs
+  // don't all inherit the count of whichever sibling fired. For a singleton
+  // pair the dispatch is trivial; for a parallel group the source node's
+  // state at that iteration picks the matching outcome (success vs fail).
+  const traversalsByEdge = new Map<number, number>();
+  for (const sel of detail?.selectedEdges ?? []) {
+    const k = edgeKey(sel.from, sel.to);
+    const candidates = edgesByPair.get(k);
+    if (!candidates || candidates.length === 0) continue;
+    let pick: number | undefined;
+    if (candidates.length === 1) {
+      pick = candidates[0];
+    } else {
+      const srcState = stateByNodeIter.get(`${sel.from}#${sel.iteration}`);
+      const srcFailed = srcState?.state === "failed";
+      // Prefer the candidate whose declared outcome matches the source's
+      // terminal state at that iteration. Fall back to the first candidate
+      // so an unanticipated rule (route-only parallels, missing state) still
+      // marks *some* edge as taken instead of dimming the whole pair.
+      pick = candidates.find((idx) => {
+        const ed = graph.edges[idx];
+        const o = ed === undefined ? undefined : (ed.attrs as Record<string, unknown>)["outcome"];
+        return srcFailed ? o === "fail" : o === "success" || o === undefined;
+      });
+      if (pick === undefined) pick = candidates[0];
+    }
+    if (pick !== undefined) traversalsByEdge.set(pick, (traversalsByEdge.get(pick) ?? 0) + 1);
   }
   // Per-gate visit count. Goal-gate retargets bypass `edge.selected`
   // (the executor sets `result.nextNode = action.target` without going
@@ -877,8 +914,10 @@ export function toFlowGraph(
     }
     // Untaken edges fade. During a run, an edge is "taken" iff it appears
     // in `detail.selectedEdges`; outside a run (workflow-detail view)
-    // everything renders at full opacity.
-    const traversalCount = traversalCounts.get(edgeKey(e.from, e.to)) ?? 0;
+    // everything renders at full opacity. `traversalsByEdge` is keyed by
+    // graph.edges index — parallel edges sharing a (from, to) pair are
+    // disambiguated against the source's iteration state above.
+    const traversalCount = traversalsByEdge.get(i) ?? 0;
     const taken = traversalCount > 0;
     const dim = hasRun && !taken;
     // In a run, an `outcome=fail` edge that never fired is just topology —

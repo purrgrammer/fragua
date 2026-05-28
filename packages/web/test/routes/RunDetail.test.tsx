@@ -850,7 +850,7 @@ steps:
       }
     });
 
-    it("shows EmptyState when /snapshots returns an empty array", async () => {
+    it("redirects to /conversation when /diff is opened for a run with no diffable snapshots", async () => {
       const detail: RunDetailT = {
         runId: "run-diff-empty",
         startedAt: "2024-01-01T00:00:00Z",
@@ -878,14 +878,17 @@ steps:
       try {
         const { container } = mount(client, "/runs/run-diff-empty/diff");
         await waitFor(() => {
-          expect(within(container).getByTestId("run-diff-empty")).toBeTruthy();
+          expect(within(container).getByTestId("conversation-region")).toBeTruthy();
         });
+        // Tab itself is hidden; redirect lands us on conversation, not on an empty diff pane.
+        expect(within(container).queryByTestId("diff-region")).toBeNull();
+        expect(within(container).queryByTestId("view-tab-diff")).toBeNull();
       } finally {
         mock.restore();
       }
     });
 
-    it("disables the Diff tab trigger when snapshots resolve to an empty array", async () => {
+    it("hides the Diff tab trigger entirely when snapshots resolve to an empty array", async () => {
       const detail: RunDetailT = {
         runId: "run-diff-disabled",
         startedAt: "2024-01-01T00:00:00Z",
@@ -912,17 +915,19 @@ steps:
       );
       try {
         const { container } = mount(client, "/runs/run-diff-disabled");
-        // Wait for the tab to render and snapshots to resolve.
+        // Conversation tab confirms we mounted; Diff tab must not be in the DOM.
         await waitFor(() => {
-          const tab = within(container).getByTestId("view-tab-diff");
-          expect(tab.hasAttribute("disabled")).toBe(true);
+          expect(within(container).getByTestId("view-tab-conversation")).toBeTruthy();
+        });
+        await waitFor(() => {
+          expect(within(container).queryByTestId("view-tab-diff")).toBeNull();
         });
       } finally {
         mock.restore();
       }
     });
 
-    it("does not disable the Diff tab when snapshots are present", async () => {
+    it("renders the Diff tab when snapshots have file changes", async () => {
       const detail: RunDetailT = {
         runId: "run-diff-enabled",
         startedAt: "2024-01-01T00:00:00Z",
@@ -938,14 +943,11 @@ steps:
       const { client, mock } = prepareWithDiff("run-diff-enabled", detail);
       try {
         const { container } = mount(client, "/runs/run-diff-enabled");
-        // Wait for the snapshots to load (non-empty), then confirm tab is not disabled.
         await waitFor(() => {
           expect(within(container).getByTestId("view-tab-diff")).toBeTruthy();
         });
-        await waitFor(() => {
-          const tab = within(container).getByTestId("view-tab-diff");
-          expect(tab.hasAttribute("disabled")).toBe(false);
-        });
+        const tab = within(container).getByTestId("view-tab-diff");
+        expect(tab.hasAttribute("disabled")).toBe(false);
       } finally {
         mock.restore();
       }

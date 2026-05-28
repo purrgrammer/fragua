@@ -23,16 +23,24 @@ export function snapshotLabel(snap: RunSnapshot): string {
   return snap.label === "hitl" ? "HITL" : "terminal";
 }
 
+/** A snapshot is "diffable" when it actually changed the tree at its boundary.
+ * No-op step snapshots (committed + uncommitted both empty) just duplicate the
+ * previous snapshot's diff vs base, so they're hidden from the selector and
+ * don't count toward "does the Diff tab have anything to show". */
+export function hasDiff(snap: RunSnapshot): boolean {
+  return (snap.committed?.filesChanged ?? 0) > 0 || (snap.uncommitted?.filesChanged ?? 0) > 0;
+}
+
 export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
   const snapshotsQuery = useQuery(queries.runs.snapshots(runId));
-  const snapshots = snapshotsQuery.data ?? [];
+  const diffable = (snapshotsQuery.data ?? []).filter(hasDiff);
 
   /** `null` = "latest" sentinel; otherwise the `eventIdx` of the chosen snapshot. */
   const [selectedEventIdx, setSelectedEventIdx] = useState<number | null>(null);
 
-  const latest = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+  const latest = diffable.length > 0 ? diffable[diffable.length - 1] : null;
   const selected =
-    selectedEventIdx === null ? latest : (snapshots.find((s) => s.eventIdx === selectedEventIdx) ?? latest);
+    selectedEventIdx === null ? latest : (diffable.find((s) => s.eventIdx === selectedEventIdx) ?? latest);
 
   const diffQuery = useQuery({
     ...queries.runs.snapshotDiff(runId, selected?.eventIdx ?? -1, "base"),
@@ -47,28 +55,39 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
     );
   }
 
-  if (snapshots.length === 0) {
+  if (diffable.length === 0) {
     return (
       <EmptyState
         data-testid="run-diff-empty"
-        title="No snapshots"
-        description="This run has no worktree snapshots. Bare-cwd runs or runs without a worktree do not capture diff history."
+        title="No diffs"
+        description="This run has no worktree snapshots with file changes."
         density="compact"
       />
     );
   }
 
   const stat = selected ? (selected.committed ?? selected.uncommitted) : null;
+  const showSelector = diffable.length > 1;
 
   return (
     <section className="flex min-h-0 flex-col gap-3 p-3" data-testid="run-diff-section">
       <div className="flex min-w-0 items-center gap-3">
-        <SnapshotSelector
-          snapshots={snapshots}
-          selectedEventIdx={selectedEventIdx}
-          latestEventIdx={latest?.eventIdx ?? null}
-          onChange={setSelectedEventIdx}
-        />
+        {showSelector ? (
+          <SnapshotSelector
+            snapshots={diffable}
+            selectedEventIdx={selectedEventIdx}
+            latestEventIdx={latest?.eventIdx ?? null}
+            onChange={setSelectedEventIdx}
+          />
+        ) : selected ? (
+          <span
+            data-testid="run-diff-single-label"
+            className="max-w-56 truncate rounded-sw-card border border-sw-border bg-sw-surface px-2 py-1 font-mono text-sw-xs text-sw-muted"
+            title={snapshotLabel(selected)}
+          >
+            {snapshotLabel(selected)}
+          </span>
+        ) : null}
         {stat && (
           <ChangeStat
             className="flex-1 text-sw-sm"

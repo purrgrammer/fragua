@@ -24,7 +24,7 @@ import { NodeInspector } from "../components/NodeInspector.tsx";
 import { ProjectLink } from "../components/ProjectLink.tsx";
 import { RunControls } from "../components/RunControls.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
-import { RunDiffTab } from "../components/RunDiffTab.tsx";
+import { hasDiff, RunDiffTab } from "../components/RunDiffTab.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
@@ -113,10 +113,14 @@ export function RunDetail(): JSX.Element {
     ...queries.runs.snapshots(id),
     enabled: !!id && detail?.cwd != null,
   });
-  // Disable the tab only once snapshots have resolved to empty — while
-  // the query is still pending (undefined) we leave the tab enabled so
-  // it doesn't flicker disabled→enabled on first load.
-  const diffTabDisabled = diffSnapshots !== undefined && diffSnapshots.length === 0;
+  // Hide the tab only once snapshots have resolved AND no snapshot has any
+  // file changes. While the query is still pending (undefined) we render the
+  // tab so it doesn't flicker hidden→shown on first load. Counts only diffable
+  // snapshots — a step with no committed/uncommitted changes would just
+  // duplicate the prior snapshot's diff vs base, so it doesn't qualify the
+  // tab on its own.
+  const diffableSnapshotCount = (diffSnapshots ?? []).filter(hasDiff).length;
+  const showDiffTab = detail?.cwd != null && (diffSnapshots === undefined || diffableSnapshotCount > 0);
 
   // `isLive` here means "actively dispatching", not just "SSE connected".
   // A paused run keeps the SSE socket open (so resume facts still arrive)
@@ -168,10 +172,12 @@ export function RunDetail(): JSX.Element {
   // invalid view → same. Runs AFTER all hooks to stay rules-compliant.
   if (shouldCanonicalize) return <Navigate to={`/runs/${id}/${view}`} replace />;
 
-  // Guard: the diff tab is only valid for runs that have a cwd. Once the
-  // snapshot has loaded and confirms no cwd, redirect away so a stale
-  // bookmark to /runs/:id/diff doesn't strand the user.
-  if (view === "diff" && detail != null && detail.cwd == null) {
+  // Guard: the diff tab is only valid for runs that have a cwd AND at least
+  // one diffable snapshot. Redirect away from a stale bookmark to /runs/:id/diff
+  // once we can prove the tab won't render — either the run has no cwd at all
+  // (the snapshots query is disabled so it stays undefined) or snapshots have
+  // resolved to zero diffable rows.
+  if (view === "diff" && detail != null && !showDiffTab && (detail.cwd == null || diffSnapshots !== undefined)) {
     return <Navigate to={`/runs/${id}/conversation`} replace />;
   }
 
@@ -224,8 +230,8 @@ export function RunDetail(): JSX.Element {
             <TabsTrigger value="cost" data-testid="view-tab-cost">
               Cost
             </TabsTrigger>
-            {detail?.cwd != null && (
-              <TabsTrigger value="diff" data-testid="view-tab-diff" disabled={diffTabDisabled}>
+            {showDiffTab && (
+              <TabsTrigger value="diff" data-testid="view-tab-diff">
                 Diff
               </TabsTrigger>
             )}
@@ -270,7 +276,7 @@ export function RunDetail(): JSX.Element {
             <TabsContent value="cost" className="h-full">
               <CostInspector runId={id} totalEvents={totalEvents} isLive={isLive} />
             </TabsContent>
-            {detail?.cwd != null && (
+            {showDiffTab && (
               <TabsContent value="diff" className="h-full">
                 <RunDiffTab runId={id} run={detail ?? undefined} />
               </TabsContent>

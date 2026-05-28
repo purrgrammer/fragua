@@ -48,6 +48,15 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
   "run.title_generated",
 ]);
 
+/** Event kinds that add or update a snapshot row in the scrubber feed.
+ * `snapshot.captured` fires per step/HITL during the run; `fact.snapshot_recorded`
+ * fires once after the terminal status (in the executor's finally-block dispose
+ * path). The terminal one races run_completed by design — RunDetail's local
+ * effect invalidates on overlay status flips, but that runs BEFORE the snapshot
+ * write lands. We invalidate the snapshots + snapshot-diff caches here when the
+ * snapshot event itself arrives, so the Diff tab refreshes for any open tab. */
+const SNAPSHOT_INVALIDATE_KINDS = new Set<string>(["snapshot.captured", "fact.snapshot_recorded"]);
+
 export interface UseGlobalEventStreamOptions {
   /** Test injection. */
   eventSourceImpl?: typeof EventSource;
@@ -146,6 +155,13 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
         // Project list rolls up `lastUpdatedAt` / `runCount` per cwd —
         // any run lifecycle change shifts at least one of those.
         void qc.invalidateQueries({ queryKey: queries.projects.all() });
+      }
+
+      if (SNAPSHOT_INVALIDATE_KINDS.has(evt.type)) {
+        void qc.invalidateQueries({ queryKey: queries.runs.snapshots(evt.runId).queryKey });
+        // snapshot-diff is keyed by (runId, eventIdx, against) — prefix match
+        // every variant so any open scrubber selection refetches.
+        void qc.invalidateQueries({ queryKey: [...queries.runs.all(), evt.runId, "snapshot-diff"] });
       }
     },
     [appendFeed, qc],
