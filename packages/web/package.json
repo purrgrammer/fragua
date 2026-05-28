@@ -1,8 +1,8 @@
 {
   "name": "@fragua/web",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
-  "description": "fragua web UI \u2014 Vite + React + Tailwind client for the HTTP/SSE server",
+  "description": "fragua web UI — Vite + React + Tailwind client for the HTTP/SSE server",
   "type": "module",
   "scripts": {
     "dev": "vite",

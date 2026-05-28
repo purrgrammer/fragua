@@ -6,6 +6,37 @@ All notable changes to fragua are recorded here. The format follows
 changes, and anything marked **experimental** can change shape without a compat
 guarantee.
 
+## [0.3.1] — 2026-05-28
+
+Bugfix release. One executor fix + the pinning tests that should have caught it.
+
+### Fixed
+
+- **Goal-gate retarget stole non-gate fails at terminal, causing silent retry
+  loops.** Once a `goal_gate` node had failed and its outcome lived in routing
+  state, any *downstream non-gate* node terminating via `outcome=fail` — an
+  `abort` tool call, retry-exhausted, any unrecovered failure — was being
+  intercepted by the §3.4 terminal-arrival check and retargeted to the gate's
+  `retry_target` (often the failing node itself), looping until the
+  operator-raised cap exhausted. Observed on run `01kspxc14ktygz3grtevey53kp`
+  (audit description optimize): a propose-step called `abort` three times after
+  a paused-gate cap raise; each abort dispatched another propose iteration
+  under the still-unsatisfied gate. **~$1.15 burned before the operator paused
+  the run manually.** Also silently overrode the documented `on: {fail: exit}`
+  sanctioned-landing escape hatch under any unsatisfied gate. Fix in
+  `transition-planner.ts`: skip the §3.4 check when the completed node is
+  non-gate and its outcome is `fail` — the node's own terminal decision.
+  (eea93348)
+
+### Tests
+
+- Pinning tests in `executor.goal-gate.test.ts` whose names quote the SPEC §3
+  and workflows-skill lines they enforce: *"a node that fails with no fail
+  route halts the run with `aborted_exit`"* and *"an explicit edge to the `exit`
+  sink on failure is a sanctioned landing — the run *completes*"*, both
+  asserted under a prior-failed-gate state. A grep from SKILL.md or SPEC.md
+  now lands on the test that pins each claim.
+
 ## [0.3.0] — 2026-05-28
 
 This release makes the `.fragua` bundle **secret-free by scrubbing**, not just by
