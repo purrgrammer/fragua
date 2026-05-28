@@ -378,6 +378,217 @@ steps:
   });
 });
 
+describe("executor — non-gate fail does not retarget a previously-failed gate", () => {
+  // Regression for the propose-step abort loop observed on run
+  // 01kspxc14ktygz3grtevey53kp (audit optimize). Once a gate has failed
+  // and its outcome lives in routing state, a later *non-gate* node
+  // terminating via `outcome=fail` (the abort tool's map, or any
+  // unrecovered failure) was being intercepted by the §3.4 terminal-arrival
+  // check, which retargeted the gate's `retry_target` (often the failing
+  // node itself). The carve-out in transition-planner skips the gate
+  // check on a non-gate fail so the run halts cleanly per the documented
+  // `aborted_exit` semantics (see `agent/backend.ts:findAbortToolCall`).
+  test("propose fails after gate-pause + resume → halts, does not loop on retarget", async () => {
+    // Topology: propose → reeval → gate (retry: propose). Gate fails
+    // every time. After exhausting max-retries=1 it pauses goal_gate.
+    // Operator raises the cap and resumes; propose now also fails
+    // (simulating abort because nothing more can be tried). Without the
+    // carve-out, the §3.4 check at propose's terminal arrival would
+    // retarget back to propose because the gate is still unsatisfied,
+    // looping until the raised cap exhausts. With the fix, propose's
+    // fail terminates via the standard halt path.
+    const yaml = `name: t
+steps:
+  propose:
+    type: llm
+    prompt: p
+    next: reeval
+  reeval:
+    type: llm
+    prompt: r
+    next: gate
+  gate:
+    type: llm
+    prompt: g
+    retry: propose
+    max-retries: 1
+    on: {success: exit}
+`;
+    const r = rig({ yaml });
+    let proposeAttempts = 0;
+    let gateAttempts = 0;
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "propose", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "propose", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        proposeAttempts++;
+        // First two attempts succeed (before pause). Third — the post-resume
+        // attempt — fails, simulating the propose-step's `abort` after the
+        // operator raised the cap.
+        return {
+          kind: "transition",
+          outcomeStatus: proposeAttempts >= 3 ? "fail" : "success",
+          tokens: 0,
+          costUsd: 0,
+        };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "reeval", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        outcomeStatus: "success",
+        tokens: 0,
+        costUsd: 0,
+      }),
+    });
+    r.dispatcher.register(r.workflowSha, "gate", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        gateAttempts++;
+        return { kind: "transition", outcomeStatus: "fail", tokens: 0, costUsd: 0 };
+      },
+    });
+
+    enqueue(r, "ng1", "start");
+    // First drive: gate fails twice (max-retries=1 → one retarget, then
+    // pause on the second failure). propose ran twice (once initially,
+    // once on the retarget).
+    await driveOnce(r, "ng1");
+    expect(r.store.getState("ng1")!.status).toBe("paused");
+    expect(gateAttempts).toBe(2);
+    expect(proposeAttempts).toBe(2);
+
+    // Operator raises the cap and resumes. The resume re-dispatches the
+    // paused node (gate) once with the new cap; gate fails again, the
+    // engine retargets to propose, propose fails, halt.
+    r.store.appendIntent("ng1", { type: "intent.goal_gate_adjusted", payload: { newLimit: 5 } });
+    r.store.appendIntent("ng1", { type: "intent.resume", payload: {} });
+    expect(wakePending(r.store).resumed).toContain("ng1");
+
+    await driveOnce(r, "ng1");
+
+    const state = r.store.getState("ng1")!;
+    expect(state.status).toBe("halted");
+
+    // Post-resume sequence (with the fix): gate re-runs once (re-dispatch
+    // on resume), retargets to propose under the raised cap, propose runs
+    // once and returns fail, fail lands at the terminal and halts.
+    // Without the fix, propose's fail would be intercepted by the §3.4
+    // terminal check (gate still unsatisfied) and re-routed back to
+    // propose, looping until the raised cap (5) exhausts — proposeAttempts
+    // would balloon to 6+ and gateAttempts would track the inner re-runs.
+    expect(gateAttempts).toBe(3);
+    expect(proposeAttempts).toBe(3);
+
+    const events = r.store.getEvents("ng1");
+    const haltEvent = events.find((e) => e.type === "fact.run_halted");
+    expect(haltEvent).toBeDefined();
+    // Halt reason is the standard non-gate-fail terminal landing — NOT
+    // goal_gate_unsatisfied.
+    expect((haltEvent?.payload as { reason: string }).reason).toBe("aborted_exit");
+
+    // Exactly two retargets total: one pre-pause (first gate fail), and
+    // one post-resume (raised-cap re-decision). No extra retargets fired
+    // from propose's own fail.
+    const retargets = events.filter((e) => e.type === "goal_gate.retarget");
+    expect(retargets).toHaveLength(2);
+
+    // Final propose completion routed to a terminal, not back to propose
+    // itself. (This is the assertion that would FAIL without the carve-out
+    // — the bug rewrote `nextNode` to propose, looping.)
+    const proposeCompletions = events.filter(
+      (e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "propose",
+    );
+    const lastPropose = proposeCompletions[proposeCompletions.length - 1];
+    expect((lastPropose?.payload as { outcomeStatus: string }).outcomeStatus).toBe("fail");
+    expect((lastPropose?.payload as { nextNode: string }).nextNode).toBe("__end__");
+    r.store.close();
+  });
+
+  test("non-gate fail with explicit `on: {fail: exit}` + prior failed gate → completes", async () => {
+    // Companion to the loop regression above. Workflows skill: "an explicit
+    // edge to the `exit` sink on failure (`on: {fail: exit}`) is a sanctioned
+    // landing — the run *completes*. Use it only when 'failed here is a fine
+    // end state'." The same carve-out that prevents the abort-loop also
+    // honors this documented escape hatch: before the fix, the §3.4 check
+    // at terminal arrival would silently override the explicit fail-edge
+    // and retarget back through the gate's retry_target.
+    const yaml = `name: t
+steps:
+  propose:
+    type: llm
+    prompt: p
+    on: {success: gate, fail: exit}
+  gate:
+    type: llm
+    prompt: g
+    retry: propose
+    max-retries: 1
+    on: {success: exit}
+`;
+    const r = rig({ yaml });
+    let proposeAttempts = 0;
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "propose", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "propose", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        proposeAttempts++;
+        // First call → success (drives the gate cycle). Second call (after
+        // the gate's retarget) → fail, taking the explicit `on: {fail: exit}`.
+        return {
+          kind: "transition",
+          outcomeStatus: proposeAttempts >= 2 ? "fail" : "success",
+          tokens: 0,
+          costUsd: 0,
+        };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "gate", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", outcomeStatus: "fail", tokens: 0, costUsd: 0 }),
+    });
+
+    enqueue(r, "ng2", "start");
+    await driveOnce(r, "ng2");
+
+    const state = r.store.getState("ng2")!;
+    // With the fix: propose's explicit fail edge to `exit` lands cleanly
+    // and the run completes. Without the fix, the §3.4 check at the
+    // `exit` terminal would override `nextNode` back to propose and loop
+    // until the gate's max-retries (=1) re-exhausts, pausing.
+    expect(state.status).toBe("completed");
+
+    const events = r.store.getEvents("ng2");
+    const lastPropose = events
+      .filter((e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "propose")
+      .pop();
+    expect((lastPropose?.payload as { outcomeStatus: string }).outcomeStatus).toBe("fail");
+    expect((lastPropose?.payload as { nextNode: string }).nextNode).toBe("exit");
+    r.store.close();
+  });
+});
+
 describe("executor — operator goal_gate_adjusted override", () => {
   test("intent.goal_gate_adjusted raises the gate cap above its max-retries", async () => {
     // Gate has max-retries: 1. After the first retarget it pauses with

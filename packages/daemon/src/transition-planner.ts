@@ -257,6 +257,19 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // The current-turn outcome is folded into a synthetic snapshot before
   // checking gates, so a final-stage gate that just completed can be
   // evaluated without waiting for the next turn's projection refresh.
+  //
+  // Carve-out: a *non-gate* node's own `outcome=fail` (abort, or any
+  // unrecovered failure) is the node's own decision to terminate the
+  // run — the §3.4 chain must not intercept it. Without this skip, an
+  // earlier gate's persisted `fail` in routing state would steal every
+  // downstream terminal: a propose-step abort after a paused/resumed
+  // gate would silently retarget the gate's `retry_target` (often the
+  // proposer itself), looping until the operator-raised cap exhausts.
+  // The intent at `agent/backend.ts:findAbortToolCall` is explicit —
+  // "an ordinary node with no fail-edge then halts (`aborted_exit`)";
+  // gate-driven retargeting is reserved for the gate node's *own* fail.
+  // Explicit `on: {fail: <target>}` routes win above this check via the
+  // edge selector and aren't subject to it either way.
   let goalGateRetargetTarget: string | undefined;
   let goalGateRetriesPatch: number | undefined;
   if (result.kind === "transition") {
@@ -274,7 +287,8 @@ export function planTransition(input: TransitionInput): TransitionPlan {
       if (completedNode.attrs.goal_gate === true && result.outcomeStatus != null) {
         synthOutcomes.set(currentNode, result.outcomeStatus);
       }
-      if (isTerminalNext) {
+      const nonGateFail = result.outcomeStatus === "fail" && completedNode.attrs.goal_gate !== true;
+      if (isTerminalNext && !nonGateFail) {
         // Read override from effectiveRouting (state.routing merged with
         // this turn's routingDelta) so intent.goal_gate_adjusted applied
         // in the same dispatch cycle is immediately visible.
