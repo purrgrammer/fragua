@@ -268,8 +268,13 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // The intent at `agent/backend.ts:findAbortToolCall` is explicit —
   // "an ordinary node with no fail-edge then halts (`aborted_exit`)";
   // gate-driven retargeting is reserved for the gate node's *own* fail.
-  // Explicit `on: {fail: <target>}` routes win above this check via the
-  // edge selector and aren't subject to it either way.
+  // The same carve-out also rescues an explicit `on: {fail: <target>}`
+  // route: the edge selector picked the target above, but without the
+  // skip the §3.4 check would rewrite `result.nextNode` back to the
+  // gate's `retry_target`, silently overriding the author's sanctioned
+  // fail-landing (SKILL: "an explicit edge to the `exit` sink on
+  // failure is a sanctioned landing — the run *completes*"). One
+  // condition, both cases.
   let goalGateRetargetTarget: string | undefined;
   let goalGateRetriesPatch: number | undefined;
   if (result.kind === "transition") {

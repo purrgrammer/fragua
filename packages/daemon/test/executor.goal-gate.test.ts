@@ -589,6 +589,124 @@ steps:
   });
 });
 
+// Pinning tests for the documented halt-vs-complete contract at SPEC §3 /
+// workflows-skill. The bug `eea93348` fixed broke both of these claims under
+// an unsatisfied gate; each test below quotes the doc line it pins so a grep
+// from SKILL.md or SPEC.md lands on the test that enforces it.
+describe("executor — SPEC §3 / SKILL halt-vs-complete pinning under prior-failed gate", () => {
+  // SPEC §3 / SKILL: "a node that fails with no fail route halts the run with
+  // `aborted_exit`". The carve-out at transition-planner §3.4 must preserve
+  // this regardless of routing state — including a previously-failed gate.
+  test("a node that fails with no fail route halts the run with `aborted_exit` (even under unsatisfied gate)", async () => {
+    const yaml = `name: t
+steps:
+  gate:
+    type: llm
+    prompt: g
+    retry: worker
+    max-retries: 1
+    on: {success: exit}
+  worker:
+    type: llm
+    prompt: w
+    next: gate
+`;
+    const r = rig({ yaml });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "worker", tokens: 0, costUsd: 0 }),
+    });
+    let workerAttempts = 0;
+    r.dispatcher.register(r.workflowSha, "worker", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        workerAttempts++;
+        // First pass succeeds (drives the gate to its fail). Second pass
+        // (post-retarget) fails — no fail-edge declared, must halt as
+        // `aborted_exit` even though the gate is still unsatisfied.
+        return {
+          kind: "transition",
+          outcomeStatus: workerAttempts >= 2 ? "fail" : "success",
+          tokens: 0,
+          costUsd: 0,
+        };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "gate", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", outcomeStatus: "fail", tokens: 0, costUsd: 0 }),
+    });
+
+    enqueue(r, "pin1", "start");
+    await driveOnce(r, "pin1");
+
+    const state = r.store.getState("pin1")!;
+    expect(state.status).toBe("halted");
+    const halt = r.store.getEvents("pin1").find((e) => e.type === "fact.run_halted");
+    expect((halt?.payload as { reason: string }).reason).toBe("aborted_exit");
+    r.store.close();
+  });
+
+  // SKILL: "an explicit edge to the `exit` sink on failure (`on: {fail: exit}`)
+  // is a sanctioned landing — the run *completes*." This must hold under an
+  // unsatisfied gate too; otherwise the documented escape hatch is a lie.
+  test("an explicit edge to the `exit` sink on failure is a sanctioned landing — the run completes (even under unsatisfied gate)", async () => {
+    const yaml = `name: t
+steps:
+  gate:
+    type: llm
+    prompt: g
+    retry: worker
+    max-retries: 1
+    on: {success: exit}
+  worker:
+    type: llm
+    prompt: w
+    on: {success: gate, fail: exit}
+`;
+    const r = rig({ yaml });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "worker", tokens: 0, costUsd: 0 }),
+    });
+    let workerAttempts = 0;
+    r.dispatcher.register(r.workflowSha, "worker", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        workerAttempts++;
+        return {
+          kind: "transition",
+          outcomeStatus: workerAttempts >= 2 ? "fail" : "success",
+          tokens: 0,
+          costUsd: 0,
+        };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "gate", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", outcomeStatus: "fail", tokens: 0, costUsd: 0 }),
+    });
+
+    enqueue(r, "pin2", "start");
+    await driveOnce(r, "pin2");
+
+    expect(r.store.getState("pin2")!.status).toBe("completed");
+    r.store.close();
+  });
+});
+
 describe("executor — operator goal_gate_adjusted override", () => {
   test("intent.goal_gate_adjusted raises the gate cap above its max-retries", async () => {
     // Gate has max-retries: 1. After the first retarget it pauses with
