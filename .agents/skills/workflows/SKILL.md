@@ -179,7 +179,7 @@ review:
     Judge `git diff HEAD`. Reply `APPROVE: <one line>`, or `abort` with `REJECT: <one line>`.
 ```
 
-On REJECT, the engine retargets to `implement`; after `max-retries` retargets the run pauses `goal_gate`. Operators raise the live cap via `intent.goal_gate_adjusted`. The retarget chain (gate `retry_target` → graph `retry_target`) is documented in SPEC §3.4.
+On REJECT, the engine retargets to `implement`; after `max-retries` retargets the run pauses `goal_gate`. Operators raise the live cap via `intent.goal_gate_adjusted`. The retarget destination is the failing gate's own `retry_target` (SPEC §3.4) — single-step, no graph-level or fallback retarget.
 
 ---
 
@@ -334,7 +334,7 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 - **E030** — `${{ inputs.x }}` references an undeclared input.
 - **E031** — a `retry:` gate has no `max-retries:` (the per-gate retarget cap is required).
 - **E032** — a step declares no success successor — add `next:` / `on: {success: …}` / `routes:` (`next: exit` to finish). There is no linear fall-through.
-- **W007** — `goal_gate` (`retry:`) with no retarget chain.
+- **W007** — `goal_gate` (`retry:`) with no `retry_target`.
 - **W013** — unrecognised attribute (typo).
 - **W014** — `retry-policy:` / `default-retry-policy:` names an unknown preset (typo). Falls back to `none` at runtime. Valid presets: `none` / `standard` / `aggressive` / `linear` / `patient`.
 

@@ -169,7 +169,7 @@ After a node completes, the executor picks the next edge using a two-case algori
 
 **Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 
-Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal — a node that fails with no fail route halts the run with `aborted_exit`. A fail-edge whose target is the `exit` sink is the one graceful exception: it is a sanctioned failure landing the author opted into, so the run reaches the terminal and emits `fact.run_completed` rather than halting. Per-node `retry_target` / `fallback_retry_target` serve goal-gate retargeting (§3.7), not per-node failure.
+Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal — a node that fails with no fail route halts the run with `aborted_exit`. A fail-edge whose target is the `exit` sink is the one graceful exception: it is a sanctioned failure landing the author opted into, so the run reaches the terminal and emits `fact.run_completed` rather than halting. Per-node `retry_target` serves goal-gate retargeting (§3.7), not per-node failure.
 
 **Outcome shape.** Every handler returns an `Outcome` (defined in `packages/core/src/types/outcome.ts`):
 
@@ -201,13 +201,9 @@ Per-node override attrs (`retry-initial-delay-ms`, `retry-backoff-factor`, `retr
 
 Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcome — the reducer treats the outcome as terminal regardless of status, so retry presets don't accidentally hammer a permanent failure.
 
-**Goal gates.** A node with `goal_gate=true` must reach `success` before the run can exit. When the run reaches the `exit` node and would emit `fact.run_completed`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to:
+**Goal gates.** A node with `goal_gate=true` must reach `success` before the run can exit. When the run reaches the `exit` node and would emit `fact.run_completed`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to the failing gate's `retry_target`. If that's unset, or once the failing gate's `max_retries` retargets are exhausted, the run pauses `fact.run_paused{reason:"goal_gate"}` (operator-resumable; raise the cap via `intent.goal_gate_adjusted` → `routing.max_goal_gate_retries_override`). Single-step retarget — there is no graph-level retarget and no fallback chain.
 
-1. The failing gate's `retry_target` (then `fallback_retry_target`).
-2. The graph-level `retry_target` (then `fallback_retry_target`).
-3. Halt — `fact.run_paused{reason:"goal_gate"}` after the failing gate's own `max_retries` retargets are exhausted.
-
-The gate's `max_retries` bounds the chain so a perpetually-failing `retry_target` can't loop forever; it is required on every step authored via `retry:` (E031). Operators raise the live cap via `intent.goal_gate_adjusted` → `routing.max_goal_gate_retries_override`.
+The gate's `max_retries` bounds the loop so a perpetually-failing `retry_target` can't burn the run forever; it is required on every step authored via `retry:` (E031).
 
 ### 3.8 Substitution
 

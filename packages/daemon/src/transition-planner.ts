@@ -249,10 +249,10 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   //   1. Record this node's outcome under `goal_gates.<id>` whenever it
   //      has goal_gate=true, so terminal-arrival can read the fold.
   //   2. When the resolved transition leads to a terminal, check every
-  //      visited gate: if any unsatisfied, redirect to the §3.4 chain
-  //      (gate.retry_target → gate.fallback_retry_target → graph.retry_target
-  //      → graph.fallback_retry_target) bounded by max_goal_gate_retries.
-  //   3. Counter exhaust → halt with `goal_gate_unsatisfied`.
+  //      visited gate: if any unsatisfied, redirect to the failed gate's
+  //      `retry_target` (bounded by max_goal_gate_retries).
+  //   3. Counter exhaust or unset `retry_target` → halt with
+  //      `goal_gate_unsatisfied`.
   //
   // The current-turn outcome is folded into a synthetic snapshot before
   // checking gates, so a final-stage gate that just completed can be

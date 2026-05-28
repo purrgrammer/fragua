@@ -54,9 +54,6 @@ export interface NodeAttrs {
   /** Goal-gate retarget destination. Set by the parser when authoring
    * uses `retry: <step>`. References a step id. */
   retry_target?: string;
-  /** Secondary goal-gate retarget, tried when `retry_target` is unset
-   * (SPEC §3.4 chain). References a step id. */
-  fallback_retry_target?: string;
   /** Tool-step config (type:tool). Shell command executed by the tool
    * handler. */
   tool_command?: string;

@@ -13,7 +13,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E006 | Cycle with no reachable exit — the run can't terminate. |
 | E008 | `tool` step has an empty `run:` (the executor has nothing to spawn). |
 | E009 | `human` step has no outgoing edges and no `routes:` — the operator would have no choices. |
-| E011 | `retry:` (goal-gate `retry_target`) or `fallback_retry_target` references a step that doesn't exist. |
+| E011 | `retry:` (goal-gate `retry_target`) references a step that doesn't exist. |
 | E012 | The start node has incoming edges. |
 | E013 | The exit sink has outgoing edges. |
 | E017 | A routing step (declares `routes:`) has an outgoing edge keyed by `outcome` — routing steps discriminate by `route` only. |
@@ -39,7 +39,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W001 | Orphan step (no in-edges, not start). Usually a copy/paste leftover. |
 | W002 | Step unreachable from start. Dead code. |
 | W005 | Duplicate edge. |
-| W007 | A goal-gate (`retry:`) with no retarget at any level — failure can only halt. |
+| W007 | A goal-gate (`retry:`) with no `retry_target` — failure can only halt. |
 | W009 | An `llm` step with empty `prompt` and empty label — the call has nothing to do. |
 | W013 | Unrecognised attribute on a step / edge / graph. The parser passes unknown keys through silently; this catches typos (`goalgate: true`, `max_seconds:`). Canonical list: `packages/core/src/types/graph.ts`. |
 | W014 | A step's `retry-policy:` or the graph-level `default-retry-policy:` names an unknown preset. Expected one of `none` / `standard` / `aggressive` / `linear` / `patient`. Unknown values silently fall back to `none` at runtime. |

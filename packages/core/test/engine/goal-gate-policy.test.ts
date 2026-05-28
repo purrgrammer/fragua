@@ -4,10 +4,10 @@
 //   1. All gates SUCCESS → exit
 //   2. Unvisited gate → vacuous (exit)
 //   3. PARTIAL_SUCCESS satisfies a gate per spec ("SUCCESS or PARTIAL_SUCCESS")
-//   4. Retarget chain precedence: gate.retry_target → gate.fallback_retry_target
-//      → graph.retry_target → graph.fallback_retry_target
+//   4. Retarget destination: the failing gate's own `retry_target`
+//      (single-step — no graph-level or fallback retarget)
 //   5. Counter bounded by the failing gate's own max_retries
-//   6. Missing retarget at every level → halt
+//   6. Missing retry_target → halt
 
 import { describe, expect, test } from "bun:test";
 import {

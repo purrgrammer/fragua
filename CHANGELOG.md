@@ -8,7 +8,8 @@ guarantee.
 
 ## [0.3.1] — 2026-05-28
 
-Bugfix release. One executor fix + the pinning tests that should have caught it.
+Bugfix release. One executor fix + the pinning tests that should have caught it
++ the drift on the same surface, subtracted.
 
 ### Fixed
 
@@ -36,6 +37,21 @@ Bugfix release. One executor fix + the pinning tests that should have caught it.
   sink on failure is a sanctioned landing — the run *completes*"*, both
   asserted under a prior-failed-gate state. A grep from SKILL.md or SPEC.md
   now lands on the test that pins each claim.
+
+### Removed
+
+- **`fallback_retry_target` (node attr) and graph-level `retry_target` /
+  `fallback_retry_target` attrs.** SPEC §3.7 + SKILL §182 + two source
+  comments described a 4-step goal-gate retarget chain
+  (`gate.retry_target → gate.fallback_retry_target → graph.retry_target →
+  graph.fallback_retry_target`), but the runtime only walked step 1; the other
+  three fields were accepted by the validator (E011) and silently ignored.
+  Surfaced during the drift sweep for the bug above. Pre-1.0 subtraction: the
+  unwired fields are removed from the schema, the validator's E011 + W007
+  wording, the SPEC, the SKILL, and the policy/planner header comments. The
+  goal-gate retarget is now single-step — the failing gate's own `retry_target`
+  — and the docs say so. A workflow that previously declared an unwired field
+  will now get W013 (unrecognised attribute).
 
 ## [0.3.0] — 2026-05-28
 

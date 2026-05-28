@@ -30,7 +30,6 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "allowed_tools",
   "denied_tools",
   "retry_target",
-  "fallback_retry_target",
   "tool_command",
   "max_cost_usd",
   "max_tokens",
@@ -327,33 +326,19 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E011: retry_target / fallback_retry_target reference an undefined node.
-  // Fires for both node-level (attractor §3.4 step 1/2) and graph-level
-  // (steps 3/4) targets. Catches typos that would silently halt the run
-  // with `goal_gate_unsatisfied` at the worst possible moment.
+  // E011: a node's `retry_target` references an undefined node. Catches a
+  // typo that would otherwise silently halt the run with
+  // `goal_gate_unsatisfied` at the worst possible moment.
   for (const n of nodes) {
-    for (const key of ["retry_target", "fallback_retry_target"] as const) {
-      const target = n.attrs[key];
-      if (typeof target !== "string" || target === "") continue;
-      if (!nodeIds.has(target)) {
-        diags.push({
-          severity: "error",
-          code: "E011",
-          message: `node "${n.id}" ${key}="${target}" references undefined node`,
-          nodeId: n.id,
-          ...(n.loc !== undefined ? { loc: n.loc } : {}),
-        });
-      }
-    }
-  }
-  for (const key of ["retry_target", "fallback_retry_target"] as const) {
-    const target = (graph.attrs as Record<string, unknown>)[key];
+    const target = n.attrs.retry_target;
     if (typeof target !== "string" || target === "") continue;
     if (!nodeIds.has(target)) {
       diags.push({
         severity: "error",
         code: "E011",
-        message: `graph ${key}="${target}" references undefined node`,
+        message: `node "${n.id}" retry_target="${target}" references undefined node`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
     }
   }

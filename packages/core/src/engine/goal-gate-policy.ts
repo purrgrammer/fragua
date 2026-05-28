@@ -2,14 +2,10 @@
 //
 // When traversal reaches a terminal (exit), every node visited with
 // `goal_gate=true` must have settled in SUCCESS or PARTIAL_SUCCESS for the
-// run to exit cleanly. If any gate is unsatisfied, route to its retarget:
-//
-//   1. failed gate's `retry_target`
-//   2. failed gate's `fallback_retry_target`
-//   3. graph's `retry_target`
-//   4. graph's `fallback_retry_target`
-//
-// If no target resolves, the run halts with `goal_gate_unsatisfied`.
+// run to exit cleanly. If any gate is unsatisfied, route to the failed
+// gate's `retry_target`; if that's unset, the run halts with
+// `goal_gate_unsatisfied`. Single-step — there is no graph-level or
+// fallback retarget.
 //
 // Fragua caps each retarget loop with the failing gate's own `max_retries`
 // so a misconfigured retry target can't burn the run forever. The cap is
