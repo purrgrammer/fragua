@@ -355,9 +355,14 @@ cli
 
 cli
   .command("db <action>", "DB maintenance: vacuum | gc-blobs | backup | migrate")
-  .option("--to <path>", "`backup` destination path")
+  .option(
+    "--to <value>",
+    "`backup`: destination path. `migrate`: target schema version (default CURRENT; lower = downgrade)",
+  )
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
   .option("--dry-run", "`migrate` only: print the plan without applying")
+  .option("--allow-data-loss", "`migrate` only: permit a downgrade step that restores shape but not data")
+  .option("--no-backup", "`migrate` only: skip the pre-migrate backup (ephemeral / CI stores)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
   .action(async (action: string, options: Record<string, unknown>) => {
@@ -384,6 +389,8 @@ cli
       ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
       ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
       ...(options["dryRun"] === true ? { dryRun: true } : {}),
+      ...(options["allowDataLoss"] === true ? { allowDataLoss: true } : {}),
+      ...(options["backup"] === false ? { noBackup: true } : {}),
     });
     process.exit(code);
   });

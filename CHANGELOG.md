@@ -10,6 +10,16 @@ guarantee.
 
 ### Added
 
+- **Reversible schema migrations** — each schema-migration step now carries an
+  optional `down` inverse, and `fragua db migrate` takes `--to <version>` to
+  walk the schema *down* as well as up. A downgrade backs up the store first
+  (`<store dir>/backups/pre-migrate-*.db`; opt out with `--no-backup`), refuses
+  to cross a step that declares no `down` or that would lose data (override with
+  `--allow-data-loss`), and refuses to run while a daemon is live against the
+  store. `--dry-run` prints the ordered plan with each step's reversibility
+  class. The automatic open path is unchanged — a store newer than the binary
+  still refuses to open, and nothing downgrades by surprise.
+
 - **`fragua runs explain <id>`** — new read-plane verb that synthesises a run's
   event log into a narrative: path taken (nodes + edges), per-step outcome and
   cost, snapshots captured, diff-vs-base summary (files / insertions /
