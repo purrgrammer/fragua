@@ -370,6 +370,14 @@ cli
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
+    // `--to` is a path for `backup` but a version number for `migrate`; cac
+    // coerces a bare integer to a number, so accept both and stringify.
+    const pickTo = (): string | undefined => {
+      const v = options["to"];
+      if (typeof v === "string") return v;
+      if (typeof v === "number") return String(v);
+      return undefined;
+    };
     if (action !== "vacuum" && action !== "gc-blobs" && action !== "backup" && action !== "migrate") {
       console.error(chalk.red(`unknown db action: ${action}`));
       console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup | migrate"));
@@ -386,7 +394,7 @@ cli
       action,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-      ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
+      ...(pickTo() !== undefined ? { to: pickTo()! } : {}),
       ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
       ...(options["dryRun"] === true ? { dryRun: true } : {}),
       ...(options["allowDataLoss"] === true ? { allowDataLoss: true } : {}),
