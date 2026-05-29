@@ -20,9 +20,8 @@
 // rows, which exist to drive token refresh, are never the right shape here.
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { AuthStorage } from "@fragua/agent";
+import { AuthStorage, getFraguaHome } from "@fragua/agent";
 import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
 import { findEnvKeys, getEnvApiKey, getProviders } from "@mariozechner/pi-ai";
 
@@ -201,7 +200,7 @@ export function seedCredsFromEnv(store: IProviderCredentialStore): string[] {
 export async function seedCredsFromGlobalStore(
   target: SqliteStore,
   targetPath: string,
-  globalPath: string = resolve(homedir(), ".fragua/fragua.db"),
+  globalPath: string = resolve(getFraguaHome(), "fragua.db"),
 ): Promise<string[]> {
   // No global store (CI), or ci was pointed AT the global store (--db) so the
   // creds are already present — nothing to copy.
