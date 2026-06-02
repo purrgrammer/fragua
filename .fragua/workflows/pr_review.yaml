@@ -76,11 +76,13 @@ steps:
     max-cost: 0.40
     next: verdict
     prompt: |
-      Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). One focused pass over correctness and any obvious security or clarity issue — it's a small change, keep it to a single pass.
+      Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). One focused pass over correctness and any obvious security issue — it's a small change, keep it to a single pass.
 
-      WRITE the review to `pr-review.md` (cwd-relative) with the `write` tool — do NOT print it to the thread (the `verdict` step reads the file; re-emitting the body burns the node's cost twice). Use the SAME severity-section shape as the full tier (one format for the `verdict` classifier to read). The file's content, headings exactly: `# Code Review` / `## Critical` / `## High` / `## Medium` / `## Low`.
+      THE BAR: record a finding ONLY if it has a concrete, present consequence (wrong output, data loss, a crash, a security hole) and a specific fix. DROP formatting, naming, comment/doc wording, "consider …" suggestions, speculation about code that doesn't exist, and anything whose worst case is "might confuse a reader". When unsure, drop it — a clean small PR should come back `All clear`.
 
-      Per finding under its severity heading: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence. Drop a severity heading only if it has no findings; if everything is clean, replace the severity sections with `## All clear` (one sentence: what was reviewed, what you couldn't see).
+      WRITE the review to `pr-review.md` (cwd-relative) with the `write` tool — do NOT print it to the thread (the `verdict` step reads the file; re-emitting the body burns the node's cost twice). Use the SAME severity-section shape as the full tier (one format for the `verdict` classifier to read). Headings exactly: `# Code Review` / `## Critical` / `## High` / `## Medium` (there is no Low tier).
+
+      Per finding under its severity heading: **path:line** — one-line claim. `Why:` one sentence (the consequence). `Fix:` one sentence. Drop a severity heading only if it has no findings; if nothing clears the bar, replace the severity sections with `## All clear` (one sentence: what was reviewed, what you couldn't see).
 
       End with `## Next steps` — ≤2 concrete actions, or `No follow-up required.`
 
@@ -97,20 +99,37 @@ steps:
     prompt: |
       Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
 
-        correctness — logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
+        correctness — logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, real edge cases. Cross-check call sites where it matters.
         security (iff trust boundaries / auth / input parsing / crypto / secrets touched) — injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF; check surrounding sanitisation before flagging.
         performance (iff hot paths / data layer / loops / large payloads touched) — complexity surprises (O(n²) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads; confidence ∝ evidence; no cold-path constant-factor nits.
-        architecture (iff cross-package coupling / public surface / abstraction boundaries change) — coupling crossing boundaries, leaky abstractions, SRP violations, drift-inviting duplication, misleading naming, public surface exposing internals, half-finished work, scope creep.
+        architecture (iff cross-package coupling / public surface / abstraction boundaries change) — ONLY a concrete, present structural break with a real maintenance cost: a dependency cycle, a leaked internal an external consumer can now misuse, duplication that will demonstrably drift. NOT naming, NOT "consider extracting/grouping", NOT export- or API-stability opinions, NOT speculative "a future author might".
 
-      Then WRITE one ranked review to `pr-review.md` (cwd-relative, `write` tool) — do NOT print it to the thread; the `verdict` step reads the file, and re-emitting the body burns cost twice. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
+      THE BAR — apply to every candidate before you write it down. Report a finding ONLY if it has a concrete, PRESENT consequence (wrong output, data loss, a crash, a security hole, or a maintenance cost that will bite a near-term change) AND a specific fix. If the worst case is "a reader might be confused", "a future change might…", or it's a preference, DROP it. When unsure, drop it. A short, high-signal review beats a padded one — a clean PR SHOULD come back `All clear`; never manufacture findings to look thorough.
+
+      DO NOT FLAG (drop silently — not even as Medium):
+        - formatting / whitespace / import order (the formatter owns these);
+        - naming, comment wording, doc phrasing, or "this is only documented in a test/comment";
+        - "consider …" / "you might want to …" suggestions with no concrete bug;
+        - speculative future-author traps or hypotheticals about code that doesn't exist yet;
+        - intra-workspace export / API-stability worries (this is a pre-1.0 monorepo);
+        - defending against inputs that cannot occur given the call sites;
+        - test-coverage suggestions for paths that can't be triggered;
+        - restating that something is already handled or documented.
+
+      Then WRITE one ranked review to `pr-review.md` (cwd-relative, `write` tool) — do NOT print it to the thread; the `verdict` step reads the file, and re-emitting the body burns cost twice. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium`.
 
       ## Scope: one paragraph naming the touched packages/areas and the change type; name which lenses you applied and why.
 
-      Per finding: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence or short snippet. `Lens:` which lens flagged it.
+      Severities (there is NO Low tier — anything below Medium is noise; drop it):
+        Critical — data loss / corruption / a security hole / a crash on a normal path, shipping now.
+        High     — a correctness or security bug that WILL trigger in real use.
+        Medium   — a real, contained issue worth fixing before merge.
 
-      Rules: NO INVENTION. DROP subjective low findings with no evidence. A concern flagged under two lenses is ONE entry at the higher severity, noted `(cross-flagged)`.
+      Per finding: **path:line** — one-line claim. `Why:` one sentence (the concrete consequence). `Fix:` one sentence or short snippet. `Lens:` which lens flagged it.
 
-      If everything is clean, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence).
+      Rules: NO INVENTION. A concern flagged under two lenses is ONE entry at the higher severity, noted `(cross-flagged)`.
+
+      If nothing clears the bar, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence).
 
       End the file with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
 
@@ -127,9 +146,10 @@ steps:
     prompt: |
       Read `pr-review.md` (the review under gate). Judge on its own merits.
         1. Every finding's path:line is verifiable — spot-check 2-3 by reading the cited path.
-        2. Severity calibration sane (no low for misleading claims, no critical for nitpicks; cross-flagged ≥ high).
-        3. Schema followed — Scope present; severities ordered or replaced by All clear; Next steps present.
-      All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>`.
+        2. Severity calibration sane (no Critical for a contained issue; cross-flagged ≥ High; and no nitpick dressed as High to force a `changes` verdict).
+        3. THE BAR held — NO recorded finding is a formatting/naming/doc-wording nit, a "consider …" preference, a speculative future-author or hypothetical concern, an intra-workspace API-stability opinion, or a guard against an input that can't occur. Those must be DROPPED, not recorded at any severity.
+        4. Schema followed — Scope present; Critical/High/Medium ordered (no Low tier) or replaced by All clear; Next steps present.
+      All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>` (e.g. "nitpick recorded as Medium", "over-severe High", "unverifiable claim").
 
   verdict:                             # classify the written review → route to one of two posts.
     # A cheap isolated classifier (no thread): reads pr-review.md fresh and decides the GitHub review
@@ -143,7 +163,7 @@ steps:
     prompt: |
       Read `pr-review.md`. Classify it by its WORST finding and call `route` once (state the deciding severity in one line first):
         changes  — there is any Critical or High finding
-        comment  — everything else (only Medium/Low findings, an `All clear`, or an `LGTM`)
+        comment  — everything else (only Medium findings, an `All clear`, or an `LGTM`)
       You MUST end by calling the `route` tool exactly once. Do not reply with prose instead of routing.
     routes:
       comment: {to: post_comment, label: "Comment"}
