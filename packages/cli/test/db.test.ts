@@ -186,4 +186,14 @@ describe("fragua db", () => {
     const cwd = makeStore();
     expect(await run({ action: "migrate", cwd, to: "abc", noBackup: true })).toBe(1);
   });
+
+  test("migrate --to a numeric-but-non-integer literal is refused", async () => {
+    // `Number.isInteger` coerces all of these to whole numbers; the literal
+    // guard must reject them so a typo doesn't silently retarget the migrate.
+    const cwd = makeStore();
+    for (const to of ["2.0", "0x2", "2e0", " 2 ", "1.5"]) {
+      expect(await run({ action: "migrate", cwd, to, noBackup: true })).toBe(1);
+    }
+    expect(schedulesCols(cwd)).toContain("title"); // never mutated
+  });
 });

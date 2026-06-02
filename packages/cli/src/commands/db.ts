@@ -128,11 +128,14 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
     return 1;
   }
 
-  const target = opts.to !== undefined ? Number(opts.to) : CURRENT_SCHEMA_VERSION;
-  if (!Number.isInteger(target)) {
+  // Validate the literal before `Number`: `Number.isInteger` accepts "2.0",
+  // "0x2", "2e0", "  2 " (all coerce to whole numbers), silently migrating to a
+  // version the operator didn't type. Require a plain integer string.
+  if (opts.to !== undefined && !/^-?\d+$/.test(opts.to)) {
     console.error(chalk.red(`db migrate: --to expects an integer schema version, got "${opts.to}"`));
     return 1;
   }
+  const target = opts.to !== undefined ? Number(opts.to) : CURRENT_SCHEMA_VERSION;
 
   // planMigration carries the canonical out-of-band messages (target past
   // CURRENT, below the floor, store newer than this binary). Surface them as-is.
