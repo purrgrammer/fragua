@@ -20,6 +20,18 @@ guarantee.
   class. The automatic open path is unchanged — a store newer than the binary
   still refuses to open, and nothing downgrades by surprise.
 
+## [0.4.0] — 2026-06-02
+
+### Added
+
+- **`fragua ci --allow-env <name>`** — exempt a secret-named env var from the CI
+  perimeter env-strip so a workflow's deterministic `tool` steps can use it (e.g.
+  `GH_TOKEN` for `gh pr diff/comment`). Exempts the STRIP only: the value is still
+  captured as a scrub needle, so it stays redacted from the exported bundle
+  (allow ≠ declassify). Provider credentials (`ANTHROPIC_API_KEY`, `*_API_KEY`, …)
+  are refused — they must never reach a tool subprocess. Repeat or comma-separate
+  to allow several. Lets the `pr-review` / `crowdin-review` GitHub Actions
+  authenticate `gh` without the disk-login workaround.
 - **`fragua runs explain <id>`** — new read-plane verb that synthesises a run's
   event log into a narrative: path taken (nodes + edges), per-step outcome and
   cost, snapshots captured, diff-vs-base summary (files / insertions /
@@ -161,5 +173,6 @@ back down as a portable `.fragua` bundle for local inspection and aggregation.
 - Nightly property-test suite: raised the per-test timeout to fit PBT scaling and
   deflaked timer-fragile tests (#4).
 
+[0.4.0]: https://github.com/purrgrammer/fragua/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/purrgrammer/fragua/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/purrgrammer/fragua/releases/tag/v0.1.0

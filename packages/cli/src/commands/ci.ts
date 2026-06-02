@@ -38,6 +38,7 @@ import {
   ciEnvDenyPredicate,
   seedCredsFromEnv,
   seedCredsFromGlobalStore,
+  unsafeAllowEnvNames,
 } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
 import { resolveProject } from "../project.ts";
@@ -65,6 +66,11 @@ export interface CiCommandOptions {
   /** Provider/model override (else config defaults, else env-autodetect). */
   provider?: string;
   model?: string;
+  /** Env var names exempted from the CI env-strip so a workflow's deterministic
+   * tool steps can reach them (e.g. GH_TOKEN for `gh`). Exempts the STRIP only —
+   * the value is still captured as a scrub needle and redacted from the exported
+   * bundle. Provider creds are refused (see {@link unsafeAllowEnvNames}). */
+  allowEnv?: string[];
   /** Base directory used to resolve the workflow + project identity. Default cwd. */
   cwd?: string;
 }
@@ -116,6 +122,14 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   }
   const { dotPath, name, scope } = resolved;
 
+  const allowEnv = new Set(opts.allowEnv ?? []);
+  const unsafe = unsafeAllowEnvNames(allowEnv);
+  if (unsafe.length > 0) {
+    console.error(chalk.red(`ci: --allow-env refuses provider credential(s): ${unsafe.join(", ")}`));
+    console.error(chalk.dim("  provider keys are read directly by fragua and must never reach a tool subprocess."));
+    return CLI_EXIT.usage;
+  }
+
   let source: string;
   try {
     source = await readFile(dotPath, "utf8");
@@ -140,8 +154,8 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
   const provisioner = new WorktreeProvisioner({
-    envDenyNames: ciEnvDenyNames(),
-    envDenyPredicate: ciEnvDenyPredicate(),
+    envDenyNames: ciEnvDenyNames(process.env, allowEnv),
+    envDenyPredicate: ciEnvDenyPredicate(allowEnv),
   });
   let runId: string | undefined;
   // Captured at seed time so mid-run rotation can't desync the registry.
