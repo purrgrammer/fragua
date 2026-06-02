@@ -1,9 +1,9 @@
 // Bundle export/import (docs/proposals/archive/bundles.md): the deterministic tar
-// round-trips through the system `tar`; `exportRunBundle` carries a FILTERED event
-// log (fact.* + intent.* + cost.recorded only - observability dropped) + transcript
-// + blobs and NEVER the seeded credential; import re-DERIVES `run_state` by
-// replaying the log (no projection in the bundle), so an imported run reconstructs
-// faithfully and is inert (cwd null).
+// round-trips through the system `tar`; `exportRunBundle` carries a DENYLIST-FILTERED
+// event log (streaming deltas dropped; llm.start slimmed; read-plane anchors
+// retained) + transcript + blobs and NEVER the seeded credential; import re-DERIVES
+// `run_state` by replaying the log (no projection in the bundle), so an imported
+// run reconstructs faithfully and is inert (cwd null).
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -388,8 +388,8 @@ describe("importRunBundle", () => {
 });
 
 describe("exportRunBundle - observability event filtering", () => {
-  /** Seed a terminal run and append several observability events of different
-   * families, plus a cost.recorded event, before exporting. */
+  /** Seed a terminal run and append observability events covering all denylist
+   * families plus several retained types, before exporting. */
   async function seedWithObservability(store: ReturnType<typeof freshStore>): Promise<string> {
     const runId = await seedTerminalRun(store);
     store.appendObservabilityEvents(runId, [
@@ -399,7 +399,7 @@ describe("exportRunBundle - observability event filtering", () => {
       { type: "summary.text_delta", payload: { delta: "summarised thread content" } },
       { type: "control.pause_requested", payload: { reason: "human" } },
       { type: "steering.message_sent", payload: { text: "steer text" } },
-      { type: "run.title_generated", payload: { title: "My secret run" } },
+      { type: "run.title_generated", payload: { title: "My run" } },
       { type: "budget.warning", payload: { threshold: 0.8 } },
       { type: "cost.recorded", payload: { inputTokens: 100, outputTokens: 50, costUsd: 0.001 } },
     ]);
@@ -418,21 +418,38 @@ describe("exportRunBundle - observability event filtering", () => {
       .map((line) => (JSON.parse(line) as { type: string }).type);
   }
 
-  test("(a) content-bearing observability families are absent from the exported events.jsonl", async () => {
+  test("(a) denylist streaming-delta types are absent from the exported events.jsonl", async () => {
     const store = freshStore();
     const runId = await seedWithObservability(store);
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store.close();
 
     const types = extractEventTypes(bytes, runId);
-    const droppedPrefixes = ["llm.", "agent.", "tool.execution", "summary.", "control.", "steering.", "budget."];
-    const droppedLiterals = ["run.title_generated"];
-    for (const prefix of droppedPrefixes) {
-      const leaked = types.filter((t) => t.startsWith(prefix));
-      expect(leaked).toEqual([]);
-    }
-    for (const lit of droppedLiterals) {
-      expect(types).not.toContain(lit);
+    // Streaming deltas are dropped (the denylist).
+    const droppedExact = [
+      "llm.text_delta",
+      "llm.text_end",
+      "llm.thinking_delta",
+      "llm.thinking_end",
+      "llm.toolcall_delta",
+      "llm.toolcall_end",
+      "agent.start",
+      "agent.end",
+      "agent.message_start",
+      "agent.message_end",
+      "agent.message_update",
+      "agent.turn_start",
+      "agent.turn_end",
+      "tool.execution_start",
+      "tool.execution_update",
+      "tool.execution_end",
+      "tool.output_chunk",
+      "summary.started",
+      "summary.text_delta",
+      "snapshot.captured",
+    ];
+    for (const t of droppedExact) {
+      expect(types, `expected ${t} to be absent`).not.toContain(t);
     }
   });
 
@@ -471,6 +488,19 @@ describe("exportRunBundle - observability event filtering", () => {
     expect(types).toContain("intent.run_enqueued");
   });
 
+  test("(e) tier-3 structural events are retained (control, steering, budget, run.title_generated)", async () => {
+    const store = freshStore();
+    const runId = await seedWithObservability(store);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    store.close();
+
+    const types = extractEventTypes(bytes, runId);
+    expect(types).toContain("control.pause_requested");
+    expect(types).toContain("steering.message_sent");
+    expect(types).toContain("run.title_generated");
+    expect(types).toContain("budget.warning");
+  });
+
   test("stored events are not mutated - getEvents still returns all families", async () => {
     const store = freshStore();
     const runId = await seedWithObservability(store);
@@ -498,6 +528,285 @@ describe("exportRunBundle - observability event filtering", () => {
 
     const types = extractEventTypes(bytes, runId);
     expect(types.length).toBe(exportedCount);
+  });
+});
+
+describe("exportRunBundle - retained read-plane anchors", () => {
+  function extractEvents(bytes: Uint8Array, runId: string): Array<{ type: string; payload: Record<string, unknown> }> {
+    const entries = readTar(bytes);
+    const evEntry = entries.find((e) => e.name === `runs/${runId}/events.jsonl`);
+    if (evEntry == null) return [];
+    return new TextDecoder()
+      .decode(evEntry.data)
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
+  }
+
+  async function seedLlmRun(store: ReturnType<typeof freshStore>): Promise<string> {
+    const sha = await seedWorkflow(store, "a".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id",
+      projectName: "proj",
+      workflowName: "wf",
+      workflowScope: "local",
+      initialRouting: { input: "seed" },
+    });
+    let v = store.getState(runId)!.version;
+    v = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: sha,
+            contractVersion: 1,
+            startNode: "llm-node",
+            baseGitSha: "base",
+            baseGitRef: "main",
+          },
+        },
+      ],
+      v,
+    ).newVersion;
+    store.appendObservabilityEvents(runId, [
+      {
+        type: "llm.start",
+        payload: {
+          nodeId: "llm-node",
+          provider: "anthropic",
+          model: "claude-3-5-sonnet",
+          thread_id: "t1",
+          summary: "low",
+          prompt: "this is the secret prompt text",
+          system_prompt: "also secret system prompt",
+          budget: { cumulative_cost_usd: 0, cumulative_tokens: 0 },
+          context_files: [{ path: "AGENTS.md", sha256: "abc", bytes: 100, truncated: false, status: "ok" }],
+          skills: [],
+        },
+      },
+      {
+        type: "llm.done",
+        payload: { nodeId: "llm-node", stop_reason: "end_turn" },
+      },
+      {
+        type: "cost.recorded",
+        payload: { nodeId: "llm-node", input_tokens: 200, output_tokens: 80, total_tokens: 280, cost_usd: 0.0042 },
+      },
+      {
+        type: "edge.selected",
+        payload: { from: "llm-node", to: "done", rule: "default", iteration: 0 },
+      },
+      {
+        type: "run.title_generated",
+        payload: { title: "Fix the bug" },
+      },
+    ]);
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "llm-node" } }], v);
+    return runId;
+  }
+
+  test("retains llm.start (slimmed) so getStepAggregates produces a per-step cost row", async () => {
+    const src = freshStore();
+    const runId = await seedLlmRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const aggs = dst.getStepAggregates(runId);
+    expect(aggs.length).toBeGreaterThan(0);
+    const row = aggs.find((a) => a.nodeId === "llm-node");
+    expect(row).not.toBeUndefined();
+    expect(row!.costUsd).toBeCloseTo(0.0042, 6);
+    dst.close();
+  });
+
+  test("retained llm.start has no prompt field (no free-text leak)", async () => {
+    const src = freshStore();
+    const runId = await seedLlmRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const events = extractEvents(bytes, runId);
+    const llmStart = events.find((e) => e.type === "llm.start");
+    expect(llmStart).not.toBeUndefined();
+    expect(llmStart!.payload).not.toHaveProperty("prompt");
+    expect(llmStart!.payload["model"]).toBe("claude-3-5-sonnet");
+    expect(llmStart!.payload["provider"]).toBe("anthropic");
+    expect(llmStart!.payload["nodeId"]).toBe("llm-node");
+    expect(llmStart!.payload["thread_id"]).toBe("t1");
+    expect(llmStart!.payload["context_files"]).toBeDefined();
+    expect(llmStart!.payload["budget"]).toBeDefined();
+  });
+
+  test("retains llm.done so eventsToSteps can derive stop_reason and end timing", async () => {
+    const src = freshStore();
+    const runId = await seedLlmRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const events = extractEvents(bytes, runId);
+    const llmDone = events.find((e) => e.type === "llm.done");
+    expect(llmDone).not.toBeUndefined();
+    expect(llmDone!.payload["stop_reason"]).toBe("end_turn");
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const aggs = dst.getStepAggregates(runId);
+    const row = aggs.find((a) => a.nodeId === "llm-node");
+    expect(row!.stopReason).toBe("end_turn");
+    dst.close();
+  });
+
+  test("retains edge.selected triples for the executed routing path", async () => {
+    const src = freshStore();
+    const runId = await seedLlmRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const events = extractEvents(bytes, runId);
+    const edgeSel = events.find((e) => e.type === "edge.selected");
+    expect(edgeSel).not.toBeUndefined();
+    expect(edgeSel!.payload["from"]).toBe("llm-node");
+    expect(edgeSel!.payload["to"]).toBe("done");
+    expect(edgeSel!.payload["iteration"]).toBe(0);
+  });
+
+  test("retains run.title_generated so pickTitle resolves on import", async () => {
+    const src = freshStore();
+    const runId = await seedLlmRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const events = extractEvents(bytes, runId);
+    const titleEv = events.find((e) => e.type === "run.title_generated");
+    expect(titleEv).not.toBeUndefined();
+    expect(titleEv!.payload["title"]).toBe("Fix the bug");
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const dstEvents = dst.getEvents(runId);
+    const titleInStore = dstEvents.find((e) => e.type === "run.title_generated");
+    expect(titleInStore).not.toBeUndefined();
+    dst.close();
+  });
+
+  test("run.title_generated title is scrubbed when it contains a credential", async () => {
+    const SECRET = "sk-ant-test-secretABCDEFGHIJ0123456789";
+    const src = freshStore();
+    src.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: SECRET }),
+    });
+    const sha = await seedWorkflow(src, "a".repeat(64));
+    const runId = newRunId();
+    src.enqueueRun({
+      runId,
+      workflowSha: sha,
+      cwd: "/home/dev",
+      initialRouting: { input: "x" },
+    });
+    let v = src.getState(runId)!.version;
+    v = src.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: sha, contractVersion: 1, startNode: "n", baseGitSha: "x", baseGitRef: "main" },
+        },
+      ],
+      v,
+    ).newVersion;
+    src.appendObservabilityEvents(runId, [{ type: "run.title_generated", payload: { title: `Key is ${SECRET}` } }]);
+    src.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n" } }], v);
+
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    expect(Buffer.from(bytes).includes(SECRET)).toBe(false);
+    const events = extractEvents(bytes, runId);
+    const titleEv = events.find((e) => e.type === "run.title_generated");
+    expect(typeof titleEv!.payload["title"]).toBe("string");
+    expect(titleEv!.payload["title"]).not.toContain(SECRET);
+    expect(titleEv!.payload["title"]).toContain("[REDACTED");
+  });
+
+  test("streaming-delta denylist types stay absent (regression)", async () => {
+    const src = freshStore();
+    const runId = await seedLlmRun(src);
+    src.appendObservabilityEvents(runId, [
+      { type: "llm.text_delta", payload: { delta: "x" } },
+      { type: "llm.text_end", payload: {} },
+      { type: "llm.thinking_delta", payload: { delta: "y" } },
+      { type: "llm.thinking_end", payload: {} },
+      { type: "llm.toolcall_delta", payload: { delta: "z" } },
+      { type: "llm.toolcall_end", payload: {} },
+      { type: "agent.start", payload: {} },
+      { type: "agent.end", payload: {} },
+      { type: "agent.message_start", payload: {} },
+      { type: "agent.message_end", payload: {} },
+      { type: "agent.message_update", payload: {} },
+      { type: "agent.turn_start", payload: {} },
+      { type: "agent.turn_end", payload: {} },
+      { type: "tool.execution_start", payload: {} },
+      { type: "tool.execution_update", payload: {} },
+      { type: "tool.execution_end", payload: {} },
+      { type: "tool.output_chunk", payload: {} },
+      { type: "summary.started", payload: {} },
+      { type: "summary.text_delta", payload: { delta: "s" } },
+      { type: "snapshot.captured", payload: {} },
+    ]);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const events = extractEvents(bytes, runId);
+    const types = events.map((e) => e.type);
+    const denylist = [
+      "llm.text_delta",
+      "llm.text_end",
+      "llm.thinking_delta",
+      "llm.thinking_end",
+      "llm.toolcall_delta",
+      "llm.toolcall_end",
+      "agent.start",
+      "agent.end",
+      "agent.message_start",
+      "agent.message_end",
+      "agent.message_update",
+      "agent.turn_start",
+      "agent.turn_end",
+      "tool.execution_start",
+      "tool.execution_update",
+      "tool.execution_end",
+      "tool.output_chunk",
+      "summary.started",
+      "summary.text_delta",
+      "snapshot.captured",
+    ];
+    for (const t of denylist) {
+      expect(types, `expected ${t} to be absent`).not.toContain(t);
+    }
+  });
+
+  test("does not bump BUNDLE_VERSION - bundle is backward-compatible", async () => {
+    const src = freshStore();
+    const runId = await seedLlmRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const entries = readTar(bytes);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(entries.find((e) => e.name === "manifest.json")!.data),
+    ) as BundleManifest;
+    expect(manifest.bundleVersion).toBe(BUNDLE_VERSION);
   });
 });
 

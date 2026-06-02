@@ -221,6 +221,18 @@ export function scrubEventPayload(
     }
   }
 
+  // Rule 1c: scrub title for run.title_generated (LLM-generated free text).
+  if (type === "run.title_generated") {
+    const val = src["title"];
+    if (typeof val === "string") {
+      const scrubbed = scrubText(val, registry, opts);
+      if (scrubbed !== val) {
+        if (out == null) out = { ...src };
+        out["title"] = scrubbed;
+      }
+    }
+  }
+
   // Rule 2: deep-scrub routing string values for the genesis event.
   if (type === "intent.run_enqueued") {
     const routing = src["routing"];

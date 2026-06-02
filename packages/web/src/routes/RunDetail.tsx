@@ -425,6 +425,7 @@ const DetailHeader = memo(function DetailHeader({
                 runStatus={detail.runStatus}
                 hitlOptionsCount={detail.hitlOptions?.length ?? 0}
                 compact
+                imported={detail.imported}
               />
             </div>
           )}

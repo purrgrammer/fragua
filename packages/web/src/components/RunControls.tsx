@@ -31,6 +31,10 @@ export interface RunControlsProps {
    * with a tooltip-style title, sized to match the status badge so the
    * controls can sit inline alongside the badge in a header row. */
   compact?: boolean;
+  /** When true the run was brought in via `fragua import` and has no local
+   * cwd. The daemon will never dispatch it, so operate controls are
+   * replaced with a read-only "imported (inert)" badge. */
+  imported?: boolean;
 }
 
 async function refreshAfterControl(qc: ReturnType<typeof useQueryClient>, runId: string): Promise<void> {
@@ -44,6 +48,7 @@ export function RunControls({
   runStatus,
   hitlOptionsCount,
   compact = false,
+  imported = false,
 }: RunControlsProps): JSX.Element | null {
   const qc = useQueryClient();
 
@@ -73,6 +78,17 @@ export function RunControls({
   });
 
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+
+  if (imported) {
+    return (
+      <div
+        className="inline-flex items-center rounded-sw-card border border-sw-border px-1.5 py-0.5 text-sw-xs text-sw-muted"
+        data-testid="run-controls-imported"
+      >
+        imported (inert)
+      </div>
+    );
+  }
 
   const canPause = status === "running";
   const isOperatorHitlPause = runStatus === "paused_human" && (hitlOptionsCount ?? 0) === 0;

@@ -1408,15 +1408,31 @@ export class SqliteStore implements IEventStore {
   }
 
   /** Export `runId` as a portable `.fragua` bundle (bundles.md): a
-   * manifest-first tar carrying a FILTERED EVENT LOG, transcript, artifact
-   * rows, the content-addressed workflow, and the referenced blob bytes. There
-   * is NO `run_state` — it is re-derived on import by replaying the log.
+   * manifest-first tar carrying a DENYLIST-FILTERED EVENT LOG, transcript,
+   * artifact rows, the content-addressed workflow, and the referenced blob
+   * bytes. There is NO `run_state` — it is re-derived on import by replaying
+   * the log.
    *
-   * Event filtering (allowlist): only `fact.*`, `intent.*`, and `cost.recorded`
-   * are written into the tar. All other event families (`agent.*`, `llm.*`,
-   * `tool.*`, `summary.*`, `control.*`, `steering.*`, `run.title_generated`,
-   * `budget.*`, `snapshot.*`, etc.) are content-bearing observability and are
-   * dropped. Stored events are never mutated — filtering is export-only.
+   * Event filtering (denylist): streaming-delta and scaffolding events that are
+   * losslessly reconstructable from the `messages` transcript are dropped.
+   * Everything else is retained so read-plane projections (step aggregates,
+   * edge overlays, title) work on imported runs. Dropped types:
+   *   llm.text_delta, llm.text_end, llm.thinking_delta, llm.thinking_end,
+   *   llm.toolcall_delta, llm.toolcall_end,
+   *   agent.start, agent.end, agent.message_start, agent.message_end,
+   *   agent.message_update, agent.turn_start, agent.turn_end,
+   *   tool.execution_start, tool.execution_update, tool.execution_end,
+   *   tool.output_chunk, summary.started, summary.text_delta,
+   *   snapshot.captured (snapshot refs not in bundle; imported cwd=null).
+   * Retained: llm.start (slimmed — prompt stripped, identity fields kept),
+   *   llm.done, llm.error, edge.selected, run.title_generated, cost.recorded,
+   *   budget.warn, budget.stop, steering.*, control.*, fact.*, intent.*.
+   *
+   * `llm.start` is exported as a slimmed payload (prompt stripped; see
+   * `slimLlmStartForExport`) so it anchors getStepAggregates cost windows
+   * and eventsToSteps LLM-step detection without leaking prompt text.
+   *
+   * Stored events are never mutated — filtering and slimming are export-only.
    * Message content and event payload free-text fields are scrubbed at export
    * time (literal credentials + cwd path + known-format patterns). To build the
    * literal needle set this reads `provider_credentials` payloads into the
@@ -1439,9 +1455,7 @@ export class SqliteStore implements IEventStore {
     if (wf == null) throw new Error(`exportRunBundle: workflow ${run.workflowSha} missing for run ${runId}`);
 
     const allEvents = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
-    const events = allEvents.filter(
-      (e) => e.type.startsWith("fact.") || e.type.startsWith("intent.") || e.type === "cost.recorded",
-    );
+    const events = allEvents.filter((e) => !EXPORT_DENYLIST.has(e.type));
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
     const { registry, literalValues } = buildExportRegistry({
       providerCredentials: this.listProviderCredentials(),
@@ -1579,7 +1593,10 @@ export class SqliteStore implements IEventStore {
         name: runEventsPath(runId),
         data: encodeJsonl(
           events.map((e) => {
-            const scrubbedPayload = scrubEventPayload(e.type, e.payload, registry, scrubOpts);
+            // Slim llm.start before scrub so prompt is stripped first, then
+            // the retained identity fields still go through the registry.
+            const exportPayloadPre = e.type === "llm.start" ? slimLlmStartForExport(e.payload) : e.payload;
+            const scrubbedPayload = scrubEventPayload(e.type, exportPayloadPre, registry, scrubOpts);
             // Rewrite $fragua_blob shas in the genesis routing so the exported
             // ref points at the scrubbed blob's new sha. scrubEventPayload leaves
             // ref objects (non-string values) untouched — only the sha needs
@@ -2051,5 +2068,70 @@ function truncationMarker(original: unknown, originalBytes: number): Record<stri
     if (typeof src["thread_id"] === "string") out["thread_id"] = src["thread_id"];
     if (typeof src["summary"] === "string") out["summary"] = src["summary"];
   }
+  return out;
+}
+
+/** Event types dropped from bundle exports — streaming deltas and scaffolding
+ * that are losslessly reconstructable from the `messages` transcript.
+ * Everything NOT in this set is retained so read-plane projections work on
+ * imported runs. See docs/proposals/secret-scrubbing.md §4 for the rationale.
+ *
+ * Tier-3 decision: retain llm.error, budget.warn, budget.stop, steering.*,
+ * control.*, and legacy run.* lifecycle echoes (small structural payloads
+ * useful for forensics, already covered by scrubEventPayload for free-text
+ * fields). Drop snapshot.captured (snapshot refs aren’t in the bundle and
+ * imported cwd=null means no diff target anyway). */
+const EXPORT_DENYLIST = new Set<string>([
+  "llm.text_delta",
+  "llm.text_end",
+  "llm.thinking_delta",
+  "llm.thinking_end",
+  "llm.toolcall_delta",
+  "llm.toolcall_end",
+  "agent.start",
+  "agent.end",
+  "agent.message_start",
+  "agent.message_end",
+  "agent.message_update",
+  "agent.turn_start",
+  "agent.turn_end",
+  "tool.execution_start",
+  "tool.execution_update",
+  "tool.execution_end",
+  "tool.output_chunk",
+  "summary.started",
+  "summary.text_delta",
+  "snapshot.captured",
+]);
+
+/** Slim an `llm.start` payload for bundle export: keep identity and manifest
+ * fields that back read-plane projections (getStepAggregates, eventsToSteps),
+ * strip the free-text `prompt` which is already in the `messages` transcript
+ * and is a secret-leak surface.
+ *
+ * Mirrors the identity-field set of `truncationMarker` and extends it with
+ * the small manifests carried by llm.start. `system_prompt` on llm.start is
+ * already a `{ sha256, bytes }` digest (not full text) and passes through. */
+function slimLlmStartForExport(payload: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) return out;
+  const src = payload as Record<string, unknown>;
+  if (typeof src["nodeId"] === "string") out["nodeId"] = src["nodeId"];
+  if (typeof src["provider"] === "string") out["provider"] = src["provider"];
+  if (typeof src["model"] === "string") out["model"] = src["model"];
+  if (typeof src["thread_id"] === "string") out["thread_id"] = src["thread_id"];
+  if (typeof src["summary"] === "string") out["summary"] = src["summary"];
+  if (typeof src["iteration"] === "number") {
+    out["iteration"] = src["iteration"];
+  } else if (src["iteration"] != null && typeof src["iteration"] === "object") {
+    const it = src["iteration"] as Record<string, unknown>;
+    if (typeof it["n"] === "number" && typeof it["max"] === "number") {
+      out["iteration"] = { n: it["n"], max: it["max"] };
+    }
+  }
+  if (src["context_files"] !== undefined) out["context_files"] = src["context_files"];
+  if (src["skills"] !== undefined) out["skills"] = src["skills"];
+  if (src["budget"] !== undefined) out["budget"] = src["budget"];
+  if (src["system_prompt"] !== undefined) out["system_prompt"] = src["system_prompt"];
   return out;
 }

@@ -44,9 +44,12 @@ function renderControls(
   mocks: Record<string, () => Response | Promise<Response>> = {},
   status: ControlStatus = "running",
   runStatus: ControlRunStatus = "running",
+  imported = false,
 ) {
   const { restore, calls } = installFetchMock(mocks);
-  const result = renderWithClient(<RunControls runId="run-99" status={status} runStatus={runStatus} />);
+  const result = renderWithClient(
+    <RunControls runId="run-99" status={status} runStatus={runStatus} imported={imported} />,
+  );
   return { ...result, restore, calls };
 }
 
@@ -203,6 +206,33 @@ describe("RunControls — cancel dialog", () => {
 
       const confirm = await findInBody("run-controls-cancel-confirm");
       expect(confirm).not.toBeNull();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("RunControls — imported (inert) runs", () => {
+  afterEach(() => cleanup());
+
+  test("renders no pause/resume/cancel buttons when imported=true on a paused run", () => {
+    const { queryByTestId, getByTestId, restore } = renderControls({}, "paused", "paused", true);
+    try {
+      getByTestId("run-controls-imported");
+      expect(queryByTestId("run-controls-pause")).toBeNull();
+      expect(queryByTestId("run-controls-resume")).toBeNull();
+      expect(queryByTestId("run-controls-cancel")).toBeNull();
+      expect(queryByTestId("run-controls-cancel-confirm")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  test("still renders operate controls when imported is false (existing behavior unchanged)", () => {
+    const { queryByTestId, restore } = renderControls({}, "paused", "paused_auto", false);
+    try {
+      expect(queryByTestId("run-controls-imported")).toBeNull();
+      expect(queryByTestId("run-controls-resume")).not.toBeNull();
     } finally {
       restore();
     }

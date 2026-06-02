@@ -166,6 +166,7 @@ export function runStateToDetail(
 
   if (state.baseGitRef != null && state.baseGitRef.length > 0) detail.baseGitRef = state.baseGitRef;
   if (state.baseGitSha != null && state.baseGitSha.length > 0) detail.baseGitSha = state.baseGitSha;
+  if (state.cwd == null) detail.imported = true;
 
   if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {
