@@ -193,6 +193,18 @@ export function migrateTo(db: Database, target: number, opts: { allowDataLoss?: 
   }
 
   db.transaction(() => {
+    // `current` was read (and the plan validated) before the transaction. Under
+    // WAL the body runs on a read snapshot, but another writer (e.g. a second
+    // `db migrate` — the CLI liveness gate only guards against a daemon) could
+    // have advanced `schema_version` in the gap. Re-read inside the transaction
+    // and refuse if it moved, so the walk never applies against a state
+    // `planMigration` didn't validate.
+    const live = readVersion(db);
+    if (live !== current) {
+      throw new Error(
+        `schema_version moved under the migrate (planned from v${current}, store now v${live}) — re-run`,
+      );
+    }
     if (plan.direction === "up") {
       if (target === CURRENT_SCHEMA_VERSION) db.exec(SCHEMA_SQL);
       for (const s of plan.steps) {
