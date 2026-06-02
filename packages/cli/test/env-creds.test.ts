@@ -10,7 +10,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthStorage } from "@fragua/agent";
 import { SqliteStore } from "@fragua/store";
-import { captureCiEnvSecrets, ciEnvDenyNames, seedCredsFromEnv, seedCredsFromGlobalStore } from "../src/env-creds.ts";
+import {
+  captureCiEnvSecrets,
+  ciEnvDenyNames,
+  ciEnvDenyPredicate,
+  seedCredsFromEnv,
+  seedCredsFromGlobalStore,
+  unsafeAllowEnvNames,
+} from "../src/env-creds.ts";
 
 // Every env var the seed could read, scrubbed before each test so the
 // operator's own shell creds can't leak into assertions.
@@ -390,6 +397,54 @@ describe("ciEnvDenyNames", () => {
     const denySet = ciEnvDenyNames(env);
     expect(denySet.has("my_service_token")).toBe(true);
     expect(denySet.has("my_api_key")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --allow-env: exempt named secrets from the STRIP only (they still reach the
+// tool subprocess), while remaining scrub needles (redacted from the bundle).
+// ---------------------------------------------------------------------------
+
+describe("--allow-env (ciEnvDeny* allow-set)", () => {
+  test("(allow-name) an allowed var is dropped from the deny name set", () => {
+    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678", OTHER_TOKEN: "other-value-12345678" };
+    const denySet = ciEnvDenyNames(env, new Set(["GH_TOKEN"]));
+    expect(denySet.has("GH_TOKEN")).toBe(false);
+    expect(denySet.has("OTHER_TOKEN")).toBe(true);
+  });
+
+  test("(allow-predicate) the spawn-time predicate stops denying an allowed var", () => {
+    const deny = ciEnvDenyPredicate(new Set(["GH_TOKEN"]));
+    expect(deny("GH_TOKEN")).toBe(false);
+    expect(deny("OTHER_TOKEN")).toBe(true);
+  });
+
+  test("(allow-still-scrubbed) an allowed var is STILL captured as a scrub needle", () => {
+    // capture is deliberately allow-agnostic: --allow-env affects the strip, not
+    // the needle set, so an allowed secret's value is still redacted from the bundle.
+    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678" };
+    const names = captureCiEnvSecrets(env).map((c) => c.name);
+    expect(names).toContain("GH_TOKEN");
+  });
+
+  test("(allow-default) no allow-set behaves exactly as before", () => {
+    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678" };
+    expect(ciEnvDenyNames(env).has("GH_TOKEN")).toBe(true);
+    expect(ciEnvDenyPredicate()("GH_TOKEN")).toBe(true);
+  });
+});
+
+describe("unsafeAllowEnvNames (provider-cred rail)", () => {
+  test("provider credential names are refused", () => {
+    expect(unsafeAllowEnvNames(["ANTHROPIC_API_KEY"])).toContain("ANTHROPIC_API_KEY");
+  });
+
+  test("generic secret names (GH_TOKEN) are allowed through", () => {
+    expect(unsafeAllowEnvNames(["GH_TOKEN", "GITHUB_TOKEN"])).toEqual([]);
+  });
+
+  test("mixed input returns only the provider creds", () => {
+    expect(unsafeAllowEnvNames(["GH_TOKEN", "ANTHROPIC_API_KEY"])).toEqual(["ANTHROPIC_API_KEY"]);
   });
 });
 

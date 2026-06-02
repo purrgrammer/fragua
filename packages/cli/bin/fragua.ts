@@ -490,6 +490,10 @@ cli
   .option("--json", "Emit the event log as JSONL instead of the human render")
   .option("--provider <id>", "LLM provider override (else config defaults, else env-autodetect)")
   .option("--model <id>", "LLM model override")
+  .option(
+    "--allow-env <name>",
+    "Exempt an env var from the CI secret-strip so deterministic tool steps can use it (e.g. GH_TOKEN for gh). The value is still scrubbed from the exported bundle. Repeat or comma-separate. Provider credentials are refused.",
+  )
   .option("--cwd <path>", "Base directory for the workflow + project identity")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
@@ -503,6 +507,13 @@ cli
       console.error((err as Error).message);
       process.exit(2);
     }
+    // cac kebab→camelCases `--allow-env` to `allowEnv` and collects repeats into
+    // an array; accept comma-separated values within each too.
+    const allowEnvRaw = options["allowEnv"] as string | string[] | undefined;
+    const allowEnv = (Array.isArray(allowEnvRaw) ? allowEnvRaw : allowEnvRaw != null ? [allowEnvRaw] : [])
+      .flatMap((s) => String(s).split(","))
+      .map((s) => s.trim())
+      .filter(Boolean);
     const code = await ciCommand({
       workflow,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
@@ -512,6 +523,7 @@ cli
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
       ...(options["json"] === true ? { json: true } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(allowEnv.length > 0 ? { allowEnv } : {}),
     });
     process.exit(code);
   });

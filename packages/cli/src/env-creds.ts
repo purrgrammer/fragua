@@ -124,12 +124,26 @@ export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array
  * empty-value vars ARE included — the strip is name-based, unconditional,
  * because an attacker could later assign a value to a secret-named var.
  *
+ * `allow` names (from `fragua ci --allow-env`) are exempted from the strip so a
+ * workflow's deterministic tool steps can reach them (e.g. `gh` needs GH_TOKEN).
+ * This affects ONLY the strip — an allowed var is NOT removed from the tool
+ * subprocess env, but it is STILL captured as a scrub needle (`captureCiEnvSecrets`
+ * is deliberately unaffected), so its value is redacted from the exported bundle.
+ * Allow ≠ declassify. Provider-credential names must NEVER be allowed through —
+ * guard with {@link unsafeAllowEnvNames} at the call site before passing them here.
+ *
  * @param env - defaults to `process.env`; injectable for tests.
+ * @param allow - names kept OUT of the deny set so they reach tool steps; still
+ *   scrubbed from the exported bundle. Default: none.
  */
-export function ciEnvDenyNames(env: NodeJS.ProcessEnv = process.env): Set<string> {
+export function ciEnvDenyNames(
+  env: NodeJS.ProcessEnv = process.env,
+  allow: ReadonlySet<string> = NO_ALLOW,
+): Set<string> {
   const providerVars = knownProviderVarNames();
   const result = new Set<string>();
   for (const name of Object.keys(env)) {
+    if (allow.has(name)) continue;
     if (isSecretEnvName(name, providerVars)) result.add(name);
   }
   return result;
@@ -145,10 +159,51 @@ export function ciEnvDenyNames(env: NodeJS.ProcessEnv = process.env): Set<string
  * applied at SPAWN TIME against the live env, catching any secret-named var
  * set AFTER the Set was built. The provider-var set is memoised in the closure
  * so the predicate is cheap to call on every spawn.
+ *
+ * @param allow - names kept OUT of the strip so they reach tool steps; still
+ *   scrubbed from the exported bundle (allow ≠ declassify). Default: none. See
+ *   {@link ciEnvDenyNames} — provider creds must never be allowed through.
  */
-export function ciEnvDenyPredicate(): (name: string) => boolean {
+export function ciEnvDenyPredicate(allow: ReadonlySet<string> = NO_ALLOW): (name: string) => boolean {
   const providerVars = knownProviderVarNames();
-  return (name: string) => isSecretEnvName(name, providerVars);
+  return (name: string) => !allow.has(name) && isSecretEnvName(name, providerVars);
+}
+
+/** Shared empty allow-set so the default path allocates nothing. */
+const NO_ALLOW: ReadonlySet<string> = new Set();
+
+/**
+ * Validate a `--allow-env` request: return the names that must NOT be exempted
+ * from the CI env-strip. A provider-credential var (e.g. `ANTHROPIC_API_KEY`,
+ * `ANTHROPIC_OAUTH_TOKEN`) must never reach a tool subprocess — fragua reads it
+ * directly for the provider, and a public/team-readable bundle is an
+ * exfiltration target. Generic `*_TOKEN` / `*_KEY` secrets (GH_TOKEN, …) ARE
+ * allowed through — that's the flag's purpose. The caller refuses the run when
+ * this returns a non-empty list.
+ */
+/**
+ * Provider-credential env names refused regardless of whether pi-ai's provider
+ * registry is loaded. `knownProviderVarNames()` is registration-gated — empty
+ * early in `fragua ci` and in unit tests — so the rail can't rely on it alone.
+ * These are the LLM-provider creds fragua reads directly; they must never reach
+ * a tool subprocess. (`_API_KEY` covers the shape virtually every provider key
+ * follows; the explicit names cover non-`_API_KEY` creds like the OAuth token.)
+ */
+const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]);
+
+export function unsafeAllowEnvNames(allow: Iterable<string>): string[] {
+  const providerVars = knownProviderVarNames();
+  const bad: string[] = [];
+  for (const name of allow) {
+    const upper = name.toUpperCase();
+    // dynamic registry (prod) ∪ static critical set ∪ the `*_API_KEY` shape. The
+    // legitimate allow case is CI platform tokens (GH_TOKEN, …) which end in
+    // _TOKEN, never _API_KEY, so they pass.
+    if (providerVars.has(name) || ALWAYS_PROVIDER_CRED.has(upper) || upper.endsWith("_API_KEY")) {
+      bad.push(name);
+    }
+  }
+  return bad;
 }
 
 /**
