@@ -156,13 +156,32 @@ fragua gc --snapshots [--older-than 30d] [--dry-run]
 fragua db vacuum                         # reclaim free pages
 fragua db gc-blobs [--limit N]           # delete orphaned blob rows
 fragua db backup --to <path>             # online backup to a file
-fragua db migrate [--dry-run]            # explicit, consent-driven schema migration
+fragua db migrate [--to <version>] [--dry-run] [--allow-data-loss] [--no-backup]
 ```
 
-`db migrate` is the manual upgrade path: store-client verbs open *without*
-migrating and, on a version mismatch, point here. `--dry-run` prints the plan
-(`vN → vM`). The harness/daemon auto-migrate under their lock; migrations are
-transactional + version-gated, so a concurrent migrate is safe.
+`db migrate` is the manual schema-version path: store-client verbs open
+*without* migrating and, on a version mismatch, point here. Direction is
+inferred from `--to <version>` vs the store's current version:
+
+- **omitted / `--to CURRENT`** — forward to the current version (today's
+  behaviour).
+- **`--to <lower>`** — **downgrade**: walks each step's `down` inverse in
+  descending order, then pins the target. A downgrade must be run by the
+  *newer* binary — the one that defines the `down` steps — after which you
+  switch back to the older binary, which then opens the store cleanly. A step
+  with no `down` refuses the walk (naming it); a step that loses data needs
+  `--allow-data-loss`.
+- **`--to <higher>`** — forward to that version (may stop short of CURRENT).
+
+`--dry-run` prints the ordered plan with each step's reversibility class
+(`full` / `lossy` / `irreversible`) and applies nothing. Every operator-invoked
+migrate serializes a pre-migrate backup beside the store
+(`<store dir>/backups/pre-migrate-v{from}-to-v{to}-<ts>.db`) first; `--no-backup`
+opts out for ephemeral / CI stores. A migrate refuses if a harness is live
+against the store (its `daemon_lock` heartbeat is fresh) — stop it first.
+
+The harness/daemon auto-migrate forward under their lock; that automatic path
+never downgrades — only this explicit, backed-up command does.
 
 ---
 

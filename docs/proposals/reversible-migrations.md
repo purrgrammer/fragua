@@ -1,9 +1,9 @@
 ---
 title: Reversible schema migrations — `{ up, down }` steps + explicit `fragua db migrate --to <version>`
 summary: "Give every schema-migration step an optional `down` inverse and add an operator-only `fragua db migrate --to <version>` that walks DOWN as well as up. Today SCHEMA_MIGRATIONS is `Record<targetVersion, up>` and `migrate()` is walk-forward only — a store ahead of the binary is flatly refused, so reversing a bump means hand-rolled sqlite3. The load-bearing constraint: a downgrade is run by the *newer* binary (the only one that knows how to undo its own steps), then you switch back to the older one. Strictly additive to the forward path; downgrade is never automatic, always backed up first, gated on reversibility + daemon-liveness, and orthogonal to the EVENT_CONTRACT_VERSION resume gate."
-status: proposed
-maturity: designed
-last-reviewed: 2026-05-28
+status: implemented
+maturity: shipped
+last-reviewed: 2026-05-29
 ---
 
 # Reversible schema migrations
@@ -193,16 +193,25 @@ harder, separate question and stays out of scope.)
      discipline).
   3. Existing forward-migrate tests stay green (shape change is mechanical).
 
-## 8. Open questions
+## 8. Open questions — resolved at implementation
 
-- **Forward partial `--to`** (stop below `CURRENT`) — included for symmetry and
-  near-free; confirm it's wanted, or restrict `--to` to downgrade-only.
-- **Backup retention.** Reuse `~/.fragua/backups/`; pruning old `pre-migrate-*`
-  dumps is out of scope (the dir already accretes `pre-delete-*`).
-- **`v2`'s `down` correctness.** The rename inverse is trivial, but it must run
-  against a store where no later step depends on the new name — true today
-  (only v3 exists above it, and v3's down runs first in the walk). Re-check when
-  a v4 lands.
+- **Forward partial `--to`** — **kept.** `--to` infers direction from target vs
+  current; a forward target below CURRENT is allowed. One caveat surfaced in the
+  code: `schema.sql` only ever encodes the CURRENT shape, so the full forward
+  walk re-runs it but a *partial* forward (`target < CURRENT`) does **not** —
+  it relies on the `up`-step deltas alone, which therefore must be
+  self-contained (create their own additive objects, not lean on `schema.sql`).
+  Moot on `main` (CURRENT=2, no intermediate target exists) but load-bearing
+  once v3+ lands.
+- **Backup scope** — **all operator-invoked migrates** back up first (forward
+  and down), `--no-backup` to opt out. The backup lands beside the store
+  (`<store dir>/backups/`), not a central `~/.fragua/backups/`, so a `--db`
+  project store backs up next to itself. Retention/pruning still out of scope.
+- **`v2`'s `down` correctness.** The rename inverse is trivial; re-check the
+  ordering assumption when a v4 lands.
+
+The v3 `outputs`-table step (and its `down`) lands with the structured-outputs
+branch; the engine here ships independently on `main`.
 
 ## Related
 

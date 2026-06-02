@@ -22,7 +22,17 @@ export {
 export type { MetricsSnapshot } from "./metrics.ts";
 export { Metrics } from "./metrics.ts";
 export {
+  type Migration,
+  type MigrationPlan,
+  type MigrationPlanStep,
+  migrateTo,
+  migrationRegistry,
+  planMigration,
+} from "./migrations.ts";
+export {
+  applyPragmas,
   CURRENT_SCHEMA_VERSION,
+  DAEMON_LOCK_TTL_MS,
   EVENT_CONTRACT_VERSION,
   MIN_COMPATIBLE_CONTRACT_VERSION,
   MIN_COMPATIBLE_SCHEMA_VERSION,
