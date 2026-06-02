@@ -46,7 +46,7 @@ jobs:
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.3.1
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.4.0
 
       # `fragua ci` strips secret-named env (anything ending _TOKEN / _KEY / …) from
       # tool subprocesses, which removes GH_TOKEN from the `gh pr diff/view/review`
