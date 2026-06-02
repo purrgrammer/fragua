@@ -67,7 +67,6 @@ export function RunControls({
     mutationFn: (reason?: string) => cancelRun(runId, reason),
     onSuccess: () => {
       toast.success("Run cancelled");
-      setCancelDialogOpen(false);
       return refreshAfterControl(qc, runId);
     },
     onError: (err) => toastError(err),
@@ -158,8 +157,6 @@ export function RunControls({
         <CancelRunDialog
           open={cancelDialogOpen}
           onOpenChange={setCancelDialogOpen}
-          isPending={cancelM.isPending}
-          error={cancelM.error instanceof Error ? cancelM.error : null}
           onConfirm={(reason) => cancelM.mutate(reason)}
         />
       )}

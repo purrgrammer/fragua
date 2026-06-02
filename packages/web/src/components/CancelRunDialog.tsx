@@ -14,19 +14,18 @@ import { Button } from "./ui/button.tsx";
 export interface CancelRunDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  isPending: boolean;
-  error?: Error | null;
   onConfirm: (reason: string | undefined) => void;
   /** When false the reason textarea is hidden (e.g. paused-notice cancel path
    * where no reason field exists). Defaults to true. */
   showReason?: boolean;
 }
 
+// Confirming closes the dialog immediately (Radix `AlertDialogAction`) and fires
+// the mutation; success/failure is reported by the caller's toast. We don't keep
+// the dialog open to show a pending state — a cancel is a quick fire-and-forget.
 export function CancelRunDialog({
   open,
   onOpenChange,
-  isPending,
-  error,
   onConfirm,
   showReason = true,
 }: CancelRunDialogProps): JSX.Element {
@@ -35,6 +34,10 @@ export function CancelRunDialog({
   function handleConfirm(): void {
     const trimmed = reason.trim();
     onConfirm(trimmed.length > 0 ? trimmed : undefined);
+    // Reset explicitly: the success path closes the dialog by flipping the
+    // parent's `open` prop, which does NOT fire `onOpenChange`, so the dismiss
+    // reset below wouldn't run and the reason would leak into the next open.
+    setReason("");
   }
 
   function handleOpenChange(next: boolean): void {
@@ -58,33 +61,20 @@ export function CancelRunDialog({
             onChange={(e) => setReason(e.target.value)}
             placeholder="Optional reason"
             rows={2}
-            disabled={isPending}
             data-testid="run-controls-cancel-reason"
             className="w-full resize-none rounded-sw-card border border-sw-border bg-sw-bg px-2 py-1 text-sw-xs text-sw-text placeholder:text-sw-muted focus:outline-none"
           />
         )}
 
-        {error != null && (
-          <p className="text-sw-xs text-sw-danger" data-testid="run-controls-error">
-            {error.message}
-          </p>
-        )}
-
         <AlertDialogFooter>
           <AlertDialogCancel asChild>
-            <Button variant="ghost" size="sm" disabled={isPending} data-testid="cancel-run-dialog-dismiss">
+            <Button variant="ghost" size="sm" data-testid="cancel-run-dialog-dismiss">
               Keep run
             </Button>
           </AlertDialogCancel>
           <AlertDialogAction asChild>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={isPending}
-              onClick={handleConfirm}
-              data-testid="run-controls-cancel-confirm"
-            >
-              {isPending ? "Cancelling…" : "Cancel run"}
+            <Button variant="destructive" size="sm" onClick={handleConfirm} data-testid="run-controls-cancel-confirm">
+              Cancel run
             </Button>
           </AlertDialogAction>
         </AlertDialogFooter>

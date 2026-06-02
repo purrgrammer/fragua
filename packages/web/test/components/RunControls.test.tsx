@@ -107,13 +107,15 @@ describe("RunControls — cancel dialog", () => {
       const confirmBtn = await findInBody("run-controls-cancel-confirm");
       fireEvent.click(confirmBtn);
 
-      await waitFor(() => {
-        const hit = calls.find((c) => c.url === CANCEL_URL && c.method === "POST");
-        if (!hit) throw new Error("POST /cancel not called");
-        return hit;
+      const hit = await waitFor(() => {
+        const h = calls.find((c) => c.url === CANCEL_URL && c.method === "POST");
+        if (!h) throw new Error("POST /cancel not called");
+        return h;
       });
 
-      expect(calls.some((c) => c.url === CANCEL_URL)).toBe(true);
+      // The typed reason must actually reach the request body, not just the URL.
+      expect(hit.body).toBeTruthy();
+      expect(JSON.parse(hit.body as string)).toEqual({ reason: "stopping for maintenance" });
     } finally {
       restore();
     }
@@ -133,11 +135,14 @@ describe("RunControls — cancel dialog", () => {
       const confirmBtn = await findInBody("run-controls-cancel-confirm");
       fireEvent.click(confirmBtn);
 
-      await waitFor(() => {
-        const hit = calls.find((c) => c.url === CANCEL_URL && c.method === "POST");
-        if (!hit) throw new Error("POST /cancel not called");
-        return hit;
+      const hit = await waitFor(() => {
+        const h = calls.find((c) => c.url === CANCEL_URL && c.method === "POST");
+        if (!h) throw new Error("POST /cancel not called");
+        return h;
       });
+
+      // Blank reason ⇒ cancelRun sends no body at all (undefined, not `{}`).
+      expect(hit.body).toBeUndefined();
     } finally {
       restore();
     }

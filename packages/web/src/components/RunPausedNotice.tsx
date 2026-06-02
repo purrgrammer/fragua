@@ -633,7 +633,6 @@ export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps)
     mutationFn: (reason?: string) => cancelRun(runId, reason),
     onSuccess: () => {
       toast.success("Run cancelled");
-      setCancelDialogOpen(false);
       return refreshAfterControl(qc, runId);
     },
     onError: (err) => toastError(err),
@@ -708,8 +707,6 @@ export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps)
       <CancelRunDialog
         open={cancelDialogOpen}
         onOpenChange={setCancelDialogOpen}
-        isPending={cancelMutation.isPending}
-        error={cancelMutation.error instanceof Error ? cancelMutation.error : null}
         onConfirm={(reason) => cancelMutation.mutate(reason)}
         showReason={false}
       />
