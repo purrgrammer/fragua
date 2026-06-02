@@ -186,6 +186,10 @@ export interface RunDetail {
    * metadata and used as the operator-action target default. */
   baseGitRef?: string;
   baseGitSha?: string;
+  /** True when the run was brought in via `fragua import`. The run has no
+   * local cwd, the daemon will never dispatch it, and operate controls
+   * should be suppressed. */
+  imported?: boolean;
 }
 
 /** One row in `GET /runs/:runId/changes`. Server projects
@@ -1277,6 +1281,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     cwd?: unknown;
     projectId?: unknown;
     projectName?: unknown;
+    imported?: unknown;
   };
   return (
     typeof o.runId === "string" &&
@@ -1295,6 +1300,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
     (o.durationMs === undefined || typeof o.durationMs === "number") &&
     (o.cwd === undefined || typeof o.cwd === "string") &&
+    (o.imported === undefined || typeof o.imported === "boolean") &&
     ((o as { worktreePath?: unknown }).worktreePath === undefined ||
       typeof (o as { worktreePath?: unknown }).worktreePath === "string")
   );

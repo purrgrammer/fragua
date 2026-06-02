@@ -7,7 +7,7 @@
 
 import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RunControls } from "../../src/components/RunControls.tsx";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
@@ -33,7 +33,7 @@ vi.mock("sonner", () => ({
 }));
 
 function renderControls(
-  overrides: { status?: string; runStatus?: string } = {},
+  overrides: { status?: string; runStatus?: string; imported?: boolean } = {},
   mocks: Record<string, () => Response | Promise<Response>> = {},
 ) {
   const status = (overrides.status ?? "running") as
@@ -61,7 +61,7 @@ function renderControls(
   });
   const result = renderWithClient(
     <MemoryRouter>
-      <RunControls runId="run-99" status={status} runStatus={runStatus} />
+      <RunControls runId="run-99" status={status} runStatus={runStatus} imported={overrides.imported} />
     </MemoryRouter>,
   );
   return { ...result, restore, calls };
@@ -152,6 +152,41 @@ describe("RunControls — toast feedback", () => {
           );
         }
       });
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("RunControls — imported (inert) runs", () => {
+  afterEach(() => cleanup());
+
+  test("renders no pause/resume/cancel buttons when imported=true on a paused run", async () => {
+    const { queryByTestId, getByTestId, restore } = renderControls({
+      status: "paused",
+      runStatus: "paused",
+      imported: true,
+    });
+    try {
+      getByTestId("run-controls-imported");
+      expect(queryByTestId("run-controls-pause")).toBeNull();
+      expect(queryByTestId("run-controls-resume")).toBeNull();
+      expect(queryByTestId("run-controls-cancel")).toBeNull();
+      expect(queryByTestId("run-controls-cancel-confirm")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  test("still renders operate controls when imported is false (existing behavior unchanged)", async () => {
+    const { queryByTestId, restore } = renderControls({
+      status: "paused",
+      runStatus: "paused_auto",
+      imported: false,
+    });
+    try {
+      expect(queryByTestId("run-controls-imported")).toBeNull();
+      expect(queryByTestId("run-controls-resume")).not.toBeNull();
     } finally {
       restore();
     }

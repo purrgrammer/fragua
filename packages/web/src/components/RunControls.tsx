@@ -35,6 +35,10 @@ export interface RunControlsProps {
    * controls can sit inline alongside the badge in a header row. The
    * confirm-cancel textarea + error messages still render below. */
   compact?: boolean;
+  /** When true the run was brought in via `fragua import` and has no local
+   * cwd. The daemon will never dispatch it, so operate controls are
+   * replaced with a read-only "imported (inert)" badge. */
+  imported?: boolean;
 }
 
 const CONFIRM_WINDOW_MS = 3_000;
@@ -50,6 +54,7 @@ export function RunControls({
   runStatus,
   hitlOptionsCount,
   compact = false,
+  imported = false,
 }: RunControlsProps): JSX.Element | null {
   const qc = useQueryClient();
 
@@ -107,6 +112,17 @@ export function RunControls({
     cancelM.mutate(trimmed.length > 0 ? trimmed : undefined);
     setReason("");
   };
+
+  if (imported) {
+    return (
+      <div
+        className="inline-flex items-center rounded-sw-card border border-sw-border px-1.5 py-0.5 text-sw-xs text-sw-muted"
+        data-testid="run-controls-imported"
+      >
+        imported (inert)
+      </div>
+    );
+  }
 
   const canPause = status === "running";
   // Resume is the generic operator-pause path. The specialized

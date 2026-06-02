@@ -8,6 +8,21 @@ guarantee.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Imported-run fidelity — export filter**: the bundle export filter now uses a
+  named denylist (streaming deltas and scaffolding events) instead of a coarse
+  allowlist. `llm.start` (slimmed — `prompt` stripped), `llm.done`,
+  `edge.selected`, `run.title_generated`, and Tier-3 structural events
+  (`llm.error`, `budget.warn`, `budget.stop`, `steering.*`, `control.*`) are
+  retained, so imported runs display per-step cost, LLM-step labels, the
+  traversal-edge overlay, and the run title correctly.
+- **Imported-run fidelity — UI operate controls**: `RunControls` now accepts an
+  `imported` prop; when true (derived from `RunDetail.imported`, set when
+  `cwd == null`) the pause/resume/cancel buttons are replaced with a read-only
+  "imported (inert)" badge, preventing dead-end operate actions on runs the
+  daemon will never dispatch.
+
 ## [0.4.0] — 2026-06-02
 
 ### Added

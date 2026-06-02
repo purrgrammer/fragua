@@ -126,25 +126,50 @@ the tar, not the row.
 
 A single transform in `exportRunBundle` that, per run:
 
-1. **Drops content-bearing observability events** — `llm.text_delta`,
-   `llm.thinking_delta`, `llm.toolcall_delta`, `tool.output_chunk`, `agent.*`.
-   These persist (`appendObservabilityEvents` → `events` table, `store.ts:486`)
-   and currently export verbatim (`getEvents` has no type filter,
-   `store.ts:1311`), but they are **redundant** with the finalized `messages`
-   transcript and are pure streaming scaffolding. The UI renders an imported
-   run's conversation, thinking, and tool calls from `messages`
-   (`RunConversation`), not from deltas — confirmed: a terminal run never opens
-   SSE. Dropping them is the security fix **and** lossless.
-2. **Keeps `cost.recorded`** — numeric/structural, no secret payload, and the
+1. **Drops streaming-delta and scaffolding events** by **named denylist** —
+   not a family allowlist. The dropped types are those that are losslessly
+   reconstructable from the `messages` transcript and represent a secret-leak
+   surface (prompt text, thinking, tool I/O deltas):
+   - LLM streaming: `llm.text_delta`, `llm.text_end`, `llm.thinking_delta`,
+     `llm.thinking_end`, `llm.toolcall_delta`, `llm.toolcall_end`
+   - Agent scaffolding: `agent.start`, `agent.end`, `agent.message_start`,
+     `agent.message_end`, `agent.message_update`, `agent.turn_start`,
+     `agent.turn_end`
+   - Tool execution: `tool.execution_start`, `tool.execution_update`,
+     `tool.execution_end`, `tool.output_chunk`
+   - Summary deltas: `summary.started`, `summary.text_delta`
+   - Snapshot refs (not in bundle, imported `cwd` is null): `snapshot.captured`
+
+   Everything **not** on this denylist is retained, including `llm.start`,
+   `llm.done`, `llm.error`, `edge.selected`, `run.title_generated`,
+   `cost.recorded`, `budget.warn`, `budget.stop`, `steering.*`, `control.*`,
+   and `fact.*` / `intent.*` families.
+
+2. **Projects `llm.start` to its identity/manifest fields before export** —
+   `llm.start` is retained (it anchors `getStepAggregates` cost windows and
+   opens LLM steps in `eventsToSteps`), but its free-text `prompt` field is a
+   secret surface already covered by the `messages` transcript. The export
+   substitutes a **slimmed payload** that keeps only structural fields:
+   `nodeId`, `iteration`, `provider`, `model`, `thread_id`, `summary`, and
+   the small manifests `context_files`, `skills`, `budget`. The `prompt` field
+   is stripped. `system_prompt` on `llm.start` is already a `{ sha256, bytes }`
+   digest (not full text) and passes through. The slim payload then runs through
+   the same `scrubEventPayload` pass as every other retained event, so any
+   credential that appears in the remaining string fields is caught.
+
+3. **Keeps `cost.recorded`** — numeric/structural, no secret payload, and the
    sole source of the cost view (`CostInspector` → `/steps` →
    `getStepAggregates`). Dropping it would zero out cost on imported runs.
-3. **Scrubs text fields** — `messages` content blocks, fact
+
+4. **Scrubs text fields** — `messages` content blocks, fact
    `preview`/`text`/`note`/`errorMessage`, `routing.input`/`routing.inputs`, the
-   workflow body copy, and the titling fact's text. Replacement is a fixed
+   workflow body copy, and the titling fact's text (`run.title_generated.title`
+   is scrubbed via `scrubEventPayload`). Replacement is a fixed
    `[REDACTED]` / `[REDACTED:source]` marker (label per profile —
    [§13](#13-resolved-decisions-was-open-questions)) with **no length
    preservation** (length is a side channel).
-4. **Re-CASes artifacts** after scrubbing text-ish blobs. A scrub changes a blob's
+
+5. **Re-CASes artifacts** after scrubbing text-ish blobs. A scrub changes a blob's
    bytes, hence its sha256 — so the new sha must be rewritten *consistently* across
    all three places it appears: the blob entry name (`blobPath(sha)`), the
    `blobSha` in `run-artifacts.jsonl`, and the `blobs[]` manifest entry
@@ -154,11 +179,12 @@ A single transform in `exportRunBundle` that, per run:
    `application/x-yaml`, …) get the full scrub; **binary blobs are skipped** and
    marked `binary, not inspected`. A secret embedded in a binary artifact is a
    known residual hole (deferred — see [§13](#13-resolved-decisions-was-open-questions)).
-5. **Snapshots: nothing to do** — they are not in the bundle ([§9](#9-snapshots-not-an-egress-surface)).
+
+6. **Snapshots: nothing to do** — they are not in the bundle ([§9](#9-snapshots-not-an-egress-surface)).
 
 `deriveRunState` skips all non-fact events (`reducers.ts:302`, the
-`!e.type.startsWith("fact.")` continue), so dropping
-observability from the bundle does not affect replay on import.
+`!e.type.startsWith("fact.")` continue), so the newly retained observability
+events do not affect replay on import.
 
 > **Shipped surface.** `exportRunBundle` returns `{ bytes: Uint8Array;
 > liveLiteralHit: boolean }`; options `labelMode: "source" | "generic"` +
