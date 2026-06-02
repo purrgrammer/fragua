@@ -10,6 +10,14 @@ guarantee.
 
 ### Added
 
+- **`fragua ci --allow-env <name>`** — exempt a secret-named env var from the CI
+  perimeter env-strip so a workflow's deterministic `tool` steps can use it (e.g.
+  `GH_TOKEN` for `gh pr diff/comment`). Exempts the STRIP only: the value is still
+  captured as a scrub needle, so it stays redacted from the exported bundle
+  (allow ≠ declassify). Provider credentials (`ANTHROPIC_API_KEY`, `*_API_KEY`, …)
+  are refused — they must never reach a tool subprocess. Repeat or comma-separate
+  to allow several. Lets the `pr-review` / `crowdin-review` GitHub Actions
+  authenticate `gh` without the disk-login workaround.
 - **`fragua runs explain <id>`** — new read-plane verb that synthesises a run's
   event log into a narrative: path taken (nodes + edges), per-step outcome and
   cost, snapshots captured, diff-vs-base summary (files / insertions /

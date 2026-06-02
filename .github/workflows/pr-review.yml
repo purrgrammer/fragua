@@ -48,13 +48,19 @@ jobs:
 
       - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.3.1
 
+      # `fragua ci` strips secret-named env (anything ending _TOKEN / _KEY / …) from
+      # tool subprocesses, which removes GH_TOKEN from the `gh pr diff/view/review`
+      # calls pr_review makes. `--allow-env GH_TOKEN` exempts it from the strip only —
+      # the value is still a scrub needle, so it stays redacted from the exported
+      # bundle. NOTE: needs a fragua release that has --allow-env (the version this
+      # change ships); bump the setup-fragua pin above to that release when cutting it.
       - name: "Review PR #${{ github.event.pull_request.number }}"
-        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --export "$RUNNER_TEMP/pr-review.fragua"
+        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN --export "$RUNNER_TEMP/pr-review.fragua"
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ github.token }} # gh pr diff / view / review
+          GH_TOKEN: ${{ github.token }} # exempted via --allow-env for gh; still a scrub needle
 
       # No manual scrubbing step: `fragua ci`'s CI profile scrubs the bundle at
       # export — it redacts provider-credential values + secret-named env vars
