@@ -198,7 +198,9 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
   // and migrateTo's first write contends on the write lock, and the in-txn
   // version re-read refuses a state planMigration didn't validate.
   if (daemonLive(storePath)) {
-    console.error(chalk.red("db migrate: a harness started against this store mid-migrate — aborted before any change"));
+    console.error(
+      chalk.red("db migrate: a harness started against this store mid-migrate — aborted before any change"),
+    );
     return 1;
   }
 

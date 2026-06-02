@@ -201,9 +201,7 @@ export function migrateTo(db: Database, target: number, opts: { allowDataLoss?: 
     // `planMigration` didn't validate.
     const live = readVersion(db);
     if (live !== current) {
-      throw new Error(
-        `schema_version moved under the migrate (planned from v${current}, store now v${live}) — re-run`,
-      );
+      throw new Error(`schema_version moved under the migrate (planned from v${current}, store now v${live}) — re-run`);
     }
     if (plan.direction === "up") {
       if (target === CURRENT_SCHEMA_VERSION) db.exec(SCHEMA_SQL);

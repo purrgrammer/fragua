@@ -199,9 +199,7 @@ describe("fragua db", () => {
     db.close();
     expect(await run({ action: "migrate", cwd, to: "1" })).toBe(1);
     const backupsDir = join(cwd, ".fragua/backups");
-    const orphans = existsSync(backupsDir)
-      ? readdirSync(backupsDir).filter((f) => f.startsWith("pre-migrate-"))
-      : [];
+    const orphans = existsSync(backupsDir) ? readdirSync(backupsDir).filter((f) => f.startsWith("pre-migrate-")) : [];
     expect(orphans).toEqual([]);
   });
 
