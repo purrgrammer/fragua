@@ -1,3 +1,6 @@
 [install]
 exact = true
 frozenLockfile = false
+
+[test]
+preload = ["./scripts/test-preload.ts"]

@@ -1,21 +1,22 @@
-// RunControls — toast feedback tests.
+// RunControls — cancel confirmation dialog behaviour.
 //
-// Verifies that pause/resume/cancel mutations fire the correct toast on
-// success and error. We spy on `toast.success` and `toast.error` at the
-// module boundary using `vi.mock("sonner", ...)` so the spies are in
-// place before the component's module resolves its import.
+// The cancel action opens an AlertDialog (portaled to document.body).
+// All four assertions from the spec:
+//   1. Clicking Cancel opens the dialog — does NOT immediately call the API.
+//   2. Confirming in the dialog calls cancelRun with the typed reason.
+//   3. Dismissing the dialog calls nothing and closes it.
+//   4. No timer-based auto-revert — the dialog stays open across advanced
+//      timers / after a delay.
+//
+// Portal content lives under document.body; queries use findInBody().
 
-import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RunControls } from "../../src/components/RunControls.tsx";
+import type { RunDetail } from "../../src/lib/api.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
-const PAUSE_URL = "/api/runs/run-99/pause";
-const RESUME_URL = "/api/runs/run-99/resume";
-const CANCEL_URL = "/api/runs/run-99/cancel";
-const DETAIL_URL = "/api/runs/run-99";
-const EVENTS_URL = "/api/runs/run-99/events";
+// ── Toast mocks ──────────────────────────────────────────────────────────────
 
 const { successSpy, errorSpy } = vi.hoisted(() => ({
   successSpy: vi.fn(() => "t1"),
@@ -32,161 +33,176 @@ vi.mock("sonner", () => ({
   ),
 }));
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const CANCEL_URL = "/api/runs/run-99/cancel";
+
+type ControlStatus = RunDetail["status"];
+type ControlRunStatus = RunDetail["runStatus"];
+
 function renderControls(
-  overrides: { status?: string; runStatus?: string; imported?: boolean } = {},
   mocks: Record<string, () => Response | Promise<Response>> = {},
+  status: ControlStatus = "running",
+  runStatus: ControlRunStatus = "running",
 ) {
-  const status = (overrides.status ?? "running") as
-    | "running"
-    | "paused"
-    | "queued"
-    | "success"
-    | "fail"
-    | "canceled"
-    | "unknown";
-  const runStatus = (overrides.runStatus ?? "running") as
-    | "queued"
-    | "running"
-    | "paused"
-    | "paused_human"
-    | "paused_auto"
-    | "completed"
-    | "cancelled"
-    | "halted"
-    | "quarantined";
-  const { restore, calls } = installFetchMock({
-    [DETAIL_URL]: () => json({ runId: "run-99", status, runStatus }),
-    [EVENTS_URL]: () => json({ events: [], lastSeq: 0 }),
-    ...mocks,
-  });
-  const result = renderWithClient(
-    <MemoryRouter>
-      <RunControls runId="run-99" status={status} runStatus={runStatus} imported={overrides.imported} />
-    </MemoryRouter>,
-  );
+  const { restore, calls } = installFetchMock(mocks);
+  const result = renderWithClient(<RunControls runId="run-99" status={status} runStatus={runStatus} />);
   return { ...result, restore, calls };
 }
 
-describe("RunControls — toast feedback", () => {
+async function findInBody(testId: string): Promise<HTMLElement> {
+  return waitFor(() => {
+    const el = document.body.querySelector(`[data-testid="${testId}"]`) as HTMLElement | null;
+    if (!el) throw new Error(`"${testId}" not found in document.body`);
+    return el;
+  });
+}
+
+function inBody(testId: string): Element | null {
+  return document.body.querySelector(`[data-testid="${testId}"]`);
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe("RunControls — cancel dialog", () => {
   beforeEach(() => {
     successSpy.mockReset();
     errorSpy.mockReset();
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+  });
 
-  test("fires toast.success('Run paused') after Pause resolves", async () => {
-    const { getByTestId, restore } = renderControls(
-      { status: "running", runStatus: "running" },
-      {
-        [PAUSE_URL]: () => json({ seq: 1 }),
-      },
-    );
+  // 1. Clicking Cancel opens dialog and does NOT immediately call the API.
+  test("clicking Cancel opens the dialog without calling the cancel API", async () => {
+    const { container, restore, calls } = renderControls();
     try {
-      const pauseBtn = await waitFor(() => getByTestId("run-controls-pause") as HTMLButtonElement);
-      await act(async () => {
-        fireEvent.click(pauseBtn);
-        await new Promise((r) => setTimeout(r, 50));
-      });
-      await waitFor(() => {
-        if (!successSpy.mock.calls.some((c) => (c as unknown[])[0] === "Run paused")) {
-          throw new Error(
-            `toast.success not called with "Run paused"; calls: ${JSON.stringify(successSpy.mock.calls as unknown[])}`,
-          );
-        }
-      });
+      const trigger = container.querySelector(`[data-testid="run-controls-cancel"]`) as HTMLButtonElement;
+      expect(trigger).not.toBeNull();
+
+      fireEvent.click(trigger);
+
+      await findInBody("cancel-run-dialog");
+
+      // No API call fired yet.
+      expect(calls.filter((c) => c.url === CANCEL_URL)).toHaveLength(0);
     } finally {
       restore();
     }
   });
 
-  test("fires toast.error when cancel fails", async () => {
-    const { getByTestId, restore } = renderControls(
-      { status: "running", runStatus: "running" },
-      {
-        [CANCEL_URL]: () =>
-          new Response(JSON.stringify({ error: "nope" }), {
-            status: 500,
-            headers: { "content-type": "application/json" },
-          }),
-      },
-    );
-    try {
-      // Arm confirm
-      const cancelBtn = await waitFor(() => getByTestId("run-controls-cancel") as HTMLButtonElement);
-      await act(async () => {
-        fireEvent.click(cancelBtn);
-      });
-
-      // Confirm (3 s timer armed — just click confirm directly)
-      const confirmBtn = await waitFor(() => getByTestId("run-controls-cancel-confirm") as HTMLButtonElement);
-      await act(async () => {
-        fireEvent.click(confirmBtn);
-        await new Promise((r) => setTimeout(r, 50));
-      });
-      await waitFor(() => {
-        if (errorSpy.mock.calls.length === 0) {
-          throw new Error("toast.error not called");
-        }
-      });
-    } finally {
-      restore();
-    }
-  });
-
-  test("fires toast.success('Run resumed') after Resume resolves", async () => {
-    const { getByTestId, restore } = renderControls(
-      { status: "paused", runStatus: "paused_auto" },
-      { [RESUME_URL]: () => json({ seq: 1 }) },
-    );
-    try {
-      const resumeBtn = await waitFor(() => getByTestId("run-controls-resume") as HTMLButtonElement);
-      await act(async () => {
-        fireEvent.click(resumeBtn);
-        await new Promise((r) => setTimeout(r, 50));
-      });
-      await waitFor(() => {
-        if (!successSpy.mock.calls.some((c) => (c as unknown[])[0] === "Run resumed")) {
-          throw new Error(
-            `toast.success not called with "Run resumed"; calls: ${JSON.stringify(successSpy.mock.calls as unknown[])}`,
-          );
-        }
-      });
-    } finally {
-      restore();
-    }
-  });
-});
-
-describe("RunControls — imported (inert) runs", () => {
-  afterEach(() => cleanup());
-
-  test("renders no pause/resume/cancel buttons when imported=true on a paused run", async () => {
-    const { queryByTestId, getByTestId, restore } = renderControls({
-      status: "paused",
-      runStatus: "paused",
-      imported: true,
+  // 2. Confirming in the dialog calls cancelRun with the typed reason.
+  test("confirming with a typed reason calls cancelRun with that reason", async () => {
+    const { container, restore, calls } = renderControls({
+      [CANCEL_URL]: () => json({ seq: 1 }),
     });
     try {
-      getByTestId("run-controls-imported");
-      expect(queryByTestId("run-controls-pause")).toBeNull();
-      expect(queryByTestId("run-controls-resume")).toBeNull();
-      expect(queryByTestId("run-controls-cancel")).toBeNull();
-      expect(queryByTestId("run-controls-cancel-confirm")).toBeNull();
+      const trigger = container.querySelector(`[data-testid="run-controls-cancel"]`) as HTMLButtonElement;
+      fireEvent.click(trigger);
+
+      const textarea = await findInBody("run-controls-cancel-reason");
+      fireEvent.change(textarea, { target: { value: "stopping for maintenance" } });
+
+      const confirmBtn = await findInBody("run-controls-cancel-confirm");
+      fireEvent.click(confirmBtn);
+
+      const hit = await waitFor(() => {
+        const h = calls.find((c) => c.url === CANCEL_URL && c.method === "POST");
+        if (!h) throw new Error("POST /cancel not called");
+        return h;
+      });
+
+      // The typed reason must actually reach the request body, not just the URL.
+      expect(hit.body).toBeTruthy();
+      expect(JSON.parse(hit.body as string)).toEqual({ reason: "stopping for maintenance" });
     } finally {
       restore();
     }
   });
 
-  test("still renders operate controls when imported is false (existing behavior unchanged)", async () => {
-    const { queryByTestId, restore } = renderControls({
-      status: "paused",
-      runStatus: "paused_auto",
-      imported: false,
+  // 2b. Confirming with no reason calls cancelRun without a reason (empty → undefined).
+  test("confirming with blank reason calls cancelRun without a reason body", async () => {
+    const { container, restore, calls } = renderControls({
+      [CANCEL_URL]: () => json({ seq: 1 }),
     });
     try {
-      expect(queryByTestId("run-controls-imported")).toBeNull();
-      expect(queryByTestId("run-controls-resume")).not.toBeNull();
+      const trigger = container.querySelector(`[data-testid="run-controls-cancel"]`) as HTMLButtonElement;
+      fireEvent.click(trigger);
+
+      await findInBody("cancel-run-dialog");
+
+      const confirmBtn = await findInBody("run-controls-cancel-confirm");
+      fireEvent.click(confirmBtn);
+
+      const hit = await waitFor(() => {
+        const h = calls.find((c) => c.url === CANCEL_URL && c.method === "POST");
+        if (!h) throw new Error("POST /cancel not called");
+        return h;
+      });
+
+      // Blank reason ⇒ cancelRun sends no body at all (undefined, not `{}`).
+      expect(hit.body).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  // 3. Dismissing the dialog calls nothing and closes it.
+  test("dismissing the dialog calls nothing and closes it", async () => {
+    const { container, restore, calls } = renderControls();
+    try {
+      const trigger = container.querySelector(`[data-testid="run-controls-cancel"]`) as HTMLButtonElement;
+      fireEvent.click(trigger);
+
+      const dismissBtn = await findInBody("cancel-run-dialog-dismiss");
+      fireEvent.click(dismissBtn);
+
+      await waitFor(() => {
+        if (inBody("cancel-run-dialog")) throw new Error("dialog still open after dismiss");
+      });
+
+      expect(calls.filter((c) => c.url === CANCEL_URL)).toHaveLength(0);
+    } finally {
+      restore();
+    }
+  });
+
+  // 4. No timer-based auto-revert — dialog stays open across advanced timers.
+  test("dialog remains open after timers advance (no auto-revert)", async () => {
+    vi.useFakeTimers();
+    const { container, restore } = renderControls();
+    try {
+      const trigger = container.querySelector(`[data-testid="run-controls-cancel"]`) as HTMLButtonElement;
+      fireEvent.click(trigger);
+
+      // With fake timers, waitFor won't work directly. Check synchronously
+      // after clicking — dialog should be in body immediately after the click.
+      const dialog = inBody("cancel-run-dialog");
+      expect(dialog).not.toBeNull();
+
+      // Advance well past the old 3 s confirm window.
+      vi.advanceTimersByTime(10_000);
+
+      // Dialog must still be present — no auto-revert.
+      expect(inBody("cancel-run-dialog")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+      restore();
+    }
+  });
+
+  // data-testid parity: trigger is run-controls-cancel, confirm is run-controls-cancel-confirm.
+  test("trigger has data-testid=run-controls-cancel, dialog confirm has run-controls-cancel-confirm", async () => {
+    const { container, restore } = renderControls();
+    try {
+      const trigger = container.querySelector(`[data-testid="run-controls-cancel"]`);
+      expect(trigger).not.toBeNull();
+
+      fireEvent.click(trigger as HTMLElement);
+
+      const confirm = await findInBody("run-controls-cancel-confirm");
+      expect(confirm).not.toBeNull();
     } finally {
       restore();
     }

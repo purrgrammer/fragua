@@ -44,14 +44,14 @@ type RouteHandler = (req: { url: string; method: string; init?: RequestInit }) =
 export function installFetchMock(
   routes: Record<string, RouteHandler> = {},
   fallback: RouteHandler = () => new Response("not found", { status: 404 }),
-): { restore: () => void; calls: Array<{ url: string; method: string }> } {
+): { restore: () => void; calls: Array<{ url: string; method: string; body?: BodyInit | null }> } {
   const original = globalThis.fetch;
-  const calls: Array<{ url: string; method: string }> = [];
+  const calls: Array<{ url: string; method: string; body?: BodyInit | null }> = [];
 
   const impl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const method = init?.method ?? "GET";
-    calls.push({ url, method });
+    calls.push({ url, method, body: init?.body });
     const handler = routes[url] ?? fallback;
     return handler({ url, method, init });
   };

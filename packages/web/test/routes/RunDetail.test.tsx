@@ -631,7 +631,7 @@ steps:
       }
     });
 
-    it("requires a second click within the confirmation window before cancelling", async () => {
+    it("opens a confirmation dialog on Cancel click, then POSTs cancel on confirm", async () => {
       const detail: RunDetailT = {
         runId: "run-cancel-confirm",
         startedAt: "2024-01-01T00:00:00Z",
@@ -666,17 +666,20 @@ steps:
         const countCancelPosts = (): number =>
           mock.calls.filter((c) => c.method === "POST" && c.url.endsWith("/cancel")).length;
 
-        // First click: arms the confirm step. No POST should fire.
+        // First click: opens the dialog. No POST should fire.
         await act(async () => {
           fireEvent.click(q.getByTestId("run-controls-cancel"));
         });
         expect(countCancelPosts()).toBe(0);
 
-        // Confirm control should now be visible; original Cancel hidden.
-        const confirmBtn = await waitFor(() => q.getByTestId("run-controls-cancel-confirm"));
-        expect(q.queryByTestId("run-controls-cancel")).toBeNull();
+        // Confirm button is portaled to document.body (AlertDialog portal).
+        const confirmBtn = await waitFor(() => {
+          const el = document.body.querySelector(`[data-testid="run-controls-cancel-confirm"]`) as HTMLElement | null;
+          if (!el) throw new Error("confirm button not found in document.body");
+          return el;
+        });
 
-        // Second click within the 3s window: fires exactly one POST.
+        // Clicking confirm fires exactly one POST.
         await act(async () => {
           fireEvent.click(confirmBtn);
         });
