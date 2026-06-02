@@ -11,13 +11,17 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { getFraguaHome } from "@fragua/agent";
 import { CURRENT_SCHEMA_VERSION, DAEMON_LOCK_TTL_MS, migrateTo, planMigration, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
 export interface DbCommandOptions {
   action: "vacuum" | "gc-blobs" | "backup" | "migrate";
   cwd?: string;
-  /** Explicit store path. Overrides `<cwd>/.fragua/fragua.db`. */
+  /** Explicit store path. Overrides the default home store
+   * (`$FRAGUA_HOME/fragua.db`, i.e. `~/.fragua/fragua.db`) — the same store the
+   * harness binds and the `run`/`runs` verbs open. Point it at a project or
+   * throwaway store to operate elsewhere. */
   dbPath?: string;
   /** For `backup` — destination path. For `migrate` — target schema version
    * (parsed as an integer); omitted ⇒ migrate forward to CURRENT. */
@@ -34,7 +38,7 @@ export interface DbCommandOptions {
 
 export async function dbCommand(opts: DbCommandOptions): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".fragua/fragua.db");
+  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(getFraguaHome(), "fragua.db");
   if (!existsSync(storePath)) {
     console.error(chalk.red(`db ${opts.action}: no store at ${storePath}`));
     return 1;

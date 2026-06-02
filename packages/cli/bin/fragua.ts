@@ -364,7 +364,7 @@ cli
   .option("--allow-data-loss", "`migrate` only: permit a downgrade step that restores shape but not data")
   .option("--no-backup", "`migrate` only: skip the pre-migrate backup (ephemeral / CI stores)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
-  .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
+  .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
   .action(async (action: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
