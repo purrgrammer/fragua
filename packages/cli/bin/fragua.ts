@@ -355,15 +355,28 @@ cli
 
 cli
   .command("db <action>", "DB maintenance: vacuum | gc-blobs | backup | migrate")
-  .option("--to <path>", "`backup` destination path")
+  .option(
+    "--to <value>",
+    "`backup`: destination path. `migrate`: target schema version (default CURRENT; lower = downgrade)",
+  )
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
   .option("--dry-run", "`migrate` only: print the plan without applying")
+  .option("--allow-data-loss", "`migrate` only: permit a downgrade step that restores shape but not data")
+  .option("--no-backup", "`migrate` only: skip the pre-migrate backup (ephemeral / CI stores)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
-  .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db)")
+  .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
   .action(async (action: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
       return typeof v === "string" ? v : undefined;
+    };
+    // `--to` is a path for `backup` but a version number for `migrate`; cac
+    // coerces a bare integer to a number, so accept both and stringify.
+    const pickTo = (): string | undefined => {
+      const v = options["to"];
+      if (typeof v === "string") return v;
+      if (typeof v === "number") return String(v);
+      return undefined;
     };
     if (action !== "vacuum" && action !== "gc-blobs" && action !== "backup" && action !== "migrate") {
       console.error(chalk.red(`unknown db action: ${action}`));
@@ -381,9 +394,11 @@ cli
       action,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-      ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
+      ...(pickTo() !== undefined ? { to: pickTo()! } : {}),
       ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
       ...(options["dryRun"] === true ? { dryRun: true } : {}),
+      ...(options["allowDataLoss"] === true ? { allowDataLoss: true } : {}),
+      ...(options["backup"] === false ? { noBackup: true } : {}),
     });
     process.exit(code);
   });

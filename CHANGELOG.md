@@ -8,6 +8,29 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **Reversible schema migrations** — each schema-migration step now carries an
+  optional `down` inverse, and `fragua db migrate` takes `--to <version>` to
+  walk the schema *down* as well as up. A downgrade backs up the store first
+  (`<store dir>/backups/pre-migrate-*.db`; opt out with `--no-backup`), refuses
+  to cross a step that declares no `down` or that would lose data (override with
+  `--allow-data-loss`), and refuses to run while a daemon is live against the
+  store. `--dry-run` prints the ordered plan with each step's reversibility
+  class. The automatic open path is unchanged — a store newer than the binary
+  still refuses to open, and nothing downgrades by surprise.
+
+### Fixed
+
+- **`fragua db <action>` now defaults to the home store** — `vacuum`,
+  `gc-blobs`, `backup`, and `migrate` resolve `~/.fragua/fragua.db` (honoring
+  `$FRAGUA_HOME`) when `--db` is omitted, the same store the harness binds and
+  the `run`/`runs` verbs open. They previously resolved `<cwd>/.fragua/fragua.db`,
+  so a bare `fragua db migrate` from a project checkout reported "no store".
+  Pass `--db <store>` to point at an alternate store (e.g. an ephemeral test
+  store); `--cwd` only sets the backup-destination root. The resolved store path
+  is echoed in each action's output.
+
 ## [0.4.0] — 2026-06-02
 
 ### Added

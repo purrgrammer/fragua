@@ -7,7 +7,7 @@
 
 import { hostname as osHostname } from "node:os";
 import type * as coreHandler from "@fragua/core/handler";
-import type { IEventStore } from "@fragua/store";
+import { DAEMON_LOCK_TTL_MS, type IEventStore } from "@fragua/store";
 import { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler } from "./auto-titler.ts";
 import { type BlobGcOpts, DEFAULT_BLOB_GC_INTERVAL_MS, DEFAULT_BLOB_GC_MAX_ROWS, startBlobGc } from "./blob-gc.ts";
@@ -90,7 +90,7 @@ export interface DaemonMainOpts {
   scheduleTickMs?: number;
 }
 
-const DEFAULT_LOCK_TTL_MS = 30_000;
+const DEFAULT_LOCK_TTL_MS = DAEMON_LOCK_TTL_MS;
 const DEFAULT_CONCURRENCY = 16;
 // Matches @fragua/agent's llm default — the supervisor must never
 // trip a legitimate long-running llm node just because the spec

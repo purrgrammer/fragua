@@ -27,6 +27,12 @@ export const EVENT_CONTRACT_VERSION = 1;
  * paths. A snapshot test pins this value. */
 export const MIN_COMPATIBLE_CONTRACT_VERSION = 1;
 
+/** A `daemon_lock` row whose `heartbeat_at` is older than this is treated as
+ * dead — the window the daemon's reaper uses to reclaim a stale lock, and the
+ * window `fragua db migrate` uses to decide a harness is live and refuse to
+ * race it. One source so the two can't drift. */
+export const DAEMON_LOCK_TTL_MS = 30_000;
+
 /**
  * Apply connection-level pragmas. Called on every opened Database.
  *
