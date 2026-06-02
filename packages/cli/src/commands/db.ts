@@ -109,20 +109,28 @@ function backupPath(storePath: string, from: number, to: number, ts: number): st
   return join(dirname(storePath), "backups", `pre-migrate-v${from}-to-v${to}-${ts}.db`);
 }
 
+/** A locked/busy store means a writer holds it — assume a live harness. Any
+ * other SQLite error (perms, I/O, corruption, a vanished file) is NOT a daemon,
+ * so it must surface as itself rather than masquerade as "harness running". */
+function isBusyOrLocked(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";
+}
+
 /** A harness running against this store auto-migrates under its lock and would
  * race a `db migrate` walk. Read-only probe of the `daemon_lock` heartbeat.
  * A lock is live until its heartbeat ages PAST the TTL — `<=` matches the
  * reaper, which reclaims only when `age > DAEMON_LOCK_TTL_MS` (entrypoint.ts);
  * at exactly the TTL both treat the lock as still alive, so they can't disagree
- * about that boundary tick. */
+ * about that boundary tick. Throws on a non-busy access error — the caller
+ * surfaces that as the real failure instead of a false liveness refusal. */
 function daemonLive(storePath: string): boolean {
   let probe: Database;
   try {
     probe = new Database(storePath, { readonly: true });
-  } catch {
-    // Can't even open read-only (e.g. SQLITE_BUSY mid-checkpoint). Assume a
-    // harness holds it and refuse — the safe default for a destructive verb.
-    return true;
+  } catch (err) {
+    if (isBusyOrLocked(err)) return true;
+    throw err;
   }
   try {
     const hasLock = probe.query("SELECT name FROM sqlite_master WHERE type='table' AND name='daemon_lock'").get();
@@ -131,8 +139,9 @@ function daemonLive(storePath: string): boolean {
       probe.query<{ heartbeat_at: number }, []>("SELECT heartbeat_at FROM daemon_lock WHERE id = 1").get()
         ?.heartbeat_at ?? null;
     return heartbeatAt != null && Date.now() - heartbeatAt <= DAEMON_LOCK_TTL_MS;
-  } catch {
-    return true;
+  } catch (err) {
+    if (isBusyOrLocked(err)) return true;
+    throw err;
   } finally {
     probe.close();
   }
@@ -199,8 +208,16 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
   }
 
   // Liveness gate: a live harness auto-migrates under its lock and would race
-  // this walk.
-  if (daemonLive(storePath)) {
+  // this walk. A non-busy probe error (perms / I/O / corrupt / vanished store)
+  // surfaces as itself, not as a false "harness running".
+  let liveAtGate: boolean;
+  try {
+    liveAtGate = daemonLive(storePath);
+  } catch (err) {
+    console.error(chalk.red(`db migrate: cannot read store liveness: ${err instanceof Error ? err.message : err}`));
+    return 1;
+  }
+  if (liveAtGate) {
     console.error(chalk.red("db migrate: a harness is running against this store (live daemon_lock) — stop it first"));
     return 1;
   }

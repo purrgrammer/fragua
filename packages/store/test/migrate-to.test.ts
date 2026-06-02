@@ -137,6 +137,19 @@ describe("migrateTo — applies the walk and pins the target", () => {
     db.close();
   });
 
+  test("non-assumeLocked sets a defensive busy_timeout on a bare connection", () => {
+    // A caller that skipped applyPragmas (default busy_timeout=0) must still get
+    // a sane timeout so the walk's BEGIN IMMEDIATE waits rather than instant-BUSY.
+    const db = new Database(":memory:");
+    applyCreationPragmas(db);
+    migrate(db); // bootstrap to CURRENT without applyPragmas
+    expect(db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout).toBe(0);
+    toV1(db);
+    migrateTo(db, CURRENT_SCHEMA_VERSION); // non-assumeLocked walk
+    expect(db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+    db.close();
+  });
+
   test("assumeLocked runs the walk inside the caller's transaction", () => {
     const db = freshDb();
     migrate(db); // v2: schedules.title

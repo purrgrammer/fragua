@@ -177,11 +177,11 @@ function classOf(version: number): "full" | "lossy" | "irreversible" {
  * one transaction so a failing step rolls the whole thing back.
  *
  * Connection precondition: when not `assumeLocked` this opens its own
- * `BEGIN IMMEDIATE`, so the caller should have applied connection pragmas
- * (notably `busy_timeout`, via `applyPragmas`) first — a bare `new Database`
- * defaults `busy_timeout=0` and would take an instant `SQLITE_BUSY` against any
- * concurrent writer. With `assumeLocked` the caller already holds the lock and
- * owns commit/rollback.
+ * `BEGIN IMMEDIATE` and sets a defensive `busy_timeout` first, so a caller that
+ * passed a bare `new Database` (default `busy_timeout=0`) still waits for a
+ * concurrent writer instead of taking an instant `SQLITE_BUSY`. Applying the
+ * full pragma set (`applyPragmas`) up front is still recommended. With
+ * `assumeLocked` the caller already holds the lock and owns commit/rollback.
  */
 export function migrateTo(
   db: Database,
@@ -223,6 +223,9 @@ export function migrateTo(
     return plan;
   }
 
+  // Defensive `busy_timeout`: a caller that passed a bare connection (no
+  // `applyPragmas`) would otherwise hit an instant SQLITE_BUSY on the lock below.
+  db.exec("PRAGMA busy_timeout = 5000");
   // BEGIN IMMEDIATE takes the write lock at the start of the walk, so a second
   // concurrent `db migrate` blocks here instead of interleaving — serializing the
   // two migrates rules out an ABA race where another walk moves the version away
