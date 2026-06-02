@@ -20,6 +20,16 @@ guarantee.
   class. The automatic open path is unchanged — a store newer than the binary
   still refuses to open, and nothing downgrades by surprise.
 
+### Fixed
+
+- **`fragua db <action>` now defaults to the home store** — `vacuum`,
+  `gc-blobs`, `backup`, and `migrate` resolve `~/.fragua/fragua.db` (honoring
+  `$FRAGUA_HOME`) when `--db` is omitted, the same store the harness binds and
+  the `run`/`runs` verbs open. Previously they looked in
+  `<cwd>/.fragua/fragua.db`, so a bare `fragua db migrate` from a project
+  checkout reported "no store". Pass `--db` to target a project or throwaway
+  store.
+
 ## [0.4.0] — 2026-06-02
 
 ### Added
