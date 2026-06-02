@@ -181,8 +181,12 @@ export function migrateTo(db: Database, target: number, opts: { allowDataLoss?: 
   if (plan.direction === "down") {
     const irreversible = plan.steps.find((s) => s.class === "irreversible");
     if (irreversible) {
+      // Name the step edge, not just the version: it's the v→v-1 step that
+      // lacks a `down`, not "v blocks us".
       throw new Error(
-        `cannot downgrade past v${irreversible.version}: ${irreversible.reason ?? "migration declares no `down`"}`,
+        `cannot downgrade across v${irreversible.version} → v${irreversible.version - 1}: ${
+          irreversible.reason ?? "migration declares no `down`"
+        }`,
       );
     }
     const lossy = plan.steps.filter((s) => s.class === "lossy");
@@ -192,13 +196,15 @@ export function migrateTo(db: Database, target: number, opts: { allowDataLoss?: 
     }
   }
 
-  db.transaction(() => {
-    // `current` was read (and the plan validated) before the transaction. Under
-    // WAL the body runs on a read snapshot, but another writer (e.g. a second
-    // `db migrate` — the CLI liveness gate only guards against a daemon) could
-    // have advanced `schema_version` in the gap. Re-read inside the transaction
-    // and refuse if it moved, so the walk never applies against a state
-    // `planMigration` didn't validate.
+  // BEGIN IMMEDIATE takes the write lock at the start of the walk, so a second
+  // concurrent `db migrate` (the CLI liveness gate only guards against a daemon)
+  // blocks here instead of interleaving — serializing the two migrates rules out
+  // an ABA race where another walk moves the version away and back while ours
+  // runs. The re-read below then catches the remaining case: a writer that
+  // committed between the pre-lock `readVersion` above and our acquiring the
+  // lock, which would leave us planning from a version that no longer holds.
+  db.exec("BEGIN IMMEDIATE");
+  try {
     const live = readVersion(db);
     if (live !== current) {
       throw new Error(`schema_version moved under the migrate (planned from v${current}, store now v${live}) — re-run`);
@@ -218,7 +224,11 @@ export function migrateTo(db: Database, target: number, opts: { allowDataLoss?: 
       }
     }
     db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(target);
-  })();
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
   return plan;
 }
 
