@@ -12,6 +12,7 @@ import type { PauseReason } from "@fragua/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
+import { CancelRunDialog } from "@/components/CancelRunDialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -626,10 +627,13 @@ export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps)
     onError: (err) => toastError(err),
   });
 
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+
   const cancelMutation = useMutation({
-    mutationFn: () => cancelRun(runId),
+    mutationFn: (reason?: string) => cancelRun(runId, reason),
     onSuccess: () => {
       toast.success("Run cancelled");
+      setCancelDialogOpen(false);
       return refreshAfterControl(qc, runId);
     },
     onError: (err) => toastError(err),
@@ -676,7 +680,7 @@ export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps)
   const ctx: RenderCtx = {
     busy,
     onResume: () => resumeMutation.mutate(),
-    onCancel: () => cancelMutation.mutate(),
+    onCancel: () => setCancelDialogOpen(true),
     onAdjustBudget: async (input) => {
       await adjustBudgetMutation.mutateAsync(input);
     },
@@ -694,11 +698,21 @@ export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps)
 
   const variant = DESTRUCTIVE_REASONS.has(payload.reason) ? "destructive" : "default";
   return (
-    <Alert variant={variant} data-testid="run-paused-notice" data-pause-reason={payload.reason}>
-      <AlertCircle />
-      <AlertTitle>{title}</AlertTitle>
-      <AlertDescription>{body}</AlertDescription>
-      {actions}
-    </Alert>
+    <>
+      <Alert variant={variant} data-testid="run-paused-notice" data-pause-reason={payload.reason}>
+        <AlertCircle />
+        <AlertTitle>{title}</AlertTitle>
+        <AlertDescription>{body}</AlertDescription>
+        {actions}
+      </Alert>
+      <CancelRunDialog
+        open={cancelDialogOpen}
+        onOpenChange={setCancelDialogOpen}
+        isPending={cancelMutation.isPending}
+        error={cancelMutation.error instanceof Error ? cancelMutation.error : null}
+        onConfirm={(reason) => cancelMutation.mutate(reason)}
+        showReason={false}
+      />
+    </>
   );
 }
