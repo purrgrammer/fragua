@@ -84,9 +84,9 @@ export function migrate(db: Database): void {
   // failed step rolls back the whole walk.
   db.transaction(() => {
     db.exec(SCHEMA_SQL);
-    for (let target = version + 1; target <= CURRENT_SCHEMA_VERSION; target++) {
-      const step = SCHEMA_MIGRATIONS[target];
-      if (step == null) throw new Error(`no schema migration registered for target version ${target}`);
+    for (const s of planMigration(version, CURRENT_SCHEMA_VERSION).steps) {
+      const step = SCHEMA_MIGRATIONS[s.version];
+      if (step == null) throw new Error(`no schema migration registered for target version ${s.version}`);
       step.up(db);
     }
     db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(CURRENT_SCHEMA_VERSION);

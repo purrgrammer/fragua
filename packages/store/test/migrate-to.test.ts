@@ -67,6 +67,16 @@ describe("planMigration — pure, side-effect-free direction inference", () => {
     expect(plan.steps[0]?.class).toBe("full"); // step 2's down round-trips
   });
 
+  test("step.version is direction-relative: forward up(2) vs down(2) both read v2", () => {
+    // The asymmetry is intentional and a one-off-by-one trap for a future
+    // step author: forward steps[].version is the version the `up` PRODUCES;
+    // down steps[].version is the version whose `down` runs (landing on
+    // version-1). For the 1↔2 hop both directions surface v2 — but the
+    // forward runs `up[2]` and the down runs `down[2]`.
+    expect(planMigration(1, 2).steps[0]?.version).toBe(2);
+    expect(planMigration(2, 1).steps[0]?.version).toBe(2);
+  });
+
   test("target past CURRENT is refused", () => {
     expect(() => planMigration(CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION + 1)).toThrow(/only knows up to/i);
   });
