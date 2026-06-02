@@ -7,17 +7,14 @@
 // pause, resume of an operator-paused run, and cancel-from-anywhere on
 // non-terminal runs. Returns null when no action applies (terminal
 // runs, or when a specialized banner already owns every action).
-//
-// Cancel is terminal and irreversible — gated behind a single inline
-// two-step (first click flips into a 3s confirm window; second click
-// fires). No AlertDialog primitive lives under components/ui yet.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { cancelRun, pauseRun, type RunDetail, resumeRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { toast, toastError } from "../lib/toast.ts";
+import { CancelRunDialog } from "./CancelRunDialog.tsx";
 import { Button } from "./ui/button.tsx";
 
 export interface RunControlsProps {
@@ -32,12 +29,9 @@ export interface RunControlsProps {
   hitlOptionsCount?: number;
   /** Compact mode: drops the card wrapper, shrinks the buttons to icon-only
    * with a tooltip-style title, sized to match the status badge so the
-   * controls can sit inline alongside the badge in a header row. The
-   * confirm-cancel textarea + error messages still render below. */
+   * controls can sit inline alongside the badge in a header row. */
   compact?: boolean;
 }
-
-const CONFIRM_WINDOW_MS = 3_000;
 
 async function refreshAfterControl(qc: ReturnType<typeof useQueryClient>, runId: string): Promise<void> {
   await qc.invalidateQueries(queries.runs.detail(runId));
@@ -78,45 +72,9 @@ export function RunControls({
     onError: (err) => toastError(err),
   });
 
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const [reason, setReason] = useState("");
-  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (confirmTimerRef.current != null) clearTimeout(confirmTimerRef.current);
-    };
-  }, []);
-
-  const armConfirm = (): void => {
-    setConfirmingCancel(true);
-    if (confirmTimerRef.current != null) clearTimeout(confirmTimerRef.current);
-    confirmTimerRef.current = setTimeout(() => {
-      setConfirmingCancel(false);
-      setReason("");
-    }, CONFIRM_WINDOW_MS);
-  };
-
-  const fireCancel = (): void => {
-    if (confirmTimerRef.current != null) {
-      clearTimeout(confirmTimerRef.current);
-      confirmTimerRef.current = null;
-    }
-    setConfirmingCancel(false);
-    const trimmed = reason.trim();
-    cancelM.mutate(trimmed.length > 0 ? trimmed : undefined);
-    setReason("");
-  };
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
   const canPause = status === "running";
-  // Resume is the generic operator-pause path. The specialized
-  // substatuses handle their own surface:
-  //   - paused                  → RunPausedNotice (Resume + Cancel)
-  //   - paused_human with options → HitlChoice (option buttons)
-  // paused_human with NO options is the workflow-authored human-node
-  // resume case (operator pauses route to `paused` now).
-  // paused_auto auto-resumes on a timer; manual Resume short-circuits
-  // the wait — handled in RunPausedNotice for those reasons.
   const isOperatorHitlPause = runStatus === "paused_human" && (hitlOptionsCount ?? 0) === 0;
   const canResume =
     status === "paused" && runStatus !== "paused" && (runStatus !== "paused_human" || isOperatorHitlPause);
@@ -129,17 +87,12 @@ export function RunControls({
 
   const busy = pauseM.isPending || resumeM.isPending || cancelM.isPending;
   const errorMessage =
-    cancelM.error instanceof Error
-      ? cancelM.error.message
-      : resumeM.error instanceof Error
-        ? resumeM.error.message
-        : pauseM.error instanceof Error
-          ? pauseM.error.message
-          : null;
+    resumeM.error instanceof Error
+      ? resumeM.error.message
+      : pauseM.error instanceof Error
+        ? pauseM.error.message
+        : null;
 
-  // Compact: icon-only buttons sized to the status-badge row
-  // (`text-[0.65rem] px-1.5 py-0.5` per RunDetail). Drop the card
-  // wrapper so the buttons sit inline alongside the badge.
   const buttonSize = compact ? "xs" : "sm";
   const compactBtn = "h-5 px-1.5 text-[0.65rem] gap-1 [&_svg]:size-3";
   const compactClass = compact ? compactBtn : "";
@@ -178,52 +131,34 @@ export function RunControls({
             {!compact && "Resume"}
           </Button>
         )}
-        {canCancel &&
-          (confirmingCancel ? (
-            <Button
-              variant="destructive"
-              size={buttonSize}
-              disabled={busy}
-              onClick={fireCancel}
-              data-testid="run-controls-cancel-confirm"
-              title="Confirm cancel"
-              className={compactClass}
-            >
-              <X />
-              {compact ? "Confirm" : "Confirm cancel"}
-            </Button>
-          ) : (
-            <Button
-              variant="destructive"
-              size={buttonSize}
-              disabled={busy}
-              onClick={armConfirm}
-              data-testid="run-controls-cancel"
-              title="Cancel"
-              className={compactClass}
-            >
-              <X />
-              {!compact && "Cancel"}
-            </Button>
-          ))}
+        {canCancel && (
+          <Button
+            variant="destructive"
+            size={buttonSize}
+            disabled={busy}
+            onClick={() => setCancelDialogOpen(true)}
+            data-testid="run-controls-cancel"
+            title="Cancel"
+            className={compactClass}
+          >
+            <X />
+            {!compact && "Cancel"}
+          </Button>
+        )}
       </div>
-
-      {confirmingCancel && (
-        <textarea
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Optional reason"
-          rows={2}
-          disabled={busy}
-          data-testid="run-controls-cancel-reason"
-          className="w-full resize-none rounded-sw-card border border-sw-border bg-sw-bg px-2 py-1 text-sw-xs text-sw-text placeholder:text-sw-muted focus:outline-none"
-        />
-      )}
 
       {errorMessage && (
         <p className="text-sw-xs text-sw-danger" data-testid="run-controls-error">
           {errorMessage}
         </p>
+      )}
+
+      {canCancel && (
+        <CancelRunDialog
+          open={cancelDialogOpen}
+          onOpenChange={setCancelDialogOpen}
+          onConfirm={(reason) => cancelM.mutate(reason)}
+        />
       )}
     </div>
   );

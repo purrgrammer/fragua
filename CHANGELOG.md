@@ -20,6 +20,14 @@ guarantee.
   class. The automatic open path is unchanged — a store newer than the binary
   still refuses to open, and nothing downgrades by surprise.
 
+### Changed
+
+- **Cancel-run confirmation is now a modal dialog.** Cancelling a run from the
+  run detail view opens a confirmation dialog (reason optional, entered inline)
+  that stays open until the operator acts, replacing the previous two-step
+  button that auto-reverted after a 3-second window. The same dialog backs the
+  Cancel action in the paused-run notice.
+
 ### Fixed
 
 - **`fragua db <action>` now defaults to the home store** — `vacuum`,

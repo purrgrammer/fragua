@@ -310,7 +310,7 @@ describe("RunPausedNotice", () => {
     }
   });
 
-  it("Cancel button POSTs intent.cancel_requested", async () => {
+  it("Cancel button opens confirm dialog, then POSTs intent.cancel_requested on confirm", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     const { restore } = installFetchMock({
       [EVENTS_URL]: () => json(PROVIDER_ERROR_EVENTS),
@@ -323,6 +323,13 @@ describe("RunPausedNotice", () => {
       const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
       const cancelBtn = await findByTestId("run-paused-cancel");
       fireEvent.click(cancelBtn);
+      // Dialog is portaled to document.body.
+      const confirmBtn = await waitFor(() => {
+        const el = document.body.querySelector(`[data-testid="run-controls-cancel-confirm"]`) as HTMLElement | null;
+        if (!el) throw new Error("confirm button not in body");
+        return el;
+      });
+      fireEvent.click(confirmBtn);
       await waitFor(() => {
         expect(calls.some((c) => c.url === CANCEL_URL && c.method === "POST")).toBe(true);
       });
