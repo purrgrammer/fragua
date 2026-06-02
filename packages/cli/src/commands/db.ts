@@ -63,7 +63,7 @@ export async function dbCommand(opts: DbCommandOptions): Promise<number> {
       const store = new SqliteStore({ path: storePath });
       const { deleted } = store.gcBlobs(opts.limit ?? 1000);
       store.close();
-      console.log(chalk.green(`deleted ${deleted} orphan blob row(s)`));
+      console.log(chalk.green(`deleted ${deleted} orphan blob row(s) in ${storePath}`));
       return 0;
     }
     case "backup": {
@@ -94,6 +94,14 @@ function serializeTo(storePath: string, dest: string): void {
   }
 }
 
+/** Remove a pre-migrate backup that turned out redundant — the migrate never
+ * mutated the store (a liveness abort, or a transactional walk that rolled
+ * back), so the dump is just a copy of the intact store and would otherwise
+ * read as a successful checkpoint. */
+function cleanupBackup(backupDest: string | null): void {
+  if (backupDest != null && existsSync(backupDest)) rmSync(backupDest);
+}
+
 /** `<storePath dir>/backups/pre-migrate-v{from}-to-v{to}-<ts>.db`. Lives beside
  * the store being migrated, so a `--db` project store backs up next to itself
  * rather than into the global `~/.fragua`. */
@@ -102,8 +110,11 @@ function backupPath(storePath: string, from: number, to: number, ts: number): st
 }
 
 /** A harness running against this store auto-migrates under its lock and would
- * race a `db migrate` walk. Read-only probe of the `daemon_lock` heartbeat; a
- * stale heartbeat (same TTL the reaper uses) reads as dead. */
+ * race a `db migrate` walk. Read-only probe of the `daemon_lock` heartbeat.
+ * A lock is live until its heartbeat ages PAST the TTL — `<=` matches the
+ * reaper, which reclaims only when `age > DAEMON_LOCK_TTL_MS` (entrypoint.ts);
+ * at exactly the TTL both treat the lock as still alive, so they can't disagree
+ * about that boundary tick. */
 function daemonLive(storePath: string): boolean {
   const probe = new Database(storePath, { readonly: true });
   try {
@@ -112,7 +123,7 @@ function daemonLive(storePath: string): boolean {
     const heartbeatAt =
       probe.query<{ heartbeat_at: number }, []>("SELECT heartbeat_at FROM daemon_lock WHERE id = 1").get()
         ?.heartbeat_at ?? null;
-    return heartbeatAt != null && Date.now() - heartbeatAt < DAEMON_LOCK_TTL_MS;
+    return heartbeatAt != null && Date.now() - heartbeatAt <= DAEMON_LOCK_TTL_MS;
   } finally {
     probe.close();
   }
@@ -198,6 +209,7 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
   // and migrateTo's first write contends on the write lock, and the in-txn
   // version re-read refuses a state planMigration didn't validate.
   if (daemonLive(storePath)) {
+    cleanupBackup(backupDest);
     console.error(
       chalk.red("db migrate: a harness started against this store mid-migrate — aborted before any change"),
     );
@@ -215,9 +227,8 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
     migrateTo(db, target, { allowDataLoss: opts.allowDataLoss ?? false });
   } catch (e) {
     // The walk is transactional, so a failure rolled back to the intact store —
-    // the pre-migrate backup is now a redundant copy of it. Drop it so a failed
-    // run doesn't strew orphan dumps (which read as successful checkpoints).
-    if (backupDest != null && existsSync(backupDest)) rmSync(backupDest);
+    // the pre-migrate backup is now a redundant copy of it.
+    cleanupBackup(backupDest);
     console.error(chalk.red(`db migrate: ${e instanceof Error ? e.message : String(e)}`));
     return 1;
   } finally {

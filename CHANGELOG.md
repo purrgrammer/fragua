@@ -25,10 +25,11 @@ guarantee.
 - **`fragua db <action>` now defaults to the home store** — `vacuum`,
   `gc-blobs`, `backup`, and `migrate` resolve `~/.fragua/fragua.db` (honoring
   `$FRAGUA_HOME`) when `--db` is omitted, the same store the harness binds and
-  the `run`/`runs` verbs open. Previously they looked in
-  `<cwd>/.fragua/fragua.db`, so a bare `fragua db migrate` from a project
-  checkout reported "no store". Pass `--db` to target a project or throwaway
-  store.
+  the `run`/`runs` verbs open. They previously resolved `<cwd>/.fragua/fragua.db`,
+  so a bare `fragua db migrate` from a project checkout reported "no store". To
+  target a project or throwaway store, pass `--db <store>` (`--cwd` only sets the
+  backup-destination root); the resolved store path is echoed in each action's
+  output.
 
 ## [0.4.0] — 2026-06-02
 
