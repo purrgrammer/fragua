@@ -48,13 +48,30 @@ jobs:
 
       - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.3.1
 
+      # `fragua ci` strips secret-named env (anything ending _TOKEN / _KEY / _SECRET / …)
+      # from every tool subprocess — the perimeter control for the adversarial PR-review
+      # threat model (untrusted diff, public bundle). That strip also removes GH_TOKEN, so
+      # a token passed only via `env:` never reaches the `gh pr diff/view/review` calls the
+      # workflow makes; gh then exits non-zero ("set the GH_TOKEN environment variable").
+      # Authenticate to disk instead: hosts.yml survives the strip (HOME is not stripped)
+      # and gh falls back to it when GH_TOKEN is absent. Token piped via a non-GH_TOKEN var
+      # so `gh auth login` doesn't refuse (it errors when GH_TOKEN is set in its own env).
+      - name: Authenticate gh for fragua tool steps
+        env:
+          GH_AUTH_TOKEN: ${{ github.token }}
+        run: gh auth login --with-token <<< "$GH_AUTH_TOKEN"
+
       - name: "Review PR #${{ github.event.pull_request.number }}"
         run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --export "$RUNNER_TEMP/pr-review.fragua"
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ github.token }} # gh pr diff / view / review
+          # gh itself reads creds from hosts.yml (above) — this is stripped from tool
+          # subprocesses. Kept ONLY so captureCiEnvSecrets() registers the token VALUE as a
+          # scrub needle: a leak (e.g. an LLM step catting hosts.yml) is then redacted from
+          # the public bundle, and a live un-scrubbed leak trips the fail-closed exit-80 alarm.
+          GH_TOKEN: ${{ github.token }}
 
       # No manual scrubbing step: `fragua ci`'s CI profile scrubs the bundle at
       # export — it redacts provider-credential values + secret-named env vars
