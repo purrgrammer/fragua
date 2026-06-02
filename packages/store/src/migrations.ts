@@ -117,6 +117,12 @@ export interface MigrationPlan {
  * one consistent message for `--dry-run` and the real walk. Down steps are
  * listed in descending order (the order they run). */
 export function planMigration(from: number, to: number): MigrationPlan {
+  // The invariant lives here, not only in the CLI shim: `migrateTo` is a public
+  // export, so a non-integer `to` (e.g. 2.5) must not slip through to pin a
+  // fractional `schema_version`.
+  if (!Number.isInteger(from) || !Number.isInteger(to)) {
+    throw new Error(`migration versions must be integers (from v${from} → v${to})`);
+  }
   if (to > CURRENT_SCHEMA_VERSION) {
     throw new Error(`cannot migrate to v${to}: this binary only knows up to v${CURRENT_SCHEMA_VERSION}`);
   }
@@ -170,7 +176,11 @@ function classOf(version: number): "full" | "lossy" | "irreversible" {
  * a `lossy` step refuses unless `allowDataLoss`. The walk + version pin run in
  * one transaction so a failing step rolls the whole thing back.
  */
-export function migrateTo(db: Database, target: number, opts: { allowDataLoss?: boolean } = {}): MigrationPlan {
+export function migrateTo(
+  db: Database,
+  target: number,
+  opts: { allowDataLoss?: boolean; assumeLocked?: boolean } = {},
+): MigrationPlan {
   const current = readVersion(db);
   if (current == null) {
     throw new Error("no fragua store here (schema uninitialized) — start the harness to create it");
@@ -196,40 +206,63 @@ export function migrateTo(db: Database, target: number, opts: { allowDataLoss?: 
     }
   }
 
+  // `assumeLocked`: the caller already holds the write lock (BEGIN IMMEDIATE) and
+  // owns the commit/rollback — used by the CLI so its liveness check and the lock
+  // acquisition are atomic. Otherwise own the transaction here.
+  if (opts.assumeLocked) {
+    applyMigrationWalk(db, plan, target, current);
+    return plan;
+  }
+
   // BEGIN IMMEDIATE takes the write lock at the start of the walk, so a second
-  // concurrent `db migrate` (the CLI liveness gate only guards against a daemon)
-  // blocks here instead of interleaving — serializing the two migrates rules out
-  // an ABA race where another walk moves the version away and back while ours
-  // runs. The re-read below then catches the remaining case: a writer that
-  // committed between the pre-lock `readVersion` above and our acquiring the
-  // lock, which would leave us planning from a version that no longer holds.
+  // concurrent `db migrate` blocks here instead of interleaving — serializing the
+  // two migrates rules out an ABA race where another walk moves the version away
+  // and back while ours runs.
   db.exec("BEGIN IMMEDIATE");
+  let inTxn = true;
   try {
-    const live = readVersion(db);
-    if (live !== current) {
-      throw new Error(`schema_version moved under the migrate (planned from v${current}, store now v${live}) — re-run`);
-    }
-    if (plan.direction === "up") {
-      if (target === CURRENT_SCHEMA_VERSION) db.exec(SCHEMA_SQL);
-      for (const s of plan.steps) {
-        const step = SCHEMA_MIGRATIONS[s.version];
-        if (step == null) throw new Error(`no schema migration registered for target version ${s.version}`);
-        step.up(db);
-      }
-    } else {
-      for (const s of plan.steps) {
-        const down = SCHEMA_MIGRATIONS[s.version]?.down;
-        if (down == null) throw new Error(`no down step for v${s.version}`);
-        down(db);
-      }
-    }
-    db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(target);
+    applyMigrationWalk(db, plan, target, current);
     db.exec("COMMIT");
+    inTxn = false;
   } catch (e) {
-    db.exec("ROLLBACK");
+    // Some COMMIT failures auto-roll-back the txn, so a follow-up ROLLBACK can
+    // raise "no transaction is active" and mask the real error. Swallow the
+    // rollback error so the original always propagates.
+    if (inTxn) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {}
+    }
     throw e;
   }
   return plan;
+}
+
+/** Run the validated plan against `db`, which MUST already be inside a write
+ * transaction. Re-reads `schema_version` first: a writer that committed between
+ * the caller's `readVersion` and acquiring the lock would leave us planning from
+ * a version that no longer holds (an interleaving ABA is already impossible —
+ * the held write lock serializes concurrent walks). */
+function applyMigrationWalk(db: Database, plan: MigrationPlan, target: number, current: number): void {
+  const live = readVersion(db);
+  if (live !== current) {
+    throw new Error(`schema_version moved under the migrate (planned from v${current}, store now v${live}) — re-run`);
+  }
+  if (plan.direction === "up") {
+    if (target === CURRENT_SCHEMA_VERSION) db.exec(SCHEMA_SQL);
+    for (const s of plan.steps) {
+      const step = SCHEMA_MIGRATIONS[s.version];
+      if (step == null) throw new Error(`no schema migration registered for target version ${s.version}`);
+      step.up(db);
+    }
+  } else {
+    for (const s of plan.steps) {
+      const down = SCHEMA_MIGRATIONS[s.version]?.down;
+      if (down == null) throw new Error(`no down step for v${s.version}`);
+      down(db);
+    }
+  }
+  db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(target);
 }
 
 /** Test-facing view of the registered steps — lets the coverage-discipline

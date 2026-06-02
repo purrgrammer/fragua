@@ -77,6 +77,10 @@ describe("planMigration — pure, side-effect-free direction inference", () => {
     expect(planMigration(2, 1).steps[0]?.version).toBe(2);
   });
 
+  test("a non-integer target is refused (the invariant lives in planMigration)", () => {
+    expect(() => planMigration(2, 2.5)).toThrow(/integer/i);
+  });
+
   test("target past CURRENT is refused", () => {
     expect(() => planMigration(CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION + 1)).toThrow(/only knows up to/i);
   });
@@ -130,6 +134,20 @@ describe("migrateTo — applies the walk and pins the target", () => {
     const db = freshDb();
     migrate(db);
     expect(() => migrateTo(db, CURRENT_SCHEMA_VERSION + 1)).toThrow(/only knows up to/i);
+    db.close();
+  });
+
+  test("assumeLocked runs the walk inside the caller's transaction", () => {
+    const db = freshDb();
+    migrate(db); // v2: schedules.title
+    // Caller owns the transaction; migrateTo must NOT open its own (a second
+    // BEGIN would throw) and must NOT commit (the COMMIT below would then fail).
+    db.exec("BEGIN IMMEDIATE");
+    const plan = migrateTo(db, 1, { assumeLocked: true });
+    db.exec("COMMIT");
+    expect(plan.direction).toBe("down");
+    expect(version(db)).toBe(1);
+    expect(scheduleCols(db)).toContain("input");
     db.close();
   });
 });
