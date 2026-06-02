@@ -101,24 +101,34 @@ function backupPath(storePath: string, from: number, to: number, ts: number): st
   return join(dirname(storePath), "backups", `pre-migrate-v${from}-to-v${to}-${ts}.db`);
 }
 
+/** A harness running against this store auto-migrates under its lock and would
+ * race a `db migrate` walk. Read-only probe of the `daemon_lock` heartbeat; a
+ * stale heartbeat (same TTL the reaper uses) reads as dead. */
+function daemonLive(storePath: string): boolean {
+  const probe = new Database(storePath, { readonly: true });
+  try {
+    const hasLock = probe.query("SELECT name FROM sqlite_master WHERE type='table' AND name='daemon_lock'").get();
+    if (hasLock == null) return false;
+    const heartbeatAt =
+      probe.query<{ heartbeat_at: number }, []>("SELECT heartbeat_at FROM daemon_lock WHERE id = 1").get()
+        ?.heartbeat_at ?? null;
+    return heartbeatAt != null && Date.now() - heartbeatAt < DAEMON_LOCK_TTL_MS;
+  } finally {
+    probe.close();
+  }
+}
+
 function migrateDb(storePath: string, opts: DbCommandOptions): number {
   // Read the current version + daemon liveness WITHOUT mutating. The
   // store-client open mode (`migrate:false`) throws on an out-of-band version —
   // exactly the case `db migrate` exists to resolve — so probe the raw rows.
   const probe = new Database(storePath, { readonly: true });
   let current: number | null;
-  let heartbeatAt: number | null = null;
   try {
     const hasVersion = probe.query("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'").get();
     current = hasVersion
       ? (probe.query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1").get()?.version ?? null)
       : null;
-    const hasLock = probe.query("SELECT name FROM sqlite_master WHERE type='table' AND name='daemon_lock'").get();
-    if (hasLock) {
-      heartbeatAt =
-        probe.query<{ heartbeat_at: number }, []>("SELECT heartbeat_at FROM daemon_lock WHERE id = 1").get()
-          ?.heartbeat_at ?? null;
-    }
   } finally {
     probe.close();
   }
@@ -169,8 +179,8 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
   }
 
   // Liveness gate: a live harness auto-migrates under its lock and would race
-  // this walk. Stale heartbeat ⇒ treated as dead (same TTL the reaper uses).
-  if (heartbeatAt != null && Date.now() - heartbeatAt < DAEMON_LOCK_TTL_MS) {
+  // this walk.
+  if (daemonLive(storePath)) {
     console.error(chalk.red("db migrate: a harness is running against this store (live daemon_lock) — stop it first"));
     return 1;
   }
@@ -179,6 +189,16 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
     const dest = backupPath(storePath, current, target, Date.now());
     serializeTo(storePath, dest);
     console.log(chalk.dim(`backup: ${dest}`));
+  }
+
+  // Re-check after the (possibly slow) backup: a harness could have started in
+  // the gap between the first gate and opening the write connection. This
+  // narrows but doesn't fully close the window — a daemon starting between here
+  // and migrateTo's first write contends on the write lock, and the in-txn
+  // version re-read refuses a state planMigration didn't validate.
+  if (daemonLive(storePath)) {
+    console.error(chalk.red("db migrate: a harness started against this store mid-migrate — aborted before any change"));
+    return 1;
   }
 
   const db = new Database(storePath);
