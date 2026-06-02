@@ -318,6 +318,7 @@ function rowToRunState(row: RunStateRow): RunState {
     inboxStatus: row.inbox_status as InboxStatus | null,
     acceptedSha: row.accepted_sha,
     cwd: row.cwd,
+    imported: row.imported === 1,
     projectId: row.project_id,
     projectName: row.project_name,
     workflowName: row.workflow_name,
@@ -1393,7 +1394,19 @@ export class SqliteStore implements IEventStore {
    * part of the portable record, so a future table can't silently ride along.
    * Keep this in sync with schema.sql. */
   retainPortableTables(): void {
-    const portable = new Set(["schema_version", "workflows", "run_state", "events", "messages", "artifacts", "blobs"]);
+    // `imported_runs` rides along: it's the authoritative inert marker, and
+    // `getState` reads it to derive `imported`. Dropping it would both break that
+    // read and strip the inert flag from any imported run in a portable copy.
+    const portable = new Set([
+      "schema_version",
+      "workflows",
+      "run_state",
+      "events",
+      "messages",
+      "artifacts",
+      "blobs",
+      "imported_runs",
+    ]);
     const tables = this.db
       .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
       .all()

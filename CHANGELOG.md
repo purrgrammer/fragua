@@ -46,10 +46,10 @@ guarantee.
   retained, so imported runs display per-step cost, LLM-step labels, the
   traversal-edge overlay, and the run title correctly.
 - **Imported-run fidelity — UI operate controls**: `RunControls` now accepts an
-  `imported` prop; when true (derived from `RunDetail.imported`, set when
-  `cwd == null`) the pause/resume/cancel buttons are replaced with a read-only
-  "imported (inert)" badge, preventing dead-end operate actions on runs the
-  daemon will never dispatch.
+  `imported` prop; when true (derived from `RunDetail.imported`, set from the
+  `imported_runs` inert marker) the pause/resume/cancel buttons are replaced with
+  a read-only "imported (inert)" badge, preventing dead-end operate actions on
+  runs the daemon will never dispatch.
 
 ## [0.4.0] — 2026-06-02
 

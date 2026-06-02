@@ -15,7 +15,16 @@ function tableNames(store: unknown): string[] {
     .map((r) => r.name);
 }
 
-const PORTABLE = ["artifacts", "blobs", "events", "messages", "run_state", "schema_version", "workflows"];
+const PORTABLE = [
+  "artifacts",
+  "blobs",
+  "events",
+  "imported_runs",
+  "messages",
+  "run_state",
+  "schema_version",
+  "workflows",
+];
 
 describe("retainPortableTables", () => {
   test("drops credential + instance tables, keeps the portable run record", async () => {
