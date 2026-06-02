@@ -158,9 +158,12 @@ describe("fragua db", () => {
   test("migrate refuses to race a live harness (fresh daemon_lock heartbeat)", async () => {
     const cwd = makeStore();
     const db = new Database(join(cwd, ".fragua/fragua.db"));
+    // Future-stamp the heartbeat so the liveness gate (heartbeat within
+    // DAEMON_LOCK_TTL_MS) fires regardless of scheduler jitter — a `Date.now()`
+    // stamp could age past the TTL if the runner pauses before the gate.
     db.query("INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at) VALUES (1, 999, 'h', ?, ?)").run(
       Date.now(),
-      Date.now(),
+      Date.now() + 60_000,
     );
     db.close();
     expect(await run({ action: "migrate", cwd, to: "1", noBackup: true })).toBe(1);
