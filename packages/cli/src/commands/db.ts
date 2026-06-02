@@ -116,7 +116,14 @@ function backupPath(storePath: string, from: number, to: number, ts: number): st
  * at exactly the TTL both treat the lock as still alive, so they can't disagree
  * about that boundary tick. */
 function daemonLive(storePath: string): boolean {
-  const probe = new Database(storePath, { readonly: true });
+  let probe: Database;
+  try {
+    probe = new Database(storePath, { readonly: true });
+  } catch {
+    // Can't even open read-only (e.g. SQLITE_BUSY mid-checkpoint). Assume a
+    // harness holds it and refuse — the safe default for a destructive verb.
+    return true;
+  }
   try {
     const hasLock = probe.query("SELECT name FROM sqlite_master WHERE type='table' AND name='daemon_lock'").get();
     if (hasLock == null) return false;
@@ -124,6 +131,8 @@ function daemonLive(storePath: string): boolean {
       probe.query<{ heartbeat_at: number }, []>("SELECT heartbeat_at FROM daemon_lock WHERE id = 1").get()
         ?.heartbeat_at ?? null;
     return heartbeatAt != null && Date.now() - heartbeatAt <= DAEMON_LOCK_TTL_MS;
+  } catch {
+    return true;
   } finally {
     probe.close();
   }
@@ -203,19 +212,6 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
     console.log(chalk.dim(`backup: ${backupDest}`));
   }
 
-  // Re-check after the (possibly slow) backup: a harness could have started in
-  // the gap between the first gate and opening the write connection. This
-  // narrows but doesn't fully close the window — a daemon starting between here
-  // and migrateTo's first write contends on the write lock, and the in-txn
-  // version re-read refuses a state planMigration didn't validate.
-  if (daemonLive(storePath)) {
-    cleanupBackup(backupDest);
-    console.error(
-      chalk.red("db migrate: a harness started against this store mid-migrate — aborted before any change"),
-    );
-    return 1;
-  }
-
   const db = new Database(storePath);
   // Same pragma set the bootstrap migrate path uses: `busy_timeout` so a
   // concurrent reader waits instead of taking an instant SQLITE_BUSY, WAL, and
@@ -223,11 +219,40 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
   // an FK-bearing table uses `PRAGMA defer_foreign_keys=ON` (valid inside the
   // walk's transaction) rather than disabling enforcement on the connection.
   applyPragmas(db);
+
+  // Take the write lock BEFORE the second liveness re-check, then run the walk
+  // under that same lock (`assumeLocked`). This makes the check + acquisition
+  // atomic: a harness booting now blocks on our lock, so the heartbeat we read
+  // reflects any daemon that was already live — closing the gap a separate
+  // pre-lock check would leave open. BEGIN IMMEDIATE is INSIDE the try so a
+  // failed lock acquisition (SQLITE_BUSY past busy_timeout) still cleans up the
+  // backup and closes the connection rather than escaping uncaught.
+  let inTxn = false;
   try {
-    migrateTo(db, target, { allowDataLoss: opts.allowDataLoss ?? false });
+    db.exec("BEGIN IMMEDIATE");
+    inTxn = true;
+    if (daemonLive(storePath)) {
+      db.exec("ROLLBACK");
+      inTxn = false;
+      cleanupBackup(backupDest);
+      console.error(
+        chalk.red("db migrate: a harness started against this store mid-migrate — aborted before any change"),
+      );
+      return 1;
+    }
+    migrateTo(db, target, { allowDataLoss: opts.allowDataLoss ?? false, assumeLocked: true });
+    db.exec("COMMIT");
+    inTxn = false;
   } catch (e) {
-    // The walk is transactional, so a failure rolled back to the intact store —
-    // the pre-migrate backup is now a redundant copy of it.
+    // Some COMMIT failures auto-roll-back the txn, so a follow-up ROLLBACK can
+    // raise "no transaction is active" — swallow it so it never masks the
+    // original error. The walk is transactional, so the store is intact on
+    // failure and the backup is a redundant copy.
+    if (inTxn) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {}
+    }
     cleanupBackup(backupDest);
     console.error(chalk.red(`db migrate: ${e instanceof Error ? e.message : String(e)}`));
     return 1;

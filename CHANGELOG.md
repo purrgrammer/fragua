@@ -26,10 +26,10 @@ guarantee.
   `gc-blobs`, `backup`, and `migrate` resolve `~/.fragua/fragua.db` (honoring
   `$FRAGUA_HOME`) when `--db` is omitted, the same store the harness binds and
   the `run`/`runs` verbs open. They previously resolved `<cwd>/.fragua/fragua.db`,
-  so a bare `fragua db migrate` from a project checkout reported "no store". To
-  target a project or throwaway store, pass `--db <store>` (`--cwd` only sets the
-  backup-destination root); the resolved store path is echoed in each action's
-  output.
+  so a bare `fragua db migrate` from a project checkout reported "no store".
+  Pass `--db <store>` to point at an alternate store (e.g. an ephemeral test
+  store); `--cwd` only sets the backup-destination root. The resolved store path
+  is echoed in each action's output.
 
 ## [0.4.0] — 2026-06-02
 
