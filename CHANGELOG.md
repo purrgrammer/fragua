@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-02
+
 ### Added
 
 - **`fragua ci --allow-env <name>`** — exempt a secret-named env var from the CI
@@ -159,5 +161,6 @@ back down as a portable `.fragua` bundle for local inspection and aggregation.
 - Nightly property-test suite: raised the per-test timeout to fit PBT scaling and
   deflaked timer-fragile tests (#4).
 
+[0.4.0]: https://github.com/purrgrammer/fragua/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/purrgrammer/fragua/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/purrgrammer/fragua/releases/tag/v0.1.0
