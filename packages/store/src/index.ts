@@ -30,6 +30,7 @@ export {
   planMigration,
 } from "./migrations.ts";
 export {
+  applyPragmas,
   CURRENT_SCHEMA_VERSION,
   DAEMON_LOCK_TTL_MS,
   EVENT_CONTRACT_VERSION,

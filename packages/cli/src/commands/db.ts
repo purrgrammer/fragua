@@ -12,7 +12,14 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { getFraguaHome } from "@fragua/agent";
-import { CURRENT_SCHEMA_VERSION, DAEMON_LOCK_TTL_MS, migrateTo, planMigration, SqliteStore } from "@fragua/store";
+import {
+  applyPragmas,
+  CURRENT_SCHEMA_VERSION,
+  DAEMON_LOCK_TTL_MS,
+  migrateTo,
+  planMigration,
+  SqliteStore,
+} from "@fragua/store";
 import chalk from "chalk";
 
 export interface DbCommandOptions {
@@ -172,6 +179,12 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
   }
 
   const db = new Database(storePath);
+  // Same pragma set the bootstrap migrate path uses: `busy_timeout` so a
+  // concurrent reader waits instead of taking an instant SQLITE_BUSY, WAL, and
+  // `foreign_keys=ON` for parity with normal operation. A down-step that rebuilds
+  // an FK-bearing table uses `PRAGMA defer_foreign_keys=ON` (valid inside the
+  // walk's transaction) rather than disabling enforcement on the connection.
+  applyPragmas(db);
   try {
     migrateTo(db, target, { allowDataLoss: opts.allowDataLoss ?? false });
   } catch (e) {
