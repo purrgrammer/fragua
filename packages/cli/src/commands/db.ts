@@ -205,36 +205,40 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
     return 1;
   }
 
+  // Everything from the backup onward runs under one try: the pre-migrate dump,
+  // opening + pragma-configuring the write connection, taking the lock, and the
+  // walk. `committed` gates cleanup so the `finally` removes the (now redundant)
+  // backup on ANY non-committed exit — a throw from `serializeTo` /
+  // `new Database` / `applyPragmas` / `BEGIN IMMEDIATE`, the liveness refusal, or
+  // a failed walk — and never strands an orphan dump that reads as a checkpoint.
   let backupDest: string | null = null;
-  if (willBackup) {
-    backupDest = backupPath(storePath, current, target, Date.now());
-    serializeTo(storePath, backupDest);
-    console.log(chalk.dim(`backup: ${backupDest}`));
-  }
-
-  const db = new Database(storePath);
-  // Same pragma set the bootstrap migrate path uses: `busy_timeout` so a
-  // concurrent reader waits instead of taking an instant SQLITE_BUSY, WAL, and
-  // `foreign_keys=ON` for parity with normal operation. A down-step that rebuilds
-  // an FK-bearing table uses `PRAGMA defer_foreign_keys=ON` (valid inside the
-  // walk's transaction) rather than disabling enforcement on the connection.
-  applyPragmas(db);
-
-  // Take the write lock BEFORE the second liveness re-check, then run the walk
-  // under that same lock (`assumeLocked`). This makes the check + acquisition
-  // atomic: a harness booting now blocks on our lock, so the heartbeat we read
-  // reflects any daemon that was already live — closing the gap a separate
-  // pre-lock check would leave open. BEGIN IMMEDIATE is INSIDE the try so a
-  // failed lock acquisition (SQLITE_BUSY past busy_timeout) still cleans up the
-  // backup and closes the connection rather than escaping uncaught.
+  let db: Database | undefined;
   let inTxn = false;
+  let committed = false;
   try {
+    if (willBackup) {
+      backupDest = backupPath(storePath, current, target, Date.now());
+      serializeTo(storePath, backupDest);
+      console.log(chalk.dim(`backup: ${backupDest}`));
+    }
+
+    db = new Database(storePath);
+    // Same pragma set the bootstrap migrate path uses: `busy_timeout` so a
+    // concurrent reader waits instead of an instant SQLITE_BUSY, WAL, and
+    // `foreign_keys=ON` for parity with normal operation. A down-step that
+    // rebuilds an FK-bearing table uses `PRAGMA defer_foreign_keys=ON` (valid
+    // inside the walk's transaction) rather than disabling enforcement here.
+    applyPragmas(db);
+
+    // Take the write lock BEFORE the second liveness re-check, then run the walk
+    // under that same lock (`assumeLocked`) so the check + acquisition are atomic:
+    // a harness booting now blocks on our lock, so the heartbeat we read reflects
+    // any daemon already live — closing the gap a separate pre-lock check leaves.
     db.exec("BEGIN IMMEDIATE");
     inTxn = true;
     if (daemonLive(storePath)) {
       db.exec("ROLLBACK");
       inTxn = false;
-      cleanupBackup(backupDest);
       console.error(
         chalk.red("db migrate: a harness started against this store mid-migrate — aborted before any change"),
       );
@@ -243,21 +247,21 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
     migrateTo(db, target, { allowDataLoss: opts.allowDataLoss ?? false, assumeLocked: true });
     db.exec("COMMIT");
     inTxn = false;
+    committed = true;
   } catch (e) {
     // Some COMMIT failures auto-roll-back the txn, so a follow-up ROLLBACK can
     // raise "no transaction is active" — swallow it so it never masks the
-    // original error. The walk is transactional, so the store is intact on
-    // failure and the backup is a redundant copy.
-    if (inTxn) {
+    // original error.
+    if (inTxn && db) {
       try {
         db.exec("ROLLBACK");
       } catch {}
     }
-    cleanupBackup(backupDest);
     console.error(chalk.red(`db migrate: ${e instanceof Error ? e.message : String(e)}`));
     return 1;
   } finally {
-    db.close();
+    if (!committed) cleanupBackup(backupDest);
+    db?.close();
   }
   console.log(chalk.green(`migrated ${storePath}: v${current} ${arrow} v${target}`));
   return 0;

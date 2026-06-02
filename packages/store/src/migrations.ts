@@ -175,6 +175,13 @@ function classOf(version: number): "full" | "lossy" | "irreversible" {
  * transaction). The first irreversible step in range refuses the whole walk;
  * a `lossy` step refuses unless `allowDataLoss`. The walk + version pin run in
  * one transaction so a failing step rolls the whole thing back.
+ *
+ * Connection precondition: when not `assumeLocked` this opens its own
+ * `BEGIN IMMEDIATE`, so the caller should have applied connection pragmas
+ * (notably `busy_timeout`, via `applyPragmas`) first — a bare `new Database`
+ * defaults `busy_timeout=0` and would take an instant `SQLITE_BUSY` against any
+ * concurrent writer. With `assumeLocked` the caller already holds the lock and
+ * owns commit/rollback.
  */
 export function migrateTo(
   db: Database,
@@ -202,7 +209,9 @@ export function migrateTo(
     const lossy = plan.steps.filter((s) => s.class === "lossy");
     if (lossy.length > 0 && !opts.allowDataLoss) {
       const vs = lossy.map((s) => `v${s.version}`).join(", ");
-      throw new Error(`downgrade loses data at ${vs} — re-run with --allow-data-loss to proceed`);
+      // Engine-level message: name the option, not the CLI flag. The CLI maps
+      // `allowDataLoss` ⇒ `--allow-data-loss` for its own users.
+      throw new Error(`downgrade loses data at ${vs} — pass allowDataLoss to override`);
     }
   }
 
