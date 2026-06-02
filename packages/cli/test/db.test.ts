@@ -187,6 +187,21 @@ describe("fragua db", () => {
     expect(await run({ action: "migrate", cwd, to: "abc", noBackup: true })).toBe(1);
   });
 
+  test("a failed migrate removes its pre-migrate backup", async () => {
+    const cwd = makeStore(); // v2
+    // Drop schedules so the v2→v1 down step's ALTER throws inside the walk,
+    // AFTER the pre-migrate backup is written — exercising the cleanup path.
+    const db = new Database(join(cwd, ".fragua/fragua.db"));
+    db.exec("DROP TABLE schedules");
+    db.close();
+    expect(await run({ action: "migrate", cwd, to: "1" })).toBe(1);
+    const backupsDir = join(cwd, ".fragua/backups");
+    const orphans = existsSync(backupsDir)
+      ? readdirSync(backupsDir).filter((f) => f.startsWith("pre-migrate-"))
+      : [];
+    expect(orphans).toEqual([]);
+  });
+
   test("migrate --to a numeric-but-non-integer literal is refused", async () => {
     // `Number.isInteger` coerces all of these to whole numbers; the literal
     // guard must reject them so a typo doesn't silently retarget the migrate.

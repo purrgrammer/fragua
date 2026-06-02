@@ -9,7 +9,7 @@
 //               version-gated, so this is gated on surprise, not correctness.
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { getFraguaHome } from "@fragua/agent";
 import {
@@ -185,10 +185,11 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
     return 1;
   }
 
+  let backupDest: string | null = null;
   if (willBackup) {
-    const dest = backupPath(storePath, current, target, Date.now());
-    serializeTo(storePath, dest);
-    console.log(chalk.dim(`backup: ${dest}`));
+    backupDest = backupPath(storePath, current, target, Date.now());
+    serializeTo(storePath, backupDest);
+    console.log(chalk.dim(`backup: ${backupDest}`));
   }
 
   // Re-check after the (possibly slow) backup: a harness could have started in
@@ -211,6 +212,10 @@ function migrateDb(storePath: string, opts: DbCommandOptions): number {
   try {
     migrateTo(db, target, { allowDataLoss: opts.allowDataLoss ?? false });
   } catch (e) {
+    // The walk is transactional, so a failure rolled back to the intact store —
+    // the pre-migrate backup is now a redundant copy of it. Drop it so a failed
+    // run doesn't strew orphan dumps (which read as successful checkpoints).
+    if (backupDest != null && existsSync(backupDest)) rmSync(backupDest);
     console.error(chalk.red(`db migrate: ${e instanceof Error ? e.message : String(e)}`));
     return 1;
   } finally {
