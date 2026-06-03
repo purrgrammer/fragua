@@ -14,8 +14,10 @@
 # never `-f`. A fixed, force-pushed branch would silently clobber any human fixup
 # commits pushed onto the drift PR between runs (the `## Manual` follow-ups the PR
 # itself invites). A per-run branch shares nothing, so there is nothing to
-# overwrite — each weekly PR is an independent snapshot. If today's branch already
-# exists upstream (a same-day re-run), its PR is open already and the run no-ops.
+# overwrite — each weekly PR is an independent snapshot. The run is idempotent on
+# PR existence: a branch whose PR is already open no-ops; a branch a prior run
+# pushed but never opened a PR for (e.g. a transient gh failure) gets its PR
+# opened on retry. Commits are attributed to the GitHub Actions bot.
 #
 #   bash open-pr.sh <open_pr:true|false>
 
@@ -42,18 +44,30 @@ if git diff --cached --quiet; then
   exit 0
 fi
 
-# Today's branch already upstream ⇒ a same-day run already opened its PR. No-op
-# rather than racing a second push — and we never force over it.
-if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-  echo "$branch already exists upstream — today's PR is open; skipping"
+# Idempotent on PR existence, not branch existence: a prior run that pushed the
+# branch but failed before opening the PR (e.g. a transient `gh` error) leaves
+# the branch upstream with no PR — a retry should OPEN the PR, not skip.
+existing_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+if [ -n "$existing_pr" ]; then
+  echo "PR #$existing_pr already open for $branch — nothing to do"
   exit 0
 fi
 
-git config user.name "fragua-drift"
-git config user.email "drift@users.noreply.github.com"
-git checkout -B "$branch"
-git commit -m "[docs] drift: sync docs to the code they describe"
-git push -u origin "$branch" # plain push of a fresh branch — never -f
+if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+  # Branch already upstream from a prior run that never opened a PR — open the PR
+  # for the existing remote head rather than re-pushing (a fresh commit off main
+  # would be non-fast-forward, and we never force).
+  echo "$branch already upstream with no open PR — opening the PR for it"
+else
+  # Commit as the GitHub Actions bot — a system identity with no real account.
+  # A bare `<name>@users.noreply.github.com` would attribute commits to whatever
+  # GitHub user is named `<name>`; 41898282 is github-actions[bot]'s user id.
+  git config user.name "github-actions[bot]"
+  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+  git checkout -B "$branch"
+  git commit -m "[docs] drift: sync docs to the code they describe"
+  git push -u origin "$branch" # plain push of a fresh branch — never -f
+fi
 
 # apply writes the body; fall back to a minimal one if that step was skipped.
 if [ ! -f "$body" ]; then
