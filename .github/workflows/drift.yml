@@ -1,0 +1,67 @@
+name: Doc drift
+
+# Weekly unattended doc/code drift sync. Installs the released fragua binary
+# (setup-fragua) and runs the `drift` workflow (`.fragua/workflows/drift.yaml`)
+# under `fragua ci`: it cross-references the docs against the code, applies the
+# doc-fixable corrections in the run's worktree, and opens a fresh PR (one per run) with
+# the edits — the `## Manual` findings ride in the PR body for a human to action.
+#
+# Trust posture differs from pr-review.yml: that job reviews an UNTRUSTED PR diff,
+# so it is read-only. drift reads and edits the repo's OWN trusted docs, so it
+# holds `contents: write` (to push the branch) + `pull-requests: write` (to open
+# the PR). It NEVER merges — the PR review is the human gate. drift's apply step
+# is scoped to [read, edit, write] over docs; open_pr is the only write to origin.
+#
+# NOTE: PRs opened with the default GITHUB_TOKEN do not trigger other workflows
+# (incl. pr-review.yml). That's a GitHub safety rule; the drift PR is reviewed by
+# a human, not by the bot reviewer.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Mondays 09:00 UTC
+  workflow_dispatch: # manual trigger; audits both surfaces (drift.yaml's default)
+
+# One drift run at a time; never cancel an in-flight run (it may be mid-push).
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Scoped to the one job that needs them, not the whole workflow.
+    permissions:
+      contents: write # open_pr pushes the per-run fragua/drift-<date> branch
+      pull-requests: write # open_pr opens the PR
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0 # full history so the collectors can read commit history
+          # open_pr pushes via the credential checkout embeds in .git (the run's
+          # worktree shares it); persist it explicitly or the push loses its auth.
+          persist-credentials: true
+
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@1d07104f2585ba682791896393de5e8b8622220c # v0.4.0
+
+      # `fragua ci` strips secret-named env (anything ending _TOKEN / _KEY / …) from
+      # tool subprocesses; `--allow-env GH_TOKEN` exempts it so open_pr's `gh` calls
+      # work. The value stays a scrub needle (redacted from the exported bundle).
+      # git push authenticates via the checkout's embedded credential, not GH_TOKEN.
+      - name: Audit doc drift
+        run: fragua ci drift --allow-env GH_TOKEN --export "$RUNNER_TEMP/drift.fragua"
+        env:
+          # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
+          # instead of API billing (setup-fragua/README.md § Credentials).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }} # exempted via --allow-env for gh; still a scrub needle
+
+      # Post-mortem locally: `fragua show <download>` to summarize, then
+      # `fragua import <download>` + `fragua runs status|events|messages <run-id>`.
+      - name: Upload run bundle
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: drift-bundle
+          path: ${{ runner.temp }}/drift.fragua
+          if-no-files-found: warn
