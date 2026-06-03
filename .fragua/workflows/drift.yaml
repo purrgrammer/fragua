@@ -14,22 +14,31 @@
 # Shape: collect (deterministic inventory) → analyze (evidence-cited findings,
 # reading the snapshot + each skill's SKILL.md directly) → propose (edit blocks
 # for the doc-fixable findings; the rest go to a Manual list) → verify (quality gate:
-# drop weak findings, validate each edit's OLD/NEW against the doc) → signoff
-# (HITL) → apply (edit tool). The first four steps share `thread: drift` so the
-# snapshot, findings, and edits carry forward.
+# drop weak findings, validate each edit's OLD/NEW against the doc) → apply (edit
+# tool, in the run's worktree; writes the PR body) → open_pr (commit the doc edits,
+# push a branch, open or update a PR). The first five steps share `thread: drift`
+# so the snapshot, findings, and edits carry forward.
+#
+# NO human gate. The PR review IS the gate: drift only ever edits docs and never
+# merges — a human reads the diff and merges. Runs unattended weekly in CI
+# (.github/workflows/drift.yml) under `fragua ci drift`; the GHA job seeds a
+# provider key + GH_TOKEN and holds contents:write so open_pr can push the branch.
 #
 # Not every finding is doc-fixable — an UNBACKED status claim needs code, a
-# commit-hygiene gap is historical. Those land in `## Manual`, never edited.
-# At signoff the operator applies the verified edits or keeps the report only.
+# commit-hygiene gap is historical. Those land in the PR body's `## Manual`
+# section (a checklist for the reviewer), never edited. A run with auto-fixable
+# edits opens/updates the PR; a run with only Manual findings opens no PR (the
+# findings ride in the exported run bundle).
 #
-#   bun run fragua run drift
+#   fragua ci   drift                                   # unattended: apply + open PR
+#   bun run fragua run drift --input open_pr=false      # local: apply to worktree, no PR
 #   bun run fragua run drift --input surface=structural
 #   bun run fragua run drift --input surface=narrative --input focus="only workflows"
 
 name: drift
 goal: Cross-reference the docs against the code they describe, surface evidence-cited drift, and apply the doc-fixable corrections with operator signoff.
-budget: 7.00
-budget-policy: pause
+budget: 10.00
+budget-policy: stop
 
 inputs:
   surface:
@@ -41,6 +50,10 @@ inputs:
     type: string
     default: ""
     description: Optional focus hint (e.g. "event taxonomy", "only workflows")
+  open_pr:
+    type: boolean
+    default: true
+    description: Commit the doc edits and open/update a PR (false = leave the edits in the worktree, no PR)
 
 defaults:
   provider: anthropic
@@ -125,7 +138,7 @@ steps:
 
   verify:
     thread: drift
-    next: signoff
+    next: apply
     allowed-tools: [read, grep]
     max-cost: 1.00
     prompt: |
@@ -137,21 +150,44 @@ steps:
 
       Emit your FINAL message: the filtered findings table, then the surviving `### Edit` blocks verbatim, then the `## Manual (not auto-fixed)` section, then a one-line `## Dropped: <n> — <terse reasons>`. If nothing survives and there are no manual items, reply EXACTLY: `no drift detected`.
 
-  signoff:
-    type: human
-    text: "Verified drift findings + proposed doc edits are ready above. Apply the edits, or keep the report only?"
-    routes:
-      apply:       {to: apply, label: "Apply"}
-      report_only: {to: exit,  label: "Report only"}
-
   apply:
     thread: drift
-    allowed-tools: [read, edit]
+    allowed-tools: [read, edit, write]
     max-cost: 0.60
+    next: open_pr
+    prompt: |
+      Apply each surviving `### Edit` block (the verified set above) to its doc with the `edit` tool — one call per block, OLD as `old_string`, NEW as `new_string`, verbatim.
+
+      If an `edit` fails because OLD is missing or not unique, SKIP that block and record it under "Could not apply" — do NOT abort; apply the rest.
+
+      Then WRITE `drift-pr.md` (cwd-relative, `write` tool) as the PR body, this exact shape:
+
+        ## Doc drift — auto-sync
+
+        Applied <N> doc edit(s) to keep the docs in step with the code they describe.
+
+        ### Applied
+        - <doc path> — <one-line summary of the correction>
+
+        ## Manual (not auto-fixed)
+        <the verified `## Manual` section verbatim; `None.` if it was empty>
+
+        ### Could not apply
+        <each skipped edit with its reason; omit this heading entirely if none>
+
+      Emit EXACTLY `applied <N>` (use `applied 0` if every block was skipped or there were none).
+
+  # Deterministic git + PR step (.fragua/scripts/drift/open-pr.sh). Runs in the
+  # run's worktree, which shares the checkout's `.git` (remotes + the GHA-embedded
+  # push credential) — so a branch pushed here reaches origin. The script opens a
+  # PR only when the tree carries tracked doc edits; a clean tree (no fixes, or
+  # only Manual findings) is a no-op (exit 0 → success). A real git/gh error
+  # (open-pr.sh exits non-zero) is left UNROUTED so the run halts and `fragua ci`
+  # returns non-zero — the weekly CI job goes red instead of silently green; the
+  # exported bundle still uploads (its GHA step is `if: always()`).
+  open_pr:
+    type: tool
+    timeout-minutes: 5
     on:
       success: exit
-      fail: exit
-    prompt: |
-      Apply each surviving `### Edit` block (the verified set above) to its doc using the `edit` tool — one call per block, OLD as `old_string`, NEW as `new_string`, verbatim.
-
-      If an `edit` fails because OLD is not found or not unique, call `abort` with reason `apply failed: edit <n> old_string not uniquely matched`. On success, emit `applied <N>`, then echo the `## Manual (not auto-fixed)` section verbatim so it survives in the run's report.
+    run: bash .fragua/scripts/drift/open-pr.sh ${{ inputs.open_pr }}
