@@ -80,6 +80,11 @@ export const RunSummary = Type.Object({
   baseGitRef: Type.Optional(Type.String()),
   /** Source repo HEAD sha at provision (for a short-sha label). */
   baseGitSha: Type.Optional(Type.String()),
+  /** True when the run was brought in via `fragua import`. The run is
+   * inspect-only: the daemon will never dispatch it, and operate controls
+   * (pause/resume/cancel) must be suppressed. Derived from the
+   * `imported_runs` inert marker — not from `cwd == null`. */
+  imported: Type.Optional(Type.Boolean()),
 });
 export type RunSummary = Static<typeof RunSummary>;
 

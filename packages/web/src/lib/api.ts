@@ -96,6 +96,9 @@ export interface RunSummary {
    * default + git-centric row/feed label. Absent when provisioned detached. */
   baseGitRef?: string;
   baseGitSha?: string;
+  /** True when the run was brought in via `fragua import`. Inspect-only:
+   * the daemon will never dispatch it; operate controls must be suppressed. */
+  imported?: boolean;
 }
 
 export interface NodeState {
@@ -487,6 +490,10 @@ export interface ListRunsFilter {
   /** Filter by worktree inbox status.
    * `"pending"` surfaces terminal runs awaiting an operator primitive. */
   inbox?: "pending" | "acted" | "discarded";
+  /** When `true`, exclude runs that carry the `imported_runs` inert marker.
+   * Operator-worklist surfaces (Inbox) set this so imported inspect-only
+   * runs never appear as actionable items. */
+  excludeImported?: boolean;
 }
 
 export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
@@ -500,6 +507,7 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
   if (filter?.projectId !== undefined && filter.projectId.length > 0) params.set("project_id", filter.projectId);
   if (filter?.cwd !== undefined && filter.cwd.length > 0) params.set("cwd", filter.cwd);
   if (filter?.inbox !== undefined) params.set("inbox", filter.inbox);
+  if (filter?.excludeImported === true) params.set("exclude_imported", "true");
   const qs = params.toString();
   const path = qs ? `/runs?${qs}` : "/runs";
   return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
@@ -1244,6 +1252,7 @@ function isRunSummary(v: unknown): v is RunSummary {
     cwd?: unknown;
     projectId?: unknown;
     projectName?: unknown;
+    imported?: unknown;
   };
   return (
     typeof o.runId === "string" &&
@@ -1258,7 +1267,8 @@ function isRunSummary(v: unknown): v is RunSummary {
     (o.cacheReadTokens === undefined || typeof o.cacheReadTokens === "number") &&
     (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
     (o.durationMs === undefined || typeof o.durationMs === "number") &&
-    (o.cwd === undefined || typeof o.cwd === "string")
+    (o.cwd === undefined || typeof o.cwd === "string") &&
+    (o.imported === undefined || typeof o.imported === "boolean")
   );
 }
 

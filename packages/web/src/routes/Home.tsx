@@ -38,8 +38,8 @@ import { useInboxCounts } from "../lib/useInboxCounts.ts";
 export const INBOX_HOME_LIMIT = 5;
 
 const RUNNING_STATUSES = ["running"] as const;
-const BLOCKED_FILTER = { status: ATTENTION_STATUSES, order: "oldest" as const };
-const WORKTREE_FILTER = { inbox: "pending" as const, order: "oldest" as const };
+const BLOCKED_FILTER = { status: ATTENTION_STATUSES, order: "oldest" as const, excludeImported: true as const };
+const WORKTREE_FILTER = { inbox: "pending" as const, order: "oldest" as const, excludeImported: true as const };
 
 export function Home(): JSX.Element {
   // Stats reads the full list (global aggregates); Inbox + Running

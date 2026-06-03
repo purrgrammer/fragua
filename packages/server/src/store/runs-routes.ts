@@ -31,6 +31,8 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     //   ?inbox=pending|acted|discarded — narrow to a worktree inbox status.
     //   ?order=oldest                 — surface longest-waiting first (Inbox).
     //   ?limit=N                      — cap the result, clamped to [1, 200].
+    //   ?exclude_imported=true        — omit imported (inert) runs; used by
+    //                                   the Inbox to keep worklist clean.
     // Unknown statuses are dropped silently — a typo shouldn't 400 a
     // list endpoint that older clients hit on every page load.
     const statusParam = c.req.query("status");
@@ -40,6 +42,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const order: "newest" | "oldest" = c.req.query("order") === "oldest" ? "oldest" : "newest";
     const limit = parseLimit(c.req.query("limit"));
     const inboxParam = c.req.query("inbox");
+    const excludeImportedParam = c.req.query("exclude_imported");
     const queryOpts: Parameters<typeof store.listRunSummaryRows>[0] = { order };
     if (statuses !== undefined) queryOpts.statuses = statuses;
     if (cwdParam !== undefined && cwdParam.length > 0) queryOpts.cwd = cwdParam;
@@ -48,6 +51,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     if (inboxParam === "pending" || inboxParam === "acted" || inboxParam === "discarded") {
       queryOpts.inbox = inboxParam;
     }
+    if (excludeImportedParam === "true") queryOpts.excludeImported = true;
     return c.json(readPlane.runSummaries(queryOpts));
   });
 

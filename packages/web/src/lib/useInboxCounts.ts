@@ -9,8 +9,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ATTENTION_STATUSES } from "../components/Inbox.tsx";
 import { queries } from "./queries.ts";
 
-const BLOCKED_FILTER = { status: ATTENTION_STATUSES, order: "oldest" as const };
-const WORKTREE_FILTER = { inbox: "pending" as const, order: "oldest" as const };
+const BLOCKED_FILTER = { status: ATTENTION_STATUSES, order: "oldest" as const, excludeImported: true as const };
+const WORKTREE_FILTER = { inbox: "pending" as const, order: "oldest" as const, excludeImported: true as const };
 
 export interface InboxCounts {
   /** Runs in paused_human / paused / quarantined. */

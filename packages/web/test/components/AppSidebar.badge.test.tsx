@@ -57,11 +57,11 @@ function mountApp(mocks: Record<string, () => Response | Promise<Response>>, pat
   return { ...result, fetchMock };
 }
 
-// URL produced by listRuns({ inbox: "pending", order: "oldest" })
-const WORKTREE_URL = "/api/runs?order=oldest&inbox=pending";
-// URL produced by listRuns({ status: ["paused_human", "paused", "quarantined"], order: "oldest" })
-// listRuns adds status first, then order; statuses sorted alphabetically.
-const BLOCKED_URL = "/api/runs?status=paused%2Cpaused_human%2Cquarantined&order=oldest";
+// URL produced by listRuns({ inbox: "pending", order: "oldest", excludeImported: true })
+const WORKTREE_URL = "/api/runs?order=oldest&inbox=pending&exclude_imported=true";
+// URL produced by listRuns({ status: ["paused_human", "paused", "quarantined"], order: "oldest", excludeImported: true })
+// listRuns adds status first, then order; excludeImported comes after inbox.
+const BLOCKED_URL = "/api/runs?status=paused%2Cpaused_human%2Cquarantined&order=oldest&exclude_imported=true";
 const HEALTH_URL = "/api/health";
 
 describe("AppSidebar — Inbox pending-count badge", () => {

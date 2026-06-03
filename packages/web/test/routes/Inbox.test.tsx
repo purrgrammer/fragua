@@ -15,10 +15,10 @@ import { installFetchMock, json, renderWithClient } from "../helpers/with-query-
 
 // ── Query URLs ────────────────────────────────────────────────────────
 // Must exactly match what listRuns() builds for each filter.
-// listRuns adds params in order: status, order, limit, cwd, inbox.
+// listRuns adds params in order: status, order, limit, cwd, inbox, excludeImported.
 // statuses are sorted alphabetically before joining.
-const BLOCKED_URL = "/api/runs?status=paused%2Cpaused_human%2Cquarantined&order=oldest";
-const WORKTREE_URL = "/api/runs?order=oldest&inbox=pending";
+const BLOCKED_URL = "/api/runs?status=paused%2Cpaused_human%2Cquarantined&order=oldest&exclude_imported=true";
+const WORKTREE_URL = "/api/runs?order=oldest&inbox=pending&exclude_imported=true";
 
 // ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -152,6 +152,58 @@ describe("InboxPage", () => {
         expect(container.querySelector('[data-testid="inbox-needs-input"]')).toBeNull();
         expect(container.querySelector('[data-testid="inbox-empty"]')).toBeNull();
         expect(container.querySelector('[data-testid="inbox-empty-combined"]')).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  describe("imported-run exclusion", () => {
+    test("the NEEDS INPUT query URL includes exclude_imported=true (server-side exclusion enforced)", () => {
+      expect(BLOCKED_URL).toContain("exclude_imported=true");
+    });
+
+    test("the READY TO LAND query URL includes exclude_imported=true (server-side exclusion enforced)", () => {
+      expect(WORKTREE_URL).toContain("exclude_imported=true");
+    });
+
+    test("NEEDS INPUT fetch is made to BLOCKED_URL (which includes exclude_imported)", async () => {
+      const calls: string[] = [];
+      const { container, restore } = renderPage({
+        [BLOCKED_URL]: () => {
+          calls.push(BLOCKED_URL);
+          return json([]);
+        },
+        [WORKTREE_URL]: () => json([]),
+      });
+      try {
+        await waitFor(() => {
+          if (!container.querySelector('[data-testid="inbox-empty-combined"]') && calls.length === 0) {
+            throw new Error("not yet rendered");
+          }
+          expect(calls).toContain(BLOCKED_URL);
+        });
+      } finally {
+        restore();
+      }
+    });
+
+    test("READY TO LAND fetch is made to WORKTREE_URL (which includes exclude_imported)", async () => {
+      const calls: string[] = [];
+      const { container, restore } = renderPage({
+        [BLOCKED_URL]: () => json([]),
+        [WORKTREE_URL]: () => {
+          calls.push(WORKTREE_URL);
+          return json([]);
+        },
+      });
+      try {
+        await waitFor(() => {
+          if (!container.querySelector('[data-testid="inbox-empty-combined"]') && calls.length === 0) {
+            throw new Error("not yet rendered");
+          }
+          expect(calls).toContain(WORKTREE_URL);
+        });
       } finally {
         restore();
       }

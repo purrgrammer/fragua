@@ -35,6 +35,10 @@ export interface RunPausedNoticeProps {
    * without it the separate query can serve pre-pause events and render
    * nothing until a manual refresh. */
   eventEpoch?: number;
+  /** When true the run was brought in via `fragua import`. All pause/halt
+   * banners render in strictly-informational mode — reason text only,
+   * no action buttons (Resume, Cancel, Raise budget, etc.). */
+  imported?: boolean;
 }
 
 /** Pauses that are genuine errors / wedged states get the destructive
@@ -604,7 +608,7 @@ function renderPause(payload: PausePayload, ctx: RenderCtx): RenderOutput {
   return renderer({ payload: payload as never, ctx });
 }
 
-export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps): JSX.Element | null {
+export function RunPausedNotice({ runId, eventEpoch = 0, imported = false }: RunPausedNoticeProps): JSX.Element | null {
   const qc = useQueryClient();
   const eventsQuery = useQuery({
     // `eventEpoch` (parent's SSE frame counter) is in the key so a pause
@@ -702,14 +706,16 @@ export function RunPausedNotice({ runId, eventEpoch = 0 }: RunPausedNoticeProps)
         <AlertCircle />
         <AlertTitle>{title}</AlertTitle>
         <AlertDescription>{body}</AlertDescription>
-        {actions}
+        {!imported && actions}
       </Alert>
-      <CancelRunDialog
-        open={cancelDialogOpen}
-        onOpenChange={setCancelDialogOpen}
-        onConfirm={(reason) => cancelMutation.mutate(reason)}
-        showReason={false}
-      />
+      {!imported && (
+        <CancelRunDialog
+          open={cancelDialogOpen}
+          onOpenChange={setCancelDialogOpen}
+          onConfirm={(reason) => cancelMutation.mutate(reason)}
+          showReason={false}
+        />
+      )}
     </>
   );
 }

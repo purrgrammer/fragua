@@ -690,6 +690,37 @@ steps:
         mock.restore();
       }
     });
+
+    it("renders ImportedBadge in the header and no action controls when detail.imported is true", async () => {
+      const detail: RunDetailT = {
+        runId: "run-imported",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "paused",
+        runStatus: "paused",
+        lastEventSeq: 2,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0.01,
+        inputTokens: 100,
+        outputTokens: 50,
+        imported: true,
+      };
+      const { client, mock } = prepare("run-imported", detail);
+      try {
+        const { container } = mount(client, "/runs/run-imported");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("detail-status")).toBeTruthy();
+        });
+        expect(q.getByTestId("imported-badge")).toBeTruthy();
+        expect(q.queryByTestId("run-controls")).toBeNull();
+        expect(q.queryByTestId("run-controls-pause")).toBeNull();
+        expect(q.queryByTestId("run-controls-resume")).toBeNull();
+        expect(q.queryByTestId("run-controls-cancel")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
   });
 
   describe("RunDetail — Diff tab", () => {

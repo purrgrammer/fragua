@@ -65,6 +65,7 @@ export function runStateToSummary(
   if (state.cwd != null) summary.cwd = state.cwd;
   summary.projectId = state.projectId;
   summary.projectName = state.projectName;
+  if (state.imported === true) summary.imported = true;
   return summary;
 }
 
@@ -115,6 +116,7 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
   }
   if (row.baseGitRef != null && row.baseGitRef.length > 0) summary.baseGitRef = row.baseGitRef;
   if (row.baseGitSha != null && row.baseGitSha.length > 0) summary.baseGitSha = row.baseGitSha;
+  if (row.imported === 1) summary.imported = true;
   return summary;
 }
 

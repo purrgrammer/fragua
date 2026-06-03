@@ -212,13 +212,14 @@ describe("RunControls — cancel dialog", () => {
   });
 });
 
-describe("RunControls — imported (inert) runs", () => {
+describe("RunControls — imported runs", () => {
   afterEach(() => cleanup());
 
-  test("renders no pause/resume/cancel buttons when imported=true on a paused run", () => {
-    const { queryByTestId, getByTestId, restore } = renderControls({}, "paused", "paused", true);
+  test("renders ImportedBadge — no '(inert)' copy — and no action buttons when imported=true on a paused run", () => {
+    const { queryByTestId, getByTestId, queryByText, restore } = renderControls({}, "paused", "paused", true);
     try {
-      getByTestId("run-controls-imported");
+      getByTestId("imported-badge");
+      expect(queryByText(/inert|inspect-only/i)).toBeNull();
       expect(queryByTestId("run-controls-pause")).toBeNull();
       expect(queryByTestId("run-controls-resume")).toBeNull();
       expect(queryByTestId("run-controls-cancel")).toBeNull();
@@ -231,7 +232,7 @@ describe("RunControls — imported (inert) runs", () => {
   test("still renders operate controls when imported is false (existing behavior unchanged)", () => {
     const { queryByTestId, restore } = renderControls({}, "paused", "paused_auto", false);
     try {
-      expect(queryByTestId("run-controls-imported")).toBeNull();
+      expect(queryByTestId("imported-badge")).toBeNull();
       expect(queryByTestId("run-controls-resume")).not.toBeNull();
     } finally {
       restore();
