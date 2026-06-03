@@ -22,6 +22,7 @@ guarantee.
 
 ### Changed
 
+- **Imported runs show an `imported` badge** in the run list and run detail header, consistent with the status and step badges. The previous "imported (inert)" parenthetical copy is removed. All pause/halt banners for imported runs render in strictly-informational mode: reason text is shown but every action affordance (Resume, Cancel, Raise budget, Retry, etc.) is suppressed.
 - **Cancel-run confirmation is now a modal dialog.** Cancelling a run from the
   run detail view opens a confirmation dialog (reason optional, entered inline)
   that stays open until the operator acts, replacing the previous two-step
@@ -30,6 +31,7 @@ guarantee.
 
 ### Fixed
 
+- **Imported runs no longer appear in the Inbox.** Both the NEEDS INPUT (paused/HITL/quarantined) and READY TO LAND (inbox_status=pending) sections exclude imported runs at the query source via `excludeImported: true` on `GET /runs`, so inspect-only runs are never surfaced as operator worklist items.
 - **`fragua db <action>` now defaults to the home store** — `vacuum`,
   `gc-blobs`, `backup`, and `migrate` resolve `~/.fragua/fragua.db` (honoring
   `$FRAGUA_HOME`) when `--db` is omitted, the same store the harness binds and
@@ -47,8 +49,8 @@ guarantee.
   traversal-edge overlay, and the run title correctly.
 - **Imported-run fidelity — UI operate controls**: `RunControls` now accepts an
   `imported` prop; when true (derived from `RunDetail.imported`, set from the
-  `imported_runs` inert marker) the pause/resume/cancel buttons are replaced with
-  a read-only "imported (inert)" badge, preventing dead-end operate actions on
+  `imported_runs` inert marker) the pause/resume/cancel buttons are suppressed in
+  favor of strictly-informational status, preventing dead-end operate actions on
   runs the daemon will never dispatch.
 
 ## [0.4.0] — 2026-06-02

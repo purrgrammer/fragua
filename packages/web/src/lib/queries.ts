@@ -23,6 +23,7 @@ function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null 
   if (filter.projectId && filter.projectId.length > 0) out.projectId = filter.projectId;
   if (filter.cwd && filter.cwd.length > 0) out.cwd = filter.cwd;
   if (filter.inbox !== undefined) out.inbox = filter.inbox;
+  if (filter.excludeImported === true) out.excludeImported = true;
   return Object.keys(out).length === 0 ? null : out;
 }
 

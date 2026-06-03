@@ -22,6 +22,7 @@
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
 import { shortRunId } from "../lib/runId.ts";
+import { ImportedBadge } from "./ImportedBadge.tsx";
 import { RunStatusBadge } from "./RunStatusBadge.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { WorkflowLink } from "./WorkflowLink.tsx";
@@ -59,7 +60,10 @@ function TableRow({ row }: { row: RunSummary }): JSX.Element {
       </td>
       <td className="py-2 pr-4 max-w-0">{wf ? <WorkflowLink name={wf} variant="badge" /> : null}</td>
       <td className="py-2 pr-4 text-right">
-        <RunStatusBadge status={row.status} runStatus={row.runStatus} />
+        <span className="inline-flex items-center gap-1.5 justify-end">
+          {row.imported && <ImportedBadge />}
+          <RunStatusBadge status={row.status} runStatus={row.runStatus} />
+        </span>
       </td>
     </tr>
   );
@@ -83,6 +87,7 @@ function CompactRow({ row }: { row: RunSummary }): JSX.Element {
           {wf}
         </Badge>
       ) : null}
+      {row.imported && <ImportedBadge />}
       <RunStatusBadge status={row.status} runStatus={row.runStatus} />
     </Link>
   );

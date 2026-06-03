@@ -20,6 +20,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
+import { ImportedBadge } from "../components/ImportedBadge.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { ProjectLink } from "../components/ProjectLink.tsx";
 import { RunControls } from "../components/RunControls.tsx";
@@ -201,7 +202,7 @@ export function RunDetail(): JSX.Element {
       <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
 
       {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && (
-        <RunPausedNotice runId={id} eventEpoch={totalEvents} />
+        <RunPausedNotice runId={id} eventEpoch={totalEvents} imported={detail.imported} />
       )}
       {isError && !detail ? (
         <EmptyState
@@ -398,6 +399,9 @@ const DetailHeader = memo(function DetailHeader({
               data-testid="detail-status"
               className="px-1.5 py-0.5 text-[0.65rem]"
             />
+          )}
+          {detail?.imported && (
+            <ImportedBadge className="px-1.5 py-0.5 text-[0.65rem]" data-testid="detail-imported-badge" />
           )}
           {detail && currentLabel && (
             <span

@@ -56,6 +56,7 @@ function withRows(rows: RunSummary[]) {
     queries.runs.list({
       status: ["paused_human", "paused", "quarantined"],
       order: "oldest",
+      excludeImported: true,
     }).queryKey,
     blockedRows,
   );
@@ -64,6 +65,7 @@ function withRows(rows: RunSummary[]) {
     queries.runs.list({
       inbox: "pending",
       order: "oldest",
+      excludeImported: true,
     }).queryKey,
     worktreeRows,
   );

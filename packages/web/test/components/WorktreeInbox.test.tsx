@@ -57,9 +57,9 @@ const PENDING_ROW_2: RunSummary = {
   },
 };
 
-// URL produced by listRuns({ inbox: "pending", order: "oldest" })
-// order param is set before inbox in listRuns, so order comes first.
-const INBOX_URL = "/api/runs?order=oldest&inbox=pending";
+// URL produced by listRuns({ inbox: "pending", order: "oldest", excludeImported: true })
+// order param is set before inbox, excludeImported comes last.
+const INBOX_URL = "/api/runs?order=oldest&inbox=pending&exclude_imported=true";
 const COMMIT_URL = "/api/runs/run-aaa/commit";
 
 function renderInbox(mocks: Record<string, () => Response | Promise<Response>>) {
@@ -249,6 +249,24 @@ describe("WorktreeInbox", () => {
         });
         // Row is present — the fetch mock is working
         expect(container.querySelector(`[data-testid="worktree-inbox-row-run-bbb"]`)).not.toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    test("requests /runs?inbox=pending with exclude_imported=true (INBOX_URL includes the param)", async () => {
+      const calls: string[] = [];
+      const { restore } = renderInbox({
+        [INBOX_URL]: () => {
+          calls.push(INBOX_URL);
+          return json([]);
+        },
+      });
+      try {
+        await waitFor(() => {
+          expect(calls).toContain(INBOX_URL);
+        });
+        expect(INBOX_URL).toContain("exclude_imported=true");
       } finally {
         restore();
       }

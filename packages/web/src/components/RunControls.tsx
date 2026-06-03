@@ -15,6 +15,7 @@ import { cancelRun, pauseRun, type RunDetail, resumeRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { toast, toastError } from "../lib/toast.ts";
 import { CancelRunDialog } from "./CancelRunDialog.tsx";
+import { ImportedBadge } from "./ImportedBadge.tsx";
 import { Button } from "./ui/button.tsx";
 
 export interface RunControlsProps {
@@ -31,9 +32,9 @@ export interface RunControlsProps {
    * with a tooltip-style title, sized to match the status badge so the
    * controls can sit inline alongside the badge in a header row. */
   compact?: boolean;
-  /** When true the run was brought in via `fragua import` and has no local
-   * cwd. The daemon will never dispatch it, so operate controls are
-   * replaced with a read-only "imported (inert)" badge. */
+  /** When true the run was brought in via `fragua import`. The daemon will
+   * never dispatch it, so operate controls are replaced with an
+   * `ImportedBadge` (inspect-only indicator). */
   imported?: boolean;
 }
 
@@ -80,14 +81,7 @@ export function RunControls({
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
   if (imported) {
-    return (
-      <div
-        className="inline-flex items-center rounded-sw-card border border-sw-border px-1.5 py-0.5 text-sw-xs text-sw-muted"
-        data-testid="run-controls-imported"
-      >
-        imported (inert)
-      </div>
-    );
+    return <ImportedBadge />;
   }
 
   const canPause = status === "running";

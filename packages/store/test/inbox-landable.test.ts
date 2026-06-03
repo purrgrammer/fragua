@@ -2,7 +2,12 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { insertEventWeb } from "../src/event-queries.ts";
 import { migrate } from "../src/migrations.ts";
-import { insertRunState, selectInboxActionCandidates, selectRunSummaryRows } from "../src/run-state-queries.ts";
+import {
+  insertRunState,
+  markRunImported,
+  selectInboxActionCandidates,
+  selectRunSummaryRows,
+} from "../src/run-state-queries.ts";
 
 // A run is in the inbox only if it can be landed *here* — accept/discard both
 // gate on a non-null `cwd` (`checkGate` → `no_worktree`). Imported runs are
@@ -63,5 +68,16 @@ describe("inbox queries — landable-here gate (cwd IS NOT NULL)", () => {
     const candidates = selectInboxActionCandidates(db);
 
     expect(candidates.map((c) => c.runId)).toEqual(["local"]);
+  });
+
+  test("selectRunSummaryRows({inbox:'pending'}) excludes runs marked in imported_runs even with non-null cwd", () => {
+    const db = freshDb();
+    seedTerminalInboxRun(db, "local-real", "/repos/real");
+    seedTerminalInboxRun(db, "imported-cwd", "/repos/imported");
+    markRunImported(db, "imported-cwd", Date.now());
+
+    const rows = selectRunSummaryRows(db, { inbox: "pending", excludeImported: true });
+
+    expect(rows.map((r) => r.runId)).toEqual(["local-real"]);
   });
 });

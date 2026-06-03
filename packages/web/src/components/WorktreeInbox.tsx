@@ -13,7 +13,7 @@ import { SectionTitle } from "./ui/section-title.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
 import { WorktreeInboxRow } from "./WorktreeInboxRow.tsx";
 
-const BASE_FILTER = { inbox: "pending" as const, order: "oldest" as const };
+const BASE_FILTER = { inbox: "pending" as const, order: "oldest" as const, excludeImported: true as const };
 
 export interface WorktreeInboxProps {
   /** Override the section heading. Defaults to "Recoverable work". */

@@ -105,6 +105,7 @@ export function Inbox({ limit, viewAllHref, title, testId }: InboxProps): JSX.El
     queries.runs.list({
       status: ATTENTION_STATUSES,
       order: "oldest",
+      excludeImported: true,
       ...(limit !== undefined ? { limit: limit + 1 } : {}),
     }),
   );

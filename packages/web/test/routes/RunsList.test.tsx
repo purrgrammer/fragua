@@ -3,9 +3,10 @@
 // routing fake `fetch` when a test needs to exercise the loading or
 // error paths.
 
-import { cleanup, waitFor, within } from "@testing-library/react";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, waitFor, within } from "@testing-library/react";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
+import { afterEach, describe, expect, it, test } from "vitest";
+import { RunRow } from "../../src/components/RunRow.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
@@ -185,5 +186,93 @@ describe("RunsList", () => {
     } finally {
       mock.restore();
     }
+  });
+});
+
+function importedRow(overrides: Partial<RunSummary> = {}): RunSummary {
+  return {
+    runId: "imp-1",
+    startedAt: "2024-01-01T00:00:00Z",
+    status: "success",
+    runStatus: "completed",
+    eventCount: 5,
+    costUsd: 0.01,
+    inputTokens: 100,
+    outputTokens: 50,
+    imported: true,
+    title: "Imported run",
+    ...overrides,
+  };
+}
+
+function normalRow(overrides: Partial<RunSummary> = {}): RunSummary {
+  return {
+    runId: "norm-1",
+    startedAt: "2024-01-01T00:00:00Z",
+    status: "success",
+    runStatus: "completed",
+    eventCount: 5,
+    costUsd: 0.01,
+    inputTokens: 100,
+    outputTokens: 50,
+    title: "Normal run",
+    ...overrides,
+  };
+}
+
+describe("RunRow — imported indicator", () => {
+  afterEach(() => cleanup());
+
+  test("renders ImportedBadge alongside the status pill when row.imported is true (default / table variant)", () => {
+    const row = importedRow();
+    const { container } = render(
+      <MemoryRouter>
+        <table>
+          <tbody>
+            <RunRow row={row} variant="default" />
+          </tbody>
+        </table>
+      </MemoryRouter>,
+    );
+    const badge = container.querySelector('[data-testid="imported-badge"]');
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toBe("imported");
+    expect(container.querySelector('[data-testid="status-success"]')).not.toBeNull();
+  });
+
+  test("renders ImportedBadge alongside the status pill when row.imported is true (compact variant)", () => {
+    const row = importedRow();
+    const { container } = render(
+      <MemoryRouter>
+        <RunRow row={row} variant="compact" />
+      </MemoryRouter>,
+    );
+    const badge = container.querySelector('[data-testid="imported-badge"]');
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toBe("imported");
+  });
+
+  test("does NOT render ImportedBadge when row.imported is false/undefined (default variant)", () => {
+    const row = normalRow();
+    const { container } = render(
+      <MemoryRouter>
+        <table>
+          <tbody>
+            <RunRow row={row} variant="default" />
+          </tbody>
+        </table>
+      </MemoryRouter>,
+    );
+    expect(container.querySelector('[data-testid="imported-badge"]')).toBeNull();
+  });
+
+  test("does NOT render ImportedBadge when row.imported is false/undefined (compact variant)", () => {
+    const row = normalRow();
+    const { container } = render(
+      <MemoryRouter>
+        <RunRow row={row} variant="compact" />
+      </MemoryRouter>,
+    );
+    expect(container.querySelector('[data-testid="imported-badge"]')).toBeNull();
   });
 });

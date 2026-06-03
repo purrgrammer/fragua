@@ -169,6 +169,10 @@ export interface ListRunIdsOpts {
   order?: "newest" | "oldest";
   /** SQL `LIMIT` cap. Omitted = unbounded. */
   limit?: number;
+  /** When `true`, exclude runs that carry the `imported_runs` inert marker.
+   *  Operator-worklist surfaces (Inbox) set this so imported inspect-only
+   *  runs never appear as actionable items. */
+  excludeImported?: boolean;
 }
 
 export interface ListRunSummaryRowsOpts extends ListRunIdsOpts {
@@ -201,12 +205,14 @@ export interface RunSummaryRow {
   changeStat: string | null;
   baseGitRef: string | null;
   baseGitSha: string | null;
+  /** 1 when the run carries the `imported_runs` inert marker, else 0. */
+  imported: number;
 }
 
 /** Enumerate run ids with filtering, ordering, and limit pushed into SQL.
  *  Returns `[]` for `statuses: []` without hitting the DB. */
 export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] {
-  const { statuses, cwd, projectId, order = "newest", limit } = opts;
+  const { statuses, cwd, projectId, order = "newest", limit, excludeImported } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
   const clauses: string[] = [];
   const args: (RunStatus | string | number)[] = [];
@@ -222,6 +228,9 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
     clauses.push("project_id = ?");
     args.push(projectId);
   }
+  if (excludeImported) {
+    clauses.push(NOT_IMPORTED_SQL);
+  }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
   const limitClause = limit !== undefined ? "LIMIT ?" : "";
@@ -236,7 +245,7 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
 /** SQL-backed projection for `GET /runs`. Avoids hydrating full event
  *  logs just to derive count, duration, and title fallback. */
 export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts = {}): RunSummaryRow[] {
-  const { statuses, cwd, projectId, order = "newest", limit, inbox } = opts;
+  const { statuses, cwd, projectId, order = "newest", limit, inbox, excludeImported } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
 
   const clauses: string[] = [];
@@ -257,6 +266,9 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
     clauses.push("r.inbox_status = ?");
     args.push(inbox);
     clauses.push(`r.${LANDABLE_HERE}`);
+  }
+  if (excludeImported) {
+    clauses.push(`NOT EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = r.run_id)`);
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -312,7 +324,8 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
            s.inbox_status AS inboxStatus,
            s.change_stat AS changeStat,
            s.base_git_ref AS baseGitRef,
-           s.base_git_sha AS baseGitSha
+           s.base_git_sha AS baseGitSha,
+           EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = s.run_id) AS imported
       FROM selected s
       LEFT JOIN workflows w ON w.sha = s.workflow_sha
       LEFT JOIN event_bounds eb ON eb.run_id = s.run_id
