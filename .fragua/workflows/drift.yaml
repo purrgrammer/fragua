@@ -1,5 +1,5 @@
 # drift.yaml — find rot between the docs and the code they describe, then FIX
-# it behind an operator gate. Two surfaces:
+# it as a reviewable PR — the PR review is the gate. Two surfaces:
 #
 #   structural — literal code↔doc cross-reference where drift is mechanical:
 #                schema columns, event-taxonomy enums, handler-contract shapes,
@@ -16,7 +16,7 @@
 # for the doc-fixable findings; the rest go to a Manual list) → verify (quality gate:
 # drop weak findings, validate each edit's OLD/NEW against the doc) → apply (edit
 # tool, in the run's worktree; writes the PR body) → open_pr (commit the doc edits,
-# push a branch, open or update a PR). The first five steps share `thread: drift`
+# push a fresh per-run branch, open a PR). The first five steps share `thread: drift`
 # so the snapshot, findings, and edits carry forward.
 #
 # NO human gate. The PR review IS the gate: drift only ever edits docs and never
@@ -27,7 +27,7 @@
 # Not every finding is doc-fixable — an UNBACKED status claim needs code, a
 # commit-hygiene gap is historical. Those land in the PR body's `## Manual`
 # section (a checklist for the reviewer), never edited. A run with auto-fixable
-# edits opens/updates the PR; a run with only Manual findings opens no PR (the
+# edits opens a per-run PR; a run with only Manual findings opens no PR (the
 # findings ride in the exported run bundle).
 #
 #   fragua ci   drift                                   # unattended: apply + open PR
@@ -36,7 +36,7 @@
 #   bun run fragua run drift --input surface=narrative --input focus="only workflows"
 
 name: drift
-goal: Cross-reference the docs against the code they describe, surface evidence-cited drift, and apply the doc-fixable corrections with operator signoff.
+goal: Cross-reference the docs against the code they describe, surface evidence-cited drift, apply the doc-fixable corrections, and open a PR for human review — drift never merges.
 budget: 10.00
 budget-policy: stop
 
@@ -66,7 +66,7 @@ steps:
     thread: drift
     next: analyze
     allowed-tools: [bash]
-    max-cost: 0.15
+    max-cost: 0.25
     prompt: |
       Run the drift collector(s) for surface `${{ inputs.surface }}` via the bash tool — once each, in this order:
         - structural or both → `bun .fragua/scripts/drift/structural.ts ${{ inputs.focus }}`
@@ -79,7 +79,7 @@ steps:
     thread: drift
     next: propose
     allowed-tools: [read, grep, find]
-    max-cost: 3.00
+    max-cost: 4.50
     prompt: |
       Build a drift findings table from the collector snapshot(s) in this thread. Surface every discrepancy you can back with evidence — no speculation. Read-only (you may re-read files to confirm). Honour the `focus` hint if the snapshot carries one.
 
@@ -111,7 +111,7 @@ steps:
     thread: drift
     next: verify
     allowed-tools: [read, grep]
-    max-cost: 1.50
+    max-cost: 2.00
     prompt: |
       Turn the findings into doc edits. A finding is AUTO-FIXABLE only if editing a doc fully resolves it — wrong doc text (correct it) or missing doc text (add it). A finding needing a CODE change or human judgment (UNBACKED 'delivers today' claims, historical commit-hygiene gaps, anything where the *code* is what's wrong) is NOT auto-fixable.
 
@@ -140,7 +140,7 @@ steps:
     thread: drift
     next: apply
     allowed-tools: [read, grep]
-    max-cost: 1.00
+    max-cost: 1.25
     prompt: |
       Quality gate over the proposed findings and edits. You DROP weak items rather than failing the run — the operator approves what survives.
 
@@ -153,7 +153,7 @@ steps:
   apply:
     thread: drift
     allowed-tools: [read, edit, write]
-    max-cost: 0.60
+    max-cost: 1.00
     next: open_pr
     prompt: |
       Apply each surviving `### Edit` block (the verified set above) to its doc with the `edit` tool — one call per block, OLD as `old_string`, NEW as `new_string`, verbatim.

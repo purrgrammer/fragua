@@ -3,7 +3,7 @@ name: Doc drift
 # Weekly unattended doc/code drift sync. Installs the released fragua binary
 # (setup-fragua) and runs the `drift` workflow (`.fragua/workflows/drift.yaml`)
 # under `fragua ci`: it cross-references the docs against the code, applies the
-# doc-fixable corrections in the run's worktree, and opens (or updates) a PR with
+# doc-fixable corrections in the run's worktree, and opens a fresh PR (one per run) with
 # the edits — the `## Manual` findings ride in the PR body for a human to action.
 #
 # Trust posture differs from pr-review.yml: that job reviews an UNTRUSTED PR diff,
@@ -32,8 +32,8 @@ jobs:
     timeout-minutes: 30
     # Scoped to the one job that needs them, not the whole workflow.
     permissions:
-      contents: write # open_pr pushes the fragua/drift branch
-      pull-requests: write # open_pr opens/updates the PR
+      contents: write # open_pr pushes the per-run fragua/drift-<date> branch
+      pull-requests: write # open_pr opens the PR
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
