@@ -37,6 +37,11 @@
 
 name: drift
 goal: Cross-reference the docs against the code they describe, surface evidence-cited drift, apply the doc-fixable corrections, and open a PR for human review — drift never merges.
+# Single governor: the run-level budget. No per-step max-cost caps — on a
+# shared-thread workflow each later step re-sends the growing thread, so a
+# per-step cap trips on accumulated context rather than the step's own work
+# (it's what halted the first CI run). budget-policy: stop ends the run
+# (non-zero exit, red CI) if the whole run exceeds this.
 budget: 10.00
 budget-policy: stop
 
@@ -66,7 +71,6 @@ steps:
     thread: drift
     next: analyze
     allowed-tools: [bash]
-    max-cost: 0.25
     prompt: |
       Run the drift collector(s) for surface `${{ inputs.surface }}` via the bash tool — once each, in this order:
         - structural or both → `bun .fragua/scripts/drift/structural.ts ${{ inputs.focus }}`
@@ -79,7 +83,6 @@ steps:
     thread: drift
     next: propose
     allowed-tools: [read, grep, find]
-    max-cost: 4.50
     prompt: |
       Build a drift findings table from the collector snapshot(s) in this thread. Surface every discrepancy you can back with evidence — no speculation. Read-only (you may re-read files to confirm). Honour the `focus` hint if the snapshot carries one.
 
@@ -111,7 +114,6 @@ steps:
     thread: drift
     next: verify
     allowed-tools: [read, grep]
-    max-cost: 2.00
     prompt: |
       Turn the findings into doc edits. A finding is AUTO-FIXABLE only if editing a doc fully resolves it — wrong doc text (correct it) or missing doc text (add it). A finding needing a CODE change or human judgment (UNBACKED 'delivers today' claims, historical commit-hygiene gaps, anything where the *code* is what's wrong) is NOT auto-fixable.
 
@@ -140,7 +142,6 @@ steps:
     thread: drift
     next: apply
     allowed-tools: [read, grep]
-    max-cost: 1.25
     prompt: |
       Quality gate over the proposed findings and edits. You DROP weak items rather than failing the run — the operator approves what survives.
 
@@ -153,7 +154,6 @@ steps:
   apply:
     thread: drift
     allowed-tools: [read, edit, write]
-    max-cost: 1.00
     next: open_pr
     prompt: |
       Apply each surviving `### Edit` block (the verified set above) to its doc with the `edit` tool — one call per block, OLD as `old_string`, NEW as `new_string`, verbatim.
