@@ -88,6 +88,18 @@ export interface WakeCandidateRow {
 // Reads — single row
 // ─────────────────────────────────────────────────────────────────────
 
+/** `imported_runs` inert-marker predicate, parameterized by the run-table alias
+ *  so it composes in unaliased (`run_state`) and aliased (`r`/`s`) contexts
+ *  alike. `importedSql` projects the boolean column; `notImportedSql` is the
+ *  dispatch gate — a run is the daemon's to drive toward execution only when it
+ *  is NOT imported, spliced into every toward-execution selection (the queued
+ *  claim, the concurrency-capacity count, the wake candidates, the crash sweep)
+ *  so the marker is honoured uniformly. Imported runs executed elsewhere — they
+ *  stay fully inspectable, just invisible to dispatch. */
+const importedSql = (alias: string): string =>
+  `EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = ${alias}.run_id)`;
+const notImportedSql = (alias: string): string => `NOT ${importedSql(alias)}`;
+
 const SELECT_RUN_STATE_FULL_SQL = `
   SELECT run_id, version, status, current_node, workflow_sha,
          contract_version, routing, metrics, next_seq, last_applied_seq,
@@ -97,7 +109,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          base_git_sha, base_git_ref,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
          inbox_status, accepted_sha, schedule_id,
-         EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id) AS imported
+         ${importedSql("run_state")} AS imported
     FROM run_state
    WHERE run_id = ?
 `;
@@ -105,15 +117,6 @@ const SELECT_RUN_STATE_FULL_SQL = `
 export function selectRunStateRow(db: Database, runId: string): RunStateRow | null {
   return db.query<RunStateRow, [string]>(SELECT_RUN_STATE_FULL_SQL).get(runId) ?? null;
 }
-
-/** Gate fragment: a run is the daemon's to drive toward execution only when it
- *  is NOT an imported run. Spliced into every toward-execution selection (the
- *  queued claim, the concurrency-capacity count, the wake candidates, the crash
- *  sweep) so the inert marker is honoured uniformly. Imported runs executed
- *  elsewhere — they stay fully inspectable, just invisible to dispatch. */
-export const NOT_IMPORTED_SQL = `NOT EXISTS (
-    SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id
-  )`;
 
 const COUNT_RUN_STATE_RUNNING_SQL = `
   SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'
@@ -123,7 +126,7 @@ const COUNT_RUN_STATE_RUNNING_SQL = `
 // imported run that derived to `running` (a non-terminal source run) can never
 // burn a live slot. Distinct from the display gauge, which counts them.
 const COUNT_DISPATCHABLE_RUNNING_SQL = `
-  SELECT COUNT(*) AS n FROM run_state WHERE status = 'running' AND ${NOT_IMPORTED_SQL}
+  SELECT COUNT(*) AS n FROM run_state WHERE status = 'running' AND ${notImportedSql("run_state")}
 `;
 
 const COUNT_RUN_STATE_QUEUED_SQL = `
@@ -229,7 +232,7 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
     args.push(projectId);
   }
   if (excludeImported) {
-    clauses.push(NOT_IMPORTED_SQL);
+    clauses.push(notImportedSql("run_state"));
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
@@ -268,7 +271,7 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
     clauses.push(`r.${LANDABLE_HERE}`);
   }
   if (excludeImported) {
-    clauses.push(`NOT EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = r.run_id)`);
+    clauses.push(notImportedSql("r"));
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -325,7 +328,7 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
            s.change_stat AS changeStat,
            s.base_git_ref AS baseGitRef,
            s.base_git_sha AS baseGitSha,
-           EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = s.run_id) AS imported
+           ${importedSql("s")} AS imported
       FROM selected s
       LEFT JOIN workflows w ON w.sha = s.workflow_sha
       LEFT JOIN event_bounds eb ON eb.run_id = s.run_id
@@ -418,7 +421,7 @@ export function selectWakeCandidates(
 ): WakeCandidateRow[] {
   if (opts.statuses.length === 0) return [];
   const placeholders = opts.statuses.map(() => "?").join(",");
-  const where = `${SELECT_WAKE_CANDIDATES_BASE_SQL} (${placeholders}) AND ${NOT_IMPORTED_SQL}`;
+  const where = `${SELECT_WAKE_CANDIDATES_BASE_SQL} (${placeholders}) AND ${notImportedSql("run_state")}`;
   if (opts.autoResumeBefore != null) {
     const sql = `${where}
        AND CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) IS NOT NULL
@@ -546,7 +549,7 @@ export function updateRunStateTitle(db: Database, runId: string, title: string, 
 
 const SELECT_NEXT_QUEUED_RUN_SQL = `
   SELECT run_id, version FROM run_state
-   WHERE status = 'queued' AND ${NOT_IMPORTED_SQL}
+   WHERE status = 'queued' AND ${notImportedSql("run_state")}
    ORDER BY priority DESC, ready_at ASC, run_id ASC
    LIMIT 1
 `;
