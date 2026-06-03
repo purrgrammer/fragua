@@ -30,6 +30,12 @@ guarantee.
 
 ### Fixed
 
+- **Anthropic 429 rate-limit resilience** — provider 429s are now absorbed by
+  the Anthropic SDK's header-aware retry (`retry-after` / `retry-after-ms` /
+  `anthropic-ratelimit-*`), with `maxRetries` raised to 8, instead of exhausting
+  fragua's blind engine-retry (which ignores rate-limit headers on pre-stream
+  rejections) and pausing/failing `fragua ci` jobs in CI.
+
 - **`fragua db <action>` now defaults to the home store** — `vacuum`,
   `gc-blobs`, `backup`, and `migrate` resolve `~/.fragua/fragua.db` (honoring
   `$FRAGUA_HOME`) when `--db` is omitted, the same store the harness binds and

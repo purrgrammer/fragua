@@ -13,7 +13,7 @@ import {
   toCatalogRecord,
 } from "@fragua/workspace";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
-import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
+import { type AssistantMessage, getModel, type Model, streamSimple } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { MessageStore } from "./message-store.ts";
@@ -465,6 +465,8 @@ export class PiLlmBackend implements LlmBackend {
         ...(hydrateMessages.length > 0 ? { messages: hydrateMessages } : {}),
       },
       onResponse: captureResponse,
+      streamFn: (model, ctx, options) => streamSimple(model, ctx, { ...options, maxRetries: PROVIDER_SDK_MAX_RETRIES }),
+      maxRetryDelayMs: PROVIDER_SDK_MAX_RETRY_DELAY_MS,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(this.getApiKey !== undefined ? { getApiKey: this.getApiKey } : {}),
     });
@@ -787,6 +789,16 @@ export class PiLlmBackend implements LlmBackend {
  *  10s `LEAK_GRACE_MS`, so a wedged fetch lands as `fact.node_aborted`
  *  instead of `fact.handler_timeout_leaked`. */
 const ABORT_TEARDOWN_GRACE_MS = 2_000;
+
+// The Anthropic SDK's built-in retry honors `retry-after` /
+// `retry-after-ms` / `anthropic-ratelimit-*` headers, so it is the
+// correct layer to wait out a rate-limit window. fragua's own engine-
+// retry (PROVIDER_RETRY_MAX_ATTEMPTS = 5) is header-blind for
+// pre-stream 429s and remains the backstop when the SDK also exhausts.
+const PROVIDER_SDK_MAX_RETRIES = 8;
+// Cap the per-attempt SDK wait so a single very-long `retry-after`
+// cannot hang a step indefinitely.
+const PROVIDER_SDK_MAX_RETRY_DELAY_MS = 60_000;
 
 function sessionKey(runId: string, threadId: string): string {
   return `${runId}::${threadId}`;
