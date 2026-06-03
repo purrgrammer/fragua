@@ -340,8 +340,20 @@ CREATE INDEX idx_daemon_events_ts   ON daemon_events(ts, seq);
 CREATE INDEX idx_daemon_events_type ON daemon_events(type, ts);
 CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
 
+-- Local inert marker — one row per run merged in by `fragua import`, NEVER
+-- carried in a bundle (the bundle has no run_state; this sidecar is local by
+-- construction). Its presence holds the run permanently OUT of dispatch,
+-- concurrency capacity, and the crash sweep: an imported run executed
+-- elsewhere and is inspect-only here. This is the AUTHORITATIVE inert gate —
+-- the run's derived `cwd` is also null, but dispatch keys on this marker, not
+-- on cwd (a legitimately-enqueued run can have a null cwd).
+CREATE TABLE imported_runs (
+  run_id      TEXT PRIMARY KEY REFERENCES run_state(run_id) ON DELETE CASCADE,
+  imported_at INTEGER NOT NULL
+) STRICT;
+
 -- Recurring-run primitive.
--- `(workflow_ref, cwd, interval_ms, optional input)` triple plus a
+-- `(workflow_ref, cwd, interval_ms, optional title)` triple plus a
 -- `next_fire_at` cursor. The daemon's `schedule-dispatcher` fiber
 -- selects rows where `next_fire_at <= now AND paused_at IS NULL` once
 -- per minute, fires runs by calling `enqueueRun` with `schedule_id`
@@ -359,8 +371,8 @@ CREATE TABLE schedules (
   cwd             TEXT NOT NULL,
   project_id      TEXT NOT NULL,
   interval_ms     INTEGER NOT NULL,
-  interval_text   TEXT NOT NULL,                  -- "30m" / "1h" / "6h" / "24h"; display only
-  input           TEXT,                           -- positional input piped to the run via routing.input
+  interval_text   TEXT NOT NULL,                  -- "30m" / "1h" / "6h" / "24h" / "3d" / "7d"; display only
+  title           TEXT,                           -- optional run title stamped on fired runs
   overlap_policy  TEXT NOT NULL DEFAULT 'skip'
                   CHECK (overlap_policy IN ('skip','queue','concurrent')),
   next_fire_at    INTEGER NOT NULL,               -- unix ms
@@ -495,7 +507,7 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 | `daemon.blob_gc_completed` | `deleted: number`, `durationMs` | Orphan-blob GC sweep finished |
 | `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced. Only fires for nodes with a numeric `HandlerSpec.maxMs` — unbounded llm (`max_ms=0`) skips the watchdog. |
 | `daemon.worktree_provisioned` | `runId`, `ok: boolean`, `errorDetail?` | Provisioner result; `ok: false` records why a run halted at provision time |
-| `intent.schedule_create` | `scheduleId`, `workflowRef`, `cwd`, `intervalMs`, `intervalText`, `input?`, `overlapPolicy`, `fireOnCreate` | Operator created a schedule (writer: web/CLI). Audit only — the row in `schedules` is the canonical state |
+| `intent.schedule_create` | `scheduleId`, `workflowRef`, `cwd`, `intervalMs`, `intervalText`, `title?`, `overlapPolicy`, `fireOnCreate` | Operator created a schedule (writer: web/CLI). Audit only — the row in `schedules` is the canonical state |
 | `intent.schedule_pause` | `scheduleId` | Operator paused a schedule |
 | `intent.schedule_resume` | `scheduleId` | Operator resumed a schedule (no catch-up: `next_fire_at = now + interval_ms`) |
 | `intent.schedule_delete` | `scheduleId` | Operator hard-deleted a schedule |
@@ -772,6 +784,7 @@ export type HandlerResult =
       nextNode?: string;                                // omit to let edge selection decide
       outcomeStatus?: "success" | "fail" | "retry";
       route?: string;                                   // set by llm on routing nodes
+      failureReason?: string;                           // single-line; surfaces as fact.run_halted.detail on fail→__end__
       tokens: number;
       costUsd: number;
       inputCostUsd?: number;
@@ -786,10 +799,12 @@ export type HandlerResult =
       kind: "yield_human";
       text: string;
       routes: string[];
+      routeLabels?: Record<string, string>;
     }
   | {
       kind: "halt";
-      reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
+      reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded"
+            | "route_not_picked" | "route_call_not_isolated" | "edge_no_match";
       detail?: string;
       // Stage 3 of recoverable-budget-pause.md converts the
       // operator-recoverable halts in this union to pauses. The executor emits
@@ -999,9 +1014,10 @@ app.post("/runs", async (c) => {
     runId?: string;
     priority?: number;
     routing?: Record<string, unknown>;
-    input?: string;          // free-form description → routing.input (auto-title seed; not substituted)
     inputs?: Record<string, string>;  // typed inputs → routing.inputs → ${{ inputs.x }}; validated against the inputs: block (400 invalid_inputs)
     cwd?: string;            // absolute project root at enqueue time; surfaced on run_state.cwd
+    projectId?: string;      // stable project id from .fragua/config.yaml; falls back to cwd when absent
+    projectName?: string;    // project display label captured at enqueue
     workflowName?: string;   // resolved name when the caller passed a bare name
     workflowScope?: "global" | "local" | "path" | "ephemeral";
     workflowPath?: string;   // filesystem path of the workflow file at resolution time
@@ -1024,9 +1040,6 @@ app.post("/runs", async (c) => {
   // missing required input or out-of-range choice) before enqueue.
   const runId = body.runId ?? newRunId();
   const initialRouting = { ...(body.routing ?? {}) };
-  if (typeof body.input === "string" && initialRouting.input === undefined) {
-    initialRouting.input = body.input;
-  }
   if (body.inputs != null && initialRouting.inputs === undefined) {
     initialRouting.inputs = body.inputs;
   }
@@ -1063,9 +1076,9 @@ app.post("/runs/:id/discard",      async (c) => writeIntent(c, "intent.discard_r
 // CRUD over the `schedules` table plus pause/resume verbs. Each
 // mutation lands a matching `intent.schedule_*` audit row on
 // `daemon_events`. Body of POST /schedules:
-//   { workflow, cwd, every: "30m"|"1h"|"6h"|"24h",
-//     input?, overlap?: "skip"|"queue"|"concurrent", fireOnCreate?: bool }
-// `every` outside the four-value whitelist returns 400
+//   { workflow, cwd, every: "30m"|"1h"|"6h"|"24h"|"3d"|"7d",
+//     title?, overlap?: "skip"|"queue"|"concurrent", fireOnCreate?: bool }
+// `every` outside the allowed-interval whitelist returns 400
 // `code:"invalid_interval"`; bad overlap returns `code:"invalid_overlap"`.
 app.post("/schedules",                async (c) => createSchedule(c));
 app.get("/schedules",                 (c) => c.json(store.listSchedules({ cwd: c.req.query("cwd") })));
