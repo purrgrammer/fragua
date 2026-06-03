@@ -202,7 +202,7 @@ rule 5), last-write-wins for re-entry (§7), **off the `run_state` fold** (like
 
 > **Injection note.** Interpolating an output into a `run:` shell string is a
 > shell-injection surface — the general fix is the `exec:` argv form in
-> [`tool-exec-variant.md`](tool-exec-variant.md), which substitutes per-argument
+> [`tool-exec-variant.md`](archive/tool-exec-variant.md), which substitutes per-argument
 > with no re-split. Steps interpolating generated outputs should prefer `exec:`.
 
 > **Event-contract impact — verified re-snapshot, NOT a bump.** Adding `outputs`
@@ -302,7 +302,7 @@ IR):
 - **The `route` tool + two-case edge selector** (SPEC §3.6; `edge-selection.ts`;
   synthesis in `packages/agent/src/backend.ts`) — shipped and **unchanged**; this
   adds typed, fail-closed outputs *alongside* it.
-- [`tool-exec-variant.md`](tool-exec-variant.md) — the `exec:` argv form that
+- [`tool-exec-variant.md`](archive/tool-exec-variant.md) — the `exec:` argv form that
   makes interpolating outputs into commands injection-safe.
 - [`workflow-ir.md`](workflow-ir.md) — `outputs:` (and the shared input/output
   type profile) is an IR-core attr; lands as an `ir_version` bump + converter,

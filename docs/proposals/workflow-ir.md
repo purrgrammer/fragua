@@ -154,3 +154,43 @@ canonicalizers needed). The core rules, each a forever contract:
   and the graph feature set has settled. The bundle format already reserves
   the carrying shape (`{ ir, ir_version, source, sha }`) — see
   [`bundles.md`](archive/bundles.md).
+
+### 8.4 The IR cleanup pass — `NodeAttrs` → discriminated union
+
+> Status: sketch. This is the concrete first item in the "full cleanup pass of
+> the canonical IR shape" that §8.0 names as a precondition for (B). It is an
+> `ir_version` bump (node shape changes), not a `sha`/(B) move on its own.
+
+`Node` today carries a single flat `NodeAttrs` bag (`packages/core/src/types/
+graph.ts`) — every attr (`tool_command`, `context_files`, `skills`, `routes`,
+`text`, `system_prompt`, `goal_gate`, …) hangs off one struct regardless of
+`kind`. Refactor it into a discriminated union keyed by `kind`:
+`LlmNode | HumanNode | ToolNode | StartNode | ExitNode`.
+
+Why it earns its place independent of any authoring API:
+
+- **Per-kind narrowing in the engine.** Handlers, validator rules, and
+  projections stop asking "is this field meaningful for this kind?" at runtime
+  (`tool_command` only on `tool`; `routes` mean different things on `llm` vs
+  `human`); the discriminant makes those type-level facts.
+- **It scopes the dev-domain attrs to where they belong.** The flat bag is *why*
+  `context_files` / `skills` / `system_prompt` / `allowed_tools` feel like
+  they're "on every node." In the union they land on `LlmNode`; a `ToolNode` has
+  no `context_files`, which is *correct*. That is half the domain-genericity
+  cleanup ([`embeddable-engine.md`](embeddable-engine.md) Axis 3) done from the
+  type side.
+
+Interactions:
+
+- **The `tool` / `ToolNode` variant is in flux.** The `tool` node is being
+  redesigned away from a bare shell `tool_command`
+  ([`embeddable-engine.md`](embeddable-engine.md) §5.3); the union refactor
+  should land the other variants and leave `ToolNode`'s field set to follow that
+  redesign rather than freeze the shell shape.
+- **Precedes the (B) freeze.** §8.1's canonicalization is over the node struct;
+  freezing the hash before the union (and the `ToolNode` redesign) settle would
+  freeze a shape we're still changing — exactly the §8.0 risk. So: union refactor
+  → `ToolNode` redesign → graph feature-complete → *then* (B).
+- **Enables the typed front-end.** A TypeScript `graph()` authoring API
+  ([`graph-as-data.md`](graph-as-data.md)) is only worth having over a
+  discriminated `Node`; this refactor is its hard prerequisite.
