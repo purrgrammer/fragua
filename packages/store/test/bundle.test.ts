@@ -24,7 +24,7 @@ import {
   scrubEventPayload,
   writeTar,
 } from "../src/index.ts";
-import { freshStore, seedWorkflow } from "./helpers.ts";
+import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
 
 function untar(bytes: Uint8Array, dir: string): void {
   const tarPath = join(dir, "bundle.tar");
@@ -160,6 +160,7 @@ describe("importRunBundle", () => {
     expect(state.baseGitSha).toBe("base");
     expect(state.cwd).toBeNull(); // src had a cwd; import drops it → inert
     expect(srcState.cwd).toBe("/home/dev/proj");
+    expect(state.imported).toBe(true); // the `imported_runs` marker, not the null cwd
 
     expect(dst.getEvents(runId).length).toBe(srcEvents);
     expect(dst.getMessages(runId).length).toBe(1);
@@ -168,6 +169,18 @@ describe("importRunBundle", () => {
     // The credential did not travel.
     expect(dst.getProviderCredential("anthropic")).toBeNull();
     dst.close();
+  });
+
+  test("a cwd-less run WITHOUT the import marker is NOT flagged imported", async () => {
+    // The regression guard: `imported` keys on the `imported_runs` marker, not on
+    // a null cwd. A run enqueued without filesystem context (CI / API by sha) has
+    // a null cwd but is fully dispatchable — it must NOT read as imported.
+    const store = freshStore();
+    const runId = await seedRun(store); // enqueued with no cwd, no import marker
+    const state = store.getState(runId)!;
+    expect(state.cwd).toBeNull();
+    expect(state.imported).toBe(false);
+    store.close();
   });
 
   test("an imported run is inert - never claimed, even when it derives to queued", async () => {

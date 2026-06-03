@@ -25,9 +25,11 @@ function deriveFromLog(runId: string, events: { type: string; payload: unknown; 
 }
 
 /** Fields the reducer doesn't own (write bookkeeping), plus the deliberately
- *  non-portable ones. Normalized away on both sides before comparing. */
+ *  non-portable ones. Normalized away on both sides before comparing.
+ *  `imported` is read-derived by `getState` (the `imported_runs` marker), not
+ *  part of the reducer projection. */
 function normalize(s: RunState): RunState {
-  return { ...s, version: 0, nextSeq: 0, lastAppliedSeq: 0, title: null, cwd: null };
+  return { ...s, version: 0, nextSeq: 0, lastAppliedSeq: 0, title: null, cwd: null, imported: false };
 }
 
 describe("genesis derivation", () => {

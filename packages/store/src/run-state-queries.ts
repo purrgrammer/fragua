@@ -69,6 +69,9 @@ export interface RunStateRow {
   inbox_status: string | null;
   accepted_sha: string | null;
   schedule_id: string | null;
+  /** 1 when the run carries the `imported_runs` inert marker, else 0. Computed
+   * by the SELECT (not a `run_state` column). */
+  imported: number;
 }
 
 /** Per-run identity + version + lastAppliedSeq + status. Returned by
@@ -93,7 +96,8 @@ const SELECT_RUN_STATE_FULL_SQL = `
          cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path,
          base_git_sha, base_git_ref,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
-         inbox_status, accepted_sha, schedule_id
+         inbox_status, accepted_sha, schedule_id,
+         EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id) AS imported
     FROM run_state
    WHERE run_id = ?
 `;

@@ -231,8 +231,14 @@ export interface RunState {
    * traceability). Set by `fact.run_accepted`. */
   acceptedSha: string | null;
   /** Per-machine LOCATION binding — the resolved project root on this box.
-   * `null` for runs enqueued without filesystem context (CI, tests). */
+   * `null` for runs enqueued without filesystem context (CI, tests). NOTE: a
+   * null `cwd` does NOT mean the run is imported — see `imported`. */
   cwd: string | null;
+  /** Read-derived (NOT a persisted column): true when the run carries the
+   * `imported_runs` inert marker. This — not `cwd == null` — is the authoritative
+   * "imported, never dispatched" signal (a legitimately-enqueued run can have a
+   * null `cwd`). Populated by `getState`; absent on reducer-produced states. */
+  imported?: boolean;
   /** Project IDENTITY (the committed `id`) and its display label. Stable
    * across clones / machines / imports; this — not `cwd` — is how a run
    * attributes to a project. Always present (NOT NULL in the store). */
