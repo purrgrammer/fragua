@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-04
+
 ### Added
 
 - **Reversible schema migrations** — each schema-migration step now carries an
@@ -211,6 +213,7 @@ back down as a portable `.fragua` bundle for local inspection and aggregation.
 - Nightly property-test suite: raised the per-test timeout to fit PBT scaling and
   deflaked timer-fragile tests (#4).
 
+[0.5.0]: https://github.com/purrgrammer/fragua/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/purrgrammer/fragua/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/purrgrammer/fragua/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/purrgrammer/fragua/releases/tag/v0.1.0
