@@ -135,7 +135,7 @@ describe("read-plane explain", () => {
         label: "step",
         commitSha: "a".repeat(40),
         treeSha: "b".repeat(40),
-        committed: { files: 1, additions: 5, deletions: 1 },
+        committed: { filesChanged: 1, insertions: 5, deletions: 1 },
         uncommitted: null,
       },
       {
@@ -144,7 +144,7 @@ describe("read-plane explain", () => {
         label: "terminal",
         commitSha: "c".repeat(40),
         treeSha: "d".repeat(40),
-        committed: { files: 2, additions: 8, deletions: 0 },
+        committed: { filesChanged: 2, insertions: 8, deletions: 0 },
         uncommitted: null,
       },
     ];
@@ -298,23 +298,40 @@ describe("read-plane explain", () => {
         startSeq: 1,
         nodeId: "n1",
         startedAt: new Date().toISOString(),
-        cost: { input_tokens: 200, output_tokens: 100, cost_usd: 0.005 },
+        cost: {
+          input_tokens: 200,
+          output_tokens: 100,
+          cache_read_tokens: 1000,
+          cache_write_tokens: 50,
+          billed_tokens: 1350,
+          cost_usd: 0.005,
+        },
       },
       {
         stepIdx: 1,
         startSeq: 2,
         nodeId: "n2",
         startedAt: new Date().toISOString(),
-        cost: { input_tokens: 300, output_tokens: 150, cost_usd: 0.007 },
+        cost: {
+          input_tokens: 300,
+          output_tokens: 150,
+          cache_read_tokens: 2000,
+          cache_write_tokens: 100,
+          billed_tokens: 2550,
+          cost_usd: 0.007,
+        },
       },
     ];
     const exp = buildExplanation(baseDetail(), [], [], steps);
     expect(exp.totals.costUsd).toBeCloseTo(0.012);
     expect(exp.totals.inputTokens).toBe(500);
     expect(exp.totals.outputTokens).toBe(250);
+    expect(exp.totals.cacheReadTokens).toBe(3000);
+    expect(exp.totals.cacheWriteTokens).toBe(150);
+    expect(exp.totals.billedTokens).toBe(3900);
   });
 
-  test("snapshot rows map SnapshotItem.committed.files → filesChanged", () => {
+  test("snapshot rows preserve canonical SnapshotStat fields", () => {
     const snaps: SnapshotItem[] = [
       {
         eventIdx: 5,
@@ -322,12 +339,14 @@ describe("read-plane explain", () => {
         label: "step",
         commitSha: "a".repeat(40),
         treeSha: "b".repeat(40),
-        committed: { files: 3, additions: 10, deletions: 2 },
-        uncommitted: { files: 1, additions: 2, deletions: 0 },
+        committed: { filesChanged: 3, insertions: 10, deletions: 2 },
+        uncommitted: { filesChanged: 1, insertions: 2, deletions: 0 },
       },
     ];
     const exp = buildExplanation(baseDetail(), [], snaps, []);
     expect(exp.snapshots[0]!.committed!.filesChanged).toBe(3);
+    expect(exp.snapshots[0]!.committed!.insertions).toBe(10);
     expect(exp.snapshots[0]!.uncommitted!.filesChanged).toBe(1);
+    expect(exp.snapshots[0]!.uncommitted!.insertions).toBe(2);
   });
 });

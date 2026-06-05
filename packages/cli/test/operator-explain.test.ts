@@ -62,6 +62,80 @@ function seedCompleted(store: IEventStore, runId: string): void {
   store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
 }
 
+function seedCompletedWithCachedCost(store: IEventStore, runId: string): void {
+  store.enqueueRun({ runId, workflowSha: "wf", cwd: "/tmp/repo" });
+  const s0 = store.getState(runId)!;
+  store.appendFact(
+    runId,
+    [
+      {
+        type: "fact.run_started",
+        payload: {
+          workflowSha: "wf",
+          contractVersion: s0.contractVersion,
+          startNode: "n1",
+          baseGitSha: BASE,
+          baseGitRef: "main",
+        },
+      },
+      {
+        type: "fact.node_started",
+        payload: {
+          nodeId: "n1",
+          iteration: 0,
+        },
+      },
+    ],
+    s0.version,
+  );
+  store.appendObservabilityEvents(runId, [
+    {
+      type: "llm.start",
+      payload: {
+        nodeId: "n1",
+        iteration: 0,
+        model: "claude-sonnet",
+      },
+    },
+    {
+      type: "cost.recorded",
+      payload: {
+        nodeId: "n1",
+        iteration: 0,
+        input_tokens: 24,
+        output_tokens: 4171,
+        cache_read_tokens: 10000,
+        cache_write_tokens: 200,
+        total_tokens: 14395,
+        cost_usd: 0.5002,
+      },
+    },
+  ]);
+  const s1 = store.getState(runId)!;
+  store.appendFact(
+    runId,
+    [
+      {
+        type: "fact.node_completed",
+        payload: {
+          nodeId: "n1",
+          iteration: 0,
+          tokens: 14395,
+          costUsd: 0.5002,
+          inputTokens: 24,
+          outputTokens: 4171,
+          cacheReadTokens: 10000,
+          cacheWriteTokens: 200,
+          nextNode: "exit",
+          outcomeStatus: "success",
+        },
+      },
+      { type: "fact.run_completed", payload: { finalNode: "n1" } },
+    ],
+    s1.version,
+  );
+}
+
 function seedHalted(store: IEventStore, runId: string): void {
   store.enqueueRun({ runId, workflowSha: "wf", cwd: "/tmp/repo" });
   const s0 = store.getState(runId)!;
@@ -144,6 +218,26 @@ describe("fragua runs explain", () => {
     expect(typeof parsed.totals.costUsd).toBe("number");
     expect(typeof parsed.totals.inputTokens).toBe("number");
     expect(typeof parsed.totals.outputTokens).toBe("number");
+  });
+
+  test("--json totals include cache tokens", async () => {
+    seedCompletedWithCachedCost(r.store, "ex-cache-json");
+    const code = await explainCommand({ runId: "ex-cache-json", json: true, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out()) as RunExplanation;
+    expect(parsed.totals.inputTokens).toBe(24);
+    expect(parsed.totals.outputTokens).toBe(4171);
+    expect(parsed.totals.cacheReadTokens).toBe(10000);
+    expect(parsed.totals.cacheWriteTokens).toBe(200);
+    expect(parsed.totals.billedTokens).toBe(14395);
+    expect(parsed.steps[0]!.billedTokens).toBe(14395);
+  });
+
+  test("human render includes cache tokens in the total", async () => {
+    seedCompletedWithCachedCost(r.store, "ex-cache-human");
+    const code = await explainCommand({ runId: "ex-cache-human", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("(24+4171+10200 cached = 14395 tok)");
   });
 
   test("unknown run → exit 1", async () => {

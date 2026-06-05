@@ -25,6 +25,9 @@ export interface ExplainStep {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  billedTokens: number;
   durationMs?: number;
   model?: string;
 }
@@ -75,6 +78,9 @@ export interface RunExplanation {
     costUsd: number;
     inputTokens: number;
     outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    billedTokens: number;
     durationMs?: number;
   };
 }
@@ -104,15 +110,15 @@ export function buildExplanation(
     commitSha: s.commitSha,
     committed: s.committed
       ? {
-          filesChanged: s.committed.files,
-          insertions: s.committed.additions,
+          filesChanged: s.committed.filesChanged,
+          insertions: s.committed.insertions,
           deletions: s.committed.deletions,
         }
       : null,
     uncommitted: s.uncommitted
       ? {
-          filesChanged: s.uncommitted.files,
-          insertions: s.uncommitted.additions,
+          filesChanged: s.uncommitted.filesChanged,
+          insertions: s.uncommitted.insertions,
           deletions: s.uncommitted.deletions,
         }
       : null,
@@ -124,6 +130,9 @@ export function buildExplanation(
   const totalCostUsd = explainSteps.reduce((sum, s) => sum + s.costUsd, 0);
   const totalInputTokens = explainSteps.reduce((sum, s) => sum + s.inputTokens, 0);
   const totalOutputTokens = explainSteps.reduce((sum, s) => sum + s.outputTokens, 0);
+  const totalCacheReadTokens = explainSteps.reduce((sum, s) => sum + s.cacheReadTokens, 0);
+  const totalCacheWriteTokens = explainSteps.reduce((sum, s) => sum + s.cacheWriteTokens, 0);
+  const totalBilledTokens = explainSteps.reduce((sum, s) => sum + s.billedTokens, 0);
   const totalDuration =
     detail.durationMs !== undefined
       ? detail.durationMs
@@ -141,6 +150,9 @@ export function buildExplanation(
       costUsd: totalCostUsd,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      cacheWriteTokens: totalCacheWriteTokens,
+      billedTokens: totalBilledTokens,
       ...(totalDuration !== undefined ? { durationMs: totalDuration } : {}),
     },
   };
@@ -175,6 +187,14 @@ function buildSteps(events: StoredEvent[], steps: StepSnapshot[]): ExplainStep[]
       costUsd: s.cost?.cost_usd ?? 0,
       inputTokens: s.cost?.input_tokens ?? 0,
       outputTokens: s.cost?.output_tokens ?? 0,
+      cacheReadTokens: s.cost?.cache_read_tokens ?? 0,
+      cacheWriteTokens: s.cost?.cache_write_tokens ?? 0,
+      billedTokens:
+        s.cost?.billed_tokens ??
+        (s.cost?.input_tokens ?? 0) +
+          (s.cost?.output_tokens ?? 0) +
+          (s.cost?.cache_read_tokens ?? 0) +
+          (s.cost?.cache_write_tokens ?? 0),
       ...(s.durationMs !== undefined ? { durationMs: s.durationMs } : {}),
       ...(s.model !== undefined ? { model: s.model } : {}),
     };
