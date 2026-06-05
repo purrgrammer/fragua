@@ -76,7 +76,7 @@ steps:
     max-cost: 0.40
     next: verdict
     prompt: |
-      Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). One focused pass over correctness and any obvious security issue — it's a small change, keep it to a single pass.
+      Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). `-` lines are removed (context only — don't flag); flag only `+`/changed lines. One focused pass over correctness and any obvious security issue — it's a small change, keep it to a single pass.
 
       THE BAR: record a finding ONLY if it has a concrete, present consequence (wrong output, data loss, a crash, a security hole) and a specific fix. DROP formatting, naming, comment/doc wording, "consider …" suggestions, speculation about code that doesn't exist, and anything whose worst case is "might confuse a reader". When unsure, drop it — a clean small PR should come back `All clear`.
 
@@ -97,7 +97,7 @@ steps:
     max-cost: 6.00 # one deep pass; raised from 2.50 so a large multi-kLoC diff finishes (huge-diff chunking tracked separately)
     next: verify
     prompt: |
-      Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
+      Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). In a diff, `-` lines are being REMOVED — they are context only, never flag them; `+`/changed lines are the change under review. Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
 
         correctness — logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, real edge cases. Cross-check call sites where it matters.
         security (iff trust boundaries / auth / input parsing / crypto / secrets touched) — injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF; check surrounding sanitisation before flagging.
@@ -114,7 +114,8 @@ steps:
         - intra-workspace export / API-stability worries (this is a pre-1.0 monorepo);
         - defending against inputs that cannot occur given the call sites;
         - test-coverage suggestions for paths that can't be triggered;
-        - restating that something is already handled or documented.
+        - restating that something is already handled or documented;
+        - any issue in UNCHANGED or sibling code — you may READ any file for context, but only lines this PR adds or changes are in scope to flag.
 
       Then WRITE one ranked review to `pr-review.md` (cwd-relative, `write` tool) — do NOT print it to the thread; the `verdict` step reads the file, and re-emitting the body burns cost twice. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium`.
 
