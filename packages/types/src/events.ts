@@ -192,7 +192,7 @@ export function isTerminal(status: RunStatus): boolean {
  * - `provider_retry` — auto-retryable provider transport error
  *   (408/429/5xx/529/network); wake-pending sweeps `auto_resume_at`.
  * - `handler_retry` — handler returned `outcomeStatus="retry"`; engine
- *   scheduled a backoff window per attractor §3.5/§3.6.
+ *   scheduled a backoff window.
  *
  * Adding a new reason is a one-line addition here plus a UI renderer
  * body branch (`Record<PauseReason, ReasonRenderer>` exhaustiveness
@@ -489,6 +489,15 @@ export type FactEvent =
          * agent exited via the synthesised `route` tool. The chosen route
          * name; the engine's Step-0 edge selector keys on this. */
         route?: string;
+        /** Structured outputs emitted by this node via `emit_output` (llm) or
+         * `$FRAGUA_OUTPUT` (tool). Present iff the node declared `outputs:` and
+         * successfully emitted a valid struct. Bounded by the 4KB event-payload
+         * cap (ARCH P12); an oversized struct is a node failure.
+         *
+         * contract: no-bump — additive optional field; not folded into run_state
+         * by the reducer. Written to the rebuildable `outputs` index table in
+         * the same transaction as the fact. */
+        outputs?: Record<string, unknown>;
       };
     }
   | {
@@ -642,8 +651,7 @@ export type FactEvent =
             resumeAt: number;
           }
         | {
-            /** Handler returned `outcomeStatus="retry"` (attractor §3.5/
-             * §3.6). Concurrency slot released for the backoff window.
+            /** Handler returned `outcomeStatus="retry"`. Concurrency slot released for the backoff window.
              * Wake-pending re-queues at `resumeAt`; the same node
              * re-dispatches because `fact.node_completed` already
              * pointed `nextNode` back at it. Operator may short-circuit
@@ -716,7 +724,7 @@ export type FactEvent =
           }
         | {
             /** Provider auto-retry chain capped (5 attempts or 5
-             * cumulative minutes, attractor §3.6). Naked resume
+             * cumulative minutes). Naked resume
              * re-enters and starts a fresh chain. No per-run knob —
              * chain config is daemon-wide. */
             reason: "provider_exhausted";

@@ -104,6 +104,7 @@ import {
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
+import { getAllOutputStructs, getLatestOutput, getOutputsForRun, insertOutput } from "./outputs-queries.ts";
 import {
   applyCreationPragmas,
   applyPragmas,
@@ -127,7 +128,13 @@ import {
   selectProviderCredential,
 } from "./provider-credentials-queries.ts";
 import { applyFact, deriveRunState, emptyMetrics } from "./reducers.ts";
-import { collectRoutingBlobShas, isBlobRef, spillRoutingInputs } from "./routing-blobs.ts";
+import {
+  collectRoutingBlobShas,
+  isBlobRef,
+  materializeStructJson,
+  maybeSpillStruct,
+  spillRoutingInputs,
+} from "./routing-blobs.ts";
 import { assertSafeRunId } from "./run-id.ts";
 import {
   bumpRunSeq,
@@ -502,6 +509,35 @@ export class SqliteStore implements IEventStore {
     let newVersion = 0;
     const startAt = performance.now();
 
+    // Pre-serialise outputs payloads OUTSIDE the transaction (invariant I1:
+    // no JSON.stringify inside db.transaction). We extract them from the
+    // node_completed events before entering the txn so insertOutput receives a
+    // plain string inside the closure. An oversized struct spills to the blob
+    // CAS here (blob written before the txn, same crash-safety as routing
+    // spill): the event payload + the index then hold a tiny `{$fragua_blob}`
+    // ref, so neither needs raising past the 4 KiB cap, and a large struct is
+    // no longer a node failure.
+    const outputsInserts: Array<{ nodeId: string; iteration: number; structJson: string }> = [];
+    const outputsSpilledBlobs: Array<{ sha: string; bytes: number }> = [];
+    for (const event of events) {
+      if (event.type === "fact.node_completed") {
+        const p = event.payload as { nodeId: string; iteration: number; outputs?: Record<string, unknown> };
+        if (p.outputs !== undefined) {
+          const structJson = JSON.stringify(p.outputs);
+          const ref = maybeSpillStruct(structJson, (sha, bytes) => this.blobs.put(sha, bytes));
+          if (ref !== null) {
+            // Replace the inline struct in the event payload with the ref so the
+            // event stays under the 4 KiB cap; the index stores the same ref.
+            p.outputs = { ...ref };
+            outputsInserts.push({ nodeId: p.nodeId, iteration: p.iteration, structJson: JSON.stringify(ref) });
+            outputsSpilledBlobs.push({ sha: ref.$fragua_blob, bytes: ref.bytes });
+          } else {
+            outputsInserts.push({ nodeId: p.nodeId, iteration: p.iteration, structJson });
+          }
+        }
+      }
+    }
+
     try {
       this.writeTxn(() => {
         const row = selectRunStateRow(this.db, runId);
@@ -518,6 +554,17 @@ export class SqliteStore implements IEventStore {
           seqs.push(seq);
           insertEventDaemon(this.db, runId, seq, event.type, payload, ts);
           state = applyFact(state, event, ts);
+        }
+
+        // Durability barrier for spilled-output blobs: the BlobFS.put() ran
+        // before this txn; the row insert makes them reachable + GC-protected.
+        for (const { sha, bytes } of outputsSpilledBlobs) {
+          insertBlobIfAbsent(this.db, sha, bytes, ts);
+        }
+
+        // Write outputs index rows in the same transaction (ground rule #5).
+        for (const o of outputsInserts) {
+          insertOutput(this.db, runId, o.nodeId, o.iteration, o.structJson);
         }
 
         if (opts.routingPatch != null) {
@@ -923,6 +970,20 @@ export class SqliteStore implements IEventStore {
       nodeId: r.node_id,
       iteration: r.iteration,
     }));
+  }
+
+  // ─────────────── Outputs index ───────────────
+
+  getOutputsForRun(runId: string): Array<{ nodeId: string; iteration: number; struct: string }> {
+    return getOutputsForRun(this.db, runId).map((r) => ({
+      ...r,
+      struct: materializeStructJson(r.struct, (sha) => this.blobs.get(sha)),
+    }));
+  }
+
+  getLatestOutput(runId: string, nodeId: string): string | null {
+    const struct = getLatestOutput(this.db, runId, nodeId);
+    return struct === null ? null : materializeStructJson(struct, (sha) => this.blobs.get(sha));
   }
 
   // ─────────────── Aggregations ───────────────
@@ -1470,6 +1531,7 @@ export class SqliteStore implements IEventStore {
     const allEvents = [...this.getEvents(runId)].sort((a, b) => a.seq - b.seq);
     const events = allEvents.filter((e) => !EXPORT_DENYLIST.has(e.type));
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
+
     const { registry, literalValues } = buildExportRegistry({
       providerCredentials: this.listProviderCredentials(),
       cwd: run.cwd,
@@ -1550,6 +1612,30 @@ export class SqliteStore implements IEventStore {
       }
     }
 
+    // Spilled structured-output blobs: a `fact.node_completed` whose `outputs`
+    // is a `$fragua_blob` ref points at a CAS blob holding the struct JSON.
+    // Collect, scrub as JSON, and re-CAS (same treatment as a text artifact) so
+    // the blob ships in the bundle; the event ref is rewritten to the export
+    // sha at serialisation below.
+    for (const e of events) {
+      if (e.type !== "fact.node_completed") continue;
+      const out = (e.payload as { outputs?: unknown }).outputs;
+      if (!isBlobRef(out)) continue;
+      const origSha = out.$fragua_blob;
+      if (reCasMap.has(origSha)) continue;
+      const origBytes = this.blobs.get(origSha);
+      const text = dec.decode(origBytes);
+      let scrubbed: string;
+      try {
+        scrubbed = JSON.stringify(scrubJsonStrings(JSON.parse(text), registry, scrubOpts));
+      } catch {
+        scrubbed = scrubJsonStrings(text, registry, scrubOpts) as string;
+      }
+      const exportBytes = scrubbed !== text ? enc.encode(scrubbed) : origBytes;
+      const exportSha = scrubbed !== text ? sha256Hex(exportBytes) : origSha;
+      reCasMap.set(origSha, { exportSha, exportBytes });
+    }
+
     // Binary-artifact residual gate: scan every binary blob for verbatim
     // live-literal values. Text blobs are always scrubbed, so only binary ones
     // can contain a live secret. A single hit flips liveLiteralHit=true — the
@@ -1615,7 +1701,11 @@ export class SqliteStore implements IEventStore {
             // ref objects (non-string values) untouched — only the sha needs
             // updating to match what we put in the tar and manifest.
             const exportPayload =
-              e.type === "intent.run_enqueued" ? rewriteRoutingRefs(scrubbedPayload, reCasMap) : scrubbedPayload;
+              e.type === "intent.run_enqueued"
+                ? rewriteRoutingRefs(scrubbedPayload, reCasMap)
+                : e.type === "fact.node_completed"
+                  ? (deepRewriteRefs(scrubbedPayload, reCasMap) as typeof scrubbedPayload)
+                  : scrubbedPayload;
             return { seq: e.seq, type: e.type, writer: e.writer, payload: exportPayload, ts: e.ts };
           }),
         ),
@@ -1801,8 +1891,22 @@ export class SqliteStore implements IEventStore {
       asObject(gp["routing"], `run ${r.runId} genesis routing`);
 
       const derived = deriveRunState(r.runId, events);
+      // Pre-serialise outputs from node_completed facts (I1: no JSON.stringify in txn).
+      const outputsRows: Array<{ nodeId: string; iteration: number; structJson: string }> = [];
+      for (const ev of events) {
+        if (ev.type === "fact.node_completed") {
+          const p = ev.payload as { nodeId?: unknown; iteration?: unknown; outputs?: unknown };
+          if (p.outputs !== undefined && typeof p.nodeId === "string" && typeof p.iteration === "number") {
+            const structJson = JSON.stringify(p.outputs);
+            if (structJson.length < 4096) {
+              outputsRows.push({ nodeId: p.nodeId, iteration: p.iteration, structJson });
+            }
+          }
+        }
+      }
       return {
         derived,
+        outputsRows,
         routingJson: JSON.stringify(derived.routing),
         metricsJson: JSON.stringify(derived.metrics),
         changeStatJson: derived.changeStat != null ? JSON.stringify(derived.changeStat) : null,
@@ -1902,6 +2006,10 @@ export class SqliteStore implements IEventStore {
               contentHash: m.contentHash,
             });
           }
+          // Rebuild the outputs index from node_completed facts.
+          for (const o of r.outputsRows) {
+            insertOutput(this.db, d.runId, o.nodeId, o.iteration, o.structJson);
+          }
           for (const a of r.artifacts) {
             upsertArtifact(this.db, {
               runId: d.runId,
@@ -1944,6 +2052,18 @@ export class SqliteStore implements IEventStore {
       for (const sha of collectRoutingBlobShas(parsed)) {
         routingRootShas.add(sha);
       }
+    }
+    // Spilled structured-output blobs are GC roots too: each outputs-index row
+    // may itself be a `{$fragua_blob}` ref. Without this they'd be collected as
+    // orphans and a later `${{ outputs.X.f }}` read would fail to rehydrate.
+    for (const structJson of getAllOutputStructs(this.db)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(structJson);
+      } catch {
+        continue;
+      }
+      if (isBlobRef(parsed)) routingRootShas.add(parsed.$fragua_blob);
     }
     const protectedShasJson = JSON.stringify([...routingRootShas]);
 

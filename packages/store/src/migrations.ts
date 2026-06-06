@@ -39,6 +39,25 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
     up: (db) => db.exec("ALTER TABLE schedules RENAME COLUMN input TO title"),
     down: (db) => db.exec("ALTER TABLE schedules RENAME COLUMN title TO input"),
   },
+  // v2 → v3: add the rebuildable outputs index table. `down` is non-lossy —
+  // `outputs` is a projection re-derivable from fact.node_completed.payload.outputs,
+  // so dropping it loses no source-of-truth data.
+  3: {
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS outputs (
+  run_id    TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+  node_id   TEXT NOT NULL,
+  iteration INTEGER NOT NULL,
+  struct    TEXT NOT NULL CHECK (json_valid(struct) AND length(struct) < 4096),
+  PRIMARY KEY (run_id, node_id, iteration)
+) STRICT, WITHOUT ROWID`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id, node_id)");
+    },
+    down: (db) => {
+      db.exec("DROP INDEX IF EXISTS idx_outputs_run");
+      db.exec("DROP TABLE IF EXISTS outputs");
+    },
+  },
 };
 
 /** Steps that deliberately ship without a `down`, each with the reason a

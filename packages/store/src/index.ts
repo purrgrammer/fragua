@@ -29,6 +29,7 @@ export {
   migrationRegistry,
   planMigration,
 } from "./migrations.ts";
+export { deleteOutputsForRun, getLatestOutput, getOutputsForRun, insertOutput } from "./outputs-queries.ts";
 export {
   applyPragmas,
   CURRENT_SCHEMA_VERSION,

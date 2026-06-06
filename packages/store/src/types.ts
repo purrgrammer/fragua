@@ -879,6 +879,13 @@ export interface IEventReader {
    */
   getRunCostTotals(runId: string): RunCostTotalsRow;
 
+  // ─── Outputs index (read)
+  /** All output rows for a run, in (node_id, iteration ASC) order.
+   * Each row carries the pre-parsed struct as a JSON string. */
+  getOutputsForRun(runId: string): Array<{ nodeId: string; iteration: number; struct: string }>;
+  /** Latest-iteration output struct for a specific node, or null. */
+  getLatestOutput(runId: string, nodeId: string): string | null;
+
   // ─── Blobs (raw read)
   /** Read a blob by sha256. Returns `null` when the file is absent (not yet
    *  written or already GC'd). Used by `materializeRouting` callers to resolve

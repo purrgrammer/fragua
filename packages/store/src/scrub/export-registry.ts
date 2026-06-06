@@ -178,7 +178,13 @@ const FREE_TEXT_KEYS = new Set(["text", "note", "preview", "errorMessage", "deta
  *  2. When `type === "intent.run_enqueued"`, deep-scrub string VALUES in
  *     `payload.routing` via `scrubJsonStrings` — catches cwd, input, inputs
  *     while leaving structural numbers/objects and all keys untouched.
- *  3. Everything else passes through unchanged.
+ *  3. When `type === "fact.node_completed"`, deep-scrub string VALUES in
+ *     `payload.outputs` via `scrubJsonStrings` — typed output values are
+ *     author/LLM/tool-produced and can carry secrets. Inline structs ride the
+ *     event payload (a spilled struct is scrubbed via the blob path instead, and
+ *     its `$fragua_blob` ref is inert to scrubbing), so without this an inline
+ *     output ships verbatim.
+ *  4. Everything else passes through unchanged.
  *
  * Returns a shallow-cloned object when modified; returns the original when
  * there is nothing to scrub (no allocation on the hot path for unaffected
@@ -241,6 +247,21 @@ export function scrubEventPayload(
       if (scrubbedRouting !== routing) {
         if (out == null) out = { ...src };
         out["routing"] = scrubbedRouting;
+      }
+    }
+  }
+
+  // Rule 3: deep-scrub the typed outputs struct on a completed node. An inline
+  // struct carries its values verbatim in the payload; a spilled struct holds an
+  // inert `$fragua_blob` ref here (the real bytes are scrubbed via the blob
+  // path), so scrubbing it is a safe no-op that doesn't disturb the ref.
+  if (type === "fact.node_completed") {
+    const outputs = src["outputs"];
+    if (outputs != null && typeof outputs === "object") {
+      const scrubbedOutputs = scrubJsonStrings(outputs, registry, opts);
+      if (scrubbedOutputs !== outputs) {
+        if (out == null) out = { ...src };
+        out["outputs"] = scrubbedOutputs;
       }
     }
   }
