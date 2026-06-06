@@ -22,7 +22,7 @@ import {
 } from "@fragua/workspace";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model, streamSimple } from "@mariozechner/pi-ai";
-import { type TSchema, Type } from "@sinclair/typebox";
+import { Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { MessageStore } from "./message-store.ts";
 import { SteeringRegistry } from "./steering-registry.ts";
