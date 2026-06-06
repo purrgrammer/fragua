@@ -8,6 +8,7 @@
 import type { AgentMessage, Message as PiMessage } from "@fragua/types";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
+import type { OutputsValue } from "../types/outputs.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
 
@@ -149,8 +150,7 @@ export interface HandlerContext {
   readonly runId: string;
   readonly nodeId: string;
   /** Per-node re-entry counter. 0 on first entry; bumped by the executor
-   * every time a backward edge returns control to this node (attractor
-   * §3.6 retry semantics). Used to key idempotency hashes so repeated
+   * every time a backward edge returns control to this node. Used to key idempotency hashes so repeated
    * retries of the same external call don't dedupe to a single provider
    * request. */
   readonly iteration: number;
@@ -259,6 +259,12 @@ export type HandlerResult =
       cacheReadTokens?: number;
       cacheWriteTokens?: number;
       modelName?: string;
+      /** Structured outputs emitted by this node. Set when the node declared
+       * `outputs:` and the handler successfully produced a validated value
+       * (via `emit_output` for llm steps; via `$FRAGUA_OUTPUT` for tool steps).
+       * Persisted on `fact.node_completed.payload.outputs` (bounded by 4KB cap);
+       * written to the `outputs` index table in the same transaction. */
+      outputs?: OutputsValue;
     }
   | {
       kind: "yield_human";

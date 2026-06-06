@@ -1,8 +1,16 @@
 // PiLlmBackend — LlmBackend backed by pi-agent-core + pi-ai.
 
 import { createHash } from "node:crypto";
-import type { EventType, LlmBackend, LlmInput, Outcome, SummariserBackend } from "@fragua/core";
-import { fail, failHalt, failProvider, ok } from "@fragua/core";
+import type {
+  EventType,
+  LlmBackend,
+  LlmInput,
+  Outcome,
+  OutputsDecl,
+  OutputsValue,
+  SummariserBackend,
+} from "@fragua/core";
+import { compileOutputsToTypeBox, fail, failHalt, failProvider, ok, validateOutputsValue } from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
 import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
 import {
@@ -14,7 +22,7 @@ import {
 } from "@fragua/workspace";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model, streamSimple } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { type TSchema, Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { MessageStore } from "./message-store.ts";
 import { SteeringRegistry } from "./steering-registry.ts";
@@ -290,23 +298,24 @@ export class PiLlmBackend implements LlmBackend {
     };
     const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
 
-    // Route-tool synthesis. When the node declares `routes=`, append an
-    // ephemeral, per-call `route`
-    // tool whose `name` parameter is enum-constrained to the declared
-    // routes. Provider rejects off-list values at the tool-call layer,
-    // so an unknown route never reaches the handler. The tool sets
-    // `terminate: true` so pi-agent-core stops the loop after the
-    // batch — same loop-terminator pattern as the `abort` tool. The
-    // chosen route is recovered post-loop by `findRouteToolCall`
-    // scanning the transcript; the synthesised tool itself is purely a
-    // loop-end signal. Force-included regardless of
-    // `allowed_tools`/`denied_tools` because the route surface is
-    // structural for a routing node — excluding it would leave the
-    // model with no way to exit and the run would land
-    // `route_not_picked`.
+    // Exit-tool synthesis — a node exits via exactly ONE terminating tool:
+    //   routes → the ephemeral, per-call `route` tool whose `name` parameter is
+    //     an enum constrained to the declared routes (a bare `{type,enum}`,
+    //     provider-enforced — see buildRouteTool).
+    //   outputs → `emit_output`, whose schema is the node's outputs profile.
+    //   neither → the loop ends when the agent stops emitting calls.
+    // `outputs:` and `routes:` are mutually exclusive (parser-enforced), so at
+    // most one is synthesised. Both set `terminate: true` and are force-included
+    // regardless of allowed_tools / denied_tools (ground rule #12): the exit
+    // surface is structural. The chosen exit is recovered post-loop by scanning
+    // the transcript.
     const nodeRoutes = input.node.attrs.routes as string[] | undefined;
-    if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
-      tools.push(buildRouteTool(nodeRoutes));
+    const outputsDecl = (input.outputsDecl ?? input.node.attrs.outputs) as OutputsDecl | undefined;
+    const hasRoutes = Array.isArray(nodeRoutes) && nodeRoutes.length > 0;
+    if (hasRoutes) {
+      tools.push(buildRouteTool(nodeRoutes as string[]));
+    } else if (outputsDecl !== undefined) {
+      tools.push(buildEmitOutputTool(outputsDecl));
     }
 
     const contextFiles = applyDefaultContextFiles([]);
@@ -750,6 +759,19 @@ export class PiLlmBackend implements LlmBackend {
       return ok({ notes, route: routeCall.route });
     }
 
+    // emit_output resolution for nodes that declare outputs: but no routes:.
+    if (outputsDecl !== undefined) {
+      const emitCall = findEmitOutputCall(agent.state.messages);
+      if (emitCall == null) {
+        return fail("node declared outputs: but did not call emit_output", { non_retryable: true });
+      }
+      const valErr = validateOutputsValue(outputsDecl, emitCall.value);
+      if (valErr !== null) {
+        return fail(`emit_output value failed validation: ${valErr}`, { non_retryable: true });
+      }
+      return ok({ notes, outputs: emitCall.value as OutputsValue });
+    }
+
     return ok({ notes });
   }
 
@@ -1004,6 +1026,51 @@ export function findRouteToolCall(
 }
 
 /**
+ * Build the `emit_output` tool for a node that declares `outputs:` but does NOT
+ * route (a routing node carries its outputs on the `route` call instead).
+ * Force-included (like `route`); one call closes the turn (`terminate: true`).
+ * The schema is compiled from the node's `OutputsDecl` via `compileOutputsToTypeBox`.
+ */
+function buildEmitOutputTool(decl: OutputsDecl): AgentTool {
+  const parameters = compileOutputsToTypeBox(decl);
+  return {
+    name: "emit_output",
+    label: "emit_output",
+    description:
+      "Emit the structured output for this step. Call exactly once when you have produced all declared output fields. " +
+      "All declared fields must be present with their correct types. This call closes the turn.",
+    parameters,
+    async execute(_toolCallId, params) {
+      return {
+        content: [{ type: "text", text: `emit_output called` }],
+        details: { fragua_tool: "emit_output", is_error: false, data: params },
+        terminate: true,
+      };
+    },
+  };
+}
+
+/**
+ * Scan the transcript for the last `emit_output` tool call.
+ * Returns `{ value }` where `value` is the raw arguments object, or `null`.
+ * Last call wins (like `findRouteToolCall`) to handle thread rehydration.
+ */
+export function findEmitOutputCall(
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
+): { value: unknown } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message === undefined || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const blocks = message.content as Array<{ type: string; name?: string; arguments?: unknown }>;
+    for (const block of blocks) {
+      if (block.type !== "toolCall" || block.name !== "emit_output") continue;
+      return { value: block.arguments };
+    }
+  }
+  return null;
+}
+
+/**
  * Build the ephemeral `route` tool for one routing-node invocation.
  * Inline (not a static module): the enum is materialised from the
  * node's `routes=` attribute on every call. `terminate: true` ends
@@ -1021,12 +1088,7 @@ function buildRouteTool(routes: readonly string[]): AgentTool {
   // enforced at the provider layer, so a wayward
   // `route({name:"feature"})` is rejected before it ever lands.
   const nameSchema = Type.Unsafe<string>({ type: "string", enum: [...routes] });
-  const parameters = Type.Object(
-    {
-      name: nameSchema,
-    },
-    { additionalProperties: false },
-  );
+  const parameters = Type.Object({ name: nameSchema }, { additionalProperties: false });
   return {
     name: "route",
     label: "route",

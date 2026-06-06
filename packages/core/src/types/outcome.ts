@@ -2,6 +2,7 @@
 
 import type { HaltReason } from "@fragua/types";
 import { type Static, Type } from "@sinclair/typebox";
+import type { OutputsValue } from "./outputs.ts";
 
 export type OutcomeStatus = "success" | "fail" | "retry";
 
@@ -71,7 +72,13 @@ export const OutcomeSchema = Type.Object(
   { $id: "Outcome" },
 );
 
-export type Outcome = Static<typeof OutcomeSchema>;
+export type OutcomeBase = Static<typeof OutcomeSchema>;
+
+/** Full outcome type with the optional `outputs` field that carries the
+ * emitted struct from `emit_output` (llm) or `$FRAGUA_OUTPUT` (tool).
+ * `outputs` is typed separately from OutcomeSchema because TypeBox's
+ * `Type.Any()` loses precision — keep it as the precise OutputsValue. */
+export type Outcome = OutcomeBase & { outputs?: OutputsValue };
 
 /** Convenience factory for successful outcomes. */
 export function ok(partial: Partial<Outcome> = {}): Outcome {
