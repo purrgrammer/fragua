@@ -93,7 +93,7 @@ steps:
 
 ## 3. Inputs — structured, typed, validated
 
-Workflows take **typed inputs**, declared in `inputs:` and referenced as `${{ inputs.name }}` in any `prompt:`, `text:`, or tool `run:` string. This is the *only* substitution token — there is no free-form `$ARGUMENTS`; everything a run needs is a declared input.
+Workflows take **typed inputs**, declared in `inputs:` and referenced as `${{ inputs.name }}` in any `prompt:`, `text:`, or tool `run:` string. There is no free-form `$ARGUMENTS`; everything a run needs is a declared input. (`${{ inputs.name }}` and `${{ outputs.X.f }}` — §6 — are the only two substitution tokens; a bare `$name` is literal.)
 
 ```yaml
 inputs:
@@ -185,7 +185,15 @@ On REJECT, the engine retargets to `implement`; after `max-retries` retargets th
 
 ## 6. Moving data between steps
 
-Two channels — pick consciously per step. There is **no `$node.output`** substitution.
+Three channels — pick by what the data *is* and what the consumer *does* with it:
+
+| Channel | For |
+|---|---|
+| **Shared `thread:`** | steps that genuinely converse (plan ↔ implement ↔ review) |
+| **Environment re-derivation** | anything already on disk / in git |
+| **Typed `outputs:`** | a consumer that needs a value *typed* — to run it, pass it verbatim, or aggregate several producers |
+
+Default to the thread for conversational context and the environment for on-disk state. Reach for `outputs:` only when the value being typed and addressable earns its keep (below).
 
 ### Shared thread (continuity)
 
@@ -198,6 +206,45 @@ Scope a thread to the steps that genuinely converse (e.g. `plan ↔ implement �
 ### Environment re-derivation
 
 Many steps need no upstream artifact — they re-derive from git / fs / a script. Say so in the prompt ("Fresh thread — read state via git"). Cheaper than threading and harder to get wrong: `commit`, `merge::preflight`, `ci`, gates that read `git diff`.
+
+### Typed outputs (`outputs:`)
+
+An `llm` step declares typed `outputs:`; downstream steps read them with `${{ outputs.<producer>.<field>[.<sub>] }}` in `prompt:` (llm), `run:` (tool), or `text:` (human). A scalar leaf interpolates as its value, a record/array as JSON, a dotted leaf as the inner scalar. **Reads fail closed** — referencing a field the producer never populated on the taken path *fails the consuming node*, never a silent `""`.
+
+```yaml
+  review_security:
+    type: llm
+    prompt: Review the diff for security issues.
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [low, high] }
+            note:     { type: string }
+            fix:      { type: string, optional: true }
+    next: synthesize
+  synthesize:
+    type: llm
+    prompt: |
+      Reconcile into one verdict:
+      ${{ outputs.review_security.findings }}
+    next: exit
+  merge:                                  # the other shape — a scalar into a tool
+    type: tool
+    run: gh pr merge ${{ outputs.scope.pr_number }} --auto --squash
+```
+
+The type grammar is the same one `inputs:` uses — `type:` of `string` / `number` / `boolean` / `choice` (+`options`) / `object` (+`fields`) / `array` (+`items`), nesting to any fixed depth; no recursion, no `$ref`, no constraint keywords (those are step predicates). Record fields are required unless marked `optional: true`.
+
+**Rules:** `outputs:` is **`llm`-only to produce** (`tool`/`human` consume but never produce) and **mutually exclusive with `routes:`** (a routing step's terminal call is `route`). The producer emits via a forced `emit_output` tool, validated post-emit.
+
+**Reach for `outputs:` only when:**
+- a **mechanical consumer takes the value verbatim** — a `tool` runs it (`gh pr merge ${{ outputs.scope.pr_number }}`), or a step passes it through unchanged; getting it wrong is a bug, not a re-read; **or**
+- a **synthesizer aggregates several producers** — multiple `llm` steps each emit structured results and a downstream step combines them (review lenses → `synthesize`). This `llm → llm` hand-off is legitimate: typed outputs give the consumer clean per-source access where a shared thread would interleave the sources as prose.
+
+**Don't** reach for `outputs:` when another channel already serves: steps that *converse* → the thread (the data is already there); state *already in git / on disk* → re-derive; a *large prose body a tool consumes* (a review for `gh --body-file`) → a file; a *single producer with no consumer* → nothing to hand off. The smell is typing data the thread already carries between two steps that share it.
 
 ---
 
@@ -212,6 +259,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 | `model` | string | Provider-native model id (must be registered). |
 | `provider` | string | Provider key (defaults to daemon default / `defaults:`). |
 | `thread` | string | Share an LLM conversation across steps (§6). |
+| `outputs` | map | Typed step outputs (`llm` only; mutually exclusive with `routes:`). Read downstream as `${{ outputs.X.f }}` (§6). |
 | `allowed-tools` | string[] | Tool whitelist. Name them — unconstrained is usually wrong. |
 | `denied-tools` | string[] | Subtractive filter. |
 | `effort` | `low\|medium\|high` | Reasoning effort for extended-thinking providers. |
@@ -332,6 +380,9 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 - **E027** — `summary:` without a `thread`.
 - **E028 / E029** — step id `exit` / `start` is reserved.
 - **E030** — `${{ inputs.x }}` references an undeclared input.
+- **E033 / E034** — malformed `outputs:` type grammar (unknown `type:`, bad `fields`/`items`/`options`, or a disallowed construct like `pattern`/`$ref`/recursion).
+- **E035** — `${{ outputs.X.f }}` references a field the producer doesn't declare, or a producer that can never reach the consumer (dead reference).
+- **W015** — a referenced `outputs:` producer may not run on every path to the consumer; the read fails closed at runtime if it didn't.
 - **E031** — a `retry:` gate has no `max-retries:` (the per-gate retarget cap is required).
 - **E032** — a step declares no success successor — add `next:` / `on: {success: …}` / `routes:` (`next: exit` to finish). There is no linear fall-through.
 - **W007** — `goal_gate` (`retry:`) with no `retry_target`.
@@ -352,6 +403,7 @@ Full table, including removed codes: `references/validator-codes.md`.
 - **Re-reading a classification from a thread.** Encode it in the topology, or re-derive fresh evidence at the point of decision.
 - **A `collect → analyze` tool→llm chain.** Tool steps don't feed data forward; run the collector inside the analyser's `bash` tool, or split it into a dedicated `llm` collector sharing the thread.
 - **A heavy collector that's also a goal-gate retarget target.** Each retarget re-runs it. Split `collect` out so only the analyser re-runs.
+- **Typing data the thread already carries.** `outputs:` between two steps that share a `thread:` is usually the smell — the data is already present. Reach for `outputs:` for a verbatim machine hand-off or a multi-producer synthesis (§6), not to make a conversation "structured".
 - **Uniform max rigor.** Scale the work to the change (§11).
 - **Leaking plumbing into prompts.** No "previous turn", "your context contains", "in a single message".
 - **Editing a workflow mid-run.** `workflow_sha` is pinned at enqueue; edits apply to future runs.
