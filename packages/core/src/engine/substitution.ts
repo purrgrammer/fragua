@@ -31,6 +31,37 @@ export interface SubstitutionOptions {
   args?: SubstitutionArgs;
   /** If true, wrap substituted values in single quotes for shell safety. */
   escapeForShell?: boolean;
+  /** If true, wrap each interpolated `${{ outputs.X.f }}` value in a
+   * content-derived delimiter so an upstream-laundered value can't pose as an
+   * instruction in an `llm` `prompt:`. Set ONLY for prompt consumption — `tool`
+   * `run:` uses `escapeForShell` (a shell-injection surface, not prompt), and
+   * `human` `text:` is read by a person. Ignored when `escapeForShell` is set.
+   * See docs/proposals/structured-outputs.md §6.4. */
+  wrapOutputs?: boolean;
+}
+
+/** Boundary tag for an output value interpolated into a prompt. The id is a
+ * content hash, so a value can't contain its own closing tag (it would need a
+ * hash preimage) and the delimiter is collision-free by construction — and
+ * deterministic, so the same value renders identically on replay. The stable
+ * `fragua_output` name is what the agent's standing system-prompt rule marks as
+ * data. Best-effort defense-in-depth, not a cryptographic guarantee. */
+export function wrapOutputValue(value: string): string {
+  const id = fnv1a64Hex(value);
+  return `<fragua_output id="${id}">\n${value}\n</fragua_output id="${id}">`;
+}
+
+/** FNV-1a 64-bit → 16 hex chars. Browser-safe + synchronous (core stays free of
+ * `node:crypto`); used only to derive a delimiter boundary, not for security. */
+function fnv1a64Hex(s: string): string {
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash ^ BigInt(s.charCodeAt(i))) & mask;
+    hash = (hash * prime) & mask;
+  }
+  return hash.toString(16).padStart(16, "0");
 }
 
 /** Matches `${{ inputs.name }}` with surrounding whitespace tolerance.
@@ -47,7 +78,7 @@ const COMBINED_REF_RE =
   /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
-  const { args = {}, escapeForShell = false } = opts;
+  const { args = {}, escapeForShell = false, wrapOutputs = false } = opts;
   const fmt = (raw: string): string => (escapeForShell ? shellQuote(raw) : raw);
   const inputs = args.inputs ?? {};
   const outputs = args.outputs ?? {};
@@ -68,7 +99,7 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
         missing.push(whole.trim());
         return whole;
       }
-      return rendered;
+      return wrapOutputs && !escapeForShell ? wrapOutputValue(rendered) : rendered;
     },
   );
   if (missing.length > 0) throw new UnpopulatedOutputError([...new Set(missing)]);

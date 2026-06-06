@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { outputReferences, substituteOutputs, UnpopulatedOutputError } from "../../src/engine/outputs-substitution.ts";
-import { substitute } from "../../src/engine/substitution.ts";
+import { substitute, wrapOutputValue } from "../../src/engine/substitution.ts";
 
 describe("substituteOutputs", () => {
   test("scalar string leaf interpolates as its value", () => {
@@ -139,5 +139,43 @@ describe("substitute() integration with outputs", () => {
       escapeForShell: true,
     });
     expect(result).toBe("run 'my cmd' out='it'\\''s here'");
+  });
+});
+
+describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
+  test("wraps an interpolated output value in a content-derived fragua_output tag", () => {
+    const result = substitute("findings: ${{ outputs.scope.note }}", {
+      args: { outputs: { scope: { note: "all good" } } },
+      wrapOutputs: true,
+    });
+    expect(result).toMatch(
+      /^findings: <fragua_output id="[0-9a-f]{16}">\nall good\n<\/fragua_output id="[0-9a-f]{16}">$/,
+    );
+  });
+
+  test("the boundary id is content-derived (deterministic; differs by value)", () => {
+    expect(wrapOutputValue("abc")).toBe(wrapOutputValue("abc"));
+    const idOf = (v: string) => wrapOutputValue(v).match(/id="([0-9a-f]+)"/)![1];
+    expect(idOf("abc")).not.toBe(idOf("abd"));
+  });
+
+  test("inputs are NOT wrapped — only outputs", () => {
+    const result = substitute("x ${{ inputs.t }} y ${{ outputs.n.v }}", {
+      args: { inputs: { t: "TT" }, outputs: { n: { v: "VV" } } },
+      wrapOutputs: true,
+    });
+    expect(result).toContain("x TT y ");
+    expect(result).toContain("<fragua_output");
+    expect(result).not.toContain('<fragua_output id="">TT'); // input stayed bare
+  });
+
+  test("wrapOutputs is ignored under escapeForShell (shell context, not prompt)", () => {
+    const result = substitute("echo ${{ outputs.n.v }}", {
+      args: { outputs: { n: { v: "hi" } } },
+      wrapOutputs: true,
+      escapeForShell: true,
+    });
+    expect(result).toBe("echo 'hi'");
+    expect(result).not.toContain("fragua_output");
   });
 });

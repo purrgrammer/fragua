@@ -1,6 +1,6 @@
 ---
 title: Structured step outputs (MVP) — typed `outputs:` on `llm` steps
-summary: "An `llm` step declares typed `outputs:` with the same small type grammar used by `inputs:` (scalars, `choice`, records, arrays — a subset of JSON Schema sized to what provider strict-mode enforces; no recursion, no `$ref`). It emits through one force-included `emit_output` tool; any step consumes via `${{ outputs.X.f }}` interpolation (`llm` in prompt, `tool` in run, `human` in text). Reads fail closed — a reference the producer never populated halts the node (a recorded, replayable fact), never a silent \"\". The grammar compiles to TypeBox (already a dependency): TypeBox validates the emitted value and supplies the emit-tool schema, so author surface, our validation, and the provider's native strict-mode all agree. Oversized structs spill to the blob CAS via the input-spill path. Values interpolated into an `llm` prompt are wrapped in per-run nonce-delimited tags. MVP: only `llm` steps produce; `tool`/`human` consume."
+summary: "An `llm` step declares typed `outputs:` with the same small type grammar used by `inputs:` (scalars, `choice`, records, arrays — a subset of JSON Schema sized to what provider strict-mode enforces; no recursion, no `$ref`). It emits through one force-included `emit_output` tool; any step consumes via `${{ outputs.X.f }}` interpolation (`llm` in prompt, `tool` in run, `human` in text). Reads fail closed — a reference the producer never populated halts the node (a recorded, replayable fact), never a silent \"\". The grammar compiles to TypeBox (already a dependency): TypeBox validates the emitted value and supplies the emit-tool schema, so author surface, our validation, and the provider's native strict-mode all agree. Oversized structs spill to the blob CAS via the input-spill path. Values interpolated into an `llm` prompt are wrapped in content-derived (hash-boundary) delimiters. MVP: only `llm` steps produce; `tool`/`human` consume."
 status: proposed
 maturity: designed
 last-reviewed: 2026-06-07
@@ -113,7 +113,7 @@ Additive; breaks nothing already authored.
 - Spill: an output rides inline on the fact when it fits the event-payload cap and
   spills to the blob CAS (`{$fragua_blob: sha}` ref, rehydrated on read) when it
   doesn't, over the same path run inputs use.
-- Nonce-delimited wrapping of output values interpolated into an `llm` `prompt:`
+- Content-derived (hash-boundary) wrapping of output values interpolated into an `llm` `prompt:`
   (§6).
 - Validator reachability checks: E035 (broken/dead reference), W015 (producer may
   not run on every path).
@@ -226,21 +226,26 @@ provider's native enforcement.
    node's `fail:` edge).
 
 4. **Untrusted-content delimiting (prompt-consumption).** An output interpolated
-   into an `llm` `prompt:` is wrapped in a per-run nonce-delimited envelope, and a
-   standing system-prompt rule marks delimited regions as data, not instructions:
+   into an `llm` `prompt:` is wrapped in a stable-named tag whose boundary id is
+   a **content hash**, and a standing system-prompt rule marks those regions as
+   data, not instructions:
 
    ```text
-   <output_a3f9c1 name="review.findings">
+   <fragua_output id="9c1f2a3b4d5e6f70">
    [ … the value (scalar verbatim, record/array as JSON) … ]
-   </output_a3f9c1>
+   </fragua_output id="9c1f2a3b4d5e6f70">
    ```
 
-   The nonce (a per-run random suffix) makes the delimiter unforgeable by content
-   the model saw before the nonce was chosen — so data containing a literal
-   `</output>` can't end the envelope early. This applies to `llm prompt:` only:
-   `tool run:` is shell injection (use `exec:`, §4) and `human text:` is read by a
-   person. It closes one window — the shared `thread:` and the agent loop's raw
-   tool/file/bash results still enter prompts un-delimited (§9).
+   A **content-derived boundary** (not a random nonce) is the right fit: a value
+   can't contain its own closing tag without a hash preimage, so the delimiter is
+   collision-free by construction — and it's *deterministic*, so the same value
+   renders identically on replay (a random nonce would have to be recorded). It's
+   computed locally in the substitution resolver (a browser-safe synchronous
+   hash), so no per-run state threads through the handler or agent. This applies
+   to `llm prompt:` only: `tool run:` is shell injection (use `exec:`, §4) and
+   `human text:` is read by a person. It closes one window — the shared `thread:`
+   and the agent loop's raw tool/file/bash results still enter prompts
+   un-delimited (§9). Best-effort defense-in-depth, not a cryptographic guarantee.
 
 ## 7. Provider-native enforcement
 
@@ -288,7 +293,7 @@ The seams already exist; none is greenfield.
 | Seam | File(s) | Change |
 |---|---|---|
 | Shared type grammar | `core/src/parser/yaml.ts`, `core/src/types/` | one declaration grammar; `compileTypeDecl` → TypeBox; `choice`→`enum`, `additionalProperties:false`, optional→nullable (E033/E034) |
-| Substitution token | `core/src/engine/substitution.ts` | `${{ outputs.X.f }}` resolver; fail-closed; nonce-wrap on `prompt:` interpolation |
+| Substitution token | `core/src/engine/substitution.ts` | `${{ outputs.X.f }}` resolver; fail-closed; content-derived-boundary wrap on `prompt:` interpolation |
 | Validator reachability | `core/src/engine/` | E035 / W015 |
 | Emit tool synthesis | `agent/src/backend.ts` | build the `emit_output` schema like the `route` tool; post-loop read + validate |
 | Outputs index | `store/src/outputs-queries.ts` | rebuildable `(run_id, node_id) → struct`, written same-transaction, off the `run_state` fold (a re-snapshot, not an `EVENT_CONTRACT_VERSION` bump) |
@@ -330,7 +335,7 @@ schema augmentation.
   `fact.node_completed.payload.outputs`; the egress scrubber must walk nested
   string values there (it already redacts event-payload free-text). Confirm the
   walk covers `payload.outputs` during implementation.
-- **Prompt-injection scope.** Nonce-wrapping (§6.4) delimits output→prompt
+- **Prompt-injection scope.** Output-wrapping (§6.4) delimits output→prompt
   interpolation only. The shared `thread:` and the agent loop's raw tool/file/bash
   results remain un-delimited; the cross-cutting mitigation is a separate effort
   (§10), and the wrap must not be presented as full injection protection.

@@ -64,10 +64,12 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
   const run: handler.Handler = async (ctx) => {
     const node = opts.node;
     const rawPrompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt : "";
-    // Resolve `${{ inputs.x }}` before the prompt hits the LLM. Without
-    // this the agent sees the literal placeholder and every workflow with
-    // an abort-on-empty guard halts on its first node.
-    const prompt = substitute(rawPrompt, { args: ctx.args });
+    // Resolve `${{ inputs.x }}` / `${{ outputs.X.f }}` before the prompt hits
+    // the LLM. Without this the agent sees the literal placeholder and every
+    // workflow with an abort-on-empty guard halts on its first node.
+    // `wrapOutputs`: interpolated outputs are delimited so an upstream-laundered
+    // value can't pose as an instruction (substitution.ts §6.4).
+    const prompt = substitute(rawPrompt, { args: ctx.args, wrapOutputs: true });
     const graphGoal = typeof ctx.routing["graph.goal"] === "string" ? (ctx.routing["graph.goal"] as string) : undefined;
 
     let tokens = 0;
