@@ -16,9 +16,13 @@
 # path mutates the PR without a human. Each PR action consumes the review body
 # + PR# from the thread.
 #
-# Two decisions: DEPTH is topology (skip/quick/full); within `full`, the LENS
-# SET is the review step's own call — correctness always, security /
-# performance / architecture only when the diff implicates them.
+# Two decisions: DEPTH is topology (skip/quick/full). The `full` tier is itself
+# split into per-lens passes (correctness / security / performance) — each a
+# focused review that emits typed `findings[]`, aggregated by `synthesize` into
+# one ranked review. Separate focused passes beat one mega-pass, and synthesize
+# reads three typed producers cleanly rather than disentangling prose (the
+# multi-producer→synthesize case for `outputs:`). A lens whose concern the diff
+# doesn't touch emits an empty array.
 #
 # PRECONDITION for PR / branch inputs: clean working tree. `scope` checks out
 # the PR/branch so lenses read files on disk; `git checkout -` to return.
@@ -76,9 +80,9 @@ steps:
 
       For `skip`, that one line is the whole review — make it a clean `LGTM: <reason>`.
     routes:
-      skip:  {to: signoff,      label: "Trivial"}
-      quick: {to: review_quick, label: "Quick review"}
-      full:  {to: review_full,  label: "Full review"}
+      skip:  {to: signoff,             label: "Trivial"}
+      quick: {to: review_quick,        label: "Quick review"}
+      full:  {to: review_correctness,  label: "Full review"}
 
   review_quick:                        # quick tier — one focused pass
     type: llm
@@ -97,38 +101,103 @@ steps:
       ## Next steps
       ≤2 concrete actions, or `No follow-up required.`
 
-  review_full:                         # full tier — one deep pass over the implicated lenses
+  # ── full tier: three focused lens passes, each emitting typed findings ──
+  # Each lens shares the `review` thread (so it inherits scope's TARGET/PATHS/
+  # FOCUS) but hands its result to `synthesize` as a typed `findings[]` via
+  # emit_output, not as prose — so the synthesizer aggregates three clean
+  # producers instead of disentangling three review messages. A lens whose
+  # surface the diff doesn't touch emits an empty array.
+  review_correctness:
     type: llm
-    model: claude-opus-4-7
-    effort: high
     thread: review
     allowed-tools: [read, grep, bash]
-    max-cost: 1.80
+    max-cost: 0.45
+    next: review_security
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim:    { type: string }
+            why:      { type: string }
+            fix:      { type: string, optional: true }
+    prompt: |
+      Review the scoped change (PATHS / range / FOCUS above; read the files directly) through the **correctness** lens ONLY: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
+
+      Call `emit_output` once with `findings` — one record per issue: `severity`, `location` (`path:line`), `claim` (one line), `why` (one sentence), `fix` (one sentence; omit if none). NO INVENTION — drop subjective findings with no evidence. Empty array if clean.
+
+  review_security:
+    type: llm
+    thread: review
+    allowed-tools: [read, grep, bash]
+    max-cost: 0.45
+    next: review_performance
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim:    { type: string }
+            why:      { type: string }
+            fix:      { type: string, optional: true }
+    prompt: |
+      Review the scoped change through the **security** lens ONLY, and only where the diff touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
+
+      Call `emit_output` once with `findings` (same shape: `severity`, `location`, `claim`, `why`, `fix?`). NO INVENTION. Empty array if no security surface or no issues.
+
+  review_performance:
+    type: llm
+    thread: review
+    allowed-tools: [read, grep, bash]
+    max-cost: 0.45
+    next: synthesize
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim:    { type: string }
+            why:      { type: string }
+            fix:      { type: string, optional: true }
+    prompt: |
+      Review the scoped change through the **performance** lens ONLY, and only where the diff touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits.
+
+      Call `emit_output` once with `findings` (same shape). NO INVENTION. Empty array if no perf surface or no issues.
+
+  synthesize:                          # aggregate the three typed lens results into one ranked review
+    type: llm
+    thread: review
+    allowed-tools: [read, grep]
+    max-cost: 0.40
     next: verify
     prompt: |
-      Deep review of the scoped change (PATHS / range / FOCUS above; read the files directly). Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
+      Combine the three lens results into one ranked review. The findings are typed arrays from the correctness / security / performance passes:
 
-        correctness — logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
-        security (iff trust boundaries / auth / input parsing / crypto / secrets touched) — injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF; check surrounding sanitisation before flagging.
-        performance (iff hot paths / data layer / loops / large payloads touched) — complexity surprises (O(n²) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads; confidence ∝ evidence; no cold-path constant-factor nits.
-        architecture (iff cross-package coupling / public surface / abstraction boundaries change) — coupling crossing boundaries, leaky abstractions, SRP violations, drift-inviting duplication, misleading naming, public surface exposing internals, half-finished work, scope creep.
+        correctness: ${{ outputs.review_correctness.findings }}
+        security:    ${{ outputs.review_security.findings }}
+        performance: ${{ outputs.review_performance.findings }}
 
-      Then emit one ranked review verbatim. Headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
+      Merge them: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set. Emit verbatim — headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
-      ## Scope: one paragraph naming the touched packages/areas and the change type (uncommitted diff, commit range, branch); note CHECKOUT if set; name which lenses you applied and why.
+      ## Scope: one paragraph naming the touched packages/areas and the change type; note CHECKOUT if set; name which lenses found anything.
 
-      Per finding: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence or short snippet. `Lens:` which lens flagged it.
+      Per finding: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence or short snippet.
 
-      Rules: NO INVENTION. DROP subjective low findings with no evidence. A concern flagged under two lenses is ONE entry at the higher severity, noted `(cross-flagged)`.
-
-      If everything is clean, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence).
-
-      End with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
+      If all three arrays are empty, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence). End with `## Next steps` — at most 3 ordered actions, or `No follow-up required.`
 
   verify:                              # full tier — automated evidence-quality gate
     type: llm
     thread: review
-    retry: review_full                 # REJECT ⇒ re-review (capped)
+    retry: synthesize                  # REJECT ⇒ re-synthesise (capped)
     max-retries: 2
     allowed-tools: [read, grep]
     max-cost: 0.30
