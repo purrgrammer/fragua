@@ -8,7 +8,7 @@
 //
 // No files, no sockets, no IPC. Just the store.
 
-import { type ExecutionEnvironment, evaluateBudget, type Graph } from "@fragua/core";
+import { type ExecutionEnvironment, evaluateBudget, type Graph, type OutputsValue } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import {
   EVENT_CONTRACT_VERSION,
@@ -301,6 +301,26 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
     if (result.reason === "unparseable") workflowUnparseable = true;
     return null;
+  };
+
+  // Lazy per-run outputs cache. `resolveRunOutputs` scans the outputs index and
+  // JSON-parses every row; called per dispatch it was O(dispatches · outputs)
+  // (worst in emit-each-iteration loops). Cache the folded map and invalidate
+  // only when a committed fact carries fresh `outputs` — the sole writer of the
+  // index on the live path. Turns that emit no outputs (the common case) reuse it.
+  let cachedOutputs: Record<string, OutputsValue> | undefined;
+  let outputsCacheValid = false;
+  const outputsFor = (): Record<string, OutputsValue> | undefined => {
+    if (!outputsCacheValid) {
+      cachedOutputs = resolveRunOutputs(opts.store, runId);
+      outputsCacheValid = true;
+    }
+    return cachedOutputs;
+  };
+  const invalidateOutputsCacheIf = (facts: readonly FactEvent[]): void => {
+    if (facts.some((f) => f.type === "fact.node_completed" && (f.payload as { outputs?: unknown }).outputs != null)) {
+      outputsCacheValid = false;
+    }
   };
 
   const dispatchOne = async (): Promise<DispatchOutcome> => {
@@ -728,7 +748,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       ),
       tools: opts.tools,
       recorder,
-      args: buildSubstitutionArgs(effectiveRouting, graph?.attrs.inputs),
+      args: buildSubstitutionArgs(effectiveRouting, graph?.attrs.inputs, outputsFor()),
       emitObservability: (type, payload) => {
         // Stamp nodeId + iteration so the UI can scope without the
         // handler having to thread it through every payload.
@@ -1064,6 +1084,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "continue" }; // OCC retry — rebuild from fresh state
     }
     onOccResolved(currentNode, nodeRetryCount(state.routing, currentNode));
+    invalidateOutputsCacheIf(facts);
     await captureBoundarySnapshot(opts, runId, facts, currentNode);
     return { kind: "continue" };
   };
@@ -1089,6 +1110,25 @@ export interface LeakBudget {
   recordLeak(runId: string, nodeId: string): void;
   /** Read-only — for tests and observability. */
   count(): number;
+}
+
+/** Pre-fetch all emitted outputs for a run from the outputs index and fold
+ * them into a Record<nodeId, OutputsValue> with last-write-wins semantics
+ * (the last iteration wins per node). Called before each dispatch so
+ * outputs substitution resolves in prompts and tool commands. */
+function resolveRunOutputs(store: IEventStore, runId: string): Record<string, OutputsValue> | undefined {
+  const rows = store.getOutputsForRun(runId);
+  if (rows.length === 0) return undefined;
+  const out: Record<string, OutputsValue> = {};
+  // Rows are ordered (nodeId ASC, iteration ASC). Last row per nodeId wins.
+  for (const row of rows) {
+    try {
+      out[row.nodeId] = JSON.parse(row.struct) as OutputsValue;
+    } catch {
+      // Corrupt row — skip.
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
