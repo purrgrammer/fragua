@@ -1,20 +1,30 @@
 // Prompt / template substitution. See docs/SPEC.md §3.8.
 //
-// One token family:
+// Two token families:
 //   - `${{ inputs.<name> }}` — a typed run input declared in the
 //     workflow's `inputs:` block, bound per-run via `--input name=value`
 //     (declared defaults ⊕ run-provided).
+//   - `${{ outputs.<producer>.<field>[.<subfield>...] }}` — a typed step
+//     output emitted by an upstream node. Reads fail closed: an unpopulated
+//     ref throws `UnpopulatedOutputError` (→ node failure) rather than
+//     collapsing to "". See docs/proposals/structured-outputs.md.
 //
-// Substitutes in `prompt:` / `text:` / `run:` strings. Cross-node data
-// transfer still happens through a shared `thread:` + optional per-node
-// `summary:` (SPEC §3.3), not through prompt substitution.
+// Substitutes in `prompt:` / `text:` / `run:` strings.
 //
 // Shell-safe mode wraps the substituted value in single quotes, escaping
 // embedded quotes per POSIX (close quote, escaped quote, reopen).
 
+import type { OutputsValue } from "../types/outputs.ts";
+import { resolveOutputRef, UnpopulatedOutputError } from "./outputs-substitution.ts";
+
+export { outputReferences } from "./outputs-substitution.ts";
+
 export interface SubstitutionArgs {
   /** Resolved `${{ inputs.<name> }}` bindings (defaults ⊕ run-provided). */
   inputs?: Record<string, string>;
+  /** Resolved `${{ outputs.<producer>.<field> }}` bindings.
+   * Keyed by producer node id; value is the node's emitted struct. */
+  outputs?: Record<string, OutputsValue>;
 }
 
 export interface SubstitutionOptions {
@@ -28,15 +38,41 @@ export interface SubstitutionOptions {
  * the parser's `inputs:` key grammar. */
 const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g;
 
+/** Matches EITHER token in one pattern, so both families resolve in a single
+ * pass over the original template. Group 1 = input name; groups 2+3 = output
+ * producer + dotted path. The inputs name allows hyphens; the outputs path does
+ * not (identifier-only node ids / field keys) — same grammars as the two
+ * single-family regexes. */
+const COMBINED_REF_RE =
+  /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
+
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
   const { args = {}, escapeForShell = false } = opts;
   const fmt = (raw: string): string => (escapeForShell ? shellQuote(raw) : raw);
-  // `${{ inputs.x }}` references that resolve to a binding substitute;
-  // unresolved references collapse to "" (the validator flags undeclared
-  // refs at validate-time, so a surviving placeholder here means the
-  // input was declared but left unbound and undefaulted).
   const inputs = args.inputs ?? {};
-  return template.replace(INPUT_REF_RE, (_whole, name: string) => fmt(inputs[name] ?? ""));
+  const outputs = args.outputs ?? {};
+  const missing: string[] = [];
+  // ONE pass over the ORIGINAL template: a substituted value is never re-scanned,
+  // so an input whose value literally contains `${{ outputs.X.f }}` (or an output
+  // value containing `${{ inputs.x }}`) stays literal — each token is resolved
+  // exactly once, never cross-injected. Inputs collapse to "" when unbound (the
+  // validator flags undeclared refs); outputs FAIL CLOSED — an unresolved ref is
+  // collected and thrown as `UnpopulatedOutputError`, which the handlers turn
+  // into a node failure rather than a silent "".
+  const result = template.replace(
+    COMBINED_REF_RE,
+    (whole: string, inName: string | undefined, outProducer: string | undefined, outRest: string | undefined) => {
+      if (inName !== undefined) return fmt(inputs[inName] ?? "");
+      const rendered = resolveOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."), escapeForShell);
+      if (rendered === undefined) {
+        missing.push(whole.trim());
+        return whole;
+      }
+      return rendered;
+    },
+  );
+  if (missing.length > 0) throw new UnpopulatedOutputError([...new Set(missing)]);
+  return result;
 }
 
 /** Every `${{ inputs.X }}` reference name in a template. Used by the

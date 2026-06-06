@@ -3,6 +3,7 @@ export * from "./events.ts";
 export * from "./execution.ts";
 export * from "./graph.ts";
 export * from "./outcome.ts";
+export * from "./outputs.ts";
 export * from "./read-only-env.ts";
 export * from "./summariser.ts";
 export * from "./summary.ts";
