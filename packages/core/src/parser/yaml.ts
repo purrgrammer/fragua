@@ -89,6 +89,7 @@
 // reuse the same name table.
 
 import * as YAML from "yaml";
+import { OutputsProfileError, parseOutputsDecl } from "../engine/outputs-profile.ts";
 import type { Edge, EdgeAttrs, Graph, GraphAttrs, InputDecl, Node, NodeAttrs, NodeType } from "../types/graph.ts";
 
 export type { InputDecl } from "../types/graph.ts";
@@ -156,7 +157,7 @@ const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
 export const DEFAULT_TOOL_MAX_MS = 5 * 60 * 1000;
 
 // Keys consumed by the parser at the step level (not stored in attrs):
-const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes"]);
+const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes", "outputs"]);
 // Keys consumed at the graph level (not stored in attrs):
 const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults"]);
 
@@ -502,6 +503,33 @@ export function parseWorkflow(source: string): Graph {
       // success successor trips validator E032; terminate via `next: exit`.
       if (nextNode === "exit") needExit = true;
       edges.push({ from: stepId, to: nextNode, attrs: { outcome: "success" } });
+    }
+
+    // ---- outputs: block (llm steps only; mutually exclusive with routes) ----
+    const outputsNode = body.get("outputs", true);
+    if (outputsNode !== undefined) {
+      if (nodeType !== "llm") {
+        throw new ParseError(
+          `step "${stepId}" declares \`outputs:\` but has type "${nodeType}" — outputs are only supported on \`llm\` steps`,
+          ...locArr(locOf(outputsNode, lineCounter)),
+        );
+      }
+      if (attrs["routes"] !== undefined) {
+        throw new ParseError(
+          `step "${stepId}" declares both \`outputs:\` and \`routes:\` — a routing step's terminal call is \`route\`, not \`emit_output\`; they are mutually exclusive`,
+          ...locArr(locOf(outputsNode, lineCounter)),
+        );
+      }
+      const rawOutputs = YAML.isMap(outputsNode) ? outputsNode.toJSON() : scalarValue(outputsNode);
+      try {
+        attrs["outputs"] = parseOutputsDecl(rawOutputs);
+      } catch (err) {
+        const msg = err instanceof OutputsProfileError ? err.message : String(err);
+        throw new ParseError(
+          `step "${stepId}" \`outputs:\` parse error: ${msg}`,
+          ...locArr(locOf(outputsNode, lineCounter)),
+        );
+      }
     }
 
     // ---- materialise the node ----
