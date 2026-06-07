@@ -62,6 +62,43 @@ describe("human handler", () => {
     }
   });
 
+  test("interpolates ${{ inputs.x }} / ${{ outputs.X.f }} in the operator text", async () => {
+    const spec = makeHumanHandler({
+      nodeId: "signoff",
+      text: "PR ${{ outputs.resolve.pr }} for ${{ inputs.ticket }} — proceed?",
+      routes: ["yes", "no"],
+      edges: [
+        { route: "yes", to: "a" },
+        { route: "no", to: "b" },
+      ],
+    });
+    const result = await spec.handler(
+      stubCtx({ args: { inputs: { ticket: "BUG-1" }, outputs: { resolve: { pr: "128" } } } }),
+    );
+    expect(result.kind).toBe("yield_human");
+    if (result.kind === "yield_human") {
+      expect(result.text).toBe("PR 128 for BUG-1 — proceed?");
+    }
+  });
+
+  test("an unpopulated ${{ outputs.X.f }} in operator text fails closed as a node fail (not a thrown halt)", async () => {
+    const spec = makeHumanHandler({
+      nodeId: "signoff",
+      text: "Apply ${{ outputs.review.fix }}?",
+      routes: ["yes", "no"],
+      edges: [
+        { route: "yes", to: "a" },
+        { route: "no", to: "b" },
+      ],
+    });
+    const result = await spec.handler(stubCtx({ args: { outputs: {} } }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.failureReason).toContain("outputs.review.fix");
+    }
+  });
+
   test("first call carries edge label= overrides as a sparse routeLabels map", async () => {
     const spec = makeHumanHandler({
       nodeId: "signoff",
