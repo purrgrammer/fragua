@@ -8,13 +8,9 @@
 // and the CLI store-client resolve identically.
 
 import type { StoredEvent } from "@fragua/store";
-import type { SnapshotCapturedData } from "@fragua/types";
+import type { SnapshotCapturedData, SnapshotStat } from "@fragua/types";
 
-export interface SnapshotStat {
-  files: number;
-  additions: number;
-  deletions: number;
-}
+export type { SnapshotStat } from "@fragua/types";
 
 /** Wire shape of one item in the scrubber list. */
 export interface SnapshotItem {
@@ -32,10 +28,7 @@ export interface SnapshotItem {
 }
 
 export function toScrubberRow(ev: StoredEvent): SnapshotItem {
-  const p = ev.payload as Partial<SnapshotCapturedData> & {
-    committed?: { files: number; additions: number; deletions: number } | null;
-    uncommitted?: { files: number; additions: number; deletions: number } | null;
-  };
+  const p = ev.payload as Partial<SnapshotCapturedData>;
 
   const nodeId = p.nodeId ?? null;
   const label: SnapshotItem["label"] =
@@ -47,8 +40,8 @@ export function toScrubberRow(ev: StoredEvent): SnapshotItem {
     label,
     commitSha: (p.commitSha as string) ?? "",
     treeSha: (p.treeSha as string) ?? "",
-    committed: (p.committed as SnapshotStat | null | undefined) ?? null,
-    uncommitted: (p.uncommitted as SnapshotStat | null | undefined) ?? null,
+    committed: p.committed ?? null,
+    uncommitted: p.uncommitted ?? null,
   };
 }
 

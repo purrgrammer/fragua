@@ -385,8 +385,12 @@ function renderExplanation(e: RunExplanation): void {
   }
 
   // ── Totals ───────────────────────────────────────────────────────────────
+  const cacheTokens = e.totals.cacheReadTokens + e.totals.cacheWriteTokens;
+  const tokenParts = `${e.totals.inputTokens}+${e.totals.outputTokens}${
+    cacheTokens > 0 ? `+${cacheTokens} cached` : ""
+  }`;
   console.log(
-    `  cost:     $${e.totals.costUsd.toFixed(4)} ${chalk.dim(`(${e.totals.inputTokens}+${e.totals.outputTokens} tok)`)}`,
+    `  cost:     $${e.totals.costUsd.toFixed(4)} ${chalk.dim(`(${tokenParts} = ${e.totals.billedTokens} tok)`)}`,
   );
   if (e.totals.durationMs != null) {
     console.log(`  duration: ${(e.totals.durationMs / 1000).toFixed(1)}s`);
@@ -839,7 +843,12 @@ export function stepsCommand(opts: StepsOptions): Promise<number> {
 }
 
 function renderStepLine(s: StepSnapshot): string {
-  const tokens = (s.cost?.input_tokens ?? 0) + (s.cost?.output_tokens ?? 0);
+  const tokens =
+    s.cost?.billed_tokens ??
+    (s.cost?.input_tokens ?? 0) +
+      (s.cost?.output_tokens ?? 0) +
+      (s.cost?.cache_read_tokens ?? 0) +
+      (s.cost?.cache_write_tokens ?? 0);
   const cost = (s.cost?.cost_usd ?? 0).toFixed(4);
   const dur = s.durationMs != null ? `${s.durationMs}` : "?";
   return (
