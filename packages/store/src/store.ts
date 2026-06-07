@@ -1891,22 +1891,36 @@ export class SqliteStore implements IEventStore {
       asObject(gp["routing"], `run ${r.runId} genesis routing`);
 
       const derived = deriveRunState(r.runId, events);
-      // Pre-serialise outputs from node_completed facts (I1: no JSON.stringify in txn).
+      // Rebuild the outputs index from node_completed facts, mirroring the live
+      // append path so import and live agree (I1: JSON.stringify stays out of the
+      // txn). An already-spilled output rides the payload as a `{$fragua_blob}`
+      // ref (its blob ships in the bundle) → index the ref verbatim. An inline
+      // struct is indexed as-is, or spilled to a blob here when it would breach
+      // the `outputs.struct` CHECK (<4096) — never silently dropped (the prior
+      // `length < 4096` guard skipped such a row, leaving the index incomplete).
       const outputsRows: Array<{ nodeId: string; iteration: number; structJson: string }> = [];
+      const outputsSpilledBlobs: Array<{ sha: string; bytes: number }> = [];
       for (const ev of events) {
-        if (ev.type === "fact.node_completed") {
-          const p = ev.payload as { nodeId?: unknown; iteration?: unknown; outputs?: unknown };
-          if (p.outputs !== undefined && typeof p.nodeId === "string" && typeof p.iteration === "number") {
-            const structJson = JSON.stringify(p.outputs);
-            if (structJson.length < 4096) {
-              outputsRows.push({ nodeId: p.nodeId, iteration: p.iteration, structJson });
-            }
-          }
+        if (ev.type !== "fact.node_completed") continue;
+        const p = ev.payload as { nodeId?: unknown; iteration?: unknown; outputs?: unknown };
+        if (p.outputs === undefined || typeof p.nodeId !== "string" || typeof p.iteration !== "number") continue;
+        if (isBlobRef(p.outputs)) {
+          outputsRows.push({ nodeId: p.nodeId, iteration: p.iteration, structJson: JSON.stringify(p.outputs) });
+          continue;
+        }
+        const structJson = JSON.stringify(p.outputs);
+        const ref = maybeSpillStruct(structJson, (sha, bytes) => this.blobs.put(sha, bytes));
+        if (ref !== null) {
+          outputsRows.push({ nodeId: p.nodeId, iteration: p.iteration, structJson: JSON.stringify(ref) });
+          outputsSpilledBlobs.push({ sha: ref.$fragua_blob, bytes: ref.bytes });
+        } else {
+          outputsRows.push({ nodeId: p.nodeId, iteration: p.iteration, structJson });
         }
       }
       return {
         derived,
         outputsRows,
+        outputsSpilledBlobs,
         routingJson: JSON.stringify(derived.routing),
         metricsJson: JSON.stringify(derived.metrics),
         changeStatJson: derived.changeStat != null ? JSON.stringify(derived.changeStat) : null,
@@ -2006,6 +2020,12 @@ export class SqliteStore implements IEventStore {
               contentHash: m.contentHash,
             });
           }
+          // Durability barrier for any output struct spilled during import:
+          // the blob was written to the FS in the map above; make it reachable
+          // + GC-protected before the index row that references it lands.
+          for (const b of r.outputsSpilledBlobs) {
+            insertBlobIfAbsent(this.db, b.sha, b.bytes, now);
+          }
           // Rebuild the outputs index from node_completed facts.
           for (const o of r.outputsRows) {
             insertOutput(this.db, d.runId, o.nodeId, o.iteration, o.structJson);
@@ -2027,6 +2047,13 @@ export class SqliteStore implements IEventStore {
     } catch (err) {
       for (const b of blobs) {
         if (!blobRowExists(this.db, b.sha256)) this.blobs.delete(b.sha256);
+      }
+      // Reap any output struct spilled during the map whose index row didn't
+      // land (txn rolled back) — same orphan-blob discipline as the bundle blobs.
+      for (const r of runsToImport) {
+        for (const b of r.outputsSpilledBlobs) {
+          if (!blobRowExists(this.db, b.sha)) this.blobs.delete(b.sha);
+        }
       }
       throw err;
     }

@@ -2377,3 +2377,96 @@ describe("(bug-7) application/json artifact scrubs values, keeps keys and valid 
     expect(parsed!["other"] as string).toContain("[REDACTED");
   });
 });
+
+describe("structured outputs ↔ bundle", () => {
+  async function seedRunWithOutput(
+    store: ReturnType<typeof freshStore>,
+    outputs: Record<string, unknown>,
+  ): Promise<string> {
+    const sha = await seedWorkflow(store, "c".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, cwd: "/home/dev/p", initialRouting: { input: "x" } });
+    let v = store.getState(runId)!.version;
+    v = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: sha, contractVersion: 1, startNode: "resolve", baseGitSha: "b", baseGitRef: "main" },
+        },
+      ],
+      v,
+    ).newVersion;
+    v = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.node_completed",
+          payload: { nodeId: "resolve", iteration: 0, tokens: 5, costUsd: 0.001, nextNode: "exit", outputs },
+        },
+      ],
+      v,
+    ).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "exit" } }], v);
+    return runId;
+  }
+
+  test("an inline output survives export → import: index re-derived from the log", async () => {
+    const src = freshStore();
+    const runId = await seedRunWithOutput(src, { pr: "42", paths: ["a.ts", "b.ts"] });
+    expect(JSON.parse(src.getOutputsForRun(runId)[0]!.struct)).toEqual({ pr: "42", paths: ["a.ts", "b.ts"] });
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    // The outputs index is NOT in the bundle — import rebuilds it from
+    // `fact.node_completed.payload.outputs` in the replayed log.
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const rows = dst.getOutputsForRun(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.nodeId).toBe("resolve");
+    expect(JSON.parse(rows[0]!.struct)).toEqual({ pr: "42", paths: ["a.ts", "b.ts"] });
+    dst.close();
+  });
+
+  test("a secret inside an inline output is scrubbed in the bundle and the rebuilt index", async () => {
+    const SECRET = "sk-ant-test-secretABCDEFGHIJ0123456789";
+    const src = freshStore();
+    src.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: SECRET }),
+    });
+    const runId = await seedRunWithOutput(src, { token: SECRET, note: "leaked into a typed output" });
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    // Not anywhere in the bundle, and the redaction survives the import rebuild.
+    expect(Buffer.from(bytes).includes(SECRET)).toBe(false);
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const struct = JSON.parse(dst.getOutputsForRun(runId)[0]!.struct) as Record<string, string>;
+    expect(struct["token"]).not.toContain(SECRET);
+    expect(struct["token"]).toContain("[REDACTED");
+    dst.close();
+  });
+
+  test("a secret inside a spilled (oversized) output is scrubbed in the shipped blob", async () => {
+    const SECRET = "sk-ant-test-secretABCDEFGHIJ0123456789";
+    const src = freshStore();
+    src.upsertProviderCredential({
+      provider: "anthropic",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: SECRET }),
+    });
+    // Padding pushes the struct past the ~3 KiB inline budget → it spills to a
+    // blob (a 6 KB struct can't fit the `outputs.struct` CHECK <4096 inline, so
+    // a successful append is itself proof it spilled).
+    const runId = await seedRunWithOutput(src, { token: SECRET, pad: "z".repeat(6000) });
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    // The secret is scrubbed inside the shipped CAS blob, not just the event payload.
+    expect(Buffer.from(bytes).includes(SECRET)).toBe(false);
+  });
+});
