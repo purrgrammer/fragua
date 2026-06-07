@@ -238,6 +238,11 @@ An `llm` step declares typed `outputs:`; downstream steps read them with `${{ ou
 
 The type grammar is the same one `inputs:` uses — `type:` of `string` / `number` / `boolean` / `choice` (+`options`) / `object` (+`fields`) / `array` (+`items`), nesting to any fixed depth; no recursion, no `$ref`, no constraint keywords (those are step predicates). Record fields are required unless marked `optional: true`.
 
+**`optional:` vs sentinels — pick by how the field is read.** A read fails closed when it lands on an absent/`null` value, so where a field *might be empty* matters:
+- **Always read, sometimes empty → required field with a sentinel.** A PR number that's sometimes "no PR" is `pr: { type: string }` carrying `"none"`, and the consumer branches on `"none"`. Marking it `optional:` would turn the no-value case into a node failure (a direct `${{ outputs.X.pr }}` read of an absent leaf fails closed) instead of a value you can handle. This is the right model whenever the consumer reads the field on every path.
+- **Conditionally present, read inside a whole record/array → `optional:`.** A per-element `fix` that only some findings carry is `optional:` *because* the consumer reads the enclosing `findings` array **whole** — absence is just omitted JSON, never a fail-closed read.
+- **Don't direct-read an optional leaf.** `${{ outputs.X.rec.optfield }}` fails closed whenever the producer omits the field; the validator flags it **W016**. There's no fallback syntax yet, so model it as one of the two shapes above.
+
 **Rules:** `outputs:` is **`llm`-only to produce** (`tool`/`human` consume but never produce) and **mutually exclusive with `routes:`** (a routing step's terminal call is `route`). The producer emits via a forced `emit_output` tool, validated post-emit.
 
 **Reach for `outputs:` only when:**
@@ -383,6 +388,7 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 - **E033 / E034** — malformed `outputs:` type grammar (unknown `type:`, bad `fields`/`items`/`options`, or a disallowed construct like `pattern`/`$ref`/recursion).
 - **E035** — `${{ outputs.X.f }}` references a field the producer doesn't declare, or a producer that can never reach the consumer (dead reference).
 - **W015** — a referenced `outputs:` producer may not run on every path to the consumer; the read fails closed at runtime if it didn't.
+- **W016** — a `${{ outputs.X.f }}` read reaches through an `optional:` field the producer may omit; fails closed at runtime. Model it as a required field + sentinel, or read the enclosing record/array whole.
 - **E031** — a `retry:` gate has no `max-retries:` (the per-gate retarget cap is required).
 - **E032** — a step declares no success successor — add `next:` / `on: {success: …}` / `routes:` (`next: exit` to finish). There is no linear fall-through.
 - **W007** — `goal_gate` (`retry:`) with no `retry_target`.

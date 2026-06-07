@@ -377,3 +377,148 @@ describe("E035 / W015 — outputs references", () => {
     expect(d.filter((x) => x.code === "E035")).toHaveLength(0);
   });
 });
+
+// ─────────────── W016 — direct read of an optional field ───────────────
+// A `${{ outputs.X.f }}` that reaches THROUGH an optional field fails closed at
+// runtime whenever the producer omits it. Advisory only (runtime fail-closed is
+// the real gate) and mutually exclusive with W015 per ref — when the producer
+// also might-not-run, W015 wins and W016 stays quiet. The safe shapes (a
+// required field with a sentinel, or an optional field read inside a whole
+// record/array) draw no W016.
+
+describe("W016 — optional-field reads", () => {
+  test("direct read of an optional record subfield (producer dominates) — W016, no W015", () => {
+    const src = [
+      "name: wf",
+      "steps:",
+      "  scope:",
+      "    type: llm",
+      "    prompt: Produce.",
+      "    outputs:",
+      "      meta:",
+      "        type: object",
+      "        fields:",
+      "          pkg: { type: string }",
+      "          ver: { type: string, optional: true }",
+      "    next: use",
+      "  use:",
+      "    type: tool",
+      "    run: echo \\${{ outputs.scope.meta.ver }}",
+      "    next: exit",
+    ].join("\n");
+    const d = diags(src);
+    expect(d.filter((x) => x.code === "E035")).toHaveLength(0);
+    expect(d.filter((x) => x.code === "W015")).toHaveLength(0);
+    const w16 = d.filter((x) => x.code === "W016");
+    expect(w16.length).toBeGreaterThan(0);
+    expect(w16[0]?.severity).toBe("warning");
+    expect(w16[0]?.message).toContain("ver");
+  });
+
+  test("an optional field inside an array, read as the WHOLE array — no W016 (the safe shape)", () => {
+    // The review.yaml pattern: `fix` is optional per finding, but the consumer
+    // reads the whole `findings` array (a required top-level field) as JSON.
+    const src = [
+      "name: wf",
+      "steps:",
+      "  lens:",
+      "    type: llm",
+      "    prompt: Review.",
+      "    outputs:",
+      "      findings:",
+      "        type: array",
+      "        items:",
+      "          type: object",
+      "          fields:",
+      "            title: { type: string }",
+      "            fix: { type: string, optional: true }",
+      "    next: synth",
+      "  synth:",
+      "    type: llm",
+      "    prompt: 'Findings: \\${{ outputs.lens.findings }}'",
+      "    next: exit",
+    ].join("\n");
+    const d = diags(src);
+    expect(d.filter((x) => x.code === "W016")).toHaveLength(0);
+    expect(d.filter((x) => x.code === "E035")).toHaveLength(0);
+  });
+
+  test("an optional INTERMEDIATE segment also trips W016 (anything beneath it can vanish)", () => {
+    const src = [
+      "name: wf",
+      "steps:",
+      "  scope:",
+      "    type: llm",
+      "    prompt: Produce.",
+      "    outputs:",
+      "      outer:",
+      "        type: object",
+      "        fields:",
+      "          inner:",
+      "            type: object",
+      "            optional: true",
+      "            fields:",
+      "              x: { type: string }",
+      "    next: use",
+      "  use:",
+      "    type: tool",
+      "    run: echo \\${{ outputs.scope.outer.inner.x }}",
+      "    next: exit",
+    ].join("\n");
+    const d = diags(src);
+    const w16 = d.filter((x) => x.code === "W016");
+    expect(w16.length).toBeGreaterThan(0);
+    expect(w16[0]?.message).toContain("inner");
+  });
+
+  test("a required-only dotted path (producer dominates) — no W016", () => {
+    const src = [
+      "name: wf",
+      "steps:",
+      "  scope:",
+      "    type: llm",
+      "    prompt: Produce.",
+      "    outputs:",
+      "      meta:",
+      "        type: object",
+      "        fields:",
+      "          pkg: { type: string }",
+      "    next: use",
+      "  use:",
+      "    type: tool",
+      "    run: echo \\${{ outputs.scope.meta.pkg }}",
+      "    next: exit",
+    ].join("\n");
+    const d = diags(src);
+    expect(d.filter((x) => x.code === "W016")).toHaveLength(0);
+  });
+
+  test("optional field but producer does NOT dominate — W015 only, never both", () => {
+    const src = [
+      "name: wf",
+      "steps:",
+      "  triage:",
+      "    type: llm",
+      "    prompt: Triage.",
+      "    routes:",
+      "      full: producer",
+      "      quick: consumer",
+      "  producer:",
+      "    type: llm",
+      "    prompt: Produce.",
+      "    outputs:",
+      "      meta:",
+      "        type: object",
+      "        fields:",
+      "          ver: { type: string, optional: true }",
+      "    next: consumer",
+      "  consumer:",
+      "    type: tool",
+      "    run: echo \\${{ outputs.producer.meta.ver }}",
+      "    next: exit",
+    ].join("\n");
+    const d = diags(src);
+    expect(d.filter((x) => x.code === "W015").length).toBeGreaterThan(0);
+    expect(d.filter((x) => x.code === "W016")).toHaveLength(0);
+  });
+});

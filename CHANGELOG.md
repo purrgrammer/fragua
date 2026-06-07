@@ -26,8 +26,10 @@ guarantee.
   `emit_output` gets one corrective re-prompt before the node fails, so a single
   skipped call no longer hard-fails the step. New validator codes `E033`/`E034`
   (type grammar), `E035` (broken reference), `W015` (producer may not run on
-  every path). Bumps the workflow `ir_version` to 2 (additive; older workflows
-  up-convert on load).
+  every path), `W016` (a read reaches through an `optional:` field the producer
+  may omit — fails closed; model it as a required field with a sentinel, or read
+  the enclosing record/array whole). Bumps the workflow `ir_version` to 2
+  (additive; older workflows up-convert on load).
 
 ## [0.5.0] — 2026-06-04
 

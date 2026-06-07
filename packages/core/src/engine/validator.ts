@@ -516,12 +516,22 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           // so it's a dead reference — E035, not just a top-field check.
           let segProfile: OutputProfile = topProfile;
           let badPath = false;
+          // Top-level fields are always required (top-level `optional:` is
+          // rejected at parse time), so only deeper segments can be optional. A
+          // ref reaching through an optional field the producer may omit fails
+          // closed at runtime — remember the first such segment for W016.
+          let optionalSeg: string | undefined;
           for (const seg of ref.path.slice(1)) {
-            const next = isOutputRecord(segProfile) ? segProfile.fields[seg] : undefined;
+            if (!isOutputRecord(segProfile)) {
+              badPath = true;
+              break;
+            }
+            const next = segProfile.fields[seg];
             if (next === undefined) {
               badPath = true;
               break;
             }
+            if (optionalSeg === undefined && !segProfile.required.includes(seg)) optionalSeg = seg;
             segProfile = next;
           }
           if (badPath) {
@@ -537,7 +547,25 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           // Producer exists and declares the field. Decide error-vs-warn:
           // can't reach the consumer at all → dead ref (E035); reachable but
           // not success-dominating → advisory (W015), fail-closed at runtime.
-          if (dominance.dominates(ref.producer, n.id)) continue;
+          if (dominance.dominates(ref.producer, n.id)) {
+            // Producer always runs first, so W015 stays silent — but the read can
+            // still fail closed if it reaches through an optional field the
+            // producer legitimately omits. W016 covers exactly that gap (a ref
+            // never draws both W015 and W016).
+            if (optionalSeg !== undefined) {
+              diags.push({
+                severity: "warning",
+                code: "W016",
+                message:
+                  `node "${n.id}" reads \`${refToken}\` through the optional field "${optionalSeg}" — ` +
+                  `if "${ref.producer}" emits without it the read fails closed at runtime (node failure, not "") — ` +
+                  `read it only where "${ref.producer}" guarantees it, or drop \`optional:\` if it's always emitted`,
+                nodeId: n.id,
+                ...(n.loc !== undefined ? { loc: n.loc } : {}),
+              });
+            }
+            continue;
+          }
           if (!producerReaches(ref.producer, n.id)) {
             diags.push({
               severity: "error",
