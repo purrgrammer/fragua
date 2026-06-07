@@ -760,9 +760,10 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
       // the user clicks to expand. Per-card open state lives in
       // Radix's uncontrolled Collapsible.
       // Exception: `abort` is the terminal self-halt signal — its
-      // reason text is the primary diagnostic, so the card opens by
-      // default so the operator sees it without an extra click.
-      const defaultOpen = chunk.name === "abort";
+      // reason text is the primary diagnostic — and `emit_output` carries
+      // the node's structured output: both open by default so the operator
+      // sees the payload without an extra click.
+      const defaultOpen = chunk.name === "abort" || chunk.name === "emit_output";
       blocks.push(
         <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0" defaultOpen={defaultOpen}>
           <ToolHeader
@@ -934,6 +935,10 @@ function RichToolResult({
   if (toolName === "route") {
     return <RouteToolResult params={params as { name?: string } | undefined} result={result} />;
   }
+  // emit_output: the node's structured output. The value IS the tool input
+  // (rendered by ToolInput above); the result is a fixed "emit_output called"
+  // acknowledgement carrying no information — suppress it.
+  if (toolName === "emit_output") return null;
   // abort: built-in self-halt signal. The reason lands on params and is
   // echoed on result.details.data — surface it as an error-tone card
   // rather than a generic ToolOutput dump.
