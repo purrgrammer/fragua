@@ -131,8 +131,7 @@ steps:
             location: { type: string }
             claim:    { type: string }
             why:      { type: string }
-            fix:      { type: string }
-          required: [severity, location, claim, why]   # `fix` omitted ⇒ optional
+            fix:      { type: string, optional: true }
     prompt: |
       Review the change through the **correctness** lens ONLY. Get it with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty); read the cited files directly. Focus: ${{ outputs.resolve.focus }}. Look for: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
 
@@ -152,8 +151,7 @@ steps:
             location: { type: string }
             claim:    { type: string }
             why:      { type: string }
-            fix:      { type: string }
-          required: [severity, location, claim, why]   # `fix` omitted ⇒ optional
+            fix:      { type: string, optional: true }
     prompt: |
       Review the change through the **security** lens ONLY, and only where it touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
 
@@ -173,8 +171,7 @@ steps:
             location: { type: string }
             claim:    { type: string }
             why:      { type: string }
-            fix:      { type: string }
-          required: [severity, location, claim, why]   # `fix` omitted ⇒ optional
+            fix:      { type: string, optional: true }
     prompt: |
       Review the change through the **performance** lens ONLY, and only where it touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits.
 
