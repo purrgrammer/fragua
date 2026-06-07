@@ -847,6 +847,23 @@ export type FactEvent =
        * (terminal-terminal — subsequent actions fail). */
       type: "fact.run_discarded";
       payload: { refs: string[] };
+    }
+  | {
+      /** A `type: parallel` fan-out opened (Model A,
+       * docs/proposals/fan-out-nodes.md). Seeds the active-set frontier with
+       * the branch ENTRY node ids; `nodeId` is the parallel node, which stays
+       * `current_node` while the frontier advances. Branches advance
+       * independently (each sub-node completion atomically commits a
+       * `dispatch_started` for its successor), converging on the join. */
+      type: "fact.fanout_started";
+      payload: { nodeId: string; iteration: number; branches: string[] };
+    }
+  | {
+      /** Fan-out join barrier: the frontier drained (every branch reached the
+       * join). Clears the active set and advances `current_node` to the join
+       * (`nextNode`) in one commit (I1 — a crash in the gap would orphan it). */
+      type: "fact.fanout_joined";
+      payload: { nodeId: string; iteration: number; nextNode: string; branchesCompleted: number };
     };
 
 export type FactType = FactEvent["type"];

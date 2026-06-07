@@ -39,6 +39,21 @@ guarantee.
 
 ### Added
 
+- **Parallel fan-out (`type: parallel`) — experimental.** A control node that
+  runs a take-all set of branches concurrently within one run and joins them at a
+  single barrier. Declare `branches: [a, b, …]` (≥2 distinct branch ENTRY steps)
+  and a `next:` sink; each branch is a sub-pipeline — one step, or several
+  distinct `type: llm` read-class steps routing among themselves to the join —
+  and they run at once, the sink reading each branch terminal's typed output via
+  `${{ outputs.<step>.f }}` (fail-closed). An optional `concurrency:` caps
+  in-flight sub-nodes (a semaphore). Branches share the worktree read-only: they
+  may not reach a write-class tool (`bash`/`write`/`edit`), nest another
+  `parallel`, or declare their own `thread:`; the validator enforces this with
+  `E036`–`E043`. Execution is an on-log reactive frontier — every sub-node
+  completion is a durable fact, so a crash mid-fan-out resumes by re-dispatching
+  only the unfinished sub-nodes, and replay reproduces the run. Budget is
+  re-checked at each superstep boundary. See `docs/proposals/fan-out-nodes.md`.
+
 - **Structured step outputs (`outputs:`) — experimental.** An `llm` step can
   declare typed `outputs:` over a small type grammar shared with `inputs:`
   (scalars, `choice`, records via `fields`, arrays via `items`; no recursion or

@@ -44,9 +44,9 @@ export async function invokeHandler(deps: {
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
   // Register only here, not at steerCtrl creation: the caller's build steps
   // (graph load, context build) can throw, and the `finally` is the sole
-  // unregister — an earlier register would leak the entry on a build-path
-  // throw, tripping `register`'s already-registered guard on the next claim.
-  registry.register(runId, steerCtrl);
+  // dispose. `register` returns a disposer that removes exactly this entry, so
+  // concurrent fan-out branches on one run don't clobber each other.
+  const disposeRegistration = registry.register(runId, steerCtrl);
   try {
     // Promise.race against a sentinel rather than a rejecting timer: a
     // rejection would mask an ignored-AbortSignal as a "handler error". A
@@ -70,6 +70,6 @@ export async function invokeHandler(deps: {
     return { kind: "thrown", error: err, abortByName: isAbortError(err) };
   } finally {
     if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
-    registry.unregister(runId);
+    disposeRegistration();
   }
 }

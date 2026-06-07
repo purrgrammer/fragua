@@ -19,8 +19,12 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * stops tripping on projection-only migrations. See
  * docs/proposals/archive/event-contract-version.md §3.1. The contract-surface hash
  * test (packages/store/test/contract-version.test.ts) forces a conscious
- * bump-or-resnapshot whenever the surface moves. */
-export const EVENT_CONTRACT_VERSION = 1;
+ * bump-or-resnapshot whenever the surface moves.
+ * v2 adds the fan-out fold-path facts `fact.fanout_started` /
+ * `fact.fanout_joined` (Model A, docs/proposals/fan-out-nodes.md): a v1 daemon
+ * would mis-fold a parallel stream. `MIN_COMPATIBLE` stays 1 — v1 runs carry no
+ * fan-out facts, so they still resume. */
+export const EVENT_CONTRACT_VERSION = 2;
 
 /** Lowest contract version the daemon folds. Ratchets ONLY by deliberate act
  * (§3.4): advancing it strands every run pinned below it, so it moves only in

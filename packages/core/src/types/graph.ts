@@ -8,7 +8,7 @@ import type { SummaryLevel } from "./summary.ts";
  * parser (the entry and the reserved graceful-halt sink); authors only
  * declare `llm` / `human` / `tool` / `exit` (when an explicit type:exit
  * is canonical). */
-export type NodeType = "start" | "exit" | "llm" | "human" | "tool";
+export type NodeType = "start" | "exit" | "llm" | "human" | "tool" | "parallel";
 
 /** Alias for legacy callsites; `HandlerType` and `NodeType` are now the
  * same vocabulary post-codergen-rename. */
@@ -69,6 +69,22 @@ export interface NodeAttrs {
   skills?: string[];
   /** Routing targets this node may exit to via the `route` tool. */
   routes?: string[];
+  /** Branch ENTRY node ids of a `type: parallel` fan-out (Model A,
+   * docs/proposals/fan-out-nodes.md). The take-all set: every branch runs
+   * concurrently within one run; each branch is a sub-pipeline (the entry plus
+   * its intra-closure `next:`/`routes:` reach) converging on the join
+   * (`parallel.next`). Distinct, ≥2, read-class llm nodes (validator E036–E043). */
+  branches?: string[];
+  /** Max in-flight sub-nodes for a `type: parallel` fan-out — a semaphore the
+   * frontier loop acquires before each sub-node dispatch. Unset ⇒ the
+   * configured global default (`fanout.max_concurrency`). Bounds a wide static
+   * set and is `map`'s prerequisite. */
+  concurrency?: number;
+  /** The join (post-barrier sink) of a `type: parallel` fan-out — the node the
+   * branches converge on, resolved from the parallel node's `next:`. The
+   * executor advances `current_node` here when the frontier drains; the join
+   * reads each branch terminal's outputs by name. */
+  join?: string;
   /** Typed output declarations for this step (llm steps only). Keys are output
    * names; values are restricted-profile type nodes. Validated at parse time and
    * lowered to a provider-enforced TypeBox schema for the `emit_output` tool.
@@ -98,6 +114,11 @@ export interface EdgeAttrs {
   /** Route-keyed edge — selected when the source node's llm call exits
    * via `route({name: …})`. */
   route?: string;
+  /** Synthesized edge of a `type: parallel` fan-out — either `parallel → entry`
+   * (take-all) or `terminal → join` (the barrier). Lets the validator and
+   * executor tell a branch's structural edges from author-declared successors.
+   * docs/proposals/fan-out-nodes.md § DSL. */
+  fanout?: boolean;
 }
 
 /** A typed run-input declaration from the workflow's `inputs:` block.

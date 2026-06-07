@@ -105,7 +105,7 @@ export class ParseError extends Error {
   }
 }
 
-const KNOWN_TYPES: ReadonlySet<NodeType> = new Set(["llm", "human", "tool", "exit"] as const);
+const KNOWN_TYPES: ReadonlySet<NodeType> = new Set(["llm", "human", "tool", "exit", "parallel"] as const);
 
 // ---- Authoring-key → IR-key rename table ------------------------------
 //
@@ -173,9 +173,15 @@ const INT_KEYS: ReadonlySet<string> = new Set([
   "retry_max_delay_ms",
 ]);
 
-const NUMBER_KEYS: ReadonlySet<string> = new Set(["max_cost_usd", "budget_usd", "retry_backoff_factor"]);
+const NUMBER_KEYS: ReadonlySet<string> = new Set(["max_cost_usd", "budget_usd", "retry_backoff_factor", "concurrency"]);
 
-const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "skills", "routes"]);
+const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set([
+  "allowed_tools",
+  "denied_tools",
+  "skills",
+  "routes",
+  "branches",
+]);
 
 const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["budget_policy", new Set(["warn", "stop", "pause"])],
@@ -401,7 +407,7 @@ export function parseWorkflow(source: string): Graph {
     const typeStr = typeof typeRaw === "string" ? typeRaw : "llm"; // implicit llm
     if (!KNOWN_TYPES.has(typeStr as NodeType)) {
       throw new ParseError(
-        `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit)`,
+        `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit / parallel)`,
         ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
       );
     }
@@ -449,7 +455,39 @@ export function parseWorkflow(source: string): Graph {
       );
     }
 
-    if (routesNode !== undefined) {
+    if (nodeType === "parallel") {
+      // A `parallel` node fans out a take-all set of branch entries and
+      // converges on the join (its `next:`). Synthesize `parallel → entry`
+      // edges (marked fanout) for graph connectivity + take-all semantics, and
+      // record the join in `attrs.join`. The join is NOT linked directly from
+      // the parallel node — it is reached through the branches (entry → … →
+      // terminal → join, author-declared), which is what makes the branches
+      // dominate the join so `${{ outputs.<branch>.f }}` reads validate (E035).
+      if (typeof nextNode !== "string" || nextNode.length === 0) {
+        throw new ParseError(
+          `parallel step "${stepId}" needs a \`next:\` naming the join (the post-barrier sink)`,
+          ...locArr(locOf(body, lineCounter)),
+        );
+      }
+      if (onNode !== undefined || routesNode !== undefined) {
+        throw new ParseError(
+          `parallel step "${stepId}" uses \`next:\` for the join — \`on:\`/\`routes:\` are not allowed`,
+          ...locArr(locOf(body, lineCounter)),
+        );
+      }
+      const branchList = Array.isArray(attrs["branches"]) ? (attrs["branches"] as string[]) : [];
+      if (branchList.length === 0) {
+        throw new ParseError(
+          `parallel step "${stepId}" needs a non-empty \`branches:\` list of branch entry steps`,
+          ...locArr(locOf(body, lineCounter)),
+        );
+      }
+      attrs["join"] = nextNode;
+      if (nextNode === "exit") needExit = true;
+      for (const entry of branchList) {
+        edges.push({ from: stepId, to: entry, attrs: { fanout: true } });
+      }
+    } else if (routesNode !== undefined) {
       if (!YAML.isMap(routesNode)) {
         throw new ParseError(`step "${stepId}" routes: must be a mapping`, ...locArr(locOf(routesNode, lineCounter)));
       }

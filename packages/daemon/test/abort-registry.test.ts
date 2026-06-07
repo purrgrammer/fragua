@@ -30,10 +30,22 @@ describe("AbortRegistry — basics", () => {
     expect(ctrl.signal.aborted).toBe(true);
   });
 
-  test("double-register throws", () => {
+  test("concurrent registers coexist (fan-out branches); each disposer removes only its own entry", () => {
     const reg = new AbortRegistry();
-    reg.register("r1", new AbortController());
-    expect(() => reg.register("r1", new AbortController())).toThrow();
+    const c1 = new AbortController();
+    const c2 = new AbortController();
+    const dispose1 = reg.register("r1", c1);
+    const dispose2 = reg.register("r1", c2);
+    expect(reg.has("r1")).toBe(true);
+    // trip aborts the whole set (cancel/shutdown ends the superstep).
+    reg.trip("r1");
+    expect(c1.signal.aborted).toBe(true);
+    expect(c2.signal.aborted).toBe(true);
+    // Disposing one leaves the run live until the last disposer runs.
+    dispose1();
+    expect(reg.has("r1")).toBe(true);
+    dispose2();
+    expect(reg.has("r1")).toBe(false);
   });
 
   test("trip on unknown run is a no-op", () => {

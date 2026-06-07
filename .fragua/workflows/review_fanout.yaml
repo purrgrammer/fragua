@@ -1,0 +1,183 @@
+# review_fanout.yaml — multi-lens review via a `type: parallel` fan-out, where
+# each lens is a TWO-NODE branch (scan → verify) that filters its own
+# hallucinated findings before the join. This is the Model A on-log frontier
+# (docs/proposals/fan-out-nodes.md) exercised end-to-end:
+#
+#   prep_diff (tool) → lenses (parallel) → synthesize → exit
+#     correctness_scan → correctness_verify ┐
+#     security_scan    → security_verify    ├→ synthesize
+#     performance_scan → performance_verify ┘
+#
+# The three branches run CONCURRENTLY (one run, one log, per-sub-node durable);
+# each `*_scan` emits raw typed findings, each `*_verify` re-checks every
+# `path:line` against the actual code and DROPS anything it can't confirm, then
+# `synthesize` combines the three verified results. Branches are read-only
+# (allowed-tools: [read, grep] — no write-class tool, E042) and threadless (each
+# runs on its own synthetic thread, E043); they exchange data only through typed
+# outputs (fail-closed). No HITL gate — the run completes at `exit`.
+#
+#   bun run fragua run review_fanout --input target="main...HEAD"
+
+name: review_fanout
+goal: Multi-lens code review with per-lens hallucination filtering, via a parallel fan-out of two-node branches.
+budget: 8.00
+
+inputs:
+  target:
+    type: string
+    default: "main...HEAD"
+    description: A `git diff` spec (e.g. "main...HEAD", "HEAD~1..HEAD") whose change the lenses review.
+
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+
+steps:
+  prep_diff: # materialize the diff ONCE to a file the read-only lenses share (computed here, not by each branch)
+    type: tool
+    run: "git diff ${{ inputs.target }} > review-diff.patch 2>/dev/null; wc -l review-diff.patch"
+    next: lenses
+
+  lenses:
+    type: parallel
+    branches: [correctness_scan, security_scan, performance_scan]
+    next: synthesize
+    concurrency: 3
+
+  # ── correctness lens (scan → verify) ──
+  correctness_scan:
+    type: llm
+    allowed-tools: [read, grep]
+    next: correctness_verify
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim: { type: string }
+            why: { type: string }
+    prompt: |
+      Read `review-diff.patch` (the change under review). Review it through the **correctness** lens ONLY: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Read the cited files directly (read/grep) to ground each claim.
+
+      One finding per issue: `severity`, `location` (`path:line`), `claim` (one line), `why` (one sentence). Empty array if clean. Be generous here — the verify step downstream will prune anything you can't substantiate, so surface candidates.
+
+  correctness_verify:
+    type: llm
+    allowed-tools: [read, grep]
+    next: synthesize
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim: { type: string }
+            why: { type: string }
+    prompt: |
+      You are the **verification** gate for the correctness lens. Here are its raw findings:
+
+      ${{ outputs.correctness_scan.findings }}
+
+      For EACH finding, open the cited `path:line` (read/grep) and confirm the claim against the ACTUAL code. **Drop** any finding whose `path:line` doesn't exist, whose claim the code contradicts, or that you cannot substantiate by reading the code — these are hallucinations. Keep only confirmed findings, re-calibrating severity to what the evidence supports. Emit the filtered `findings` array (empty if none survive).
+
+  # ── security lens (scan → verify) ──
+  security_scan:
+    type: llm
+    allowed-tools: [read, grep]
+    next: security_verify
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim: { type: string }
+            why: { type: string }
+    prompt: |
+      Read `review-diff.patch`. Review it through the **security** lens ONLY, and only where it touches a trust boundary (auth / input parsing / shell / crypto / secrets / external I/O / SSRF / deserialisation). If it doesn't, emit an empty `findings` array. Read the cited files to ground each claim.
+
+      One finding per issue: `severity`, `location` (`path:line`), `claim`, `why`. Be generous — verify prunes downstream.
+
+  security_verify:
+    type: llm
+    allowed-tools: [read, grep]
+    next: synthesize
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim: { type: string }
+            why: { type: string }
+    prompt: |
+      You are the **verification** gate for the security lens. Raw findings:
+
+      ${{ outputs.security_scan.findings }}
+
+      For EACH, open the cited `path:line` and confirm against the actual code + its surrounding sanitisation. **Drop** anything unverifiable, contradicted, or already mitigated nearby — those are hallucinations. Emit only confirmed findings (empty if none).
+
+  # ── performance lens (scan → verify) ──
+  performance_scan:
+    type: llm
+    allowed-tools: [read, grep]
+    next: performance_verify
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim: { type: string }
+            why: { type: string }
+    prompt: |
+      Read `review-diff.patch`. Review it through the **performance** lens ONLY, and only where it touches a hot path / data layer / loops / large payloads (complexity surprises, N+1, unbounded work, blocking I/O on hot paths). If it doesn't, emit an empty `findings` array. Read the cited files to ground each claim.
+
+      One finding per issue: `severity`, `location` (`path:line`), `claim`, `why`. Be generous — verify prunes downstream.
+
+  performance_verify:
+    type: llm
+    allowed-tools: [read, grep]
+    next: synthesize
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim: { type: string }
+            why: { type: string }
+    prompt: |
+      You are the **verification** gate for the performance lens. Raw findings:
+
+      ${{ outputs.performance_scan.findings }}
+
+      For EACH, open the cited `path:line` and confirm the cost claim against the actual code (is the path actually hot? is the bound actually unbounded?). **Drop** anything unverifiable or contradicted — cold-path nits and speculative claims are hallucinations here. Emit only confirmed findings (empty if none).
+
+  synthesize: # combine the three VERIFIED lens results → write review.md
+    type: llm
+    allowed-tools: [read, write]
+    next: exit
+    prompt: |
+      Combine the three verified lens results into one ranked review and WRITE it to `review.md` (cwd-relative, `write` tool). The findings are typed arrays of already-verified items:
+
+        correctness: ${{ outputs.correctness_verify.findings }}
+        security:    ${{ outputs.security_verify.findings }}
+        performance: ${{ outputs.performance_verify.findings }}
+
+      Merge them: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`. Per finding: **path:line** — one-line claim. `Why:` one sentence. If all three arrays are empty, replace the severity sections with `## All clear` (one paragraph: what was reviewed, confidence). End with `## Next steps` — at most 3 ordered actions, or `No follow-up required.`
+
+      Emit only `WROTE` once the file is written.
