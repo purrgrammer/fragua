@@ -125,7 +125,7 @@ steps:
     prompt: |
       Review PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly) through the **correctness** lens ONLY: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, real edge cases. Cross-check call sites where it matters. Apply THE BAR (see the workflow header rule). `-` lines are context, never flag.
 
-      Call `emit_output` once with `findings` — one record per issue: `severity` (critical/high/medium — no low tier), `location` (`path:line`), `claim` (one line), `why` (the concrete consequence), `fix` (one sentence; omit if none). NO INVENTION. Empty array if nothing clears the bar.
+      One finding per issue: `severity` (critical/high/medium — no low tier), `location` (`path:line`), `claim` (one line), `why` (the concrete consequence), `fix` (one sentence; omit if none). NO INVENTION. Empty if nothing clears the bar.
 
   review_security:
     type: llm
@@ -149,7 +149,7 @@ steps:
     prompt: |
       Review PR #${{ inputs.pr }} through the **security** lens ONLY, and only where the diff touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging. Apply THE BAR; `-` lines are context.
 
-      Call `emit_output` once with `findings` (same shape; severities critical/high/medium). NO INVENTION. Empty array if no security surface or nothing clears the bar.
+      Same finding shape (severities critical/high/medium). NO INVENTION. Empty if no security surface or nothing clears the bar.
 
   review_performance:
     type: llm
@@ -173,7 +173,7 @@ steps:
     prompt: |
       Review PR #${{ inputs.pr }} through the **performance** lens ONLY, and only where the diff touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits. Apply THE BAR; `-` lines are context.
 
-      Call `emit_output` once with `findings` (same shape; severities critical/high/medium). NO INVENTION. Empty array if no perf surface or nothing clears the bar.
+      Same finding shape (severities critical/high/medium). NO INVENTION. Empty if no perf surface or nothing clears the bar.
 
   synthesize:                          # aggregate the three typed lens results → write pr-review.md
     type: llm
