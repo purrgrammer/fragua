@@ -196,6 +196,45 @@ describe("appendFact + outputs index (same-transaction write)", () => {
     expect(JSON.parse(store.getOutputsForRun(runId)[0]!.struct).report).toBe(big);
   });
 
+  test("a spilled output whose blob is missing is dropped, not thrown (read fails closed)", async () => {
+    // Corrupt store: the index row references a `$fragua_blob` whose CAS file is
+    // gone. Materialization must degrade to "no output" (the downstream read then
+    // fails closed — a clean node failure) instead of throwing out of
+    // getOutputsForRun and crashing the executor's dispatch.
+    const { store, runId } = await makeStoreWithRun();
+    const state = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: 1, startNode: "scope" },
+        },
+        {
+          type: "fact.node_completed",
+          payload: {
+            nodeId: "scope",
+            iteration: 0,
+            tokens: 0,
+            costUsd: 0,
+            nextNode: "exit",
+            outputs: { report: "y".repeat(8000) }, // > inline budget → spills
+          },
+        },
+      ],
+      state.version,
+    );
+
+    // Delete the spilled blob file, leaving the index row dangling.
+    const ev = store.getEvents(runId).find((e) => e.type === "fact.node_completed")!;
+    const sha = (ev.payload as { outputs: { $fragua_blob: string } }).outputs.$fragua_blob;
+    (store as unknown as { blobs: { delete(sha: string): void } }).blobs.delete(sha);
+
+    expect(() => store.getOutputsForRun(runId)).not.toThrow();
+    expect(store.getOutputsForRun(runId)).toEqual([]); // unreadable row dropped
+    expect(store.getLatestOutput(runId, "scope")).toBeNull();
+  });
+
   test("small outputs stay inline (no blob ref)", async () => {
     const { store, runId } = await makeStoreWithRun();
     const state = store.getState(runId)!;

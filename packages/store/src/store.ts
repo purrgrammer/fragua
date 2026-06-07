@@ -975,15 +975,30 @@ export class SqliteStore implements IEventStore {
   // ─────────────── Outputs index ───────────────
 
   getOutputsForRun(runId: string): Array<{ nodeId: string; iteration: number; struct: string }> {
-    return getOutputsForRun(this.db, runId).map((r) => ({
-      ...r,
-      struct: materializeStructJson(r.struct, (sha) => this.blobs.get(sha)),
-    }));
+    const out: Array<{ nodeId: string; iteration: number; struct: string }> = [];
+    for (const r of getOutputsForRun(this.db, runId)) {
+      try {
+        out.push({ ...r, struct: materializeStructJson(r.struct, (sha) => this.blobs.get(sha)) });
+      } catch {
+        // A spilled output whose blob is missing/corrupt: drop the row rather
+        // than throw. A downstream `${{ outputs.X.f }}` read then fails closed
+        // (a clean node failure) instead of crashing the dispatch, and the UI
+        // simply omits the unreadable output.
+      }
+    }
+    return out;
   }
 
   getLatestOutput(runId: string, nodeId: string): string | null {
     const struct = getLatestOutput(this.db, runId, nodeId);
-    return struct === null ? null : materializeStructJson(struct, (sha) => this.blobs.get(sha));
+    if (struct === null) return null;
+    try {
+      return materializeStructJson(struct, (sha) => this.blobs.get(sha));
+    } catch {
+      // Missing/corrupt spilled blob — surface as "no output" so the caller
+      // fails closed rather than throwing.
+      return null;
+    }
   }
 
   // ─────────────── Aggregations ───────────────
