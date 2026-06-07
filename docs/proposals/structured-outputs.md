@@ -192,9 +192,13 @@ in the producing step, not in the type.
 **Validation: TypeBox.** The grammar compiles to a TypeBox schema
 (`compileTypeDecl`); TypeBox's `Value.Check` validates the value, and the same
 schema is the `emit_output` tool's `parameters`. `choice` lowers to `enum`,
-records get `additionalProperties: false`, and an `optional: true` field lowers to
-a nullable type that stays in `required` so OpenAI strict (all-fields-required)
-still engages. Because the grammar is exactly the provider-supported subset, the
+records get `additionalProperties: false`, and an `optional: true` field is
+omitted from `required` and lowered to a nullable type (`anyOf: [T, null]`) — so a
+model may either omit it or emit an explicit `null`, and our post-emit +
+read-time validation accepts both. (Keeping it out of `required` rather than
+nullable-but-required avoids a strict provider rejecting a legitimately-omitted
+field; validation, not provider strict-mode, is the guarantee — strict mode just
+cuts retries.) Because the grammar is exactly the provider-supported subset, the
 schema means the same thing to the author, to our validation, and to the
 provider's native enforcement.
 

@@ -235,8 +235,7 @@ steps:
           fields:
             severity: { type: choice, options: [critical, high, low] }
             location: { type: string }
-            fix: { type: string }
-          required: [severity, location]
+            fix: { type: string, optional: true }
 `;
     const parsed = parseWorkflow(src).nodes;
 

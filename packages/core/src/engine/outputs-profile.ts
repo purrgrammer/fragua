@@ -90,7 +90,7 @@ export class OutputsProfileError extends Error {
  * Throws `OutputsProfileError` for any construct outside the restricted profile:
  * - Rejected keys: pattern, format, minimum, maximum, exclusiveMinimum, exclusiveMaximum,
  *   minLength, maxLength, minItems, maxItems, oneOf, if, allOf, $ref, title, anyOf.
- * - Allowed keys by type: type, enum, items, properties, required, fields, options.
+ * - Allowed keys by type: type, enum, items, properties, required, fields, options, optional.
  */
 export function parseOutputsDecl(raw: unknown): OutputsDecl {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -135,7 +135,7 @@ function rejectBannedKeys(obj: Record<string, unknown>, path: string): void {
     if (BANNED_KEYS.has(key)) {
       throw new OutputsProfileError(
         `outputs profile at "${path}" uses disallowed JSON-Schema key "${key}" — ` +
-          `the profile only allows: type, enum, items, properties, required, fields, options, kind. ` +
+          `the profile only allows: type, enum, items, properties, required, fields, options, optional, kind. ` +
           `Constraints like pattern/format/min/max, combinators like oneOf/allOf, ` +
           `references ($ref), and cosmetic keys (title) are not supported.`,
       );
@@ -227,11 +227,25 @@ function parseRecord(obj: Record<string, unknown>, path: string): OutputRecord {
   }
   const fieldsObj = fieldsRaw as Record<string, unknown>;
   const fields: Record<string, OutputProfile> = {};
+  // Fields a record author marked `optional: true` (per-field shorthand,
+  // documented in SPEC §3.8). Optionality is represented internally as
+  // "absent from `required`"; the parser folds the shorthand into that.
+  const optionalFields = new Set<string>();
   for (const [k, v] of Object.entries(fieldsObj)) {
     fields[k] = parseProfileNode(v, `${path}.${k}`);
+    if (
+      typeof v === "object" &&
+      v !== null &&
+      !Array.isArray(v) &&
+      (v as Record<string, unknown>)["optional"] === true
+    ) {
+      optionalFields.add(k);
+    }
   }
 
-  // `required` is optional — if omitted every field is required by convention.
+  // `required` is optional in the declaration. Two ways to mark a field
+  // optional, which must agree: a record-level `required:` subset, or
+  // per-field `optional: true`. Absent both, every field is required.
   let required: string[];
   if (Array.isArray(obj["required"])) {
     required = (obj["required"] as unknown[]).filter((v): v is string => typeof v === "string");
@@ -241,10 +255,19 @@ function parseRecord(obj: Record<string, unknown>, path: string): OutputRecord {
       if (fields[r] === undefined) {
         throw new OutputsProfileError(`outputs at "${path}": required lists "${r}" but it is not a declared field`);
       }
+      // A field can't be both listed required and flagged optional — that's an
+      // authoring contradiction, not a silently-resolved precedence.
+      if (optionalFields.has(r)) {
+        throw new OutputsProfileError(
+          `outputs at "${path}": field "${r}" is marked optional but also listed in required`,
+        );
+      }
     }
   } else {
-    // Default: all declared fields are required.
-    required = Object.keys(fields).sort();
+    // Default: every field is required except those flagged `optional: true`.
+    required = Object.keys(fields)
+      .filter((k) => !optionalFields.has(k))
+      .sort();
   }
 
   return { kind: "record", fields, required: [...new Set(required)].sort() } satisfies OutputRecord;

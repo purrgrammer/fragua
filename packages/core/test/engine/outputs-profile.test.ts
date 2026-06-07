@@ -56,6 +56,38 @@ describe("outputs profile parser", () => {
     }
   });
 
+  test("honors per-field `optional: true` (folds into the required split)", () => {
+    const decl = parseOutputsDecl({
+      finding: {
+        type: "object",
+        fields: {
+          severity: { type: "string" },
+          location: { type: "string" },
+          fix: { type: "string", optional: true },
+        },
+      },
+    });
+    const rec = decl["finding"]!;
+    expect(rec.kind).toBe("record");
+    if (rec.kind === "record") {
+      // `fix` is optional ⇒ absent from required; the other two stay required.
+      expect(rec.required).toEqual(["location", "severity"]);
+      // the field itself still parses to its declared type
+      expect(rec.fields["fix"]).toEqual({ kind: "string" });
+    }
+  });
+
+  test("rejects a field that is both `optional: true` and listed in required", () => {
+    const raw = {
+      rec: {
+        type: "object",
+        fields: { a: { type: "string" }, b: { type: "string", optional: true } },
+        required: ["a", "b"],
+      },
+    };
+    expect(() => parseOutputsDecl(raw)).toThrow(OutputsProfileError);
+  });
+
   test("accepts arrays of scalars", () => {
     const raw = {
       tags: { type: "array", items: { type: "string" } },
@@ -275,6 +307,25 @@ describe("compileOutputsToTypeBox", () => {
     expect(props["rec"]?.["required"]).toEqual(["a"]);
   });
 
+  test("an optional record field lowers to a nullable type, kept out of required", () => {
+    // `fix` is optional ⇒ absent from `required` AND its type becomes nullable
+    // (`anyOf: [string, null]`) so a model may emit an explicit null.
+    const decl = parseOutputsDecl({
+      rec: {
+        type: "object",
+        fields: { a: { type: "string" }, fix: { type: "string", optional: true } },
+      },
+    });
+    const schema = compileOutputsToTypeBox(decl) as unknown as Record<string, unknown>;
+    const recProps = (schema["properties"] as Record<string, Record<string, unknown>>)["rec"]!;
+    expect(recProps["required"]).toEqual(["a"]); // fix omitted
+    const fixSchema = (recProps["properties"] as Record<string, Record<string, unknown>>)["fix"]!;
+    const anyOf = fixSchema["anyOf"] as Array<Record<string, unknown>> | undefined;
+    expect(Array.isArray(anyOf)).toBe(true);
+    expect(anyOf!.some((m) => m["type"] === "null")).toBe(true); // nullable
+    expect(anyOf!.some((m) => m["type"] === "string")).toBe(true);
+  });
+
   test("record required is canonical (sorted), independent of field declaration order", () => {
     // No `required:` → all fields required; the lowered list must be sorted so
     // the schema is canonical (key order can't change the hash).
@@ -346,5 +397,28 @@ describe("validateOutputsValue (runtime)", () => {
     expect(ok).toBeNull();
     const bad = validateOutputsValue(decl, { tags: ["a", 2] });
     expect(bad).toContain("must be a string");
+  });
+
+  test("an optional field may be omitted, null, or a valid value — required ones may not", () => {
+    const decl = parseOutputsDecl({
+      finding: {
+        type: "object",
+        fields: {
+          severity: { type: "string" },
+          fix: { type: "string", optional: true },
+        },
+      },
+    });
+    // omitted optional → ok
+    expect(validateOutputsValue(decl, { finding: { severity: "high" } })).toBeNull();
+    // explicit null optional → ok (nullable)
+    expect(validateOutputsValue(decl, { finding: { severity: "high", fix: null } })).toBeNull();
+    // present-and-valid optional → ok
+    expect(validateOutputsValue(decl, { finding: { severity: "high", fix: "do x" } })).toBeNull();
+    // wrong-typed optional → still rejected
+    expect(validateOutputsValue(decl, { finding: { severity: "high", fix: 7 } })).toContain("must be a string");
+    // a required field is NOT nullable / omittable
+    expect(validateOutputsValue(decl, { finding: { severity: null, fix: "x" } })).not.toBeNull();
+    expect(validateOutputsValue(decl, { finding: { fix: "x" } })).toContain("required");
   });
 });
