@@ -12,6 +12,7 @@ import {
   type InputDecl,
   isRetryPresetName,
   type NodeAttrs,
+  type OutputsValue,
   RETRY_PRESETS,
   resolveInputBindings,
   retryCountKey,
@@ -206,7 +207,7 @@ export function recordEdgeSelected(
 export function buildSubstitutionArgs(
   routing: Record<string, unknown>,
   inputDecls?: readonly InputDecl[],
-  resolvedOutputs?: Record<string, import("@fragua/core").OutputsValue>,
+  resolvedOutputs?: Record<string, OutputsValue>,
 ): SubstitutionArgs {
   const args: SubstitutionArgs = {};
   // `${{ inputs.x }}` bindings: declared defaults overlaid by the run's
