@@ -143,20 +143,32 @@ describe("substitute() integration with outputs", () => {
 });
 
 describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
-  test("wraps an interpolated output value in a content-derived fragua_output tag", () => {
+  test("wraps an interpolated output value in a content-derived fragua_output tag (well-formed pair)", () => {
     const result = substitute("findings: ${{ outputs.scope.note }}", {
       args: { outputs: { scope: { note: "all good" } } },
       wrapOutputs: true,
     });
-    expect(result).toMatch(
-      /^findings: <fragua_output id="[0-9a-f]{16}">\nall good\n<\/fragua_output id="[0-9a-f]{16}">$/,
-    );
+    // The hash lives in the element NAME so the open/close pair is well-formed
+    // markup (a markdown renderer hides the tags instead of printing a broken
+    // `</tag attr="…">`). No surrounding whitespace around the value.
+    expect(result).toMatch(/^findings: <fragua_output_([0-9a-f]{16})>all good<\/fragua_output_\1>$/);
   });
 
   test("the boundary id is content-derived (deterministic; differs by value)", () => {
     expect(wrapOutputValue("abc")).toBe(wrapOutputValue("abc"));
-    const idOf = (v: string) => wrapOutputValue(v).match(/id="([0-9a-f]+)"/)![1];
+    const idOf = (v: string) => wrapOutputValue(v).match(/<fragua_output_([0-9a-f]+)>/)![1];
     expect(idOf("abc")).not.toBe(idOf("abd"));
+  });
+
+  test("the closing tag carries the same hash as the open (break-out needs a preimage)", () => {
+    const wrapped = wrapOutputValue("origin/main..HEAD");
+    const m = wrapped.match(/^<fragua_output_([0-9a-f]{16})>(.*)<\/fragua_output_([0-9a-f]{16})>$/s);
+    if (m === null) throw new Error(`wrapped value did not match the expected tag shape: ${wrapped}`);
+    const openHash = m[1]!;
+    const value = m[2]!;
+    const closeHash = m[3]!;
+    expect(openHash).toBe(closeHash); // break-out would need a value containing its own hash
+    expect(value).toBe("origin/main..HEAD"); // value verbatim, no padding whitespace
   });
 
   test("inputs are NOT wrapped — only outputs", () => {
@@ -165,8 +177,9 @@ describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
       wrapOutputs: true,
     });
     expect(result).toContain("x TT y ");
-    expect(result).toContain("<fragua_output");
-    expect(result).not.toContain('<fragua_output id="">TT'); // input stayed bare
+    expect(result).toContain("<fragua_output_"); // the output got wrapped
+    expect(result).not.toMatch(/<fragua_output_[0-9a-f]+>TT/); // input stayed bare
+    expect(result).toMatch(/<fragua_output_[0-9a-f]+>VV<\/fragua_output_[0-9a-f]+>/);
   });
 
   test("wrapOutputs is ignored under escapeForShell (shell context, not prompt)", () => {

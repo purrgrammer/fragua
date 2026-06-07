@@ -226,15 +226,18 @@ provider's native enforcement.
    node's `fail:` edge).
 
 4. **Untrusted-content delimiting (prompt-consumption).** An output interpolated
-   into an `llm` `prompt:` is wrapped in a stable-named tag whose boundary id is
-   a **content hash**, and a standing system-prompt rule marks those regions as
-   data, not instructions:
+   into an `llm` `prompt:` is wrapped in a tag whose boundary id — a **content
+   hash** — lives in the *element name*, and a standing system-prompt rule marks
+   those regions as data, not instructions:
 
    ```text
-   <fragua_output id="9c1f2a3b4d5e6f70">
-   [ … the value (scalar verbatim, record/array as JSON) … ]
-   </fragua_output id="9c1f2a3b4d5e6f70">
+   <fragua_output_9c1f2a3b4d5e6f70>[ … the value (scalar verbatim, record/array as JSON) … ]</fragua_output_9c1f2a3b4d5e6f70>
    ```
+
+   The hash sits in the name (not an attribute) so the open/close pair is
+   well-formed markup: a markdown renderer — the web conversation view — treats it
+   as an unknown element and hides the tags, instead of printing a broken
+   `</tag attr="…">` literal.
 
    A **content-derived boundary** (not a random nonce) is the right fit: a value
    can't contain its own closing tag without a hash preimage, so the delimiter is

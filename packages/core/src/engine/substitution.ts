@@ -40,15 +40,19 @@ export interface SubstitutionOptions {
   wrapOutputs?: boolean;
 }
 
-/** Boundary tag for an output value interpolated into a prompt. The id is a
- * content hash, so a value can't contain its own closing tag (it would need a
- * hash preimage) and the delimiter is collision-free by construction — and
- * deterministic, so the same value renders identically on replay. The stable
- * `fragua_output` name is what the agent's standing system-prompt rule marks as
- * data. Best-effort defense-in-depth, not a cryptographic guarantee. */
+/** Boundary tag for an output value interpolated into a prompt. The content
+ * hash lives in the element NAME (`<fragua_output_<hash>>…</fragua_output_<hash>>`)
+ * so the open/close pair is well-formed XML/HTML — a markdown renderer (the web
+ * conversation view) treats it as an unknown element and hides the tags rather
+ * than printing a broken `</tag attr="…">` literal. Carrying the hash on the
+ * close is what makes break-out a fixed-point problem: a value can't contain its
+ * own closing tag without a preimage of its FNV-1a hash. Deterministic, so the
+ * same value renders identically on replay. The `fragua_output_` prefix is what
+ * the agent's standing system-prompt rule marks as data. Best-effort
+ * defense-in-depth, not a cryptographic guarantee. */
 export function wrapOutputValue(value: string): string {
   const id = fnv1a64Hex(value);
-  return `<fragua_output id="${id}">\n${value}\n</fragua_output id="${id}">`;
+  return `<fragua_output_${id}>${value}</fragua_output_${id}>`;
 }
 
 /** FNV-1a 64-bit → 16 hex chars. Browser-safe + synchronous (core stays free of
