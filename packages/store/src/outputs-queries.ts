@@ -59,10 +59,3 @@ export function getAllOutputStructs(db: Database): string[] {
     .all()
     .map((r) => r.struct);
 }
-
-const DELETE_OUTPUTS_FOR_RUN_SQL = `DELETE FROM outputs WHERE run_id = ?1`;
-
-/** Remove all output rows for a run (used by the bundle rebuild path). */
-export function deleteOutputsForRun(db: Database, runId: string): void {
-  db.query(DELETE_OUTPUTS_FOR_RUN_SQL).run(runId);
-}

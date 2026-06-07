@@ -11,8 +11,8 @@
 import type { Graph, Node } from "./types/graph.ts";
 
 /** IR contract version. Bumped when the serialized Graph shape changes.
- * v2 adds the optional `outputs:` block on `llm` and `tool` nodes
- * (structured step outputs, additive). A v1 IR without `outputs` fields
+ * v2 adds the optional `outputs:` block on `llm` nodes (structured step
+ * outputs, additive). A v1 IR without `outputs` fields
  * is executor-equivalent to a v2 IR with no outputs declared. The v1→v2
  * converter is a no-op structural identity. */
 export const CURRENT_IR_VERSION = 2;
