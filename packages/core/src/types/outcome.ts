@@ -75,9 +75,9 @@ export const OutcomeSchema = Type.Object(
 export type OutcomeBase = Static<typeof OutcomeSchema>;
 
 /** Full outcome type with the optional `outputs` field that carries the
- * emitted struct from `emit_output` (llm) or `$FRAGUA_OUTPUT` (tool).
- * `outputs` is typed separately from OutcomeSchema because TypeBox's
- * `Type.Any()` loses precision — keep it as the precise OutputsValue. */
+ * struct emitted via the `emit_output` tool (llm steps). `outputs` is typed
+ * separately from OutcomeSchema because TypeBox's `Type.Any()` loses precision
+ * — keep it as the precise OutputsValue. */
 export type Outcome = OutcomeBase & { outputs?: OutputsValue };
 
 /** Convenience factory for successful outcomes. */

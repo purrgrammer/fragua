@@ -1,7 +1,7 @@
-// Structured step outputs — typed `outputs:` declarations on `llm` and `tool`
-// steps. A restricted JSON-Schema profile (scalars + records + arrays) that
-// both validates at parse time and lowers to provider-enforced TypeBox schemas.
-// See docs/proposals/structured-outputs.md §3.
+// Structured step outputs — typed `outputs:` declarations on `llm` steps. A
+// restricted JSON-Schema profile (scalars + records + arrays, nesting to any
+// fixed depth) that both validates at parse time and lowers to provider-enforced
+// TypeBox schemas. See docs/proposals/structured-outputs.md §3.
 
 import { type TSchema, Type } from "@sinclair/typebox";
 
@@ -14,11 +14,10 @@ export type OutputScalar =
   | { kind: "boolean" }
   | { kind: "choice"; options: string[] };
 
-/** An object output with typed named fields. No nesting beyond one level of
- * nested record/array — the profile limits depth for canonicalizability and
- * provider-enforcement honesty. Fields are required unless declared optional.
- * The parser populates `required` as a sorted, de-duped string[] for
- * canonicalization. */
+/** An object output with typed named fields. Records/arrays nest to any fixed
+ * depth (no recursion, no `$ref`). Fields are required unless declared
+ * `optional: true`; the parser populates `required` as a sorted, de-duped
+ * string[] (optional fields omitted) for canonicalization. */
 export type OutputRecord = {
   kind: "record";
   fields: Record<string, OutputProfile>;
@@ -155,7 +154,7 @@ function nullableSchema(s: TSchema): TSchema {
 
 /** Validate a runtime value against a declared `OutputsDecl`.
  * Returns `null` on success, or an error message on failure.
- * Called at runtime (after `emit_output` call or after reading `$FRAGUA_OUTPUT`). */
+ * Called at runtime after the `emit_output` tool call. */
 export function validateOutputsValue(decl: OutputsDecl, value: unknown): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return "emit_output value must be a plain object";
@@ -170,8 +169,8 @@ export function validateOutputsValue(decl: OutputsDecl, value: unknown): string 
     if (err !== null) return err;
   }
   // Match the lowered schema's `additionalProperties: false` — reject keys the
-  // declaration doesn't list (the provider strips them for emit_output, but a
-  // $FRAGUA_OUTPUT subprocess can write them).
+  // declaration doesn't list. The provider strips them under strict mode, so
+  // this is our own backstop for non-strict providers.
   for (const key of Object.keys(obj)) {
     if (!(key in decl)) return `unexpected output field "${key}" (not declared)`;
   }

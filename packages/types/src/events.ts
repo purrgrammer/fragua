@@ -489,10 +489,11 @@ export type FactEvent =
          * agent exited via the synthesised `route` tool. The chosen route
          * name; the engine's Step-0 edge selector keys on this. */
         route?: string;
-        /** Structured outputs emitted by this node via `emit_output` (llm) or
-         * `$FRAGUA_OUTPUT` (tool). Present iff the node declared `outputs:` and
-         * successfully emitted a valid struct. Bounded by the 4KB event-payload
-         * cap (ARCH P12); an oversized struct is a node failure.
+        /** Structured outputs emitted by this node via the `emit_output` tool
+         * (llm steps). Present iff the node declared `outputs:` and successfully
+         * emitted a valid struct. An oversized struct spills to the blob CAS —
+         * the event keeps a tiny `{$fragua_blob}` ref under the 4KB cap — so
+         * size is never a node failure.
          *
          * contract: no-bump — additive optional field; not folded into run_state
          * by the reducer. Written to the rebuildable `outputs` index table in
