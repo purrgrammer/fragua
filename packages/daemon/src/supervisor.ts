@@ -11,7 +11,7 @@
 // The supervisor owns no state of its own; it reads run_state and events and
 // trips controllers held by the abort registry.
 
-import type { IEventStore, StoredEvent } from "@fragua/store";
+import { type IEventStore, readActiveNodes, type StoredEvent } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 
 export interface SupervisorOpts {
@@ -137,7 +137,31 @@ export function startSupervisor(opts: SupervisorOpts): {
           if (state == null) continue;
           if (state.status !== "running") continue;
           if (state.currentNode == null) continue;
-          const maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);
+          // During a fan-out the in-flight handlers are the active BRANCHES, not
+          // the pinned `parallel` node — which has no dispatcher spec and would
+          // yield the short unknown-spec fallback, force-aborting every branch
+          // at a tiny budget. Budget the watchdog against the LONGEST active
+          // branch maxMs instead; if any branch is unbounded (maxMs 0/undefined),
+          // don't trip the set at all. (docs/proposals/fan-out-nodes.md.)
+          const active = readActiveNodes(state.routing);
+          let maxMs: number | undefined;
+          if (active !== null) {
+            if (active.length === 0) continue; // frontier draining — nothing in flight
+            let longest = 0;
+            let unbounded = false;
+            for (const branch of active) {
+              const bm = opts.handlerMaxMsFor(state.workflowSha, branch);
+              if (bm === undefined || bm === 0) {
+                unbounded = true;
+                break;
+              }
+              longest = Math.max(longest, bm);
+            }
+            if (unbounded) continue;
+            maxMs = longest;
+          } else {
+            maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);
+          }
           if (maxMs === undefined) continue;
           if (elapsed > maxMs + leakGrace) {
             opts.registry.trip(runId, new HandlerLeakedError(runId, state.currentNode));

@@ -139,6 +139,55 @@ describe("supervisor — pause-aware leak detection", () => {
       await sup.promise;
     }
   });
+
+  test("fan-out: the watchdog budgets against the active BRANCH maxMs, not the pinned parallel node", async () => {
+    // The parallel node has no dispatcher spec → handlerMaxMsFor yields the
+    // short unknown-spec fallback. The supervisor must NOT trip the long-running
+    // branch handlers against that — it budgets against the active branch maxMs,
+    // and an unbounded (maxMs 0) branch is never tripped. (Regression: a real
+    // fan-out review run was force-aborted at the fallback.)
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = new SqliteStore({ path: ":memory:" });
+    closers.push(() => store.close());
+    const wfSrc = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    store.saveWorkflow("sha", "t", wfSrc, serializeGraph(parseWorkflow(wfSrc)), CURRENT_IR_VERSION);
+    store.enqueueRun({ runId: "fo", workflowSha: "sha", initialRouting: { start_node: "lenses" } });
+    store.claimNextRun(1);
+    // Pin current_node to the parallel node and seed the frontier with a branch.
+    const seed = [
+      { type: "fact.run_started" as const, payload: { workflowSha: "sha", contractVersion: 2, startNode: "lenses" } },
+      { type: "fact.fanout_started" as const, payload: { nodeId: "lenses", iteration: 0, branches: ["b1"] } },
+    ];
+    for (const fact of seed) {
+      const v = store.getState("fo")?.version ?? 0;
+      store.appendFact("fo", [fact], v, { advanceAppliedTo: v });
+    }
+    const ctrl = new AbortController();
+    registry.register("fo", ctrl); // the in-flight branch handler
+    clk.advance(10_000_000); // far past the parallel node's short fallback
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      nodeLeakGraceMs: 500,
+      // "lenses" (parallel) → short fallback; "b1" (branch) → unbounded.
+      handlerMaxMsFor: (_sha, nodeId) => (nodeId === "b1" ? 0 : 50),
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(ctrl.signal.aborted).toBe(false); // NOT tripped despite 10M ms elapsed
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
 });
 
 describe("supervisor — intent-aware abort policy", () => {

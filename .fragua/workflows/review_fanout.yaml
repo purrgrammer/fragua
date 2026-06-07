@@ -26,16 +26,19 @@ inputs:
   target:
     type: string
     default: "main...HEAD"
-    description: A `git diff` spec (e.g. "main...HEAD", "HEAD~1..HEAD") whose change the lenses review.
+    description: A single-token `git diff` spec (e.g. "main...HEAD", "HEAD~1..HEAD"). Must be ONE shell token — paths are scoped in prep_diff below.
 
 defaults:
   provider: anthropic
   model: claude-sonnet-4-6
 
 steps:
-  prep_diff: # materialize the diff ONCE to a file the read-only lenses share (computed here, not by each branch)
+  prep_diff: # materialize the diff ONCE to a file the read-only lenses share (computed here, not by each branch).
+    # The path scope is LITERAL in the command (not via the input) — an input
+    # substituted into `run:` is shell-escaped to ONE token, so it can't carry
+    # `-- paths`. `${{ inputs.target }}` is a single ref-spec token.
     type: tool
-    run: "git diff ${{ inputs.target }} > review-diff.patch 2>/dev/null; wc -l review-diff.patch"
+    run: "git diff ${{ inputs.target }} -- packages/daemon/src/executor.ts packages/store/src/reducers.ts packages/core/src/engine/validator.ts packages/core/src/parser/yaml.ts packages/daemon/src/abort-registry.ts packages/types/src/events.ts > review-diff.patch 2>/dev/null; wc -l review-diff.patch"
     next: lenses
 
   lenses:
