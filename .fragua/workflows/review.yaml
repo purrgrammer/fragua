@@ -71,7 +71,7 @@ steps:
         PR/branch: if `git status --porcelain` is non-empty, `abort` with `working tree dirty`. Then `gh pr checkout <n>` (or `git fetch origin <branch> && git checkout <branch>`); resolve base via `gh pr view --json baseRefName` or `git merge-base HEAD origin/main`. Commit ranges: don't switch branches.
         Empty target → `abort` with `nothing to review`.
 
-      Call `emit_output` once:
+      Review context for downstream steps:
         pr        — the PR number, or "none" for a local diff with no PR.
         diff_spec — the exact argument to `git diff` that shows the change (e.g. "origin/main..HEAD", or "HEAD" for uncommitted). Use "" only for FILES mode (review the paths as-is, no diff).
         paths     — an array of repo-relative paths actually touched.
@@ -131,11 +131,12 @@ steps:
             location: { type: string }
             claim:    { type: string }
             why:      { type: string }
-            fix:      { type: string, optional: true }
+            fix:      { type: string }
+          required: [severity, location, claim, why]   # `fix` omitted ⇒ optional
     prompt: |
       Review the change through the **correctness** lens ONLY. Get it with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty); read the cited files directly. Focus: ${{ outputs.resolve.focus }}. Look for: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
 
-      Call `emit_output` once with `findings` — one record per issue: `severity`, `location` (`path:line`), `claim` (one line), `why` (one sentence), `fix` (one sentence; omit if none). NO INVENTION — drop subjective findings with no evidence. Empty array if clean.
+      One finding per issue: `severity`, `location` (`path:line`), `claim` (one line), `why` (one sentence), `fix` (one sentence; omit if none). NO INVENTION — drop subjective findings with no evidence. Empty if clean.
 
   review_security:
     type: llm
@@ -151,11 +152,12 @@ steps:
             location: { type: string }
             claim:    { type: string }
             why:      { type: string }
-            fix:      { type: string, optional: true }
+            fix:      { type: string }
+          required: [severity, location, claim, why]   # `fix` omitted ⇒ optional
     prompt: |
       Review the change through the **security** lens ONLY, and only where it touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
 
-      Call `emit_output` once with `findings` (same shape: `severity`, `location`, `claim`, `why`, `fix?`). NO INVENTION. Empty array if no security surface or no issues.
+      Same finding shape (`severity`, `location`, `claim`, `why`, `fix?`). NO INVENTION. Empty if no security surface or no issues.
 
   review_performance:
     type: llm
@@ -171,11 +173,12 @@ steps:
             location: { type: string }
             claim:    { type: string }
             why:      { type: string }
-            fix:      { type: string, optional: true }
+            fix:      { type: string }
+          required: [severity, location, claim, why]   # `fix` omitted ⇒ optional
     prompt: |
       Review the change through the **performance** lens ONLY, and only where it touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits.
 
-      Call `emit_output` once with `findings` (same shape). NO INVENTION. Empty array if no perf surface or no issues.
+      Same finding shape. NO INVENTION. Empty if no perf surface or no issues.
 
   synthesize:                          # aggregate the three typed lens results → write review.md
     type: llm
