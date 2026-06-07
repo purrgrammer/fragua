@@ -20,7 +20,13 @@ import {
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
 } from "@fragua/workspace";
-import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentTool,
+  type ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model, streamSimple } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
@@ -466,11 +472,22 @@ export class PiLlmBackend implements LlmBackend {
       lastRetryAfterMs = parseRetryAfterMs(response.headers);
     };
 
+    // Reasoning/thinking level. pi-agent-core defaults `thinkingLevel` to
+    // "off" when unset, which leaves the model with no thinking channel — it
+    // then externalises chain-of-thought into whatever affordance it has (most
+    // visibly: narrating analysis as `bash` comments). We never want to inherit
+    // that default silently, so resolve it explicitly here from the node's
+    // `effort` (parsed to `reasoning_effort`) and the model's `reasoning`
+    // capability. `streamSimple` receives it as the `reasoning` option via
+    // pi-agent-core's `AgentState.thinkingLevel`.
+    const thinkingLevel = resolveThinkingLevel(model, input.node.attrs as Record<string, unknown>);
+
     const agent = new Agent({
       initialState: {
         systemPrompt,
         model,
         tools,
+        thinkingLevel,
         ...(hydrateMessages.length > 0 ? { messages: hydrateMessages } : {}),
       },
       onResponse: captureResponse,
@@ -511,6 +528,9 @@ export class PiLlmBackend implements LlmBackend {
         system_prompt_bytes: systemPromptBytes,
       };
       if (threadId) llmStart["thread_id"] = threadId;
+      // The resolved thinking level — surfaced so "is thinking on?" is visible
+      // in the event feed, not silently inherited from an upstream default.
+      llmStart["thinking_level"] = thinkingLevel;
       if (allow) llmStart["allowed_tools"] = allow;
       if (deny) llmStart["denied_tools"] = deny;
       if (input.iteration) llmStart["iteration"] = input.iteration;
@@ -1108,6 +1128,22 @@ function buildRouteTool(routes: readonly string[]): AgentTool {
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+/** Resolve the pi-ai `reasoning` (thinking) level for a dispatch.
+ *
+ * pi-agent-core defaults `thinkingLevel` to "off" — so unless we set it
+ * explicitly, every node runs with no thinking channel. We map from the node's
+ * `effort` (parsed to `reasoning_effort`: low | medium | high) and only enable
+ * thinking on models that advertise the capability (`model.reasoning`). When a
+ * reasoning-capable model's node doesn't pin an effort, default to "medium" — a
+ * balanced level that gives the model a real place to reason (authors raise it
+ * with `effort: high`). Non-reasoning models always get "off". */
+export function resolveThinkingLevel(model: Model<string>, attrs: Record<string, unknown>): ThinkingLevel {
+  if ((model as { reasoning?: boolean }).reasoning !== true) return "off";
+  const effort = attrs["reasoning_effort"];
+  if (effort === "low" || effort === "medium" || effort === "high") return effort;
+  return "medium";
 }
 
 /** Read generation settings from node attrs, returning `undefined` when
