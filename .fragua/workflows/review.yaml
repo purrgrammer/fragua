@@ -1,33 +1,29 @@
-# review.yaml — scope-and-classify → review scaled to the change → signoff → act.
+# review.yaml — resolve → classify → review scaled to the change → signoff → act.
 #
-# Symmetric with `work`: a cheap classifier sizes the change and routes to a
-# tier-appropriate pipeline — minimum work for trivial diffs, full multi-lens
-# rigor where it matters. The tier is classified from the DIFF (fresh
-# evidence), never inherited from how the change was authored.
+# A PIPELINE, not a conversation: there is NO shared `thread:`. Every step runs
+# on FRESH, FOCUSED context — it consumes exactly the typed `outputs:` it needs
+# and nothing else. `resolve` emits the review context (pr / diff_spec / paths /
+# focus) as typed outputs; `classify` routes by depth; the lenses each emit typed
+# `findings[]`; `synthesize` aggregates them and WRITES the review to `review.md`
+# (the prose body travels through a file, not a thread); `verify` gates that file.
+# This keeps each LLM call small and on-task — better than a thread that
+# accumulates every prior step's transcript. (Contrast `work.yaml`, which IS a
+# conversation — plan ↔ implement ↔ review iterate — and rightly keeps a thread.)
 #
-#   skip  → no review pass (doc/typo/whitespace/generated) — scope LGTMs
-#   quick → one focused pass (small, single-concern change); no gate
-#   full  → one deep pass applying the implicated lenses → verify gate
+# Depth is topology: classify → skip / quick / full.
+#   skip  → classify writes an LGTM to review.md; straight to signoff
+#   quick → one focused pass (writes review.md); no gate
+#   full  → three per-lens passes (correctness / security / performance), each
+#           emitting typed findings → synthesize (writes review.md) → verify gate
 #
-# All three tiers converge at the `signoff` HITL, where the operator decides
-# the PR action — approve, post the review as feedback (request-changes if it
-# has blocking findings, else a comment), or keep it local. The classifier only
-# ever decides review *depth*; the human always authorizes the *action* — no
-# path mutates the PR without a human. Each PR action consumes the review body
-# + PR# from the thread.
+# All tiers converge at the `signoff` HITL — the classifier decides review
+# *depth*; the human authorizes the *action* (no path mutates a PR without a
+# human). The post steps read review.md + `${{ outputs.resolve.pr }}`.
 #
-# Two decisions: DEPTH is topology (skip/quick/full). The `full` tier is itself
-# split into per-lens passes (correctness / security / performance) — each a
-# focused review that emits typed `findings[]`, aggregated by `synthesize` into
-# one ranked review. Separate focused passes beat one mega-pass, and synthesize
-# reads three typed producers cleanly rather than disentangling prose (the
-# multi-producer→synthesize case for `outputs:`). A lens whose concern the diff
-# doesn't touch emits an empty array.
+# PRECONDITION for PR / branch inputs: clean working tree. `resolve` checks out
+# the PR/branch so lenses read files on disk.
 #
-# PRECONDITION for PR / branch inputs: clean working tree. `scope` checks out
-# the PR/branch so lenses read files on disk; `git checkout -` to return.
-#
-# Input forms (the `target` input, resolved by `scope`):
+# Input forms (the `target` input, resolved by `resolve`):
 #   - empty                 → uncommitted changes (`git diff HEAD`)
 #   - "<commitish>"         → e.g. "HEAD~3..HEAD", a sha
 #   - "<path-or-glob>"      → e.g. "packages/server/src"
@@ -39,7 +35,12 @@
 
 name: review
 goal: Code review scaled to the change — minimum work for trivial diffs, full multi-lens rigor where it matters.
-budget: 2.50
+# Single governor: the run-level budget. No per-step max-cost caps — a per-node
+# cap sums across the node's iterations (a verify↔synthesize retarget re-runs
+# synthesize) and a lens reading a real diff can need more than a tight cap, so
+# per-step caps trip on legitimate work. Bound the run here; budget-policy pause
+# (default) lets the operator raise it if a genuine review needs more.
+budget: 6.00
 
 inputs:
   target:
@@ -52,46 +53,55 @@ defaults:
   model: claude-sonnet-4-6
 
 steps:
-  scope:                               # resolve target + checkout + classify tier; routes
+  resolve:                             # resolve target + checkout; emit the review context as typed outputs
     type: llm
-    thread: review
     allowed-tools: [read, grep, find, bash]
-    max-cost: 0.40
+    next: classify
+    outputs:
+      pr:        { type: string }      # PR number, or "none"
+      diff_spec: { type: string }      # exact `git diff` argument (e.g. "origin/main..HEAD", "HEAD"); "" ⇒ review PATHS directly
+      paths:                           # real on-disk, repo-relative paths actually touched
+        type: array
+        items: { type: string }
+      focus:     { type: string }      # focus hint, or "general"
     prompt: |
-      Resolve the review target from `${{ inputs.target }}`, prep the tree, then size the change and route.
+      Resolve the review target from `${{ inputs.target }}` and prep the tree, then emit the review context for the downstream steps (which run on fresh context and have ONLY what you emit).
 
-      Resolve & prep:
-        Classify the target: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).
+      Classify the target: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).
         PR/branch: if `git status --porcelain` is non-empty, `abort` with `working tree dirty`. Then `gh pr checkout <n>` (or `git fetch origin <branch> && git checkout <branch>`); resolve base via `gh pr view --json baseRefName` or `git merge-base HEAD origin/main`. Commit ranges: don't switch branches.
         Empty target → `abort` with `nothing to review`.
 
-      Emit (no preamble, ≤8 lines):
-        TARGET: <DIFF|FILES|UNCOMMITTED> <args>
-        PR: <number, or 'none'>
-        PATHS: <comma-sep, real on-disk, repo-relative>
-        LOC: <approx>
-        FOCUS: <hint or general>
-        CHECKOUT: <branch switched to, or 'unchanged'>
+      Call `emit_output` once:
+        pr        — the PR number, or "none" for a local diff with no PR.
+        diff_spec — the exact argument to `git diff` that shows the change (e.g. "origin/main..HEAD", or "HEAD" for uncommitted). Use "" only for FILES mode (review the paths as-is, no diff).
+        paths     — an array of repo-relative paths actually touched.
+        focus     — the focus hint, or "general".
 
-      Then size the change and call the `route` tool once (state the deciding factor in one line first):
-        skip  — doc-only / typo / whitespace / comments / generated / version-bump; no semantic code change
-        quick — small, single-concern change (a contained fix or minor change)
-        full  — feature-scale, cross-cutting, or risk-bearing (auth / input parsing / data layer / shared contracts / large diff)
-
-      For `skip`, that one line is the whole review — make it a clean `LGTM: <reason>`.
+  classify:                            # size the change and route by depth (fresh context; reads the diff)
+    type: llm
+    allowed-tools: [read, grep, bash, write]
     routes:
       skip:  {to: signoff,             label: "Trivial"}
       quick: {to: review_quick,        label: "Quick review"}
       full:  {to: review_correctness,  label: "Full review"}
+    prompt: |
+      Size the change and route. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (if diff_spec is empty, read the files at `${{ outputs.resolve.paths }}`). Focus: ${{ outputs.resolve.focus }}.
 
-  review_quick:                        # quick tier — one focused pass
+      Call the `route` tool once (state the deciding factor in one line first):
+        skip  — doc-only / typo / whitespace / comments / generated / version-bump; no semantic code change
+        quick — small, single-concern change (a contained fix or minor change)
+        full  — feature-scale, cross-cutting, or risk-bearing (auth / input parsing / data layer / shared contracts / large diff)
+
+      Before routing `skip`: WRITE `review.md` (cwd-relative, `write` tool) containing a clean `# Code Review` + `## All clear` with a one-line `LGTM: <reason>` — the signoff/post steps read that file.
+
+  review_quick:                        # quick tier — one focused pass → review.md
     type: llm
-    thread: review
-    allowed-tools: [read, grep, bash]
-    max-cost: 0.40
+    allowed-tools: [read, grep, bash, write]
     next: signoff
     prompt: |
-      Quick review of the scoped change (PATHS / range above; read the files directly). One focused pass over correctness and any obvious security or clarity issue — it's a small change, keep it to a single pass. Emit verbatim:
+      Quick review of the change: `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty). Focus: ${{ outputs.resolve.focus }}. One focused pass over correctness and any obvious security or clarity issue — keep it to a single pass.
+
+      WRITE the review to `review.md` (cwd-relative, `write` tool), this shape:
 
       # Code Review
 
@@ -101,17 +111,15 @@ steps:
       ## Next steps
       ≤2 concrete actions, or `No follow-up required.`
 
+      Emit only `WROTE`.
+
   # ── full tier: three focused lens passes, each emitting typed findings ──
-  # Each lens shares the `review` thread (so it inherits scope's TARGET/PATHS/
-  # FOCUS) but hands its result to `synthesize` as a typed `findings[]` via
-  # emit_output, not as prose — so the synthesizer aggregates three clean
-  # producers instead of disentangling three review messages. A lens whose
-  # surface the diff doesn't touch emits an empty array.
+  # No thread: each lens gets the review context from `resolve`'s typed outputs
+  # and reviews on fresh context, handing `synthesize` a typed `findings[]`. A
+  # lens whose surface the diff doesn't touch emits an empty array.
   review_correctness:
     type: llm
-    thread: review
     allowed-tools: [read, grep, bash]
-    max-cost: 0.45
     next: review_security
     outputs:
       findings:
@@ -125,15 +133,13 @@ steps:
             why:      { type: string }
             fix:      { type: string, optional: true }
     prompt: |
-      Review the scoped change (PATHS / range / FOCUS above; read the files directly) through the **correctness** lens ONLY: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
+      Review the change through the **correctness** lens ONLY. Get it with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty); read the cited files directly. Focus: ${{ outputs.resolve.focus }}. Look for: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
 
       Call `emit_output` once with `findings` — one record per issue: `severity`, `location` (`path:line`), `claim` (one line), `why` (one sentence), `fix` (one sentence; omit if none). NO INVENTION — drop subjective findings with no evidence. Empty array if clean.
 
   review_security:
     type: llm
-    thread: review
     allowed-tools: [read, grep, bash]
-    max-cost: 0.45
     next: review_performance
     outputs:
       findings:
@@ -147,15 +153,13 @@ steps:
             why:      { type: string }
             fix:      { type: string, optional: true }
     prompt: |
-      Review the scoped change through the **security** lens ONLY, and only where the diff touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
+      Review the change through the **security** lens ONLY, and only where it touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
 
       Call `emit_output` once with `findings` (same shape: `severity`, `location`, `claim`, `why`, `fix?`). NO INVENTION. Empty array if no security surface or no issues.
 
   review_performance:
     type: llm
-    thread: review
     allowed-tools: [read, grep, bash]
-    max-cost: 0.45
     next: synthesize
     outputs:
       findings:
@@ -169,49 +173,47 @@ steps:
             why:      { type: string }
             fix:      { type: string, optional: true }
     prompt: |
-      Review the scoped change through the **performance** lens ONLY, and only where the diff touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits.
+      Review the change through the **performance** lens ONLY, and only where it touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits.
 
       Call `emit_output` once with `findings` (same shape). NO INVENTION. Empty array if no perf surface or no issues.
 
-  synthesize:                          # aggregate the three typed lens results into one ranked review
+  synthesize:                          # aggregate the three typed lens results → write review.md
     type: llm
-    thread: review
-    allowed-tools: [read, grep]
-    max-cost: 0.40
+    allowed-tools: [read, grep, write]
     next: verify
     prompt: |
-      Combine the three lens results into one ranked review. The findings are typed arrays from the correctness / security / performance passes:
+      Combine the three lens results into one ranked review and WRITE it to `review.md` (cwd-relative, `write` tool). The findings are typed arrays:
 
         correctness: ${{ outputs.review_correctness.findings }}
         security:    ${{ outputs.review_security.findings }}
         performance: ${{ outputs.review_performance.findings }}
 
-      Merge them: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set. Emit verbatim — headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
+      Merge them: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
-      ## Scope: one paragraph naming the touched packages/areas and the change type; note CHECKOUT if set; name which lenses found anything.
+      ## Scope: one paragraph naming the touched packages/areas (`${{ outputs.resolve.paths }}`) and the change type; name which lenses found anything.
 
       Per finding: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence or short snippet.
 
       If all three arrays are empty, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence). End with `## Next steps` — at most 3 ordered actions, or `No follow-up required.`
 
-  verify:                              # full tier — automated evidence-quality gate
+      Emit only `WROTE`.
+
+  verify:                              # full tier — automated evidence-quality gate over review.md
     type: llm
-    thread: review
     retry: synthesize                  # REJECT ⇒ re-synthesise (capped)
     max-retries: 2
     allowed-tools: [read, grep]
-    max-cost: 0.30
     next: signoff
     prompt: |
-      Evidence-quality gate for the review. Judge on its own merits.
+      Read `review.md` (cwd-relative) — the review under gate. Judge on its own merits.
         1. Every finding's path:line is verifiable — spot-check 2-3 by reading the cited path.
         2. Severity calibration sane (no low for misleading claims, no critical for nitpicks; cross-flagged ≥ high).
         3. Schema followed — Scope present; severities ordered or replaced by All clear; Next steps present.
       All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>`.
 
-  signoff:                             # human gate after quick + full (skip bypasses it)
+  signoff:                             # human gate after skip / quick / full
     type: human
-    text: "Review ready above. Approve the PR, post it as feedback, or keep it local?"
+    text: "Review written to review.md (and visible in the synthesize/quick step output). Approve the PR, post it as feedback, or keep it local?"
     routes:
       approve:  {to: pr_approve,  label: "Approve PR"}
       feedback: {to: pr_feedback, label: "Post feedback"}
@@ -219,22 +221,18 @@ steps:
 
   pr_approve:                          # post the review + APPROVE the PR
     type: llm
-    thread: review
-    allowed-tools: [bash]
-    max-cost: 0.15
+    allowed-tools: [read, bash]
     next: exit
     prompt: |
-      The PR number (PR: <n>) and the review are above in this thread.
-      If PR is `none` (local diff, no PR), emit `LGTM (no PR to approve)` and stop — don't post.
-      Otherwise write the review body to a temp file (heredoc), `gh pr review <PR> --approve --body-file <tmp>`, and emit `APPROVED: PR <n> <url>`.
+      PR number: ${{ outputs.resolve.pr }}. The review body is in `review.md` (cwd-relative).
+      If the PR number is `none` (local diff, no PR), emit `LGTM (no PR to approve)` and stop — don't post.
+      Otherwise `gh pr review ${{ outputs.resolve.pr }} --approve --body-file review.md` and emit `APPROVED: PR ${{ outputs.resolve.pr }} <url>`.
 
   pr_feedback:                         # post the review; request-changes if blocking, else comment
     type: llm
-    thread: review
-    allowed-tools: [bash]
-    max-cost: 0.15
+    allowed-tools: [read, bash]
     next: exit
     prompt: |
-      The PR number (PR: <n>) and the review are above in this thread.
-      If PR is `none`, emit `feedback kept local (no PR)` and stop.
-      Otherwise write the review body to a temp file (heredoc). If the review has any Critical or High finding, `gh pr review <PR> --request-changes --body-file <tmp>`; otherwise `gh pr review <PR> --comment --body-file <tmp>`. Emit `POSTED: PR <n> <changes|comment> <url>`.
+      PR number: ${{ outputs.resolve.pr }}. The review body is in `review.md` (cwd-relative) — read it.
+      If the PR number is `none`, emit `feedback kept local (no PR)` and stop.
+      Otherwise: if `review.md` has any Critical or High finding, `gh pr review ${{ outputs.resolve.pr }} --request-changes --body-file review.md`; else `gh pr review ${{ outputs.resolve.pr }} --comment --body-file review.md`. Emit `POSTED: PR ${{ outputs.resolve.pr }} <changes|comment> <url>`.
