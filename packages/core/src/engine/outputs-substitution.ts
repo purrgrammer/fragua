@@ -106,9 +106,29 @@ function renderValue(val: OutputStructValue, escapeForShell: boolean): string {
     const s = String(val);
     return escapeForShell ? shellQuote(s) : s;
   }
-  // Record or array → JSON.
-  const json = JSON.stringify(val);
+  // Record or array → canonical JSON.
+  const json = canonicalJson(val);
   return escapeForShell ? shellQuote(json) : json;
+}
+
+/** `JSON.stringify` with object keys sorted recursively, so a record/array
+ * output renders to identical bytes whatever key order the model emitted —
+ * the consuming prompt is then reproducible across runs (the module header's
+ * "canonical struct" guarantee). Array order is preserved (it's semantic). */
+function canonicalJson(val: OutputStructValue): string {
+  return JSON.stringify(canonicalize(val));
+}
+
+function canonicalize(val: unknown): unknown {
+  if (Array.isArray(val)) return val.map(canonicalize);
+  if (val !== null && typeof val === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(val as Record<string, unknown>).sort()) {
+      out[key] = canonicalize((val as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return val;
 }
 
 function shellQuote(v: string): string {

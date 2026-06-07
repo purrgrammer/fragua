@@ -24,11 +24,21 @@ describe("substituteOutputs", () => {
     expect(result).toBe("flag=true");
   });
 
-  test("record interpolates as JSON", () => {
+  test("record interpolates as canonical JSON (keys sorted, not emission order)", () => {
     const result = substituteOutputs("data=${{ outputs.scope.meta }}", {
       scope: { meta: { pr: "123", loc: 42 } },
     });
-    expect(result).toBe('data={"pr":"123","loc":42}');
+    expect(result).toBe('data={"loc":42,"pr":"123"}');
+  });
+
+  test("canonical JSON is stable across key-emission order; array order is preserved", () => {
+    const a = substituteOutputs("${{ outputs.s.m }}", { s: { m: { b: 1, a: 2, c: 3 } } });
+    const b = substituteOutputs("${{ outputs.s.m }}", { s: { m: { c: 3, a: 2, b: 1 } } });
+    expect(a).toBe(b);
+    expect(a).toBe('{"a":2,"b":1,"c":3}');
+    // nested records sort recursively; array element order stays semantic
+    expect(substituteOutputs("${{ outputs.s.m }}", { s: { m: { z: { y: 1, x: 2 } } } })).toBe('{"z":{"x":2,"y":1}}');
+    expect(substituteOutputs("${{ outputs.s.t }}", { s: { t: ["b", "a", "c"] } })).toBe('["b","a","c"]');
   });
 
   test("array interpolates as JSON", () => {

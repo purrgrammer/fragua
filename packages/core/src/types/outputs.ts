@@ -238,15 +238,3 @@ function validateValueAgainstProfile(profile: OutputProfile, value: unknown, pat
   }
   return null;
 }
-
-/** Resolve a dot-path like `["rec", "field"]` into the leaf value within an
- * `OutputsValue`. Returns `undefined` when the path doesn't exist. */
-export function resolveOutputPath(outputs: OutputsValue, path: string[]): OutputStructValue | undefined {
-  let cur: unknown = outputs;
-  for (const segment of path) {
-    if (typeof cur !== "object" || cur === null || Array.isArray(cur)) return undefined;
-    cur = (cur as Record<string, unknown>)[segment];
-  }
-  if (cur === undefined) return undefined;
-  return cur as OutputStructValue;
-}

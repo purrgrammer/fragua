@@ -626,6 +626,25 @@ export class PiLlmBackend implements LlmBackend {
     const promptDone = (async () => {
       await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
+      // One corrective re-prompt when a required `emit_output` exit was skipped.
+      // A forgotten final tool call is the textbook transient; absorbing a single
+      // retry here — inside the abort race, so cancel/budget still preempt it —
+      // means one model hiccup no longer hard-fails the node. A model that skips
+      // it twice still falls through to the non-retryable miss below. Routing
+      // nodes exit via `route` (not emit_output) so they're excluded, a deliberate
+      // `abort` is left alone, and a dead-provider turn (no assistant message) is
+      // handled by the no-response path rather than burning a second call.
+      if (
+        outputsDecl !== undefined &&
+        !hasRoutes &&
+        !input.signal?.aborted &&
+        lastAssistantMessage(agent.state.messages) !== undefined &&
+        findEmitOutputCall(agent.state.messages) == null &&
+        findAbortToolCall(agent.state.messages) == null
+      ) {
+        await agent.prompt(EMIT_OUTPUT_REMINDER);
+        await agent.waitForIdle();
+      }
     })();
     // Already-aborted case: agent.abort() called before agent.prompt()
     // existed is a no-op (no activeRun yet to abort). agent.prompt()
@@ -1054,6 +1073,13 @@ export function findRouteToolCall(
   }
   return null;
 }
+
+/** Corrective nudge replayed once when an outputs node ends its turn without
+ * calling `emit_output` (see the in-loop re-prompt in `run`). */
+const EMIT_OUTPUT_REMINDER =
+  "You ended your turn without calling `emit_output`, so this step is not complete. " +
+  "Call `emit_output` exactly once now, on its own (no other tool calls in the same response), " +
+  "with every declared output field present and correctly typed.";
 
 /**
  * Build the `emit_output` tool for a node that declares `outputs:` but does NOT

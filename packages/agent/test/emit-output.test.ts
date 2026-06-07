@@ -211,14 +211,53 @@ describe("emit_output tool synthesis", () => {
     }
   });
 
-  test("agent ends without emit_output → outcome.status='fail' non_retryable", async () => {
+  test("a transient skip is recovered by one corrective re-prompt (turn 1 forgets, turn 2 emits)", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-emit-reprompt-"));
+    try {
+      const prompts: string[] = [];
+      const { outcome } = await runWithOutputs({
+        scratch,
+        registry: coreRegistry(),
+        attrs: { outputs: PR_OUTPUTS_DECL },
+        responses: [
+          // turn 1: model answers in prose but forgets to call emit_output
+          fauxAssistantMessage([fauxText("here is the answer")], { stopReason: "stop" }),
+          // turn 2 (after the corrective nudge): it emits properly
+          fauxAssistantMessage([fauxToolCall("emit_output", { pr_number: "5", loc: 9 }, { id: "tc1" })], {
+            stopReason: "toolUse",
+          }),
+        ],
+        onContext: (ctx) => {
+          const last = ctx.messages[ctx.messages.length - 1];
+          if (last?.role === "user") {
+            const text = Array.isArray(last.content)
+              ? last.content.map((b) => (b.type === "text" ? b.text : "")).join("")
+              : String(last.content);
+            prompts.push(text);
+          }
+        },
+      });
+      expect(outcome.status).toBe("success");
+      expect(outcome.outputs).toEqual({ pr_number: "5", loc: 9 });
+      // the second turn was driven by the emit_output reminder
+      expect(prompts.some((p) => p.includes("emit_output"))).toBe(true);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  test("a persistent skip still fails (re-prompt is bounded to one retry)", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "fragua-emit-missing-"));
     try {
       const { outcome } = await runWithOutputs({
         scratch,
         registry: coreRegistry(),
         attrs: { outputs: PR_OUTPUTS_DECL },
-        responses: [fauxAssistantMessage([fauxText("I'm done")], { stopReason: "stop" })],
+        responses: [
+          fauxAssistantMessage([fauxText("I'm done")], { stopReason: "stop" }),
+          // even after the corrective nudge it still skips emit_output → fail
+          fauxAssistantMessage([fauxText("still done")], { stopReason: "stop" }),
+        ],
       });
       expect(outcome.status).toBe("fail");
       expect(outcome.failure_reason).toContain("emit_output");
