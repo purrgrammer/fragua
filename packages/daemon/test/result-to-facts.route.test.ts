@@ -111,3 +111,38 @@ describe("resultToFacts — routing-node halt reasons", () => {
     expect(halted?.payload.detail).toContain("hard");
   });
 });
+
+describe("resultToFacts — structured outputs", () => {
+  test("transition.outputs lands on fact.node_completed.payload.outputs", () => {
+    const result: HandlerResult = {
+      kind: "transition",
+      nextNode: "merge",
+      outcomeStatus: "success",
+      outputs: { pr_number: "42", loc: 100 },
+      tokens: 0,
+      costUsd: 0,
+    };
+    const facts = resultToFacts(result, { state: minimalRunState("scope"), appliedIntentSeqs: [] });
+    const completed = findFact(facts, "fact.node_completed");
+    expect(completed!.payload.outputs).toEqual({ pr_number: "42", loc: 100 });
+  });
+
+  test("oversize outputs are attached as-is (no halt) — the store spills them", () => {
+    // result-to-facts is size-agnostic: it attaches the struct regardless of
+    // size and never halts on size. The store spills >3 KiB structs to the
+    // blob CAS at append time.
+    const result: HandlerResult = {
+      kind: "transition",
+      nextNode: "merge",
+      outcomeStatus: "success",
+      outputs: { blob: "x".repeat(8000) },
+      tokens: 0,
+      costUsd: 0,
+    };
+    const facts = resultToFacts(result, { state: minimalRunState("scope"), appliedIntentSeqs: [] });
+    const completed = findFact(facts, "fact.node_completed");
+    expect(completed!.payload.outcomeStatus).toBe("success");
+    expect((completed!.payload.outputs as { blob: string }).blob.length).toBe(8000);
+    expect(findFact(facts, "fact.run_halted")).toBeUndefined();
+  });
+});

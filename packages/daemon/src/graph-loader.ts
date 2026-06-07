@@ -11,7 +11,7 @@
 // the parse output with `loc` (validator-only) stripped, so it's
 // executor-equivalent.
 
-import { CURRENT_IR_VERSION, deserializeGraph, type Graph } from "@fragua/core";
+import { CURRENT_IR_VERSION, convertIr, type Graph } from "@fragua/core";
 import type { IEventStore, WorkflowRow } from "@fragua/store";
 
 export type GraphLoadResult = { ok: true; graph: Graph } | { ok: false; reason: "missing" | "unparseable" };
@@ -53,10 +53,19 @@ export function makeGraphLoader(store: Pick<IEventStore, "getWorkflow">): GraphL
 }
 
 /** Deserialize the persisted IR. A future `ir_version` ahead of this runtime
- *  is treated as unparseable (no down-conversion) rather than mis-executed. */
+ * is treated as unparseable (no down-conversion) rather than mis-executed.
+ * An older IR version is up-converted via the converter chain before
+ * deserialisation so the executor always sees a current-version Graph. */
 function graphFromRow(workflow: WorkflowRow): Graph {
   if (workflow.irVersion > CURRENT_IR_VERSION) {
     throw new Error(`workflow ir_version ${workflow.irVersion} > supported ${CURRENT_IR_VERSION}`);
   }
-  return deserializeGraph(workflow.ir);
+  let irJson: unknown;
+  if (workflow.irVersion < CURRENT_IR_VERSION) {
+    const converted = convertIr(JSON.parse(workflow.ir) as unknown, workflow.irVersion);
+    irJson = converted.json;
+  } else {
+    irJson = JSON.parse(workflow.ir) as unknown;
+  }
+  return irJson as Graph;
 }

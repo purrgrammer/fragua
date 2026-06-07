@@ -8,6 +8,29 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **Structured step outputs (`outputs:`) — experimental.** An `llm` step can
+  declare typed `outputs:` over a small type grammar shared with `inputs:`
+  (scalars, `choice`, records via `fields`, arrays via `items`; no recursion or
+  `$ref`). The step emits them through a force-included `emit_output` tool, and
+  any downstream step reads them with `${{ outputs.<producer>.<field> }}` in
+  `prompt:` (llm), `run:` (tool), or `text:` (human). Reads **fail closed** — an
+  unpopulated reference fails the node rather than substituting `""`. Outputs are
+  llm-only to produce (tool/human consume only) and mutually exclusive with
+  `routes:`. Where the provider supports it (Anthropic, OpenAI) the emit schema
+  carries native strict-mode enforcement automatically. Oversized structs spill
+  to the blob store. Record and array reads render as canonical (key-sorted)
+  JSON, so a consumer sees identical bytes across runs regardless of the order
+  the producer emitted fields. A step that ends its turn without calling
+  `emit_output` gets one corrective re-prompt before the node fails, so a single
+  skipped call no longer hard-fails the step. New validator codes `E033`/`E034`
+  (type grammar), `E035` (broken reference), `W015` (producer may not run on
+  every path), `W016` (a read reaches through an `optional:` field the producer
+  may omit — fails closed; model it as a required field with a sentinel, or read
+  the enclosing record/array whole). Bumps the workflow `ir_version` to 2
+  (additive; older workflows up-convert on load).
+
 ## [0.5.0] — 2026-06-04
 
 ### Added

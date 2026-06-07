@@ -1,8 +1,16 @@
 // PiLlmBackend — LlmBackend backed by pi-agent-core + pi-ai.
 
 import { createHash } from "node:crypto";
-import type { EventType, LlmBackend, LlmInput, Outcome, SummariserBackend } from "@fragua/core";
-import { fail, failHalt, failProvider, ok } from "@fragua/core";
+import type {
+  EventType,
+  LlmBackend,
+  LlmInput,
+  Outcome,
+  OutputsDecl,
+  OutputsValue,
+  SummariserBackend,
+} from "@fragua/core";
+import { compileOutputsToTypeBox, fail, failHalt, failProvider, ok, validateOutputsValue } from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
 import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
 import {
@@ -12,7 +20,13 @@ import {
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
 } from "@fragua/workspace";
-import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentTool,
+  type ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model, streamSimple } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
@@ -290,23 +304,24 @@ export class PiLlmBackend implements LlmBackend {
     };
     const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
 
-    // Route-tool synthesis. When the node declares `routes=`, append an
-    // ephemeral, per-call `route`
-    // tool whose `name` parameter is enum-constrained to the declared
-    // routes. Provider rejects off-list values at the tool-call layer,
-    // so an unknown route never reaches the handler. The tool sets
-    // `terminate: true` so pi-agent-core stops the loop after the
-    // batch — same loop-terminator pattern as the `abort` tool. The
-    // chosen route is recovered post-loop by `findRouteToolCall`
-    // scanning the transcript; the synthesised tool itself is purely a
-    // loop-end signal. Force-included regardless of
-    // `allowed_tools`/`denied_tools` because the route surface is
-    // structural for a routing node — excluding it would leave the
-    // model with no way to exit and the run would land
-    // `route_not_picked`.
+    // Exit-tool synthesis — a node exits via exactly ONE terminating tool:
+    //   routes → the ephemeral, per-call `route` tool whose `name` parameter is
+    //     an enum constrained to the declared routes (a bare `{type,enum}`,
+    //     provider-enforced — see buildRouteTool).
+    //   outputs → `emit_output`, whose schema is the node's outputs profile.
+    //   neither → the loop ends when the agent stops emitting calls.
+    // `outputs:` and `routes:` are mutually exclusive (parser-enforced), so at
+    // most one is synthesised. Both set `terminate: true` and are force-included
+    // regardless of allowed_tools / denied_tools (ground rule #12): the exit
+    // surface is structural. The chosen exit is recovered post-loop by scanning
+    // the transcript.
     const nodeRoutes = input.node.attrs.routes as string[] | undefined;
-    if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
-      tools.push(buildRouteTool(nodeRoutes));
+    const outputsDecl = (input.outputsDecl ?? input.node.attrs.outputs) as OutputsDecl | undefined;
+    const hasRoutes = Array.isArray(nodeRoutes) && nodeRoutes.length > 0;
+    if (hasRoutes) {
+      tools.push(buildRouteTool(nodeRoutes as string[]));
+    } else if (outputsDecl !== undefined) {
+      tools.push(buildEmitOutputTool(outputsDecl));
     }
 
     const contextFiles = applyDefaultContextFiles([]);
@@ -457,11 +472,22 @@ export class PiLlmBackend implements LlmBackend {
       lastRetryAfterMs = parseRetryAfterMs(response.headers);
     };
 
+    // Reasoning/thinking level. pi-agent-core defaults `thinkingLevel` to
+    // "off" when unset, which leaves the model with no thinking channel — it
+    // then externalises chain-of-thought into whatever affordance it has (most
+    // visibly: narrating analysis as `bash` comments). We never want to inherit
+    // that default silently, so resolve it explicitly here from the node's
+    // `effort` (parsed to `reasoning_effort`) and the model's `reasoning`
+    // capability. `streamSimple` receives it as the `reasoning` option via
+    // pi-agent-core's `AgentState.thinkingLevel`.
+    const thinkingLevel = resolveThinkingLevel(model, input.node.attrs as Record<string, unknown>);
+
     const agent = new Agent({
       initialState: {
         systemPrompt,
         model,
         tools,
+        thinkingLevel,
         ...(hydrateMessages.length > 0 ? { messages: hydrateMessages } : {}),
       },
       onResponse: captureResponse,
@@ -502,6 +528,9 @@ export class PiLlmBackend implements LlmBackend {
         system_prompt_bytes: systemPromptBytes,
       };
       if (threadId) llmStart["thread_id"] = threadId;
+      // The resolved thinking level — surfaced so "is thinking on?" is visible
+      // in the event feed, not silently inherited from an upstream default.
+      llmStart["thinking_level"] = thinkingLevel;
       if (allow) llmStart["allowed_tools"] = allow;
       if (deny) llmStart["denied_tools"] = deny;
       if (input.iteration) llmStart["iteration"] = input.iteration;
@@ -597,6 +626,25 @@ export class PiLlmBackend implements LlmBackend {
     const promptDone = (async () => {
       await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
+      // One corrective re-prompt when a required `emit_output` exit was skipped.
+      // A forgotten final tool call is the textbook transient; absorbing a single
+      // retry here — inside the abort race, so cancel/budget still preempt it —
+      // means one model hiccup no longer hard-fails the node. A model that skips
+      // it twice still falls through to the non-retryable miss below. Routing
+      // nodes exit via `route` (not emit_output) so they're excluded, a deliberate
+      // `abort` is left alone, and a dead-provider turn (no assistant message) is
+      // handled by the no-response path rather than burning a second call.
+      if (
+        outputsDecl !== undefined &&
+        !hasRoutes &&
+        !input.signal?.aborted &&
+        lastAssistantMessage(agent.state.messages) !== undefined &&
+        findEmitOutputCall(agent.state.messages) == null &&
+        findAbortToolCall(agent.state.messages) == null
+      ) {
+        await agent.prompt(EMIT_OUTPUT_REMINDER);
+        await agent.waitForIdle();
+      }
     })();
     // Already-aborted case: agent.abort() called before agent.prompt()
     // existed is a no-op (no activeRun yet to abort). agent.prompt()
@@ -748,6 +796,29 @@ export class PiLlmBackend implements LlmBackend {
         return failHalt("route_call_not_isolated", "route() shared an assistant response with other tool calls");
       }
       return ok({ notes, route: routeCall.route });
+    }
+
+    // emit_output resolution for nodes that declare outputs: but no routes:.
+    if (outputsDecl !== undefined) {
+      const emitCall = findEmitOutputCall(agent.state.messages);
+      if (emitCall == null) {
+        return fail("node declared outputs: but did not call emit_output", { non_retryable: true });
+      }
+      // Isolation (mirrors the route exit, D3): emit_output terminates the turn,
+      // so any tool call sharing its batch runs but its result is discarded — the
+      // output was committed blind to that side effect. Force the model to emit
+      // alone, on a response of its own.
+      if (!emitCall.isolated) {
+        return fail(
+          "emit_output shared an assistant response with other tool calls — emit it alone, with no other tools in the same turn",
+          { non_retryable: true },
+        );
+      }
+      const valErr = validateOutputsValue(outputsDecl, emitCall.value);
+      if (valErr !== null) {
+        return fail(`emit_output value failed validation: ${valErr}`, { non_retryable: true });
+      }
+      return ok({ notes, outputs: emitCall.value as OutputsValue });
     }
 
     return ok({ notes });
@@ -1003,6 +1074,72 @@ export function findRouteToolCall(
   return null;
 }
 
+/** Corrective nudge replayed once when an outputs node ends its turn without
+ * calling `emit_output` (see the in-loop re-prompt in `run`). */
+const EMIT_OUTPUT_REMINDER =
+  "You ended your turn without calling `emit_output`, so this step is not complete. " +
+  "Call `emit_output` exactly once now, on its own (no other tool calls in the same response), " +
+  "with every declared output field present and correctly typed.";
+
+/**
+ * Build the `emit_output` tool for a node that declares `outputs:` but does NOT
+ * route (a routing node carries its outputs on the `route` call instead).
+ * Force-included (like `route`); one call closes the turn (`terminate: true`).
+ * The schema is compiled from the node's `OutputsDecl` via `compileOutputsToTypeBox`.
+ */
+function buildEmitOutputTool(decl: OutputsDecl): AgentTool {
+  const parameters = compileOutputsToTypeBox(decl);
+  return {
+    name: "emit_output",
+    label: "emit_output",
+    description:
+      "Emit the structured output for this step. Call exactly once when you have produced all declared output fields. " +
+      "All declared fields must be present with their correct types. This call closes the turn — call it alone, " +
+      "with no other tool calls in the same response (do all other work in earlier turns first).",
+    parameters,
+    async execute(_toolCallId, params) {
+      return {
+        content: [{ type: "text", text: `emit_output called` }],
+        details: { fragua_tool: "emit_output", is_error: false, data: params },
+        terminate: true,
+      };
+    },
+  };
+}
+
+/**
+ * Scan the transcript for the last `emit_output` tool call.
+ * Returns `{ value, isolated }`:
+ *  - `value`: the raw arguments object from the `emit_output` block.
+ *  - `isolated`: false when the assistant message containing the call also
+ *    contains any other `toolCall` block. emit_output terminates the turn, so a
+ *    tool sharing its batch runs but its result is discarded — the same D3
+ *    isolation rule the `route` exit enforces (see `findRouteToolCall`).
+ * Last call wins (like `findRouteToolCall`) to handle thread rehydration.
+ */
+export function findEmitOutputCall(
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
+): { value: unknown; isolated: boolean } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message === undefined || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const blocks = message.content as Array<{ type: string; name?: string; arguments?: unknown }>;
+    let emitBlock: { arguments?: unknown } | undefined;
+    let otherToolCalls = 0;
+    for (const block of blocks) {
+      if (block.type !== "toolCall") continue;
+      if (block.name === "emit_output" && emitBlock === undefined) {
+        emitBlock = block;
+        continue;
+      }
+      otherToolCalls += 1;
+    }
+    if (emitBlock === undefined) continue;
+    return { value: emitBlock.arguments, isolated: otherToolCalls === 0 };
+  }
+  return null;
+}
+
 /**
  * Build the ephemeral `route` tool for one routing-node invocation.
  * Inline (not a static module): the enum is materialised from the
@@ -1021,12 +1158,7 @@ function buildRouteTool(routes: readonly string[]): AgentTool {
   // enforced at the provider layer, so a wayward
   // `route({name:"feature"})` is rejected before it ever lands.
   const nameSchema = Type.Unsafe<string>({ type: "string", enum: [...routes] });
-  const parameters = Type.Object(
-    {
-      name: nameSchema,
-    },
-    { additionalProperties: false },
-  );
+  const parameters = Type.Object({ name: nameSchema }, { additionalProperties: false });
   return {
     name: "route",
     label: "route",
@@ -1046,6 +1178,22 @@ function buildRouteTool(routes: readonly string[]): AgentTool {
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+/** Resolve the pi-ai `reasoning` (thinking) level for a dispatch.
+ *
+ * pi-agent-core defaults `thinkingLevel` to "off" — so unless we set it
+ * explicitly, every node runs with no thinking channel. We map from the node's
+ * `effort` (parsed to `reasoning_effort`: low | medium | high) and only enable
+ * thinking on models that advertise the capability (`model.reasoning`). When a
+ * reasoning-capable model's node doesn't pin an effort, default to "medium" — a
+ * balanced level that gives the model a real place to reason (authors raise it
+ * with `effort: high`). Non-reasoning models always get "off". */
+export function resolveThinkingLevel(model: Model<string>, attrs: Record<string, unknown>): ThinkingLevel {
+  if ((model as { reasoning?: boolean }).reasoning !== true) return "off";
+  const effort = attrs["reasoning_effort"];
+  if (effort === "low" || effort === "medium" || effort === "high") return effort;
+  return "medium";
 }
 
 /** Read generation settings from node attrs, returning `undefined` when

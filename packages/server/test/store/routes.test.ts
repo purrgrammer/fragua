@@ -93,7 +93,7 @@ describe("POST /workflows — upload", () => {
     expect(wf?.name).toBe("hello");
     // (A): the upload persists the canonical IR (loc-stripped Graph JSON) +
     // its version, so the dispatch loader deserializes instead of re-parsing.
-    expect(wf?.irVersion).toBe(1);
+    expect(wf?.irVersion).toBe(2);
     expect(wf?.ir).toBeTruthy();
     const ir = JSON.parse(wf!.ir!) as { nodes: Record<string, unknown>; edges: unknown[] };
     expect(Object.keys(ir.nodes)).toContain("work");

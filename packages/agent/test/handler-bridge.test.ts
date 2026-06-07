@@ -138,6 +138,74 @@ describe("makeLlmHandler", () => {
     store.close();
   });
 
+  test("backend ok({ outputs }) propagates onto the transition (so result-to-facts can persist it)", async () => {
+    // Regression: handler-bridge built the transition result with every cost /
+    // token / route / modelName field but silently dropped `outcome.outputs`.
+    // An `emit_output` call therefore reached the backend, validated, and
+    // returned ok({ outputs }) — but the fact landed with outputs:null and a
+    // downstream `${{ outputs.X.f }}` consumer failed closed at runtime.
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-outputs", store, "n1");
+    const emitting: LlmBackend = {
+      async run() {
+        return ok({ notes: "done", outputs: { pr: "123", paths: ["a.ts", "b.ts"] } });
+      },
+    };
+    const spec = makeLlmHandler({ node: node({ id: "n1" }), nextNode: "__end__", backend: emitting });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outputs).toEqual({ pr: "123", paths: ["a.ts", "b.ts"] });
+    }
+    store.close();
+  });
+
+  test("backend ok() with no outputs → transition omits the outputs field", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-no-outputs", store, "n1");
+    const spec = makeLlmHandler({
+      node: node({ id: "n1" }),
+      nextNode: "__end__",
+      backend: stubBackend({ assistantText: "plain" }),
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outputs).toBeUndefined();
+      expect("outputs" in result).toBe(false);
+    }
+    store.close();
+  });
+
+  test("an unpopulated ${{ outputs.X.f }} prompt ref fails closed as a node fail (not a thrown halt)", async () => {
+    // The fail-closed contract: an unresolvable output ref is a node failure
+    // (routes via fail-edge / goal-gate / aborted_exit), NOT an uncaught throw
+    // the executor would turn into a fatal reason:"error" halt. The backend
+    // must never run when substitution fails.
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-failclosed", store, "n1");
+    let backendRan = false;
+    const backend: LlmBackend = {
+      async run() {
+        backendRan = true;
+        return ok({});
+      },
+    };
+    const spec = makeLlmHandler({
+      node: node({ id: "n1", attrs: { prompt: "use ${{ outputs.upstream.field }}" } }),
+      nextNode: "__end__",
+      backend,
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.failureReason).toContain("outputs.upstream.field");
+    }
+    expect(backendRan).toBe(false);
+    store.close();
+  });
+
   test("appends assistant + tool messages into ctx.messages", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r2", store, "n1");

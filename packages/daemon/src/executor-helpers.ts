@@ -12,6 +12,7 @@ import {
   type InputDecl,
   isRetryPresetName,
   type NodeAttrs,
+  type OutputsValue,
   RETRY_PRESETS,
   resolveInputBindings,
   retryCountKey,
@@ -98,8 +99,7 @@ export function routingString(routing: Record<string, unknown>, key: string): st
   return typeof v === "string" ? v : undefined;
 }
 
-/** Read the per-node retry counter from routing. Attractor §3.6:
- * bumped each time a backward edge re-enters a node after a
+/** Read the per-node retry counter from routing, bumped each time a backward edge re-enters a node after a
  * non-success outcome. Stored at `internal.retry_count.<nodeId>`
  * (retryCountKey) — the same key the retry-policy block writes; the
  * dispatch iteration reads it so a re-entered node carries the right
@@ -207,12 +207,17 @@ export function recordEdgeSelected(
 export function buildSubstitutionArgs(
   routing: Record<string, unknown>,
   inputDecls?: readonly InputDecl[],
+  resolvedOutputs?: Record<string, OutputsValue>,
 ): SubstitutionArgs {
   const args: SubstitutionArgs = {};
   // `${{ inputs.x }}` bindings: declared defaults overlaid by the run's
   // provided `routing.inputs` map (set at enqueue from `--input k=v`).
   const resolved = resolveInputBindings(inputDecls, readStringMap(routing["inputs"]));
   if (Object.keys(resolved).length > 0) args.inputs = resolved;
+  // `${{ outputs.X.f }}` bindings: pre-fetched from the outputs index.
+  if (resolvedOutputs !== undefined && Object.keys(resolvedOutputs).length > 0) {
+    args.outputs = resolvedOutputs;
+  }
   return args;
 }
 

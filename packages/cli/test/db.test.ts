@@ -123,7 +123,7 @@ describe("fragua db", () => {
   }
 
   test("migrate --to 1 walks DOWN, reverses the rename, and backs up first", async () => {
-    const cwd = makeStore(); // at CURRENT (v2): schedules.title
+    const cwd = makeStore(); // at CURRENT: schedules.title
     expect(schedulesCols(cwd)).toContain("title");
 
     expect(await run({ action: "migrate", cwd, to: "1" })).toBe(0);
@@ -131,7 +131,8 @@ describe("fragua db", () => {
     expect(schedulesCols(cwd)).toContain("input");
     expect(schedulesCols(cwd)).not.toContain("title");
     const backups = readdirSync(join(cwd, ".fragua/backups"));
-    expect(backups.some((f) => f.startsWith("pre-migrate-v2-to-v1-") && f.endsWith(".db"))).toBe(true);
+    const prefix = `pre-migrate-v${CURRENT_SCHEMA_VERSION}-to-v1-`;
+    expect(backups.some((f) => f.startsWith(prefix) && f.endsWith(".db"))).toBe(true);
   });
 
   test("migrate --to 1 --dry-run prints the plan and mutates nothing", async () => {

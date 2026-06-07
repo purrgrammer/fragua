@@ -188,6 +188,21 @@ CREATE TABLE IF NOT EXISTS messages (
   PRIMARY KEY (run_id, ordinal)
 ) STRICT, WITHOUT ROWID;
 
+-- Structured step outputs index. Rebuildable from fact.node_completed.payload.outputs.
+-- Keyed by (run_id, node_id, iteration); INSERT OR REPLACE provides last-write-wins
+-- semantics for re-entrant nodes. `struct` is JSON validated at write time;
+-- bounded by the 4KB event-payload cap (store enforces at appendFact time, not here).
+-- OFF the run_state fold: the reducer never reads this table; it is a re-snapshot.
+CREATE TABLE IF NOT EXISTS outputs (
+  run_id    TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+  node_id   TEXT NOT NULL,
+  iteration INTEGER NOT NULL,
+  struct    TEXT NOT NULL CHECK (json_valid(struct) AND length(struct) < 4096),
+  PRIMARY KEY (run_id, node_id, iteration)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id, node_id);
+
 -- Blob metadata only — the bytes live on the filesystem under the store's
 -- `blobsDir`, keyed by sha256. Keeping raw content out of SQLite keeps the
 -- WAL small under large-artifact workloads; the `blobs` row + content file

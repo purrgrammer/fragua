@@ -143,6 +143,50 @@ export function spillRoutingInputs(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Struct spill (whole-value) — used for structured step `outputs:`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A serialised outputs struct at or above this many bytes spills to the CAS as
+ * a single blob, leaving a tiny `BlobRef` in the event payload + outputs index.
+ * Tighter than the 4 KiB event cap so the rest of `node_completed.payload`
+ * (nodeId, token/cost split, route) still fits. */
+export const STRUCT_INLINE_MAX_BYTES = 3072;
+
+/**
+ * Spill a whole serialised struct to the CAS when it would bust the inline
+ * budget. Returns a `BlobRef` to store in the struct's place (so neither the
+ * event payload nor the outputs-index column needs raising past 4 KiB), or
+ * `null` to store `structJson` inline. `putBlob` must be idempotent.
+ */
+export function maybeSpillStruct(
+  structJson: string,
+  putBlob: (sha: string, bytes: Uint8Array) => void,
+  maxInlineBytes: number = STRUCT_INLINE_MAX_BYTES,
+): BlobRef | null {
+  const encoded = new TextEncoder().encode(structJson);
+  if (encoded.length <= maxInlineBytes) return null;
+  const sha = sha256Hex(encoded);
+  putBlob(sha, encoded);
+  return makeBlobRef(sha, encoded.length);
+}
+
+/**
+ * Resolve a stored outputs struct: if `stored` parses to a `BlobRef`, return the
+ * blob's utf-8 contents; otherwise return `stored` unchanged. Pure (takes a
+ * `getBlob` callback). The inverse of `maybeSpillStruct`.
+ */
+export function materializeStructJson(stored: string, getBlob: (sha: string) => Uint8Array): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    return stored;
+  }
+  if (isBlobRef(parsed)) return dec.decode(getBlob(parsed[BLOB_REF_SENTINEL]));
+  return stored;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Resolve (materialise)
 // ─────────────────────────────────────────────────────────────────────────────
 

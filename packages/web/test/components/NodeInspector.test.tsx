@@ -210,4 +210,64 @@ steps:
     expect(text).not.toContain("thread");
     expect(text).not.toContain("model & context");
   });
+
+  it("renders the typed outputs schema as an indented tree", () => {
+    const src = `name: outs
+steps:
+  resolve:
+    type: llm
+    prompt: resolve
+    next: lens
+    outputs:
+      pr: { type: string }
+      paths:
+        type: array
+        items: { type: string }
+  lens:
+    type: llm
+    prompt: review
+    next: exit
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, low] }
+            location: { type: string }
+            fix: { type: string, optional: true }
+`;
+    const parsed = parseWorkflow(src).nodes;
+
+    const resolve = parsed["resolve"];
+    expect(resolve).toBeTruthy();
+    if (!resolve) return;
+    const r = within(render(<NodeInspector node={resolve} />).container);
+    const resolveSchema = r.getByTestId("node-inspector-outputs").textContent ?? "";
+    expect(resolveSchema).toContain("pr");
+    expect(resolveSchema).toContain("string");
+    expect(resolveSchema).toContain("string[]"); // array of scalars renders as `T[]`
+
+    const lens = parsed["lens"];
+    expect(lens).toBeTruthy();
+    if (!lens) return;
+    const l = within(render(<NodeInspector node={lens} />).container);
+    const lensSchema = l.getByTestId("node-inspector-outputs").textContent ?? "";
+    expect(lensSchema).toContain("record[]"); // array of records
+    expect(lensSchema).toContain("choice (critical | high | low)"); // choice options inlined
+    expect(lensSchema).toContain("fix?"); // optional record field marked
+  });
+
+  it("omits the outputs section when a node declares none", () => {
+    const src = `name: demo
+steps:
+  plan:
+    type: llm
+    prompt: plan
+`;
+    const plan = parseWorkflow(src).nodes["plan"];
+    if (!plan) return;
+    const { container } = render(<NodeInspector node={plan} />);
+    expect(container.querySelector("[data-testid='node-inspector-outputs']")).toBeNull();
+  });
 });

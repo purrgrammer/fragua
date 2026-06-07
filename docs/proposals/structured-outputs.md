@@ -1,309 +1,377 @@
 ---
-title: Structured step outputs — typed `outputs:` on `llm` steps (scalars, records, arrays)
-summary: "One-directional typed data flow: `llm` steps declare `outputs:` over a restricted JSON-Schema profile (scalars + records + arrays), emit them via a single force-included `emit_output` tool, and downstream steps consume them by `${{ outputs.X.f }}` interpolation — reads fail closed, so referencing a field its producer never emitted halts loudly (a recorded, replayable fact) instead of silently collapsing to \"\". Collapses the data-plumbing half of shared-thread usage into typed, validated hand-offs. STRICTLY ADDITIVE and llm-only-production: keeps the `tool` kind, keeps `routes:`/`on:` routing and the `route` tool unchanged; tools and humans CONSUME outputs but do not produce them. Tool output production, transparent spill for oversized structures, fact-routing, and binary blobs are deferred. Post-0.1.0, via an `ir_version` bump."
+title: Structured step outputs (MVP) — typed `outputs:` on `llm` steps
+summary: "An `llm` step declares typed `outputs:` with the same small type grammar used by `inputs:` (scalars, `choice`, records, arrays — a subset of JSON Schema sized to what provider strict-mode enforces; no recursion, no `$ref`). It emits through one force-included `emit_output` tool; any step consumes via `${{ outputs.X.f }}` interpolation (`llm` in prompt, `tool` in run, `human` in text). Reads fail closed — a reference the producer never populated halts the node (a recorded, replayable fact), never a silent \"\". The grammar compiles to TypeBox (already a dependency): TypeBox validates the emitted value and supplies the emit-tool schema, so author surface, our validation, and the provider's native strict-mode all agree. Oversized structs spill to the blob CAS via the input-spill path. Values interpolated into an `llm` prompt are wrapped in content-derived (hash-boundary) delimiters. MVP: only `llm` steps produce; `tool`/`human` consume."
 status: proposed
 maturity: designed
-last-reviewed: 2026-05-28
+last-reviewed: 2026-06-07
+supersedes: an earlier, broader cut (tool-step production via $FRAGUA_OUTPUT, route-carried outputs) — narrowed to llm-only production
 ---
 
-# Structured step outputs
+# Structured step outputs (MVP)
 
-> **Designed, not scheduled — strictly additive, llm-only production.** Adds
-> `outputs:` on `llm` steps (a restricted JSON-Schema profile: scalars, records,
-> arrays) plus the `${{ outputs.X.f }}` token. It **changes no routing**
-> (branching stays on the existing `route` tool + `on:`/`next:`) and **breaks no
-> existing syntax**. Tools and humans **consume** outputs but do not produce
-> them. Lands **post-0.1.0 as an `ir_version` bump + converter**
-> ([`workflow-ir.md`](workflow-ir.md) §5) — not a 0.1.0 freeze item.
+> **Designed, narrow, additive.** Adds `outputs:` on **`llm` steps only**, plus
+> the `${{ outputs.X.f }}` substitution token. Branching is unchanged (the
+> `route` tool + `on:`/`next:`); no existing syntax changes. `tool` and `human`
+> steps **consume** outputs; they do not produce them. Reads **fail closed** — an
+> unpopulated reference is a node failure, not `""`. Ships as an `ir_version` bump
+> + converter.
 
-## 1. The two load-bearing principles
+## 1. The principle
 
-Everything below is in service of two sentences. If the design is cut to the
-bone, keep these:
+> **Reading an output a producer never populated is a loud, recoverable,
+> replayable halt — never a silent `""`.**
 
-- **Why the substrate exists.** Its job is to make correctness a property of the
-  *topology between an `llm` step and a `tool` step*, not of trusting either
-  half. An `llm` produces candidates a `tool` executes (it can't be
-  overconfident); a `tool` produces evidence an `llm` consumes (it can't
-  hallucinate the facts). Typed outputs are the edge that makes those
-  compositions trustworthy. **This cut ships the first half** — `llm` produces,
-  `tool` consumes; the second (`tool` produces structured evidence) waits on tool
-  output production (§2.1).
-- **Why a reference is safe.** *Reading an unpopulated output is a loud,
-  recoverable, replayable halt — never a silent `""`.* If `${{ outputs.X.f }}`
-  resolves and X emitted nothing (it never ran on the taken path, or it failed
-  before `emit_output`), the consuming node **fails closed**: it halts to the
-  operator, it does not substitute the empty string. That halt is itself a
-  recorded `fact.*`, so it folds back identically on every replay. This is the
-  populated-guarantee the old `$node.output` hand-wave lacked — that token
-  silently collapsed to `""`. We get the same safety *without* proving totality
-  statically, because fragua's determinism is a property of the folded log, not
-  of re-execution (SPEC §1, *Testable*): a faithfully-recorded runtime fault is
-  exactly as trustworthy as a compile-time impossibility, and it doesn't freeze
-  the graph into being fully static.
+If `${{ outputs.X.f }}` resolves and X emitted nothing on the path taken (it
+never ran, or ran and failed before `emit_output`), the **consuming** node fails
+closed: it halts to the operator with a named fault, it does not substitute the
+empty string. That halt is itself a recorded `fact.*`, so it folds back
+identically on every replay.
 
-## 2. Problem
+So outputs need **no static totality proof**. fragua's determinism is a property
+of the folded event log, not of re-execution (SPEC §1, *Testable*): a faithfully
+recorded runtime fault is exactly as trustworthy as a compile-time impossibility,
+and it doesn't freeze the graph into being fully static. The validator's
+reachability checks (§6) are advice, not a gate.
 
-`work.yaml` and `review.yaml` lean on shared `thread:` to move data between
-steps. That's two smells wearing one coat:
+## 2. When to use `outputs:`
 
-- **Conversation / revision loops (keep the thread).** `plan → implement →
-  review → (REJECT) → implement`. The thread *is* the conversation. Structured
-  outputs can't and shouldn't replace this.
-- **Data hand-off dressed as conversation (the actual smell).** `scope` emits a
-  `TARGET/PR/PATHS/LOC` block every downstream step re-reads;
-  `pr_approve`/`pr_feedback` scrape the PR number back out of the thread; the
-  dependency `update` step hands a bump list to `fix` through a thread. Structs
-  cosplaying as prose — carried at full transcript cost, read nondeterministically.
+There are three channels for moving data between steps. Pick by what the data
+*is* and what the consumer *does* with it:
 
-Today the only substitution token is `${{ inputs.<name> }}` (ground rule 13).
-`$node.output` was banned because the old hand-wave silently collapsed an
-unpopulated reference to `""`. A typed schema + fail-closed reads (§3) is exactly
-what retires that reason — the unpopulated case now halts loudly instead.
+| Channel | For | Cost |
+|---|---|---|
+| **Shared `thread:`** | steps that genuinely converse (plan ↔ implement ↔ review) | full transcript re-sent each step |
+| **Environment re-derivation** | anything already on disk / in git | a fresh read; can't drift from truth |
+| **Typed `outputs:`** | a consumer that needs a value *typed* — to run it, pass it verbatim, or aggregate several producers' results | a typed, validated hand-off |
 
-**The material win is step elimination, not context trimming** — collapsing the
-data-hand-off threads into typed, validated outputs, and letting bare `tool`
-steps consume them.
+Default to the **thread** for conversational context and the **environment** for
+anything on disk. Reach for `outputs:` when the consumer benefits from the value
+being *typed and addressable* rather than embedded in prose. Two patterns where
+that benefit is real:
 
-## 2.1 Scope — what lands, what's out
+- **A mechanical consumer takes the value verbatim.** A `tool` step substitutes a
+  computed scalar into its `run:` with no model in between; an `llm` passes a
+  value through unchanged to a tool. Getting it wrong is a bug, not a re-read.
+
+  ```yaml
+    merge:
+      type: tool
+      run: gh pr merge ${{ outputs.scope.pr_number }} --auto --squash
+  ```
+
+- **A synthesizer aggregates several producers.** When multiple `llm` steps each
+  produce a structured result and a downstream step combines them — e.g. several
+  review lenses each emitting typed `findings`, fed to a `synthesize` step — typed
+  outputs give the consumer clean per-source access. A shared thread would
+  interleave the sources as prose the synthesizer has to disentangle; typed
+  outputs keep each producer's result distinct and let the synthesizer run on a
+  fresh context. This is a legitimate `llm → llm` hand-off — the consumer being an
+  `llm` does not disqualify it.
+
+  ```yaml
+    synthesize:
+      type: llm
+      prompt: |
+        Reconcile the lens findings into one verdict.
+        Correctness: ${{ outputs.review_correctness.findings }}
+        Security:    ${{ outputs.review_security.findings }}
+  ```
+
+Do **not** reach for `outputs:` when another channel already serves:
+
+- **The steps converse** (plan ↔ implement ↔ review, or a producer and consumer
+  that share a thread and read each other's prose) → the thread. Typing it
+  mutilates the conversation, and the data is already present.
+- **The value is already in the environment** (the diff a gate judges, the deps a
+  bump moved) → re-derive it. Cheaper, and it can't drift.
+- **A large prose body a tool consumes** (a review for `gh --body-file`) → a file
+  the consumer reads, not a typed string.
+- **Human display** (a report shown at a gate) → the thread shows prose; a gate's
+  `text:` is not for typed JSON.
+- **A single producer with no downstream consumer** → there's nothing to hand off.
+
+The throughline: `outputs:` exists so a downstream step can act on a value
+without locating and re-parsing it out of a transcript. Where the transcript
+already serves the consumer, the thread is the better channel.
+
+## 3. Scope
 
 Additive; breaks nothing already authored.
 
 **In:**
-- `outputs:` block **on `llm` steps** (new key). Types are a **restricted
-  JSON-Schema profile**: scalars (`string`/`number`/`boolean`/`choice`),
-  **records** (`object` with typed fields), and **arrays** (`array` of a type).
-  See §3 for the profile boundary and *why a profile, not full JSON Schema*.
-- `${{ outputs.X.f }}` substitution token (new token, fail-closed): a scalar
-  leaf interpolates as its value; a record/array interpolates as JSON; dotted
-  leaf access reaches a scalar inside a structure. An unpopulated reference is a
-  node failure, not an empty string.
-- **`emit_output`** — a single force-included tool whose schema is the node's
-  whole `outputs:` profile; one call closes the turn (the only emission
-  mechanism).
-- Fail-closed reads, plus a static reachability **W-code** (an undeclared field
-  or an entirely-unreachable producer stays a hard error).
 
-**Out (deferred / non-goal):**
-- **Tool output production.** Tools and humans **consume** outputs (interpolation
-  / gate text) but do not declare `outputs:`. The `$FRAGUA_OUTPUT` channel and
-  the tool→`llm` *gather→judge* half of §1 are a later layer — they arrive
-  together (a tool emitting structured, validated evidence an `llm` judges).
-- **Transparent spill for oversized structures.** A record/array must fit the
-  event-payload cap (ARCH P12); one that exceeds it is a node failure. Spilling
-  large structures to the artifact store (rehydrated on read) is a follow-on.
-- **Routing on emitted values (`when:`/`edges:`).** Branching stays on the
-  `route` tool + `on:`/`next:`. A separate future proposal if ever wanted.
-- **Binary / file (`blob`) outputs**, the `tool`→`script` rename, and
-  dropping/unifying the `route` tool.
+- `outputs:` on **`llm` steps only**, declared with the type grammar shared with
+  `inputs:` (§5).
+- `${{ outputs.X.f }}` substitution token (fail-closed): a scalar leaf
+  interpolates as its value; a record/array as JSON; a dotted leaf reaches a
+  scalar inside a structure. Consumed by `llm` (`prompt:`), `tool` (`run:`), and
+  `human` (`text:`).
+- `emit_output` — one force-included tool whose schema is the node's `outputs:`
+  schema; a single call carries the whole struct. The only production mechanism.
+- Native strict-mode enforcement of `emit_output` where the provider supports it,
+  automatic via pi-ai (§7).
+- Spill: an output rides inline on the fact when it fits the event-payload cap and
+  spills to the blob CAS (`{$fragua_blob: sha}` ref, rehydrated on read) when it
+  doesn't, over the same path run inputs use.
+- Content-derived (hash-boundary) wrapping of output values interpolated into an `llm` `prompt:`
+  (§6).
+- Validator reachability checks: E035 (broken/dead reference), W015 (producer may
+  not run on every path).
 
-## 3. The model — one-directional typed data flow
+**Out:**
 
-Three step kinds:
+- `outputs:` on a step that also `routes:` — a routing step's terminal call is
+  `route`, not `emit_output`; the two are mutually exclusive.
+- Tool-step production (`$FRAGUA_OUTPUT`); `tool` steps consume, never produce.
+- Native final-message JSON as an emit backend (`output_config.format` /
+  `response_format`).
+- `object`/`array` types in `inputs:` (the grammar admits them; the MVP keeps
+  `inputs:` scalar-only).
+- Routing on emitted values, binary/`blob` outputs, HITL (`human`-produced)
+  outputs.
 
-- **`tool`** — a deterministic shell node (`run:`); exit code → outcome.
-- **`llm`** — a probabilistic reasoner running its own bounded tool-use loop.
-- **`human`** — an operator gate.
+## 4. The model
 
-All three **consume** `${{ inputs.* }}` / `${{ outputs.X.f }}` by interpolation —
-`tool` in `run:`, `llm` in `prompt:`, `human` in its operator-facing `text:`
-(the gate shows upstream context at first paint). **Only `llm` steps produce**
-`outputs:`. Data flows **forward only**, typed, fail-closed on read.
+Three step kinds, unchanged: `tool` (deterministic shell, exit code → outcome),
+`llm` (a reasoner running its own bounded tool-use loop), `human` (an operator
+gate). All three **consume** `${{ inputs.* }}` / `${{ outputs.X.f }}` by
+interpolation. **Only `llm` steps produce** `outputs:`, and only when they do not
+`route:`. Data flows forward only, typed, fail-closed on read.
+
+> **Interpolating into a `tool` `run:` is a shell-injection surface** — the fix is
+> the `exec:` argv form ([`tool-exec-variant.md`](tool-exec-variant.md)), which
+> substitutes per-argument with no re-split. A `tool` step interpolating a
+> generated value should use `exec:`. (Distinct from the prompt-injection surface
+> in §6.4, which has its own fix.)
+
+## 5. The type surface
+
+`inputs:` and `outputs:` share **one type-declaration grammar** — same type
+keywords, one parser, one compiler, one validator. The type vocabulary is
+identical; only the presence modifiers differ, because providing a value and
+producing one are different acts: a top-level input takes `required:` / `default:`,
+a record field takes `optional:` (required by default).
+
+The grammar is a small subset of JSON Schema — the structural core that provider
+strict-mode enforces:
+
+| Key | Means | Lowers to |
+|---|---|---|
+| `type: string \| number \| boolean` | scalar | the scalar type |
+| `type: choice` + `options: [...]` | closed set | `enum` |
+| `type: object` + `fields: { name: <decl>, … }` | record | `properties` + `required` + `additionalProperties: false` |
+| `type: array` + `items: <decl>` | homogeneous list | `array` / `items` |
+| `description:` | doc string | `description` |
+| *(inputs only)* `required:`, `default:` | provide-time | — |
 
 ```yaml
-  scope:                                    # llm — produces a record
-    type: llm
-    outputs:
-      pr_number: { type: string }
-      loc:       { type: number }
-    routes: "skip,quick,full"               # unchanged — the route tool
+inputs:
+  ticket: { type: string, required: true, description: Bug ticket id }
+  env:    { type: choice, options: [dev, staging, prod], default: dev }
 
-  update:                                   # llm — produces an array of records
-    type: llm
-    outputs:
-      bumps:
-        type: array
-        items:
-          type: object
-          fields:
-            pkg:  { type: string }
-            from: { type: string }
-            to:   { type: string }
-            kind: { type: choice, options: [patch, minor, major] }
-
-  merge:                                    # tool — consumes a leaf, produces nothing
-    type: tool
-    run: gh pr merge ${{ outputs.scope.pr_number }} --auto --squash
+outputs:
+  findings:
+    type: array
+    items:
+      type: object
+      fields:
+        severity:   { type: choice, options: [low, medium, high] }
+        file:       { type: string }
+        note:       { type: string }
+        suggestion: { type: string, optional: true }
 ```
 
-### The type profile — why a profile, not full JSON Schema
+`fields:` and `items:` nest to any fixed depth. A record field is **required by
+default**; mark one `optional: true` to let it be absent (it lowers to a nullable
+type — see below). **No recursion and no `$ref`** — a tree type can't be enforced
+by provider strict-mode and has no finite leaf path for dotted reads. **No
+constraint keywords** (`minimum`/`maxLength`/`pattern`/`format`): the providers
+don't enforce them in strict-mode, and they are predicates that belong as a check
+in the producing step, not in the type.
 
-Output (and input) types are a **restricted profile** of JSON Schema:
-`type` (string/number/boolean/object/array), `enum` (→ `choice`),
-`properties`+`required` (records), `items` (arrays). fragua schemas *are* valid
-JSON Schema — they lower straight to `emit_output`'s provider-validated tool
-schema (TypeBox `Type.Object`/`Type.Array`) — but the validator **rejects**
-everything outside the profile (`pattern`/`format`/min·max, `oneOf`/`if`/`allOf`,
-`$ref`/recursion, cosmetic `title`). Three reasons, in force order:
+**Validation: TypeBox.** The grammar compiles to a TypeBox schema
+(`compileTypeDecl`); TypeBox's `Value.Check` validates the value, and the same
+schema is the `emit_output` tool's `parameters`. `choice` lowers to `enum`,
+records get `additionalProperties: false`, and an `optional: true` field is
+omitted from `required` and lowered to a nullable type (`anyOf: [T, null]`) — so a
+model may either omit it or emit an explicit `null`, and our post-emit +
+read-time validation accepts both. (Keeping it out of `required` rather than
+nullable-but-required avoids a strict provider rejecting a legitimately-omitted
+field; validation, not provider strict-mode, is the guarantee — strict mode just
+cuts retries.) Because the grammar is exactly the provider-supported subset, the
+schema means the same thing to the author, to our validation, and to the
+provider's native enforcement.
 
-1. **Canonicalization for the freeze.** Under [`workflow-ir.md`](workflow-ir.md)
-   (B) the schema is hashed into `sha`. Full JSON Schema has many syntactic forms
-   per meaning (`const` vs `enum`, `$ref`, `oneOf` orderings, draft differences) —
-   canonicalizing *arbitrary* schema for a stable hash is its own hard problem,
-   the "ambiguous shape" §8.0 warns against freezing. The profile has a tiny fixed
-   canonicalization (sort `properties`, `required`, `enum`).
-2. **Provider-enforcement honesty.** `emit_output` is validated by the provider's
-   tool-use validator, which enforces only the structural core. (`backend.ts`
-   already uses a bare `{type, enum}` because `anyOf:[{const}]` isn't enforced.)
-   Admitting only enforced constructs makes "validated as a unit" true.
-3. **Logic belongs in steps.** Combinators, regexes, numeric bounds are
-   predicates — they compute in the producing step, not in the type.
+## 6. Enforcement and fail-closed reads
 
-### Enforcement — runtime totality, static warning
+1. **Emission through one exit tool.** An `llm` node with `outputs:` exits via the
+   force-included `emit_output` tool (ground rule 12), whose schema is the
+   `outputs:` schema. The prompt instructs the model to call it; after the agent
+   loop the backend reads the last `emit_output` call and validates its arguments
+   against the schema (TypeBox). A node that declares `outputs:` and ends without
+   a valid emission is a node failure (`outcome=fail`).
 
-1. **`emit_output` forces emission.** A single force-included tool
-   (ground rule 12) whose schema is the node's whole `outputs:` profile;
-   one call, validated as a unit, closes the turn. Never partial. Synthesised
-   *additively* — the existing `route` tool is untouched; a node declaring both
-   `routes:` and `outputs:` carries both. A node that declares `outputs:` and ends
-   without a valid `emit_output` is a node failure, not a silent `""`.
+   pi-ai's `Context` exposes no `toolChoice`, so emission is prompt-instructed and
+   validated post-hoc rather than provider-forced; a model that ignores the
+   instruction fails the node (retryable). Provider strict-mode (§7) guarantees
+   the arguments are schema-valid *if* the call happens.
+
 2. **Fail-closed reads.** `${{ outputs.X.f }}` resolving to an unpopulated field
-   — X never ran on the path taken, or ran and failed before `emit_output` — is a
-   **node failure**, not a silent `""`. The fault halts to the operator and is
-   recorded as a `fact.*`, so it folds back identically on replay. The
-   populated-guarantee is enforced *at read time*, not proven at validate time —
-   the half the old `$node.output` hand-wave got wrong.
-3. **Static reachability — a warning, not a gate.** The validator extracts every
-   `${{ outputs.X.f }}` (the same machinery as `inputReferences()` → E030) and
-   hard-errors when X doesn't declare `f`, or when X is unreachable from entry on
-   *any* path (a dead reference — always a typo). When X is reachable on some
-   paths to N but not all, it emits a **W-code**: "X may not have run on every
-   path to N; the reference fails closed at runtime if it didn't." No dominator
-   analysis, no disposition-edge colouring — authoring keeps its typo-catch, the
-   graph keeps its freedom.
+   throws in the substitution resolver; the handler turns it into a routable
+   `outcome=fail`. The fault is recorded as a `fact.*` and folds back identically
+   on replay. The populated-guarantee is enforced at read time.
 
-**The populated-guarantee is enforced at read time and total over the log** —
-every fault is a recorded fact, so it survives replay identically. That is why
-outputs carry no static-graph assumption and compose with future runtime-spawned
-topology, rather than locking the engine into a fully-static graph.
+3. **Reachability checks (advisory).** The validator extracts every
+   `${{ outputs.X.f }}` reference and raises **E035** when X doesn't declare `f`,
+   or when X can never reach the consumer (a dead reference). It raises **W015**
+   when X can reach the consumer but isn't guaranteed to — the reference fails
+   closed at runtime if X didn't run. W015 does not fire when the consumer is
+   reached only on a path where X did run (e.g. a recovery step behind another
+   node's `fail:` edge).
 
-### Consumption and size
+4. **Untrusted-content delimiting (prompt-consumption).** An output interpolated
+   into an `llm` `prompt:` is wrapped in a tag whose boundary id — a **content
+   hash** — lives in the *element name*, and a standing system-prompt rule marks
+   those regions as data, not instructions:
 
-A reference yields: a **scalar** leaf → its value; a **record/array** → its JSON;
-a **dotted leaf** (`${{ outputs.scope.pr_number }}`, `${{ outputs.X.rec.field }}`)
-→ the inner scalar. The dominant pattern is a record/array as JSON into an `llm`
-prompt; leaf scalars into `tool` commands. Outputs ride
-`fact.node_completed.payload.outputs` inline, bounded by the event-payload cap
-(ARCH P12) — a structure that exceeds it is a node failure (transparent spill is
-deferred, §2.1). Assembly: the substitution resolver reads from a **rebuildable
-outputs index** — `(run_id, step_id) → struct`, written same-transaction (ground
-rule 5), last-write-wins for re-entry (§7), **off the `run_state` fold** (like
-`messages`), so it's a re-snapshot, not an `EVENT_CONTRACT_VERSION` bump.
+   ```text
+   <fragua_output_9c1f2a3b4d5e6f70>[ … the value (scalar verbatim, record/array as JSON) … ]</fragua_output_9c1f2a3b4d5e6f70>
+   ```
 
-> **Injection note.** Interpolating an output into a `run:` shell string is a
-> shell-injection surface — the general fix is the `exec:` argv form in
-> [`tool-exec-variant.md`](tool-exec-variant.md), which substitutes per-argument
-> with no re-split. Steps interpolating generated outputs should prefer `exec:`.
+   The hash sits in the name (not an attribute) so the open/close pair is
+   well-formed markup: a markdown renderer — the web conversation view — treats it
+   as an unknown element and hides the tags, instead of printing a broken
+   `</tag attr="…">` literal.
 
-> **Event-contract impact — verified re-snapshot, NOT a bump.** Adding `outputs`
-> to `fact.node_completed` trips the §3.3 contract-surface hash (field shapes are
-> in scope), forcing the decision by design. It resolves to a `// contract:
-> no-bump` re-snapshot: only `packages/store/src/reducers.ts` folds the fact into
-> `run_state`, reading cost/token/model + `nodeId` + `nextNode` — never `outputs`.
-> The outputs index and the read-plane read it off the fold contract. (Flips to a
-> real bump only if a reducer ever folds `outputs` into `run_state`.)
+   A **content-derived boundary** (not a random nonce) is the right fit: a value
+   can't contain its own closing tag without a hash preimage, so the delimiter is
+   collision-free by construction — and it's *deterministic*, so the same value
+   renders identically on replay (a random nonce would have to be recorded). It's
+   computed locally in the substitution resolver (a browser-safe synchronous
+   hash), so no per-run state threads through the handler or agent. This applies
+   to `llm prompt:` only: `tool run:` is shell injection (use `exec:`, §4) and
+   `human text:` is read by a person. It closes one window — the shared `thread:`
+   and the agent loop's raw tool/file/bash results still enter prompts
+   un-delimited (§9). Best-effort defense-in-depth, not a cryptographic guarantee.
 
-## 4. Consuming outputs — the step-elimination win
+## 7. Provider-native enforcement
 
-A `tool` or downstream `llm` consuming an upstream output replaces an `llm` step
-that would otherwise scrape data from a thread:
+Anthropic and OpenAI both expose structured output in two forms over their chat
+endpoint:
 
-- **`gh pr merge ${{ outputs.scope.pr_number }}`** — `scope`'s text block becomes
-  a typed record; downstream reads `pr_number` directly, not "it's above, go find
-  it." (llm produces, tool consumes — the half this cut ships.)
-- **typed pipelines** — `update` emits a `bumps` array a downstream `fix` reads;
-  `drift`'s `analyze`→`propose`→`verify` each emit a validated array the next
-  consumes, dissolving most of `thread: drift`. (The `collect`→`analyze` snapshot
-  hand-off stays a filesystem read until tool production lands — `collect` is a
-  `tool`.)
+| Form | Anthropic | OpenAI | Constrains |
+|---|---|---|---|
+| Strict tool/function args | `strict: true` on a tool | `strict: true` on a function | the tool-call arguments |
+| Final-message JSON | `output_config: { format: { type: json_schema, schema } }` | `response_format: { type: json_schema, json_schema: { strict } }` | the final assistant message |
 
-The GHA correspondence, way less general (data-flow only):
+Both accept only a subset of JSON Schema (objects with
+`additionalProperties: false`, enums, arrays, scalars; no numeric/string/length
+constraints, no recursion) — the subset the §5 grammar already is.
 
-| This proposal | GHA |
-|---|---|
-| `outputs:` on a step | `jobs.<id>.outputs` |
-| `${{ outputs.X.f }}` | `${{ needs.<job>.outputs.<name> }}` |
-| fail-closed read at runtime | the `needs:` DAG (a *static* gate) — fragua deliberately diverges here |
-| typed `inputs` = the trigger event | `github.event.*` |
+Our LLM layer is **pi-ai**, whose `Context` is `{ systemPrompt, messages, tools }`
+— no `response_format`/`output_config` field, no `toolChoice`. Its only
+structured-output surface is the **tool channel**: a `Tool` carries
+`parameters: TSchema`, and the per-model `supportsStrictMode` flag (default
+`true` for the direct Anthropic and OpenAI models) controls whether pi-ai sends
+the `strict` field with the tool definition.
 
-## 5. The seams are already the right shape
+So defining `emit_output` with the §5 schema makes pi-ai apply the provider's
+native strict-mode enforcement to it on Anthropic and OpenAI, with no
+per-provider code. The tool channel is the native-backed path on those providers,
+not a fallback.
 
-- **Edge selection is untouched** — no new routing; `selectEdge` and the
-  outcome/route model are unchanged.
-- **Substitution is already a tokenizer** — `INPUT_REF_RE` handles
-  `${{ inputs.x }}`; `${{ outputs.X.f }}` is a sibling regex, and
-  `inputReferences()` → E030 is the pattern for output-ref extraction + the
-  reachability W-code. No dominator pass is needed — that greenfield is avoided.
-- **`emit_output` mirrors the `route` tool's synthesis** — `backend.ts` already
-  builds a per-node provider-validated schema at dispatch; `emit_output` builds
-  the (profile) struct schema the same way.
+Correctness does not depend on it. We validate the emitted struct ourselves
+(TypeBox) and fail closed on read. On a strict-capable provider, native
+enforcement means our validation rarely rejects — fewer retries. On a
+non-strict / custom / OSS-via-openai-compat provider, an invalid struct is caught
+by our validation and fails the node. Native strict-mode is an optimization
+layered on a guarantee we own.
 
-## 6. Generalisation, non-goals, and what it changes
+The final-message JSON form (typed output as the model's last message, no tool
+round-trip) is a deferred backend (§10): pi-ai exposes no field for it, but its
+`onPayload` hook can override the request body to inject the schema per
+`model.api`. It would sit behind the same `outputs:` declaration, validation, and
+fail-closed read; `emit_output` stays the universal floor.
 
-**SDLC sweep:** the recurring data-flow vocabulary is `inputs` (event) +
-forward `outputs` (record/array hand-off) + bare-`tool` action, with `thread:`
-reserved for genuine conversations. The `llm`-produces compositions land now
-(scope records, dependency-bump arrays, drift's findings/edits pipeline). The
-*gather→judge* composition (a `tool` emits structured evidence an `llm` judges —
-`compliance-evidence`, `adversarial-red-team`) waits on tool output production.
+## 8. Where it lands
 
-**Non-goals:** tool output production, transparent spill, fact-routing, binary
-blobs (§2.1); dynamic graph multiplicity (in-node or cross-run); deep loops
-(`llm`-node-internal); durable cross-run state (external + re-derived).
+The seams already exist; none is greenfield.
 
-**What it changes (all additive):** evolves ground rule 13 (cross-node
-substitution allowed when the field is declared, with the read failing closed if
-the producer didn't run on the taken path); rewrites the "No `$node.output`"
-SKILL teaching → allowed, with unpopulated reads halting loudly instead of
-silently resolving to `""`. `tool` steps still feed nothing downstream (only
-`llm` steps declare `outputs:`) — so that teaching is unchanged, and the kind is
-not renamed.
+| Seam | File(s) | Change |
+|---|---|---|
+| Shared type grammar | `core/src/parser/yaml.ts`, `core/src/types/` | one declaration grammar; `compileTypeDecl` → TypeBox; `choice`→`enum`, `additionalProperties:false`, optional→nullable (E033/E034) |
+| Substitution token | `core/src/engine/substitution.ts` | `${{ outputs.X.f }}` resolver; fail-closed; content-derived-boundary wrap on `prompt:` interpolation |
+| Validator reachability | `core/src/engine/` | E035 / W015 |
+| Emit tool synthesis | `agent/src/backend.ts` | build the `emit_output` schema like the `route` tool; post-loop read + validate |
+| Outputs index | `store/src/outputs-queries.ts` | rebuildable `(run_id, node_id) → struct`, written same-transaction, off the `run_state` fold (a re-snapshot, not an `EVENT_CONTRACT_VERSION` bump) |
+| Fact carries outputs | `daemon/src/result-to-facts.ts` | `fact.node_completed.payload.outputs` (inline, or `{$fragua_blob}` ref) |
+| Spill | `store/src/` (input-spill path) | reuse the `{$fragua_blob: sha}` ref + scrubber + bundle export/import that run inputs already use |
+| Schema/IR version | `store/src/migrations.ts`, IR converter | `ir_version` bump + converter; reversible migration step (the `outputs` index is rebuildable → non-lossy `down`) |
 
-## 7. Open questions + freeze-facts
+Most of this exists, built and tested, on the prior `feat/structured-outputs`
+branch and is reusable as written:
 
-- **The `work::review` REJECT loop.** Detaching `review` from the `build` thread
-  (to judge `${{ outputs.implement.plan_realised }}` fresh) used to force a
-  back-edge question under dominance. Fail-closed reads dissolve the safety half:
-  a back-edge reading an output that *was* populated on the taken path just works;
-  one that wasn't fails closed. What remains is a design call, not a correctness
-  one — whether `review`'s REJECT reason rides an output or the existing retarget
-  mechanism. Settle before touching `work.yaml`.
-- **Re-entry semantics.** A re-entered node re-emits and overwrites its outputs;
-  `${{ outputs.X.f }}` reads "most recent X" — correct across revision loops, and
-  natural once reads are a runtime fold rather than a static promise.
-- **The deferred layers, in likely order:** (1) **tool output production**
-  (`$FRAGUA_OUTPUT` + the gather→judge half of §1) — highest corpus value
-  (drift's `collect`, anti-hallucination); (2) **transparent spill** for oversized
-  records/arrays; (3) **`blob`** (binary/file, mime, `.path`) — niche, only if a
-  workflow ever produces a file. Each rides its own `ir_version` step.
+- the type compiler `compileOutputsToTypeBox` + `validateOutputsValue` (generalise
+  to `compileTypeDecl` so `inputs:` and `outputs:` share one grammar);
+- the `emit_output` tool synthesis and post-loop transcript read;
+- the `${{ outputs.X.f }}` resolver and the combined inputs+outputs single-pass
+  substitution;
+- the validator codes E033/E034/E035/W015;
+- the outputs index table, the spill path, and the reversible migration step;
+- the `yaml-outputs` / `outputs-profile` / `outputs-substitution` /
+  `validator-outputs` / `emit-output` test suites.
 
-**Freeze-facts** (only bite if [`workflow-ir.md`](workflow-ir.md) (B) hashes the
-IR):
-1. **`route` is the single routing field** for both `llm` and `human` — one
-   hashed field, not two.
-2. **`label` is cosmetic → excluded from the IR hash.**
-3. **The type profile is the closed JSON-Schema subset of §3** — fixed
-   canonicalization (sort `properties`/`required`/`enum`); reject the rest. With
-   no fact-routing, edges stay outcome/route — order-independent — so §8.1's
-   edge-sort is correct and needs no carve-out.
+Not carried over: `$FRAGUA_OUTPUT` (tool production) and the route-carried-outputs
+schema augmentation.
+
+## 9. Risks and non-goals
+
+- **Over-use.** The failure mode is wiring `outputs:` where the thread or the
+  environment already serves (§2). The MVP's narrowness (llm-only production, no
+  routing) blocks the most tempting misuses; the rest is authoring discipline,
+  carried by §2 and the `workflows` skill. A future advisory lint could flag an
+  output consumed only by a single same-thread `llm`.
+- **Emission is not provider-forced.** Without `toolChoice` (§6.1), a model can
+  decline to call `emit_output`; the node then fails closed and retries. This is
+  strictly safer than the silent `""` it replaces, and tightens to a hard force if
+  pi-ai gains `toolChoice`.
+- **Spilled outputs are refs, not inline.** A spilled struct is a `{$fragua_blob}`
+  ref rather than inline event content — the same forensics tradeoff run inputs
+  and artifacts already carry.
+- **Outputs in exported bundles.** Inline outputs ride
+  `fact.node_completed.payload.outputs`; the egress scrubber must walk nested
+  string values there (it already redacts event-payload free-text). Confirm the
+  walk covers `payload.outputs` during implementation.
+- **Prompt-injection scope.** Output-wrapping (§6.4) delimits output→prompt
+  interpolation only. The shared `thread:` and the agent loop's raw tool/file/bash
+  results remain un-delimited; the cross-cutting mitigation is a separate effort
+  (§10), and the wrap must not be presented as full injection protection.
+
+## 10. Deferred follow-ups
+
+Each rides its own proposal/PR; the MVP's contract admits each without a rewrite.
+
+1. **Route-carried / fact-routing outputs** — let a routing `llm` step also hand
+   off data, by making `route` a reserved field inside the outputs record (so
+   `routes:` becomes sugar and a branch carries data only when it has data).
+2. **Native final-message JSON emit backend** (§7) via pi-ai `onPayload`,
+   capability-gated per `model.api`.
+3. **Tool-step production (`$FRAGUA_OUTPUT`)** — the gather→judge composition (a
+   `tool` emits structured evidence an `llm` judges).
+4. **Cross-cutting untrusted-content delimiting** — extend §6.4 from
+   output→prompt interpolation to the shared `thread:` and tool/file/bash results.
+5. **`object`/`array` types in `inputs:`** — the shared grammar already admits
+   them; the CLI would JSON-parse a non-scalar `--input`.
+6. **Richer type vocabulary** — constraint keywords enforced at our layer via
+   TypeBox, and/or accepting raw JSON Schema documents.
+7. **`blob` (binary/file) outputs** and **HITL outputs** (operator-supplied typed
+   values from a `human` gate).
 
 ## Related
 
-- **The `route` tool + two-case edge selector** (SPEC §3.6; `edge-selection.ts`;
-  synthesis in `packages/agent/src/backend.ts`) — shipped and **unchanged**; this
-  adds typed, fail-closed outputs *alongside* it.
-- [`tool-exec-variant.md`](tool-exec-variant.md) — the `exec:` argv form that
-  makes interpolating outputs into commands injection-safe.
-- [`workflow-ir.md`](workflow-ir.md) — `outputs:` (and the shared input/output
-  type profile) is an IR-core attr; lands as an `ir_version` bump + converter,
-  honouring the freeze-facts above.
+- The `route` tool + two-case edge selector (SPEC §3.6; `edge-selection.ts`;
+  synthesis in `agent/src/backend.ts`) — unchanged; outputs sit alongside it.
+- [`tool-exec-variant.md`](tool-exec-variant.md) — the `exec:` argv form for
+  injection-safe interpolation into commands.
+- [`workflow-ir.md`](workflow-ir.md) — `outputs:` is an IR-core attr; ships as an
+  `ir_version` bump + converter.

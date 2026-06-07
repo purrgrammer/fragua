@@ -1,26 +1,81 @@
 // Prompt / template substitution. See docs/SPEC.md §3.8.
 //
-// One token family:
+// Two token families:
 //   - `${{ inputs.<name> }}` — a typed run input declared in the
 //     workflow's `inputs:` block, bound per-run via `--input name=value`
 //     (declared defaults ⊕ run-provided).
+//   - `${{ outputs.<producer>.<field>[.<subfield>...] }}` — a typed step
+//     output emitted by an upstream node. Reads fail closed: an unpopulated
+//     ref throws `UnpopulatedOutputError` (→ node failure) rather than
+//     collapsing to "". See docs/proposals/structured-outputs.md.
 //
-// Substitutes in `prompt:` / `text:` / `run:` strings. Cross-node data
-// transfer still happens through a shared `thread:` + optional per-node
-// `summary:` (SPEC §3.3), not through prompt substitution.
+// Substitutes in `prompt:` / `text:` / `run:` strings.
 //
 // Shell-safe mode wraps the substituted value in single quotes, escaping
 // embedded quotes per POSIX (close quote, escaped quote, reopen).
 
+import type { OutputsValue } from "../types/outputs.ts";
+import { resolveOutputRef, UnpopulatedOutputError } from "./outputs-substitution.ts";
+
+export { outputReferences } from "./outputs-substitution.ts";
+
 export interface SubstitutionArgs {
   /** Resolved `${{ inputs.<name> }}` bindings (defaults ⊕ run-provided). */
   inputs?: Record<string, string>;
+  /** Resolved `${{ outputs.<producer>.<field> }}` bindings.
+   * Keyed by producer node id; value is the node's emitted struct. */
+  outputs?: Record<string, OutputsValue>;
 }
 
 export interface SubstitutionOptions {
   args?: SubstitutionArgs;
   /** If true, wrap substituted values in single quotes for shell safety. */
   escapeForShell?: boolean;
+  /** If true, wrap each interpolated `${{ outputs.X.f }}` value in a
+   * content-derived delimiter so an upstream-laundered value can't pose as an
+   * instruction in an `llm` `prompt:`. Set ONLY for prompt consumption — `tool`
+   * `run:` uses `escapeForShell` (a shell-injection surface, not prompt), and
+   * `human` `text:` is read by a person. Ignored when `escapeForShell` is set.
+   * See docs/proposals/structured-outputs.md §6.4. */
+  wrapOutputs?: boolean;
+  /** Hash used to derive the `<fragua_output_<hash>>` boundary id when
+   * `wrapOutputs` is set. Defaults to the browser-safe `fnv1a64Hex`. Server-side
+   * callers (the agent) inject a `node:crypto` SHA-256 so break-out is a
+   * preimage problem, not an FNV fixed-point — `@fragua/core` stays browser-safe
+   * because the strong hash is supplied from outside, not imported here. */
+  hashOutputs?: (value: string) => string;
+}
+
+/** Boundary tag for an output value interpolated into a prompt. The content
+ * hash lives in the element NAME (`<fragua_output_<hash>>…</fragua_output_<hash>>`)
+ * so the open/close pair is well-formed XML/HTML — a markdown renderer (the web
+ * conversation view) treats it as an unknown element and hides the tags rather
+ * than printing a broken `</tag attr="…">` literal. Carrying the hash on the
+ * close is what makes break-out a preimage problem: a value can't contain its
+ * own closing tag without a preimage of `hashHex(value)`. Deterministic, so the
+ * same value renders identically on replay. The `fragua_output_` prefix is what
+ * the agent's standing system-prompt rule marks as data.
+ *
+ * `hashHex` defaults to the browser-safe FNV-1a (best-effort, fixed-point-feasible
+ * under a determined attacker); server-side callers inject SHA-256 (preimage-hard)
+ * — see SubstitutionOptions.hashOutputs. */
+export function wrapOutputValue(value: string, hashHex: (s: string) => string = fnv1a64Hex): string {
+  const id = hashHex(value);
+  return `<fragua_output_${id}>${value}</fragua_output_${id}>`;
+}
+
+/** FNV-1a 64-bit → 16 hex chars. Browser-safe + synchronous (core stays free of
+ * `node:crypto`); the default delimiter hash, not for security. Server-side
+ * callers inject SHA-256 via `hashOutputs`. */
+function fnv1a64Hex(s: string): string {
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash ^ BigInt(s.charCodeAt(i))) & mask;
+    hash = (hash * prime) & mask;
+  }
+  return hash.toString(16).padStart(16, "0");
 }
 
 /** Matches `${{ inputs.name }}` with surrounding whitespace tolerance.
@@ -28,15 +83,41 @@ export interface SubstitutionOptions {
  * the parser's `inputs:` key grammar. */
 const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g;
 
+/** Matches EITHER token in one pattern, so both families resolve in a single
+ * pass over the original template. Group 1 = input name; groups 2+3 = output
+ * producer + dotted path. The inputs name allows hyphens; the outputs path does
+ * not (identifier-only node ids / field keys) — same grammars as the two
+ * single-family regexes. */
+const COMBINED_REF_RE =
+  /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
+
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
-  const { args = {}, escapeForShell = false } = opts;
+  const { args = {}, escapeForShell = false, wrapOutputs = false, hashOutputs } = opts;
   const fmt = (raw: string): string => (escapeForShell ? shellQuote(raw) : raw);
-  // `${{ inputs.x }}` references that resolve to a binding substitute;
-  // unresolved references collapse to "" (the validator flags undeclared
-  // refs at validate-time, so a surviving placeholder here means the
-  // input was declared but left unbound and undefaulted).
   const inputs = args.inputs ?? {};
-  return template.replace(INPUT_REF_RE, (_whole, name: string) => fmt(inputs[name] ?? ""));
+  const outputs = args.outputs ?? {};
+  const missing: string[] = [];
+  // ONE pass over the ORIGINAL template: a substituted value is never re-scanned,
+  // so an input whose value literally contains `${{ outputs.X.f }}` (or an output
+  // value containing `${{ inputs.x }}`) stays literal — each token is resolved
+  // exactly once, never cross-injected. Inputs collapse to "" when unbound (the
+  // validator flags undeclared refs); outputs FAIL CLOSED — an unresolved ref is
+  // collected and thrown as `UnpopulatedOutputError`, which the handlers turn
+  // into a node failure rather than a silent "".
+  const result = template.replace(
+    COMBINED_REF_RE,
+    (whole: string, inName: string | undefined, outProducer: string | undefined, outRest: string | undefined) => {
+      if (inName !== undefined) return fmt(inputs[inName] ?? "");
+      const rendered = resolveOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."), escapeForShell);
+      if (rendered === undefined) {
+        missing.push(whole.trim());
+        return whole;
+      }
+      return wrapOutputs && !escapeForShell ? wrapOutputValue(rendered, hashOutputs) : rendered;
+    },
+  );
+  if (missing.length > 0) throw new UnpopulatedOutputError([...new Set(missing)]);
+  return result;
 }
 
 /** Every `${{ inputs.X }}` reference name in a template. Used by the
