@@ -37,6 +37,7 @@
 //     quarantine a run whose daemon crashed mid-spawn.
 
 import type { ToolNodeMessage } from "@fragua/types";
+import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
 import { substitute } from "../../engine/substitution.ts";
 import { DEFAULT_TOOL_MAX_MS } from "../../parser/yaml.ts";
 import type { ExecutionEnvironment } from "../../types/execution.ts";
@@ -86,10 +87,21 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     // the rendered command — every substitution becomes an injection
     // vector. Llm prompts don't need this: prose tolerates stray
     // whitespace; shell does not.
-    const command = substitute(rawCommand, {
-      args: ctx.args,
-      escapeForShell: true,
-    });
+    // An unpopulated `${{ outputs.X.f }}` read FAILS CLOSED as a node `fail`
+    // (routes via fail-edge / aborted_exit), never an uncaught throw the
+    // executor would turn into a fatal `reason:"error"` halt.
+    let command: string;
+    try {
+      command = substitute(rawCommand, {
+        args: ctx.args,
+        escapeForShell: true,
+      });
+    } catch (err) {
+      if (err instanceof UnpopulatedOutputError) {
+        return { kind: "transition", outcomeStatus: "fail", failureReason: err.message, tokens: 0, costUsd: 0 };
+      }
+      throw err;
+    }
 
     // cwd resolution: every production dispatch MUST carry `ctx.env`
     // — the executor wires the run-scoped `ExecutionEnvironment` onto

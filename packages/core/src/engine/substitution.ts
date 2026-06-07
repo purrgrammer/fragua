@@ -38,6 +38,12 @@ export interface SubstitutionOptions {
    * `human` `text:` is read by a person. Ignored when `escapeForShell` is set.
    * See docs/proposals/structured-outputs.md §6.4. */
   wrapOutputs?: boolean;
+  /** Hash used to derive the `<fragua_output_<hash>>` boundary id when
+   * `wrapOutputs` is set. Defaults to the browser-safe `fnv1a64Hex`. Server-side
+   * callers (the agent) inject a `node:crypto` SHA-256 so break-out is a
+   * preimage problem, not an FNV fixed-point — `@fragua/core` stays browser-safe
+   * because the strong hash is supplied from outside, not imported here. */
+  hashOutputs?: (value: string) => string;
 }
 
 /** Boundary tag for an output value interpolated into a prompt. The content
@@ -45,18 +51,22 @@ export interface SubstitutionOptions {
  * so the open/close pair is well-formed XML/HTML — a markdown renderer (the web
  * conversation view) treats it as an unknown element and hides the tags rather
  * than printing a broken `</tag attr="…">` literal. Carrying the hash on the
- * close is what makes break-out a fixed-point problem: a value can't contain its
- * own closing tag without a preimage of its FNV-1a hash. Deterministic, so the
+ * close is what makes break-out a preimage problem: a value can't contain its
+ * own closing tag without a preimage of `hashHex(value)`. Deterministic, so the
  * same value renders identically on replay. The `fragua_output_` prefix is what
- * the agent's standing system-prompt rule marks as data. Best-effort
- * defense-in-depth, not a cryptographic guarantee. */
-export function wrapOutputValue(value: string): string {
-  const id = fnv1a64Hex(value);
+ * the agent's standing system-prompt rule marks as data.
+ *
+ * `hashHex` defaults to the browser-safe FNV-1a (best-effort, fixed-point-feasible
+ * under a determined attacker); server-side callers inject SHA-256 (preimage-hard)
+ * — see SubstitutionOptions.hashOutputs. */
+export function wrapOutputValue(value: string, hashHex: (s: string) => string = fnv1a64Hex): string {
+  const id = hashHex(value);
   return `<fragua_output_${id}>${value}</fragua_output_${id}>`;
 }
 
 /** FNV-1a 64-bit → 16 hex chars. Browser-safe + synchronous (core stays free of
- * `node:crypto`); used only to derive a delimiter boundary, not for security. */
+ * `node:crypto`); the default delimiter hash, not for security. Server-side
+ * callers inject SHA-256 via `hashOutputs`. */
 function fnv1a64Hex(s: string): string {
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
@@ -82,7 +92,7 @@ const COMBINED_REF_RE =
   /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
-  const { args = {}, escapeForShell = false, wrapOutputs = false } = opts;
+  const { args = {}, escapeForShell = false, wrapOutputs = false, hashOutputs } = opts;
   const fmt = (raw: string): string => (escapeForShell ? shellQuote(raw) : raw);
   const inputs = args.inputs ?? {};
   const outputs = args.outputs ?? {};
@@ -103,7 +113,7 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
         missing.push(whole.trim());
         return whole;
       }
-      return wrapOutputs && !escapeForShell ? wrapOutputValue(rendered) : rendered;
+      return wrapOutputs && !escapeForShell ? wrapOutputValue(rendered, hashOutputs) : rendered;
     },
   );
   if (missing.length > 0) throw new UnpopulatedOutputError([...new Set(missing)]);

@@ -170,6 +170,20 @@ describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
     expect(idOf("abc")).not.toBe(idOf("abd"));
   });
 
+  test("hashOutputs injects a custom (e.g. SHA-256) boundary hash; default stays FNV", () => {
+    // Server-side callers inject a strong hash; core keeps a browser-safe default.
+    const fakeSha = (_v: string) => "a".repeat(64);
+    const wrapped = substitute("x ${{ outputs.n.v }}", {
+      args: { outputs: { n: { v: "VV" } } },
+      wrapOutputs: true,
+      hashOutputs: fakeSha,
+    });
+    expect(wrapped).toBe(`x <fragua_output_${"a".repeat(64)}>VV</fragua_output_${"a".repeat(64)}>`);
+    // Default (no hashOutputs) → the 16-hex FNV id.
+    const def = substitute("x ${{ outputs.n.v }}", { args: { outputs: { n: { v: "VV" } } }, wrapOutputs: true });
+    expect(def).toMatch(/<fragua_output_[0-9a-f]{16}>VV<\/fragua_output_[0-9a-f]{16}>/);
+  });
+
   test("the closing tag carries the same hash as the open (break-out needs a preimage)", () => {
     const wrapped = wrapOutputValue("origin/main..HEAD");
     const m = wrapped.match(/^<fragua_output_([0-9a-f]{16})>(.*)<\/fragua_output_([0-9a-f]{16})>$/s);

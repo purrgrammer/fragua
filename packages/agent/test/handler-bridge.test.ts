@@ -177,6 +177,35 @@ describe("makeLlmHandler", () => {
     store.close();
   });
 
+  test("an unpopulated ${{ outputs.X.f }} prompt ref fails closed as a node fail (not a thrown halt)", async () => {
+    // The fail-closed contract: an unresolvable output ref is a node failure
+    // (routes via fail-edge / goal-gate / aborted_exit), NOT an uncaught throw
+    // the executor would turn into a fatal reason:"error" halt. The backend
+    // must never run when substitution fails.
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-failclosed", store, "n1");
+    let backendRan = false;
+    const backend: LlmBackend = {
+      async run() {
+        backendRan = true;
+        return ok({});
+      },
+    };
+    const spec = makeLlmHandler({
+      node: node({ id: "n1", attrs: { prompt: "use ${{ outputs.upstream.field }}" } }),
+      nextNode: "__end__",
+      backend,
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.failureReason).toContain("outputs.upstream.field");
+    }
+    expect(backendRan).toBe(false);
+    store.close();
+  });
+
   test("appends assistant + tool messages into ctx.messages", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r2", store, "n1");
