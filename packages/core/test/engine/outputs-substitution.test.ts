@@ -161,7 +161,7 @@ describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
     // The hash lives in the element NAME so the open/close pair is well-formed
     // markup (a markdown renderer hides the tags instead of printing a broken
     // `</tag attr="…">`). No surrounding whitespace around the value.
-    expect(result).toMatch(/^findings: <fragua_output_([0-9a-f]{16})>all good<\/fragua_output_\1>$/);
+    expect(result).toMatch(/^findings: <fragua_output_([0-9a-f]{64})>all good<\/fragua_output_\1>$/);
   });
 
   test("the boundary id is content-derived (deterministic; differs by value)", () => {
@@ -170,23 +170,21 @@ describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
     expect(idOf("abc")).not.toBe(idOf("abd"));
   });
 
-  test("hashOutputs injects a custom (e.g. SHA-256) boundary hash; default stays FNV", () => {
-    // Server-side callers inject a strong hash; core keeps a browser-safe default.
-    const fakeSha = (_v: string) => "a".repeat(64);
-    const wrapped = substitute("x ${{ outputs.n.v }}", {
-      args: { outputs: { n: { v: "VV" } } },
-      wrapOutputs: true,
-      hashOutputs: fakeSha,
-    });
-    expect(wrapped).toBe(`x <fragua_output_${"a".repeat(64)}>VV</fragua_output_${"a".repeat(64)}>`);
-    // Default (no hashOutputs) → the 16-hex FNV id.
-    const def = substitute("x ${{ outputs.n.v }}", { args: { outputs: { n: { v: "VV" } } }, wrapOutputs: true });
-    expect(def).toMatch(/<fragua_output_[0-9a-f]{16}>VV<\/fragua_output_[0-9a-f]{16}>/);
+  test("boundary id is a 64-hex SHA-256 (browser-safe noble-hashes, no injection)", () => {
+    // One cross-env hash everywhere — core hashes with noble-hashes SHA-256, byte
+    // -identical to `node:crypto`, so no server-side injection seam is needed.
+    const wrapped = substitute("x ${{ outputs.n.v }}", { args: { outputs: { n: { v: "VV" } } }, wrapOutputs: true });
+    expect(wrapped).toMatch(/^x <fragua_output_([0-9a-f]{64})>VV<\/fragua_output_\1>$/);
+    // SHA-256("VV") — pinned so a hash-impl swap is a visible test break.
+    expect(wrapOutputValue("VV")).toBe(
+      "<fragua_output_12fe9d97b944ffcda622a39abd67ef89d33b2ea20535254f475f37249969fb91>" +
+        "VV</fragua_output_12fe9d97b944ffcda622a39abd67ef89d33b2ea20535254f475f37249969fb91>",
+    );
   });
 
   test("the closing tag carries the same hash as the open (break-out needs a preimage)", () => {
     const wrapped = wrapOutputValue("origin/main..HEAD");
-    const m = wrapped.match(/^<fragua_output_([0-9a-f]{16})>(.*)<\/fragua_output_([0-9a-f]{16})>$/s);
+    const m = wrapped.match(/^<fragua_output_([0-9a-f]{64})>(.*)<\/fragua_output_([0-9a-f]{64})>$/s);
     if (m === null) throw new Error(`wrapped value did not match the expected tag shape: ${wrapped}`);
     const openHash = m[1]!;
     const value = m[2]!;

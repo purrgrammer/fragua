@@ -6,7 +6,6 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import { createHash } from "node:crypto";
 import {
   type EventType,
   type LlmBackend,
@@ -20,13 +19,6 @@ import { MessageTooLargeError } from "@fragua/store";
 import type { AgentMessage } from "@fragua/types";
 import { PiLlmBackend, type PiLlmBackendOptions } from "./backend.ts";
 import { syntheticThreadId } from "./thread.ts";
-
-/** SHA-256 hex — injected as the output-delimiter hash so a laundered value
- * can't forge its own closing tag without a SHA-256 preimage. Server-side only
- * (`@fragua/core` stays browser-safe and takes this via `hashOutputs`). */
-function sha256Hex(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
 
 export interface MakeLlmHandlerOpts {
   /**
@@ -82,15 +74,15 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // Resolve `${{ inputs.x }}` / `${{ outputs.X.f }}` before the prompt hits
     // the LLM. Without this the agent sees the literal placeholder and every
     // workflow with an abort-on-empty guard halts on its first node.
-    // `wrapOutputs` + `hashOutputs`: interpolated outputs are delimited with a
-    // SHA-256-derived boundary so an upstream-laundered value can't pose as an
-    // instruction (substitution.ts §6.4).
+    // `wrapOutputs`: interpolated outputs are delimited with a SHA-256-derived
+    // boundary so an upstream-laundered value can't pose as an instruction
+    // (substitution.ts §6.4).
     // An unpopulated `${{ outputs.X.f }}` read FAILS CLOSED as a node `fail`
     // (routes via fail-edge / goal-gate / aborted_exit), never an uncaught throw
     // that the executor would turn into a fatal `reason:"error"` halt.
     let prompt: string;
     try {
-      prompt = substitute(rawPrompt, { args: ctx.args, wrapOutputs: true, hashOutputs: sha256Hex });
+      prompt = substitute(rawPrompt, { args: ctx.args, wrapOutputs: true });
     } catch (err) {
       if (err instanceof UnpopulatedOutputError) {
         return { kind: "transition", outcomeStatus: "fail", failureReason: err.message, tokens: 0, costUsd: 0 };
