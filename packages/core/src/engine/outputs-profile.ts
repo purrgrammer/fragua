@@ -99,6 +99,22 @@ export function parseOutputsDecl(raw: unknown): OutputsDecl {
   const obj = raw as Record<string, unknown>;
   const decl: OutputsDecl = {};
   for (const [key, val] of Object.entries(obj)) {
+    // `optional:` is a record-FIELD modifier. Every top-level output must be
+    // produced by emit_output, so a top-level `optional: true` is meaningless —
+    // reject it loudly rather than silently dropping it (parseScalar ignores
+    // unknown keys), which would surprise an author when omitting the field
+    // fails validation at runtime.
+    if (
+      typeof val === "object" &&
+      val !== null &&
+      !Array.isArray(val) &&
+      (val as Record<string, unknown>)["optional"] === true
+    ) {
+      throw new OutputsProfileError(
+        `top-level output "${key}" cannot be optional — every declared output must be emitted; ` +
+          "`optional:` is only valid on a record field (inside `fields:`)",
+      );
+    }
     decl[key] = parseProfileNode(val, key);
   }
   return decl;

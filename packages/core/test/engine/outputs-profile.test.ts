@@ -77,6 +77,13 @@ describe("outputs profile parser", () => {
     }
   });
 
+  test("rejects a top-level `optional: true` (only valid on a record field)", () => {
+    // Every declared top-level output must be emitted; a top-level optional is
+    // meaningless and was silently dropped before — now it errors loudly.
+    expect(() => parseOutputsDecl({ foo: { type: "string", optional: true } })).toThrow(OutputsProfileError);
+    expect(() => parseOutputsDecl({ foo: { type: "string", optional: true } })).toThrow(/top-level output "foo"/);
+  });
+
   test("rejects a field that is both `optional: true` and listed in required", () => {
     const raw = {
       rec: {
@@ -352,8 +359,8 @@ describe("validateOutputsValue (runtime)", () => {
   });
 
   test("rejects an extra top-level field not in the declaration", () => {
-    // Matches the lowered schema's `additionalProperties: false`. Mostly bites
-    // $FRAGUA_OUTPUT, where a subprocess can write keys the provider can't strip.
+    // Matches the lowered schema's `additionalProperties: false` — our backstop
+    // for a non-strict provider that doesn't strip undeclared keys.
     const decl = parseOutputsDecl({ a: { type: "string" } });
     expect(validateOutputsValue(decl, { a: "x", extra: "y" })).not.toBeNull();
   });
