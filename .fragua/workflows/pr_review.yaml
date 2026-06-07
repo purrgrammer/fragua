@@ -23,7 +23,7 @@
 
 name: pr_review
 goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR (comment or request-changes) with no human gate.
-budget: 21.00 # covers the full lens-split + verify-retry path: scope (0.40) + 3 lens passes (3×2.00, once) + 3×(synthesize 1.00 + verify 0.60 on each retry) + verdict (0.15) ≈ 11.4, with headroom so a retry never halts mid-pass on the cap. verify retargets `synthesize` (cheap re-synthesise), not the lenses, so retries don't re-run the deep passes.
+budget: 21.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 6.00 + verify 0.60) + verdict (0.15) = 20.35, so a retry never halts mid-pass on the cap. review_full bumped 2.50→6.00 so a large (multi-kLoC) diff finishes one deep pass; the real fix for huge diffs (chunked/scoped review) is tracked separately.
 
 inputs:
   pr:
@@ -61,9 +61,9 @@ steps:
 
       For `skip`: write `pr-review.md` (cwd-relative, `write` tool) containing a clean `LGTM: <reason>` as the whole review, before you route skip — the `verdict` node reads it (LGTM ⇒ approve).
     routes:
-      skip:  {to: verdict,             label: "Trivial"}
-      quick: {to: review_quick,        label: "Quick review"}
-      full:  {to: review_correctness,  label: "Full review"}
+      skip:  {to: verdict,      label: "Trivial"}
+      quick: {to: review_quick, label: "Quick review"}
+      full:  {to: review_full,  label: "Full review"}
 
   review_quick:                        # quick tier — one focused pass
     # Intentionally routes straight to `verdict` with NO `verify` gate: this tier
@@ -88,120 +88,58 @@ steps:
 
       Emit only `WROTE` (do NOT reprint the review).
 
-  # ── full tier: three focused lens passes, each emitting typed findings ──
-  # Each lens shares the `review` thread (inherits scope's PR/PATHS/diff context)
-  # but hands its result to `synthesize` as a typed `findings[]` via emit_output —
-  # so the synthesizer aggregates three clean producers instead of disentangling
-  # prose. THE BAR (below) is enforced in every lens AND re-checked at synthesize.
-  # In a diff `-` lines are REMOVED (context only, never flag); only `+`/changed
-  # lines are in scope. A lens whose surface the diff doesn't touch emits [].
-  #
-  # THE BAR (every lens): record a finding ONLY if it has a concrete, PRESENT
-  # consequence (wrong output, data loss, a crash, a security hole, or a
-  # maintenance cost that bites a near-term change) AND a specific fix. DROP
-  # formatting/naming/doc-wording nits, "consider …" preferences, speculative
-  # future-author/hypothetical concerns, intra-workspace API-stability opinions,
-  # guards against inputs that can't occur, and anything in UNCHANGED code. When
-  # unsure, drop it — a clean PR SHOULD come back empty.
-  review_correctness:
+  review_full:                         # full tier — one deep pass over the implicated lenses
     type: llm
     model: claude-opus-4-7
     effort: high
     thread: review
-    allowed-tools: [read, grep, bash]
-    max-cost: 2.00
-    next: review_security
-    outputs:
-      findings:
-        type: array
-        items:
-          type: object
-          fields:
-            severity: { type: choice, options: [critical, high, medium] }
-            location: { type: string }
-            claim:    { type: string }
-            why:      { type: string }
-            fix:      { type: string, optional: true }
-    prompt: |
-      Review PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly) through the **correctness** lens ONLY: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, real edge cases. Cross-check call sites where it matters. Apply THE BAR (see the workflow header rule). `-` lines are context, never flag.
-
-      One finding per issue: `severity` (critical/high/medium — no low tier), `location` (`path:line`), `claim` (one line), `why` (the concrete consequence), `fix` (one sentence; omit if none). NO INVENTION. Empty if nothing clears the bar.
-
-  review_security:
-    type: llm
-    model: claude-opus-4-7
-    effort: high
-    thread: review
-    allowed-tools: [read, grep, bash]
-    max-cost: 2.00
-    next: review_performance
-    outputs:
-      findings:
-        type: array
-        items:
-          type: object
-          fields:
-            severity: { type: choice, options: [critical, high, medium] }
-            location: { type: string }
-            claim:    { type: string }
-            why:      { type: string }
-            fix:      { type: string, optional: true }
-    prompt: |
-      Review PR #${{ inputs.pr }} through the **security** lens ONLY, and only where the diff touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging. Apply THE BAR; `-` lines are context.
-
-      Same finding shape (severities critical/high/medium). NO INVENTION. Empty if no security surface or nothing clears the bar.
-
-  review_performance:
-    type: llm
-    model: claude-opus-4-7
-    effort: high
-    thread: review
-    allowed-tools: [read, grep, bash]
-    max-cost: 2.00
-    next: synthesize
-    outputs:
-      findings:
-        type: array
-        items:
-          type: object
-          fields:
-            severity: { type: choice, options: [critical, high, medium] }
-            location: { type: string }
-            claim:    { type: string }
-            why:      { type: string }
-            fix:      { type: string, optional: true }
-    prompt: |
-      Review PR #${{ inputs.pr }} through the **performance** lens ONLY, and only where the diff touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits. Apply THE BAR; `-` lines are context.
-
-      Same finding shape (severities critical/high/medium). NO INVENTION. Empty if no perf surface or nothing clears the bar.
-
-  synthesize:                          # aggregate the three typed lens results → write pr-review.md
-    type: llm
-    thread: review
-    allowed-tools: [read, grep, write]
-    max-cost: 1.00
+    allowed-tools: [read, grep, bash, write]
+    max-cost: 6.00 # one deep pass; raised from 2.50 so a large multi-kLoC diff finishes (huge-diff chunking tracked separately)
     next: verify
     prompt: |
-      Combine the three lens results into one ranked review and WRITE it to `pr-review.md` (cwd-relative, `write` tool) — do NOT print the body to the thread (the `verdict` step reads the file). The findings are typed arrays:
+      Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). In a diff, `-` lines are being REMOVED — they are context only, never flag them; `+`/changed lines are the change under review. Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
 
-        correctness: ${{ outputs.review_correctness.findings }}
-        security:    ${{ outputs.review_security.findings }}
-        performance: ${{ outputs.review_performance.findings }}
+        correctness — logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, real edge cases. Cross-check call sites where it matters.
+        security (iff trust boundaries / auth / input parsing / crypto / secrets touched) — injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF; check surrounding sanitisation before flagging.
+        performance (iff hot paths / data layer / loops / large payloads touched) — complexity surprises (O(n²) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads; confidence ∝ evidence; no cold-path constant-factor nits.
+        architecture (iff cross-package coupling / public surface / abstraction boundaries change) — ONLY a concrete, present structural break with a real maintenance cost: a dependency cycle, a leaked internal an external consumer can now misuse, duplication that will demonstrably drift. NOT naming, NOT "consider extracting/grouping", NOT export- or API-stability opinions, NOT speculative "a future author might".
 
-      Merge them: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-apply THE BAR across the merged set and drop anything that doesn't clear it. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` (there is NO Low tier).
+      THE BAR — apply to every candidate before you write it down. Report a finding ONLY if it has a concrete, PRESENT consequence (wrong output, data loss, a crash, a security hole, or a maintenance cost that will bite a near-term change) AND a specific fix. If the worst case is "a reader might be confused", "a future change might…", or it's a preference, DROP it. When unsure, drop it. A short, high-signal review beats a padded one — a clean PR SHOULD come back `All clear`; never manufacture findings to look thorough.
 
-      ## Scope: one paragraph naming the touched packages/areas and the change type; name which lenses found anything.
+      DO NOT FLAG (drop silently — not even as Medium):
+        - formatting / whitespace / import order (the formatter owns these);
+        - naming, comment wording, doc phrasing, or "this is only documented in a test/comment";
+        - "consider …" / "you might want to …" suggestions with no concrete bug;
+        - speculative future-author traps or hypotheticals about code that doesn't exist yet;
+        - intra-workspace export / API-stability worries (this is a pre-1.0 monorepo);
+        - defending against inputs that cannot occur given the call sites;
+        - test-coverage suggestions for paths that can't be triggered;
+        - restating that something is already handled or documented;
+        - any issue in UNCHANGED or sibling code — you may READ any file for context, but only lines this PR adds or changes are in scope to flag.
 
-      Per finding: **path:line** — one-line claim. `Why:` one sentence (the concrete consequence). `Fix:` one sentence or short snippet.
+      Then WRITE one ranked review to `pr-review.md` (cwd-relative, `write` tool) — do NOT print it to the thread; the `verdict` step reads the file, and re-emitting the body burns cost twice. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium`.
 
-      If all three arrays are empty (or nothing clears the bar), replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence). End the file with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
+      ## Scope: one paragraph naming the touched packages/areas and the change type; name which lenses you applied and why.
+
+      Severities (there is NO Low tier — anything below Medium is noise; drop it):
+        Critical — data loss / corruption / a security hole / a crash on a normal path, shipping now.
+        High     — a correctness or security bug that WILL trigger in real use.
+        Medium   — a real, contained issue worth fixing before merge.
+
+      Per finding: **path:line** — one-line claim. `Why:` one sentence (the concrete consequence). `Fix:` one sentence or short snippet. `Lens:` which lens flagged it.
+
+      Rules: NO INVENTION. A concern flagged under two lenses is ONE entry at the higher severity, noted `(cross-flagged)`.
+
+      If nothing clears the bar, replace the severity sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence).
+
+      End the file with `## Next steps` — ≤3 ordered actions, or `No follow-up required.`
 
       After the file is written, emit only `WROTE`.
 
   verify:                              # full tier — automated evidence-quality gate
     type: llm
     thread: review
-    retry: synthesize                  # REJECT ⇒ re-synthesise (capped; budget covers the full path)
+    retry: review_full                 # REJECT ⇒ re-review (capped; budget covers the full path)
     max-retries: 2
     allowed-tools: [read, grep]
     max-cost: 0.60
