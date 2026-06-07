@@ -16,7 +16,15 @@
 // the panel renders a hint instead of collapsing — the layout stays
 // stable so the graph doesn't reflow on click.
 
-import { type Node as GraphNode, handlerOf } from "@fragua/core";
+import {
+  type Node as GraphNode,
+  handlerOf,
+  isOutputArray,
+  isOutputRecord,
+  isOutputScalar,
+  type OutputProfile,
+  type OutputsDecl,
+} from "@fragua/core";
 import type { NodeState } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { canRetry, showsLlm } from "../lib/node-metadata.ts";
@@ -190,6 +198,20 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
+      {/* Typed outputs — the structured shape this llm node emits via
+       *  `emit_output`, read downstream as `${{ outputs.<node>.<field> }}`.
+       *  Rendered as an aligned type tree (records/arrays nest). */}
+      {attrs.outputs && Object.keys(attrs.outputs).length > 0 && (
+        <Section title="outputs">
+          <pre
+            data-testid="node-inspector-outputs"
+            className="whitespace-pre-wrap break-words px-3 py-2 text-sw-xs text-sw-text"
+          >
+            {formatOutputsDecl(attrs.outputs)}
+          </pre>
+        </Section>
+      )}
+
       {/* Routing targets — nodes that declare `routes=` are routing nodes.
        *  List the route names as chips so the operator can see what
        *  branches this node can choose from. */}
@@ -215,6 +237,48 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
       )}
     </aside>
   );
+}
+
+/** Render an `OutputsDecl` as an aligned, indented type tree:
+ *
+ *   findings   record[]
+ *     severity  choice (critical | high | medium | low)
+ *     location  string
+ *     fix       string?
+ *
+ * Names are column-aligned within each sibling group; record/array-of-record
+ * fields nest one level deeper. Optional record fields carry a trailing `?`. */
+function formatOutputsDecl(decl: OutputsDecl): string {
+  const lines: string[] = [];
+  const walk = (entries: [string, OutputProfile][], depth: number, required?: Set<string>): void => {
+    const display = entries.map(([name]) => name + (required && !required.has(name) ? "?" : ""));
+    const width = display.reduce((w, d) => Math.max(w, d.length), 0);
+    entries.forEach(([, profile], i) => {
+      lines.push(`${"  ".repeat(depth)}${display[i]!.padEnd(width)}  ${outputTypeHead(profile)}`);
+      if (isOutputRecord(profile)) {
+        walk(Object.entries(profile.fields), depth + 1, new Set(profile.required));
+      } else if (isOutputArray(profile) && isOutputRecord(profile.items)) {
+        walk(Object.entries(profile.items.fields), depth + 1, new Set(profile.items.required));
+      }
+    });
+  };
+  walk(Object.entries(decl), 0);
+  return lines.join("\n");
+}
+
+/** One-line type summary for a profile — the part shown next to the field
+ * name. Nested record fields are rendered on their own lines by the walker,
+ * so a record collapses to `record` / `record[]` here. */
+function outputTypeHead(profile: OutputProfile): string {
+  if (isOutputScalar(profile)) {
+    return profile.kind === "choice" ? `choice (${profile.options.join(" | ")})` : profile.kind;
+  }
+  if (isOutputRecord(profile)) return "record";
+  const items = profile.items;
+  if (isOutputScalar(items)) {
+    return items.kind === "choice" ? `choice (${items.options.join(" | ")})[]` : `${items.kind}[]`;
+  }
+  return isOutputRecord(items) ? "record[]" : "array[]";
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }): JSX.Element {
