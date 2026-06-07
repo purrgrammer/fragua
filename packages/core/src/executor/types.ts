@@ -8,7 +8,7 @@ import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import type { Node } from "../types/graph.ts";
 import type { Outcome } from "../types/outcome.ts";
-import type { OutputsDecl, OutputsValue } from "../types/outputs.ts";
+import type { OutputsDecl } from "../types/outputs.ts";
 import type { SummaryLevel } from "../types/summary.ts";
 
 export type { BudgetSnapshotInput };
@@ -68,9 +68,4 @@ export interface LlmInput {
   /** Outputs declared by the current node (forwarded from `node.attrs.outputs`).
    * Used by the backend to synthesise the `emit_output` tool. */
   outputsDecl?: OutputsDecl;
-  /** Pre-fetched resolved outputs from dominating nodes. Keyed by producer
-   * node id; value is the latest emitted struct for that node.
-   * Threaded into `SubstitutionArgs.outputs` so `$\{\{ outputs.X.f \}\}` resolves
-   * in both the prompt and tool_command. */
-  resolvedOutputs?: Record<string, OutputsValue>;
 }
