@@ -31,6 +31,9 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E030 | `${{ inputs.x }}` references an input not declared in the workflow's `inputs:` block (scans `prompt` / `text` / `run`). Add it to `inputs:` or fix the typo. |
 | E031 | A goal-gate step (uses `retry:`) has no `max-retries:` — the per-gate retarget cap is required on every `retry:` gate. Add `max-retries: N` to the gate step. |
 | E032 | A step declares no success successor. Flow is explicit — there is no linear fall-through to the next declared step. Add `next:` / `on: {success: …}` / `routes:`, or `next: exit` to finish a branch. |
+| E033 | An `outputs:` declaration uses a construct outside the restricted profile — most commonly a `choice` field with no `options`. (Out-of-profile JSON-Schema keys like `pattern`/`minimum`/`oneOf`/`$ref` are rejected earlier as a parse error.) |
+| E034 | Malformed `outputs:` declaration — an empty block (no fields) or an output key that isn't a valid identifier (must start with a letter, then letters/digits/underscore). |
+| E035 | A `${{ outputs.X.f }}` reference is broken (scans `prompt` / `text` / `run`): producer `X` doesn't exist, declares no `outputs:`, doesn't declare the field/path `f`, or can never reach the consumer (a dead reference). Fix the producer name, the field path, or the wiring. |
 
 ## Warnings
 
@@ -43,6 +46,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W009 | An `llm` step with empty `prompt` and empty label — the call has nothing to do. |
 | W013 | Unrecognised attribute on a step / edge / graph. The parser passes unknown keys through silently; this catches typos (`goalgate: true`, `max_seconds:`). Canonical list: `packages/core/src/types/graph.ts`. |
 | W014 | A step's `retry-policy:` or the graph-level `default-retry-policy:` names an unknown preset. Expected one of `none` / `standard` / `aggressive` / `linear` / `patient`. Unknown values silently fall back to `none` at runtime. |
+| W015 | A `${{ outputs.X.f }}` reference where producer `X` can reach the consumer but doesn't dominate its success path — on some run path the producer didn't run, so the read fails closed at runtime (a node failure, never a silent `""`). Advisory: re-wire so the producer always precedes the consumer, or accept the fail-closed branch. Suppressed when `X` is reached only on a path where it did run (e.g. a recovery step behind another node's `fail:` edge). |
 
 ## Removed codes — these no longer fire
 
