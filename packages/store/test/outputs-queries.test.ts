@@ -3,8 +3,9 @@
 
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { applyFact, emptyMetrics, SqliteStore } from "../src/index.ts";
+import { applyFact, emptyMetrics, MAX_EVENT_PAYLOAD_BYTES, SqliteStore } from "../src/index.ts";
 import { getLatestOutput, getOutputsForRun, insertOutput } from "../src/outputs-queries.ts";
+import { STRUCT_INLINE_MAX_BYTES } from "../src/routing-blobs.ts";
 import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
 
 function rawDb(store: SqliteStore): Database {
@@ -233,6 +234,57 @@ describe("appendFact + outputs index (same-transaction write)", () => {
     expect(() => store.getOutputsForRun(runId)).not.toThrow();
     expect(store.getOutputsForRun(runId)).toEqual([]); // unreadable row dropped
     expect(store.getLatestOutput(runId, "scope")).toBeNull();
+  });
+
+  test("a near-threshold inline output + full metrics stays under the 4KB event cap", async () => {
+    // Headroom guard: an output struct just under the inline spill threshold
+    // rides the event payload alongside every metric field. The threshold
+    // (STRUCT_INLINE_MAX_BYTES) must leave enough room that the whole
+    // node_completed payload stays under MAX_EVENT_PAYLOAD_BYTES — otherwise a
+    // legitimately-inline struct + a fully-populated cost/token split would
+    // breach the cap. Tie the struct size to the threshold so raising it can't
+    // silently erase the margin.
+    const { store, runId } = await makeStoreWithRun();
+    const state = store.getState(runId)!;
+    const report = "r".repeat(STRUCT_INLINE_MAX_BYTES - 150);
+    const outputs = { report, pr: "12345" };
+    expect(Buffer.byteLength(JSON.stringify(outputs))).toBeLessThan(STRUCT_INLINE_MAX_BYTES); // stays inline
+
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: 1, startNode: "scope" },
+        },
+        {
+          type: "fact.node_completed",
+          payload: {
+            nodeId: "scope",
+            iteration: 0,
+            nextNode: "exit",
+            outputs,
+            tokens: 999999,
+            costUsd: 1.23456789,
+            inputTokens: 123456,
+            outputTokens: 654321,
+            cacheReadTokens: 100000,
+            cacheWriteTokens: 50000,
+            inputCostUsd: 0.12345678,
+            outputCostUsd: 0.87654321,
+            cacheReadCostUsd: 0.301803,
+            cacheWriteCostUsd: 0.00258375,
+            modelName: "anthropic/claude-opus-4-7-some-long-variant-identifier",
+          },
+        },
+      ],
+      state.version,
+    );
+
+    const ev = store.getEvents(runId).find((e) => e.type === "fact.node_completed")!;
+    // The struct stayed inline (not spilled) AND the whole payload fits the cap.
+    expect((ev.payload as { outputs: Record<string, unknown> }).outputs["$fragua_blob"]).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(ev.payload))).toBeLessThan(MAX_EVENT_PAYLOAD_BYTES);
   });
 
   test("small outputs stay inline (no blob ref)", async () => {
