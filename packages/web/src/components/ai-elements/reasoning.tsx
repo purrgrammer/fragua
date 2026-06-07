@@ -7,7 +7,7 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { Streamdown } from "streamdown";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -43,7 +43,6 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
   duration?: number;
 };
 
-const AUTO_CLOSE_DELAY = 1000;
 const MS_IN_S = 1000;
 
 export const Reasoning = memo(
@@ -57,9 +56,10 @@ export const Reasoning = memo(
     children,
     ...props
   }: ReasoningProps) => {
-    const resolvedDefaultOpen = defaultOpen ?? isStreaming;
-    // Track if defaultOpen was explicitly set to false (to prevent auto-open)
-    const isExplicitlyClosed = defaultOpen === false;
+    // Thinking is never auto-expanded — it stays collapsed by default (even
+    // while streaming) and only opens when the operator clicks. An explicit
+    // `defaultOpen`/`open` prop still wins for callers that want otherwise.
+    const resolvedDefaultOpen = defaultOpen ?? false;
 
     const [isOpen, setIsOpen] = useControllableState<boolean>({
       defaultProp: resolvedDefaultOpen,
@@ -71,14 +71,12 @@ export const Reasoning = memo(
       prop: durationProp,
     });
 
-    const hasEverStreamedRef = useRef(isStreaming);
-    const [hasAutoClosed, setHasAutoClosed] = useState(false);
     const startTimeRef = useRef<number | null>(null);
 
-    // Track when streaming starts and compute duration
+    // Track streaming start/end only to compute the "Thought for N seconds"
+    // duration — no open/close side effects.
     useEffect(() => {
       if (isStreaming) {
-        hasEverStreamedRef.current = true;
         if (startTimeRef.current === null) {
           startTimeRef.current = Date.now();
         }
@@ -87,25 +85,6 @@ export const Reasoning = memo(
         startTimeRef.current = null;
       }
     }, [isStreaming, setDuration]);
-
-    // Auto-open when streaming starts (unless explicitly closed)
-    useEffect(() => {
-      if (isStreaming && !isOpen && !isExplicitlyClosed) {
-        setIsOpen(true);
-      }
-    }, [isStreaming, isOpen, setIsOpen, isExplicitlyClosed]);
-
-    // Auto-close when streaming ends (once only, and only if it ever streamed)
-    useEffect(() => {
-      if (hasEverStreamedRef.current && !isStreaming && isOpen && !hasAutoClosed) {
-        const timer = setTimeout(() => {
-          setIsOpen(false);
-          setHasAutoClosed(true);
-        }, AUTO_CLOSE_DELAY);
-
-        return () => clearTimeout(timer);
-      }
-    }, [isStreaming, isOpen, setIsOpen, hasAutoClosed]);
 
     const handleOpenChange = useCallback(
       (newOpen: boolean) => {
@@ -122,7 +101,10 @@ export const Reasoning = memo(
     return (
       <ReasoningContext.Provider value={contextValue}>
         <Collapsible
-          className={cn("not-prose mb-[var(--sw-space-4)]", className)}
+          // No own bottom margin — the parent MessageContent already stacks
+          // blocks with a uniform gap; an extra mb here made the trace look
+          // bottom-heavy (more space below than above).
+          className={cn("not-prose", className)}
           onOpenChange={handleOpenChange}
           open={isOpen}
           {...props}
@@ -141,7 +123,13 @@ export type ReasoningTriggerProps = ComponentProps<typeof CollapsibleTrigger> & 
 const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
   if (isStreaming || duration === 0) {
     // Sentence case, not Title Case (§ Typography: "Never Title Case").
-    return <Shimmer duration={1}>Thinking…</Shimmer>;
+    // Neutral tone — the state accent belongs to the node's status dot, not
+    // the thinking label (§ Color: "labels stay text-sw-muted").
+    return (
+      <Shimmer duration={1} color="var(--sw-muted)">
+        Thinking…
+      </Shimmer>
+    );
   }
   if (duration === undefined) {
     return <p>Thought for a few seconds</p>;
@@ -198,8 +186,11 @@ export const ReasoningContent = memo(({ className, children, ...props }: Reasoni
       // Enter/exit on transform + opacity only, paired with the chevron.
       // § Motion: "Only animate transform and opacity"; "Drawer / panel
       // enter-exit … 200ms ease-out".
-      "mt-[var(--sw-space-3)] outline-none",
-      "text-[length:var(--sw-text-sm)] text-[var(--sw-text)]",
+      "mt-[var(--sw-space-2)] outline-none",
+      // Thinking is secondary context: smaller + muted, set off as a quote
+      // (hairline left rule) so it reads as the model's aside, not body copy.
+      "text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]",
+      "border-l-2 border-[var(--sw-border)] pl-[var(--sw-space-3)]",
       "data-[state=open]:animate-in data-[state=closed]:animate-out",
       "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
       "data-[state=open]:slide-in-from-top-1 data-[state=closed]:slide-out-to-top-1",
