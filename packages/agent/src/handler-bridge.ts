@@ -281,6 +281,7 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       kind: "transition",
       outcomeStatus: outcome.status,
       ...(outcome.route !== undefined && outcome.route.length > 0 ? { route: outcome.route } : {}),
+      ...(outcome.outputs !== undefined ? { outputs: outcome.outputs } : {}),
       ...(explicitNext != null ? { nextNode: explicitNext } : {}),
       ...(failureReason !== undefined ? { failureReason } : {}),
       tokens,
