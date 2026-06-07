@@ -38,8 +38,16 @@ export type OutputsDecl = Record<string, OutputProfile>;
 
 // ─────────────── Runtime value types ───────────────
 
-/** A JSON-safe value that satisfies an `OutputProfile`. */
-export type OutputStructValue = string | number | boolean | OutputStructValue[] | { [k: string]: OutputStructValue };
+/** A JSON-safe value that satisfies an `OutputProfile`. `null` is included
+ * because an `optional: true` field may be emitted as `null` ("no value"); a
+ * direct `${{ outputs.X.f }}` read of such a leaf fails closed. */
+export type OutputStructValue =
+  | string
+  | number
+  | boolean
+  | null
+  | OutputStructValue[]
+  | { [k: string]: OutputStructValue };
 
 /** The runtime value a node emits: one entry per declared output field. */
 export type OutputsValue = Record<string, OutputStructValue>;

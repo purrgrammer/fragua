@@ -49,6 +49,16 @@ describe("substituteOutputs", () => {
     expect(() => substituteOutputs("x=${{ outputs.nonexistent.field }}", {})).toThrow(UnpopulatedOutputError);
   });
 
+  test("a null leaf (optional field emitted as null) fails closed, not literal 'null'", () => {
+    expect(() => substituteOutputs("fix=${{ outputs.lens.fix }}", { lens: { fix: null } })).toThrow(
+      UnpopulatedOutputError,
+    );
+    // a falsy-but-present scalar still renders (only "no value" fails closed)
+    expect(substituteOutputs("n=${{ outputs.s.n }} b=${{ outputs.s.b }}", { s: { n: 0, b: false } })).toBe(
+      "n=0 b=false",
+    );
+  });
+
   test("partially-resolved template still throws on the missing ref", () => {
     expect(() => substituteOutputs("a=${{ outputs.s.a }} b=${{ outputs.s.b }}", { s: { a: "1" } })).toThrow(
       /outputs\.s\.b/,

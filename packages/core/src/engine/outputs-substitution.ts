@@ -66,9 +66,10 @@ export function substituteOutputs(
 
 /** Resolve a single `${{ outputs.<producer>.<segments> }}` reference to its
  * rendered string, or `undefined` when the producer emitted nothing on this
- * path (producer absent, or the dotted path doesn't resolve). A real
- * `false`/`0`/`""` value renders to its string — only a genuinely-absent value
- * is `undefined`, so the caller's fail-closed check never trips on a falsy
+ * path (producer absent, the dotted path doesn't resolve, or the leaf is an
+ * optional field emitted as `null`). A real `false`/`0`/`""` value renders to
+ * its string — only a genuinely-absent value (missing or `null`) is `undefined`,
+ * so the caller's fail-closed check trips on "no value" but never on a falsy
  * scalar. Shared by `substituteOutputs` and the single-pass `substitute`. */
 export function resolveOutputRef(
   outputs: Record<string, OutputsValue>,
@@ -79,7 +80,10 @@ export function resolveOutputRef(
   const producerVal = outputs[producer];
   if (producerVal === undefined) return undefined;
   const resolved = resolveSegments(producerVal, segments);
-  if (resolved === undefined) return undefined;
+  // `undefined` (no such field) and `null` (an optional field emitted as null —
+  // i.e. "no value") both fail closed: an unpopulated ref is a node failure,
+  // never a silent `"null"` interpolated into the prompt.
+  if (resolved === undefined || resolved === null) return undefined;
   return renderValue(resolved, escapeForShell);
 }
 
