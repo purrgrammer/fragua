@@ -20,9 +20,9 @@ describe("findEmitOutputCall", () => {
     return { type: "toolCall", id: `tc-${name}`, name, arguments: args };
   }
 
-  test("returns value for an emit_output call", () => {
+  test("returns value + isolated for a lone emit_output call", () => {
     const r = findEmitOutputCall([assistant(toolCall("emit_output", { pr_number: "123" }))]);
-    expect(r).toEqual({ value: { pr_number: "123" } });
+    expect(r).toEqual({ value: { pr_number: "123" }, isolated: true });
   });
 
   test("returns null when no emit_output call", () => {
@@ -37,6 +37,14 @@ describe("findEmitOutputCall", () => {
       assistant(toolCall("emit_output", { pr_number: "2" })),
     ]);
     expect(r?.value).toEqual({ pr_number: "2" });
+  });
+
+  test("isolated=false when emit_output shares a batch with another tool", () => {
+    const r = findEmitOutputCall([
+      assistant(toolCall("bash", { command: "echo hi" }), toolCall("emit_output", { pr_number: "1" })),
+    ]);
+    expect(r?.value).toEqual({ pr_number: "1" });
+    expect(r?.isolated).toBe(false);
   });
 });
 
@@ -214,6 +222,37 @@ describe("emit_output tool synthesis", () => {
       });
       expect(outcome.status).toBe("fail");
       expect(outcome.failure_reason).toContain("emit_output");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  test("emit_output sharing a turn with another tool → outcome.status='fail' (not isolated)", async () => {
+    // emit_output terminates the turn, so a tool in the same batch runs blind —
+    // its result never reaches the emit. Reject it (mirrors the route exit).
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-emit-batch-"));
+    try {
+      const { outcome } = await runWithOutputs({
+        scratch,
+        registry: coreRegistry(),
+        attrs: { outputs: PR_OUTPUTS_DECL },
+        responses: [
+          // bash is non-terminating, so the loop runs another turn; the model
+          // then stops without re-emitting, leaving the non-isolated emit as the
+          // last one the scan finds.
+          fauxAssistantMessage(
+            [
+              fauxToolCall("bash", { command: "echo hi" }, { id: "t1" }),
+              fauxToolCall("emit_output", { pr_number: "42", loc: 100 }, { id: "t2" }),
+            ],
+            { stopReason: "toolUse" },
+          ),
+          fauxAssistantMessage([fauxText("done")], { stopReason: "stop" }),
+        ],
+      });
+      expect(outcome.status).toBe("fail");
+      expect(outcome.failure_reason).toContain("alone");
+      expect(outcome.outputs).toBeUndefined();
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

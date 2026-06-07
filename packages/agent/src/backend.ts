@@ -785,6 +785,16 @@ export class PiLlmBackend implements LlmBackend {
       if (emitCall == null) {
         return fail("node declared outputs: but did not call emit_output", { non_retryable: true });
       }
+      // Isolation (mirrors the route exit, D3): emit_output terminates the turn,
+      // so any tool call sharing its batch runs but its result is discarded — the
+      // output was committed blind to that side effect. Force the model to emit
+      // alone, on a response of its own.
+      if (!emitCall.isolated) {
+        return fail(
+          "emit_output shared an assistant response with other tool calls — emit it alone, with no other tools in the same turn",
+          { non_retryable: true },
+        );
+      }
       const valErr = validateOutputsValue(outputsDecl, emitCall.value);
       if (valErr !== null) {
         return fail(`emit_output value failed validation: ${valErr}`, { non_retryable: true });
@@ -1058,7 +1068,8 @@ function buildEmitOutputTool(decl: OutputsDecl): AgentTool {
     label: "emit_output",
     description:
       "Emit the structured output for this step. Call exactly once when you have produced all declared output fields. " +
-      "All declared fields must be present with their correct types. This call closes the turn.",
+      "All declared fields must be present with their correct types. This call closes the turn — call it alone, " +
+      "with no other tool calls in the same response (do all other work in earlier turns first).",
     parameters,
     async execute(_toolCallId, params) {
       return {
@@ -1072,20 +1083,33 @@ function buildEmitOutputTool(decl: OutputsDecl): AgentTool {
 
 /**
  * Scan the transcript for the last `emit_output` tool call.
- * Returns `{ value }` where `value` is the raw arguments object, or `null`.
+ * Returns `{ value, isolated }`:
+ *  - `value`: the raw arguments object from the `emit_output` block.
+ *  - `isolated`: false when the assistant message containing the call also
+ *    contains any other `toolCall` block. emit_output terminates the turn, so a
+ *    tool sharing its batch runs but its result is discarded — the same D3
+ *    isolation rule the `route` exit enforces (see `findRouteToolCall`).
  * Last call wins (like `findRouteToolCall`) to handle thread rehydration.
  */
 export function findEmitOutputCall(
   messages: ReadonlyArray<{ role: string; content?: unknown }>,
-): { value: unknown } | null {
+): { value: unknown; isolated: boolean } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message === undefined || message.role !== "assistant" || !Array.isArray(message.content)) continue;
     const blocks = message.content as Array<{ type: string; name?: string; arguments?: unknown }>;
+    let emitBlock: { arguments?: unknown } | undefined;
+    let otherToolCalls = 0;
     for (const block of blocks) {
-      if (block.type !== "toolCall" || block.name !== "emit_output") continue;
-      return { value: block.arguments };
+      if (block.type !== "toolCall") continue;
+      if (block.name === "emit_output" && emitBlock === undefined) {
+        emitBlock = block;
+        continue;
+      }
+      otherToolCalls += 1;
     }
+    if (emitBlock === undefined) continue;
+    return { value: emitBlock.arguments, isolated: otherToolCalls === 0 };
   }
   return null;
 }
