@@ -789,6 +789,7 @@ function BranchCollapsible({
               state={stateByNodeId.get(m.nodeId)}
               isLive={isLive}
               isPaused={isPaused}
+              staticHeader
             >
               {m.rows.map((row) => (
                 <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
@@ -808,9 +809,20 @@ interface NodeSectionProps {
   isLive: boolean;
   isPaused: boolean;
   children: ReactNode;
+  /** Render the header static (not sticky). Used for member-node sections
+   * nested inside a fan-out branch collapsible — a sticky header inside the
+   * scroll container would pin and overlap as you scroll the branch. */
+  staticHeader?: boolean;
 }
 
-function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionProps): JSX.Element {
+function NodeSection({
+  nodeId,
+  state,
+  isLive,
+  isPaused,
+  children,
+  staticHeader = false,
+}: NodeSectionProps): JSX.Element {
   const label = nodeId ?? "unscoped";
   const status: NodeState["state"] | "idle" = state?.state ?? "idle";
   return (
@@ -819,7 +831,12 @@ function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionP
       data-testid={nodeId ? `node-section-${nodeId}` : "node-section-unscoped"}
       className="relative flex flex-col gap-3"
     >
-      <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm">
+      <header
+        className={cn(
+          "z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm",
+          !staticHeader && "sticky top-0",
+        )}
+      >
         <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
         <span
           className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80"
