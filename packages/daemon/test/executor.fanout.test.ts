@@ -754,6 +754,59 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     r.store.close();
   });
 
+  test("a parallel node crossing 80% of its max-cost emits budget.warn ONCE (not silent, not repeated)", async () => {
+    const r = rig({
+      yaml: `name: wfo
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan:
+    type: parallel
+    branches: [a_scan, b_scan]
+    max-cost: 0.10
+    next: synth
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // Each branch spends 0.045 → closure sum 0.09 = 90% of the 0.10 cap: warn, no breach.
+    const spend = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.045 }),
+      });
+    spend("a_scan");
+    spend("b_scan");
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "warn1", "begin");
+    await drive(r, "warn1");
+
+    const final = r.store.getState("warn1")!;
+    expect(final.status).toBe("completed"); // a warn neither pauses nor halts
+    const warns = r.store
+      .getEvents("warn1")
+      .filter((e) => e.type === "budget.warn" && (e.payload as { caller_node_id?: string }).caller_node_id === "fan");
+    // Exactly once: not silent (the pre-fix gap), and not re-fired across the
+    // region's many per-commit budget gates (the __budget_warned mark persisted).
+    expect(warns).toHaveLength(1);
+    expect(Array.isArray(final.routing["__budget_warned"])).toBe(true);
+    r.store.close();
+  });
+
   test("crash after branches commit but before join → committed branches do NOT re-run on recovery", async () => {
     const r = rig({ yaml: HOL_YAML });
     const seen: Record<string, number> = {};

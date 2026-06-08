@@ -24,6 +24,7 @@ import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import {
+  BUDGET_WARNED_KEY,
   buildSubstitutionArgs,
   classifyAbortCause,
   deriveResumeOf,
@@ -1160,6 +1161,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // after a commit, so this is always fresh there).
   let lastFanoutState: RunState | undefined;
 
+  // Soft budget-warn tags (`__budget_warned`) accrued by `fanoutBudgetDisposition`
+  // this fan-out run, pending a durable fold into routing so an 80% warn fires
+  // once per run (the fan-out analog of the linear planner's mark). Drained onto
+  // the next commit by `commitFanoutFact`.
+  const pendingWarnTags = new Set<string>();
+
   // ── Fan-out (Model A): serialized commit lane. Re-reads the live version
   // each attempt; a sibling's commit having moved `version` is benign — retry
   // the APPEND (never re-execute). This is the linearization point that makes
@@ -1173,8 +1180,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     for (let attempt = 0; attempt < FANOUT_COMMIT_ATTEMPTS; attempt++) {
       const fresh = opts.store.getState(runId);
       if (fresh == null || fresh.status !== "running") return { ok: false, reason: "status" };
+      // A pending soft budget-warn mark rides this commit's routing patch (prior ∪
+      // pending, sorted) so the 80% warn persists once per run — the fan-out analog
+      // of the linear planner's `__budget_warned` fold.
+      let effectiveOpts = appendOpts;
+      if (pendingWarnTags.size > 0) {
+        const prior = readBudgetWarned(fresh.routing);
+        const merged = new Set(prior);
+        for (const t of pendingWarnTags) merged.add(t);
+        if (merged.size > prior.size) {
+          effectiveOpts = {
+            ...appendOpts,
+            routingPatch: { ...(appendOpts.routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() },
+          };
+        }
+      }
       try {
-        const res = opts.store.appendFact(runId, facts, fresh.version, appendOpts);
+        const res = opts.store.appendFact(runId, facts, fresh.version, effectiveOpts);
         lastFanoutState = res.state;
         invalidateOutputsCacheIf(facts);
         return { ok: true };
@@ -1491,6 +1513,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         nodeCumulativeCostUsd += bucket.costUsd;
         nodeCumulativeTokens += bucket.tokens;
       }
+      // Suppress re-warns for tags already marked (routing) OR emitted-but-not-yet-
+      // folded this fan-out run (pendingWarnTags) — else each per-commit gate call
+      // re-fires the same 80% warn.
+      const alreadyWarned = new Set([...readBudgetWarned(folded.routing), ...pendingWarnTags]);
       const budget = evaluateBudget({
         graphAttrs: graph?.attrs ?? {},
         ...(node?.attrs !== undefined ? { completedNodeAttrs: node.attrs } : {}),
@@ -1499,9 +1525,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         cumulativeTokens: folded.metrics.totalInputTokens + folded.metrics.totalOutputTokens,
         nodeCumulativeCostUsd,
         nodeCumulativeTokens,
-        alreadyWarned: readBudgetWarned(folded.routing),
+        alreadyWarned,
         ...(overrides !== undefined ? { overrides } : {}),
       });
+      // Emit the soft budget.warn / budget.stop observability the linear planner
+      // emits via its trail, and mark the new tags pending so commitFanoutFact
+      // folds them durably. Without this a fan-out 80% crossing — and a
+      // budget_policy="warn" ceiling breach — were silent.
+      if (budget.events.length > 0) {
+        opts.store.appendObservabilityEvents(
+          runId,
+          budget.events.map((e) => ({ type: e.type, payload: { nodeId: parallelNode, ...e.payload } })),
+        );
+        for (const t of budget.newlyWarned) pendingWarnTags.add(t);
+      }
       if (budget.shouldHalt) {
         const payload: { reason: "budget"; detail?: string } = { reason: "budget" };
         if (budget.haltReason !== undefined && budget.haltReason.length > 0) payload.detail = budget.haltReason;
