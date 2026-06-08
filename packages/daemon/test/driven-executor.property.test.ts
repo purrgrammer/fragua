@@ -35,11 +35,18 @@ import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
-import { makeArbGraph } from "./arbitraries/graph.ts";
+import { type ArbGraphOptions, makeArbGraph } from "./arbitraries/graph.ts";
 import { checkRunInvariants } from "./invariants.ts";
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 const AUTO_PAUSE_REASONS = new Set(["provider_retry", "handler_retry", "timeout_retry"]);
+
+// The scripted handlers here return plain success/fail/retry transitions — they
+// neither emit typed `outputs:` nor run the fan-out frontier, so a graph with an
+// `${{ outputs.X.f }}` consumer or a `type: parallel` node wouldn't reach a
+// clean terminal under this drive. Those shapes are the validate()-only
+// bootstrap's job; here we keep to the driveable spine + routing + human set.
+const DRIVEABLE: ArbGraphOptions = { structuredOutputs: false, parallel: false };
 
 function isRoutingNode(node: Node): boolean {
   return node.type === "llm" && Array.isArray(node.attrs.routes) && node.attrs.routes.length > 0;
@@ -225,7 +232,7 @@ function assertActiveMsBounded(state: RunState, clockSpanMs: number, jumpedMs: n
 describe("driven executor — tier-2", () => {
   test("slice 1: all-success over any human-free graph completes, no pauses/aborts", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { events, state, status, clockSpanMs, jumpedMs } = await drive(graph, successSpec);
         expect(status).toBe("completed");
         expect(events.at(-1)?.type).toBe("fact.run_completed");
@@ -246,7 +253,7 @@ describe("driven executor — tier-2", () => {
   test("slice 2: fail/retry/provider scripts thread the auto-wake loop and settle", async () => {
     await fc.assert(
       fc.asyncProperty(
-        makeArbGraph(["llm", "tool", "routing"]),
+        makeArbGraph(["llm", "tool", "routing"], DRIVEABLE),
         fc.array(fc.record({ providerFails: fc.nat({ max: 5 }), retries: fc.nat({ max: 2 }) }), {
           minLength: 6,
           maxLength: 6,
@@ -310,7 +317,7 @@ describe("driven executor — tier-2", () => {
 
   test("slice 3: HITL — human pauses are answered (intent.human_input) and the run completes", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing", "human"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing", "human"], DRIVEABLE), async (graph) => {
         // Non-human nodes all succeed; each human gate is answered with its
         // forward route (r0). The run threads every pause and reaches exit.
         const { events, state, status } = await drive(graph, successSpec);
@@ -353,7 +360,7 @@ describe("driven executor — tier-2", () => {
   test("slice 4: crash mid-run + startup sweep recovers and completes", async () => {
     await fc.assert(
       fc.asyncProperty(
-        makeArbGraph(["llm", "tool", "routing"]),
+        makeArbGraph(["llm", "tool", "routing"], DRIVEABLE),
         fc.integer({ min: 1, max: 4 }),
         async (graph, crashTurns) => {
           const { events, state, status, requeued, clockSpanMs, jumpedMs } = await drive(graph, successSpec, {

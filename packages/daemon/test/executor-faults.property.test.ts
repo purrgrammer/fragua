@@ -33,9 +33,14 @@ import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import type { Provisioner } from "../src/worktree-provisioner.ts";
-import { makeArbGraph } from "./arbitraries/graph.ts";
+import { type ArbGraphOptions, makeArbGraph } from "./arbitraries/graph.ts";
 import { type AppendFaultSchedule, faultStore } from "./fault-store.ts";
 import { checkRunInvariants } from "./invariants.ts";
+
+// Fault scripts drive plain success/fail transitions — no typed `outputs:` emit,
+// no fan-out frontier — so the outputs-consumer / parallel shapes (validate()-only
+// bootstrap material) are opted out to keep every generated run driveable.
+const DRIVEABLE: ArbGraphOptions = { structuredOutputs: false, parallel: false };
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 
@@ -185,20 +190,24 @@ describe("executor faults — OCC conflict at the commit seam", () => {
   // the same terminal. Sweep the conflict across the first 40 commit calls.
   test("a single transient OCC at commit #k still completes, invariants intact", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), fc.integer({ min: 1, max: 40 }), async (graph, k) => {
-        const { events, state, status, faultsInjected } = await driveFaulted(graph, {
-          schedule: (n, facts) => (n === k && !hasTerminalFact(facts) ? "occ" : "ok"),
-        });
-        // Either the conflict fired (k ≤ #commits) and was absorbed, or k was
-        // past the end (vacuous). Both converge to a clean completion. The
-        // terminal fact is PRESENT (not necessarily last: a resolved OCC
-        // appends an `occ_conflict_resolved` observability trail after it —
-        // no version bump, so terminal-absorbing for facts still holds).
-        expect(status).toBe("completed");
-        expect(events.some((e) => e.type === "fact.run_completed")).toBe(true);
-        checkRunInvariants(events, state);
-        expect(faultsInjected).toBeLessThanOrEqual(1);
-      }),
+      fc.asyncProperty(
+        makeArbGraph(["llm", "tool", "routing"], DRIVEABLE),
+        fc.integer({ min: 1, max: 40 }),
+        async (graph, k) => {
+          const { events, state, status, faultsInjected } = await driveFaulted(graph, {
+            schedule: (n, facts) => (n === k && !hasTerminalFact(facts) ? "occ" : "ok"),
+          });
+          // Either the conflict fired (k ≤ #commits) and was absorbed, or k was
+          // past the end (vacuous). Both converge to a clean completion. The
+          // terminal fact is PRESENT (not necessarily last: a resolved OCC
+          // appends an `occ_conflict_resolved` observability trail after it —
+          // no version bump, so terminal-absorbing for facts still holds).
+          expect(status).toBe("completed");
+          expect(events.some((e) => e.type === "fact.run_completed")).toBe(true);
+          checkRunInvariants(events, state);
+          expect(faultsInjected).toBeLessThanOrEqual(1);
+        },
+      ),
       { numRuns: pbtRuns(150) },
     );
   });
@@ -208,7 +217,7 @@ describe("executor faults — OCC conflict at the commit seam", () => {
   // termination, never a wedged `running`.
   test("persistent OCC on node commits halts with occ_exhausted (bounded, no wedge)", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { events, state, status } = await driveFaulted(graph, {
           schedule: (_n, facts) =>
             facts.some((f) => f.type === "fact.node_started" || f.type === "fact.node_completed") ? "occ" : "ok",
@@ -230,7 +239,7 @@ describe("executor faults — OCC conflict at the commit seam", () => {
   // machinery isn't masking a baseline failure).
   test("control: no fault → completes", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { status, events, state, faultsInjected } = await driveFaulted(graph, {});
         expect(status).toBe("completed");
         expect(faultsInjected).toBe(0);
@@ -247,7 +256,7 @@ describe("executor faults — handler hang (leaked watchdog timeout)", () => {
   // leaked handler never wedges the run as `running` forever.
   test("a hung handler is leaked → run halts (handler_timeout_leaked), invariants intact", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { events, state, status } = await driveFaulted(graph, { specFor: hangSpec, leakGraceMs: 10 });
         expect(status).toBe("halted");
         expect(events.some((e) => e.type === "fact.handler_timeout_leaked")).toBe(true);
@@ -337,7 +346,7 @@ describe("executor faults — orphan side-effect (crash between intent and done)
   // generated graph, mid-flight at a real node.
   test("an orphaned side_effect_intent quarantines the run on sweep, invariants intact", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { status, events, state, orphanSeq } = await orphanCase(graph);
         expect(status).toBe("quarantined");
         const q = events.find((e) => e.type === "fact.run_quarantined");
@@ -370,7 +379,7 @@ describe("executor faults — provision + store failure", () => {
   // reason rather than dispatching env-less or wedging.
   test("provision failure halts the run (worktree_provision_failed), invariants intact", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { status, events, state } = await driveFaulted(graph, { provisioner: throwingProvisioner });
         expect(status).toBe("halted");
         // Halted with a clear provision-failure reason (in the fact log;
@@ -389,22 +398,26 @@ describe("executor faults — provision + store failure", () => {
   // a commit failure never loses the run. Sweep the failure across commits.
   test("a transient store-commit failure is recovered (requeue + redrive) → completes", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), fc.integer({ min: 1, max: 30 }), async (graph, k) => {
-        const { status, events, state, faultsInjected } = await driveFaulted(graph, {
-          schedule: (n, facts) => (n === k && !hasTerminalFact(facts) ? "error" : "ok"),
-        });
-        // A non-OCC commit error is fatal-but-clean: the executor halts the run
-        // (reason "error") rather than retrying (only OCC conflicts retry) or
-        // wedging. When k lands past the run's commits, no fault fires → it
-        // completes. Either way: a terminal, never a wedge; invariants intact.
-        if (faultsInjected > 0) {
-          expect(status).toBe("halted");
-          expect(haltReason(events)).toBe("error");
-        } else {
-          expect(status).toBe("completed");
-        }
-        checkRunInvariants(events, state);
-      }),
+      fc.asyncProperty(
+        makeArbGraph(["llm", "tool", "routing"], DRIVEABLE),
+        fc.integer({ min: 1, max: 30 }),
+        async (graph, k) => {
+          const { status, events, state, faultsInjected } = await driveFaulted(graph, {
+            schedule: (n, facts) => (n === k && !hasTerminalFact(facts) ? "error" : "ok"),
+          });
+          // A non-OCC commit error is fatal-but-clean: the executor halts the run
+          // (reason "error") rather than retrying (only OCC conflicts retry) or
+          // wedging. When k lands past the run's commits, no fault fires → it
+          // completes. Either way: a terminal, never a wedge; invariants intact.
+          if (faultsInjected > 0) {
+            expect(status).toBe("halted");
+            expect(haltReason(events)).toBe("error");
+          } else {
+            expect(status).toBe("completed");
+          }
+          checkRunInvariants(events, state);
+        },
+      ),
       { numRuns: pbtRuns(80) },
     );
   });
