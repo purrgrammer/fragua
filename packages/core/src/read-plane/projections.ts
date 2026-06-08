@@ -290,6 +290,15 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
       case "fact.dispatch_started":
         bump(nodeId, iteration, "running", ev.seq);
         break;
+      case "fact.fanout_started": {
+        // A parallel node's branch ENTRIES are seeded into the active set here;
+        // they never emit node_started/dispatch_started (that would unpin the
+        // run pointer from the parallel node), so mark each branch running so
+        // the graph glows it. Its own node_completed later flips it to done.
+        const branches = (ev.payload as { branches?: string[] }).branches ?? [];
+        for (const b of branches) bump(b, 0, "running", ev.seq);
+        break;
+      }
       case "fact.node_completed": {
         const outcome = (ev.payload as { outcomeStatus?: string }).outcomeStatus;
         bump(nodeId, iteration, outcome === "fail" ? "failed" : "completed", ev.seq);

@@ -94,6 +94,7 @@ export function isDetailEvent(type: string): boolean {
 const DETAIL_TYPES = new Set<string>([
   "fact.node_started",
   "fact.dispatch_started",
+  "fact.fanout_started",
   "fact.node_completed",
   "fact.node_aborted",
   "edge.selected",
@@ -149,6 +150,16 @@ function foldDetailFrameInner(
     // optimistically marked "failed" by a prior `node_aborted`.
     case "fact.dispatch_started":
       return setNodeState(prev, payload, "running", seq);
+    case "fact.fanout_started": {
+      // A parallel node's branch ENTRIES are seeded into the active set here;
+      // they never emit node_started/dispatch_started (that would unpin the run
+      // pointer from the parallel node), so mark them running directly — the
+      // graph glows them and the conversation groups their live streams.
+      const branches = Array.isArray(payload?.["branches"]) ? (payload["branches"] as string[]) : [];
+      let next = prev;
+      for (const b of branches) next = setNodeState(next, { nodeId: b }, "running", seq);
+      return next;
+    }
     case "fact.node_completed": {
       const outcome = stringField(payload, "outcomeStatus");
       return setNodeState(prev, payload, outcome === "fail" ? "failed" : "completed", seq);

@@ -736,8 +736,21 @@ export function toFlowGraph(
   // own node_started/node_completed — the executor goes straight to
   // run_halted/run_completed — so without the edge fallback they'd render
   // as never-reached even when the run actually terminated on them.
+  //
+  // Exception: a `type: parallel` JOIN. Each branch terminal fires an
+  // `edge.selected → join` barrier edge as it finishes, but the join itself
+  // only dispatches after the WHOLE fan-out converges (`fanout_joined`). So
+  // treat a join as reached only once it has its own state, not when a branch
+  // edge points at it — otherwise it un-dims while the fan-out is still running.
+  const fanoutJoins = new Set<string>();
+  for (const n of Object.values(graph.nodes)) {
+    if (n.type === "parallel" && typeof n.attrs.join === "string") fanoutJoins.add(n.attrs.join);
+  }
   const reached = new Set<string>(stateById.keys());
-  for (const e of detail?.selectedEdges ?? []) reached.add(e.to);
+  for (const e of detail?.selectedEdges ?? []) {
+    if (fanoutJoins.has(e.to) && !stateById.has(e.to)) continue;
+    reached.add(e.to);
+  }
   const incoming = new Set(graph.edges.map((e) => e.to));
   const outgoing = new Set(graph.edges.map((e) => e.from));
   // "dim" applies only when a run exists — in workflow-detail mode

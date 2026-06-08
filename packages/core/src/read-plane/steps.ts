@@ -147,19 +147,25 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // otherwise invisible there. Real duration is
   // `completed.ts − started.ts`; cost stays absent.
   const pendingToolNode = new Map<string, { startTs: number; startSeq: number }>();
-  // branch nodeId → its `type: parallel` parent, learned from
-  // `fact.fanout_started`. Tags each branch step so the Cost breakdown can
-  // nest concurrent branches under their parent group.
-  const branchToParent = new Map<string, string>();
+  // The `type: parallel` node whose fan-out is currently in flight (between
+  // `fact.fanout_started` and `fact.fanout_joined`). Every sub-node step that
+  // opens while it's set — branch ENTRIES (scans) AND their multi-node
+  // successors (verify steps) — nests under it in the Cost breakdown. Tracking
+  // the active region (not just `fanout_started.branches`) is what nests the
+  // successor steps, which the branch list alone never names.
+  let activeFanoutParent: string | undefined;
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
     const nodeId = stringField(data, "nodeId");
 
     if (ev.type === "fact.fanout_started") {
-      if (nodeId) {
-        for (const b of stringArrayField(data, "branches")) branchToParent.set(b, nodeId);
-      }
+      if (nodeId) activeFanoutParent = nodeId;
+      continue;
+    }
+
+    if (ev.type === "fact.fanout_joined") {
+      activeFanoutParent = undefined;
       continue;
     }
 
@@ -264,8 +270,9 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         nodeId: nodeId || "__unknown",
         startedAt: new Date(startTs).toISOString(),
       };
-      const parent = nodeId !== "" ? branchToParent.get(nodeId) : undefined;
-      if (parent !== undefined) step.parentNodeId = parent;
+      // Nest under the in-flight parallel parent (entry scans + their verify
+      // successors alike). `!== nodeId` guards the degenerate self-tag.
+      if (activeFanoutParent !== undefined && activeFanoutParent !== nodeId) step.parentNodeId = activeFanoutParent;
       assignOptional(step, data);
       steps.push(step);
       if (nodeId) {
@@ -394,11 +401,6 @@ function assignOptional(step: StepSnapshot, data: Record<string, unknown>): void
 function stringField(data: Record<string, unknown>, key: string): string {
   const v = data[key];
   return typeof v === "string" ? v : "";
-}
-
-function stringArrayField(data: Record<string, unknown>, key: string): string[] {
-  const v = data[key];
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
 function iterationField(data: Record<string, unknown>, key: string): { n: number; max: number } | undefined {

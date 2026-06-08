@@ -25,7 +25,7 @@
 import { parseWorkflow } from "@fragua/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import {
@@ -101,6 +101,41 @@ export function CostInspector({ runId, totalEvents, isLive = false, workflowSour
     return m;
   }, [workflowSource]);
 
+  // Fan-out branch lineage: sub-node id → the branch (entry) its `scan → verify`
+  // sub-pipeline belongs to, + each branch's declared order. Lets the parallel
+  // cost group order a lens's steps together and rule a separator between
+  // branches. Computed by walking each branch entry's closure to the join.
+  const branchInfo = useMemo<{ branchOf: ReadonlyMap<string, string>; order: ReadonlyMap<string, number> }>(() => {
+    const branchOf = new Map<string, string>();
+    const order = new Map<string, number>();
+    if (!workflowSource) return { branchOf, order };
+    try {
+      const graph = parseWorkflow(workflowSource);
+      for (const node of Object.values(graph.nodes)) {
+        if (node.type !== "parallel" || !Array.isArray(node.attrs.branches)) continue;
+        const join = typeof node.attrs.join === "string" ? node.attrs.join : undefined;
+        node.attrs.branches.forEach((entry, i) => {
+          if (typeof entry !== "string") return;
+          order.set(entry, i);
+          const queue = [entry];
+          const seen = new Set<string>();
+          while (queue.length > 0) {
+            const x = queue.shift();
+            if (x === undefined || x === join || seen.has(x)) continue;
+            seen.add(x);
+            branchOf.set(x, entry);
+            for (const e of graph.edges) {
+              if (e.from === x && e.attrs.fanout !== true && e.to !== join && !seen.has(e.to)) queue.push(e.to);
+            }
+          }
+        });
+      }
+    } catch {
+      // Unparseable → no lineage; rows render flat (the prior behavior).
+    }
+    return { branchOf, order };
+  }, [workflowSource]);
+
   if (isPending) {
     return (
       <div data-testid="cost-inspector-loading" className="text-xs text-sw-muted p-4">
@@ -158,6 +193,7 @@ export function CostInspector({ runId, totalEvents, isLive = false, workflowSour
             parentNodeId={item.parentNodeId}
             branches={item.branches}
             nodeTypes={nodeTypes}
+            branchInfo={branchInfo}
             isLive={isLive}
           />
         ) : (
@@ -232,11 +268,13 @@ function ParallelCostGroup({
   parentNodeId,
   branches,
   nodeTypes,
+  branchInfo,
   isLive,
 }: {
   parentNodeId: string;
   branches: StepSnapshot[];
   nodeTypes: ReadonlyMap<string, string>;
+  branchInfo: { branchOf: ReadonlyMap<string, string>; order: ReadonlyMap<string, number> };
   isLive: boolean;
 }): JSX.Element {
   // A branch with no `durationMs` is still in flight; while the run is live its
@@ -244,6 +282,16 @@ function ParallelCostGroup({
   // branch joins (rather than freezing at the slowest *completed* branch).
   const anyRunning = branches.some((b) => b.durationMs == null);
   const groupTicking = isLive && anyRunning;
+  // Order the merged branch rows so each lens's steps (scan → verify) sit
+  // together. Stable sort by branch index keeps scan before verify within a lens.
+  const orderedBranches = branches
+    .map((b, i) => ({ b, i }))
+    .sort((x, y) => {
+      const bx = branchInfo.order.get(branchInfo.branchOf.get(x.b.nodeId) ?? x.b.nodeId) ?? 0;
+      const by = branchInfo.order.get(branchInfo.branchOf.get(y.b.nodeId) ?? y.b.nodeId) ?? 0;
+      return bx - by || x.i - y.i;
+    })
+    .map((e) => e.b);
   const now = useNow(1_000, groupTicking);
   const ParallelIcon = nodeTypeIcon(nodeTypes.get(parentNodeId) ?? "parallel");
   let costUsd = 0;
@@ -295,20 +343,30 @@ function ParallelCostGroup({
         </span>
         <span />
       </div>
-      {branches.map((b) => (
-        <StepCostRow
-          key={stepIdentityKey(b)}
-          step={b}
-          nodeType={nodeTypes.get(b.nodeId)}
-          // A branch has no sequential "next" — its successor is the join sink
-          // after the barrier, not the sibling that happens to start next. So a
-          // still-running branch ticks live instead of freezing at the gap to a
-          // sibling's start.
-          nextStartedAt={undefined}
-          isLive={isLive}
-          indent
-        />
-      ))}
+      {orderedBranches.map((b, i) => {
+        const branch = branchInfo.branchOf.get(b.nodeId) ?? b.nodeId;
+        const prevBranch =
+          i > 0 ? (branchInfo.branchOf.get(orderedBranches[i - 1]!.nodeId) ?? orderedBranches[i - 1]!.nodeId) : branch;
+        return (
+          <Fragment key={stepIdentityKey(b)}>
+            {/* Hairline between branches so a lens's scan + verify read as one unit. */}
+            {i > 0 && branch !== prevBranch && (
+              <div className="col-span-4 mx-3 border-t border-sw-border/60" aria-hidden />
+            )}
+            <StepCostRow
+              step={b}
+              nodeType={nodeTypes.get(b.nodeId)}
+              // A branch has no sequential "next" — its successor is the join sink
+              // after the barrier, not the sibling that happens to start next. So a
+              // still-running branch ticks live instead of freezing at the gap to a
+              // sibling's start.
+              nextStartedAt={undefined}
+              isLive={isLive}
+              indent
+            />
+          </Fragment>
+        );
+      })}
     </>
   );
 }

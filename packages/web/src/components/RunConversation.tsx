@@ -395,11 +395,11 @@ export function RunConversation({
             {/* Streaming buffers for nodes with no section yet: a fresh fan-out
                 whose branches are mid-first-token (grouped under the parent), or
                 a lone non-branch node streaming before its first persisted row. */}
-            {[...streamingOnlyParents].map(([parentId, branchIds]) => (
+            {[...streamingOnlyParents].map(([parentId]) => (
               <ParallelGroupSection
                 key={`parallel-live-${parentId}`}
                 parentId={parentId}
-                branches={branchIds.map((nodeId) => ({ nodeId, rows: [] }))}
+                branches={branchEntries([], parentId, fanout, streamingByNode)}
                 toolResultsById={toolResultsById}
                 streamingByNode={streamingByNode}
                 stateByNodeId={stateByNodeId}
@@ -524,37 +524,57 @@ function messageKey(row: RunMessageRow): string {
 // ─── Fan-out branch grouping ────────────────────────────────────────
 
 interface Fanout {
-  /** branch nodeId → its `type: parallel` parent nodeId. */
+  /** sub-node id → its `type: parallel` parent nodeId. Covers a branch's
+   * whole closure (entry + multi-node successors), not just the entry. */
   parentOf: Map<string, string>;
-  /** branch nodeId → its declared index in the parent's `branches:`. */
+  /** sub-node id → the BRANCH it belongs to (the entry id of its
+   * `scan → verify → …` sub-pipeline). Lets a multi-node branch render as one
+   * collapsible mini-conversation rather than N sibling sections. */
+  branchOf: Map<string, string>;
+  /** branch-entry id → its declared index in the parent's `branches:`. */
   orderOf: Map<string, number>;
 }
 
-/** Extract the `type: parallel` → branch topology from the workflow
- * source. Branches of a parallel node render collapsed under one parent
- * group instead of as N interleaved sections. Malformed source → no
- * grouping (every node renders as its own section, the prior behavior). */
+/** Extract the `type: parallel` → branch topology from the workflow source.
+ * For each parallel node, walk every branch entry's closure (its `next:` reach
+ * up to — but excluding — the join) so a branch's scan + verify steps group
+ * under one collapsible. Malformed source → no grouping (every node renders as
+ * its own section, the prior behavior). */
 function parseFanout(source: string | undefined): Fanout {
   const parentOf = new Map<string, string>();
+  const branchOf = new Map<string, string>();
   const orderOf = new Map<string, number>();
-  if (!source) return { parentOf, orderOf };
+  if (!source) return { parentOf, branchOf, orderOf };
   try {
     const g = parseWorkflow(source);
     for (const node of Object.values(g.nodes)) {
       if (node.type !== "parallel") continue;
       const branches = node.attrs.branches;
       if (!Array.isArray(branches)) continue;
-      branches.forEach((b, i) => {
-        if (typeof b === "string") {
-          parentOf.set(b, node.id);
-          orderOf.set(b, i);
+      const join = typeof node.attrs.join === "string" ? node.attrs.join : undefined;
+      branches.forEach((entry, i) => {
+        if (typeof entry !== "string") return;
+        orderOf.set(entry, i);
+        // BFS the branch closure from the entry, following non-fanout edges and
+        // stopping at the join. Each closure node belongs to this branch.
+        const queue = [entry];
+        const seen = new Set<string>();
+        while (queue.length > 0) {
+          const x = queue.shift();
+          if (x === undefined || x === join || seen.has(x)) continue;
+          seen.add(x);
+          parentOf.set(x, node.id);
+          branchOf.set(x, entry);
+          for (const e of g.edges) {
+            if (e.from === x && e.attrs.fanout !== true && e.to !== join && !seen.has(e.to)) queue.push(e.to);
+          }
         }
       });
     }
   } catch {
     // malformed source — fall back to no fan-out grouping
   }
-  return { parentOf, orderOf };
+  return { parentOf, branchOf, orderOf };
 }
 
 type RenderItem =
@@ -593,35 +613,60 @@ function buildRenderItems(visibleSections: Section[], parentOf: Map<string, stri
   return items;
 }
 
-interface BranchEntry {
+/** One member node (e.g. a `scan` or a `verify`) within a branch. */
+interface BranchNode {
   nodeId: string;
   rows: RunMessageRow[];
 }
 
-/** Merge a parallel group's interleaved sections into one row-list per
- * branch (concurrent branches interleave on the wire, so a single branch
- * spans several sections), include branches that are streaming but have
- * no rows yet, and order by the parent's declared `branches:` order. */
+/** One fan-out BRANCH = its `scan → verify → …` member nodes, rendered as a
+ * mini-conversation in a single collapsible. */
+interface BranchEntry {
+  /** The branch entry (lens) id — its collapsible header + sort key. */
+  branchId: string;
+  nodes: BranchNode[];
+}
+
+/** Group a parallel group's interleaved sections into one entry PER BRANCH
+ * (a branch's scan + verify steps share a `branchOf`), each carrying its
+ * member nodes' rows in first-seen (scan → verify) order. Includes nodes that
+ * are streaming but have no persisted rows yet; orders branches by the parent's
+ * declared `branches:` order. */
 function branchEntries(
   sections: Section[],
   parentId: string,
   fanout: Fanout,
   streamingByNode: ReadonlyMap<string, StreamingMessage>,
 ): BranchEntry[] {
-  const byBranch = new Map<string, RunMessageRow[]>();
+  const rowsByNode = new Map<string, RunMessageRow[]>();
+  const nodeOrder: string[] = [];
+  const note = (nid: string): RunMessageRow[] => {
+    let rows = rowsByNode.get(nid);
+    if (rows === undefined) {
+      rows = [];
+      rowsByNode.set(nid, rows);
+      nodeOrder.push(nid);
+    }
+    return rows;
+  };
   for (const s of sections) {
     if (s.nodeId == null) continue;
-    const rows = byBranch.get(s.nodeId) ?? [];
-    rows.push(...s.rows);
-    byBranch.set(s.nodeId, rows);
+    note(s.nodeId).push(...s.rows);
   }
   for (const buf of streamingByNode.values()) {
     const nid = buf.nodeId;
-    if (nid != null && fanout.parentOf.get(nid) === parentId && !byBranch.has(nid)) byBranch.set(nid, []);
+    if (nid != null && fanout.parentOf.get(nid) === parentId) note(nid);
+  }
+  const byBranch = new Map<string, BranchNode[]>();
+  for (const nid of nodeOrder) {
+    const branch = fanout.branchOf.get(nid) ?? nid;
+    const members = byBranch.get(branch) ?? [];
+    members.push({ nodeId: nid, rows: rowsByNode.get(nid) ?? [] });
+    byBranch.set(branch, members);
   }
   return [...byBranch.entries()]
-    .map(([nodeId, rows]) => ({ nodeId, rows }))
-    .sort((a, b) => (fanout.orderOf.get(a.nodeId) ?? 0) - (fanout.orderOf.get(b.nodeId) ?? 0));
+    .map(([branchId, nodes]) => ({ branchId, nodes }))
+    .sort((a, b) => (fanout.orderOf.get(a.branchId) ?? 0) - (fanout.orderOf.get(b.branchId) ?? 0));
 }
 
 /** A `type: parallel` fan-out group: a parent header over a stack of
@@ -645,14 +690,9 @@ function ParallelGroupSection({
   isLive: boolean;
   isPaused: boolean;
 }): JSX.Element {
-  const states = branches.map((b) => stateByNodeId.get(b.nodeId)?.state);
-  const groupStatus: NodeState["state"] | "idle" = states.some((s) => s === "running")
-    ? "running"
-    : states.some((s) => s === "failed")
-      ? "failed"
-      : states.length > 0 && states.every((s) => s === "completed")
-        ? "completed"
-        : "running";
+  const branchStatusOf = (b: BranchEntry): NodeState["state"] | "idle" =>
+    aggregateState(b.nodes.map((n) => stateByNodeId.get(n.nodeId)?.state));
+  const groupStatus = aggregateState(branches.map(branchStatusOf));
   return (
     <section
       id={`node-${parentId}`}
@@ -675,10 +715,10 @@ function ParallelGroupSection({
       <div className="flex flex-col gap-2 pl-4">
         {branches.map((b) => (
           <BranchCollapsible
-            key={b.nodeId}
+            key={b.branchId}
             entry={b}
-            state={stateByNodeId.get(b.nodeId)}
-            streaming={streamingByNode.get(b.nodeId)}
+            stateByNodeId={stateByNodeId}
+            streamingByNode={streamingByNode}
             toolResultsById={toolResultsById}
             isLive={isLive}
             isPaused={isPaused}
@@ -689,47 +729,74 @@ function ParallelGroupSection({
   );
 }
 
-/** One fan-out branch, collapsed by default. Header carries the branch
- * id + status; expanding reveals the transcript and any live stream. */
+/** Roll a set of member-node states into one branch/group state: running if any
+ * is running, else failed if any failed, else completed if all completed. */
+function aggregateState(states: (NodeState["state"] | "idle" | undefined)[]): NodeState["state"] | "idle" {
+  if (states.some((s) => s === "running")) return "running";
+  if (states.some((s) => s === "failed")) return "failed";
+  if (states.length > 0 && states.every((s) => s === "completed")) return "completed";
+  return "idle";
+}
+
+/** One fan-out BRANCH, collapsed by default. The header carries the branch id
+ * + rolled-up status; expanding reveals a mini-conversation — each member node
+ * (`scan`, `verify`, …) as its own node section with transcript + live stream. */
 function BranchCollapsible({
   entry,
-  state,
-  streaming,
+  stateByNodeId,
+  streamingByNode,
   toolResultsById,
   isLive,
   isPaused,
 }: {
   entry: BranchEntry;
-  state?: NodeState;
-  streaming?: StreamingMessage;
+  stateByNodeId: Map<string, NodeState>;
+  streamingByNode: ReadonlyMap<string, StreamingMessage>;
   toolResultsById: Map<string, ToolResultMessage>;
   isLive: boolean;
   isPaused: boolean;
 }): JSX.Element {
-  const status: NodeState["state"] | "idle" = state?.state ?? "idle";
-  const visibleRows = entry.rows.filter((r) => r.content.role !== "toolResult");
+  const status = aggregateState(entry.nodes.map((n) => stateByNodeId.get(n.nodeId)?.state));
+  const totalRows = entry.nodes.reduce(
+    (sum, n) => sum + n.rows.filter((r) => r.content.role !== "toolResult").length,
+    0,
+  );
   return (
     <Collapsible
-      data-testid={`branch-${entry.nodeId}`}
+      data-testid={`branch-${entry.branchId}`}
       className="group/branch rounded-md border border-sw-border bg-sw-surface/40"
     >
       <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sw-surface/60">
         <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
-        <span className="font-mono text-[11px] font-semibold tracking-[0.04em] text-sw-text/90" title={entry.nodeId}>
-          {entry.nodeId}
+        <span className="font-mono text-[11px] font-semibold tracking-[0.04em] text-sw-text/90" title={entry.branchId}>
+          {entry.branchId}
         </span>
-        {state && <NodeStatusLabel state={state.state} isLive={isLive} isPaused={isPaused} />}
-        <AnimatedNumber
-          value={visibleRows.length}
-          className="ml-auto font-mono text-[10px] text-sw-muted tabular-nums"
-        />
+        {entry.nodes.length > 1 && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+            {entry.nodes.length} steps
+          </span>
+        )}
+        <AnimatedNumber value={totalRows} className="ml-auto font-mono text-[10px] text-sw-muted tabular-nums" />
         <span className="font-mono text-[10px] opacity-60 transition group-data-[state=open]/branch:rotate-180">▾</span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col gap-3 border-t border-sw-border px-3 py-3 pl-4">
-        {entry.rows.map((row) => (
-          <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
-        ))}
-        {streaming && <StreamingMessageRow streaming={streaming} />}
+      <CollapsibleContent className="flex flex-col gap-2 border-t border-sw-border px-3 py-3 pl-3">
+        {entry.nodes.map((m) => {
+          const nodeStream = streamingByNode.get(m.nodeId);
+          return (
+            <NodeSection
+              key={m.nodeId}
+              nodeId={m.nodeId}
+              state={stateByNodeId.get(m.nodeId)}
+              isLive={isLive}
+              isPaused={isPaused}
+            >
+              {m.rows.map((row) => (
+                <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
+              ))}
+              {nodeStream && <StreamingMessageRow streaming={nodeStream} />}
+            </NodeSection>
+          );
+        })}
       </CollapsibleContent>
     </Collapsible>
   );
