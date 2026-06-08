@@ -140,21 +140,59 @@ describe("supervisor — pause-aware leak detection", () => {
     }
   });
 
-  /** Seed a claimed run pinned to a `parallel` node with one in-flight branch. */
-  function seedFanout(store: SqliteStore): void {
+  /** Seed a claimed run pinned to a `parallel` node with in-flight branches. */
+  function seedFanout(store: SqliteStore, branches: string[] = ["b1"]): void {
     const wfSrc = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
     store.saveWorkflow("sha", "t", wfSrc, serializeGraph(parseWorkflow(wfSrc)), CURRENT_IR_VERSION);
     store.enqueueRun({ runId: "fo", workflowSha: "sha", initialRouting: { start_node: "lenses" } });
     store.claimNextRun(1);
     const seed = [
       { type: "fact.run_started" as const, payload: { workflowSha: "sha", contractVersion: 2, startNode: "lenses" } },
-      { type: "fact.fanout_started" as const, payload: { nodeId: "lenses", iteration: 0, branches: ["b1"] } },
+      { type: "fact.fanout_started" as const, payload: { nodeId: "lenses", iteration: 0, branches } },
     ];
     for (const fact of seed) {
       const v = store.getState("fo")?.version ?? 0;
       store.appendFact("fo", [fact], v, { advanceAppliedTo: v });
     }
   }
+
+  test("fan-out: each branch is budgeted against its OWN deadline — a short branch trips while a long sibling is spared", async () => {
+    // The review's finding: the watchdog budgeted the whole set against the
+    // LONGEST branch, so a short-deadline branch evaded detection until the
+    // longest sibling expired. Both branches here registered at the same instant
+    // (identical elapsed), but only the short-deadline one must trip.
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = new SqliteStore({ path: ":memory:" });
+    closers.push(() => store.close());
+    seedFanout(store, ["short", "long"]);
+    const shortCtrl = new AbortController();
+    const longCtrl = new AbortController();
+    registry.register("fo", shortCtrl, "short");
+    registry.register("fo", longCtrl, "long");
+    clk.advance(2_000); // past short's 100ms + grace, far under long's 100_000ms
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      nodeLeakGraceMs: 500,
+      handlerMaxMsFor: (_sha, nodeId) => (nodeId === "short" ? 100 : 100_000),
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(shortCtrl.signal.aborted).toBe(true); // exceeded ITS OWN deadline
+      expect(longCtrl.signal.aborted).toBe(false); // the long sibling is untouched
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
 
   test("fan-out: a BOUNDED branch is budgeted against its own maxMs, not the parallel node's fallback", async () => {
     // The pinned parallel node has no dispatcher spec → handlerMaxMsFor yields the
@@ -167,7 +205,7 @@ describe("supervisor — pause-aware leak detection", () => {
     closers.push(() => store.close());
     seedFanout(store);
     const ctrl = new AbortController();
-    registry.register("fo", ctrl);
+    registry.register("fo", ctrl, "b1");
     clk.advance(1_000); // past the 50ms fallback + grace, but under the branch's 2000ms
 
     const shutdown = new AbortController();
@@ -203,7 +241,7 @@ describe("supervisor — pause-aware leak detection", () => {
     closers.push(() => store.close());
     seedFanout(store);
     const ctrl = new AbortController();
-    registry.register("fo", ctrl);
+    registry.register("fo", ctrl, "b1");
     clk.advance(10_000); // past the 1000ms backstop + 500ms grace
 
     const shutdown = new AbortController();

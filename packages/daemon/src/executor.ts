@@ -11,6 +11,7 @@
 import { type ExecutionEnvironment, evaluateBudget, type Graph, type OutputsValue } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import {
+  ConcurrencyError,
   EVENT_CONTRACT_VERSION,
   type FactEvent,
   type IEventStore,
@@ -1171,6 +1172,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     return { kind: "continue" };
   };
 
+  // The post-commit `run_state` from the most recent `commitFanoutFact` — the
+  // fan-out budget gate reuses it instead of re-reading (the gate runs right
+  // after a commit, so this is always fresh there).
+  let lastFanoutState: RunState | undefined;
+
   // ── Fan-out (Model A): serialized commit lane. Re-reads the live version
   // each attempt; a sibling's commit having moved `version` is benign — retry
   // the APPEND (never re-execute). This is the linearization point that makes
@@ -1180,9 +1186,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     for (let attempt = 0; attempt < FANOUT_COMMIT_ATTEMPTS; attempt++) {
       const fresh = opts.store.getState(runId);
       if (fresh == null || fresh.status !== "running") return false;
-      if (await tryAppendFact(opts.store, runId, fresh.version, facts, appendOpts)) {
+      try {
+        const res = opts.store.appendFact(runId, facts, fresh.version, appendOpts);
+        lastFanoutState = res.state;
         invalidateOutputsCacheIf(facts);
         return true;
+      } catch (err) {
+        if (!(err instanceof ConcurrencyError)) throw err;
+        // Benign sibling-moved-version conflict — re-read + retry the append.
       }
       await sleep(Math.min(2 ** attempt, 16), opts.shutdownSignal);
     }
@@ -1454,12 +1465,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const sem = new Semaphore(concurrency);
     const freshState = opts.store.getState(runId) ?? state;
 
-    // Run-level budget against the NOW-folded cumulative. Re-read per commit
-    // (each node_completed advanced the durable total) so a branch crossing the
-    // cap stops the next dispatch — tighter than a once-per-superstep barrier.
-    // Returns the disposition fact, or undefined.
+    // Run-level budget against the NOW-folded cumulative. Each commit advanced
+    // the durable total, so a branch crossing the cap stops the next dispatch —
+    // tighter than a once-per-superstep barrier. Reuses the just-committed
+    // projection (`lastFanoutState`, set by every commitFanoutFact in this pool)
+    // rather than re-reading. Returns the disposition fact, or undefined.
     const fanoutBudgetDisposition = (): FactEvent | undefined => {
-      const folded = opts.store.getState(runId) ?? state;
+      const folded = lastFanoutState ?? opts.store.getState(runId) ?? state;
       const overrides = readBudgetOverrides(folded.routing);
       const budget = evaluateBudget({
         graphAttrs: graph?.attrs ?? {},

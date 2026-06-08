@@ -46,7 +46,7 @@ export async function invokeHandler(deps: {
   // (graph load, context build) can throw, and the `finally` is the sole
   // dispose. `register` returns a disposer that removes exactly this entry, so
   // concurrent fan-out branches on one run don't clobber each other.
-  const disposeRegistration = registry.register(runId, steerCtrl);
+  const disposeRegistration = registry.register(runId, steerCtrl, ctx.nodeId);
   try {
     // Promise.race against a sentinel rather than a rejecting timer: a
     // rejection would mask an ignored-AbortSignal as a "handler error". A

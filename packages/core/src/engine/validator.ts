@@ -1001,6 +1001,52 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         });
       }
 
+      // W017: a cycle inside the branch closure (a back-edge to a node still on
+      // the DFS stack) can spin until the per-branch timeout fires. A bounded
+      // retry — `max_retries` or a goal gate — is legitimate, so this WARNS
+      // rather than erroring; an unbounded loop is almost always an authoring
+      // slip the runtime backstop only papers over. (E039 above catches a closure
+      // that can't reach the join at all; this catches one that can but may loop.)
+      const closureSet = new Set(closure);
+      const dfsState = new Map<string, 1 | 2>(); // 1 = on stack, 2 = done
+      let cyclic = false;
+      for (const root of closure) {
+        if (dfsState.has(root)) continue;
+        const stack: Array<{ node: string; succ: string[]; i: number }> = [
+          { node: root, succ: nonFanoutEdgesFrom(root).map((e) => e.to), i: 0 },
+        ];
+        dfsState.set(root, 1);
+        while (stack.length > 0) {
+          const top = stack[stack.length - 1]!;
+          if (top.i >= top.succ.length) {
+            dfsState.set(top.node, 2);
+            stack.pop();
+            continue;
+          }
+          const to = top.succ[top.i++]!;
+          if (to === join || !closureSet.has(to)) continue;
+          const seenState = dfsState.get(to);
+          if (seenState === 1) {
+            cyclic = true;
+            break;
+          }
+          if (seenState === undefined) {
+            stack.push({ node: to, succ: nonFanoutEdgesFrom(to).map((e) => e.to), i: 0 });
+            dfsState.set(to, 1);
+          }
+        }
+        if (cyclic) break;
+      }
+      if (cyclic) {
+        diags.push({
+          severity: "warning",
+          code: "W017",
+          message: `branch closure of "${entry}" in parallel "${p.id}" contains a cycle — it can loop until the per-branch timeout; bound it (max_retries / a goal gate) or make the closure acyclic`,
+          nodeId: entry,
+          ...loc,
+        });
+      }
+
       for (const nodeId of closure) {
         const cn = graph.nodes[nodeId];
         if (cn === undefined) continue;
@@ -1022,27 +1068,33 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             nodeId,
             ...loc,
           });
-        }
-        // E042: no branch node may reach a write-class tool (shared read-only worktree).
-        const writeReachable = writeReachableTools(cn.attrs);
-        if (writeReachable.length > 0) {
-          diags.push({
-            severity: "error",
-            code: "E042",
-            message: `branch node "${nodeId}" of parallel "${p.id}" can reach write-class tool(s) [${writeReachable.join(", ")}] — branches share the worktree read-only; scope it with allowed-tools / denied-tools`,
-            nodeId,
-            ...loc,
-          });
-        }
-        // E043: no explicit thread on a branch node (single-writer-log invariant).
-        if (typeof cn.attrs.thread_id === "string") {
-          diags.push({
-            severity: "error",
-            code: "E043",
-            message: `branch node "${nodeId}" of parallel "${p.id}" declares \`thread:\` — concurrent branches each run on their own synthetic thread; pass results via typed outputs`,
-            nodeId,
-            ...loc,
-          });
+        } else {
+          // `llm` is the only valid branch kind; the tool / thread constraints
+          // apply to it alone. Running them on a node that already failed E040/
+          // E041 double-fires — e.g. a nested `parallel` has no `allowed_tools`,
+          // so `writeReachableTools` returns EVERY write-class tool and E042
+          // piles on top of E040.
+          const writeReachable = writeReachableTools(cn.attrs);
+          if (writeReachable.length > 0) {
+            // E042: no branch node may reach a write-class tool (shared read-only worktree).
+            diags.push({
+              severity: "error",
+              code: "E042",
+              message: `branch node "${nodeId}" of parallel "${p.id}" can reach write-class tool(s) [${writeReachable.join(", ")}] — branches share the worktree read-only; scope it with allowed-tools / denied-tools`,
+              nodeId,
+              ...loc,
+            });
+          }
+          // E043: no explicit thread on a branch node (single-writer-log invariant).
+          if (typeof cn.attrs.thread_id === "string") {
+            diags.push({
+              severity: "error",
+              code: "E043",
+              message: `branch node "${nodeId}" of parallel "${p.id}" declares \`thread:\` — concurrent branches each run on their own synthetic thread; pass results via typed outputs`,
+              nodeId,
+              ...loc,
+            });
+          }
         }
         // E039: every closure node's non-fanout successors stay inside the
         // closure or hit the join — no escape, and at least one successor (a

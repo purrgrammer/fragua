@@ -397,6 +397,11 @@ export interface FactAppendResult {
   committed: true;
   newVersion: number;
   seqs: number[];
+  /** The post-commit `run_state` projection, folded inside the same transaction.
+   * Lets a caller that needs fresh state right after a commit (e.g. the fan-out
+   * budget gate) reuse it instead of issuing a redundant `getState`. Optional so
+   * non-Sqlite implementers needn't compute it. */
+  state?: RunState;
 }
 
 export interface AppendFactOpts {

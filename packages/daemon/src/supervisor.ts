@@ -131,44 +131,38 @@ export function startSupervisor(opts: SupervisorOpts): {
         }
       }
 
-      // (c) Stuck-node watchdog. Uses the registry's in-process `startedAt`
-      // so daemon pauses and restart gaps don't count — the node's maxMs
-      // budget applies to active execution only. A run reclaimed via
-      // startup-sweep gets a fresh budget; wall-clock accrued before the
-      // crash is not charged.
+      // (c) Stuck-node watchdog. Uses each handler's in-process `startedAt`
+      // (via liveHandlers) so daemon pauses and restart gaps don't count — the
+      // node's maxMs budget applies to active execution only. A run reclaimed via
+      // startup-sweep gets a fresh budget; wall-clock accrued before the crash
+      // is not charged.
+      //
+      // Each in-flight handler is budgeted against ITS OWN node deadline and
+      // tripped INDIVIDUALLY — under a fan-out the branches have different maxMs,
+      // so budgeting the whole set against the longest let a short-deadline branch
+      // evade detection until the longest sibling expired. An UNBOUNDED fan-out
+      // branch (maxMs 0/undefined) is budgeted against the backstop — NOT skipped
+      // — so a runaway llm branch that ignores its abort signal is still
+      // reclaimable (gap 5a). A linear unbounded node opted out of wall-clock
+      // bounding, so it's left alone. The executor arms the same backstop as an
+      // AbortSignal.timeout, so a well-behaved branch self-aborts first; this is
+      // the leak backstop.
       if (opts.handlerMaxMsFor != null) {
         for (const runId of opts.registry.activeRuns()) {
-          const elapsed = opts.registry.elapsedMs(runId);
-          if (elapsed == null) continue;
           const state = opts.store.getState(runId);
-          if (state == null) continue;
-          if (state.status !== "running") continue;
-          if (state.currentNode == null) continue;
-          // During a fan-out the in-flight handlers are the active BRANCHES, not
-          // the pinned `parallel` node — which has no dispatcher spec and would
-          // yield the short unknown-spec fallback, force-aborting every branch
-          // at a tiny budget. Budget the watchdog against the LONGEST active
-          // branch maxMs. An UNBOUNDED branch (maxMs 0/undefined) is budgeted
-          // against the fan-out backstop — NOT skipped — so a runaway llm branch
-          // that ignores its abort signal is still reclaimable (gap 5a). The
-          // executor arms the same backstop as an AbortSignal.timeout, so a
-          // well-behaved branch self-aborts first; this is the leak backstop.
+          if (state == null || state.status !== "running") continue;
           const active = readActiveNodes(state.routing);
-          let maxMs: number | undefined;
-          if (active !== null) {
-            if (active.length === 0) continue; // frontier draining — nothing in flight
-            let longest = 0;
-            for (const branch of active) {
-              const bm = opts.handlerMaxMsFor(state.workflowSha, branch);
-              longest = Math.max(longest, bm === undefined || bm === 0 ? fanoutBranchTimeout : bm);
+          for (const h of opts.registry.liveHandlers(runId)) {
+            let deadline = opts.handlerMaxMsFor(state.workflowSha, h.nodeId);
+            if (deadline === undefined || deadline === 0) {
+              // Unbounded: apply the backstop only to a fan-out branch (in the
+              // active set); a linear unbounded node is intentionally unbounded.
+              if (active !== null && active.includes(h.nodeId)) deadline = fanoutBranchTimeout;
+              else continue;
             }
-            maxMs = longest;
-          } else {
-            maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);
-          }
-          if (maxMs === undefined) continue;
-          if (elapsed > maxMs + leakGrace) {
-            opts.registry.trip(runId, new HandlerLeakedError(runId, state.currentNode));
+            if (h.elapsedMs > deadline + leakGrace) {
+              h.controller.abort(new HandlerLeakedError(runId, h.nodeId));
+            }
           }
         }
       }

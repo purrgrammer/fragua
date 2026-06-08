@@ -97,6 +97,29 @@ describe("SqliteStore — appendFact", () => {
     store.close();
   });
 
+  test("returns the post-commit run_state projection (lets a caller skip a redundant getState)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const state = store.getState(runId)!;
+    const result = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: state.contractVersion, startNode: "a" },
+        },
+      ],
+      state.version,
+    );
+    const fresh = store.getState(runId)!;
+    // The folded post-commit projection rides the result — matches a fresh read.
+    expect(result.state?.version).toBe(result.newVersion);
+    expect(result.state?.version).toBe(fresh.version);
+    expect(result.state?.status).toBe("running");
+    expect(result.state?.currentNode).toBe("a");
+    store.close();
+  });
+
   test("fact.node_completed updates totals and per-model breakdown", async () => {
     const store = freshStore();
     const runId = await seedRun(store);

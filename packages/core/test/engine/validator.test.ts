@@ -648,3 +648,118 @@ describe("validate — W014 unknown retry preset", () => {
     expect(diags.filter((d) => d.code === "W014")).toHaveLength(0);
   });
 });
+
+describe("validate — fan-out branch lints", () => {
+  // A `parallel` node fans out to branch entries and joins at `j`. Edges marked
+  // `{ fanout: true }` are the parallel→entry take-all edges; the rest is the
+  // intra-closure routing the validator's BFS walks.
+  test("E042 (write-class) is gated to llm branch nodes — a non-llm branch is not double-flagged", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["t"], join: "j" } },
+        t: { type: "tool", attrs: {} }, // no allowed_tools → writeReachableTools would return ALL write tools
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "t", { fanout: true }],
+        ["t", "j"],
+        ["j", "done"],
+      ],
+    });
+    const codes = codesOf(g);
+    expect(codes).toContain("E041"); // the non-llm branch is flagged
+    expect(codes).not.toContain("E042"); // ...and the write-class check no longer piles on
+  });
+
+  test("E040 nested parallel is not also flagged E042", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["inner"], join: "j" } },
+        inner: { type: "parallel", attrs: { branches: ["leaf"], join: "j" } },
+        leaf: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "inner", { fanout: true }],
+        ["inner", "leaf", { fanout: true }],
+        ["inner", "j"],
+        ["leaf", "j"],
+        ["j", "done"],
+      ],
+    });
+    const codes = codesOf(g);
+    expect(codes).toContain("E040"); // the nested parallel is flagged
+    expect(codes).not.toContain("E042"); // ...but not a spurious write-class error on it
+  });
+
+  test("E042 still fires for an llm branch that can reach a write-class tool", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["w"], join: "j" } },
+        w: { type: "llm", attrs: { allowed_tools: ["bash"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "w", { fanout: true }],
+        ["w", "j"],
+        ["j", "done"],
+      ],
+    });
+    expect(codesOf(g)).toContain("E042");
+  });
+
+  test("W017 warns on a cyclic branch closure that can still reach the join", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["scan"], join: "j" } },
+        scan: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        verify: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "scan", { fanout: true }],
+        ["scan", "verify"],
+        ["verify", "scan"], // back-edge — a cycle
+        ["verify", "j"], // ...but an exit to the join exists, so E039 stays quiet
+        ["j", "done"],
+      ],
+    });
+    const diags = validate(g);
+    expect(diags.map((d) => d.code)).toContain("W017");
+    expect(diags.find((d) => d.code === "W017")?.severity).toBe("warning");
+    expect(diags.filter((d) => d.code === "E039")).toHaveLength(0); // the closure CAN reach the join
+  });
+
+  test("W017 does not fire on a linear (acyclic) branch closure", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["scan"], join: "j" } },
+        scan: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        verify: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "scan", { fanout: true }],
+        ["scan", "verify"],
+        ["verify", "j"],
+        ["j", "done"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("W017");
+  });
+});

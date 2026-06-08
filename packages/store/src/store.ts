@@ -507,6 +507,7 @@ export class SqliteStore implements IEventStore {
     const ts = this.now();
     const seqs: number[] = [];
     let newVersion = 0;
+    let committedState: RunState | undefined;
     const startAt = performance.now();
 
     // Pre-serialise outputs payloads OUTSIDE the transaction (invariant I1:
@@ -582,6 +583,7 @@ export class SqliteStore implements IEventStore {
 
         this.writeProjection(state);
         newVersion = state.version;
+        committedState = state;
       });
       this.metrics.recordWrite(performance.now() - startAt, "fact");
     } catch (err) {
@@ -589,7 +591,7 @@ export class SqliteStore implements IEventStore {
       throw err;
     }
 
-    return { committed: true, newVersion, seqs };
+    return { committed: true, newVersion, seqs, ...(committedState !== undefined ? { state: committedState } : {}) };
   }
 
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult {

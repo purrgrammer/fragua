@@ -18,9 +18,22 @@
 
 export interface AbortRegistryEntry {
   controller: AbortController;
+  /** The node whose handler this controller belongs to. The leak watchdog
+   * budgets each entry against ITS OWN node deadline — under a fan-out, branches
+   * have different `maxMs`, and budgeting the whole set against the longest let a
+   * short-deadline branch evade detection until the longest sibling expired. */
+  nodeId: string;
   /** `Date.now()` at register() time. Only meaningful within the
    * current process; tripped if `now - startedAt > maxMs + leakGrace`. */
   startedAt: number;
+}
+
+/** One in-flight handler, with its own elapsed time + node — the unit the
+ * supervisor's leak watchdog checks (and trips) per-branch. */
+export interface LiveHandler {
+  nodeId: string;
+  controller: AbortController;
+  elapsedMs: number;
 }
 
 export class AbortRegistry {
@@ -31,11 +44,14 @@ export class AbortRegistry {
     this.clock = clock;
   }
 
-  /** Register an in-flight handler's controller for a run. Returns a disposer
-   * that removes exactly this entry (so concurrent fan-out branches each clean
-   * up their own registration without clobbering siblings). */
-  register(runId: string, controller: AbortController): () => void {
-    const entry: AbortRegistryEntry = { controller, startedAt: this.clock() };
+  /** Register an in-flight handler's controller for a run, tagged with the node
+   * it runs (the production caller, invoke-handler, always passes `ctx.nodeId`;
+   * the watchdog needs it to budget each branch against its own deadline). The
+   * default is for registry-mechanics tests that don't exercise the watchdog.
+   * Returns a disposer that removes exactly this entry (so concurrent fan-out
+   * branches each clean up their own registration without clobbering siblings). */
+  register(runId: string, controller: AbortController, nodeId = ""): () => void {
+    const entry: AbortRegistryEntry = { controller, nodeId, startedAt: this.clock() };
     let set = this.entries.get(runId);
     if (set === undefined) {
       set = new Set();
@@ -88,5 +104,15 @@ export class AbortRegistry {
     let oldest = Number.POSITIVE_INFINITY;
     for (const entry of set) oldest = Math.min(oldest, entry.startedAt);
     return this.clock() - oldest;
+  }
+
+  /** Every in-flight handler for a run — each with its own node id + elapsed
+   * time — so the watchdog can check each against ITS OWN deadline and trip only
+   * the offending controller (not the whole fan-out set). */
+  liveHandlers(runId: string): LiveHandler[] {
+    const set = this.entries.get(runId);
+    if (set === undefined) return [];
+    const now = this.clock();
+    return Array.from(set, (e) => ({ nodeId: e.nodeId, controller: e.controller, elapsedMs: now - e.startedAt }));
   }
 }
