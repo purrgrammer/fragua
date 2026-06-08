@@ -233,9 +233,20 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     expect(seen["b_scan"]).toBe(2); // aborted once, then succeeded
     expect(seen["synth"]).toBe(1);
 
-    const types = r.store.getEvents("fo3").map((e) => e.type);
+    const events = r.store.getEvents("fo3");
+    const types = events.map((e) => e.type);
     expect(types).toContain("fact.node_aborted");
     expect(types).toContain("fact.fanout_joined");
+    // The re-drive of b_scan emits a dispatch_started — the durable failed→running
+    // transition fact (so the projection doesn't read it as failed mid-re-run).
+    expect(
+      events.some(
+        (e) =>
+          e.type === "fact.dispatch_started" &&
+          (e.payload as { nodeId?: string; resumeOf?: string }).nodeId === "b_scan" &&
+          (e.payload as { resumeOf?: string }).resumeOf === "paused",
+      ),
+    ).toBe(true);
 
     // Replay matches the live projection after the abort + re-drive.
     const replayed = deriveRunState("fo3", r.store.getEvents("fo3"));

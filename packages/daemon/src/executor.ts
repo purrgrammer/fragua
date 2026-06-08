@@ -1475,6 +1475,24 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "continue" };
     }
 
+    // Re-dispatch transition fact. A frontier branch whose latest lifecycle fact
+    // is `node_aborted` is being RE-dispatched (resume after a pause/shutdown
+    // abort, or an abort-loop re-drive). The initial frontier rides
+    // `fanout_started` and a successor rides a bundled `dispatch_started`, but a
+    // re-dispatch emits NEITHER — so without this the prior `node_aborted` leaves
+    // the branch projected "failed" for the whole re-run. Emit `dispatch_started`
+    // so the failed→running transition is a durable fact (ground rule #5) the
+    // projection already consumes. Safe: the reducer only ADDS to the active set
+    // when absent — the branch is already there, so this is a no-op on the frontier.
+    const reDispatched = abortedActiveBranches(opts.store, runId, active);
+    if (reDispatched.length > 0) {
+      const facts: FactEvent[] = reDispatched.map((n) => ({
+        type: "fact.dispatch_started",
+        payload: { nodeId: n, iteration: nodeRetryCount(state.routing, n), resumeOf: "paused" },
+      }));
+      if (!(await commitFanoutFact(facts, takeFold()))) return { kind: "continue" };
+    }
+
     // ── Reactive pool (the on-log frontier, fan-out-nodes.md § Execution). One
     // runFanout call drains the whole region: dispatch the live frontier, then
     // as EACH branch settles, commit it and dispatch its successor immediately —
@@ -1573,6 +1591,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         if (!(await commitFanoutFact(outcome.facts, takeFold()))) return { kind: "continue" };
         branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
         abortedNodes.push(outcome.nodeId);
+        // An abort still folds `partialCostUsd` into the durable total — gate the
+        // budget on it too (the success arm does), else a branch that aborts with
+        // real partial spend slips past the cap until the barrier. First breach wins.
+        if (runHalt === undefined && runPause === undefined) {
+          const disp = fanoutBudgetDisposition();
+          if (disp?.type === "fact.run_halted") runHalt = disp;
+          else if (disp?.type === "fact.run_paused") runPause = disp;
+        }
         continue;
       }
 
@@ -1669,6 +1695,31 @@ export interface LeakBudget {
   recordLeak(runId: string, nodeId: string): void;
   /** Read-only — for tests and observability. */
   count(): number;
+}
+
+/** Active fan-out branches whose latest lifecycle fact is `node_aborted` — they
+ * are being re-dispatched (resume after a pause/shutdown abort, or an abort-loop
+ * re-drive) and need a fresh `dispatch_started` so they project as running, not
+ * failed. Scans the log backward, latest-fact-wins, stopping once every active
+ * branch is resolved. */
+function abortedActiveBranches(store: IEventStore, runId: string, active: readonly string[]): string[] {
+  const activeSet = new Set(active);
+  const latest = new Map<string, string>();
+  const events = store.getEvents(runId);
+  for (let i = events.length - 1; i >= 0 && latest.size < activeSet.size; i--) {
+    const ev = events[i]!;
+    const nodeId = (ev.payload as { nodeId?: string } | null)?.nodeId;
+    if (nodeId == null || !activeSet.has(nodeId) || latest.has(nodeId)) continue;
+    if (
+      ev.type === "fact.dispatch_started" ||
+      ev.type === "fact.node_started" ||
+      ev.type === "fact.node_completed" ||
+      ev.type === "fact.node_aborted"
+    ) {
+      latest.set(nodeId, ev.type);
+    }
+  }
+  return active.filter((n) => latest.get(n) === "fact.node_aborted");
 }
 
 /** Pre-fetch all emitted outputs for a run from the outputs index and fold

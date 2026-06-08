@@ -161,11 +161,25 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
 
     if (ev.type === "fact.fanout_started") {
       if (nodeId) activeFanoutParent = nodeId;
+      // Anchor each branch ENTRY's truthful start to fanout_started.ts (daemon-
+      // written sync) so its duration isn't derived from the buffered llm.start.
+      for (const b of Array.isArray(data["branches"]) ? (data["branches"] as string[]) : []) {
+        lastNodeStartedTs.set(b, ev.ts);
+      }
       continue;
     }
 
     if (ev.type === "fact.fanout_joined") {
       activeFanoutParent = undefined;
+      continue;
+    }
+
+    if (ev.type === "fact.dispatch_started") {
+      // A fan-out SUCCESSOR (e.g. a verify) rides dispatch_started, not
+      // node_started — record its truthful start so its branch step anchors to it
+      // instead of the buffered llm.start. Scoped to an active fan-out so a linear
+      // node's own node_started anchoring is unchanged.
+      if (nodeId && activeFanoutParent !== undefined) lastNodeStartedTs.set(nodeId, ev.ts);
       continue;
     }
 
@@ -200,6 +214,19 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       if (nodeId) {
         pausedOpenNodes.delete(nodeId);
         pendingResumeFold.delete(nodeId);
+        // A fan-out BRANCH step ends at its node_completed.ts (truthful), NOT the
+        // flat-next-step gap `fillOrphanDurations` would use — for a concurrent
+        // branch that gap is the barrier wait for its slowest sibling (a 3s verify
+        // showed 11m). Stamp the truthful duration here so the merged Cost row
+        // spans the branch's real start → completion.
+        const branchIdx = lastStepIdxForNode.get(nodeId);
+        if (branchIdx !== undefined) {
+          const branchStep = steps[branchIdx];
+          if (branchStep?.parentNodeId !== undefined && branchStep.durationMs === undefined) {
+            const dur = ev.ts - Date.parse(branchStep.startedAt);
+            if (Number.isFinite(dur) && dur >= 0) branchStep.durationMs = dur;
+          }
+        }
         const pending = pendingToolNode.get(nodeId);
         if (pending !== undefined) {
           // Tool node — no `llm.start` ever opened a step for this

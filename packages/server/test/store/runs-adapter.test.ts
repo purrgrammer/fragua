@@ -176,6 +176,24 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
     expect(byId.get("review")).toBe("running"); // the parallel node is pinned-active
   });
 
+  test("a branch re-dispatched after an abort projects as running (fresh dispatch_started fact)", () => {
+    // A branch aborted (harness shutdown / operator pause) and resumed by the
+    // sweep emits NO dispatch_started of its own — so the executor commits one on
+    // re-dispatch, making the failed→running transition a durable fact rather than
+    // an inference. Its eventual node_completed still wins.
+    const reRunning: StoredEvent[] = [
+      { ...ev("fact.dispatch_started", { nodeId: "verify", iteration: 0, resumeOf: "fresh" }), seq: 1 },
+      { ...ev("fact.node_aborted", { nodeId: "verify", iteration: 0, cause: "aborted" }), seq: 2 },
+      { ...ev("fact.dispatch_started", { nodeId: "verify", iteration: 0, resumeOf: "paused" }), seq: 3 },
+    ];
+    expect(deriveNodeStates(reRunning)[0]?.state).toBe("running");
+    const completed: StoredEvent[] = [
+      ...reRunning,
+      { ...ev("fact.node_completed", { nodeId: "verify", iteration: 0, nextNode: "synth" }), seq: 4 },
+    ];
+    expect(deriveNodeStates(completed)[0]?.state).toBe("completed");
+  });
+
   test("loop iterations produce one entry per (nodeId, iteration)", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "verify", iteration: 0 }), seq: 1 },

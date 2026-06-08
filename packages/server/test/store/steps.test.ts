@@ -269,6 +269,30 @@ describe("eventsToSteps", () => {
     expect(byNode.get("scope")?.parentNodeId).toBeUndefined();
     expect(byNode.get("synth")?.parentNodeId).toBeUndefined();
   });
+
+  test("a fan-out branch step's duration is its truthful node_completed, not the barrier-wait gap", () => {
+    // lens_b finishes fast but the join waits on the slow lens_a, so synth
+    // (post-barrier) starts long after — the flat-next-step heuristic would bill
+    // lens_b that whole wait. Its true duration is its start → node_completed.
+    const events = [
+      ev("fact.fanout_started", 1000, { nodeId: "review", iteration: 0, branches: ["lens_a", "lens_b"] }),
+      ev("llm.start", 1010, { nodeId: "lens_a", seq: 1 }),
+      ev("llm.start", 1010, { nodeId: "lens_b", seq: 2 }),
+      ev("fact.node_completed", 1100, { nodeId: "lens_b", iteration: 0, outcomeStatus: "success" }), // fast: 100ms
+      ev("fact.node_completed", 60_000, { nodeId: "lens_a", iteration: 0, outcomeStatus: "success" }), // slow: 59s
+      ev("fact.fanout_joined", 60_100, { nodeId: "review", iteration: 0, nextNode: "synth", branchesCompleted: 2 }),
+      ev("llm.start", 60_200, { nodeId: "synth", seq: 3 }),
+      ev("fact.node_completed", 61_000, { nodeId: "synth", iteration: 0 }),
+    ].map((e, i) => ({ ...e, seq: (e.payload as { seq?: number }).seq ?? i }));
+
+    const steps = fillOrphanDurations(eventsToSteps(events), { lastEventTs: 61_000, runIsTerminal: true });
+    const byNode = new Map(steps.map((s) => [s.nodeId, s]));
+    // lens_b: truthful 100ms (start 1000 → node_completed 1100), NOT the ~59s gap
+    // to synth's start that the flat heuristic would assign.
+    expect(byNode.get("lens_b")?.durationMs).toBe(100);
+    // lens_a (the slow branch): truthful 59s.
+    expect(byNode.get("lens_a")?.durationMs).toBe(59_000);
+  });
 });
 
 describe("fillOrphanDurations", () => {

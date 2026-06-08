@@ -1110,7 +1110,10 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           });
         }
         for (const e of succ) {
-          if (e.to !== join && !seen.has(e.to)) {
+          // Membership test against the explicit `closureSet` (computed for W017),
+          // not the BFS `seen` — equivalent today, but `closureSet` is the
+          // intended set and survives a BFS refactor that dedups/early-exits.
+          if (e.to !== join && !closureSet.has(e.to)) {
             diags.push({
               severity: "error",
               code: "E039",

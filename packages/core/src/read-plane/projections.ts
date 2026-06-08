@@ -283,10 +283,12 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
       case "fact.node_started":
         bump(nodeId, iteration, "running", ev.seq);
         break;
-      // `dispatch_started` fires on every dispatch including resume after
-      // an operator-pause abort. Without this case the prior `node_aborted`
-      // wins as the last-counted event and the node stays "failed" until
-      // `node_completed` finally fires — long minutes for a chatty agent.
+      // `dispatch_started` fires on every dispatch including resume after an
+      // abort — operator-pause for a linear node, and (since the executor emits
+      // one on re-dispatch) a fan-out BRANCH resumed by the sweep. Without this
+      // the prior `node_aborted` wins as the last-counted event and the node
+      // stays "failed" until `node_completed` finally fires — long minutes for a
+      // chatty agent.
       case "fact.dispatch_started":
         bump(nodeId, iteration, "running", ev.seq);
         break;
