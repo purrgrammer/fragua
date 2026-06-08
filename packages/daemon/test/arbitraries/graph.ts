@@ -44,10 +44,24 @@
 //       distinct entries, disjoint closures reaching the join, llm + read-class
 //       (allowed-tools: [read]) branch nodes, no nested parallel, no explicit
 //       thread; the join's reads are dominated by the wait_all barrier (W015
-//       suppressed). The executor-driving harnesses opt these two OUT (their
-//       scripted handlers don't emit outputs / run the frontier).
+//       suppressed). The executor-driving harnesses DRIVE this shape — their
+//       scripted handlers emit declared `outputs:` via `stubOutputsFor`, so the
+//       fan-out frontier reaches a clean terminal under crash + fault injection.
+//       Only the structured-outputs SPINE shape (a) stays driver-opted-out: its
+//       `${{…}}` refs land on routing/back-edge nodes the scripts don't populate.
 
-import type { Edge, Graph, GraphAttrs, InputDecl, Node, NodeAttrs, OutputProfile, OutputsDecl } from "@fragua/core";
+import type {
+  Edge,
+  Graph,
+  GraphAttrs,
+  InputDecl,
+  Node,
+  NodeAttrs,
+  OutputProfile,
+  OutputStructValue,
+  OutputsDecl,
+  OutputsValue,
+} from "@fragua/core";
 import fc from "fast-check";
 
 const MAX_BODY = 6;
@@ -377,6 +391,41 @@ function buildParallelGraph(branchSpecs: readonly BranchSpec[]): Graph {
 const arbParallelGraph: fc.Arbitrary<Graph> = fc
   .array(fc.record({ length: fc.constantFrom<1 | 2>(1, 2) }), { minLength: 2, maxLength: 3 })
   .map((branchSpecs) => buildParallelGraph(branchSpecs));
+
+/** A schema-valid stub value for one declared output profile — the smallest
+ * thing that passes the lowered TypeBox. Lets a scripted PBT handler settle a
+ * node that declares typed `outputs:` so its consumers resolve (no fail-closed
+ * `UnpopulatedOutputError`). Covers the whole profile grammar so it works for
+ * both the `outputs:` and `parallel` arbitraries. */
+export function stubOutputValue(profile: OutputProfile): OutputStructValue {
+  switch (profile.kind) {
+    case "number":
+      return 1;
+    case "boolean":
+      return true;
+    case "choice":
+      return profile.options[0] ?? "x";
+    case "record": {
+      const obj: Record<string, OutputStructValue> = {};
+      for (const [field, sub] of Object.entries(profile.fields)) obj[field] = stubOutputValue(sub);
+      return obj;
+    }
+    case "array":
+      return [stubOutputValue(profile.items)];
+    default:
+      return "x"; // string
+  }
+}
+
+/** Stub the full `outputs:` block a node declares (or `undefined` when it
+ * declares none), for emission on a scripted handler's success transition. */
+export function stubOutputsFor(node: Node): OutputsValue | undefined {
+  const decl = node.attrs.outputs;
+  if (decl === undefined) return undefined;
+  const out: OutputsValue = {};
+  for (const [field, profile] of Object.entries(decl)) out[field] = stubOutputValue(profile);
+  return out;
+}
 
 const arbGraphSpec: fc.Arbitrary<GraphSpec> = fc.record({
   budget: fc.option(

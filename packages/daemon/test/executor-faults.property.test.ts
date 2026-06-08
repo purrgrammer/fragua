@@ -33,14 +33,17 @@ import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import type { Provisioner } from "../src/worktree-provisioner.ts";
-import { type ArbGraphOptions, makeArbGraph } from "./arbitraries/graph.ts";
+import { type ArbGraphOptions, makeArbGraph, stubOutputsFor } from "./arbitraries/graph.ts";
 import { type AppendFaultSchedule, faultStore } from "./fault-store.ts";
 import { checkRunInvariants } from "./invariants.ts";
 
-// Fault scripts drive plain success/fail transitions — no typed `outputs:` emit,
-// no fan-out frontier — so the outputs-consumer / parallel shapes (validate()-only
-// bootstrap material) are opted out to keep every generated run driveable.
-const DRIVEABLE: ArbGraphOptions = { structuredOutputs: false, parallel: false };
+// Fault scripts emit declared `outputs:` (via stubOutputsFor) so `type: parallel`
+// graphs reach a clean terminal — which storms the commit-seam fault schedule
+// over the THREE fan-out seams (fanout_started, branch node_completed +
+// dispatch_started, fanout_joined), not just the linear spine. The
+// outputs-consumer spine shape stays off (its refs sit on routing/back-edge
+// nodes the script doesn't populate).
+const DRIVEABLE: ArbGraphOptions = { structuredOutputs: false, parallel: true };
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 
@@ -57,6 +60,8 @@ function successSpec(node: Node): handler.HandlerSpec {
     handler: async () => {
       const result: handler.HandlerResult = { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 };
       if (isRoutingNode(node)) result.route = "r0";
+      const outputs = stubOutputsFor(node);
+      if (outputs !== undefined) result.outputs = outputs;
       return result;
     },
   };

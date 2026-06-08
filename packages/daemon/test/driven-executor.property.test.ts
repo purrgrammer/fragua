@@ -35,18 +35,19 @@ import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
-import { type ArbGraphOptions, makeArbGraph } from "./arbitraries/graph.ts";
+import { type ArbGraphOptions, makeArbGraph, stubOutputsFor } from "./arbitraries/graph.ts";
 import { checkRunInvariants } from "./invariants.ts";
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 const AUTO_PAUSE_REASONS = new Set(["provider_retry", "handler_retry", "timeout_retry"]);
 
-// The scripted handlers here return plain success/fail/retry transitions — they
-// neither emit typed `outputs:` nor run the fan-out frontier, so a graph with an
-// `${{ outputs.X.f }}` consumer or a `type: parallel` node wouldn't reach a
-// clean terminal under this drive. Those shapes are the validate()-only
-// bootstrap's job; here we keep to the driveable spine + routing + human set.
-const DRIVEABLE: ArbGraphOptions = { structuredOutputs: false, parallel: false };
+// The scripted handlers emit declared `outputs:` (via stubOutputsFor) so a
+// `type: parallel` graph's join `${{ outputs.X.findings }}` consumer resolves and
+// the fan-out frontier reaches a clean terminal under crash-and-replay. The
+// outputs-consumer SPINE shape stays off (structuredOutputs) — its `${{...}}`
+// refs sit on routing/back-edge nodes the script doesn't populate — but fan-out
+// branch outputs are exactly what the scripted success emits.
+const DRIVEABLE: ArbGraphOptions = { structuredOutputs: false, parallel: true };
 
 function isRoutingNode(node: Node): boolean {
   return node.type === "llm" && Array.isArray(node.attrs.routes) && node.attrs.routes.length > 0;
@@ -62,6 +63,8 @@ function successSpec(node: Node): handler.HandlerSpec {
     handler: async () => {
       const result: handler.HandlerResult = { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 };
       if (isRoutingNode(node)) result.route = "r0";
+      const outputs = stubOutputsFor(node);
+      if (outputs !== undefined) result.outputs = outputs;
       return result;
     },
   };
@@ -95,6 +98,8 @@ function scriptedSpec(node: Node, script: NodeScript): handler.HandlerSpec {
       }
       const result: handler.HandlerResult = { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 };
       if (isRoutingNode(node)) result.route = "r0";
+      const outputs = stubOutputsFor(node);
+      if (outputs !== undefined) result.outputs = outputs;
       return result;
     },
   };
