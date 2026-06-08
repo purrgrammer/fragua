@@ -393,4 +393,51 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     expect(okRuns).toBe(1); // the healthy sibling completed and was not re-driven
     r.store.close();
   });
+
+  test("an in-flight branch STREAMS its observability mid-handler, not held until completion", async () => {
+    const r = rig({ yaml: HOL_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // a_scan emits a cost.recorded, then polls for it to LAND in the store BEFORE
+    // it returns. With the mid-handler flush timer it streams within ~50ms; without
+    // it, the event is held until the branch completes (after this poll) → sawStreamed
+    // stays false. (The head-of-line trick, applied to observability — this is what
+    // kept an in-flight branch off the live Cost view + frozen in the transcript.)
+    let sawStreamed = false;
+    r.dispatcher.register(r.workflowSha, "a_scan", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 5000,
+      handler: async (ctx) => {
+        ctx.emit("cost.recorded", { total_tokens: 7, cost_usd: 0.01, input_tokens: 5, output_tokens: 2 });
+        for (let i = 0; i < 400 && !sawStreamed; i++) {
+          const landed = r.store
+            .getEvents(ctx.runId)
+            .some((e) => e.type === "cost.recorded" && (e.payload as { nodeId?: string }).nodeId === "a_scan");
+          if (landed) sawStreamed = true;
+          else await new Promise((res) => setTimeout(res, 5));
+        }
+        return { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 };
+      },
+    });
+    const instant = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+      });
+    instant("b_scan");
+    instant("synth");
+    enqueue(r, "stream1", "begin");
+    await drive(r, "stream1");
+
+    expect(sawStreamed).toBe(true); // the branch's cost.recorded streamed BEFORE it completed
+    expect(r.store.getState("stream1")!.status).toBe("completed");
+    r.store.close();
+  });
 });

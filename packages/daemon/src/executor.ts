@@ -1238,7 +1238,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     let totalCacheWriteTokens = 0;
     let lastModel: string | undefined;
     const observability: { type: string; payload: Record<string, unknown> }[] = [];
+    // Mid-handler micro-batch timer — mirrors the linear dispatchOne path so an
+    // IN-FLIGHT branch streams its observability (llm.start, cost.recorded, text
+    // deltas) live, instead of holding it ALL until the branch completes (which
+    // left a still-running branch absent from the Cost / steps view and frozen
+    // in the transcript until it joined). Scheduled by emitObservability below.
+    let observabilityFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const flushObservability = (): void => {
+      if (observabilityFlushTimer != null) {
+        clearTimeout(observabilityFlushTimer);
+        observabilityFlushTimer = null;
+      }
       if (observability.length === 0) return;
       const drained = observability.splice(0, observability.length);
       try {
@@ -1292,6 +1302,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
           const model = p["model"];
           if (typeof model === "string") lastModel = model;
+        }
+        // Hard ceiling on a delta burst, then a soft timer to coalesce — so a
+        // long-running branch surfaces live in the Cost view + transcript rather
+        // than landing all at once when it joins.
+        if (observability.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
+          flushObservability();
+          return;
+        }
+        if (observabilityFlushTimer == null) {
+          observabilityFlushTimer = setTimeout(flushObservability, OBSERVABILITY_FLUSH_INTERVAL_MS);
         }
       },
     };
