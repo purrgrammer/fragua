@@ -2,8 +2,10 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import type { Edge, Graph } from "../types/graph.ts";
+import { isOutputRecord, type OutputProfile } from "../types/outputs.ts";
+import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
-import { inputReferences } from "./substitution.ts";
+import { inputReferences, outputReferences } from "./substitution.ts";
 
 /** Whitelist of known node attribute names — the IR (snake_case) field set
  * the validator runs against, *after* the parser has lowered authoring keys
@@ -41,6 +43,7 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "retry_backoff_factor",
   "retry_max_delay_ms",
   "retry_jitter",
+  "outputs",
 ]);
 
 /** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
@@ -163,7 +166,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E012: start node must have no incoming edges (attractor §11.2). The
+  // E012: start node must have no incoming edges. The
   // start handler is the entry point and is reached by the run-started
   // fact, not by any edge.
   for (const s of starts) {
@@ -178,7 +181,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E013: exit nodes must have no outgoing edges (attractor §11.2).
+  // E013: exit nodes must have no outgoing edges.
   for (const e of exits) {
     const out = graph.edges.filter((edge) => edge.from === e.id);
     if (out.length > 0) {
@@ -427,6 +430,165 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
+    }
+  }
+
+  // E033/E034: static validation of the restricted outputs profile.
+  // Run over every node that declares `outputs:`. Out-of-profile constructs
+  // are rejected at parse time (OutputsProfileError in yaml.ts), but the
+  // semantic rules (empty decl, non-identifier keys, empty choice options)
+  // are emitted here as E033/E034 diagnostics rather than hard parse errors.
+  // (`outputs:` on a non-llm/tool step is rejected earlier, at parse time —
+  // yaml.ts throws a ParseError, like an unknown `type:`.)
+  for (const n of nodes) {
+    const outputs = n.attrs.outputs;
+    if (outputs === undefined) continue;
+    const sub = validateOutputsDeclStatic(outputs, n.id, n.loc);
+    for (const d of sub) diags.push(d);
+  }
+
+  // E035 / W015: `${{ outputs.X.f }}` references. Reads fail closed at runtime
+  // (substituteOutputs throws → node failure), so static checking is advisory,
+  // not a gate:
+  //   - hard error (E035) when producer X doesn't exist, declares no outputs,
+  //     doesn't declare field f, or can never reach the consumer (a dead
+  //     reference — always a typo / wiring mistake);
+  //   - warning (W015) when X can reach the consumer but doesn't dominate its
+  //     success path — the ref might be unpopulated on some run path, where it
+  //     fails closed at runtime.
+  // Success-dominance is computed only to SUPPRESS the warning; it never
+  // blocks. The runtime guarantee is fail-closed reads, not this analysis.
+  {
+    const dominance = buildSuccessDominance(graph);
+    const reachableCache = new Map<string, Set<string>>();
+    const producerReaches = (producerId: string, consumerId: string): boolean => {
+      let set = reachableCache.get(producerId);
+      if (set === undefined) {
+        set = reachableSet(graph, producerId);
+        reachableCache.set(producerId, set);
+      }
+      return set.has(consumerId);
+    };
+    for (const n of nodes) {
+      if (n.type === "start" || n.type === "exit") continue;
+      const fields = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
+      for (const f of fields) {
+        if (typeof f !== "string") continue;
+        for (const ref of outputReferences(f)) {
+          const producer = graph.nodes[ref.producer];
+          const refToken = `\${{ outputs.${ref.producer}.${ref.path.join(".") || "?"} }}`;
+          if (producer === undefined) {
+            diags.push({
+              severity: "error",
+              code: "E035",
+              message: `node "${n.id}" references \`${refToken}\` but node "${ref.producer}" does not exist`,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+            continue;
+          }
+          const producerOutputs = producer.attrs.outputs;
+          if (producerOutputs === undefined) {
+            diags.push({
+              severity: "error",
+              code: "E035",
+              message: `node "${n.id}" references \`${refToken}\` but node "${ref.producer}" declares no \`outputs:\``,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+            continue;
+          }
+          const topField = ref.path[0];
+          const topProfile = topField === undefined ? undefined : producerOutputs[topField];
+          if (topProfile === undefined) {
+            diags.push({
+              severity: "error",
+              code: "E035",
+              message: `node "${n.id}" references \`${refToken}\` but node "${ref.producer}" does not declare output field "${topField ?? "?"}"`,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+            continue;
+          }
+          // Validate the deeper dotted segments against the field's profile: a
+          // record must declare each next segment; dotting into a scalar or array
+          // can never resolve (resolveSegments returns undefined → fails closed),
+          // so it's a dead reference — E035, not just a top-field check.
+          let segProfile: OutputProfile = topProfile;
+          let badPath = false;
+          // Top-level fields are always required (top-level `optional:` is
+          // rejected at parse time), so only deeper segments can be optional. A
+          // ref reaching through an optional field the producer may omit fails
+          // closed at runtime — remember the first such segment for W016.
+          let optionalSeg: string | undefined;
+          for (const seg of ref.path.slice(1)) {
+            if (!isOutputRecord(segProfile)) {
+              badPath = true;
+              break;
+            }
+            const next = segProfile.fields[seg];
+            if (next === undefined) {
+              badPath = true;
+              break;
+            }
+            if (optionalSeg === undefined && !segProfile.required.includes(seg)) optionalSeg = seg;
+            segProfile = next;
+          }
+          if (badPath) {
+            diags.push({
+              severity: "error",
+              code: "E035",
+              message: `node "${n.id}" references \`${refToken}\` but node "${ref.producer}" does not declare the field path \`${ref.path.join(".")}\``,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+            continue;
+          }
+          // Producer exists and declares the field. Decide error-vs-warn:
+          // can't reach the consumer at all → dead ref (E035); reachable but
+          // not success-dominating → advisory (W015), fail-closed at runtime.
+          if (dominance.dominates(ref.producer, n.id)) {
+            // Producer always runs first, so W015 stays silent — but the read can
+            // still fail closed if it reaches through an optional field the
+            // producer legitimately omits. W016 covers exactly that gap (a ref
+            // never draws both W015 and W016).
+            if (optionalSeg !== undefined) {
+              diags.push({
+                severity: "warning",
+                code: "W016",
+                message:
+                  `node "${n.id}" reads \`${refToken}\` through the optional field "${optionalSeg}" — ` +
+                  `if "${ref.producer}" emits without it the read fails closed at runtime (node failure, not "") — ` +
+                  `read it only where "${ref.producer}" guarantees it, or drop \`optional:\` if it's always emitted`,
+                nodeId: n.id,
+                ...(n.loc !== undefined ? { loc: n.loc } : {}),
+              });
+            }
+            continue;
+          }
+          if (!producerReaches(ref.producer, n.id)) {
+            diags.push({
+              severity: "error",
+              code: "E035",
+              message:
+                `node "${n.id}" references \`${refToken}\` but "${ref.producer}" can never run before "${n.id}" ` +
+                `(no path reaches the consumer after the producer) — the reference is always unpopulated`,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+            continue;
+          }
+          diags.push({
+            severity: "warning",
+            code: "W015",
+            message:
+              `node "${n.id}" reads \`${refToken}\` but "${ref.producer}" does not run on every path to it — ` +
+              `if it didn't run (or failed before emitting), the reference fails closed at runtime (node failure, not "")`,
+            nodeId: n.id,
+            ...(n.loc !== undefined ? { loc: n.loc } : {}),
+          });
+        }
+      }
     }
   }
 
@@ -717,6 +879,167 @@ export function validateOrThrow(graph: Graph, opts: ValidateOptions = {}): void 
 function reachableSet(graph: Graph, startId: string): Set<string> {
   return reachableFromSet(graph, [startId]);
 }
+
+export interface SuccessDominance {
+  /**
+   * Does producer X "success-dominate" consumer N — i.e. does EVERY path from
+   * start to N cross X and leave it via a non-fail (output-emitting) edge? When
+   * true, X's outputs are guaranteed populated by the time N runs.
+   */
+  dominates(producer: string, consumer: string): boolean;
+}
+
+/** Virtual "X emitted its outputs" node, inserted on each producer's non-fail
+ * out-edges. `:` can't appear in a node id, so this never collides. */
+const emitNodeId = (producer: string): string => `:emit:${producer}`;
+
+/**
+ * Build a success-dominance oracle for `${{ outputs.X.f }}` reference checking.
+ *
+ * "X success-dominates N" means every path start→N crosses X AND leaves X via a
+ * non-fail edge — only then is X's output guaranteed populated when N runs. The
+ * subtlety: N may legitimately be reached via *another* node's fail edge (a
+ * recovery step `fix` reached through a gate's `fail:`), and that must NOT break
+ * X's dominance — only X's *own* fail exits should.
+ *
+ * Encoding (standard edge-subdivision): insert a virtual `emit::X` node on each
+ * producer X's non-fail out-edges (`X → emit::X → targets`); X's fail edges stay
+ * direct, bypassing it. Then `emit::X` dominates N in the ordinary control-flow
+ * graph IFF X success-dominates N. All producers' emit-nodes coexist in one
+ * augmented graph, so a single dominator-tree build answers every (X, N) query.
+ *
+ * Dominators via Cooper–Harvey–Kennedy ("A Simple, Fast Dominance Algorithm"):
+ * iterate immediate dominators over reverse-postorder, intersecting by walking
+ * up the partial tree with postorder numbers — near-linear, no per-node O(N)
+ * dominator sets. Ancestor (dominance) queries are O(1) via dom-tree DFS
+ * enter/exit intervals.
+ */
+function buildSuccessDominance(graph: Graph): SuccessDominance {
+  const producers = new Set(Object.keys(graph.nodes).filter((id) => graph.nodes[id]?.attrs.outputs !== undefined));
+
+  // Augmented adjacency: subdivide each producer's non-fail out-edges with emit::X.
+  const succ = new Map<string, string[]>();
+  const ensure = (n: string): string[] => {
+    let list = succ.get(n);
+    if (list === undefined) {
+      list = [];
+      succ.set(n, list);
+    }
+    return list;
+  };
+  for (const id of Object.keys(graph.nodes)) ensure(id);
+  const emitNeeded = new Set<string>();
+  for (const e of graph.edges) {
+    if (producers.has(e.from) && e.attrs.outcome !== "fail") {
+      ensure(emitNodeId(e.from)).push(e.to);
+      emitNeeded.add(e.from);
+    } else {
+      ensure(e.from).push(e.to);
+    }
+  }
+  for (const p of emitNeeded) ensure(p).push(emitNodeId(p));
+
+  const start = Object.keys(graph.nodes).find((id) => graph.nodes[id]?.type === "start") ?? Object.keys(graph.nodes)[0];
+  if (start === undefined) return { dominates: () => false };
+
+  // Postorder + reverse-postorder over nodes reachable from start (iterative DFS).
+  const postNum = new Map<string, number>();
+  const visited = new Set<string>([start]);
+  const rpo: string[] = [];
+  {
+    const stack: Array<{ node: string; i: number }> = [{ node: start, i: 0 }];
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1]!;
+      const neighbors = succ.get(top.node) ?? [];
+      if (top.i < neighbors.length) {
+        const next = neighbors[top.i++]!;
+        if (!visited.has(next)) {
+          visited.add(next);
+          stack.push({ node: next, i: 0 });
+        }
+      } else {
+        postNum.set(top.node, postNum.size);
+        rpo.push(top.node);
+        stack.pop();
+      }
+    }
+    rpo.reverse();
+  }
+
+  // Predecessors among reachable nodes.
+  const preds = new Map<string, string[]>();
+  for (const n of visited) preds.set(n, []);
+  for (const [u, vs] of succ) {
+    if (!visited.has(u)) continue;
+    for (const v of vs) if (visited.has(v)) preds.get(v)!.push(u);
+  }
+
+  // Cooper–Harvey–Kennedy immediate-dominator fixpoint.
+  const idom = new Map<string, string>([[start, start]]);
+  const intersect = (a: string, b: string): string => {
+    let f1 = a;
+    let f2 = b;
+    while (f1 !== f2) {
+      while (postNum.get(f1)! < postNum.get(f2)!) f1 = idom.get(f1)!;
+      while (postNum.get(f2)! < postNum.get(f1)!) f2 = idom.get(f2)!;
+    }
+    return f1;
+  };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const b of rpo) {
+      if (b === start) continue;
+      let newIdom: string | undefined;
+      for (const p of preds.get(b) ?? []) {
+        if (!idom.has(p)) continue;
+        newIdom = newIdom === undefined ? p : intersect(p, newIdom);
+      }
+      if (newIdom !== undefined && idom.get(b) !== newIdom) {
+        idom.set(b, newIdom);
+        changed = true;
+      }
+    }
+  }
+
+  // Dom-tree DFS enter/exit intervals for O(1) ancestor checks.
+  const children = new Map<string, string[]>();
+  for (const n of visited) children.set(n, []);
+  for (const [n, d] of idom) if (n !== d) children.get(d)!.push(n);
+  const enter = new Map<string, number>();
+  const exit = new Map<string, number>();
+  {
+    let clock = 0;
+    const stack: Array<{ node: string; i: number }> = [{ node: start, i: 0 }];
+    enter.set(start, clock++);
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1]!;
+      const ch = children.get(top.node) ?? [];
+      if (top.i < ch.length) {
+        const c = ch[top.i++]!;
+        enter.set(c, clock++);
+        stack.push({ node: c, i: 0 });
+      } else {
+        exit.set(top.node, clock++);
+        stack.pop();
+      }
+    }
+  }
+
+  return {
+    dominates(producer: string, consumer: string): boolean {
+      const a = emitNodeId(producer);
+      const ea = enter.get(a);
+      const xa = exit.get(a);
+      const en = enter.get(consumer);
+      const xn = exit.get(consumer);
+      if (ea === undefined || xa === undefined || en === undefined || xn === undefined) return false;
+      return ea <= en && xn <= xa;
+    },
+  };
+}
+
+export { buildSuccessDominance };
 
 function reachableFromSet(graph: Graph, startIds: string[]): Set<string> {
   const visited = new Set<string>();

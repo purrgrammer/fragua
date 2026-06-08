@@ -21,6 +21,13 @@ export interface TextShimmerProps {
    * signal instead.
    */
   spread?: number;
+  /**
+   * CSS color for the pulsing text. Defaults to the canonical
+   * accent.thinking "alive" colour. Pass a neutral token (e.g.
+   * `var(--sw-muted)`) where the state accent isn't wanted — accents are
+   * reserved for the status dot, not body labels.
+   */
+  color?: string;
 }
 
 // Pulse is slow. 1800ms floor.
@@ -31,6 +38,7 @@ const ShimmerComponent = ({
   as: Component = "p" as ElementType,
   className,
   duration,
+  color,
   spread: _spread,
 }: TextShimmerProps) => {
   const requested = duration ? duration * 1000 : MIN_PULSE_MS;
@@ -45,7 +53,7 @@ const ShimmerComponent = ({
     {
       className: cn("sw-pulse inline-block", className),
       style: {
-        color: "var(--sw-accent-thinking)",
+        color: color ?? "var(--sw-accent-thinking)",
         animationDuration: `${pulseMs}ms`,
       } as CSSProperties,
     },

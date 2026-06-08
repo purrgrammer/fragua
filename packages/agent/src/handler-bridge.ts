@@ -6,7 +6,14 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import { type EventType, type LlmBackend, type Node, type Outcome, substitute } from "@fragua/core";
+import {
+  type EventType,
+  type LlmBackend,
+  type Node,
+  type Outcome,
+  substitute,
+  UnpopulatedOutputError,
+} from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import { MessageTooLargeError } from "@fragua/store";
 import type { AgentMessage } from "@fragua/types";
@@ -64,10 +71,24 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
   const run: handler.Handler = async (ctx) => {
     const node = opts.node;
     const rawPrompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt : "";
-    // Resolve `${{ inputs.x }}` before the prompt hits the LLM. Without
-    // this the agent sees the literal placeholder and every workflow with
-    // an abort-on-empty guard halts on its first node.
-    const prompt = substitute(rawPrompt, { args: ctx.args });
+    // Resolve `${{ inputs.x }}` / `${{ outputs.X.f }}` before the prompt hits
+    // the LLM. Without this the agent sees the literal placeholder and every
+    // workflow with an abort-on-empty guard halts on its first node.
+    // `wrapOutputs`: interpolated outputs are delimited with a SHA-256-derived
+    // boundary so an upstream-laundered value can't pose as an instruction
+    // (substitution.ts §6.4).
+    // An unpopulated `${{ outputs.X.f }}` read FAILS CLOSED as a node `fail`
+    // (routes via fail-edge / goal-gate / aborted_exit), never an uncaught throw
+    // that the executor would turn into a fatal `reason:"error"` halt.
+    let prompt: string;
+    try {
+      prompt = substitute(rawPrompt, { args: ctx.args, wrapOutputs: true });
+    } catch (err) {
+      if (err instanceof UnpopulatedOutputError) {
+        return { kind: "transition", outcomeStatus: "fail", failureReason: err.message, tokens: 0, costUsd: 0 };
+      }
+      throw err;
+    }
     const graphGoal = typeof ctx.routing["graph.goal"] === "string" ? (ctx.routing["graph.goal"] as string) : undefined;
 
     let tokens = 0;
@@ -279,6 +300,7 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       kind: "transition",
       outcomeStatus: outcome.status,
       ...(outcome.route !== undefined && outcome.route.length > 0 ? { route: outcome.route } : {}),
+      ...(outcome.outputs !== undefined ? { outputs: outcome.outputs } : {}),
       ...(explicitNext != null ? { nextNode: explicitNext } : {}),
       ...(failureReason !== undefined ? { failureReason } : {}),
       tokens,

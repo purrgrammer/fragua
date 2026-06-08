@@ -80,7 +80,7 @@ describe("IR codec — round-trip modulo loc", () => {
     expect(JSON.stringify(parsed)).toBe(before);
   });
 
-  test("CURRENT_IR_VERSION is 1 at 0.1.0", () => {
-    expect(CURRENT_IR_VERSION).toBe(1);
+  test("CURRENT_IR_VERSION is 2 (structured-outputs bump)", () => {
+    expect(CURRENT_IR_VERSION).toBe(2);
   });
 });

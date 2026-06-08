@@ -65,6 +65,13 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       // Non-routing nodes leave
       // `result.route` undefined; the field stays absent from the JSON.
       if (result.route != null && result.route.length > 0) payload.route = result.route;
+      // Structured outputs: attach unconditionally. The store spills an
+      // oversized struct to the blob CAS at append time (the event keeps a tiny
+      // `{$fragua_blob}` ref under the 4 KiB cap), so size is no longer a node
+      // failure — `result-to-facts` stays a pure size-agnostic projection.
+      if (result.outputs !== undefined) {
+        payload.outputs = result.outputs as Record<string, unknown>;
+      }
       // Input/output/cache split — emit only when non-zero so legacy
       // handlers without the split keep their payload size unchanged
       // (§I7 keeps events ≤4KB).
@@ -260,7 +267,7 @@ export function cancelToFacts(intentSeq: number): FactEvent[] {
   return [{ type: "fact.run_cancelled", payload: { intentSeq } }];
 }
 
-/** Per-node retry counter (attractor §3.6) — bumped each time a
+/** Per-node retry counter — bumped each time a
  * backward edge re-enters a node after a non-success outcome. Stored
  * per node at `internal.retry_count.<nodeId>` (retryCountKey); the
  * executor writes it and reads it for the dispatch iteration, so the

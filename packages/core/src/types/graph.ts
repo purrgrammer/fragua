@@ -1,6 +1,7 @@
 // Graph model: Nodes, Edges, and the Graph itself. See docs/SPEC.md §3.1.
 
 import type { RetryPresetName } from "../engine/retry-policy.ts";
+import type { OutputsDecl } from "./outputs.ts";
 import type { SummaryLevel } from "./summary.ts";
 
 /** Node-type discriminator. `start` and `exit` are synthesised by the
@@ -68,6 +69,11 @@ export interface NodeAttrs {
   skills?: string[];
   /** Routing targets this node may exit to via the `route` tool. */
   routes?: string[];
+  /** Typed output declarations for this step (llm steps only). Keys are output
+   * names; values are restricted-profile type nodes. Validated at parse time and
+   * lowered to a provider-enforced TypeBox schema for the `emit_output` tool.
+   * See docs/proposals/structured-outputs.md. */
+  outputs?: OutputsDecl;
   /** Free-form text shown to the operator for type:human steps. */
   text?: string;
   /** Backoff preset for handler retries (authoring: `retry-policy`). Resolution

@@ -8,6 +8,7 @@ import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import type { Node } from "../types/graph.ts";
 import type { Outcome } from "../types/outcome.ts";
+import type { OutputsDecl } from "../types/outputs.ts";
 import type { SummaryLevel } from "../types/summary.ts";
 
 export type { BudgetSnapshotInput };
@@ -64,4 +65,7 @@ export interface LlmInput {
    * so the UI can render "X of Y used" without cross-referencing the
    * graph attrs. Optional: omitted when no ceiling is configured. */
   budgetSnapshot?: BudgetSnapshotInput;
+  /** Outputs declared by the current node (forwarded from `node.attrs.outputs`).
+   * Used by the backend to synthesise the `emit_output` tool. */
+  outputsDecl?: OutputsDecl;
 }

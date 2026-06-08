@@ -4,6 +4,7 @@ import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
   BookOpenIcon,
   BotIcon,
+  BracesIcon,
   CheckCircleIcon,
   ChevronDownIcon,
   CircleIcon,
@@ -160,6 +161,8 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   skill: { icon: BookOpenIcon, label: "Skill" },
   abort: { icon: OctagonXIcon, label: "Abort" },
   route: { icon: SignpostIcon, label: "Route" },
+  // The node's structured output — reads as "Output", not the raw tool name.
+  emit_output: { icon: BracesIcon, label: "Output" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare

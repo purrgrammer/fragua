@@ -20,6 +20,8 @@
 // Per D6 the per-edge `label=` is pure UX (button text) and never
 // participates in selection.
 
+import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
+import { substitute } from "../../engine/substitution.ts";
 import type { Handler, HandlerResult, HandlerSpec, HumanInput } from "../types.ts";
 
 export interface HumanHandlerEdge {
@@ -58,9 +60,23 @@ export function makeHumanHandler(cfg: HumanHandlerConfig): HandlerSpec {
 
   const handler: Handler = async (ctx) => {
     if (ctx.humanInput === undefined) {
+      // Interpolate `${{ inputs.x }}` / `${{ outputs.X.f }}` so the operator
+      // sees real values, not literal tokens (rule 13: human `text:` consumes).
+      // No shell-escape and no output-wrap — a person reads this, it's not an
+      // LLM prompt. An unpopulated output ref FAILS CLOSED as a node `fail`
+      // (not an uncaught throw the executor would turn into a fatal halt).
+      let resolvedText: string;
+      try {
+        resolvedText = substitute(text, { args: ctx.args });
+      } catch (err) {
+        if (err instanceof UnpopulatedOutputError) {
+          return { kind: "transition", outcomeStatus: "fail", failureReason: err.message, tokens: 0, costUsd: 0 };
+        }
+        throw err;
+      }
       return {
         kind: "yield_human",
-        text,
+        text: resolvedText,
         routes,
         ...(hasLabels ? { routeLabels } : {}),
       } satisfies HandlerResult;

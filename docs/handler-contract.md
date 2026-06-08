@@ -41,7 +41,7 @@ The context object the executor hands to every handler. The fields below are the
 
 ### `ctx.args: Readonly<SubstitutionArgs>`
 
-Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. `inputs` is the resolved `${{ inputs.<name> }}` map (declared `default:` values overlaid by run-provided `--input name=value`, stored on `routing.inputs`). The run's free-form `routing.input` (CLI positional or `POST /runs` `input`) is the run description / auto-title seed and is **not** substituted into prompts. Cross-node data transfer happens through shared `thread:` (SPEC §3.3), with optional per-node `summary:` for compression, not through prompt substitution.
+Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. `inputs` is the resolved `${{ inputs.<name> }}` map (declared `default:` values overlaid by run-provided `--input name=value`, stored on `routing.inputs`). Cross-node data transfer happens through shared `thread:` (SPEC §3.3), with optional per-node `summary:` for compression, not through prompt substitution.
 
 ### `ctx.emit(type, payload): void`
 

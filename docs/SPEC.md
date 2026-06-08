@@ -207,17 +207,20 @@ The gate's `max_retries` bounds the loop so a perpetually-failing `retry_target`
 
 ### 3.8 Substitution
 
-One token family expands in `prompt:`, `text:`, and `run:` strings before the handler sees them:
+Two token families expand in `prompt:`, `text:`, and `run:` strings before the handler sees them:
 
 | Token | Meaning |
 |---|---|
 | `${{ inputs.<name> }}` | A typed run input declared in the workflow's `inputs:` block, bound per-run via `--input name=value`. Declared `default:` values apply when a binding is omitted; the validator (E030) flags references to undeclared inputs, and enqueue rejects a missing required input or an out-of-range `choice`. |
+| `${{ outputs.<producer>.<field>[.<sub>…] }}` | A typed step output emitted by an upstream `llm` node that declared `outputs:`. A scalar leaf interpolates as its value; a record/array as JSON; a dotted leaf reaches a scalar inside a structure. **Reads fail closed** — referencing a field the producer never populated on the taken path fails the consuming node (a recorded fact), never a silent `""`. The validator hard-errors on a broken/dead reference (E035) and warns when the producer may not run on every path (W015) or when a read reaches through an `optional:` field the producer may omit (W016). A value that is *always* read but sometimes empty is modelled as a **required field carrying a sentinel** (e.g. `"none"`), not `optional:`; `optional:` is for fields read inside a record/array consumed **whole** (absence is just omitted JSON there, never a fail-closed read). A direct read of an optional leaf has no fallback syntax yet, so W016 stays advisory. |
 
-Workflows take their substitutable values through declared `inputs:`. The only run input surface is typed `routing.inputs`.
+Workflows take their substitutable values through declared `inputs:` (the only run input surface is typed `routing.inputs`) and typed `outputs:`.
 
-Cross-node data transfer happens through **shared threads** (§3.3), not through prompt substitution. Two llm steps with the same `thread:` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. A receiving node may set `summary=low|medium|high` to see a summariser-compressed view of the prior thread instead of the raw history. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
+**Structured step outputs.** An `llm` step declares typed `outputs:` over a small type grammar shared with `inputs:` — scalars, `choice`, records (`fields`), arrays (`items`); no recursion, no `$ref` — a subset of JSON Schema sized to what provider strict-mode enforces, compiled to TypeBox. The step emits them through a single force-included `emit_output` tool whose schema is the declaration (validated post-emit; a missing or invalid emission fails the node). Like the `route` exit, `emit_output` must be called in isolation — it terminates the turn, so a tool sharing its batch would run blind to it; an emission paired with other tool calls fails the node. The emitted struct rides `fact.node_completed.payload.outputs`, spilling to the blob CAS when it exceeds the event cap; the executor folds it into an `(run_id, node_id)` index that the substitution resolver reads. `outputs:` is `llm`-only and mutually exclusive with `routes:`; `tool` and `human` steps consume outputs but do not produce them. See [`docs/proposals/structured-outputs.md`](proposals/structured-outputs.md).
 
-Tool nodes (`type: tool`, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. They do not feed data forward. Workflows that need to run a deterministic script and reason about its output should call the script from inside an llm step's `bash` tool instead of synthesising a tool-node-then-llm chain.
+**Conversation** still moves through **shared threads** (§3.3), not substitution. Two llm steps with the same `thread:` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages; a receiving node may set `summary=low|medium|high` for a summariser-compressed view. Reach for `outputs:` for a typed machine hand-off (a value a `tool` runs, a struct a synthesiser aggregates); reach for the thread for conversation; re-derive on-disk state via the `bash` / `read` tools.
+
+Tool nodes (`type: tool`, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. They do not *produce* data forward (they consume `${{ … }}` in `run:`). Workflows that need to run a deterministic script and reason about its output should call the script from inside an llm step's `bash` tool instead of synthesising a tool-node-then-llm chain.
 
 ### 3.9 Budgets
 
