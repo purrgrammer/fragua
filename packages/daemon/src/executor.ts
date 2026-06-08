@@ -740,30 +740,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       iteration,
       initialVersion: state.version,
     });
-    const observability: { type: string; payload: Record<string, unknown> }[] = [];
-    // Mid-handler micro-batch timer. See OBSERVABILITY_FLUSH_*_MS notes.
-    // Owned by `emitObservability` (schedules) and `flushObservability`
-    // (clears). Always null-checked before clearTimeout / setTimeout so
-    // the leak-budget / abort / normal completion paths can call
-    // `flushObservability` unconditionally.
-    let observabilityFlushTimer: ReturnType<typeof setTimeout> | null = null;
-    const flushObservability = (): void => {
-      if (observabilityFlushTimer != null) {
-        clearTimeout(observabilityFlushTimer);
-        observabilityFlushTimer = null;
-      }
-      if (observability.length === 0) return;
-      // Drain into a fresh array before the (sync) write so the buffer
-      // is empty if the write throws — best-effort telemetry; we swallow
-      // and log on failure rather than retry.
-      const drained = observability.splice(0, observability.length);
-      try {
-        opts.store.appendObservabilityEvents(runId, drained);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(`[executor] observability flush failed for run ${runId}:`, err);
-      }
-    };
+    // Mid-handler streaming flush (see makeObservabilitySink) — shared with the
+    // fan-out path. The leak / abort / completion paths call `obs.flush()`
+    // unconditionally; the soft timer + hard ceiling live inside `obs.push`.
+    const obs = makeObservabilitySink(opts.store, runId, "linear");
 
     let turnBilled = 0;
     let totalCostUsd = 0;
@@ -807,12 +787,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // so every handler kind respects the same structural enforcement.
     const graph = graphFor(state.workflowSha);
     const nodeAttrs = graph?.nodes[currentNode]?.attrs;
-    const allowedTools = Array.isArray(nodeAttrs?.allowed_tools)
-      ? (nodeAttrs.allowed_tools as readonly string[])
-      : undefined;
-    const deniedTools = Array.isArray(nodeAttrs?.denied_tools)
-      ? (nodeAttrs.denied_tools as readonly string[])
-      : undefined;
+    const { allowedTools, deniedTools } = readToolScope(nodeAttrs);
 
     const ctxOpts: core.BuildContextOpts = {
       runId,
@@ -833,27 +808,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       recorder,
       args: buildSubstitutionArgs(effectiveRouting, graph?.attrs.inputs, outputsFor()),
       emitObservability: (type, payload) => {
-        // Stamp nodeId + iteration so the UI can scope without the
-        // handler having to thread it through every payload.
-        observability.push({
-          type,
-          payload: { nodeId: currentNode, iteration, ...payload },
-        });
-        // Mirror handler-emitted `cost.recorded` into the per-turn
-        // accumulator. Llm bypasses ctx.llm.call() and reports
-        // usage through ctx.emit (handler-bridge.ts forwards every
-        // pi-agent-core message_end → cost.recorded). Without this
-        // mirror, the abort branch's `partial` payload reads zero on
-        // llm handlers — fact.node_aborted would land with
-        // partialTokens=0/partialCostUsd=0 and run_state.metrics +
-        // budget_usd would silently undercount aborted spend. The
-        // completion path is unaffected: it only backfills result
-        // fields when the handler returned zeros (executor.ts §below),
-        // and llm's HandlerResult already carries populated
-        // tokens/costUsd from its own accumulator (handler-bridge
-        // surfaces the same cost.recorded stream into the result).
-        // Per AGENTS.md ground rule #5: this accumulator is turn-local,
-        // not a reducer fold of cost.recorded.
+        // Stamp nodeId + iteration so the UI can scope without the handler
+        // threading it through every payload. (obs.push owns the soft timer +
+        // hard size ceiling.)
+        obs.push({ type, payload: { nodeId: currentNode, iteration, ...payload } });
+        // Mirror handler-emitted `cost.recorded` into the per-turn accumulator.
+        // Llm bypasses ctx.llm.call() and reports usage through ctx.emit
+        // (handler-bridge forwards every pi-agent-core message_end →
+        // cost.recorded). Without this mirror, the abort arm's `partial` payload
+        // reads zero on llm handlers and run_state.metrics undercounts aborted
+        // spend. Turn-local, not a reducer fold of cost.recorded (ground rule #5).
         if (type === "cost.recorded") {
           const p = payload as Record<string, unknown>;
           turnBilled += readNumber(p["total_tokens"]);
@@ -865,20 +829,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           const model = p["model"];
           if (typeof model === "string") lastModel = model;
 
-          // Reactive budget gate. Bounds peak overshoot to one
-          // in-flight LLM message rather than the turn's full spend.
-          // Fires once per dispatch — the halt / pause flags
-          // short-circuit subsequent events. Both stop AND pause
-          // policies abort mid-handler; the post-handler arm still
-          // exists as a belt-and-suspenders catch for handlers that
-          // don't emit `cost.recorded`.
+          // Reactive budget gate. Bounds peak overshoot to one in-flight LLM
+          // message rather than the turn's full spend. Fires once per dispatch —
+          // the halt / pause flags short-circuit subsequent events. Both stop AND
+          // pause policies abort mid-handler; the post-handler arm is the
+          // belt-and-suspenders catch for handlers that don't emit cost.recorded.
           if (reactiveBudgetHaltDetail === undefined && reactiveBudgetPauseBreach === undefined) {
             const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
             const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
             const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
-            // Read overrides from effective routing (post-fold) so the
-            // Raise & Resume flow takes effect on the FIRST dispatch
-            // after resume, not the second. Same for warned-tags.
+            // Read overrides from effective routing (post-fold) so the Raise &
+            // Resume flow takes effect on the FIRST dispatch after resume.
             const overrides = readBudgetOverrides(effectiveRouting);
             const reactive = evaluateBudget({
               graphAttrs: graph?.attrs ?? {},
@@ -894,35 +855,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             if (reactive.shouldHalt) {
               reactiveBudgetHaltDetail = reactive.haltReason ?? "";
               for (const ev of reactive.events) {
-                observability.push({
-                  type: ev.type,
-                  payload: { nodeId: currentNode, iteration, ...ev.payload },
-                });
+                obs.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
               }
               steerCtrl.abort(new Error("budget"));
             } else if (reactive.pauseBreach !== undefined) {
               reactiveBudgetPauseBreach = reactive.pauseBreach;
               for (const ev of reactive.events) {
-                observability.push({
-                  type: ev.type,
-                  payload: { nodeId: currentNode, iteration, ...ev.payload },
-                });
+                obs.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
               }
               steerCtrl.abort(new Error("budget_pause"));
             }
           }
-        }
-        // Hard ceiling — bound peak memory and per-batch render cost
-        // when a provider streams a burst of deltas faster than the
-        // soft timer can drain.
-        if (observability.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
-          flushObservability();
-          return;
-        }
-        // Soft ceiling — coalesce small bursts so we don't hammer the
-        // writer lock with one txn per text delta.
-        if (observabilityFlushTimer == null) {
-          observabilityFlushTimer = setTimeout(flushObservability, OBSERVABILITY_FLUSH_INTERVAL_MS);
         }
       },
     };
@@ -1003,7 +946,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // followed by node_completed in causal order — the timer-driven
     // flush handles mid-handler streaming, this drain handles the tail.
     if (leakedTimeout) {
-      flushObservability();
+      obs.flush();
       await tryAppendFact(opts.store, runId, recorder.version(), [
         {
           type: "fact.handler_timeout_leaked",
@@ -1024,7 +967,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
 
     if (wasAborted) {
-      flushObservability();
+      obs.flush();
       // Pure decision: which facts + routing patch + control outcome for this
       // abort — reactive-budget halt/pause, watchdog timeout-retry/exhausted, or
       // a plain workflow/operator abort. See abort-planner.ts. The fold's
@@ -1146,8 +1089,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // edge.selected) into the buffer, then flush ahead of the terminal facts
     // — preserving the trail→terminal-fact causal order the old inline flush
     // gave us.
-    for (const ev of plan.observability) observability.push(ev);
-    flushObservability();
+    for (const ev of plan.observability) obs.push(ev);
+    obs.flush();
 
     const facts = plan.facts;
     const routingPatch = plan.routingPatch;
@@ -1237,27 +1180,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     let totalCacheReadTokens = 0;
     let totalCacheWriteTokens = 0;
     let lastModel: string | undefined;
-    const observability: { type: string; payload: Record<string, unknown> }[] = [];
-    // Mid-handler micro-batch timer — mirrors the linear dispatchOne path so an
-    // IN-FLIGHT branch streams its observability (llm.start, cost.recorded, text
-    // deltas) live, instead of holding it ALL until the branch completes (which
-    // left a still-running branch absent from the Cost / steps view and frozen
-    // in the transcript until it joined). Scheduled by emitObservability below.
-    let observabilityFlushTimer: ReturnType<typeof setTimeout> | null = null;
-    const flushObservability = (): void => {
-      if (observabilityFlushTimer != null) {
-        clearTimeout(observabilityFlushTimer);
-        observabilityFlushTimer = null;
-      }
-      if (observability.length === 0) return;
-      const drained = observability.splice(0, observability.length);
-      try {
-        opts.store.appendObservabilityEvents(runId, drained);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(`[executor] fan-out observability flush failed for run ${runId}:`, err);
-      }
-    };
+    // Same streaming-flush sink as the linear path (the timer once drifted out of
+    // this branch copy — now it can't). An IN-FLIGHT branch streams its
+    // observability live rather than holding it until it joins.
+    const obs = makeObservabilitySink(opts.store, runId, "fan-out");
     const accounting: core.LlmAccounting = {
       addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
         turnBilled += tokens;
@@ -1270,12 +1196,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       },
     };
     const nodeAttrs = graph?.nodes[branchNode]?.attrs;
-    const allowedTools = Array.isArray(nodeAttrs?.allowed_tools)
-      ? (nodeAttrs.allowed_tools as readonly string[])
-      : undefined;
-    const deniedTools = Array.isArray(nodeAttrs?.denied_tools)
-      ? (nodeAttrs.denied_tools as readonly string[])
-      : undefined;
+    const { allowedTools, deniedTools } = readToolScope(nodeAttrs);
     const ctxOpts: core.BuildContextOpts = {
       runId,
       nodeId: branchNode,
@@ -1291,7 +1212,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       recorder,
       args: buildSubstitutionArgs(branchRouting, graph?.attrs.inputs, outputsFor()),
       emitObservability: (type, payload) => {
-        observability.push({ type, payload: { nodeId: branchNode, iteration, ...payload } });
+        obs.push({ type, payload: { nodeId: branchNode, iteration, ...payload } });
         if (type === "cost.recorded") {
           const p = payload as Record<string, unknown>;
           turnBilled += readNumber(p["total_tokens"]);
@@ -1302,16 +1223,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
           const model = p["model"];
           if (typeof model === "string") lastModel = model;
-        }
-        // Hard ceiling on a delta burst, then a soft timer to coalesce — so a
-        // long-running branch surfaces live in the Cost view + transcript rather
-        // than landing all at once when it joins.
-        if (observability.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
-          flushObservability();
-          return;
-        }
-        if (observabilityFlushTimer == null) {
-          observabilityFlushTimer = setTimeout(flushObservability, OBSERVABILITY_FLUSH_INTERVAL_MS);
         }
       },
     };
@@ -1328,7 +1239,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       steerCtrl,
       leakGraceMs: leakGrace,
     });
-    flushObservability();
+    obs.flush();
 
     if (invocation.kind === "leak") {
       return { kind: "leak", nodeId: branchNode, leakedAt: clock() };
@@ -1562,9 +1473,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Once a run-level (budget) disposition is captured we stop dispatching new
     // successors but keep draining the in-flight pool — bounding overshoot to
     // the branches already running — then commit the disposition at drain.
+    // First breach wins; subsequent captures short-circuit.
     let runHalt: FactEvent | undefined;
     let runPause: FactEvent | undefined;
-    const abortedNodes: string[] = [];
+    const captureDisposition = (): void => {
+      if (runHalt !== undefined || runPause !== undefined) return;
+      const disp = fanoutBudgetDisposition();
+      if (disp?.type === "fact.run_halted") runHalt = disp;
+      else if (disp?.type === "fact.run_paused") runPause = disp;
+    };
 
     while (pool.size > 0) {
       const { nodeId, outcome } = await Promise.race(pool.values());
@@ -1590,15 +1507,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (outcome.kind === "abort") {
         if (!(await commitFanoutFact(outcome.facts, takeFold()))) return { kind: "continue" };
         branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
-        abortedNodes.push(outcome.nodeId);
-        // An abort still folds `partialCostUsd` into the durable total — gate the
-        // budget on it too (the success arm does), else a branch that aborts with
-        // real partial spend slips past the cap until the barrier. First breach wins.
-        if (runHalt === undefined && runPause === undefined) {
-          const disp = fanoutBudgetDisposition();
-          if (disp?.type === "fact.run_halted") runHalt = disp;
-          else if (disp?.type === "fact.run_paused") runPause = disp;
-        }
+        // An abort still folds `partialCostUsd` into the durable total — gate on
+        // it too (the success arm does), else real partial spend slips past the cap.
+        captureDisposition();
         continue;
       }
 
@@ -1626,12 +1537,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
       if (!(await commitFanoutFact(branchFacts, { ...takeFold(), ...outcome.appendOpts }))) return { kind: "continue" };
       branchAborts.delete(outcome.nodeId);
-
-      if (runHalt === undefined && runPause === undefined) {
-        const disp = fanoutBudgetDisposition();
-        if (disp?.type === "fact.run_halted") runHalt = disp;
-        else if (disp?.type === "fact.run_paused") runPause = disp;
-      }
+      captureDisposition();
 
       // Drive the successor into the pool — but NOT once a disposition is
       // captured. Its dispatch_started already rode the commit (durable in the
@@ -1639,19 +1545,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (successor !== undefined && runHalt === undefined && runPause === undefined) dispatch(successor);
     }
 
-    // Disposition. A captured budget breach parks/halts the run.
-    if (runHalt !== undefined) {
-      await commitFanoutFact([runHalt], {});
-      return { kind: "terminal" };
-    }
-    if (runPause !== undefined) {
-      await commitFanoutFact([runPause], {});
+    // Disposition. A captured budget breach (halt or pause) parks the run.
+    const breach = runHalt ?? runPause;
+    if (breach !== undefined) {
+      await commitFanoutFact([breach], {});
       return { kind: "terminal" };
     }
     // Per-branch abort-loop: a branch that aborted `abortLoopCeiling` turns in a
-    // row parks the run regardless of sibling success.
-    for (const nodeId of abortedNodes) {
-      const streak = branchAborts.get(nodeId) ?? 0;
+    // row parks the run regardless of sibling success. `branchAborts` holds
+    // exactly the branches still aborted this turn — a success deletes its entry.
+    for (const [nodeId, streak] of branchAborts) {
       if (streak >= abortLoopCeiling) {
         await commitFanoutFact(
           [{ type: "fact.run_paused", payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak } }],
@@ -1661,7 +1564,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
     }
     // Aborts below the ceiling: re-drive the still-active (aborted) nodes next turn.
-    if (abortedNodes.length > 0) return { kind: "continue" };
+    if (branchAborts.size > 0) return { kind: "continue" };
 
     // All branches reached the join. Barrier budget re-check (belt + suspenders
     // — the per-commit gate already caught in-region breaches), then let the
@@ -1695,6 +1598,60 @@ export interface LeakBudget {
   recordLeak(runId: string, nodeId: string): void;
   /** Read-only — for tests and observability. */
   count(): number;
+}
+
+/** A node's allowed/denied tool scope from its graph attrs — hard-filters
+ * `ctx.tools` at HandlerContext construction so a handler can't reach a tool the
+ * node didn't declare. Shared by the linear + fan-out dispatch paths. */
+function readToolScope(nodeAttrs: { allowed_tools?: unknown; denied_tools?: unknown } | undefined): {
+  allowedTools?: readonly string[];
+  deniedTools?: readonly string[];
+} {
+  const scope: { allowedTools?: readonly string[]; deniedTools?: readonly string[] } = {};
+  if (Array.isArray(nodeAttrs?.allowed_tools)) scope.allowedTools = nodeAttrs.allowed_tools as readonly string[];
+  if (Array.isArray(nodeAttrs?.denied_tools)) scope.deniedTools = nodeAttrs.denied_tools as readonly string[];
+  return scope;
+}
+
+/** Per-dispatch observability buffer with the mid-handler streaming flush — a
+ * soft coalescing timer plus a hard size ceiling. Shared by the linear and
+ * fan-out dispatch paths so this batching can't drift between them (it did once:
+ * the fan-out path silently lacked the timer until it was re-added). */
+function makeObservabilitySink(
+  store: IEventStore,
+  runId: string,
+  label: string,
+): { push: (ev: { type: string; payload: Record<string, unknown> }) => void; flush: () => void } {
+  const buffer: { type: string; payload: Record<string, unknown> }[] = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const flush = (): void => {
+    if (timer != null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (buffer.length === 0) return;
+    // Drain into a fresh array before the (sync) write so the buffer is empty if
+    // the write throws — best-effort telemetry; swallow + log rather than retry.
+    const drained = buffer.splice(0, buffer.length);
+    try {
+      store.appendObservabilityEvents(runId, drained);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[executor] ${label} observability flush failed for run ${runId}:`, err);
+    }
+  };
+  const push = (ev: { type: string; payload: Record<string, unknown> }): void => {
+    buffer.push(ev);
+    // Hard ceiling — bound peak memory when a provider bursts deltas faster than
+    // the soft timer drains. Soft ceiling — coalesce so we don't hammer the
+    // writer lock with one txn per delta.
+    if (buffer.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
+      flush();
+      return;
+    }
+    if (timer == null) timer = setTimeout(flush, OBSERVABILITY_FLUSH_INTERVAL_MS);
+  };
+  return { push, flush };
 }
 
 /** Active fan-out branches whose latest lifecycle fact is `node_aborted` — they
