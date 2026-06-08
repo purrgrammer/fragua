@@ -1238,6 +1238,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       runId,
       steerCtrl,
       leakGraceMs: leakGrace,
+      // Enforce the branch backstop in the watchdog too — an unbounded branch
+      // (spec.maxMs undefined) that ignores its abort signal still leak-halts
+      // rather than hanging the pool forever.
+      maxMsOverride: branchTimeoutMs,
     });
     obs.flush();
 

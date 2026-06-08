@@ -36,8 +36,16 @@ export async function invokeHandler(deps: {
    * operator abort/steer can trip the in-flight handler. */
   steerCtrl: AbortController;
   leakGraceMs: number;
+  /** An extra wall-clock deadline beyond `spec.maxMs` — the fan-out per-branch
+   * backstop. The watchdog races against `min(spec.maxMs, maxMsOverride)`, so an
+   * UNBOUNDED branch (`spec.maxMs` undefined) still gets a leak escape when its
+   * handler IGNORES `ctx.signal`. Without this, the AbortSignal.timeout the
+   * branch arms only helps a handler that respects it — a signal-ignoring
+   * unbounded branch hangs the whole run (the pool never settles). A linear node
+   * passes none, so a linear-unbounded node stays intentionally unbounded. */
+  maxMsOverride?: number;
 }): Promise<HandlerInvocation> {
-  const { spec, ctx, registry, runId, steerCtrl, leakGraceMs } = deps;
+  const { spec, ctx, registry, runId, steerCtrl, leakGraceMs, maxMsOverride } = deps;
   // Tracked so it can be cleared once the handler wins the race — an
   // un-cleared `setTimeout(maxMs + leakGrace)` would otherwise survive every
   // bounded dispatch and keep the event loop (and tests' fake timers) populated.
@@ -48,11 +56,18 @@ export async function invokeHandler(deps: {
   // concurrent fan-out branches on one run don't clobber each other.
   const disposeRegistration = registry.register(runId, steerCtrl, ctx.nodeId);
   try {
+    // Effective wall-clock deadline = the tighter of the node's own `max_ms` and
+    // any caller override (the fan-out branch backstop). `undefined` ⇒ truly
+    // unbounded (a linear node that opted out) ⇒ no leak watchdog.
+    const watchdogMaxMs =
+      spec.maxMs !== undefined && maxMsOverride !== undefined
+        ? Math.min(spec.maxMs, maxMsOverride)
+        : (spec.maxMs ?? maxMsOverride);
     // Promise.race against a sentinel rather than a rejecting timer: a
     // rejection would mask an ignored-AbortSignal as a "handler error". A
     // resolved sentinel lets us detect the leak unambiguously.
-    if (spec.maxMs !== undefined) {
-      const watchdogMs = spec.maxMs + leakGraceMs;
+    if (watchdogMaxMs !== undefined) {
+      const watchdogMs = watchdogMaxMs + leakGraceMs;
       const raced = await Promise.race<core.HandlerResult | typeof TIMEOUT_SENTINEL>([
         spec.handler(ctx),
         new Promise<typeof TIMEOUT_SENTINEL>((res) => {
@@ -62,9 +77,9 @@ export async function invokeHandler(deps: {
       if (raced === TIMEOUT_SENTINEL) return { kind: "leak" };
       return { kind: "result", result: raced };
     }
-    // Unbounded llm (`max_ms=0`): no AbortSignal.timeout in the merged signal,
-    // so no leak watchdog either — cost/token bounds and operator intents are
-    // the operative ceiling. Steer + shutdown still abort via `ctx.signal`.
+    // Truly unbounded (a linear node that opted out): no AbortSignal.timeout in
+    // the merged signal, so no leak watchdog either — cost/token bounds and
+    // operator intents are the operative ceiling. Steer + shutdown still abort.
     return { kind: "result", result: await spec.handler(ctx) };
   } catch (err) {
     return { kind: "thrown", error: err, abortByName: isAbortError(err) };

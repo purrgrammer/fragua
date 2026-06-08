@@ -102,6 +102,7 @@ interface DriveOpts {
   maxTurns?: number;
   fanoutBranchTimeoutMs?: number;
   abortLoopCeiling?: number;
+  leakGraceMs?: number;
 }
 
 async function drive(r: ReturnType<typeof rig>, runId: string, opts: DriveOpts = {}): Promise<void> {
@@ -117,6 +118,7 @@ async function drive(r: ReturnType<typeof rig>, runId: string, opts: DriveOpts =
     shutdownSignal: new AbortController().signal,
     ...(opts.fanoutBranchTimeoutMs !== undefined ? { fanoutBranchTimeoutMs: opts.fanoutBranchTimeoutMs } : {}),
     ...(opts.abortLoopCeiling !== undefined ? { abortLoopCeiling: opts.abortLoopCeiling } : {}),
+    ...(opts.leakGraceMs !== undefined ? { leakGraceMs: opts.leakGraceMs } : {}),
   });
 }
 
@@ -449,6 +451,42 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
 
     expect(sawStreamed).toBe(true); // the branch's cost.recorded streamed BEFORE it completed
     expect(r.store.getState("stream1")!.status).toBe("completed");
+    r.store.close();
+  });
+
+  test("an UNBOUNDED branch that ignores its abort signal leak-halts the run rather than hanging the pool", async () => {
+    const r = rig({ yaml: HUNG_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // `hung` is UNBOUNDED (no maxMs) AND ignores ctx.signal — the worst case. The
+    // branch backstop must reach invokeHandler's watchdog (maxMsOverride) so it
+    // leak-halts at the deadline instead of awaiting the handler forever (which
+    // wedged the whole run permanently, across restarts).
+    r.dispatcher.register(r.workflowSha, "hung", {
+      kind: "llm",
+      sideEffect: "external",
+      handler: () => new Promise<never>(() => {}), // never resolves, never checks the signal
+    });
+    const instant = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+      });
+    instant("ok");
+    instant("synth");
+    enqueue(r, "leak1", "begin");
+
+    await drive(r, "leak1", { fanoutBranchTimeoutMs: 40, leakGraceMs: 20 });
+    const final = r.store.getState("leak1")!;
+    expect(final.status).toBe("halted"); // reclaimed, not hung
+    const halted = r.store.getEvents("leak1").find((e) => e.type === "fact.run_halted");
+    expect((halted?.payload as { detail?: string }).detail).toBe("handler_leaked");
     r.store.close();
   });
 });
