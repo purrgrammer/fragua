@@ -293,6 +293,58 @@ describe("eventsToSteps", () => {
     // lens_a (the slow branch): truthful 59s.
     expect(byNode.get("lens_a")?.durationMs).toBe(59_000);
   });
+
+  test("a RUNNING multi-turn branch leaves every step's durationMs undefined (so the Cost row ticks)", () => {
+    // A multi-LLM-turn entry branch (correctness_scan) is mid-flight: 2 llm.starts,
+    // NO fact.node_completed yet, while a sibling branch's step starts after it.
+    // fillOrphanDurations must NOT bill the branch's non-frontier turn the gap to
+    // its sibling's start — a concurrent branch has no temporal "next step", so a
+    // running branch's turns stay undefined and the merged Cost row ticks live.
+    const events = [
+      ev("fact.fanout_started", 1000, { nodeId: "review_lenses", iteration: 0, branches: ["scan_a", "scan_b"] }),
+      ev("fact.dispatch_started", 1010, { nodeId: "scan_a" }),
+      ev("fact.dispatch_started", 1020, { nodeId: "scan_b" }),
+      ev("llm.start", 1100, { nodeId: "scan_a", seq: 1 }), // scan_a turn 1
+      ev("llm.start", 1200, { nodeId: "scan_a", seq: 2 }), // scan_a turn 2 (still running)
+      ev("llm.start", 1300, { nodeId: "scan_b", seq: 3 }), // sibling — its start is NOT scan_a's "end"
+    ].map((e, i) => ({ ...e, seq: (e.payload as { seq?: number }).seq ?? i }));
+
+    // Live run: no node_completed for either branch yet.
+    const steps = fillOrphanDurations(eventsToSteps(events), { lastEventTs: 1300, runIsTerminal: false });
+    const scanASteps = steps.filter((s) => s.nodeId === "scan_a");
+    expect(scanASteps).toHaveLength(2);
+    // BOTH turns of the running branch stay undefined — neither the gap to scan_a's
+    // own next turn nor the gap to the sibling scan_b is a truthful end.
+    expect(scanASteps.every((s) => s.durationMs === undefined)).toBe(true);
+    // Each branch step still nests under the parallel parent.
+    expect(scanASteps.every((s) => s.parentNodeId === "review_lenses")).toBe(true);
+  });
+
+  test("a COMPLETED multi-turn branch surfaces the truthful full span on its last step", () => {
+    // Same branch, now finished: 2 llm.starts + a fact.node_completed. The truthful
+    // span (fanout_started → node_completed) lands on the branch's LAST step, which
+    // collapseTurns surfaces as the merged row's duration. Don't regress this.
+    const events = [
+      ev("fact.fanout_started", 1000, { nodeId: "review_lenses", iteration: 0, branches: ["scan_a", "scan_b"] }),
+      ev("fact.dispatch_started", 1010, { nodeId: "scan_a" }),
+      ev("llm.start", 1100, { nodeId: "scan_a", seq: 1 }),
+      ev("llm.start", 1200, { nodeId: "scan_a", seq: 2 }),
+      ev("fact.node_completed", 9_000, { nodeId: "scan_a", iteration: 0, outcomeStatus: "success" }),
+    ].map((e, i) => ({ ...e, seq: (e.payload as { seq?: number }).seq ?? i }));
+
+    const steps = fillOrphanDurations(eventsToSteps(events), { lastEventTs: 9_000, runIsTerminal: false });
+    const scanASteps = steps.filter((s) => s.nodeId === "scan_a");
+    expect(scanASteps).toHaveLength(2);
+    // First turn carries no per-step duration; the truthful end lands on the last
+    // step. node_completed stamps `completed.ts − last-step.startedAt` on the last
+    // step (anchored to its own buffered llm.start.ts = 1200): 9000 − 1200 = 7800.
+    expect(scanASteps[0]?.durationMs).toBeUndefined();
+    expect(scanASteps[1]?.durationMs).toBe(7_800);
+    // The first turn anchors to the truthful dispatch_started ts (1010) — the
+    // branch's real start. collapseTurns reconstructs the full merged span from
+    // it: 1200 + 7800 − 1010 = 7990ms, not the frozen-while-running zero.
+    expect(Date.parse(scanASteps[0]!.startedAt)).toBe(1010);
+  });
 });
 
 describe("fillOrphanDurations", () => {

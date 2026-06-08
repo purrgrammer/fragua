@@ -264,6 +264,48 @@ describe("CostInspector", () => {
     expect(q.getByTestId("step-3").getAttribute("data-branch")).toBeNull();
   });
 
+  it("a RUNNING multi-turn branch ticks live and keeps the parallel group ticking", async () => {
+    // The live bug: a multi-LLM-turn entry branch (correctness_scan) is mid-flight,
+    // so the steps projection emits 2+ branch rows for it with NO durationMs (the
+    // projection no longer bills a running branch the gap to a sibling's start).
+    // collapseTurns must leave the merged branch row's durationMs undefined so the
+    // branch row ticks (`now - startedAt`) AND the parent group's wall-clock span
+    // keeps ticking — instead of both freezing until a single-turn successor runs.
+    const startedAt = new Date(Date.now() - 5000).toISOString();
+    const steps = [
+      // correctness_scan: two in-flight turns, neither carries a durationMs.
+      makeStep({ stepIdx: 0, startSeq: 1, nodeId: "correctness_scan", parentNodeId: "review_lenses", startedAt }),
+      makeStep({ stepIdx: 1, startSeq: 2, nodeId: "correctness_scan", parentNodeId: "review_lenses", startedAt }),
+      // A sibling branch that already finished — proves the group ticks off the
+      // STILL-RUNNING branch, not "all branches done".
+      makeStep({
+        stepIdx: 2,
+        startSeq: 3,
+        nodeId: "perf_scan",
+        parentNodeId: "review_lenses",
+        startedAt,
+        durationMs: 2_000,
+      }),
+    ];
+    const { container } = mount("r1", steps, { isLive: true });
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("cost-inspector")).toBeTruthy();
+    });
+    // The running branch collapses to ONE row (step-0 survives the turn merge) and
+    // its elapsed chip ticks live.
+    const elapsed = q.getByTestId("step-0-elapsed");
+    expect(elapsed.getAttribute("data-live")).toBe("true");
+    expect(elapsed.textContent).toMatch(/\d/);
+    // The completed sibling does NOT tick.
+    expect(q.getByTestId("step-2-elapsed").getAttribute("data-live")).toBeNull();
+    // The parent group's wall-clock span chip ticks too (anyRunning → groupTicking).
+    const group = q.getByTestId("parallel-cost-review_lenses");
+    const liveSpan = group.querySelector('[data-live="true"]');
+    expect(liveSpan).toBeTruthy();
+    expect(liveSpan?.textContent).toMatch(/\d/);
+  });
+
   it("counts DISTINCT branches and merges re-drive rounds (not one row per round)", async () => {
     // A budget re-drive re-runs every branch, so the steps stream carries
     // multiple rows per branch (here lens_a/lens_b twice). The group header must

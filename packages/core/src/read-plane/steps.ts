@@ -354,6 +354,16 @@ export function fillOrphanDurations(
     // step synthesised from `fact.node_started`/`fact.node_completed`)
     // keeps it — don't overwrite from neighbour-step boundaries.
     if (step.durationMs !== undefined) return step;
+    // A `type: parallel` BRANCH step (parentNodeId set) has no temporal
+    // "next step" — the flat-sequence successor is a SIBLING branch's
+    // step (or the post-barrier join sink), not when this branch moved
+    // on. Its duration is either its truthful `node_completed`-derived
+    // value (stamped in `eventsToSteps`) or — while still running —
+    // `undefined`, so the Cost row ticks live (`now - startedAt`) and
+    // the parent group keeps its wall-clock span ticking too. Deriving
+    // it from the flat gap froze a multi-turn running branch (its
+    // non-frontier turns got a sibling's start as their "end").
+    if (step.parentNodeId !== undefined) return step;
     const next = steps[i + 1];
     const endTs = next != null ? Date.parse(next.startedAt) : opts.runIsTerminal ? opts.lastEventTs : undefined;
     if (endTs === undefined || !Number.isFinite(endTs)) return step;
