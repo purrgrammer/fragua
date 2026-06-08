@@ -84,6 +84,11 @@ const FANOUT_COMMIT_ATTEMPTS = 8;
 
 type FanoutAppendOpts = { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number };
 
+/** Outcome of a serialized fan-out commit. A tagged `false`: `occ` is genuine
+ * OCC exhaustion (feed the conflict controller), `status` is the run leaving
+ * `running` under us (don't — it's already parked). */
+type CommitResult = { ok: true } | { ok: false; reason: "occ" | "status" };
+
 /** Bounded-concurrency gate for fan-out sub-node dispatch. A slot transfers
  * directly to the next waiter on `release()` so `active` never exceeds `limit`. */
 class Semaphore {
@@ -102,6 +107,37 @@ class Semaphore {
     if (next !== undefined) next();
     else this.active--;
   }
+}
+
+/** Signalled into an in-flight branch's controller when the fan-out pool takes
+ * an early-terminal exit (leak-halt or a commit-fail) — without it the abandoned
+ * siblings keep running their LLM handlers to the per-branch backstop, burning
+ * cost on work whose late commit just no-ops. Named `AbortError` so the branch
+ * classifies it as a plain abort (not a timeout, not a leak). */
+class FanoutBailError extends Error {
+  constructor(public readonly runId: string) {
+    super(`fan-out pool bailed for ${runId}`);
+    this.name = "AbortError";
+  }
+}
+
+/** The sub-node ids a `parallel` node's per-node budget must sum over: the branch
+ * entries plus their non-fanout descendants, stopping at (and excluding) the
+ * join. Branch completions commit `node_completed` under the SUB-NODE id, never
+ * the parallel node, so the parent's own `nodeCosts` bucket is always 0 — the cap
+ * has to read the closure. Mirrors the validator's per-branch closure BFS. */
+function fanoutClosureSet(graph: Graph, branches: readonly string[], join: string): Set<string> {
+  const closure = new Set<string>();
+  const queue = [...branches];
+  while (queue.length > 0) {
+    const x = queue.shift()!;
+    if (x === join || closure.has(x)) continue;
+    closure.add(x);
+    for (const e of graph.edges) {
+      if (e.from === x && e.attrs.fanout !== true && e.to !== join && !closure.has(e.to)) queue.push(e.to);
+    }
+  }
+  return closure;
 }
 
 /** Outcome of executing one fan-out branch sub-node (executeBranchNode). The
@@ -336,8 +372,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // Per-branch abort streak under a fan-out, keyed by sub-node id. A run-wide
   // counter (`consecutiveAborts`) reset whenever ANY sibling succeeded, so a
   // single hard-failing branch could abort forever behind healthy siblings
-  // (the live post-mortem's masking bug). Process-local, like consecutiveAborts
-  // — a resume starts the streak fresh.
+  // (the live post-mortem's masking bug). Process-local, like consecutiveAborts:
+  // a resume OR a daemon restart starts the streak fresh — so a branch that
+  // aborts-then-crashes in a loop can outlast `abortLoopCeiling` across restarts.
+  // Intended: this ceiling is best-effort liveness, not durable safety. The
+  // DURABLE catch on a wedged branch is the per-branch timeout backstop
+  // (`fanoutBranchTimeoutMs`) + the run-wide budget — neither resets on restart.
   const branchAborts = new Map<string, number>();
   let turns = 0;
   // Dispatches counted for the max_loops ceiling. Incremented just before
@@ -1123,24 +1163,28 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // ── Fan-out (Model A): serialized commit lane. Re-reads the live version
   // each attempt; a sibling's commit having moved `version` is benign — retry
   // the APPEND (never re-execute). This is the linearization point that makes
-  // K concurrent branches OCC-contention-free (concurrency.md).
-  const commitFanoutFact = async (facts: FactEvent[], appendOpts: FanoutAppendOpts): Promise<boolean> => {
-    if (facts.length === 0) return true;
+  // K concurrent branches OCC-contention-free (concurrency.md). The `false`
+  // arm is TAGGED: `status` ⇒ the run left `running` under us (operator
+  // pause/cancel / concurrent halt), `occ` ⇒ genuine OCC exhaustion. Only the
+  // latter feeds `onOccConflict` — folding a status-stop into the conflict
+  // counter would spuriously warn or `occ_exhausted`-halt an already-parked run.
+  const commitFanoutFact = async (facts: FactEvent[], appendOpts: FanoutAppendOpts): Promise<CommitResult> => {
+    if (facts.length === 0) return { ok: true };
     for (let attempt = 0; attempt < FANOUT_COMMIT_ATTEMPTS; attempt++) {
       const fresh = opts.store.getState(runId);
-      if (fresh == null || fresh.status !== "running") return false;
+      if (fresh == null || fresh.status !== "running") return { ok: false, reason: "status" };
       try {
         const res = opts.store.appendFact(runId, facts, fresh.version, appendOpts);
         lastFanoutState = res.state;
         invalidateOutputsCacheIf(facts);
-        return true;
+        return { ok: true };
       } catch (err) {
         if (!(err instanceof ConcurrencyError)) throw err;
         // Benign sibling-moved-version conflict — re-read + retry the append.
       }
       await sleep(Math.min(2 ** attempt, 16), opts.shutdownSignal);
     }
-    return false;
+    return { ok: false, reason: "occ" };
   };
 
   // ── Execute one fan-out branch sub-node. Branches are deliberation-only llm
@@ -1355,16 +1399,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     const active = readActiveNodes(state.routing);
 
-    // Seed the frontier with the branch entries (fresh entry).
+    // Seed the frontier with the branch entries (fresh entry). Through
+    // `commitFanoutFact` (not a bare append) so the SAME OCC-vs-status split as
+    // the join barrier holds: an operator pause/cancel landing between this
+    // turn's state read and the seed append is a `status` stop (yield the turn),
+    // not an OCC conflict to feed the controller.
     if (active == null) {
-      const ok = await tryAppendFact(
-        opts.store,
-        runId,
-        state.version,
+      const res = await commitFanoutFact(
         [{ type: "fact.fanout_started", payload: { nodeId: parallelNode, iteration, branches } }],
         takeFold(),
       );
-      if (!ok) {
+      if (!res.ok) {
+        if (res.reason !== "occ") return { kind: "continue" };
         const { halted } = await onOccConflict("fact.fanout_started", parallelNode, iteration, state.version);
         return halted ? { kind: "terminal" } : { kind: "continue" };
       }
@@ -1373,7 +1419,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     // Frontier drained → barrier: advance current_node to the join.
     if (active.length === 0) {
-      const ok = await commitFanoutFact(
+      const res = await commitFanoutFact(
         [
           {
             type: "fact.fanout_joined",
@@ -1382,7 +1428,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         ],
         takeFold(),
       );
-      if (!ok) {
+      if (!res.ok) {
+        // Status-stop ⇒ the run is already leaving `running`; just yield the
+        // turn. Only true OCC exhaustion feeds the conflict controller.
+        if (res.reason !== "occ") return { kind: "continue" };
         const { halted } = await onOccConflict("fact.fanout_joined", parallelNode, iteration, state.version);
         return halted ? { kind: "terminal" } : { kind: "continue" };
       }
@@ -1405,7 +1454,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         type: "fact.dispatch_started",
         payload: { nodeId: n, iteration: nodeRetryCount(state.routing, n), resumeOf: "paused" },
       }));
-      if (!(await commitFanoutFact(facts, takeFold()))) return { kind: "continue" };
+      if (!(await commitFanoutFact(facts, takeFold())).ok) return { kind: "continue" };
     }
 
     // ── Reactive pool (the on-log frontier, fan-out-nodes.md § Execution). One
@@ -1418,6 +1467,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const sem = new Semaphore(concurrency);
     const freshState = opts.store.getState(runId) ?? state;
 
+    // The parallel node's per-node cost/token cap sums over its fan-out closure
+    // (branches + their non-fanout descendants up to the join) — see
+    // `fanoutClosureSet`. `max_cost_usd`/`max_tokens` summed across the closure
+    // accumulate over fan-out iterations too (a goal-gate re-entry re-runs the
+    // region), consistent with per-node-cap semantics. Empty when the graph is
+    // gone (the budget then sees a 0 node-cumulative — harmless, run-level still fires).
+    const closureNodes = graph !== null ? fanoutClosureSet(graph, branches, join) : new Set<string>();
+
     // Run-level budget against the NOW-folded cumulative. Each commit advanced
     // the durable total, so a branch crossing the cap stops the next dispatch —
     // tighter than a once-per-superstep barrier. Reuses the just-committed
@@ -1426,13 +1483,22 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const fanoutBudgetDisposition = (): FactEvent | undefined => {
       const folded = lastFanoutState ?? opts.store.getState(runId) ?? state;
       const overrides = readBudgetOverrides(folded.routing);
+      let nodeCumulativeCostUsd = 0;
+      let nodeCumulativeTokens = 0;
+      for (const id of closureNodes) {
+        const bucket = folded.metrics.nodeCosts[id];
+        if (bucket === undefined) continue;
+        nodeCumulativeCostUsd += bucket.costUsd;
+        nodeCumulativeTokens += bucket.tokens;
+      }
       const budget = evaluateBudget({
         graphAttrs: graph?.attrs ?? {},
+        ...(node?.attrs !== undefined ? { completedNodeAttrs: node.attrs } : {}),
         completedNodeId: parallelNode,
         cumulativeCostUsd: folded.metrics.totalCostUsd,
         cumulativeTokens: folded.metrics.totalInputTokens + folded.metrics.totalOutputTokens,
-        nodeCumulativeCostUsd: folded.metrics.nodeCosts[parallelNode]?.costUsd ?? 0,
-        nodeCumulativeTokens: folded.metrics.nodeCosts[parallelNode]?.tokens ?? 0,
+        nodeCumulativeCostUsd,
+        nodeCumulativeTokens,
         alreadyWarned: readBudgetWarned(folded.routing),
         ...(overrides !== undefined ? { overrides } : {}),
       });
@@ -1487,6 +1553,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       else if (disp?.type === "fact.run_paused") runPause = disp;
     };
 
+    // Early-terminal bail: signal every still-in-flight branch so it stops
+    // burning LLM cost (a settled branch already disposed its registration, so
+    // `liveHandlers` is exactly the in-flight set). Don't await — a leaked branch
+    // won't settle on abort (the leak budget owns it); signal-and-return is the fix.
+    const abortInflightPool = (): void => {
+      for (const h of opts.registry.liveHandlers(runId)) h.controller.abort(new FanoutBailError(runId));
+    };
+
     while (pool.size > 0) {
       const { nodeId, outcome } = await Promise.race(pool.values());
       pool.delete(nodeId);
@@ -1501,6 +1575,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           {},
         );
         leakBudget.recordLeak(runId, outcome.nodeId);
+        abortInflightPool();
         return { kind: "terminal" };
       }
 
@@ -1509,7 +1584,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // which would busy-spin a hard-failing branch. Climb its own streak so it
       // can't hide behind healthy siblings (the run-wide counter's masking bug).
       if (outcome.kind === "abort") {
-        if (!(await commitFanoutFact(outcome.facts, takeFold()))) return { kind: "continue" };
+        if (!(await commitFanoutFact(outcome.facts, takeFold())).ok) {
+          abortInflightPool();
+          return { kind: "continue" };
+        }
         branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
         // An abort still folds `partialCostUsd` into the durable total — gate on
         // it too (the success arm does), else real partial spend slips past the cap.
@@ -1539,7 +1617,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           payload: { nodeId: successor, iteration: nodeRetryCount(freshState.routing, successor), resumeOf: "fresh" },
         });
       }
-      if (!(await commitFanoutFact(branchFacts, { ...takeFold(), ...outcome.appendOpts }))) return { kind: "continue" };
+      if (!(await commitFanoutFact(branchFacts, { ...takeFold(), ...outcome.appendOpts })).ok) {
+        abortInflightPool();
+        return { kind: "continue" };
+      }
       branchAborts.delete(outcome.nodeId);
       captureDisposition();
 

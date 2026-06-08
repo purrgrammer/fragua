@@ -6,9 +6,33 @@
 
 import { describe, expect, test } from "bun:test";
 import { deriveRunState, readActiveNodes } from "@fragua/store";
+import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
+
+/** A `start → begin → fan(parallel) → [n single-node branches] → synth → exit`
+ * workflow with `n` read-class llm branches, each emitting `findings` that the
+ * join consumes — for fuzzing branch settle/commit order at width ≥3. */
+function parallelYaml(n: number): string {
+  const branches = Array.from({ length: n }, (_, i) => `b${i}`);
+  const branchSteps = branches
+    .map(
+      (b) =>
+        `  ${b}: { type: llm, prompt: x, allowed-tools: [read], next: synth, outputs: { findings: { type: string } } }`,
+    )
+    .join("\n");
+  const reads = branches.map((b) => `\${{ outputs.${b}.findings }}`).join(" ");
+  return `name: settle
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [${branches.join(", ")}], next: synth }
+${branchSteps}
+  synth: { type: llm, prompt: "combine ${reads}", next: exit }
+`;
+}
 
 const FANOUT_YAML = `name: fo
 defaults: { provider: anthropic, model: m }
@@ -55,6 +79,24 @@ steps:
   fan: { type: parallel, branches: [hung, ok], next: synth }
   hung: { type: llm, prompt: x, allowed-tools: [read], next: synth }
   ok: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+
+/** A parallel node carrying a per-node `max-cost` cap, with a MULTI-node branch
+ * (a_scan → a_verify) so the closure spans more than the entries — the per-node
+ * sum must cover the whole sub-pipeline, not just the branch entry. */
+const BUDGET_FANOUT_YAML = `name: bfo
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan:
+    type: parallel
+    branches: [a_scan, b_scan]
+    max-cost: 0.015
+    next: synth
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: a_verify }
+  a_verify: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
   synth: { type: llm, prompt: done, next: exit }
 `;
 
@@ -352,6 +394,117 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     r.store.close();
   });
 
+  test("abort-loop streak is process-local — a restart resets it (best-effort liveness, not durable safety)", async () => {
+    const r = rig({ yaml: ABLOOP_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "x_fail", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => {
+        throw new Error("always fails");
+      },
+    });
+    const okLlm = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 }),
+      });
+    okLlm("y_ok");
+    okLlm("y2");
+    okLlm("synth");
+    enqueue(r, "ablr1", "begin");
+
+    const xAborts = (): number =>
+      r.store
+        .getEvents("ablr1")
+        .filter((e) => e.type === "fact.node_aborted" && (e.payload as { nodeId?: string }).nodeId === "x_fail").length;
+
+    // Session 1 (one daemon process): cut short after a single x_fail abort, then
+    // "crash" — the run is left running. ceiling=2, so one abort does NOT pause.
+    // Turns: run_started → begin → fan seed → first dispatch+abort = 4 turns.
+    await drive(r, "ablr1", { abortLoopCeiling: 2, maxTurns: 4 });
+    expect(r.store.getState("ablr1")!.status).toBe("running");
+    expect(xAborts()).toBe(1);
+
+    // Restart: the startup sweep requeues the orphaned running run.
+    expect(r.store.startupSweep().requeued.length).toBe(1);
+
+    // Session 2 (fresh process ⇒ fresh branchAborts): x_fail climbs the streak
+    // from ZERO again — a FULL ceiling (2 more aborts) to pause, not 1. A durable
+    // streak would have paused after a single post-restart abort (total 2).
+    await drive(r, "ablr1", { abortLoopCeiling: 2 });
+    const final = r.store.getState("ablr1")!;
+    expect(final.status).toBe("paused");
+    const paused = r.store.getEvents("ablr1").find((e) => e.type === "fact.run_paused");
+    expect((paused?.payload as { reason?: string }).reason).toBe("abort_loop");
+    expect((paused?.payload as { nodeId?: string }).nodeId).toBe("x_fail");
+    expect(xAborts()).toBe(3); // 1 (pre-crash) + 2 (post-restart, reset) — not 2
+    r.store.close();
+  });
+
+  test("a re-driven branch reuses its iteration (resume continues the attempt, no retry rotation)", async () => {
+    const r = rig({ yaml: HOL_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const instant = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 }),
+      });
+    instant("a_scan");
+    instant("synth");
+    let bCalls = 0;
+    r.dispatcher.register(r.workflowSha, "b_scan", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => {
+        bCalls++;
+        if (bCalls === 1) throw new Error("transient abort");
+        return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 };
+      },
+    });
+    enqueue(r, "iter1", "begin");
+    await drive(r, "iter1");
+
+    expect(r.store.getState("iter1")!.status).toBe("completed");
+    expect(bCalls).toBe(2); // aborted once, then succeeded on the re-drive
+
+    // The aborted attempt, the re-dispatch, and the eventual completion ALL carry
+    // iteration 0: `fact.node_aborted` does NOT run the retry-policy rotation, so
+    // the re-drive reuses the slot. That reuse is what makes
+    // loadPriorMessagesForNode((b_scan, 0)) re-feed the aborted attempt's partial
+    // transcript on resume — resume continues the thread; only retry rotates it.
+    const bFacts = r.store
+      .getEvents("iter1")
+      .filter(
+        (e) =>
+          (e.type === "fact.dispatch_started" ||
+            e.type === "fact.node_started" ||
+            e.type === "fact.node_aborted" ||
+            e.type === "fact.node_completed") &&
+          (e.payload as { nodeId?: string }).nodeId === "b_scan",
+      );
+    expect(bFacts.some((e) => e.type === "fact.node_aborted")).toBe(true);
+    expect(bFacts.some((e) => e.type === "fact.node_completed")).toBe(true);
+    expect(bFacts.every((e) => (e.payload as { iteration?: number }).iteration === 0)).toBe(true);
+    r.store.close();
+  });
+
   test("hung-branch deadline: the parallel backstop aborts a branch whose own timeout is too long", async () => {
     const r = rig({ yaml: HUNG_YAML });
     let hungDispatches = 0;
@@ -488,5 +641,224 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     const halted = r.store.getEvents("leak1").find((e) => e.type === "fact.run_halted");
     expect((halted?.payload as { detail?: string }).detail).toBe("handler_leaked");
     r.store.close();
+  });
+
+  test("a leak-halt aborts the in-flight HEALTHY sibling rather than leaving it burning cost", async () => {
+    const r = rig({ yaml: HUNG_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // `hung` ignores its signal and has a SHORT maxMs, so the watchdog leak-halts
+    // it fast (maxMs + leakGrace ≈ 50ms) — independent of the generous branch
+    // backstop that keeps `ok` alive.
+    r.dispatcher.register(r.workflowSha, "hung", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 30,
+      handler: () => new Promise<never>(() => {}),
+    });
+    // `ok` is a healthy SLOW sibling with a LONG maxMs: still in-flight when the
+    // leak fires. It records its abort SYNCHRONOUSLY via the signal listener (fires
+    // inside the `.abort()` call), then throws — so it never commits a completion.
+    // Without abortInflightPool the leak-halt would abandon it: it would run to its
+    // own (5000ms) backstop, never observing the abort.
+    let okSawAbort = false;
+    r.dispatcher.register(r.workflowSha, "ok", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 5000,
+      handler: async (ctx) => {
+        await new Promise<void>((resolve) => {
+          if (ctx.signal.aborted) {
+            okSawAbort = true;
+            return resolve();
+          }
+          ctx.signal.addEventListener(
+            "abort",
+            () => {
+              okSawAbort = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        throw ctx.signal.reason ?? new Error("aborted");
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+    });
+    enqueue(r, "leakabort1", "begin");
+
+    await drive(r, "leakabort1", { fanoutBranchTimeoutMs: 5000, leakGraceMs: 20 });
+    const final = r.store.getState("leakabort1")!;
+    expect(final.status).toBe("halted");
+    const halted = r.store.getEvents("leakabort1").find((e) => e.type === "fact.run_halted");
+    expect((halted?.payload as { detail?: string }).detail).toBe("handler_leaked");
+    // The healthy sibling OBSERVED its abort — it was signalled, not abandoned.
+    expect(okSawAbort).toBe(true);
+    // ...and it never committed a completion (it was reclaimed mid-flight).
+    const okCompleted = r.store
+      .getEvents("leakabort1")
+      .some((e) => e.type === "fact.node_completed" && (e.payload as { nodeId?: string }).nodeId === "ok");
+    expect(okCompleted).toBe(false);
+    r.store.close();
+  });
+
+  test("a parallel node's max-cost cap sums its fan-out closure and trips (per-node bucket is always 0)", async () => {
+    const r = rig({ yaml: BUDGET_FANOUT_YAML });
+    const seen: Record<string, number> = {};
+    const c = counter(seen, "a_scan", "a_verify", "b_scan", "synth");
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const spend = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => {
+          c[id]?.();
+          return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 };
+        },
+      });
+    // Each branch entry spends 0.01 → closure cost reaches ≥0.02 > the 0.015 cap.
+    // With the bug (reading nodeCosts[parallelNode], always 0) the cap never fires.
+    spend("a_scan");
+    spend("a_verify");
+    spend("b_scan");
+    spend("synth");
+    enqueue(r, "bfo1", "begin");
+
+    await drive(r, "bfo1");
+    const final = r.store.getState("bfo1")!;
+    expect(final.status).toBe("paused"); // default budget_policy=pause
+
+    const pause = r.store.getEvents("bfo1").find((e) => e.type === "fact.run_paused");
+    const p = pause?.payload as { reason?: string; nodeId?: string; scope?: string; metric?: string; limit?: number };
+    expect(p.reason).toBe("budget");
+    expect(p.scope).toBe("node");
+    expect(p.metric).toBe("cost");
+    expect(p.limit).toBe(0.015);
+    // The disposition names the PARALLEL node (the cap's owner), not a sub-node.
+    expect(p.nodeId).toBe("fan");
+    r.store.close();
+  });
+
+  test("crash after branches commit but before join → committed branches do NOT re-run on recovery", async () => {
+    const r = rig({ yaml: HOL_YAML });
+    const seen: Record<string, number> = {};
+    const c = counter(seen, "a_scan", "b_scan", "synth");
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const okLlm = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => {
+          c[id]?.();
+          return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 };
+        },
+      });
+    okLlm("a_scan");
+    okLlm("b_scan");
+    okLlm("synth");
+    enqueue(r, "crash1", "begin");
+
+    // Session 1: stop right after both branches commit node_completed but BEFORE
+    // the join (run_started → begin → seed → dispatch-pool = 4 turns), then "crash".
+    await drive(r, "crash1", { maxTurns: 4 });
+    expect(r.store.getState("crash1")!.status).toBe("running");
+    expect(r.store.getEvents("crash1").some((e) => e.type === "fact.fanout_joined")).toBe(false);
+    expect(seen["a_scan"]).toBe(1);
+    expect(seen["b_scan"]).toBe(1);
+
+    // Restart: the sweep requeues the orphaned run; recovery joins + completes.
+    expect(r.store.startupSweep().requeued.length).toBe(1);
+    await drive(r, "crash1");
+    expect(r.store.getState("crash1")!.status).toBe("completed");
+
+    // Frontier-level recovery: the committed branches are NOT re-dispatched — their
+    // handlers stay at ONE call across the crash. Only the un-run join advances.
+    expect(seen["a_scan"]).toBe(1);
+    expect(seen["b_scan"]).toBe(1);
+    expect(seen["synth"]).toBe(1);
+    r.store.close();
+  });
+
+  test("settle-order fuzz: ≥3 branches with varied per-branch latencies → replay(log) == live", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 3, max: 5 }),
+        fc.array(fc.nat({ max: 12 }), { minLength: 5, maxLength: 5 }),
+        async (n, latencies) => {
+          const r = rig({ yaml: parallelYaml(n) });
+          const seen: Record<string, number> = {};
+          r.dispatcher.register(r.workflowSha, "begin", {
+            kind: "llm",
+            sideEffect: "external",
+            maxMs: 1000,
+            handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+          });
+          for (let i = 0; i < n; i++) {
+            const id = `b${i}`;
+            const delayMs = latencies[i % latencies.length]!;
+            r.dispatcher.register(r.workflowSha, id, {
+              kind: "llm",
+              sideEffect: "external",
+              maxMs: 1000,
+              handler: async () => {
+                // The varied delay fuzzes the Promise.race settle order so the
+                // serialized commit lane is exercised under many interleavings.
+                await new Promise((res) => setTimeout(res, delayMs));
+                seen[id] = (seen[id] ?? 0) + 1;
+                return {
+                  kind: "transition",
+                  outcomeStatus: "success",
+                  tokens: 10,
+                  costUsd: 0.01,
+                  outputs: { findings: "x" },
+                };
+              },
+            });
+          }
+          r.dispatcher.register(r.workflowSha, "synth", {
+            kind: "llm",
+            sideEffect: "external",
+            maxMs: 1000,
+            handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 }),
+          });
+          enqueue(r, "s", "begin");
+          await drive(r, "s");
+
+          const live = r.store.getState("s")!;
+          expect(live.status).toBe("completed");
+          // Every branch ran exactly once, whatever the settle order; no double-commit.
+          for (let i = 0; i < n; i++) expect(seen[`b${i}`]).toBe(1);
+          // The linearization point holds under any settle/commit interleaving:
+          // folding the log alone reproduces the live projection.
+          const replayed = deriveRunState("s", r.store.getEvents("s"));
+          expect(replayed.status).toBe(live.status);
+          expect(replayed.currentNode).toBe(live.currentNode);
+          expect(readActiveNodes(replayed.routing)).toBeNull();
+          r.store.close();
+        },
+      ),
+      { numRuns: pbtRuns(40) },
+    );
   });
 });

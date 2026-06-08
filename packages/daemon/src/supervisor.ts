@@ -157,7 +157,7 @@ export function startSupervisor(opts: SupervisorOpts): {
             if (deadline === undefined || deadline === 0) {
               // Unbounded: apply the backstop only to a fan-out branch (in the
               // active set); a linear unbounded node is intentionally unbounded.
-              if (active !== null && active.includes(h.nodeId)) deadline = fanoutBranchTimeout;
+              if (active?.includes(h.nodeId)) deadline = fanoutBranchTimeout;
               else continue;
             }
             if (h.elapsedMs > deadline + leakGrace) {

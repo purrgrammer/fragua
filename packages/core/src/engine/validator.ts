@@ -913,11 +913,13 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     });
   }
 
-  // ── E036–E043: `type: parallel` fan-out well-formedness (Model A,
+  // ── E036–E044: `type: parallel` fan-out well-formedness (Model A,
   // docs/proposals/fan-out-nodes.md). A branch entry begins a sub-pipeline (its
   // closure of intra-fan-out nodes) that converges on the join; every closure
   // node is a distinct, read-class llm node and the closure is an acyclic DAG
-  // terminating at the join.
+  // terminating at the join. E038 is the structural "join not a defined step";
+  // E044 is the disjointness invariant ("a node is shared by two branches") —
+  // distinct conditions a machine consumer keys on separately.
   const nonFanoutEdgesFrom = (id: string): Edge[] =>
     graph.edges.filter((e) => e.from === id && e.attrs.fanout !== true);
   for (const p of nodes) {
@@ -979,7 +981,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         if (prevOwner !== undefined && prevOwner !== entry) {
           diags.push({
             severity: "error",
-            code: "E038",
+            code: "E044",
             message: `node "${x}" is shared by branches "${prevOwner}" and "${entry}" of parallel "${p.id}" — branches must be disjoint`,
             nodeId: x,
             ...loc,

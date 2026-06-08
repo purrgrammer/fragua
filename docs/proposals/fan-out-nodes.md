@@ -149,13 +149,12 @@ DAG terminating at the join.
 
 - **E036** — a `parallel` declares ≥2 branches.
 - **E037** — branch entry ids are distinct and exist.
-- **E038** — every branch's closure exits **only** to the join: no edge escapes
-  to another branch's closure or to any node outside `{closure ∪ join}`. (This
-  replaces the single-node "a branch declares no `next`" rule with the unified
-  closure rule.)
-- **E039** — a branch closure is acyclic and every path terminates at the join
-  (no goal-gate / self-edge / loop that re-enters the fan-out — an identity and
+- **E038** — the join is a defined step (declared in `steps:`).
+- **E039** — a branch closure is acyclic, stays inside `{closure ∪ join}` (no
+  edge escapes to a node outside it), and every path terminates at the join (no
+  goal-gate / self-edge / loop that re-enters the fan-out — an identity and
   liveness hazard).
+- **E044** — branch closures are **disjoint**: no node belongs to two branches.
 - **E040** — no nested `parallel` inside a branch closure (v1; lineage reserved).
 - **E041** — branch closure nodes are `type: llm` (deliberation; `tool`/`human`
   deferred — see § Open).

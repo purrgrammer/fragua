@@ -762,4 +762,51 @@ describe("validate — fan-out branch lints", () => {
     });
     expect(codesOf(g)).not.toContain("W017");
   });
+
+  test("E044 fires when two branches share a closure node (disjointness) — not E038", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["a", "b"], join: "j" } },
+        a: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        b: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        shared: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "a", { fanout: true }],
+        ["fan", "b", { fanout: true }],
+        ["a", "shared"],
+        ["b", "shared"], // shared sits in BOTH closures → disjointness violation
+        ["shared", "j"],
+        ["j", "done"],
+      ],
+    });
+    const diags = validate(g);
+    expect(diags.map((d) => d.code)).toContain("E044");
+    expect(diags.find((d) => d.code === "E044")?.severity).toBe("error");
+    expect(diags.filter((d) => d.code === "E038")).toHaveLength(0); // join IS defined
+  });
+
+  test("E038 fires when the join is not a defined step — distinct from the E044 disjointness code", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["a", "b"], join: "missing" } },
+        a: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        b: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "a", { fanout: true }],
+        ["fan", "b", { fanout: true }],
+      ],
+    });
+    const codes = codesOf(g);
+    expect(codes).toContain("E038");
+    expect(codes).not.toContain("E044");
+  });
 });
