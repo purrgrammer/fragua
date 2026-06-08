@@ -421,6 +421,21 @@ CREATE TABLE provider_config (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 ) STRICT;
+
+-- Structured step outputs index. Rebuildable from fact.node_completed.payload.outputs.
+-- Keyed by (run_id, node_id, iteration); INSERT OR REPLACE provides last-write-wins
+-- semantics for re-entrant nodes. `struct` is JSON validated at write time;
+-- bounded by the 4 KB event-payload cap.
+-- OFF the run_state fold: the reducer never reads this table; it is a re-snapshot.
+CREATE TABLE outputs (
+  run_id    TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+  node_id   TEXT NOT NULL,
+  iteration INTEGER NOT NULL,
+  struct    TEXT NOT NULL CHECK (json_valid(struct) AND length(struct) < 4096),
+  PRIMARY KEY (run_id, node_id, iteration)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX idx_outputs_run ON outputs(run_id, node_id);
 ```
 
 **Size targets:**
@@ -459,7 +474,7 @@ Post-terminal operator actions run **synchronously in the caller** (intent-plane
 | `fact.run_started` | `workflowSha`, `contractVersion`, `startNode`, `baseGitSha?`, `baseGitRef?` | Run enters `running`. `baseGitRef` is the source repo's branch at provision — the post-run merge/commit target default |
 | `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_human'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
-| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the llm agent exited via the synthesised `route` tool) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for llm handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
+| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the llm agent exited via the synthesised `route` tool), `outputs?: Record<string, unknown>` (present iff the node declared `outputs:` and emitted a value via `emit_output`; written to the `outputs` index table in the same transaction) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for llm handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialCacheReadCostUsd?`, `partialCacheWriteCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
 | `fact.intents_folded` | `intentSeq`, `folded` | Operator intents (steer / hitl / priority / pause) merged into routing/messages by the fold |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
@@ -571,7 +586,7 @@ export interface IEventWriter {
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
 
   // Workflow catalog (write)
-  saveWorkflow(sha: string, name: string, source: string): void;
+  saveWorkflow(sha: string, name: string, source: string, ir: string, irVersion: number): void;
 
   // Maintenance
   vacuum(): void;
@@ -619,15 +634,23 @@ export interface IEventReader {
   getStepAggregates(runId: string): StepAggregateRow[];
   getRunCostTotals(runId: string): RunCostTotalsRow;
 
+  // Outputs index (read)
+  getOutputsForRun(runId: string): Array<{ nodeId: string; iteration: number; struct: string }>;
+  getLatestOutput(runId: string, nodeId: string): string | null;
+
+  // Blobs (raw read)
+  readBlob(sha: string): Uint8Array | null;
+
   // Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
+  listArtifacts(runId: string): ArtifactListRow[];
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
-  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
 
   // Workflow catalog (read) + emergent-paths project listing
   getWorkflow(sha: string): WorkflowRow | null;
   listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }>;
+  listProjects(): Array<{ projectId: string; projectName: string; cwdHint: string | null; lastUpdatedAt: number; runCount: number }>;
 }
 ```
 
@@ -705,7 +728,7 @@ on `daemon_events` (see §3).
 
 ```typescript
 export type ArtifactScope = { runId: string; nodeId: string; iteration: number; key: string };
-export type ArtifactRef = ArtifactScope & { sha256: string; sizeBytes: number; mime: string };
+export type ArtifactRef = ArtifactScope & { sha256: string; sizeBytes: number; mime: string | null };
 
 export class ConcurrencyError extends Error {}
 export class ArtifactCollisionError extends Error {}
@@ -789,11 +812,14 @@ export type HandlerResult =
       costUsd: number;
       inputCostUsd?: number;
       outputCostUsd?: number;
+      cacheReadCostUsd?: number;                        // cache-read / cache-write cost split; optional for back-compat
+      cacheWriteCostUsd?: number;
       inputTokens?: number;
       outputTokens?: number;
       cacheReadTokens?: number;
       cacheWriteTokens?: number;
       modelName?: string;
+      outputs?: OutputsValue;                           // structured outputs emitted via emit_output; llm steps only
     }
   | {
       kind: "yield_human";
