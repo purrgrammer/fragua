@@ -157,6 +157,25 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
     expect(deriveNodeStates(events)[0]?.state).toBe("failed");
   });
 
+  test("fan-out branches mid-flight project as running (dispatch_started, no completion yet)", () => {
+    // The executor emits fact.dispatch_started per branch when a `parallel`
+    // node fans out (no per-branch node_started/node_completed yet). The
+    // read-plane must show each branch "running" so the UI glows them
+    // concurrently — not pending/absent until they complete.
+    const events: StoredEvent[] = [
+      { ...ev("fact.dispatch_started", { nodeId: "review", iteration: 0, resumeOf: "fresh" }), seq: 1 },
+      { ...ev("fact.fanout_started", { nodeId: "review", iteration: 0, branches: ["security", "quality"] }), seq: 2 },
+      { ...ev("fact.dispatch_started", { nodeId: "security", iteration: 0, resumeOf: "fresh" }), seq: 3 },
+      { ...ev("fact.dispatch_started", { nodeId: "quality", iteration: 0, resumeOf: "fresh" }), seq: 4 },
+      // security finished; quality still in flight.
+      { ...ev("fact.node_completed", { nodeId: "security", iteration: 0, nextNode: "synth" }), seq: 5 },
+    ];
+    const byId = new Map(deriveNodeStates(events).map((n) => [n.nodeId, n.state]));
+    expect(byId.get("security")).toBe("completed");
+    expect(byId.get("quality")).toBe("running"); // still in flight → glows
+    expect(byId.get("review")).toBe("running"); // the parallel node is pinned-active
+  });
+
   test("loop iterations produce one entry per (nodeId, iteration)", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "verify", iteration: 0 }), seq: 1 },

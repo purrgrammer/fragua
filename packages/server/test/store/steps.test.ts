@@ -243,6 +243,32 @@ describe("eventsToSteps", () => {
     expect(merged[0]!.cost).toBeUndefined();
     expect(merged[0]!.startSeq).toBe(99);
   });
+
+  test("fact.fanout_started tags each branch step with its parallel parent (parentNodeId)", () => {
+    // scope (linear) → review (parallel: lens_a, lens_b) → synth (linear).
+    // The branch llm.starts interleave; each must carry parentNodeId="review",
+    // while scope/synth carry none — so the Cost breakdown can nest branches.
+    const events = [
+      ev("fact.node_started", 1000, { nodeId: "scope" }),
+      ev("llm.start", 1100, { nodeId: "scope", seq: 1 }),
+      ev("fact.node_completed", 1200, { nodeId: "scope" }),
+      ev("fact.fanout_started", 1300, { nodeId: "review", iteration: 0, branches: ["lens_a", "lens_b"] }),
+      ev("fact.dispatch_started", 1310, { nodeId: "lens_a" }),
+      ev("fact.dispatch_started", 1320, { nodeId: "lens_b" }),
+      ev("llm.start", 1400, { nodeId: "lens_a", seq: 2 }),
+      ev("llm.start", 1410, { nodeId: "lens_b", seq: 3 }),
+      ev("fact.fanout_joined", 1900, { nodeId: "review", iteration: 0, nextNode: "synth", branchesCompleted: 2 }),
+      ev("fact.node_started", 2000, { nodeId: "synth" }),
+      ev("llm.start", 2100, { nodeId: "synth", seq: 4 }),
+    ].map((e, i) => ({ ...e, seq: (e.payload as { seq?: number }).seq ?? i }));
+
+    const steps = eventsToSteps(events);
+    const byNode = new Map(steps.map((s) => [s.nodeId, s]));
+    expect(byNode.get("lens_a")?.parentNodeId).toBe("review");
+    expect(byNode.get("lens_b")?.parentNodeId).toBe("review");
+    expect(byNode.get("scope")?.parentNodeId).toBeUndefined();
+    expect(byNode.get("synth")?.parentNodeId).toBeUndefined();
+  });
 });
 
 describe("fillOrphanDurations", () => {

@@ -302,6 +302,9 @@ export interface StepSnapshot {
    * the SQL cost-aggregate row produced by the server. Stable React key. */
   startSeq: number;
   nodeId: string;
+  /** When the node is a `type: parallel` fan-out branch, the parent
+   * parallel node's id — CostInspector nests branches under one group. */
+  parentNodeId?: string;
   iteration?: { n: number; max: number };
   /** ISO timestamp of the originating `llm.start`. The UI ticks
    * `now - startedAt` for in-flight steps before `durationMs` lands. */

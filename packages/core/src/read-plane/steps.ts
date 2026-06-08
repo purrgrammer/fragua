@@ -65,6 +65,11 @@ export interface StepSnapshot {
   extraStartSeqs?: number[];
   /** Real workflow node id (or a synthetic id for summariser steps). */
   nodeId: string;
+  /** When this node is a `type: parallel` fan-out branch, the parent
+   * parallel node's id (from `fact.fanout_started`). Lets the Cost
+   * breakdown nest concurrent branches under one parent group instead of
+   * scattering them as flat sibling rows. Absent for non-branch steps. */
+  parentNodeId?: string;
   /** Iteration metadata when the caller is a loop. */
   iteration?: { n: number; max: number };
   /** ISO timestamp of when this step's node started running. For the
@@ -142,10 +147,21 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // otherwise invisible there. Real duration is
   // `completed.ts − started.ts`; cost stays absent.
   const pendingToolNode = new Map<string, { startTs: number; startSeq: number }>();
+  // branch nodeId → its `type: parallel` parent, learned from
+  // `fact.fanout_started`. Tags each branch step so the Cost breakdown can
+  // nest concurrent branches under their parent group.
+  const branchToParent = new Map<string, string>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
     const nodeId = stringField(data, "nodeId");
+
+    if (ev.type === "fact.fanout_started") {
+      if (nodeId) {
+        for (const b of stringArrayField(data, "branches")) branchToParent.set(b, nodeId);
+      }
+      continue;
+    }
 
     if (ev.type === "fact.node_started") {
       if (nodeId) {
@@ -248,6 +264,8 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         nodeId: nodeId || "__unknown",
         startedAt: new Date(startTs).toISOString(),
       };
+      const parent = nodeId !== "" ? branchToParent.get(nodeId) : undefined;
+      if (parent !== undefined) step.parentNodeId = parent;
       assignOptional(step, data);
       steps.push(step);
       if (nodeId) {
@@ -376,6 +394,11 @@ function assignOptional(step: StepSnapshot, data: Record<string, unknown>): void
 function stringField(data: Record<string, unknown>, key: string): string {
   const v = data[key];
   return typeof v === "string" ? v : "";
+}
+
+function stringArrayField(data: Record<string, unknown>, key: string): string[] {
+  const v = data[key];
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
 function iterationField(data: Record<string, unknown>, key: string): { n: number; max: number } | undefined {

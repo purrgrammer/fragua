@@ -85,7 +85,7 @@ export function RunDetail(): JSX.Element {
 
   const {
     messages,
-    streaming,
+    streamingByNode,
     toolStreams,
     status: liveStatus,
     totalEvents,
@@ -245,7 +245,7 @@ export function RunDetail(): JSX.Element {
             <TabsContent value="conversation" className="h-full">
               <RunConversation
                 messages={messages}
-                streaming={streaming}
+                streamingByNode={streamingByNode}
                 toolStreams={toolStreams}
                 nodeStates={detail?.nodes}
                 isLive={isLive}
@@ -276,7 +276,12 @@ export function RunDetail(): JSX.Element {
               />
             </TabsContent>
             <TabsContent value="cost" className="h-full">
-              <CostInspector runId={id} totalEvents={totalEvents} isLive={isLive} />
+              <CostInspector
+                runId={id}
+                totalEvents={totalEvents}
+                isLive={isLive}
+                {...(detail?.workflowSource ? { workflowSource: detail.workflowSource } : {})}
+              />
             </TabsContent>
             {showDiffTab && (
               <TabsContent value="diff" className="h-full">

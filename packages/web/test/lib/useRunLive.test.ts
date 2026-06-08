@@ -356,4 +356,72 @@ describe("useRunLive — bootstrap fetch is gated on a settled snapshot", () => 
       mock.restore();
     }
   });
+
+  it("concurrent fan-out branches each get their own streaming buffer (no clobber, no interleave)", async () => {
+    // A `type: parallel` fan-out runs K branches at once: their
+    // message_start/deltas/message_end frames interleave on the wire. With a
+    // single shared buffer, branch B's message_start clobbered branch A's, A's
+    // deltas leaked into B's buffer, and one branch's message_end nulled the
+    // others mid-stream — the user saw interleaved transcripts and tools stuck
+    // "Running". streamingByNode keeps each branch independent.
+    const mock = installFetchMock({
+      "/api/runs/r1/messages": () =>
+        new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+    });
+    try {
+      FakeEventSource.instances = [];
+      const { result } = renderHook(() =>
+        useRunLive("r1", {
+          terminal: false,
+          sinceSeq: 0,
+          eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        }),
+      );
+      await waitFor(() => {
+        expect(FakeEventSource.instances.length).toBe(1);
+      });
+      const es = FakeEventSource.instances[0]!;
+      act(() => es._open());
+
+      // Two branches open and stream interleaved.
+      act(() => {
+        es._emit(
+          JSON.stringify({ type: "agent.message_start", payload: { nodeId: "lens_a", role: "assistant" } }),
+          "1",
+        );
+        es._emit(
+          JSON.stringify({ type: "agent.message_start", payload: { nodeId: "lens_b", role: "assistant" } }),
+          "2",
+        );
+        es._emit(
+          JSON.stringify({ type: "llm.text_delta", payload: { nodeId: "lens_a", content_index: 0, delta: "AAA" } }),
+          "3",
+        );
+        es._emit(
+          JSON.stringify({ type: "llm.text_delta", payload: { nodeId: "lens_b", content_index: 0, delta: "BBB" } }),
+          "4",
+        );
+      });
+
+      // Both buffers exist, each with only its OWN text — no cross-contamination.
+      await waitFor(() => {
+        expect(result.current.streamingByNode.size).toBe(2);
+      });
+      const a = result.current.streamingByNode.get("lens_a");
+      const b = result.current.streamingByNode.get("lens_b");
+      expect((a?.blocks[0] as { text: string } | undefined)?.text).toBe("AAA");
+      expect((b?.blocks[0] as { text: string } | undefined)?.text).toBe("BBB");
+
+      // lens_a ends → only its buffer clears; lens_b keeps streaming.
+      act(() => {
+        es._emit(JSON.stringify({ type: "agent.message_end", payload: { nodeId: "lens_a", role: "assistant" } }), "5");
+      });
+      await waitFor(() => {
+        expect(result.current.streamingByNode.has("lens_a")).toBe(false);
+      });
+      expect(result.current.streamingByNode.get("lens_b")?.nodeId).toBe("lens_b");
+    } finally {
+      mock.restore();
+    }
+  });
 });

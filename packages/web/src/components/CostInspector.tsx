@@ -22,9 +22,10 @@
 //     premium. Both are shown as their own breakdown lines so the
 //     popover communicates exactly where the run's spend went.
 
+import { parseWorkflow } from "@fragua/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import {
@@ -34,6 +35,7 @@ import {
   pickSharedUsdOptions,
   usdFormatOptions,
 } from "../lib/format.ts";
+import { nodeTypeIcon } from "../lib/node-icons.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDuration } from "../lib/time.ts";
 import { useNow } from "../lib/useNow.ts";
@@ -49,6 +51,7 @@ import {
   ContextTrigger,
 } from "./ai-elements/context.tsx";
 import { AnimatedNumber } from "./ui/animated-number.tsx";
+import { ModelBadge } from "./ui/model-badge.tsx";
 
 export interface CostInspectorProps {
   runId: string;
@@ -61,9 +64,13 @@ export interface CostInspectorProps {
    * `durationMs` instead of computing `now - startedAt` (which would
    * grow forever on a finished-but-orphan-step run). */
   isLive?: boolean;
+  /** Workflow YAML, used to map each step's nodeId → handler type so every
+   * row leads with the right type glyph (llm / tool / human / parallel / …).
+   * When absent, rows fall back to the neutral icon. */
+  workflowSource?: string;
 }
 
-export function CostInspector({ runId, totalEvents, isLive = false }: CostInspectorProps): JSX.Element {
+export function CostInspector({ runId, totalEvents, isLive = false, workflowSource }: CostInspectorProps): JSX.Element {
   const qc = useQueryClient();
   const stepsQuery = queries.runs.steps(runId);
   const {
@@ -79,6 +86,20 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   useEffect(() => {
     if (totalEvents !== undefined) void qc.invalidateQueries({ queryKey: stepsQuery.queryKey });
   }, [totalEvents]);
+
+  // nodeId → handler type, parsed once from the workflow YAML. Lets every cost
+  // row lead with its real type glyph (a tool node reads as a tool, not an llm).
+  const nodeTypes = useMemo<ReadonlyMap<string, string>>(() => {
+    const m = new Map<string, string>();
+    if (!workflowSource) return m;
+    try {
+      const graph = parseWorkflow(workflowSource);
+      for (const [id, node] of Object.entries(graph.nodes)) m.set(id, node.type);
+    } catch {
+      // Unparseable source → no types; rows fall back to the neutral icon.
+    }
+    return m;
+  }, [workflowSource]);
 
   if (isPending) {
     return (
@@ -110,6 +131,18 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // with `turns` carrying the count. The underlying per-call detail
   // is still available via /steps for any future drill-in surface.
   const mergedSteps = mergeStepsByNode(steps);
+  // Collapse each run of `type: parallel` branch steps (tagged with the
+  // same parentNodeId by the steps projection) into one group so the
+  // breakdown reads parent → branches (indented) instead of scattering
+  // concurrent branches as flat sibling rows.
+  const displayItems = groupParallelSteps(mergedSteps);
+  // Duration fallback for an orphan step is the NEXT step's start in
+  // timeline order — keyed off the flat merged list so grouping doesn't
+  // perturb it.
+  const nextStartedAtBySeq = new Map<number, string | undefined>();
+  for (let i = 0; i < mergedSteps.length; i++) {
+    nextStartedAtBySeq.set(mergedSteps[i]!.startSeq, mergedSteps[i + 1]?.startedAt);
+  }
 
   // Outer grid defines the column tracks once; each row uses
   // `grid-cols-subgrid` to inherit them. Result: every row's cells
@@ -118,15 +151,165 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // grid-template-columns: [step | duration | cost | context]
   return (
     <div data-testid="cost-inspector" className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3">
-      {mergedSteps.map((step, i) => (
+      {displayItems.map((item) =>
+        item.kind === "parallel" ? (
+          <ParallelCostGroup
+            key={`parallel-${item.parentNodeId}-${item.branches[0]?.startSeq}`}
+            parentNodeId={item.parentNodeId}
+            branches={item.branches}
+            nodeTypes={nodeTypes}
+            isLive={isLive}
+          />
+        ) : (
+          <StepCostRow
+            key={stepIdentityKey(item.step)}
+            step={item.step}
+            nodeType={nodeTypes.get(item.step.nodeId)}
+            nextStartedAt={nextStartedAtBySeq.get(item.step.startSeq)}
+            isLive={isLive}
+          />
+        ),
+      )}
+    </div>
+  );
+}
+
+type CostDisplayItem =
+  | { kind: "step"; step: StepSnapshot }
+  | { kind: "parallel"; parentNodeId: string; branches: StepSnapshot[] };
+
+/** Collapse consecutive steps sharing a `parentNodeId` into one parallel
+ * group, then fold each branch's rows into ONE row per distinct branch.
+ * `mergeStepsByNode` only merges *consecutive* same-node rows, but a fan-out's
+ * branches interleave — and a budget re-drive re-runs every branch — so a
+ * branch's rows are scattered. Merging by nodeId here keeps the breakdown
+ * honest — one row per distinct branch (not per row), summing a branch's spend
+ * across re-drive rounds. Non-branch steps pass through. */
+function groupParallelSteps(steps: readonly StepSnapshot[]): CostDisplayItem[] {
+  const out: CostDisplayItem[] = [];
+  let i = 0;
+  while (i < steps.length) {
+    const parent = steps[i]!.parentNodeId;
+    if (parent === undefined) {
+      out.push({ kind: "step", step: steps[i]! });
+      i += 1;
+      continue;
+    }
+    const rows: StepSnapshot[] = [];
+    while (i < steps.length && steps[i]!.parentNodeId === parent) {
+      rows.push(steps[i]!);
+      i += 1;
+    }
+    out.push({ kind: "parallel", parentNodeId: parent, branches: mergeBranchesByNode(rows) });
+  }
+  return out;
+}
+
+/** One row per distinct branch nodeId (first-seen order), summing a branch's
+ * rows across re-drive rounds via `collapseTurns`. */
+function mergeBranchesByNode(rows: readonly StepSnapshot[]): StepSnapshot[] {
+  const byNode = new Map<string, StepSnapshot[]>();
+  const order: string[] = [];
+  for (const r of rows) {
+    const group = byNode.get(r.nodeId);
+    if (group) group.push(r);
+    else {
+      byNode.set(r.nodeId, [r]);
+      order.push(r.nodeId);
+    }
+  }
+  return order.map((id) => {
+    const group = byNode.get(id)!;
+    return group.length === 1 ? group[0]! : collapseTurns(group);
+  });
+}
+
+/** A `type: parallel` fan-out group in the Cost breakdown: a parent header
+ * carrying the aggregate spend + wall-clock span (branches run
+ * concurrently, so the group's duration is the SPAN, not the sum of branch
+ * durations), over the per-branch rows indented beneath it. */
+function ParallelCostGroup({
+  parentNodeId,
+  branches,
+  nodeTypes,
+  isLive,
+}: {
+  parentNodeId: string;
+  branches: StepSnapshot[];
+  nodeTypes: ReadonlyMap<string, string>;
+  isLive: boolean;
+}): JSX.Element {
+  // A branch with no `durationMs` is still in flight; while the run is live its
+  // end is "now", so the group's wall-clock span keeps ticking until the last
+  // branch joins (rather than freezing at the slowest *completed* branch).
+  const anyRunning = branches.some((b) => b.durationMs == null);
+  const groupTicking = isLive && anyRunning;
+  const now = useNow(1_000, groupTicking);
+  const ParallelIcon = nodeTypeIcon(nodeTypes.get(parentNodeId) ?? "parallel");
+  let costUsd = 0;
+  let anyCost = false;
+  let minStart = Number.POSITIVE_INFINITY;
+  let maxEnd = Number.NEGATIVE_INFINITY;
+  for (const b of branches) {
+    if (b.cost) {
+      costUsd += b.cost.cost_usd;
+      anyCost = true;
+    }
+    const start = Date.parse(b.startedAt);
+    if (!Number.isFinite(start)) continue;
+    minStart = Math.min(minStart, start);
+    const end = b.durationMs != null ? start + b.durationMs : groupTicking ? now : start;
+    maxEnd = Math.max(maxEnd, end);
+  }
+  const spanMs = Number.isFinite(minStart) && maxEnd > minStart ? maxEnd - minStart : undefined;
+  const chip = "text-xs text-sw-muted tabular-nums inline-flex items-center gap-1";
+  return (
+    <>
+      <div
+        data-testid={`parallel-cost-${parentNodeId}`}
+        className="grid grid-cols-subgrid col-span-4 items-center gap-x-4 rounded-md border bg-sw-surface px-3 py-2"
+      >
+        <span className="flex items-center gap-2 truncate text-sm font-semibold text-sw-text">
+          <ParallelIcon className="size-3.5 shrink-0 text-sw-muted" aria-hidden />
+          <span className="truncate">{parentNodeId}</span>
+        </span>
+        <span className={`${chip} justify-self-end`}>
+          {spanMs !== undefined && (
+            <span
+              className={chip}
+              data-live={groupTicking ? "true" : undefined}
+              title={groupTicking ? "fan-out in progress" : "wall-clock span"}
+            >
+              <Timer className="size-3" aria-hidden />
+              {formatDuration(spanMs)}
+            </span>
+          )}
+        </span>
+        <span className={`${chip} justify-self-end`}>
+          {anyCost && (
+            <span className={chip} title="cost">
+              <DollarSign className="size-3" aria-hidden />
+              <AnimatedNumber value={costUsd} format={usdFormatOptions(costUsd)} />
+            </span>
+          )}
+        </span>
+        <span />
+      </div>
+      {branches.map((b) => (
         <StepCostRow
-          key={stepIdentityKey(step)}
-          step={step}
-          nextStartedAt={mergedSteps[i + 1]?.startedAt}
+          key={stepIdentityKey(b)}
+          step={b}
+          nodeType={nodeTypes.get(b.nodeId)}
+          // A branch has no sequential "next" — its successor is the join sink
+          // after the barrier, not the sibling that happens to start next. So a
+          // still-running branch ticks live instead of freezing at the gap to a
+          // sibling's start.
+          nextStartedAt={undefined}
           isLive={isLive}
+          indent
         />
       ))}
-    </div>
+    </>
   );
 }
 
@@ -227,12 +410,20 @@ const COST_RATE_DIVISOR = 1_000_000;
 
 function StepCostRow({
   step,
+  nodeType,
   nextStartedAt,
   isLive,
+  indent = false,
 }: {
   step: StepSnapshot;
+  /** Handler type of this step's node (from the workflow graph). Drives the
+   * leading type glyph; `undefined` falls back to the neutral icon. */
+  nodeType?: string;
   nextStartedAt: string | undefined;
   isLive: boolean;
+  /** Render as a fan-out branch under a `ParallelCostGroup` — gently inset so
+   * the nesting reads, otherwise identical to a linear step row. */
+  indent?: boolean;
 }): JSX.Element {
   const model = useStepModel(step.provider, step.model);
 
@@ -310,23 +501,25 @@ function StepCostRow({
   const rowGridClass = cn(
     "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md",
     "bg-sw-surface px-3 py-2",
+    // Branch row under a parallel group: gently inset so the nesting reads,
+    // but otherwise identical to a linear step row (no accent highlight).
+    indent && "ml-4",
   );
 
+  // Lead with the node's real handler type (llm / tool / human / parallel / …)
+  // so a tool step reads as a tool, not an llm. Falls back to the neutral icon
+  // when the type is unknown (no workflow source, summariser synthetic node).
+  const TypeIcon = nodeTypeIcon(nodeType);
   return (
-    <div data-testid={`step-${step.stepIdx}`} className={rowGridClass}>
+    <div data-testid={`step-${step.stepIdx}`} data-branch={indent ? "true" : undefined} className={rowGridClass}>
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
+        <TypeIcon className="size-3.5 shrink-0 text-sw-muted" aria-hidden />
         <span className="truncate">{step.nodeId}</span>
+        {/* Model the step ran on — only llm steps carry one. */}
+        {step.model && <ModelBadge provider={step.provider} model={step.model} className="text-sw-xs" />}
         {step.iteration && (
           <span className={`font-mono ${metricChipClass}`}>
             iter {step.iteration.n}/{step.iteration.max}
-          </span>
-        )}
-        {step.turns != null && step.turns > 1 && (
-          <span
-            className={`font-mono ${metricChipClass}`}
-            title="LLM calls collapsed into this row (multi-turn or pause+resume)"
-          >
-            × {step.turns} turns
           </span>
         )}
       </span>

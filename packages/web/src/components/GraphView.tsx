@@ -46,9 +46,9 @@ import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
 import { Controls } from "./ai-elements/controls.tsx";
 import { Edge as AiEdge } from "./ai-elements/edge.tsx";
-import { ModelSelectorLogo } from "./ai-elements/model-selector.tsx";
 import { Node as AiNode, NodeContent, NodeHeader, NodeTitle } from "./ai-elements/node.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
+import { ModelBadge } from "./ui/model-badge.tsx";
 
 export interface GraphViewProps {
   /** When provided (and no `detail`/`graph`), we fetch `/runs/:runId`. */
@@ -274,6 +274,11 @@ function typeStripTone(handler: string, goalGate: boolean, isRouter: boolean): s
       return "bg-sw-accent-idle";
     case "tool":
       return "bg-sw-accent-loop";
+    // A `parallel` fan-out node is a control-flow fork (take-all), the same
+    // family as a router (select-one) — both get the "fork" violet. The
+    // `parallel` eyebrow + the visible edge fan disambiguate the two.
+    case "parallel":
+      return "bg-sw-accent-thinking";
     default:
       return isRouter ? "bg-sw-accent-thinking" : null;
   }
@@ -359,10 +364,9 @@ function FraguaNode({ data }: FlowNodeProps): JSX.Element {
             <span className="uppercase tracking-[0.06em]">id</span> <code className="text-sw-text">{d.nodeId}</code>
           </span>
           {d.model ? (
-            <span className="flex items-center gap-1" title={d.provider ? `${d.provider} · ${d.model}` : d.model}>
+            <span className="flex items-center gap-1">
               <span className="uppercase tracking-[0.06em]">model</span>
-              {d.provider ? <ModelSelectorLogo className="shrink-0" provider={d.provider} /> : null}
-              <code className="truncate text-sw-text">{d.model}</code>
+              <ModelBadge provider={d.provider} model={d.model} />
             </span>
           ) : null}
           {d.reasoningEffort ? (
@@ -407,6 +411,13 @@ function FraguaNode({ data }: FlowNodeProps): JSX.Element {
             <span className="truncate" title={`routes=${d.routeCount}`} data-testid="node-route-count">
               <span className="uppercase tracking-[0.06em]">routes</span>{" "}
               <code className="rounded-sw-default border border-sw-border px-1 text-sw-text">{d.routeCount}</code>
+            </span>
+          ) : null}
+          {/* Fan-out width — present on a `type: parallel` node. */}
+          {d.branchCount !== undefined ? (
+            <span className="truncate" title={`branches=${d.branchCount}`} data-testid="node-branch-count">
+              <span className="uppercase tracking-[0.06em]">branches</span>{" "}
+              <code className="rounded-sw-default border border-sw-border px-1 text-sw-text">{d.branchCount}</code>
             </span>
           ) : null}
         </NodeContent>
@@ -593,6 +604,10 @@ interface FraguaNodeData extends Record<string, unknown> {
    *  routing nodes; renders as a small chip so operators can spot routing
    *  nodes without opening the inspector. */
   routeCount: number | undefined;
+  /** Number of fan-out branches (`attrs.branches.length`). Set only on
+   *  `type: parallel` nodes; renders as a chip so the take-all width is
+   *  legible at a glance. */
+  branchCount: number | undefined;
   state: NodeState["state"] | "waiting" | null;
   hasIncoming: boolean;
   hasOutgoing: boolean;
@@ -810,6 +825,7 @@ export function toFlowGraph(
         handler === "llm" && typeof a?.retry_target === "string" && a.retry_target !== "" ? a.retry_target : undefined,
       maxRetries: canRetry && typeof a?.max_retries === "number" ? a.max_retries : undefined,
       routeCount: Array.isArray(a?.routes) && a.routes.length > 0 ? a.routes.length : undefined,
+      branchCount: handler === "parallel" && Array.isArray(a?.branches) ? a.branches.length : undefined,
       state: resolvedState,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),
@@ -918,7 +934,15 @@ export function toFlowGraph(
     // graph.edges index — parallel edges sharing a (from, to) pair are
     // disambiguated against the source's iteration state above.
     const traversalCount = traversalsByEdge.get(i) ?? 0;
-    const taken = traversalCount > 0;
+    // Take-all fan-out edges (`parallel → branch`) carry no `edge.selected`
+    // event — the executor dispatches branches directly, it doesn't run edge
+    // selection on the parallel node. So mark them taken when the target branch
+    // is reached, otherwise the whole fan would dim during/after a run even
+    // though it fired. (The `branch → sink` barrier edges DO get edge.selected
+    // from each branch's transition, so they're covered by traversalCount.)
+    const isFanoutTakeAll =
+      (e.attrs as Record<string, unknown>)["fanout"] === true && graph.nodes[e.from]?.type === "parallel";
+    const taken = traversalCount > 0 || (isFanoutTakeAll && reached.has(e.to));
     const dim = hasRun && !taken;
     // In a run, an `outcome=fail` edge that never fired is just topology —
     // rendering it red would broadcast a failure that didn't happen.
