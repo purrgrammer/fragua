@@ -68,6 +68,15 @@ export type DispatchOutcome = { kind: "terminal" } | { kind: "continue" };
  * at once (the semaphore is `map`'s prerequisite). */
 const DEFAULT_FANOUT_CONCURRENCY = 8;
 
+/** Wall-clock backstop per fan-out branch when neither the branch (`max_ms`) nor
+ * the `parallel` node (`timeout-minutes:` → its own `max_ms`) bounds it. A branch
+ * is a read-class deliberation step, so an unbounded llm loop that never
+ * self-terminates would otherwise dam the join forever (the live post-mortem's
+ * runaway lens). The branch's own bound still wins when tighter (min via
+ * AbortSignal.any). Override per-executor with `fanoutBranchTimeoutMs`. The
+ * supervisor's leak watchdog budgets unbounded branches against the same value. */
+export const DEFAULT_FANOUT_BRANCH_TIMEOUT_MS = 20 * 60_000;
+
 /** Append attempts for a serialized fan-out commit before giving up — a benign
  * sibling-moved-version conflict just re-reads and retries the append. */
 const FANOUT_COMMIT_ATTEMPTS = 8;
@@ -124,6 +133,11 @@ export interface ExecutorOpts {
   pollIntervalMs?: number;
   /** Grace period beyond handler maxMs before we treat the node as leaked. */
   leakGraceMs?: number;
+  /** Per-fan-out-branch wall-clock backstop (ms) when neither the branch nor
+   * its `parallel` node sets a tighter bound. Defaults to
+   * `DEFAULT_FANOUT_BRANCH_TIMEOUT_MS`. Tests inject a small value to exercise
+   * the hung-branch deadline. */
+  fanoutBranchTimeoutMs?: number;
   /** Hook for tests to stop after N turns; defaults to ∞. */
   maxTurnsForTesting?: number;
   /** Production ceiling on handler dispatches within a single run. When
@@ -316,7 +330,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   const abortLoopCeiling = opts.abortLoopCeiling ?? DEFAULT_ABORT_LOOP_CEILING;
   const clock = opts.clock ?? Date.now;
   const random = opts.random ?? Math.random;
+  const fanoutBranchTimeoutMs = opts.fanoutBranchTimeoutMs ?? DEFAULT_FANOUT_BRANCH_TIMEOUT_MS;
   let consecutiveAborts = 0;
+  // Per-branch abort streak under a fan-out, keyed by sub-node id. A run-wide
+  // counter (`consecutiveAborts`) reset whenever ANY sibling succeeded, so a
+  // single hard-failing branch could abort forever behind healthy siblings
+  // (the live post-mortem's masking bug). Process-local, like consecutiveAborts
+  // — a resume starts the streak fresh.
+  const branchAborts = new Map<string, number>();
   let turns = 0;
   // Dispatches counted for the max_loops ceiling. Incremented just before
   // each `spec.handler(ctx)` call — OCC-retry `continue`s and schema/start
@@ -1177,12 +1198,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     branchNode: string,
     baseState: RunState,
     branchRouting: Readonly<Record<string, unknown>>,
+    branchTimeoutMs: number,
   ): Promise<BranchOutcome> => {
     const graph = graphFor(baseState.workflowSha);
     const spec = opts.dispatcher.get(baseState.workflowSha, branchNode);
     const steerCtrl = new AbortController();
     const signals: AbortSignal[] = [steerCtrl.signal, opts.shutdownSignal];
     if (spec.maxMs !== undefined) signals.push(AbortSignal.timeout(spec.maxMs));
+    // Backstop deadline so an unbounded llm branch can't dam the join forever.
+    // AbortSignal.any fires on the first signal, so a tighter branch `max_ms`
+    // (above) still wins.
+    signals.push(AbortSignal.timeout(branchTimeoutMs));
     const signal = AbortSignal.any(signals);
     const iteration = nodeRetryCount(baseState.routing, branchNode);
     const recorder = new CommittingRecorder({
@@ -1356,6 +1382,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       typeof node?.attrs.concurrency === "number" && node.attrs.concurrency > 0
         ? node.attrs.concurrency
         : DEFAULT_FANOUT_CONCURRENCY;
+    // The `parallel` node has no handler of its own, so its `timeout-minutes:`
+    // (parsed into `attrs.max_ms`) bounds EACH branch — the per-branch deadline.
+    const branchTimeoutMs =
+      typeof node?.attrs.max_ms === "number" && node.attrs.max_ms > 0 ? node.attrs.max_ms : fanoutBranchTimeoutMs;
 
     if (join === undefined || branches.length === 0) {
       await tryAppendFact(opts.store, runId, state.version, [
@@ -1414,135 +1444,41 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "continue" };
     }
 
-    // Dispatch this superstep's frontier concurrently (bounded by the semaphore).
+    // ── Reactive pool (the on-log frontier, fan-out-nodes.md § Execution). One
+    // runFanout call drains the whole region: dispatch the live frontier, then
+    // as EACH branch settles, commit it and dispatch its successor immediately —
+    // never waiting on siblings. A slow/hung/failed branch can no longer dam the
+    // commit of its already-finished siblings (head-of-line blocking — confirmed
+    // in a live post-mortem). Commits still serialize through `commitFanoutFact`
+    // (the linearization point); only the dispatch side races.
     const sem = new Semaphore(concurrency);
     const freshState = opts.store.getState(runId) ?? state;
-    const outcomes = await Promise.all(
-      active.map(async (f) => {
-        await sem.acquire();
-        try {
-          return await executeBranchNode(f, freshState, effectiveRouting);
-        } finally {
-          sem.release();
-        }
-      }),
-    );
 
-    // A leaked handler is unrecoverable — halt the whole run.
-    const leak = outcomes.find((o): o is Extract<BranchOutcome, { kind: "leak" }> => o.kind === "leak");
-    if (leak !== undefined) {
-      await commitFanoutFact(
-        [
-          { type: "fact.handler_timeout_leaked", payload: { nodeId: leak.nodeId, leakedAt: leak.leakedAt } },
-          { type: "fact.run_halted", payload: { reason: "error", detail: "handler_leaked" } },
-        ],
-        {},
-      );
-      leakBudget.recordLeak(runId, leak.nodeId);
-      return { kind: "terminal" };
-    }
-
-    const successes = outcomes.filter((o): o is Extract<BranchOutcome, { kind: "success" }> => o.kind === "success");
-    const aborts = outcomes.filter((o): o is Extract<BranchOutcome, { kind: "abort" }> => o.kind === "abort");
-
-    // Commit every success first (each advances the frontier), capturing any
-    // run-level (budget) fact for a single deferred disposition.
-    const RUN_LEVEL = new Set(["fact.run_paused", "fact.run_halted", "fact.run_completed"]);
-    let runHalt: FactEvent | undefined;
-    let runPause: FactEvent | undefined;
-    for (const o of successes) {
-      const branchFacts: FactEvent[] = [];
-      for (const f of o.facts) {
-        if (RUN_LEVEL.has(f.type)) {
-          if (f.type === "fact.run_halted" && runHalt === undefined) runHalt = f;
-          else if (f.type === "fact.run_paused" && runPause === undefined) runPause = f;
-        } else if (f.type === "fact.node_started") {
-          // The planner emits node_started{successor} to advance current_node on
-          // the linear path. A fan-out must NOT — that would jump current_node
-          // off the pinned parallel node and deactivate the siblings. The
-          // frontier advances via the bundled dispatch_started below instead.
-        } else {
-          branchFacts.push(f);
-        }
+    // Run-level budget against the NOW-folded cumulative. Re-read per commit
+    // (each node_completed advanced the durable total) so a branch crossing the
+    // cap stops the next dispatch — tighter than a once-per-superstep barrier.
+    // Returns the disposition fact, or undefined.
+    const fanoutBudgetDisposition = (): FactEvent | undefined => {
+      const folded = opts.store.getState(runId) ?? state;
+      const overrides = readBudgetOverrides(folded.routing);
+      const budget = evaluateBudget({
+        graphAttrs: graph?.attrs ?? {},
+        completedNodeId: parallelNode,
+        cumulativeCostUsd: folded.metrics.totalCostUsd,
+        cumulativeTokens: folded.metrics.totalInputTokens + folded.metrics.totalOutputTokens,
+        nodeCumulativeCostUsd: folded.metrics.nodeCosts[parallelNode]?.costUsd ?? 0,
+        nodeCumulativeTokens: folded.metrics.nodeCosts[parallelNode]?.tokens ?? 0,
+        alreadyWarned: readBudgetWarned(folded.routing),
+        ...(overrides !== undefined ? { overrides } : {}),
+      });
+      if (budget.shouldHalt) {
+        const payload: { reason: "budget"; detail?: string } = { reason: "budget" };
+        if (budget.haltReason !== undefined && budget.haltReason.length > 0) payload.detail = budget.haltReason;
+        return { type: "fact.run_halted", payload };
       }
-      // Frontier advance: bundle a dispatch_started for the successor (the
-      // reducer adds it to the active set) unless the successor IS the join —
-      // then the branch is done (node_completed removed it; nothing added).
-      if (o.nextNode !== undefined && o.nextNode !== join) {
-        branchFacts.push({
-          type: "fact.dispatch_started",
-          payload: {
-            nodeId: o.nextNode,
-            iteration: nodeRetryCount(freshState.routing, o.nextNode),
-            resumeOf: "fresh",
-          },
-        });
-      }
-      const appendOpts = { ...takeFold(), ...o.appendOpts };
-      const ok = await commitFanoutFact(branchFacts, appendOpts);
-      if (!ok) return { kind: "continue" }; // re-drive; frontier re-dispatches the unfinished
-    }
-
-    // Commit every abort (the node stays in the frontier for re-drive).
-    for (const o of aborts) {
-      await commitFanoutFact(o.facts, takeFold());
-    }
-
-    // Disposition: a branch budget breach parks the run; otherwise advance.
-    if (runHalt !== undefined) {
-      await commitFanoutFact([runHalt], {});
-      return { kind: "terminal" };
-    }
-    if (runPause !== undefined) {
-      await commitFanoutFact([runPause], {});
-      return { kind: "terminal" };
-    }
-    if (aborts.length > 0) {
-      // A superstep that made progress resets the run-wide abort-loop counter;
-      // an all-fail superstep climbs it and parks at the ceiling.
-      if (successes.length > 0) consecutiveAborts = 0;
-      else consecutiveAborts++;
-      if (consecutiveAborts >= abortLoopCeiling) {
-        await commitFanoutFact(
-          [
-            {
-              type: "fact.run_paused",
-              payload: { reason: "abort_loop", nodeId: aborts[0]?.nodeId ?? parallelNode, consecutiveAborts },
-            },
-          ],
-          {},
-        );
-        return { kind: "terminal" };
-      }
-      return { kind: "continue" }; // re-drive only the still-active (aborted) nodes
-    }
-    consecutiveAborts = 0;
-
-    // Budget barrier re-check: the K branches forked from the same stale total
-    // and spent blind to siblings, so re-evaluate the run-wide budget against
-    // the now-folded cumulative before the next superstep / join.
-    const folded = opts.store.getState(runId) ?? state;
-    const overrides = readBudgetOverrides(folded.routing);
-    const budget = evaluateBudget({
-      graphAttrs: graph?.attrs ?? {},
-      completedNodeId: parallelNode,
-      cumulativeCostUsd: folded.metrics.totalCostUsd,
-      cumulativeTokens: folded.metrics.totalInputTokens + folded.metrics.totalOutputTokens,
-      nodeCumulativeCostUsd: folded.metrics.nodeCosts[parallelNode]?.costUsd ?? 0,
-      nodeCumulativeTokens: folded.metrics.nodeCosts[parallelNode]?.tokens ?? 0,
-      alreadyWarned: readBudgetWarned(folded.routing),
-      ...(overrides !== undefined ? { overrides } : {}),
-    });
-    if (budget.shouldHalt) {
-      const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
-      if (budget.haltReason !== undefined && budget.haltReason.length > 0) haltPayload.detail = budget.haltReason;
-      await tryAppendFact(opts.store, runId, folded.version, [{ type: "fact.run_halted", payload: haltPayload }]);
-      return { kind: "terminal" };
-    }
-    if (budget.pauseBreach !== undefined) {
-      const b = budget.pauseBreach;
-      await tryAppendFact(opts.store, runId, folded.version, [
-        {
+      if (budget.pauseBreach !== undefined) {
+        const b = budget.pauseBreach;
+        return {
           type: "fact.run_paused",
           payload: {
             reason: "budget",
@@ -1552,12 +1488,132 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             limit: b.limit,
             actual: b.actual,
           },
-        },
-      ]);
-      return { kind: "terminal" };
+        };
+      }
+      return undefined;
+    };
+
+    const pool = new Map<string, Promise<{ nodeId: string; outcome: BranchOutcome }>>();
+    const dispatch = (nodeId: string): void => {
+      pool.set(
+        nodeId,
+        (async () => {
+          await sem.acquire();
+          try {
+            return { nodeId, outcome: await executeBranchNode(nodeId, freshState, effectiveRouting, branchTimeoutMs) };
+          } finally {
+            sem.release();
+          }
+        })(),
+      );
+    };
+    for (const f of active) dispatch(f);
+
+    // Once a run-level (budget) disposition is captured we stop dispatching new
+    // successors but keep draining the in-flight pool — bounding overshoot to
+    // the branches already running — then commit the disposition at drain.
+    let runHalt: FactEvent | undefined;
+    let runPause: FactEvent | undefined;
+    const abortedNodes: string[] = [];
+
+    while (pool.size > 0) {
+      const { nodeId, outcome } = await Promise.race(pool.values());
+      pool.delete(nodeId);
+
+      // A leaked handler is unrecoverable — halt the whole run.
+      if (outcome.kind === "leak") {
+        await commitFanoutFact(
+          [
+            { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
+            { type: "fact.run_halted", payload: { reason: "error", detail: "handler_leaked" } },
+          ],
+          {},
+        );
+        leakBudget.recordLeak(runId, outcome.nodeId);
+        return { kind: "terminal" };
+      }
+
+      // An aborted branch stays in the active set (node_aborted doesn't mutate
+      // it) and re-dispatches on the NEXT runFanout turn — NOT within this pool,
+      // which would busy-spin a hard-failing branch. Climb its own streak so it
+      // can't hide behind healthy siblings (the run-wide counter's masking bug).
+      if (outcome.kind === "abort") {
+        if (!(await commitFanoutFact(outcome.facts, takeFold()))) return { kind: "continue" };
+        branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
+        abortedNodes.push(outcome.nodeId);
+        continue;
+      }
+
+      // Success: split run-level (budget) facts from node facts, drop the
+      // planner's node_started{successor} (it would unpin current_node from the
+      // parallel node and deactivate siblings), and bundle dispatch_started for
+      // the successor so the frontier advances atomically (I1) — unless the
+      // successor IS the join (branch done; node_completed already removed it).
+      const branchFacts: FactEvent[] = [];
+      for (const f of outcome.facts) {
+        if (f.type === "fact.run_halted") {
+          if (runHalt === undefined) runHalt = f;
+        } else if (f.type === "fact.run_paused") {
+          if (runPause === undefined) runPause = f;
+        } else if (f.type !== "fact.node_started") {
+          branchFacts.push(f);
+        }
+      }
+      const successor = outcome.nextNode !== undefined && outcome.nextNode !== join ? outcome.nextNode : undefined;
+      if (successor !== undefined) {
+        branchFacts.push({
+          type: "fact.dispatch_started",
+          payload: { nodeId: successor, iteration: nodeRetryCount(freshState.routing, successor), resumeOf: "fresh" },
+        });
+      }
+      if (!(await commitFanoutFact(branchFacts, { ...takeFold(), ...outcome.appendOpts }))) return { kind: "continue" };
+      branchAborts.delete(outcome.nodeId);
+
+      if (runHalt === undefined && runPause === undefined) {
+        const disp = fanoutBudgetDisposition();
+        if (disp?.type === "fact.run_halted") runHalt = disp;
+        else if (disp?.type === "fact.run_paused") runPause = disp;
+      }
+
+      // Drive the successor into the pool — but NOT once a disposition is
+      // captured. Its dispatch_started already rode the commit (durable in the
+      // active set), so on resume it re-dispatches; we just don't spend now.
+      if (successor !== undefined && runHalt === undefined && runPause === undefined) dispatch(successor);
     }
 
-    return { kind: "continue" }; // next turn dispatches the advanced frontier
+    // Disposition. A captured budget breach parks/halts the run.
+    if (runHalt !== undefined) {
+      await commitFanoutFact([runHalt], {});
+      return { kind: "terminal" };
+    }
+    if (runPause !== undefined) {
+      await commitFanoutFact([runPause], {});
+      return { kind: "terminal" };
+    }
+    // Per-branch abort-loop: a branch that aborted `abortLoopCeiling` turns in a
+    // row parks the run regardless of sibling success.
+    for (const nodeId of abortedNodes) {
+      const streak = branchAborts.get(nodeId) ?? 0;
+      if (streak >= abortLoopCeiling) {
+        await commitFanoutFact(
+          [{ type: "fact.run_paused", payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak } }],
+          {},
+        );
+        return { kind: "terminal" };
+      }
+    }
+    // Aborts below the ceiling: re-drive the still-active (aborted) nodes next turn.
+    if (abortedNodes.length > 0) return { kind: "continue" };
+
+    // All branches reached the join. Barrier budget re-check (belt + suspenders
+    // — the per-commit gate already caught in-region breaches), then let the
+    // next turn advance current_node to the join (active is now empty).
+    const barrier = fanoutBudgetDisposition();
+    if (barrier !== undefined) {
+      await commitFanoutFact([barrier], {});
+      return { kind: "terminal" };
+    }
+    return { kind: "continue" }; // frontier drained — next turn joins
   };
 
   try {

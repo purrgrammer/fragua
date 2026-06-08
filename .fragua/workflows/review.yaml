@@ -134,6 +134,10 @@ steps:
     branches: [correctness_scan, security_scan, performance_scan]
     next: synthesize
     concurrency: 3
+    # Per-branch wall-clock backstop: a lens scan/verify is read-only
+    # deliberation, so 15m is generous. Bounds a runaway llm branch that never
+    # self-terminates (which would otherwise dam the join).
+    timeout-minutes: 15
 
   correctness_scan:
     type: llm

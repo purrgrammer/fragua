@@ -13,6 +13,7 @@
 
 import { type IEventStore, readActiveNodes, type StoredEvent } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
+import { DEFAULT_FANOUT_BRANCH_TIMEOUT_MS } from "./executor.ts";
 
 export interface SupervisorOpts {
   store: IEventStore;
@@ -27,6 +28,11 @@ export interface SupervisorOpts {
    * Returns `undefined` for nodes that opted out of wall-clock bounding
    * (llm `max_ms=0`); the supervisor skips the leak-trip for those nodes. */
   handlerMaxMsFor?: (workflowSha: string, nodeId: string) => number | undefined;
+  /** Wall-clock backstop (ms) the leak watchdog budgets an UNBOUNDED fan-out
+   * branch against, so a runaway llm branch that ignores its abort signal is
+   * still reclaimable (gap 5a). Mirrors the executor's per-branch deadline;
+   * defaults to `DEFAULT_FANOUT_BRANCH_TIMEOUT_MS`. */
+  fanoutBranchTimeoutMs?: number;
   /** Forward steer text into the llm backend's queue. pi-agent-core's
    * `Agent.steer()` enqueues into a `steeringQueue` that drains at end of
    * turn; tripping the abort controller would force the in-flight LLM
@@ -59,6 +65,7 @@ export function startSupervisor(opts: SupervisorOpts): {
   const tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
   const heartbeatMs = opts.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS;
   const leakGrace = opts.nodeLeakGraceMs ?? DEFAULT_LEAK_GRACE_MS;
+  const fanoutBranchTimeout = opts.fanoutBranchTimeoutMs ?? DEFAULT_FANOUT_BRANCH_TIMEOUT_MS;
 
   // Track per-run state so we only trip on NEW intents (seq > lastSeen).
   const lastIntentSeq = new Map<string, number>();
@@ -141,23 +148,20 @@ export function startSupervisor(opts: SupervisorOpts): {
           // the pinned `parallel` node — which has no dispatcher spec and would
           // yield the short unknown-spec fallback, force-aborting every branch
           // at a tiny budget. Budget the watchdog against the LONGEST active
-          // branch maxMs instead; if any branch is unbounded (maxMs 0/undefined),
-          // don't trip the set at all. (docs/proposals/fan-out-nodes.md.)
+          // branch maxMs. An UNBOUNDED branch (maxMs 0/undefined) is budgeted
+          // against the fan-out backstop — NOT skipped — so a runaway llm branch
+          // that ignores its abort signal is still reclaimable (gap 5a). The
+          // executor arms the same backstop as an AbortSignal.timeout, so a
+          // well-behaved branch self-aborts first; this is the leak backstop.
           const active = readActiveNodes(state.routing);
           let maxMs: number | undefined;
           if (active !== null) {
             if (active.length === 0) continue; // frontier draining — nothing in flight
             let longest = 0;
-            let unbounded = false;
             for (const branch of active) {
               const bm = opts.handlerMaxMsFor(state.workflowSha, branch);
-              if (bm === undefined || bm === 0) {
-                unbounded = true;
-                break;
-              }
-              longest = Math.max(longest, bm);
+              longest = Math.max(longest, bm === undefined || bm === 0 ? fanoutBranchTimeout : bm);
             }
-            if (unbounded) continue;
             maxMs = longest;
           } else {
             maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);

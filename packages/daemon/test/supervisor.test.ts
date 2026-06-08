@@ -140,21 +140,12 @@ describe("supervisor — pause-aware leak detection", () => {
     }
   });
 
-  test("fan-out: the watchdog budgets against the active BRANCH maxMs, not the pinned parallel node", async () => {
-    // The parallel node has no dispatcher spec → handlerMaxMsFor yields the
-    // short unknown-spec fallback. The supervisor must NOT trip the long-running
-    // branch handlers against that — it budgets against the active branch maxMs,
-    // and an unbounded (maxMs 0) branch is never tripped. (Regression: a real
-    // fan-out review run was force-aborted at the fallback.)
-    const clk = fakeClock(1_000_000_000_000);
-    const registry = new AbortRegistry(clk.now);
-    const store = new SqliteStore({ path: ":memory:" });
-    closers.push(() => store.close());
+  /** Seed a claimed run pinned to a `parallel` node with one in-flight branch. */
+  function seedFanout(store: SqliteStore): void {
     const wfSrc = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
     store.saveWorkflow("sha", "t", wfSrc, serializeGraph(parseWorkflow(wfSrc)), CURRENT_IR_VERSION);
     store.enqueueRun({ runId: "fo", workflowSha: "sha", initialRouting: { start_node: "lenses" } });
     store.claimNextRun(1);
-    // Pin current_node to the parallel node and seed the frontier with a branch.
     const seed = [
       { type: "fact.run_started" as const, payload: { workflowSha: "sha", contractVersion: 2, startNode: "lenses" } },
       { type: "fact.fanout_started" as const, payload: { nodeId: "lenses", iteration: 0, branches: ["b1"] } },
@@ -163,9 +154,21 @@ describe("supervisor — pause-aware leak detection", () => {
       const v = store.getState("fo")?.version ?? 0;
       store.appendFact("fo", [fact], v, { advanceAppliedTo: v });
     }
+  }
+
+  test("fan-out: a BOUNDED branch is budgeted against its own maxMs, not the parallel node's fallback", async () => {
+    // The pinned parallel node has no dispatcher spec → handlerMaxMsFor yields the
+    // short unknown-spec fallback. The watchdog must budget the in-flight branch
+    // against the BRANCH maxMs, not that fallback (else a real fan-out review run
+    // is force-aborted early).
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = new SqliteStore({ path: ":memory:" });
+    closers.push(() => store.close());
+    seedFanout(store);
     const ctrl = new AbortController();
-    registry.register("fo", ctrl); // the in-flight branch handler
-    clk.advance(10_000_000); // far past the parallel node's short fallback
+    registry.register("fo", ctrl);
+    clk.advance(1_000); // past the 50ms fallback + grace, but under the branch's 2000ms
 
     const shutdown = new AbortController();
     const sup = startSupervisor({
@@ -176,13 +179,50 @@ describe("supervisor — pause-aware leak detection", () => {
       tickMs: 1,
       heartbeatIntervalMs: 1_000_000,
       nodeLeakGraceMs: 500,
+      handlerMaxMsFor: (_sha, nodeId) => (nodeId === "b1" ? 2_000 : 50),
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(ctrl.signal.aborted).toBe(false); // not the 50ms fallback — the branch's 2000ms governs
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  test("fan-out: an UNBOUNDED branch is budgeted against the backstop — reclaimable, not skipped forever", async () => {
+    // gap 5a: the watchdog used to SKIP the whole set when ANY active branch was
+    // unbounded (maxMs 0), so a runaway llm branch that ignored its abort signal
+    // ran forever. Now it budgets the unbounded branch against the fan-out
+    // backstop, so it's reclaimable. (The executor arms the same backstop as an
+    // AbortSignal.timeout — this is the leak backstop for an abort-ignoring branch.)
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = new SqliteStore({ path: ":memory:" });
+    closers.push(() => store.close());
+    seedFanout(store);
+    const ctrl = new AbortController();
+    registry.register("fo", ctrl);
+    clk.advance(10_000); // past the 1000ms backstop + 500ms grace
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      nodeLeakGraceMs: 500,
+      fanoutBranchTimeoutMs: 1_000,
       // "lenses" (parallel) → short fallback; "b1" (branch) → unbounded.
       handlerMaxMsFor: (_sha, nodeId) => (nodeId === "b1" ? 0 : 50),
     });
 
     await new Promise((r) => setTimeout(r, 20));
     try {
-      expect(ctrl.signal.aborted).toBe(false); // NOT tripped despite 10M ms elapsed
+      expect(ctrl.signal.aborted).toBe(true); // the runaway branch is reclaimed
     } finally {
       shutdown.abort();
       await sup.promise;
