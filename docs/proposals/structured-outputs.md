@@ -1,8 +1,8 @@
 ---
 title: Structured step outputs (MVP) — typed `outputs:` on `llm` steps
 summary: "An `llm` step declares typed `outputs:` with the same small type grammar used by `inputs:` (scalars, `choice`, records, arrays — a subset of JSON Schema sized to what provider strict-mode enforces; no recursion, no `$ref`). It emits through one force-included `emit_output` tool; any step consumes via `${{ outputs.X.f }}` interpolation (`llm` in prompt, `tool` in run, `human` in text). Reads fail closed — a reference the producer never populated halts the node (a recorded, replayable fact), never a silent \"\". The grammar compiles to TypeBox (already a dependency): TypeBox validates the emitted value and supplies the emit-tool schema, so author surface, our validation, and the provider's native strict-mode all agree. Oversized structs spill to the blob CAS via the input-spill path. Values interpolated into an `llm` prompt are wrapped in content-derived (hash-boundary) delimiters. MVP: only `llm` steps produce; `tool`/`human` consume."
-status: proposed
-maturity: designed
+status: implemented
+maturity: shipped
 last-reviewed: 2026-06-07
 supersedes: an earlier, broader cut (tool-step production via $FRAGUA_OUTPUT, route-carried outputs) — narrowed to llm-only production
 ---
