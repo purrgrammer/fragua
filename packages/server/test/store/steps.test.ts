@@ -345,6 +345,28 @@ describe("eventsToSteps", () => {
     // it: 1200 + 7800 − 1010 = 7990ms, not the frozen-while-running zero.
     expect(Date.parse(scanASteps[0]!.startedAt)).toBe(1010);
   });
+
+  test("an ABORTED branch stamps a finite duration on its last step (no forever-ticking)", () => {
+    // A branch that aborted (pause / shutdown / abort-loop) must show a STATIC
+    // elapsed time, not tick `now - startedAt` forever. node_aborted stamps the
+    // truthful duration just like node_completed; without it the parentNodeId
+    // guard in fillOrphanDurations leaves the step undefined → live-ticking
+    // despite being terminated.
+    const events = [
+      ev("fact.fanout_started", 1000, { nodeId: "review_lenses", iteration: 0, branches: ["scan_a", "scan_b"] }),
+      ev("fact.dispatch_started", 1010, { nodeId: "scan_a" }),
+      ev("llm.start", 1100, { nodeId: "scan_a", seq: 1 }),
+      ev("llm.start", 1200, { nodeId: "scan_a", seq: 2 }),
+      ev("fact.node_aborted", 5_000, { nodeId: "scan_a", iteration: 0, cause: "aborted" }),
+    ].map((e, i) => ({ ...e, seq: (e.payload as { seq?: number }).seq ?? i }));
+
+    const steps = fillOrphanDurations(eventsToSteps(events), { lastEventTs: 5_000, runIsTerminal: false });
+    const scanASteps = steps.filter((s) => s.nodeId === "scan_a");
+    expect(scanASteps).toHaveLength(2);
+    // Static duration on the last step (5000 − 1200 = 3800), NOT undefined.
+    expect(scanASteps[1]?.durationMs).toBe(3_800);
+    expect(scanASteps[0]?.parentNodeId).toBe("review_lenses");
+  });
 });
 
 describe("fillOrphanDurations", () => {

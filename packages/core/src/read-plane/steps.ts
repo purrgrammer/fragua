@@ -249,6 +249,27 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
+    if (ev.type === "fact.node_aborted") {
+      // A fan-out BRANCH that aborted (pause/shutdown/abort-loop) ends at its
+      // node_aborted.ts — stamp the truthful duration, exactly like a
+      // node_completed branch. Without this the branch step keeps
+      // `durationMs === undefined` and fillOrphanDurations' parentNodeId guard
+      // leaves it ticking `now - startedAt` forever, as if still running. A
+      // transient abort that later re-drives opens a NEW step (branch aborts
+      // aren't pause-folds), so this stamps only the ended attempt.
+      if (nodeId) {
+        const branchIdx = lastStepIdxForNode.get(nodeId);
+        if (branchIdx !== undefined) {
+          const branchStep = steps[branchIdx];
+          if (branchStep?.parentNodeId !== undefined && branchStep.durationMs === undefined) {
+            const dur = ev.ts - Date.parse(branchStep.startedAt);
+            if (Number.isFinite(dur) && dur >= 0) branchStep.durationMs = dur;
+          }
+        }
+      }
+      continue;
+    }
+
     if (ev.type === "fact.run_paused" || ev.type === "fact.run_paused_human") {
       // Pauses (operator / HITL / provider_error / payment_required /
       // budget / provider_retry / handler_retry) do NOT emit
