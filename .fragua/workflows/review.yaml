@@ -13,8 +13,10 @@
 # Depth is topology: classify → skip / quick / full.
 #   skip  → classify writes an LGTM to review.md; straight to signoff
 #   quick → one focused pass (writes review.md); no gate
-#   full  → three per-lens passes (correctness / security / performance), each
-#           emitting typed findings → synthesize (writes review.md) → verify gate
+#   full  → prep_diff → a parallel fan-out of three lens BRANCHES (correctness /
+#           security / performance), each a two-node scan→verify sub-pipeline
+#           running concurrently; verify drops hallucinated findings → synthesize
+#           (writes review.md) → verify gate
 #
 # All tiers converge at the `signoff` HITL — the classifier decides review
 # *depth*; the human authorizes the *action* (no path mutates a PR without a
@@ -81,9 +83,9 @@ steps:
     type: llm
     allowed-tools: [read, grep, bash, write]
     routes:
-      skip:  {to: signoff,             label: "Trivial"}
-      quick: {to: review_quick,        label: "Quick review"}
-      full:  {to: review_correctness,  label: "Full review"}
+      skip:  {to: signoff,        label: "Trivial"}
+      quick: {to: review_quick,   label: "Quick review"}
+      full:  {to: prep_diff,      label: "Full review"}
     prompt: |
       Size the change and route. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (if diff_spec is empty, read the files at `${{ outputs.resolve.paths }}`). Focus: ${{ outputs.resolve.focus }}.
 
@@ -113,14 +115,30 @@ steps:
 
       Emit only `WROTE`.
 
-  # ── full tier: three focused lens passes, each emitting typed findings ──
-  # No thread: each lens gets the review context from `resolve`'s typed outputs
-  # and reviews on fresh context, handing `synthesize` a typed `findings[]`. A
-  # lens whose surface the diff doesn't touch emits an empty array.
-  review_correctness:
+  # ── full tier: a parallel fan-out of three lens BRANCHES, each a two-node
+  # sub-pipeline (scan → verify) running CONCURRENTLY (one run, one log,
+  # per-sub-node durable). `prep_diff` materialises the diff ONCE so the
+  # read-only branches share it (they can't run `git diff` — branches are
+  # read-class, no bash); each `*_scan` emits raw typed findings; each
+  # `*_verify` re-checks every cited path:line against the actual code and DROPS
+  # what it can't confirm (hallucination filter); `synthesize` combines the
+  # three VERIFIED results. No thread — branches exchange data only via typed
+  # outputs (fail-closed), each on its own synthetic thread.
+  prep_diff:                           # materialise the diff once for the read-only lens branches
+    type: tool
+    run: "git diff ${{ outputs.resolve.diff_spec }} > review-diff.patch 2>/dev/null; wc -l review-diff.patch"
+    next: review_lenses
+
+  review_lenses:
+    type: parallel
+    branches: [correctness_scan, security_scan, performance_scan]
+    next: synthesize
+    concurrency: 3
+
+  correctness_scan:
     type: llm
-    allowed-tools: [read, grep, bash]
-    next: review_security
+    allowed-tools: [read, grep]
+    next: correctness_verify
     outputs:
       findings:
         type: array
@@ -133,33 +151,13 @@ steps:
             why:      { type: string }
             fix:      { type: string, optional: true }
     prompt: |
-      Review the change through the **correctness** lens ONLY. Get it with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty); read the cited files directly. Focus: ${{ outputs.resolve.focus }}. Look for: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
+      Read `review-diff.patch` (the change; if empty, read the files at `${{ outputs.resolve.paths }}`). Review it through the **correctness** lens ONLY; read the cited files directly to ground each claim. Focus: ${{ outputs.resolve.focus }}. Look for: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Cross-check call sites where it matters.
 
-      One finding per issue: `severity`, `location` (`path:line`), `claim` (one line), `why` (one sentence), `fix` (one sentence; omit if none). NO INVENTION — drop subjective findings with no evidence. Empty if clean.
+      One finding per issue: `severity`, `location` (`path:line`), `claim` (one line), `why` (one sentence), `fix` (omit if none). Be generous — the verify step prunes anything unsubstantiated. Empty if clean.
 
-  review_security:
+  correctness_verify:
     type: llm
-    allowed-tools: [read, grep, bash]
-    next: review_performance
-    outputs:
-      findings:
-        type: array
-        items:
-          type: object
-          fields:
-            severity: { type: choice, options: [critical, high, medium, low] }
-            location: { type: string }
-            claim:    { type: string }
-            why:      { type: string }
-            fix:      { type: string, optional: true }
-    prompt: |
-      Review the change through the **security** lens ONLY, and only where it touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
-
-      Same finding shape (`severity`, `location`, `claim`, `why`, `fix?`). NO INVENTION. Empty if no security surface or no issues.
-
-  review_performance:
-    type: llm
-    allowed-tools: [read, grep, bash]
+    allowed-tools: [read, grep]
     next: synthesize
     outputs:
       findings:
@@ -173,20 +171,106 @@ steps:
             why:      { type: string }
             fix:      { type: string, optional: true }
     prompt: |
-      Review the change through the **performance** lens ONLY, and only where it touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Get the change with `git diff ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}`). Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits.
+      You are the **verification** gate for the correctness lens. Raw findings:
 
-      Same finding shape. NO INVENTION. Empty if no perf surface or no issues.
+      ${{ outputs.correctness_scan.findings }}
 
-  synthesize:                          # aggregate the three typed lens results → write review.md
+      For EACH finding, open the cited `path:line` (read/grep) and confirm the claim against the ACTUAL code. **Drop** any whose `path:line` doesn't exist, whose claim the code contradicts, or that you cannot substantiate by reading the code — those are hallucinations. Keep only confirmed findings, re-calibrating severity to the evidence. Emit the filtered `findings` (empty if none survive).
+
+  security_scan:
+    type: llm
+    allowed-tools: [read, grep]
+    next: security_verify
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim:    { type: string }
+            why:      { type: string }
+            fix:      { type: string, optional: true }
+    prompt: |
+      Read `review-diff.patch` (the change; if empty, read `${{ outputs.resolve.paths }}`). Review it through the **security** lens ONLY, and only where it touches a trust boundary (auth / input parsing / crypto / secrets / external I/O). If it doesn't, emit an empty `findings` array. Look for: injection (SQL/shell/XSS/path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
+
+      Same finding shape. Be generous — verify prunes downstream. Empty if no security surface.
+
+  security_verify:
+    type: llm
+    allowed-tools: [read, grep]
+    next: synthesize
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim:    { type: string }
+            why:      { type: string }
+            fix:      { type: string, optional: true }
+    prompt: |
+      You are the **verification** gate for the security lens. Raw findings:
+
+      ${{ outputs.security_scan.findings }}
+
+      For EACH, open the cited `path:line` and confirm against the actual code + its surrounding sanitisation. **Drop** anything unverifiable, contradicted, or already mitigated nearby. Emit only confirmed findings (empty if none).
+
+  performance_scan:
+    type: llm
+    allowed-tools: [read, grep]
+    next: performance_verify
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim:    { type: string }
+            why:      { type: string }
+            fix:      { type: string, optional: true }
+    prompt: |
+      Read `review-diff.patch` (the change; if empty, read `${{ outputs.resolve.paths }}`). Review it through the **performance** lens ONLY, and only where it touches a hot path / data layer / loops / large payloads. If it doesn't, emit an empty `findings` array. Look for: complexity surprises (O(n^2) on a hot path), N+1, unbounded work, blocking I/O on hot paths, oversized payloads. Confidence proportional to evidence; no cold-path constant-factor nits.
+
+      Same finding shape. Be generous — verify prunes downstream. Empty if no perf surface.
+
+  performance_verify:
+    type: llm
+    allowed-tools: [read, grep]
+    next: synthesize
+    outputs:
+      findings:
+        type: array
+        items:
+          type: object
+          fields:
+            severity: { type: choice, options: [critical, high, medium, low] }
+            location: { type: string }
+            claim:    { type: string }
+            why:      { type: string }
+            fix:      { type: string, optional: true }
+    prompt: |
+      You are the **verification** gate for the performance lens. Raw findings:
+
+      ${{ outputs.performance_scan.findings }}
+
+      For EACH, open the cited `path:line` and confirm the cost claim against the actual code (is the path actually hot? is the bound actually unbounded?). **Drop** anything unverifiable or contradicted — cold-path nits and speculative claims are hallucinations here. Emit only confirmed findings (empty if none).
+
+  synthesize:                          # aggregate the three VERIFIED lens results → write review.md
     type: llm
     allowed-tools: [read, grep, write]
     next: verify
     prompt: |
-      Combine the three lens results into one ranked review and WRITE it to `review.md` (cwd-relative, `write` tool). The findings are typed arrays:
+      Combine the three verified lens results into one ranked review and WRITE it to `review.md` (cwd-relative, `write` tool). The findings are typed arrays of already-verified items:
 
-        correctness: ${{ outputs.review_correctness.findings }}
-        security:    ${{ outputs.review_security.findings }}
-        performance: ${{ outputs.review_performance.findings }}
+        correctness: ${{ outputs.correctness_verify.findings }}
+        security:    ${{ outputs.security_verify.findings }}
+        performance: ${{ outputs.performance_verify.findings }}
 
       Merge them: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set. The file's content, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` / `## Low`.
 
