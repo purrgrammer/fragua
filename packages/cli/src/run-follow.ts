@@ -16,6 +16,9 @@ import type { StoreClient } from "./store-client.ts";
 const POLL_MS = 200;
 const BATCH = 500;
 
+/** The HITL picker, injectable so tests can drive the gate without a TTY. */
+type RoutePicker = typeof pickRoute;
+
 const TERMINAL_TYPES = new Set<string>([
   "fact.run_completed",
   "fact.run_halted",
@@ -46,7 +49,7 @@ function followExitCode(ev: StoredEvent): number {
  * each new event, return the run's terminal exit code. A daemon must be running
  * for events to appear — with none the run sits queued and this waits (Ctrl-C
  * to stop), same as the old SSE follow. */
-export async function followRun(client: StoreClient, runId: string): Promise<number> {
+export async function followRun(client: StoreClient, runId: string, pick: RoutePicker = pickRoute): Promise<number> {
   let cursor = 0;
   for (;;) {
     const batch = client.readPlane.eventsSince(runId, cursor, BATCH);
@@ -57,7 +60,7 @@ export async function followRun(client: StoreClient, runId: string): Promise<num
         // Answer the gate inline (TTY) and keep following — the daemon folds
         // the human_input and the run resumes. Off a TTY, exit so scripts
         // don't block on a prompt.
-        if (await promptHumanGate(client, runId, ev)) continue;
+        if (await promptHumanGate(client, runId, ev, pick)) continue;
         // Unanswered (off a TTY / no choice): the run still needs a human —
         // exit `needsHuman`, not 0, so a script doesn't read it as success.
         return followExitCode(ev);
@@ -71,29 +74,77 @@ export async function followRun(client: StoreClient, runId: string): Promise<num
   }
 }
 
+/** Poll the event log from `sinceSeq` until the gate is answered elsewhere. The
+ * daemon's wake-pending sweep emits `fact.run_resumed` when an operator answers
+ * in the web UI. Resolves on that (or any later terminal fact), or returns once
+ * `signal` aborts (the inline picker won the race). */
+async function pollUntilResumed(
+  client: StoreClient,
+  runId: string,
+  sinceSeq: number,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    for (const ev of client.readPlane.eventsSince(runId, sinceSeq, BATCH)) {
+      if (ev.type === "fact.run_resumed" || (TERMINAL_TYPES.has(ev.type) && ev.type !== "fact.run_paused_human")) {
+        return;
+      }
+    }
+    await sleep(POLL_MS);
+  }
+}
+
 /** Render the HITL gate as an arrow-key select menu, write the chosen route via
  * the plane, and return true (keep following). Returns false — without writing —
  * off a TTY, on an empty gate, or on a cancel, so the caller exits and the
- * operator can answer later with `fragua runs respond`. */
-async function promptHumanGate(client: StoreClient, runId: string, ev: StoredEvent): Promise<boolean> {
+ * operator can answer later with `fragua runs respond`.
+ *
+ * Races the inline picker against a store poll: if the gate is answered in the
+ * web UI while the menu is open, the poll wins, the picker is aborted, and we
+ * keep following from the resumed event instead of blocking on stdin forever.
+ * The post-pick re-check stops a second `intent.human_input` when both land at once. */
+async function promptHumanGate(
+  client: StoreClient,
+  runId: string,
+  ev: StoredEvent,
+  pick: RoutePicker,
+): Promise<boolean> {
   const p = ev.payload as { text?: string; routes?: string[]; routeLabels?: Record<string, string> };
   const routes = p.routes ?? [];
   if (!process.stdin.isTTY || routes.length === 0) {
     console.log(chalk.yellow("run paused for human input — exiting (answer with `fragua runs respond`)."));
     return false;
   }
-  const route = await pickRoute(routes, p.routeLabels ?? {}, p.text ?? "Choose how to proceed");
-  if (route === undefined) {
+
+  const ctrl = new AbortController();
+  const picked = pick(routes, p.routeLabels ?? {}, p.text ?? "Choose how to proceed", ctrl.signal).then((route) => ({
+    kind: "picked" as const,
+    route,
+  }));
+  const externally = pollUntilResumed(client, runId, ev.seq, ctrl.signal).then(() => ({ kind: "external" as const }));
+  const outcome = await Promise.race([picked, externally]);
+  ctrl.abort();
+  await picked.catch(() => {}); // let the loser settle: cancels the menu, restores the TTY
+
+  if (outcome.kind === "external") {
+    console.log(chalk.dim("gate answered elsewhere — resuming."));
+    return true;
+  }
+  if (outcome.route === undefined) {
     console.log(chalk.yellow("no choice made — exiting; answer later with `fragua runs respond`."));
     return false;
   }
-  const built = client.plane.buildHuman({ route });
+  if (client.readPlane.eventsSince(runId, ev.seq, BATCH).some((e) => e.type === "fact.run_resumed")) {
+    console.log(chalk.dim("gate answered elsewhere — resuming."));
+    return true;
+  }
+  const built = client.plane.buildHuman({ route: outcome.route });
   if (!built.ok) {
     console.error(chalk.red(`respond: ${built.error}`));
     return false;
   }
   client.plane.commit(runId, built.intent);
-  console.log(chalk.dim(`→ ${p.routeLabels?.[route] ?? humanizeRoute(route)} (resuming)`));
+  console.log(chalk.dim(`→ ${p.routeLabels?.[outcome.route] ?? humanizeRoute(outcome.route)} (resuming)`));
   return true;
 }
 

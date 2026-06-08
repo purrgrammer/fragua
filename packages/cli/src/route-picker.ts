@@ -19,17 +19,28 @@ export function humanizeRoute(route: string): string {
  *  or `undefined` if the operator cancelled (Ctrl-C / Esc). `labels` are the
  *  workflow's `label=` overrides; a route absent from the map falls back to a
  *  humanized name. The selectable titles are human-readable; the returned value
- *  is the raw route the engine matches. */
+ *  is the raw route the engine matches.
+ *
+ *  When `signal` aborts we synthesize a Ctrl-C keypress so `prompts` runs its `abort`
+ *  close path, restoring raw mode. Dropping the promise would leave stdin raw. */
 export async function pickRoute(
   routes: string[],
   labels: Record<string, string>,
   message: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const { route } = await prompts({
-    type: "select",
-    name: "route",
-    message,
-    choices: routes.map((r) => ({ title: labels[r] ?? humanizeRoute(r), value: r })),
-  });
-  return typeof route === "string" ? route : undefined;
+  if (signal?.aborted) return undefined;
+  const cancel = () => process.stdin.emit("keypress", "", { ctrl: true, name: "c" });
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const { route } = await prompts({
+      type: "select",
+      name: "route",
+      message,
+      choices: routes.map((r) => ({ title: labels[r] ?? humanizeRoute(r), value: r })),
+    });
+    return typeof route === "string" ? route : undefined;
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
 }
