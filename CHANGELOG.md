@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-08
+
 ### Added
 
 - **Structured step outputs (`outputs:`) — experimental.** An `llm` step can
@@ -30,6 +32,17 @@ guarantee.
   may omit — fails closed; model it as a required field with a sentinel, or read
   the enclosing record/array whole). Bumps the workflow `ir_version` to 2
   (additive; older workflows up-convert on load).
+
+### Fixed
+
+- **`fragua explain` reports accurate snapshot and token totals.** The explain
+  view no longer miscounts per-step token usage or attaches the wrong snapshot
+  to a step — totals now reconcile with the underlying event log.
+- **`fragua run`/`runs tail` unfreezes when a HITL prompt is answered out of
+  band.** The follow stream races the interactive picker against store
+  resolution, so an answer submitted elsewhere (the Web UI, another client)
+  resolves the pending input and the tail resumes instead of hanging on the
+  local prompt.
 
 ## [0.5.0] — 2026-06-04
 
