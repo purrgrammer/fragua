@@ -3,14 +3,13 @@
 // reads the same everywhere. The icon carries TYPE identity, not run state, so
 // render it quiet (`text-sw-muted`) — never with a state accent.
 
-import { Bot, Circle, Flag, GitFork, type LucideIcon, Play, Split, Terminal, User } from "lucide-react";
+import { Bot, Circle, Flag, type LucideIcon, Play, Split, Terminal, User } from "lucide-react";
 
 const NODE_TYPE_ICONS: Record<string, LucideIcon> = {
   llm: Bot,
   tool: Terminal,
   human: User,
   parallel: Split,
-  conditional: GitFork,
   start: Play,
   exit: Flag,
 };

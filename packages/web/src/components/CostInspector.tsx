@@ -22,12 +22,12 @@
 //     premium. Both are shown as their own breakdown lines so the
 //     popover communicates exactly where the run's spend went.
 
-import { parseWorkflow } from "@fragua/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
 import { Fragment, useEffect, useMemo } from "react";
 import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
+import { fanoutTopology } from "../lib/fanout-topology.ts";
 import {
   formatTokensCompact,
   formatUsd,
@@ -87,54 +87,13 @@ export function CostInspector({ runId, totalEvents, isLive = false, workflowSour
     if (totalEvents !== undefined) void qc.invalidateQueries({ queryKey: stepsQuery.queryKey });
   }, [totalEvents]);
 
-  // nodeId → handler type, parsed once from the workflow YAML. Lets every cost
-  // row lead with its real type glyph (a tool node reads as a tool, not an llm).
-  const nodeTypes = useMemo<ReadonlyMap<string, string>>(() => {
-    const m = new Map<string, string>();
-    if (!workflowSource) return m;
-    try {
-      const graph = parseWorkflow(workflowSource);
-      for (const [id, node] of Object.entries(graph.nodes)) m.set(id, node.type);
-    } catch {
-      // Unparseable source → no types; rows fall back to the neutral icon.
-    }
-    return m;
-  }, [workflowSource]);
-
-  // Fan-out branch lineage: sub-node id → the branch (entry) its `scan → verify`
-  // sub-pipeline belongs to, + each branch's declared order. Lets the parallel
-  // cost group order a lens's steps together and rule a separator between
-  // branches. Computed by walking each branch entry's closure to the join.
-  const branchInfo = useMemo<{ branchOf: ReadonlyMap<string, string>; order: ReadonlyMap<string, number> }>(() => {
-    const branchOf = new Map<string, string>();
-    const order = new Map<string, number>();
-    if (!workflowSource) return { branchOf, order };
-    try {
-      const graph = parseWorkflow(workflowSource);
-      for (const node of Object.values(graph.nodes)) {
-        if (node.type !== "parallel" || !Array.isArray(node.attrs.branches)) continue;
-        const join = typeof node.attrs.join === "string" ? node.attrs.join : undefined;
-        node.attrs.branches.forEach((entry, i) => {
-          if (typeof entry !== "string") return;
-          order.set(entry, i);
-          const queue = [entry];
-          const seen = new Set<string>();
-          while (queue.length > 0) {
-            const x = queue.shift();
-            if (x === undefined || x === join || seen.has(x)) continue;
-            seen.add(x);
-            branchOf.set(x, entry);
-            for (const e of graph.edges) {
-              if (e.from === x && e.attrs.fanout !== true && e.to !== join && !seen.has(e.to)) queue.push(e.to);
-            }
-          }
-        });
-      }
-    } catch {
-      // Unparseable → no lineage; rows render flat (the prior behavior).
-    }
-    return { branchOf, order };
-  }, [workflowSource]);
+  // Parse the workflow ONCE for both the node-type glyphs (so a tool row reads
+  // as a tool, not an llm) and the fan-out branch lineage (sub-node → its
+  // `scan → verify` branch + each branch's order) that orders a lens's steps
+  // together and rules a separator between branches.
+  const topology = useMemo(() => fanoutTopology(workflowSource), [workflowSource]);
+  const nodeTypes = topology.nodeTypes;
+  const branchInfo = useMemo(() => ({ branchOf: topology.branchOf, order: topology.orderOf }), [topology]);
 
   if (isPending) {
     return (

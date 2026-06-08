@@ -53,6 +53,7 @@ import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { NodeState, RunMessageRow } from "@/lib/api";
+import { type FanoutTopology, fanoutTopology } from "@/lib/fanout-topology";
 import { type StreamingBlock, type StreamingMessage, type ToolStream, UNSCOPED_NODE } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
 
@@ -152,7 +153,7 @@ export function RunConversation({
   // Fan-out topology: branch nodeId → its `type: parallel` parent, plus
   // each branch's declared order. Drives collapsing concurrent branches
   // under one parent group instead of N interleaved sections.
-  const fanout = useMemo(() => parseFanout(workflowSource), [workflowSource]);
+  const fanout = useMemo(() => fanoutTopology(workflowSource), [workflowSource]);
 
   // Group contiguous rows by nodeId. A fresh section opens whenever
   // the nodeId changes from the previous row. `null` / missing nodeIds
@@ -523,59 +524,7 @@ function messageKey(row: RunMessageRow): string {
 
 // ─── Fan-out branch grouping ────────────────────────────────────────
 
-interface Fanout {
-  /** sub-node id → its `type: parallel` parent nodeId. Covers a branch's
-   * whole closure (entry + multi-node successors), not just the entry. */
-  parentOf: Map<string, string>;
-  /** sub-node id → the BRANCH it belongs to (the entry id of its
-   * `scan → verify → …` sub-pipeline). Lets a multi-node branch render as one
-   * collapsible mini-conversation rather than N sibling sections. */
-  branchOf: Map<string, string>;
-  /** branch-entry id → its declared index in the parent's `branches:`. */
-  orderOf: Map<string, number>;
-}
-
-/** Extract the `type: parallel` → branch topology from the workflow source.
- * For each parallel node, walk every branch entry's closure (its `next:` reach
- * up to — but excluding — the join) so a branch's scan + verify steps group
- * under one collapsible. Malformed source → no grouping (every node renders as
- * its own section, the prior behavior). */
-function parseFanout(source: string | undefined): Fanout {
-  const parentOf = new Map<string, string>();
-  const branchOf = new Map<string, string>();
-  const orderOf = new Map<string, number>();
-  if (!source) return { parentOf, branchOf, orderOf };
-  try {
-    const g = parseWorkflow(source);
-    for (const node of Object.values(g.nodes)) {
-      if (node.type !== "parallel") continue;
-      const branches = node.attrs.branches;
-      if (!Array.isArray(branches)) continue;
-      const join = typeof node.attrs.join === "string" ? node.attrs.join : undefined;
-      branches.forEach((entry, i) => {
-        if (typeof entry !== "string") return;
-        orderOf.set(entry, i);
-        // BFS the branch closure from the entry, following non-fanout edges and
-        // stopping at the join. Each closure node belongs to this branch.
-        const queue = [entry];
-        const seen = new Set<string>();
-        while (queue.length > 0) {
-          const x = queue.shift();
-          if (x === undefined || x === join || seen.has(x)) continue;
-          seen.add(x);
-          parentOf.set(x, node.id);
-          branchOf.set(x, entry);
-          for (const e of g.edges) {
-            if (e.from === x && e.attrs.fanout !== true && e.to !== join && !seen.has(e.to)) queue.push(e.to);
-          }
-        }
-      });
-    }
-  } catch {
-    // malformed source — fall back to no fan-out grouping
-  }
-  return { parentOf, branchOf, orderOf };
-}
+type Fanout = FanoutTopology;
 
 type RenderItem =
   | { kind: "node"; section: Section; index: number }
@@ -585,7 +534,7 @@ type RenderItem =
  * into one `parallel` render item. Non-branch sections pass through,
  * carrying their original `visibleSections` index so decision slotting
  * (keyed by that index) still aligns. */
-function buildRenderItems(visibleSections: Section[], parentOf: Map<string, string>): RenderItem[] {
+function buildRenderItems(visibleSections: Section[], parentOf: ReadonlyMap<string, string>): RenderItem[] {
   const items: RenderItem[] = [];
   let i = 0;
   while (i < visibleSections.length) {

@@ -2,7 +2,7 @@
 // in the Cost breakdown / graph never silently mis-labels a type. Unknown or
 // absent types fall back to a neutral dot rather than crashing.
 
-import { Bot, Circle, Flag, GitFork, Play, Split, Terminal, User } from "lucide-react";
+import { Bot, Circle, Flag, Play, Split, Terminal, User } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import { nodeTypeIcon } from "../../src/lib/node-icons.ts";
 
@@ -12,7 +12,6 @@ describe("nodeTypeIcon", () => {
     expect(nodeTypeIcon("tool")).toBe(Terminal);
     expect(nodeTypeIcon("human")).toBe(User);
     expect(nodeTypeIcon("parallel")).toBe(Split);
-    expect(nodeTypeIcon("conditional")).toBe(GitFork);
     expect(nodeTypeIcon("start")).toBe(Play);
     expect(nodeTypeIcon("exit")).toBe(Flag);
   });
