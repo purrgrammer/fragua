@@ -1,12 +1,21 @@
 ---
 title: Reactive fan-out frontier — implementation gameplan
 summary: "The shipped `runFanout` dispatches a superstep's whole frontier with one `Promise.all` and commits every branch completion together at a barrier — so a slow/hung/failed branch blocks the commit of its already-finished siblings (head-of-line blocking, confirmed in a live post-mortem: two finished verify branches sat uncommitted for ~15 min behind a runaway correctness_scan). Replace the batch with a `Promise.race` POOL that commits each branch as it settles and dispatches its successor immediately, so one bad branch can't dam the rest. This is the model fan-out-nodes.md already specifies; the MVP simplified it to a batch. The reactive frontier fixes head-of-line blocking but is NOT a liveness guarantee on its own — a genuinely hung unbounded branch still keeps the join unreachable, so this plan also closes the two gaps the post-mortem exposed: the fan-out watchdog skipping unbounded branches, and the abort-loop counter resetting on sibling success. Pick up in a fresh session; this doc is self-contained."
-status: plan
-maturity: ready-to-build
+status: shipped
+maturity: shipped
 last-reviewed: 2026-06-08
 ---
 
 # Reactive fan-out frontier — gameplan
+
+> **Status: SHIPPED** on `feat/parallel-fanout`. `runFanout` is now the
+> `Promise.race` pool (Step 1); the per-branch abort-loop (Step 2) and per-branch
+> timeout backstop + supervisor change (Step 3) landed with it. Live-validated by
+> a real multi-node review run, including repeated pause/resume mid-fan-out (the
+> frontier held only the unfinished sub-nodes across every cycle) and the
+> per-commit budget gate. Step 0 (the `executeNode` kernel extraction) and §7 (the
+> resume-after-cap-pause guard) remain open follow-ups. The realized design lives
+> in [`fan-out-nodes.md`](fan-out-nodes.md) § Execution + the executor.
 
 > Self-contained implementation plan. Branch: **`feat/parallel-fanout`** (the
 > fan-out MVP is landed + committed there). Design context: [`fan-out-nodes.md`](fan-out-nodes.md)
