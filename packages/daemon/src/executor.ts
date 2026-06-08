@@ -1531,7 +1531,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Emit the soft budget.warn / budget.stop observability the linear planner
       // emits via its trail, and mark the new tags pending so commitFanoutFact
       // folds them durably. Without this a fan-out 80% crossing — and a
-      // budget_policy="warn" ceiling breach — were silent.
+      // budget_policy="warn" ceiling breach — were silent. The durable
+      // __budget_warned mark is the once-per-run guarantee; the best-effort warn
+      // EVENT itself can re-fire once if an operator pause lands in the window
+      // before the tag folds — acceptable for a no-decision-logic telemetry event.
       if (budget.events.length > 0) {
         opts.store.appendObservabilityEvents(
           runId,

@@ -80,7 +80,7 @@ Most steps run one handler to completion before the next dispatches. The **one**
 
 ### 3.1.1 Parallel fan-out
 
-A `type: parallel` node forks into ≥2 **branch sub-pipelines** that execute concurrently and converge on a single **`wait_all` join**. A branch is a 1–2 node closure of deliberation-only `llm` steps (read-class — they share the run's worktree **read-only**); closures are disjoint; each sub-node has its own `nodeId`, so its outputs/artifacts scope cleanly and the join reads `${{ outputs.<branch-terminal>.findings }}` per branch.
+A `type: parallel` node forks into ≥2 **branch sub-pipelines** that execute concurrently and converge on a single **`wait_all` join**. A branch is a closure of deliberation-only `llm` steps (read-class — they share the run's worktree **read-only**) — typically a short pipeline like scan→verify, though any depth that reaches the join validates; closures are disjoint; each sub-node has its own `nodeId`, so its outputs/artifacts scope cleanly and the join reads `${{ outputs.<branch-terminal>.findings }}` per branch.
 
 This is a **topology** change, not a second scheduler — three properties make it legitimate, and each is an invariant with a written reason, not a placeholder:
 
