@@ -13,6 +13,7 @@ durable, portable execution for engineering workflows. drive LLM agents with a d
 - survives crashes, provider outages, and transient errors
 - provider-agnostic
 - models à la carte per step
+- concurrent fan-out with deterministic replay
 - cost-control
 - superb observability
 - a run is a portable artifact
@@ -25,6 +26,7 @@ built on one bet: the **control plane** is worth making deterministic even when 
 - **survives crashes & provider hiccups.** intent/fact split with OCC; transient errors (408/429/5xx/network) auto-retry; recoverable failures (budget caps, loop/goal ceilings, watchdog timeouts, engine incompatibility) pause instead of dying. raise the cap, resume. daemon restart picks up mid-flight runs.
 - **same workflow, any provider.** per-step `provider` / `model` overrides, pre-flighted against pi-ai's registry — bad combos fail in milliseconds, not after 30 retries.
 - **operator surface, not an afterthought.** live web UI on `:6767`: per-run + global SSE, run-scoped file tree + git-aware diff, transcripts, cost panels, steering + HITL — all driven by intents on the event log.
+- **fan out when it pays.** a `parallel` step forks read-only branches that run concurrently and converge on a single `wait_all` join; typed `outputs:` carry each branch's result forward. one shared abort, one interleaved log, replay by fold — a topology change, not a second scheduler.
 - **schedules built in.** fire on a fixed interval (`30m`…`7d`) with skip / queue / concurrent overlap, late-fire catch-up, per-schedule run history.
 - **a run is a portable artifact.** the event log, messages, canonical workflow IR and a git-bundle of the worktree snapshots together are self-contained and portable. share them, replay them, debug them on another machine.
 

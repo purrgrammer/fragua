@@ -71,11 +71,24 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 | `llm` | LLM call (the implicit default when `type:` is omitted) |
 | `human` | operator-gated routing |
 | `tool` | graph-level shell step (`run:`) |
+| `parallel` | fork-all into ≥2 concurrent branch sub-pipelines, joined by `wait_all` (§3.1.1) |
 | `exit` | reserved graceful-halt sink |
 
 `start` is synthesized by the parser (the entry node pointing at the first declared step) and is never authored; `exit` is the reserved sink. Declaring a step named `start` or `exit` with a mismatched type is rejected (`E029` / `E028`).
 
-fragua has no concurrent-dispatch primitive: every step runs one handler to completion before the next is dispatched. Composition across concurrent work happens at the workflow level via separate runs sharing artifacts.
+Most steps run one handler to completion before the next dispatches. The **one** concurrent-dispatch primitive is the `parallel` node (§3.1.1); everything else is sequential.
+
+### 3.1.1 Parallel fan-out
+
+A `type: parallel` node forks into ≥2 **branch sub-pipelines** that execute concurrently and converge on a single **`wait_all` join**. A branch is a 1–2 node closure of deliberation-only `llm` steps (read-class — they share the run's worktree **read-only**); closures are disjoint; each sub-node has its own `nodeId`, so its outputs/artifacts scope cleanly and the join reads `${{ outputs.<branch-terminal>.findings }}` per branch.
+
+This is a **topology** change, not a second scheduler — three properties make it legitimate, and each is an invariant with a written reason, not a placeholder:
+
+- **`wait_all` is the only join.** The region stays single-entry/single-exit, so dominance — and with it budget / goal-gate scoping — remains well-defined. `wait_any` / `race` / `quorum` joins would break SESE and are deliberately **excluded by design**, not yet-unbuilt.
+- **Pause is run-global; there is no per-branch pause.** An operator pause / cancel, or a budget breach, trips the run's one shared `AbortSignal`, which aborts *every* in-flight branch; resume re-enters each branch from its own logged checkpoint. The scalar `run_state.status` stays the single lifecycle truth (claim / sweep / SSE read it); the per-branch **active set is diagnostic — derived from the fact log, never an authority** (no partial-pause status exists). That seam is not built and won't be until there is demand.
+- **The commit unit is the branch-step, not a superstep.** Each branch commits its own `fact.node_completed` through the single daemon writer the instant it settles — one interleaved log under one OCC lane. This is *not* bulk-synchronous (no per-superstep barrier): a fast branch never waits on a slow sibling to commit, and crash recovery re-derives each branch's cursor from the log alone (no barrier needed — the active-set fold *is* the per-branch cursor).
+
+The branch set is **static per run** — materialised at parse time, never grown during dispatch. A dynamic ("fork N at runtime") variant, if ever added, would still materialise the full branch set *before* executing the region (plan-time), never stream branches mid-dispatch — static-per-run is what keeps the possibility space, and the log, a pure fold. `parallel` is composition *within* a run; composition across *runs* still happens via separate runs sharing artifacts. Well-formedness is enforced by validator codes E036–E044 (ARCH §6.2). See [`docs/proposals/fan-out-nodes.md`](proposals/fan-out-nodes.md) for the execution model.
 
 Loops are **backward edges** bounded by `max-retries` on the target node — there is no `loop` primitive. A step that should re-run on failure routes back to itself or to an upstream step via `on: {fail: <step>}`, and its `max-retries` attribute caps how many times the retry counter can bump before the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise the cap via `intent.max_retries_adjusted`). The `retry: <step>` shorthand collapses the goal-gate-and-retarget idiom into one line.
 
@@ -232,7 +245,7 @@ Tool nodes (`type: tool`, §3.1) are side-effect-only: exit 0 → `outcome=succe
 | `max_tokens` | node | Same for tokens. |
 | `budget_policy` | graph | `"pause"` (default) → `fact.run_paused{reason:"budget"}`; `"stop"` → `fact.run_halted{reason:"budget"}`; `"warn"` → emit `budget.warn` / `budget.stop` events without pausing/halting. |
 
-Soft `budget.warn` fires once per run at 80% of the ceiling. The ceiling check runs at every turn boundary; on `pause`, the operator raises the cap via `intent.budget_adjusted` and pairs it with `intent.resume`.
+Soft `budget.warn` fires once per run at 80% of the ceiling. The ceiling check runs at every turn boundary; on `pause`, the operator raises the cap via `intent.budget_adjusted` and pairs it with `intent.resume`. On a `parallel` node, `max_cost_usd` / `max_tokens` bound the **whole branch closure** — the sum of every sub-node's spend — since branch costs commit under sub-node ids, not the parent; the same warn / stop / pause policy applies.
 
 ### 3.10 Schedules
 
@@ -270,8 +283,9 @@ Daemon-emitted facts on a schedule fire:
 | **I8** | Raw tool output addressed by sha256 in `blobs`; artifacts are named refs scoped by `(run, node, iteration, key)`. |
 | **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`). |
 | **I10** | Seq assignment is O(1) via per-run counter; never scanned. |
+| **I11** | A `parallel` region is single-entry/single-exit: `wait_all` is its only join, pause is run-global (one shared `AbortSignal` aborts every branch), and the per-branch active set is a log-derived **diagnostic** — the scalar `run_state.status` stays the sole lifecycle authority. Branches commit through the one daemon writer (the commit unit is the branch-step, not a synchronised superstep). |
 
-Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core/test/handler/discipline.test.ts`) and a 24-entry property-test matrix ([`ARCHITECTURE.md`](./ARCHITECTURE.md) §10).
+Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core/test/handler/discipline.test.ts`) and the property-test matrix ([`ARCHITECTURE.md`](./ARCHITECTURE.md) §10).
 
 ---
 
@@ -281,7 +295,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 
 - **Multi-machine deployment.** Everything assumes one machine, one SQLite file. The `IEventStore` interface is synchronous (matching `bun:sqlite`); a Postgres backing would require async-ifying the interface and every callsite.
 - **Blob encryption.** Single-user local tool; DB read = full read anyway.
-- **Auto-migration of contract drift.** Runs pin an **event-contract version** (`EVENT_CONTRACT_VERSION`) at enqueue — DISTINCT from the DB-migration counter (`CURRENT_SCHEMA_VERSION`): it bumps only when `FactEvent`/`IntentEvent` shapes or reducer fold-semantics change, so projection-only migrations don't trip the resume gate. A mismatch **pauses** the run (recoverable — `fact.run_paused{reason:"engine_incompatible", pinnedVersion, supportedMin, supportedMax}`) rather than auto-upgrading. The payload's window tells the two arms apart: `pinnedVersion > supportedMax` (too new — a downgraded daemon / newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Neither is terminal. At the 0.1.0 baseline `MIN_COMPATIBLE_CONTRACT_VERSION = EVENT_CONTRACT_VERSION = 1`, so the gate is latent. A contract-surface hash test + a `reducers.ts` touch-gate force a conscious bump-or-resnapshot on any fold-contract change; capability-gated auto-wake for the too-new arm is still deferred.
+- **Auto-migration of contract drift.** Runs pin an **event-contract version** (`EVENT_CONTRACT_VERSION`) at enqueue — DISTINCT from the DB-migration counter (`CURRENT_SCHEMA_VERSION`): it bumps only when `FactEvent`/`IntentEvent` shapes or reducer fold-semantics change, so projection-only migrations don't trip the resume gate. A mismatch **pauses** the run (recoverable — `fact.run_paused{reason:"engine_incompatible", pinnedVersion, supportedMin, supportedMax}`) rather than auto-upgrading. The payload's window tells the two arms apart: `pinnedVersion > supportedMax` (too new — a downgraded daemon / newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Neither is terminal. Parallel fan-out drove the first real bump: `EVENT_CONTRACT_VERSION = 2` (the new `fact.fanout_started` / `fact.fanout_joined` plus the active-set reducer fold), with `MIN_COMPATIBLE_CONTRACT_VERSION = 1` — so the gate is now live but backward-compatible: a current daemon folds every pin in `[1, 2]` (pre-fan-out v1 runs replay unchanged) and only an older v1 daemon meeting a v2 pin parks (too-new). A contract-surface hash test + a `reducers.ts` touch-gate force a conscious bump-or-resnapshot on any fold-contract change; capability-gated auto-wake for the too-new arm is still deferred.
 - **Schema downgrade (DB-structure axis).** The DB-migration counter (`CURRENT_SCHEMA_VERSION`) walks forward automatically under the daemon lock and refuses to open a store newer than the binary. **Downgrade is supported but never automatic:** each `SCHEMA_MIGRATIONS` step carries an optional `down` inverse, and `fragua db migrate --to <lower>` walks them — backed up first, refusing an irreversible step, a data-losing step (without `--allow-data-loss`), or a live daemon. It is run by the *newer* binary that defines the `down` steps. This is the schema axis only, orthogonal to the contract-drift gate above: it does **not** make a newer-contract run resumable on an older daemon. See `docs/proposals/reversible-migrations.md`.
 - **Workflow hot-reload.** `workflow_sha` is pinned at enqueue time.
 
@@ -292,7 +306,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **Interviewer interface** (attractor §6). Replaced by `human` nodes (`type: human`) plus the `intent.human_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Fragua handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
-- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). fragua has no fan-out / fan-in graph primitive, and no concurrent dispatch of any kind — steps run one at a time. Concurrent work is composed at the workflow level via separate runs sharing artifacts.
+- **Non-`wait_all` joins, cross-run fan-in, and dynamic forks** (attractor §4.8 / §4.9). The intra-run `parallel` fork-all → `wait_all` primitive ships (§3.1.1), but `wait_any` / `race` / `quorum` joins are excluded **by design** — they break the single-entry/single-exit invariant that keeps dominance (and thus budget / goal-gate scoping) well-defined. Fan-*in* across runs is likewise out of scope: composition across runs stays artifact-sharing, not a graph join. And a runtime-sized fork is out: a branch set is materialised at parse time, never streamed during dispatch.
 
 **Surfaced as warnings, not errors:**
 
