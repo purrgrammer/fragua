@@ -297,7 +297,11 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
         // they never emit node_started/dispatch_started (that would unpin the
         // run pointer from the parallel node), so mark each branch running so
         // the graph glows it. Its own node_completed later flips it to done.
-        const branches = (ev.payload as { branches?: string[] }).branches ?? [];
+        // Null-safe read: a corrupted store row with `payload === null` would
+        // throw on property access before `?? []` could fire.
+        const raw = ev.payload as Record<string, unknown> | null | undefined;
+        const rawBranches = raw?.["branches"];
+        const branches = Array.isArray(rawBranches) ? (rawBranches as string[]) : [];
         for (const b of branches) bump(b, 0, "running", ev.seq);
         break;
       }

@@ -13,7 +13,7 @@
 // handler returns.
 
 import type * as handler from "@fragua/core/handler";
-import type { FactEvent, IEventStore } from "@fragua/store";
+import { ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
 
 type SideEffectRecorder = handler.SideEffectRecorder;
 
@@ -78,7 +78,29 @@ export class CommittingRecorder implements SideEffectRecorder {
   }
 
   private commit(fact: FactEvent): void {
-    const result = this.opts.store.appendFact(this.opts.runId, [fact], this.currentVersion);
-    this.currentVersion = result.newVersion;
+    // `currentVersion` is captured at dispatch and can go stale when this is a
+    // fan-out BRANCH recorder: concurrent sibling branches advance
+    // `run_state.version` through the executor's commit lane while this branch's
+    // handler runs. A side-effect commit with the stale token would throw
+    // ConcurrencyError and abort the branch. Re-read the live version and retry
+    // the APPEND (never re-runs the side effect) — the linearization invariant
+    // (concurrency.md). On the linear path no sibling contends, so the retry
+    // never trips.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = this.opts.store.appendFact(this.opts.runId, [fact], this.currentVersion);
+        this.currentVersion = result.newVersion;
+        return;
+      } catch (err) {
+        if (!(err instanceof ConcurrencyError) || attempt >= RECORDER_COMMIT_ATTEMPTS) throw err;
+        const live = this.opts.store.getState(this.opts.runId);
+        if (live == null) throw err;
+        this.currentVersion = live.version;
+      }
+    }
   }
 }
+
+/** Bounded re-reads of the live OCC token before a recorder commit gives up —
+ * intra-run sibling contention resolves in one or two tries (single committer). */
+const RECORDER_COMMIT_ATTEMPTS = 8;

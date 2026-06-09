@@ -1624,8 +1624,22 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // which would busy-spin a hard-failing branch. Climb its own streak so it
       // can't hide behind healthy siblings (the run-wide counter's masking bug).
       if (outcome.kind === "abort") {
-        if (!(await commitFanoutFact(outcome.facts, takeFold())).ok) {
+        const abortRes = await commitFanoutFact(outcome.facts, takeFold());
+        if (!abortRes.ok) {
           abortInflightPool();
+          // A genuine OCC exhaustion (not a status-stop) feeds the conflict
+          // controller so the warn → occ_exhausted escalation fires — the same
+          // split the seed/join arms make; the pool arms previously dropped the
+          // reason, leaving that escalation dead on the pool path.
+          if (abortRes.reason === "occ") {
+            const { halted } = await onOccConflict(
+              "fact.node_aborted",
+              outcome.nodeId,
+              branchAborts.get(outcome.nodeId) ?? 0,
+              state.version,
+            );
+            if (halted) return { kind: "terminal" };
+          }
           return { kind: "continue" };
         }
         branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
@@ -1657,8 +1671,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           payload: { nodeId: successor, iteration: nodeRetryCount(freshState.routing, successor), resumeOf: "fresh" },
         });
       }
-      if (!(await commitFanoutFact(branchFacts, { ...takeFold(), ...outcome.appendOpts })).ok) {
+      const successRes = await commitFanoutFact(branchFacts, { ...takeFold(), ...outcome.appendOpts });
+      if (!successRes.ok) {
         abortInflightPool();
+        // Same OCC-vs-status split as the abort arm: a true OCC exhaustion
+        // escalates through the conflict controller rather than silently bailing.
+        if (successRes.reason === "occ") {
+          const { halted } = await onOccConflict(
+            "fact.node_completed",
+            outcome.nodeId,
+            nodeRetryCount(freshState.routing, outcome.nodeId),
+            state.version,
+          );
+          if (halted) return { kind: "terminal" };
+        }
         return { kind: "continue" };
       }
       branchAborts.delete(outcome.nodeId);
