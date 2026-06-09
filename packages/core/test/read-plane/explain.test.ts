@@ -127,6 +127,20 @@ describe("read-plane explain", () => {
     expect(exp.steps[0]!.outcome).toBe("fail");
   });
 
+  test("parentNodeId passes through so a renderer can nest fan-out branches", () => {
+    // A parallel parent's branch sub-nodes carry parentNodeId (set by the steps
+    // projection from fact.fanout_started); a non-branch step has none. The
+    // explain projection must preserve the distinction so the CLI can mirror the
+    // Cost tab's parent → branches nesting.
+    const steps: StepSnapshot[] = [
+      { stepIdx: 0, startSeq: 1, nodeId: "begin", startedAt: new Date(1000).toISOString() },
+      { stepIdx: 1, startSeq: 2, nodeId: "a_scan", parentNodeId: "fan", startedAt: new Date(2000).toISOString() },
+      { stepIdx: 2, startSeq: 3, nodeId: "b_scan", parentNodeId: "fan", startedAt: new Date(2000).toISOString() },
+    ];
+    const exp = buildExplanation(baseDetail(), [], [], steps);
+    expect(exp.steps.map((s) => s.parentNodeId)).toEqual([undefined, "fan", "fan"]);
+  });
+
   test("diff summary sums committed snapshot stats vs base", () => {
     const snaps: SnapshotItem[] = [
       {

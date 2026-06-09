@@ -20,6 +20,11 @@ export interface ExplainStep {
   /** 0-based step index, matching `StepSnapshot.stepIdx`. */
   stepIdx: number;
   nodeId: string;
+  /** When this step is a `type: parallel` branch sub-node, the parent parallel
+   * node's id (from `fact.fanout_started`). Lets a renderer nest branches under
+   * their parent — mirroring the Cost tab — instead of listing them flat. Absent
+   * for non-branch steps. */
+  parentNodeId?: string;
   iteration?: { n: number; max: number };
   outcome: "success" | "fail" | "unknown";
   costUsd: number;
@@ -182,6 +187,7 @@ function buildSteps(events: StoredEvent[], steps: StepSnapshot[]): ExplainStep[]
     return {
       stepIdx: s.stepIdx,
       nodeId: s.nodeId,
+      ...(s.parentNodeId !== undefined ? { parentNodeId: s.parentNodeId } : {}),
       ...(s.iteration !== undefined ? { iteration: s.iteration } : {}),
       outcome,
       costUsd: s.cost?.cost_usd ?? 0,

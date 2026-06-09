@@ -403,17 +403,43 @@ function renderExplanation(e: RunExplanation): void {
   }
 
   // ── Steps ────────────────────────────────────────────────────────────────
+  // Mirror the Cost tab: `type: parallel` branch steps (tagged with a
+  // parentNodeId by the steps projection) nest under a parent header carrying
+  // the group's aggregate spend, indented beneath, instead of scattering as
+  // flat sibling rows.
   if (e.steps.length > 0) {
     console.log(`  steps:    ${e.steps.length}`);
-    for (const s of e.steps) {
+    const renderStep = (s: RunExplanation["steps"][number], indent: string): void => {
       const outcomeGlyph =
         s.outcome === "success" ? chalk.green("✓") : s.outcome === "fail" ? chalk.red("✗") : chalk.dim("?");
       const model = s.model ? chalk.dim(` ${s.model}`) : "";
       console.log(
-        `    ${chalk.dim(`#${s.stepIdx}`)} ${outcomeGlyph} ${chalk.cyan(s.nodeId)}${model}` +
+        `${indent}${chalk.dim(`#${s.stepIdx}`)} ${outcomeGlyph} ${chalk.cyan(s.nodeId)}${model}` +
           `  $${s.costUsd.toFixed(4)}` +
           (s.durationMs != null ? `  ${(s.durationMs / 1000).toFixed(1)}s` : ""),
       );
+    };
+    let i = 0;
+    while (i < e.steps.length) {
+      const parent = e.steps[i]!.parentNodeId;
+      if (parent === undefined) {
+        renderStep(e.steps[i]!, "    ");
+        i += 1;
+        continue;
+      }
+      // Collapse the consecutive run of branch steps sharing this parent into one
+      // group — a budget re-drive or a goal-gate re-entry scatters a branch's
+      // rows, but each contiguous run is one fan-out pass.
+      const group: RunExplanation["steps"][number][] = [];
+      while (i < e.steps.length && e.steps[i]!.parentNodeId === parent) {
+        group.push(e.steps[i]!);
+        i += 1;
+      }
+      const groupCost = group.reduce((sum, s) => sum + s.costUsd, 0);
+      console.log(
+        `    ${chalk.magenta("⑂")} ${chalk.cyan(parent)} ${chalk.dim("(parallel)")}  $${groupCost.toFixed(4)}`,
+      );
+      for (const s of group) renderStep(s, "      ");
     }
   }
 
