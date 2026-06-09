@@ -1079,4 +1079,108 @@ steps:
       { numRuns: pbtRuns(40) },
     );
   });
+
+  test("a downstream goal-gate re-enters the parallel node: clean second pass, cumulative cost, frontier re-seed", async () => {
+    // begin → fan(parallel a,b → synth) → synth → gate → exit
+    // `gate` (retry: fan) fails once, retargeting the parallel node, so the whole
+    // region runs a SECOND pass. We assert it re-runs cleanly: both branches fire
+    // twice, the frontier re-seeds from empty each pass (a replace, not append),
+    // per-node cost is CUMULATIVE across passes (the run budget — not a per-pass
+    // reset — governs a looped fan-out), and the log alone replays to the same
+    // terminal. The node-state projection collapses both passes at iteration 0
+    // (latest-seq wins) — by design; the per-pass spend is retained seq-ordered in
+    // the step/cost breakdown, not here.
+    const yaml = `name: reentry
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a, b], next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: gate }
+  gate:
+    type: llm
+    prompt: g
+    retry: fan
+    max-retries: 2
+    next: exit
+`;
+    const r = rig({ yaml });
+    const seen: Record<string, number> = {};
+    const c = counter(seen, "a", "b", "synth");
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const branch = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => {
+          c[id]?.();
+          return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 };
+        },
+      });
+    branch("a");
+    branch("b");
+    branch("synth");
+    let gateCalls = 0;
+    r.dispatcher.register(r.workflowSha, "gate", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => {
+        gateCalls++;
+        return {
+          kind: "transition",
+          outcomeStatus: gateCalls === 1 ? "fail" : "success",
+          tokens: 10,
+          costUsd: 0.01,
+        };
+      },
+    });
+
+    enqueue(r, "re1", "begin");
+    await drive(r, "re1", { maxTurns: 80 });
+
+    const state = r.store.getState("re1")!;
+    expect(state.status).toBe("completed");
+
+    // Two full passes: each branch + the join fired once per pass; the gate failed
+    // once then succeeded.
+    expect(seen).toEqual({ a: 2, b: 2, synth: 2 });
+    expect(gateCalls).toBe(2);
+
+    const events = r.store.getEvents("re1");
+    const types = events.map((e) => e.type);
+    // One fan-out region per pass — re-entry opens a fresh started/joined pair.
+    expect(types.filter((t) => t === "fact.fanout_started").length).toBe(2);
+    expect(types.filter((t) => t === "fact.fanout_joined").length).toBe(2);
+
+    // Each pass re-seeds the frontier with the SAME branch set (replace, not
+    // append — no stale branch from the prior pass leaks in).
+    const seededBranches = events
+      .filter((e) => e.type === "fact.fanout_started")
+      .map((e) => (e.payload as { branches: string[] }).branches);
+    expect(seededBranches).toEqual([
+      ["a", "b"],
+      ["a", "b"],
+    ]);
+
+    // Per-node cost is CUMULATIVE across passes: two 0.01 dispatches each.
+    expect(state.metrics.nodeCosts["a"]?.costUsd).toBeCloseTo(0.02, 6);
+    expect(state.metrics.nodeCosts["b"]?.costUsd).toBeCloseTo(0.02, 6);
+
+    // Frontier drained; the log alone replays to the same terminal pointer.
+    expect(readActiveNodes(state.routing)).toBeNull();
+    const replayed = deriveRunState("re1", events);
+    expect(replayed.status).toBe("completed");
+    expect(replayed.currentNode).toBe(state.currentNode);
+    expect(readActiveNodes(replayed.routing)).toBeNull();
+
+    r.store.close();
+  });
 });
