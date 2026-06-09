@@ -1502,8 +1502,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // tighter than a once-per-superstep barrier. Reuses the just-committed
     // projection (`lastFanoutState`, set by every commitFanoutFact in this pool)
     // rather than re-reading. Returns the disposition fact, or undefined.
-    const fanoutBudgetDisposition = (): FactEvent | undefined => {
-      const folded = lastFanoutState ?? opts.store.getState(runId) ?? state;
+    const fanoutBudgetDisposition = (gate: { fresh?: boolean } = {}): FactEvent | undefined => {
+      // Hot per-commit gate reuses the just-committed projection; the cold once-per-fan-out
+      // barrier forces a fresh read so its budget check never trusts a possibly-stale snapshot.
+      const folded = (gate.fresh ? opts.store.getState(runId) : lastFanoutState) ?? opts.store.getState(runId) ?? state;
       const overrides = readBudgetOverrides(folded.routing);
       let nodeCumulativeCostUsd = 0;
       let nodeCumulativeTokens = 0;
@@ -1601,6 +1603,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       for (const h of opts.registry.liveHandlers(runId)) h.controller.abort(new FanoutBailError(runId));
     };
 
+    // After an early bail that returns `continue` (OCC exhaustion / status-stop),
+    // wait for the just-aborted handlers to tear down — bounded by `leakGrace` so a
+    // genuinely-leaked handler can't dam the turn. Without this the next turn re-reads
+    // the still-active branches (their node_completed/node_aborted never committed) and
+    // re-dispatches them WHILE the orphaned handlers are still settling — a window of two
+    // billable handlers + two recorder commit streams under the same (nodeId, iteration).
+    const drainInflightPool = async (): Promise<void> => {
+      if (pool.size === 0) return;
+      await Promise.race([Promise.allSettled([...pool.values()]), sleep(leakGrace, opts.shutdownSignal)]);
+    };
+
     while (pool.size > 0) {
       const { nodeId, outcome } = await Promise.race(pool.values());
       pool.delete(nodeId);
@@ -1640,6 +1653,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             );
             if (halted) return { kind: "terminal" };
           }
+          await drainInflightPool();
           return { kind: "continue" };
         }
         branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
@@ -1685,6 +1699,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           );
           if (halted) return { kind: "terminal" };
         }
+        await drainInflightPool();
         return { kind: "continue" };
       }
       branchAborts.delete(outcome.nodeId);
@@ -1720,7 +1735,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // All branches reached the join. Barrier budget re-check (belt + suspenders
     // — the per-commit gate already caught in-region breaches), then let the
     // next turn advance current_node to the join (active is now empty).
-    const barrier = fanoutBudgetDisposition();
+    const barrier = fanoutBudgetDisposition({ fresh: true });
     if (barrier !== undefined) {
       await commitFanoutFact([barrier], {});
       return { kind: "terminal" };
