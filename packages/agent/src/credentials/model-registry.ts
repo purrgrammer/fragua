@@ -30,8 +30,8 @@
 // - Extension registration (custom streamSimple + OAuth provider) is
 //   preserved since summariser / custom-provider flows may need it.
 
-import type { IProviderConfigStore } from "@fragua/store";
 import {
+  type AnthropicMessagesCompat,
   type Api,
   type AssistantMessageEventStream,
   type Context,
@@ -45,8 +45,9 @@ import {
   registerApiProvider,
   resetApiProviders,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
-import { registerOAuthProvider, resetOAuthProviders } from "@mariozechner/pi-ai/oauth";
+} from "@earendil-works/pi-ai";
+import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import type { IProviderConfigStore } from "@fragua/store";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { AuthStorage } from "./auth-storage.ts";
@@ -99,28 +100,34 @@ const VercelGatewayRoutingSchema = Type.Object({
   order: Type.Optional(Type.Array(Type.String())),
 });
 
-const ReasoningEffortMapSchema = Type.Object({
-  minimal: Type.Optional(Type.String()),
-  low: Type.Optional(Type.String()),
-  medium: Type.Optional(Type.String()),
-  high: Type.Optional(Type.String()),
-  xhigh: Type.Optional(Type.String()),
+// Per-model thinking-level support map: maps pi thinking levels to
+// provider-specific values; `null` marks a level as unsupported.
+const ThinkingLevelMapValueSchema = Type.Union([Type.String(), Type.Null()]);
+const ThinkingLevelMapSchema = Type.Object({
+  off: Type.Optional(ThinkingLevelMapValueSchema),
+  minimal: Type.Optional(ThinkingLevelMapValueSchema),
+  low: Type.Optional(ThinkingLevelMapValueSchema),
+  medium: Type.Optional(ThinkingLevelMapValueSchema),
+  high: Type.Optional(ThinkingLevelMapValueSchema),
+  xhigh: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({
   supportsStore: Type.Optional(Type.Boolean()),
   supportsDeveloperRole: Type.Optional(Type.Boolean()),
   supportsReasoningEffort: Type.Optional(Type.Boolean()),
-  reasoningEffortMap: Type.Optional(ReasoningEffortMapSchema),
   supportsUsageInStreaming: Type.Optional(Type.Boolean()),
   maxTokensField: Type.Optional(Type.Union([Type.Literal("max_completion_tokens"), Type.Literal("max_tokens")])),
   requiresToolResultName: Type.Optional(Type.Boolean()),
   requiresAssistantAfterToolResult: Type.Optional(Type.Boolean()),
   requiresThinkingAsText: Type.Optional(Type.Boolean()),
+  requiresReasoningContentOnAssistantMessages: Type.Optional(Type.Boolean()),
   thinkingFormat: Type.Optional(
     Type.Union([
       Type.Literal("openai"),
       Type.Literal("openrouter"),
+      Type.Literal("together"),
+      Type.Literal("deepseek"),
       Type.Literal("zai"),
       Type.Literal("qwen"),
       Type.Literal("qwen-chat-template"),
@@ -130,11 +137,28 @@ const OpenAICompletionsCompatSchema = Type.Object({
   openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
   vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
   supportsStrictMode: Type.Optional(Type.Boolean()),
+  supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
 
-const OpenAIResponsesCompatSchema = Type.Object({});
+const OpenAIResponsesCompatSchema = Type.Object({
+  supportsDeveloperRole: Type.Optional(Type.Boolean()),
+  sendSessionIdHeader: Type.Optional(Type.Boolean()),
+  supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+});
 
-const OpenAICompatSchema = Type.Union([OpenAICompletionsCompatSchema, OpenAIResponsesCompatSchema]);
+const AnthropicMessagesCompatSchema = Type.Object({
+  supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
+  supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+  sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
+  supportsCacheControlOnTools: Type.Optional(Type.Boolean()),
+  forceAdaptiveThinking: Type.Optional(Type.Boolean()),
+});
+
+const ProviderCompatSchema = Type.Union([
+  OpenAICompletionsCompatSchema,
+  OpenAIResponsesCompatSchema,
+  AnthropicMessagesCompatSchema,
+]);
 
 const ModelDefinitionSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
@@ -142,6 +166,7 @@ const ModelDefinitionSchema = Type.Object({
   api: Type.Optional(Type.String({ minLength: 1 })),
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
   input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
   cost: Type.Optional(
     Type.Object({
@@ -154,12 +179,13 @@ const ModelDefinitionSchema = Type.Object({
   contextWindow: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-  compat: Type.Optional(OpenAICompatSchema),
+  compat: Type.Optional(ProviderCompatSchema),
 });
 
 const ModelOverrideSchema = Type.Object({
   name: Type.Optional(Type.String({ minLength: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
   input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
   cost: Type.Optional(
     Type.Object({
@@ -172,7 +198,7 @@ const ModelOverrideSchema = Type.Object({
   contextWindow: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-  compat: Type.Optional(OpenAICompatSchema),
+  compat: Type.Optional(ProviderCompatSchema),
 });
 
 type ModelOverride = Static<typeof ModelOverrideSchema>;
@@ -181,7 +207,7 @@ const ProviderConfigSchema = Type.Object({
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   api: Type.Optional(Type.String({ minLength: 1 })),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-  compat: Type.Optional(OpenAICompatSchema),
+  compat: Type.Optional(ProviderCompatSchema),
   authHeader: Type.Optional(Type.Boolean()),
   models: Type.Optional(Type.Array(ModelDefinitionSchema)),
   modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
@@ -232,9 +258,10 @@ function mergeCompat(
   overrideCompat: ModelOverride["compat"],
 ): Model<Api>["compat"] | undefined {
   if (!overrideCompat) return baseCompat;
-  const base = baseCompat as OpenAICompletionsCompat | OpenAIResponsesCompat | undefined;
-  const override = overrideCompat as OpenAICompletionsCompat | OpenAIResponsesCompat;
-  const merged = { ...base, ...override } as OpenAICompletionsCompat | OpenAIResponsesCompat;
+  type ProviderCompat = OpenAICompletionsCompat | OpenAIResponsesCompat | AnthropicMessagesCompat;
+  const base = baseCompat as ProviderCompat | undefined;
+  const override = overrideCompat as ProviderCompat;
+  const merged = { ...base, ...override } as ProviderCompat;
   const baseCompletions = base as OpenAICompletionsCompat | undefined;
   const overrideCompletions = override as OpenAICompletionsCompat;
   const mergedCompletions = merged as OpenAICompletionsCompat;
@@ -257,6 +284,9 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
   const result = { ...model };
   if (override.name !== undefined) result.name = override.name;
   if (override.reasoning !== undefined) result.reasoning = override.reasoning;
+  if (override.thinkingLevelMap !== undefined) {
+    result.thinkingLevelMap = { ...model.thinkingLevelMap, ...override.thinkingLevelMap };
+  }
   if (override.input !== undefined) result.input = override.input as ("text" | "image")[];
   if (override.contextWindow !== undefined) result.contextWindow = override.contextWindow;
   if (override.maxTokens !== undefined) result.maxTokens = override.maxTokens;
@@ -536,6 +566,7 @@ export class ModelRegistry {
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
         };
+        if (modelDef.thinkingLevelMap !== undefined) next.thinkingLevelMap = modelDef.thinkingLevelMap;
         if (compat !== undefined) next.compat = compat;
         models.push(next);
       }
@@ -695,6 +726,7 @@ export class ModelRegistry {
           contextWindow: modelDef.contextWindow,
           maxTokens: modelDef.maxTokens,
         };
+        if (modelDef.thinkingLevelMap !== undefined) next.thinkingLevelMap = modelDef.thinkingLevelMap;
         if (modelDef.compat !== undefined) next.compat = modelDef.compat;
         this.models.push(next);
       }
@@ -730,6 +762,7 @@ export interface ProviderConfigInput {
     api?: Api;
     baseUrl?: string;
     reasoning: boolean;
+    thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
     input: ("text" | "image")[];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
