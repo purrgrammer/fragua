@@ -22,6 +22,7 @@
 // assembly is credential-source-agnostic.
 
 import { homedir } from "node:os";
+import type { Model } from "@earendil-works/pi-ai";
 import {
   AuthStorage,
   defaultSummariserModel,
@@ -35,7 +36,6 @@ import * as handler from "@fragua/core/handler";
 import { autoDispatcherResolver, Dispatcher, type GraphLoader, makeGraphLoader } from "@fragua/daemon";
 import type { SqliteStore } from "@fragua/store";
 import { CORE_TOOLS, discoverSkills, ToolRegistry } from "@fragua/workspace";
-import type { Model } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import type { FraguaConfig, ResolvedTimeouts } from "./config.ts";
 

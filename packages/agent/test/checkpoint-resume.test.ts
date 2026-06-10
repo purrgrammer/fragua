@@ -15,12 +15,12 @@
 //      for 8 KB+ assistant turns.
 
 import { describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { LlmBackend, LlmInput, Node } from "@fragua/core";
 import { CURRENT_IR_VERSION, ok, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { PiLlmBackend } from "../src/backend.ts";
 import { makeLlmHandler } from "../src/handler-bridge.ts";
 

@@ -18,10 +18,10 @@
 //     the current batch (the `abort` tool sets it); forwarded onto
 //     pi-agent-core's `AgentToolResult.terminate`.
 
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ExecutionEnvironment, FraguaToolContext, Tool, ToolOutput } from "@fragua/workspace";
 import { PathEscapeError, truncate } from "@fragua/workspace";
-import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 
 /** Anthropic's tool-name regex is `^[a-zA-Z0-9_-]{1,128}$` — `:` is rejected.
  * We encode namespaces with `__` on the wire and reverse at event-bridge time

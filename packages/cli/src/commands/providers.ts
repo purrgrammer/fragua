@@ -14,9 +14,9 @@ export {
   providersRmModelCommand,
 } from "./providers-custom.ts";
 
+import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { AuthStorage, defaultModelPerProvider, getFraguaHome, ModelRegistry } from "@fragua/agent";
-import type { OAuthLoginCallbacks } from "@mariozechner/pi-ai";
-import { streamSimple } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import prompts from "prompts";
 import { openGlobalStore } from "./open-global-store.ts";
@@ -386,6 +386,18 @@ export async function providersLoginCommand(providerArg: string | undefined): Pr
       onAuth: (info) => {
         console.log(chalk.bold(`\nOpen this URL to authenticate:\n  ${info.url}\n`));
         if (info.instructions) console.log(chalk.dim(info.instructions));
+      },
+      onDeviceCode: (info) => {
+        console.log(chalk.bold(`\nOpen ${info.verificationUri} and enter code: ${info.userCode}\n`));
+      },
+      onSelect: async (p) => {
+        const res = await prompts({
+          type: "select",
+          name: "value",
+          message: p.message,
+          choices: p.options.map((o) => ({ title: o.label, value: o.id })),
+        });
+        return typeof res.value === "string" ? res.value : undefined;
       },
       onPrompt: async (p) => {
         const res = await prompts({

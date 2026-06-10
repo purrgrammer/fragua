@@ -17,7 +17,7 @@ Authoritative docs:
 
 ## Stack
 
-Bun ≥ 1.2 (Node ≥ 20.11 compat — `import.meta.dirname` in the web vitest config) · TypeScript strict (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) · `@sinclair/typebox` · `bun:sqlite` (WAL, STRICT, generated columns) · `hono` · `bun test` · `biome` · `@mariozechner/pi-agent-core` + `pi-ai` · `fast-check` · React 18 + Vite 5 + Tailwind 4 (CSS-first, `@theme inline`, no `tailwind.config.ts`) + react-router v7
+Bun ≥ 1.2 (Node ≥ 22.19 compat — pi-ai / pi-agent-core declare that floor in `engines`) · TypeScript strict (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) · `@sinclair/typebox` · `bun:sqlite` (WAL, STRICT, generated columns) · `hono` · `bun test` · `biome` · `@earendil-works/pi-agent-core` + `pi-ai` · `fast-check` · React 18 + Vite 5 + Tailwind 4 (CSS-first, `@theme inline`, no `tailwind.config.ts`) + react-router v7
 
 ## Commands
 

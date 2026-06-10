@@ -4,10 +4,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai";
 import type { EventType, NodeAttrs, OutputsDecl } from "@fragua/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
-import type { AssistantMessage, Context } from "@mariozechner/pi-ai";
-import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
 import { findEmitOutputCall, PiLlmBackend } from "../src/backend.ts";
 
 // ─────────────── findEmitOutputCall unit tests ───────────────

@@ -4,6 +4,7 @@
 // re-export the types here for legacy import paths.
 // See docs/SPEC.md §3.4.
 
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type {
   ContextValue,
   DirEntry,
@@ -14,7 +15,6 @@ import type {
 } from "@fragua/core";
 import type { HttpClient } from "@fragua/core/handler";
 import type { Skill } from "@fragua/types";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { TSchema } from "@sinclair/typebox";
 
 export type { DirEntry, ExecResult, ExecutionEnvironment };
