@@ -4,7 +4,7 @@
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { CostInspector } from "../../src/components/CostInspector.tsx";
-import type { ProviderDetail, ProviderModel, StepSnapshot } from "../../src/lib/api.ts";
+import type { ProviderDetail, ProviderModel, RunDetail, StepSnapshot } from "../../src/lib/api.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
@@ -17,15 +17,11 @@ function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
   };
 }
 
-function mount(runId: string, steps: StepSnapshot[], opts: { isLive?: boolean; workflowSource?: string } = {}) {
+function mount(runId: string, steps: StepSnapshot[], opts: { isLive?: boolean; fanout?: RunDetail["fanout"] } = {}) {
   const client = createTestQueryClient();
   client.setQueryData(["runs", "steps", runId], steps);
   return renderWithClient(
-    <CostInspector
-      runId={runId}
-      isLive={opts.isLive}
-      {...(opts.workflowSource ? { workflowSource: opts.workflowSource } : {})}
-    />,
+    <CostInspector runId={runId} isLive={opts.isLive} {...(opts.fanout ? { fanout: opts.fanout } : {})} />,
     { client },
   );
 }
@@ -334,20 +330,20 @@ describe("CostInspector", () => {
   });
 
   it("leads each row with its node-type glyph; the model badge shows only on llm steps", async () => {
-    // The workflow types `plan` as llm and `build` as tool, so the rows must
-    // read as different types (not both llm) and only the llm row carries a
-    // model badge.
-    const workflowSource = [
-      "name: t",
-      "steps:",
-      "  plan: { type: llm, prompt: x, next: build }",
-      "  build: { type: tool, run: echo hi, next: exit }",
-    ].join("\n");
+    // The served topology types `plan` as llm and `build` as tool, so the
+    // rows must read as different types (not both llm) and only the llm row
+    // carries a model badge.
+    const fanout: RunDetail["fanout"] = {
+      parentOf: {},
+      branchOf: {},
+      orderOf: {},
+      nodeTypes: { start: "start", plan: "llm", build: "tool", exit: "exit" },
+    };
     const steps = [
       makeStep({ stepIdx: 0, startSeq: 1, nodeId: "plan", model: "claude-opus-4-7", provider: "anthropic" }),
       makeStep({ stepIdx: 1, startSeq: 2, nodeId: "build" }),
     ];
-    const { container } = mount("r1", steps, { workflowSource });
+    const { container } = mount("r1", steps, { fanout });
     const q = within(container);
     await waitFor(() => {
       expect(q.getByTestId("cost-inspector")).toBeTruthy();

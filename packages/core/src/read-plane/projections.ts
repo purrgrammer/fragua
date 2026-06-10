@@ -7,7 +7,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
-import type { NodeState, RunDetail, RunSummary, SelectedEdge } from "./schemas.ts";
+import { fanoutBranchClosures } from "../engine/fanout.ts";
+import { parseWorkflow } from "../parser/yaml.ts";
+import type { Graph } from "../types/graph.ts";
+import type { NodeState, RunDetail, RunFanoutTopology, RunSummary, SelectedEdge } from "./schemas.ts";
 
 export type UiStatus = RunSummary["status"];
 
@@ -157,7 +160,11 @@ export function runStateToDetail(
     nodes: deriveNodeStates(events),
     selectedEdges: deriveSelectedEdges(events),
   };
-  if (workflowSource !== undefined) detail.workflowSource = workflowSource;
+  if (workflowSource !== undefined) {
+    detail.workflowSource = workflowSource;
+    const fanout = deriveFanoutTopology(workflowSource);
+    if (fanout !== undefined) detail.fanout = fanout;
+  }
 
   detail.projectId = state.projectId;
   detail.projectName = state.projectName;
@@ -216,6 +223,38 @@ export function runStateToDetail(
   if (decisions !== undefined) detail.hitlDecisions = decisions;
 
   return detail;
+}
+
+/** Fan-out topology for the run detail, from the stored source via the
+ * shared closure walk. Served for EVERY parseable workflow — `nodeTypes`
+ * feeds type glyphs and tool-row affordances on non-parallel runs too; the
+ * branch maps are simply empty then. `undefined` only when the source
+ * doesn't parse (defensive: the save-path mint validates, so a stored
+ * source parses). */
+function deriveFanoutTopology(workflowSource: string): RunFanoutTopology | undefined {
+  let graph: Graph;
+  try {
+    graph = parseWorkflow(workflowSource);
+  } catch {
+    return undefined;
+  }
+  const parentOf: Record<string, string> = {};
+  const branchOf: Record<string, string> = {};
+  const orderOf: Record<string, number> = {};
+  const nodeTypes: Record<string, string> = {};
+  for (const [id, node] of Object.entries(graph.nodes)) nodeTypes[id] = node.type;
+  for (const node of Object.values(graph.nodes)) {
+    if (node.type !== "parallel" || !Array.isArray(node.attrs.branches)) continue;
+    const join = typeof node.attrs.join === "string" ? node.attrs.join : undefined;
+    for (const bc of fanoutBranchClosures(graph, { branches: node.attrs.branches, join })) {
+      orderOf[bc.entry] = bc.index;
+      for (const x of bc.nodes) {
+        parentOf[x] = node.id;
+        branchOf[x] = bc.entry;
+      }
+    }
+  }
+  return { parentOf, branchOf, orderOf, nodeTypes };
 }
 
 function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: string; note?: string }> | undefined {

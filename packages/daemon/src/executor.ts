@@ -85,7 +85,8 @@ const DEFAULT_FANOUT_CONCURRENCY = 8;
  * self-terminates would otherwise dam the join forever (the live post-mortem's
  * runaway lens). The branch's own bound still wins when tighter (min via
  * AbortSignal.any). Override per-executor with `fanoutBranchTimeoutMs`. The
- * supervisor's leak watchdog budgets unbounded branches against the same value. */
+ * effective armed deadline rides each AbortRegistry entry, so the supervisor's
+ * leak watchdog budgets against exactly this value — never a re-derivation. */
 export const DEFAULT_FANOUT_BRANCH_TIMEOUT_MS = 20 * 60_000;
 
 /** Append attempts for a serialized fan-out commit before giving up — a benign

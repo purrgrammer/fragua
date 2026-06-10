@@ -39,6 +39,17 @@ describe("read-plane explain", () => {
     expect(exp.budgetWarnings).toEqual([]);
   });
 
+  test("the detail's served fan-out topology passes through to the explanation", () => {
+    const fanout = {
+      parentOf: { a: "fan", b: "fan" },
+      branchOf: { a: "a", b: "b" },
+      orderOf: { a: 0, b: 1 },
+      nodeTypes: { fan: "parallel", a: "llm", b: "llm" },
+    };
+    expect(buildExplanation(baseDetail({ fanout }), [], [], []).fanout).toEqual(fanout);
+    expect(buildExplanation(baseDetail(), [], [], []).fanout).toBeUndefined();
+  });
+
   test("traversed path mirrors edge.selected order", () => {
     const detail = baseDetail({
       selectedEdges: [

@@ -115,9 +115,10 @@ export interface NodeState {
 /**
  * `workflowSource` is the raw workflow captured on `run.started`; absent
  * when the run predates source capture. There is intentionally NO
- * `edges` field — topology lives in the workflow source and is parsed
- * client-side by `@fragua/core`'s `parseWorkflow` so the server isn't a
- * second parser.
+ * `edges` field — graph layout topology lives in the workflow source and
+ * is parsed client-side by `@fragua/core`'s `parseWorkflow`. Fan-out
+ * grouping is the exception: the server serves it as `fanout` records so
+ * the UI can't disagree with the executor's closure walk.
  */
 /** `(from, to, iteration)` triple for an edge the executor traversed — see
  *  server's `SelectedEdge` schema. Ordered log. Multiple entries for the
@@ -153,6 +154,16 @@ export interface RunDetail {
   nodes: NodeState[];
   selectedEdges: SelectedEdge[];
   workflowSource?: string;
+  /** Structural fan-out topology derived server-side (read-plane) from the
+   * workflow's `type: parallel` nodes. Present only when the workflow
+   * declares one. The web consumes THIS — never re-parses the YAML — so the
+   * grouping can't drift from the executor/validator closure walk. */
+  fanout?: {
+    parentOf: Record<string, string>;
+    branchOf: Record<string, string>;
+    orderOf: Record<string, number>;
+    nodeTypes: Record<string, string>;
+  };
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
@@ -1285,6 +1296,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     nodes?: unknown;
     selectedEdges?: unknown;
     workflowSource?: unknown;
+    fanout?: unknown;
     costUsd?: unknown;
     inputTokens?: unknown;
     outputTokens?: unknown;
@@ -1306,6 +1318,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     Array.isArray(o.nodes) &&
     Array.isArray(o.selectedEdges) &&
     (o.workflowSource === undefined || typeof o.workflowSource === "string") &&
+    (o.fanout === undefined || (typeof o.fanout === "object" && o.fanout !== null)) &&
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&

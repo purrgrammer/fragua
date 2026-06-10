@@ -274,7 +274,9 @@ Established here so the substrate is known-sufficient, not retrofitted.
   one thread.
 - **`dispatches` / `max_loops`:** each sub-node dispatch counts (a fan-out of a
   deep branch is real durable work); `max_loops` is the runaway guard, applied
-  run-wide. (Confirm at build.)
+  run-wide. At the ceiling the pool stops dispatching, captures a
+  `run_paused{max_loops}` disposition, and drains in-flight branches — so a
+  branch-closure cycle (W017) is bounded by the same guard as a linear loop.
 
 ## Build plan
 

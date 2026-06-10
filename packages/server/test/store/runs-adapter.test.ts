@@ -649,3 +649,46 @@ describe("runStateToDetail \u2014 worktreePath", () => {
     expect(detail.worktreePath).toBeUndefined();
   });
 });
+
+describe("runStateToDetail — served fan-out topology", () => {
+  const FANOUT_SRC = `name: topo
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a_scan, b_scan], next: synth }
+  a_scan: { type: llm, prompt: x, next: a_verify }
+  a_verify: { type: llm, prompt: x, next: synth }
+  b_scan: { type: llm, prompt: x, next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+
+  test("a parallel workflow serves parentOf/branchOf/orderOf/nodeTypes on the detail", () => {
+    const detail = runStateToDetail(makeState(), [], undefined, FANOUT_SRC);
+    expect(detail.fanout).toBeDefined();
+    expect(detail.fanout?.parentOf).toEqual({ a_scan: "fan", a_verify: "fan", b_scan: "fan" });
+    expect(detail.fanout?.branchOf).toEqual({ a_scan: "a_scan", a_verify: "a_scan", b_scan: "b_scan" });
+    expect(detail.fanout?.orderOf).toEqual({ a_scan: 0, b_scan: 1 });
+    expect(detail.fanout?.nodeTypes?.["fan"]).toBe("parallel");
+    expect(detail.fanout?.nodeTypes?.["a_scan"]).toBe("llm");
+  });
+
+  test("a workflow with no parallel node still serves nodeTypes (empty branch maps)", () => {
+    // Type glyphs and tool-row affordances read nodeTypes on EVERY run, not
+    // just fan-out ones — the field is unconditional for parseable sources.
+    const detail = runStateToDetail(
+      makeState(),
+      [],
+      undefined,
+      "name: t\nsteps:\n  w: {type: llm, prompt: x, next: exit}\n",
+    );
+    expect(detail.fanout?.nodeTypes?.["w"]).toBe("llm");
+    expect(detail.fanout?.parentOf).toEqual({});
+    expect(detail.fanout?.branchOf).toEqual({});
+    expect(detail.fanout?.orderOf).toEqual({});
+  });
+
+  test("no source → no topology (and no throw)", () => {
+    const detail = runStateToDetail(makeState(), [], undefined, undefined);
+    expect(detail.fanout).toBeUndefined();
+  });
+});

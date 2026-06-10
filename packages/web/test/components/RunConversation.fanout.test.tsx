@@ -9,25 +9,27 @@
 import { cleanup, fireEvent, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { RunConversation } from "../../src/components/RunConversation.tsx";
-import type { NodeState, RunMessageRow } from "../../src/lib/api.ts";
+import type { NodeState, RunDetail, RunMessageRow } from "../../src/lib/api.ts";
 import type { StreamingMessage } from "../../src/lib/useRunLive.ts";
 import { renderWithClient } from "../helpers/with-query-client.tsx";
 
-const WORKFLOW = `
-name: review
-steps:
-  scope:
-    type: llm
-    prompt: scope
-    next: review
-  review:
-    type: parallel
-    branches: [lens_a, lens_b]
-    next: synth
-  lens_a: {type: llm, prompt: a, denied-tools: [bash, write, edit]}
-  lens_b: {type: llm, prompt: b, denied-tools: [bash, write, edit]}
-  synth: {type: llm, prompt: c, next: exit}
-`;
+// Server-derived `RunDetail.fanout` records for a `scope → review(parallel:
+// [lens_a, lens_b]) → synth` workflow: each branch closure is just its entry,
+// parented under `review` in declared order.
+const FANOUT: NonNullable<RunDetail["fanout"]> = {
+  parentOf: { lens_a: "review", lens_b: "review" },
+  branchOf: { lens_a: "lens_a", lens_b: "lens_b" },
+  orderOf: { lens_a: 0, lens_b: 1 },
+  nodeTypes: {
+    start: "start",
+    scope: "llm",
+    review: "parallel",
+    lens_a: "llm",
+    lens_b: "llm",
+    synth: "llm",
+    exit: "exit",
+  },
+};
 
 function assistantRow(ordinal: number, nodeId: string, text: string): RunMessageRow {
   return {
@@ -56,7 +58,7 @@ describe("RunConversation — fan-out branch grouping", () => {
     ];
 
     const { container } = renderWithClient(
-      <RunConversation messages={messages} nodeStates={nodeStates} workflowSource={WORKFLOW} isLive />,
+      <RunConversation messages={messages} nodeStates={nodeStates} fanout={FANOUT} isLive />,
     );
     const q = within(container);
 
@@ -98,7 +100,7 @@ describe("RunConversation — fan-out branch grouping", () => {
         messages={messages}
         nodeStates={nodeStates}
         streamingByNode={streamingByNode}
-        workflowSource={WORKFLOW}
+        fanout={FANOUT}
         isLive
       />,
     );

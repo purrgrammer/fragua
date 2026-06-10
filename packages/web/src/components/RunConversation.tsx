@@ -51,7 +51,7 @@ import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { NodeState, RunMessageRow } from "@/lib/api";
+import type { NodeState, RunDetail, RunMessageRow } from "@/lib/api";
 import { type FanoutTopology, fanoutTopology } from "@/lib/fanout-topology";
 import { type StreamingBlock, type StreamingMessage, type ToolStream, UNSCOPED_NODE } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
@@ -104,14 +104,13 @@ export interface RunConversationProps {
    * answered. The currently-open gate (`hitl.nodeId`) is suppressed: its
    * card takes precedence until the answer lands. */
   hitlDecisions?: Record<string, { route: string; note?: string }> | null;
-  /** Workflow YAML, used to identify tool-type nodes so we can render an
-   * empty Terminal placeholder while a tool node is running but hasn't
-   * emitted any `tool.output_chunk` yet. Without this, a tool node that
-   * sits silently for minutes (waiting on HTTP / a subprocess) shows as
-   * an empty conversation — no persisted row, no streaming buffer, no
-   * live stream. Passing the source means we can synthesize a "running"
-   * Terminal so the operator can see the run is making progress. */
-  workflowSource?: string;
+  /** Server-derived fan-out topology records (`RunDetail.fanout`). Drives
+   * branch grouping under each `type: parallel` parent, and identifies
+   * tool-type nodes so we can render an empty Terminal placeholder while
+   * a tool node is running but hasn't emitted any `tool.output_chunk`
+   * yet — without this, a tool node that sits silently for minutes shows
+   * as an empty conversation. */
+  fanout?: RunDetail["fanout"];
   className?: string;
 }
 
@@ -128,7 +127,7 @@ export function RunConversation({
   toolStreams,
   hitl = null,
   hitlDecisions = null,
-  workflowSource,
+  fanout: fanoutRecords,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -152,7 +151,7 @@ export function RunConversation({
   // Fan-out topology: branch nodeId → its `type: parallel` parent, plus
   // each branch's declared order. Drives collapsing concurrent branches
   // under one parent group instead of N interleaved sections.
-  const fanout = useMemo(() => fanoutTopology(workflowSource), [workflowSource]);
+  const fanout = useMemo(() => fanoutTopology(fanoutRecords), [fanoutRecords]);
 
   // Group contiguous rows by nodeId. A fresh section opens whenever
   // the nodeId changes from the previous row. `null` / missing nodeIds

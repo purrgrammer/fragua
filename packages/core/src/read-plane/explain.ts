@@ -88,6 +88,10 @@ export interface RunExplanation {
     billedTokens: number;
     durationMs?: number;
   };
+  /** Fan-out topology served on the run detail (read-plane derived) —
+   * consumers order branch rows by declared `branches:` order instead of
+   * settle order, the same structural answer the web grouping uses. */
+  fanout?: RunDetail["fanout"];
 }
 
 // ── Pure builder ──────────────────────────────────────────────────────────
@@ -160,6 +164,7 @@ export function buildExplanation(
       billedTokens: totalBilledTokens,
       ...(totalDuration !== undefined ? { durationMs: totalDuration } : {}),
     },
+    ...(detail.fanout !== undefined ? { fanout: detail.fanout } : {}),
   };
 }
 

@@ -25,7 +25,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
 import { Fragment, useEffect, useMemo } from "react";
-import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
+import type { ProviderModel, RunDetail, StepSnapshot } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { fanoutTopology } from "../lib/fanout-topology.ts";
 import {
@@ -64,13 +64,20 @@ export interface CostInspectorProps {
    * `durationMs` instead of computing `now - startedAt` (which would
    * grow forever on a finished-but-orphan-step run). */
   isLive?: boolean;
-  /** Workflow YAML, used to map each step's nodeId → handler type so every
-   * row leads with the right type glyph (llm / tool / human / parallel / …).
-   * When absent, rows fall back to the neutral icon. */
-  workflowSource?: string;
+  /** Server-derived fan-out topology records (`RunDetail.fanout`). Maps each
+   * step's nodeId → handler type so every row leads with the right type
+   * glyph (llm / tool / human / parallel / …) and carries the branch lineage
+   * that groups a lens's steps. When absent, rows fall back to the neutral
+   * icon and flat ordering. */
+  fanout?: RunDetail["fanout"];
 }
 
-export function CostInspector({ runId, totalEvents, isLive = false, workflowSource }: CostInspectorProps): JSX.Element {
+export function CostInspector({
+  runId,
+  totalEvents,
+  isLive = false,
+  fanout: fanoutRecords,
+}: CostInspectorProps): JSX.Element {
   const qc = useQueryClient();
   const stepsQuery = queries.runs.steps(runId);
   const {
@@ -87,11 +94,11 @@ export function CostInspector({ runId, totalEvents, isLive = false, workflowSour
     if (totalEvents !== undefined) void qc.invalidateQueries({ queryKey: stepsQuery.queryKey });
   }, [totalEvents]);
 
-  // Parse the workflow ONCE for both the node-type glyphs (so a tool row reads
-  // as a tool, not an llm) and the fan-out branch lineage (sub-node → its
-  // `scan → verify` branch + each branch's order) that orders a lens's steps
-  // together and rules a separator between branches.
-  const topology = useMemo(() => fanoutTopology(workflowSource), [workflowSource]);
+  // Lift the served records into Maps ONCE for both the node-type glyphs (so
+  // a tool row reads as a tool, not an llm) and the fan-out branch lineage
+  // (sub-node → its `scan → verify` branch + each branch's order) that orders
+  // a lens's steps together and rules a separator between branches.
+  const topology = useMemo(() => fanoutTopology(fanoutRecords), [fanoutRecords]);
   const nodeTypes = topology.nodeTypes;
   const branchInfo = useMemo(() => ({ branchOf: topology.branchOf, order: topology.orderOf }), [topology]);
 

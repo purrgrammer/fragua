@@ -28,6 +28,16 @@ guarantee.
   what daemon autodetect picks when a workflow names a provider without a
   model.
 - Node.js 22.19.0 is the minimum supported runtime (pi's `engines` floor).
+- **Saving a workflow now validates it.** Uploading, `fragua run`, `fragua ci`,
+  and scheduled dispatch all reject a workflow carrying error-severity validator
+  diagnostics (E-codes) with the diagnostic list; warnings still pass. Workflows
+  that relied on implicit completion (a step with no declared successor, E032)
+  must declare `next: exit` (or `on:`/`routes:`). Already-saved workflows are
+  unaffected.
+- **Goal-gate re-entries are distinct executions.** Lifecycle facts carry an
+  optional `pass` (the cumulative retarget count) so two passes of the same step
+  no longer collapse onto one entry in the run-detail node states; the graph and
+  iteration history show each pass separately.
 
 ### Removed
 

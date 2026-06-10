@@ -435,6 +435,15 @@ function renderExplanation(e: RunExplanation): void {
         group.push(e.steps[i]!);
         i += 1;
       }
+      // Order rows by DECLARED branch order (the served topology), like the
+      // web's grouping — settle order is non-deterministic under the pool.
+      // Stable sort keeps a branch's own scan→verify rows in execution order.
+      const branchRank = (nodeId: string): number => {
+        const entry = e.fanout?.branchOf[nodeId];
+        const rank = entry !== undefined ? e.fanout?.orderOf[entry] : undefined;
+        return rank ?? Number.MAX_SAFE_INTEGER;
+      };
+      group.sort((a, b) => branchRank(a.nodeId) - branchRank(b.nodeId));
       const groupCost = group.reduce((sum, s) => sum + s.costUsd, 0);
       console.log(
         `    ${chalk.magenta("⑂")} ${chalk.cyan(parent)} ${chalk.dim("(parallel)")}  $${groupCost.toFixed(4)}`,

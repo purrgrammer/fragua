@@ -251,7 +251,7 @@ export function RunDetail(): JSX.Element {
                 isLive={isLive}
                 isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
-                {...(detail?.workflowSource ? { workflowSource: detail.workflowSource } : {})}
+                {...(detail?.fanout ? { fanout: detail.fanout } : {})}
                 hitl={
                   detail?.runStatus === "paused_human" && detail.hitlNodeId
                     ? {
@@ -280,7 +280,7 @@ export function RunDetail(): JSX.Element {
                 runId={id}
                 totalEvents={totalEvents}
                 isLive={isLive}
-                {...(detail?.workflowSource ? { workflowSource: detail.workflowSource } : {})}
+                {...(detail?.fanout ? { fanout: detail.fanout } : {})}
               />
             </TabsContent>
             {showDiffTab && (
