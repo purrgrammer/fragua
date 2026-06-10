@@ -20,7 +20,7 @@
 //   valve. Disk persistence via `checkpoint.pi_sessions` is not yet wired
 //   (see serialise/hydrate below for the round-trip shape).
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 // NUL is not a valid character in any legitimate runId or threadId, so
 // using it as the composite-key delimiter is collision-safe.

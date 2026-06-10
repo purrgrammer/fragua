@@ -4,7 +4,7 @@
 // content is reconstructable from the deltas already in the event log.
 
 import { describe, expect, test } from "bun:test";
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import { bridgeAgentEvent } from "../src/event-bridge.ts";
 
 // Build a message_update wrapper around an inner stream event. The

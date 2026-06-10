@@ -8,7 +8,7 @@
 // @fragua/store re-exports the relevant pieces so existing daemon/server
 // callsites stay unchanged.
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 // ─────────────── EventType (string union for SSE / log filters) ───────────────
 

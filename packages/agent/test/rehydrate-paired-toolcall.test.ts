@@ -21,9 +21,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@earendil-works/pi-ai";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import { PiLlmBackend } from "../src/backend.ts";
 
 describe("PiLlmBackend — rehydrate with paired toolCall+toolResult tail", () => {

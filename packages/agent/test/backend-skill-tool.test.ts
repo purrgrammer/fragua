@@ -14,10 +14,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai";
 import type { EventType, NodeAttrs } from "@fragua/core";
 import type { Skill } from "@fragua/types";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
-import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
 import { PiLlmBackend } from "../src/backend.ts";
 
 interface CapturedEvent {

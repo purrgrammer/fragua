@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { resolveThinkingLevel } from "../src/backend.ts";
 
 // Regression guard for a silent app-wide "thinking went dark" failure: fragua

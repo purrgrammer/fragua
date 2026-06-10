@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.71.0",
-    "@mariozechner/pi-ai": "0.71.0",
+    "@earendil-works/pi-agent-core": "0.79.1",
+    "@earendil-works/pi-ai": "0.79.1",
     "@sinclair/typebox": "0.34.49",
     "@fragua/core": "workspace:*",
     "@fragua/types": "workspace:*",

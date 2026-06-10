@@ -21,9 +21,9 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai";
 import { AuthStorage, getFraguaHome } from "@fragua/agent";
 import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
-import { findEnvKeys, getEnvApiKey, getProviders } from "@mariozechner/pi-ai";
 
 // pi-ai's github-copilot env fallback includes the generic GH_TOKEN /
 // GITHUB_TOKEN, which are set in virtually every GitHub Actions job for the

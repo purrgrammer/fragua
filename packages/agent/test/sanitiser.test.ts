@@ -12,6 +12,7 @@
 //      synthesised, execute() never called
 
 import { describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   CORE_TOOLS,
   type FraguaToolContext,
@@ -19,7 +20,6 @@ import {
   sanitiseUnpairedToolCalls,
   ToolRegistry,
 } from "@fragua/workspace";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 /** Collect every unpaired tool_use id (assistant toolCall with no
  *  following toolResult) and every orphan tool_result id (toolResult

@@ -20,7 +20,7 @@
 // `defaultModelPerProvider` is taken verbatim from pi-coding-agent
 // (packages/coding-agent/src/core/model-resolver.ts, MIT).
 
-import type { Api, KnownProvider, Model } from "@mariozechner/pi-ai";
+import type { Api, KnownProvider, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "./model-registry.ts";
 
 /** Default model id per known pi-ai provider. Used when the user
@@ -29,35 +29,40 @@ import type { ModelRegistry } from "./model-registry.ts";
  * built-in registry (enforced by tests). */
 export const defaultModelPerProvider: Record<KnownProvider, string> = {
   "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
-  anthropic: "claude-opus-4-6",
+  "ant-ling": "Ring-2.6-1T",
+  anthropic: "claude-opus-4-8",
   openai: "gpt-5.4",
-  "azure-openai-responses": "gpt-5.2",
-  "openai-codex": "gpt-5.4",
-  google: "gemini-2.5-pro",
-  "google-vertex": "gemini-3-pro-preview",
-  "github-copilot": "gpt-4o",
-  openrouter: "nvidia/nemotron-3-super-120b-a12b:free",
-  // vercel-ai-gateway uses dotted form (not the hyphen form used by
-  // the direct-Anthropic provider). The id below must exist in pi-ai's
-  // generated model list for the active version pin.
-  "vercel-ai-gateway": "anthropic/claude-opus-4.6",
-  xai: "grok-4-fast-non-reasoning",
+  "azure-openai-responses": "gpt-5.4",
+  "openai-codex": "gpt-5.5",
+  nvidia: "nvidia/nemotron-3-super-120b-a12b",
+  deepseek: "deepseek-v4-pro",
+  google: "gemini-3.1-pro-preview",
+  "google-vertex": "gemini-3.1-pro-preview",
+  "github-copilot": "gpt-5.4",
+  openrouter: "moonshotai/kimi-k2.6",
+  "vercel-ai-gateway": "zai/glm-5.1",
+  xai: "grok-4.20-0309-reasoning",
   groq: "openai/gpt-oss-120b",
   cerebras: "zai-glm-4.7",
   zai: "glm-5.1",
+  "zai-coding-cn": "glm-5.1",
   mistral: "devstral-medium-latest",
   minimax: "MiniMax-M2.7",
   "minimax-cn": "MiniMax-M2.7",
-  moonshotai: "kimi-k2-thinking",
-  "moonshotai-cn": "kimi-k2-thinking",
-  huggingface: "moonshotai/Kimi-K2.5",
-  opencode: "claude-opus-4-6",
-  "opencode-go": "kimi-k2.5",
+  moonshotai: "kimi-k2.6",
+  "moonshotai-cn": "kimi-k2.6",
+  huggingface: "moonshotai/Kimi-K2.6",
+  fireworks: "accounts/fireworks/models/kimi-k2p6",
+  together: "moonshotai/Kimi-K2.6",
+  opencode: "kimi-k2.6",
+  "opencode-go": "kimi-k2.6",
   "kimi-coding": "kimi-for-coding",
-  deepseek: "deepseek-v4-pro",
-  fireworks: "accounts/fireworks/models/deepseek-v4-pro",
-  "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.5",
-  "cloudflare-ai-gateway": "claude-3-5-haiku",
+  "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",
+  "cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
+  xiaomi: "mimo-v2.5-pro",
+  "xiaomi-token-plan-cn": "mimo-v2.5-pro",
+  "xiaomi-token-plan-ams": "mimo-v2.5-pro",
+  "xiaomi-token-plan-sgp": "mimo-v2.5-pro",
 };
 
 /** Find a model by bare id across every provider in the registry.

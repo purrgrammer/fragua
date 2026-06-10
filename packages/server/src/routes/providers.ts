@@ -17,9 +17,9 @@
 //     indirection). Transport-layer protection (TLS / loopback-only
 //     bind) is the deployment's responsibility on writes.
 
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@fragua/agent";
 import { defaultModelPerProvider } from "@fragua/agent";
-import { streamSimple } from "@mariozechner/pi-ai";
 import { Hono } from "hono";
 
 export interface ProvidersRouteOptions {

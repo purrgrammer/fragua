@@ -1,9 +1,9 @@
 // Translate pi-agent-core AgentEvents into fragua Event types.
 // See docs/SPEC.md §3.5.
 
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { EventType } from "@fragua/core";
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { unsanitizeToolName } from "./tool-adapter.ts";
 
 export interface BridgedEvent {

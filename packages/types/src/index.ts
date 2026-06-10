@@ -11,7 +11,7 @@
 // only imports @fragua/core. Putting the merge here and having every
 // consumer import from @fragua/types guarantees the merge activates.
 
-export type { AgentMessage, AgentToolCall, AgentToolResult } from "@mariozechner/pi-agent-core";
+export type { AgentMessage, AgentToolCall, AgentToolResult } from "@earendil-works/pi-agent-core";
 export type {
   AssistantMessage,
   ImageContent,
@@ -21,7 +21,7 @@ export type {
   ToolCall,
   ToolResultMessage,
   UserMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 export {
   ALL_DAEMON_EVENT_TYPES,
   ALL_EVENT_TYPES,
@@ -103,7 +103,7 @@ export interface ToolNodeMessage {
   timestamp: number;
 }
 
-declare module "@mariozechner/pi-agent-core" {
+declare module "@earendil-works/pi-agent-core" {
   interface CustomAgentMessages {
     system: SystemPromptMessage;
     tool_node: ToolNodeMessage;

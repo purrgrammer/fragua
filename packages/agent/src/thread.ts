@@ -25,9 +25,9 @@
 // deterministic template — behaviour difference is visible in
 // `events.jsonl` via the synthetic node.
 
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { EventType, SummariserBackend, SummaryLevel } from "@fragua/core";
 import { summarySyntheticNodeId } from "@fragua/core";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 /** Whether to hydrate prior messages from the store into the new Agent's
  * `initialState.messages`. True iff the node is on a thread. */

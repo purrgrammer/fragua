@@ -12,13 +12,13 @@
 // comparing the final `AgentMessage[]` arrays.
 
 import { describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { type FauxResponseStep, fauxAssistantMessage, fauxText, registerFauxProvider } from "@earendil-works/pi-ai";
 import type { Node } from "@fragua/core";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { type FauxResponseStep, fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { PiLlmBackend } from "../src/backend.ts";

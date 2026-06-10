@@ -9,9 +9,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AssistantMessage, StreamOptions } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@earendil-works/pi-ai";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
-import type { AssistantMessage, StreamOptions } from "@mariozechner/pi-ai";
-import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import { PiLlmBackend } from "../src/backend.ts";
 
 describe("PiLlmBackend — cancel signal", () => {

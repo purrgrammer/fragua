@@ -8,7 +8,7 @@
 // live under a concurrent one.
 
 import { describe, expect, test } from "bun:test";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { MessageStore } from "../src/message-store.ts";
 
 function msg(role: AgentMessage["role"], text: string): AgentMessage {

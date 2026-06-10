@@ -8,6 +8,33 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- Custom model entries and per-model overrides in `provider_config` accept
+  `thinkingLevelMap`, mapping pi thinking levels (`off`–`xhigh`) to
+  provider-specific values (`null` marks a level unsupported). Anthropic-style
+  compat options (`forceAdaptiveThinking`, cache-control flags) are accepted on
+  `compat:` alongside the OpenAI-compatible ones.
+- New built-in providers via pi-ai 0.79.1: Together AI, NVIDIA NIM, Ant Ling,
+  zai-coding-cn, and the Xiaomi MiMo token-plan regions. Claude Opus 4.8 and
+  Claude Fable 5 (adaptive thinking, `xhigh` effort) are available on the
+  Anthropic and Amazon Bedrock providers.
+
+### Changed
+
+- The pi runtime dependencies are now `@earendil-works/pi-agent-core` and
+  `@earendil-works/pi-ai` at 0.79.1. Per-provider default models follow
+  upstream (the Anthropic default is now `claude-opus-4-8`), which changes
+  what daemon autodetect picks when a workflow names a provider without a
+  model.
+- Node.js 22.19.0 is the minimum supported runtime (pi's `engines` floor).
+
+### Removed
+
+- `compat.reasoningEffortMap` on custom model definitions: pi-ai no longer
+  reads it. Stored rows that still carry it keep validating; the field is
+  inert. Use `thinkingLevelMap` on the model entry instead.
+
 ## [0.6.0] — 2026-06-08
 
 ### Added

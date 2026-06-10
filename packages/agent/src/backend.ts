@@ -1,6 +1,14 @@
 // PiLlmBackend — LlmBackend backed by pi-agent-core + pi-ai.
 
 import { createHash } from "node:crypto";
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentTool,
+  type ThinkingLevel,
+} from "@earendil-works/pi-agent-core";
+import { type AssistantMessage, getModel, type Model, streamSimple } from "@earendil-works/pi-ai";
 import type {
   EventType,
   LlmBackend,
@@ -20,14 +28,6 @@ import {
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
 } from "@fragua/workspace";
-import {
-  Agent,
-  type AgentEvent,
-  type AgentMessage,
-  type AgentTool,
-  type ThinkingLevel,
-} from "@mariozechner/pi-agent-core";
-import { type AssistantMessage, getModel, type Model, streamSimple } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { MessageStore } from "./message-store.ts";
