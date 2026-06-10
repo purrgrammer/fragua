@@ -330,6 +330,10 @@ export interface Message {
   content: AgentMessage;
   nodeId: string | null;
   iteration: number;
+  /** Goal-gate re-entry epoch (mirrors fact.*.payload.pass). Threadless
+   * resume hydration scopes to (nodeId, iteration, pass) so a fresh gate
+   * pass starts with a clean transcript. 0 for never-retargeted runs. */
+  pass: number;
 }
 
 /** Wire-shape projection of `Message` for the web transcript endpoint.
@@ -341,6 +345,7 @@ export interface NarrowMessage {
   content: AgentMessage;
   nodeId: string | null;
   iteration: number;
+  pass: number;
 }
 
 export interface ArtifactScope {
@@ -706,16 +711,18 @@ export interface IEventWriter {
 
   // ─── Messages (write)
   /**
-   * Append a message under `(run, node, iteration)`. Returns the assigned
-   * ordinal. Pass `opts.dedup: true` to enable replay-safe dedup: a
-   * subsequent call with byte-identical content at the same scope returns
-   * the existing ordinal instead of minting a duplicate row. Default OFF
-   * because agent transcripts carry per-call timestamps that differ even
-   * when the semantic message is the same; opting in is the caller's job.
+   * Append a message under `(run, node, iteration, pass)`. Returns the
+   * assigned ordinal. `pass` defaults to 0 (the goal-gate re-entry epoch —
+   * the dispatcher stamps it; direct callers without gate context omit it).
+   * Pass `opts.dedup: true` to enable replay-safe dedup: a subsequent call
+   * with byte-identical content at the same scope returns the existing
+   * ordinal instead of minting a duplicate row. Default OFF because agent
+   * transcripts carry per-call timestamps that differ even when the
+   * semantic message is the same; opting in is the caller's job.
    */
   appendMessage(
     runId: string,
-    row: Omit<Message, "runId" | "ordinal">,
+    row: Omit<Message, "runId" | "ordinal" | "pass"> & { pass?: number },
     opts?: { dedup?: boolean },
   ): {
     ordinal: number;

@@ -37,7 +37,10 @@ guarantee.
 - **Goal-gate re-entries are distinct executions.** Lifecycle facts carry an
   optional `pass` (the cumulative retarget count) so two passes of the same step
   no longer collapse onto one entry in the run-detail node states; the graph and
-  iteration history show each pass separately.
+  iteration history show each pass separately. Transcripts are pass-scoped too
+  (schema v4 adds `messages.pass`): an unthreaded step re-entered by a gate now
+  starts with a clean conversation instead of silently rehydrating its prior
+  pass's transcript — unthreaded steps rehydrate only when resumed.
 
 ### Removed
 

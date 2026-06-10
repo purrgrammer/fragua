@@ -270,6 +270,7 @@ function rowToMessage(r: {
   content: string;
   node_id: string | null;
   iteration: number;
+  pass: number;
 }): Message {
   return {
     runId: r.run_id,
@@ -277,6 +278,7 @@ function rowToMessage(r: {
     content: JSON.parse(r.content),
     nodeId: r.node_id,
     iteration: r.iteration,
+    pass: r.pass,
   };
 }
 
@@ -890,7 +892,7 @@ export class SqliteStore implements IEventStore {
 
   appendMessage(
     runId: string,
-    row: Omit<Message, "runId" | "ordinal">,
+    row: Omit<Message, "runId" | "ordinal" | "pass"> & { pass?: number },
     opts?: { dedup?: boolean },
   ): { ordinal: number } {
     // Pre-check before entering the transaction so the caller sees a typed
@@ -934,6 +936,7 @@ export class SqliteStore implements IEventStore {
         content: serialized,
         nodeId: row.nodeId,
         iteration,
+        pass: row.pass ?? 0,
         contentHash,
       });
       // Signal the per-run SSE stream that a new message row landed, so
@@ -976,6 +979,7 @@ export class SqliteStore implements IEventStore {
       content: JSON.parse(r.content),
       nodeId: r.node_id,
       iteration: r.iteration,
+      pass: r.pass,
     }));
   }
 
@@ -1845,6 +1849,8 @@ export class SqliteStore implements IEventStore {
         content: unknown;
         nodeId: string | null;
         iteration: number;
+        /** Absent in bundles exported before schema v4 — import defaults to 0. */
+        pass?: number;
       }[];
       const artData = byName.get(runArtifactsPath(r.runId));
       const artifacts = (artData == null ? [] : decodeJsonl(artData)) as ArtifactListRow[];
@@ -1960,6 +1966,7 @@ export class SqliteStore implements IEventStore {
             content,
             nodeId: m.nodeId,
             iteration: m.iteration,
+            pass: m.pass,
             contentHash: sha256Hex(content),
           };
         }),
@@ -2039,6 +2046,7 @@ export class SqliteStore implements IEventStore {
               content: m.content,
               nodeId: m.nodeId,
               iteration: m.iteration,
+              pass: m.pass ?? 0,
               contentHash: m.contentHash,
             });
           }

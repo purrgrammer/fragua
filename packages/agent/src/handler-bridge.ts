@@ -11,6 +11,7 @@ import {
   type LlmBackend,
   type Node,
   type Outcome,
+  readGoalGateRetries,
   substitute,
   UnpopulatedOutputError,
 } from "@fragua/core";
@@ -134,7 +135,8 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // fresh loop pass starts clean while a resume of the SAME entry
     // rehydrates — preserving unthreaded "fresh each entry" semantics.
     const isSyntheticThread = explicitThreadId === undefined;
-    const threadId = explicitThreadId ?? syntheticThreadId(ctx.nodeId, ctx.iteration);
+    const pass = readGoalGateRetries(ctx.routing as Record<string, unknown>);
+    const threadId = explicitThreadId ?? syntheticThreadId(ctx.nodeId, ctx.iteration, pass);
     // Resume hydration: load any prior messages for this dispatch that are
     // already in the messages table. This is the daemon-restart path —
     // in-process MessageStore is empty but the DB has the pre-crash
@@ -142,8 +144,12 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // `inProcessWrites` set to decide whether the dispatch is a resume.
     // An explicit thread loads its shared transcript (matched by node_id,
     // with a graph-level fallback); a synthetic thread loads only this
-    // node's own rows for the current iteration.
-    const priorMessages = isSyntheticThread ? loadPriorMessagesForNode(ctx) : loadPriorMessagesForThread(ctx, threadId);
+    // node's own rows for the current (iteration, pass) — a goal-gate
+    // re-entry runs at a fresh pass, so it hydrates NOTHING (threadless
+    // nodes only rehydrate when RESUMED within the same execution).
+    const priorMessages = isSyntheticThread
+      ? loadPriorMessagesForNode(ctx, pass)
+      : loadPriorMessagesForThread(ctx, threadId);
 
     // Seed dedup memo from the LAST persisted system + user row for
     // this (run, nodeId, iteration). Re-dispatching the same node on
@@ -163,7 +169,9 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // system/user — only a resume of the same entry is deduped.
     let lastPersistedSystem: string | undefined;
     let lastPersistedUser: string | undefined;
-    const nodeRows = ctx.messages.since(0).filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration);
+    const nodeRows = ctx.messages
+      .since(0)
+      .filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration && m.pass === pass);
     for (let i = nodeRows.length - 1; i >= 0; i--) {
       const row = nodeRows[i];
       if (row == null) continue;
@@ -371,8 +379,10 @@ function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): read
 // `system` row is re-seeded each dispatch (and deduped on persist), and
 // `tool_node` rows are side-effect captures, not LLM-visible turns — both
 // are dropped, matching `loadPriorMessagesForThread`.
-function loadPriorMessagesForNode(ctx: HandlerContext): readonly AgentMessage[] | undefined {
-  const rows = ctx.messages.since(0).filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration);
+function loadPriorMessagesForNode(ctx: HandlerContext, pass: number): readonly AgentMessage[] | undefined {
+  const rows = ctx.messages
+    .since(0)
+    .filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration && m.pass === pass);
   if (rows.length === 0) return undefined;
   const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
   return messages.length > 0 ? messages : undefined;

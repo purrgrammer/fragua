@@ -177,7 +177,7 @@ Handlers must not import `node:fs`, `node:child_process`, `node:net`, or `undici
 
 Persistent state goes through:
 
-- **`ctx.messages.append(message)`** — user-visible transcript; takes a pi-agent-core `AgentMessage` (round-trips losslessly, carries tool_use / tool_result / thinking blocks). Tracked as `fact.message_appended`
+- **`ctx.messages.append(message)`** — user-visible transcript; takes a pi-agent-core `AgentMessage` (round-trips losslessly, carries tool_use / tool_result / thinking blocks). Tracked as `fact.message_appended`. Rows are scoped `(node, iteration, pass)` — `pass` is the goal-gate re-entry epoch, stamped at context build — so a threadless node's resume hydration never pulls a prior gate pass's transcript (unthreaded nodes rehydrate only when *resumed*; a fresh pass starts clean)
 - **`ctx.artifacts.put(key, content, mime?)`** — content-addressed blob with a per-(run, node, iteration, key) ref
 - **`ctx.http.fetch(...)`** — abort-wired HTTP
 - **`ctx.llm.call(...)`** — LLM with accounting hook

@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@fragua/types";
+import { readGoalGateRetries } from "../engine/goal-gate-policy.ts";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
@@ -21,7 +22,7 @@ import type {
 export interface HandlerStore {
   appendMessage(
     runId: string,
-    row: { content: AgentMessage; nodeId: string | null; iteration: number },
+    row: { content: AgentMessage; nodeId: string | null; iteration: number; pass?: number },
     opts?: { dedup?: boolean },
   ): { ordinal: number };
   getMessages(runId: string, opts?: { sinceOrdinal?: number; limit?: number; nodeId?: string }): HandlerMessage[];
@@ -71,6 +72,10 @@ export interface BuildContextOpts {
  */
 export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   const { runId, nodeId, iteration, store } = opts;
+  // Goal-gate re-entry epoch, read from routing at context build so every
+  // message this dispatch persists is scoped (node, iteration, PASS) — a
+  // fresh gate pass must not rehydrate the prior pass's transcript.
+  const pass = readGoalGateRetries(opts.routing as Record<string, unknown>);
 
   const messages: MessagesApi = {
     append(message: AgentMessage) {
@@ -78,6 +83,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
         content: message,
         nodeId,
         iteration,
+        pass,
       });
     },
     recent(n) {

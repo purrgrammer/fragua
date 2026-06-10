@@ -178,6 +178,11 @@ CREATE TABLE IF NOT EXISTS messages (
   role TEXT GENERATED ALWAYS AS (json_extract(content, '$.role')) STORED,
   node_id TEXT,
   iteration INTEGER NOT NULL DEFAULT 0,
+  -- Goal-gate re-entry epoch (same meaning as fact.*.payload.pass): a gate
+  -- retarget resets per-node retry counters, so (node_id, iteration) alone
+  -- collides across passes — a threadless node's resume hydration scopes to
+  -- (node_id, iteration, pass) so a fresh pass starts with a clean transcript.
+  pass INTEGER NOT NULL DEFAULT 0,
   -- sha256 of the serialised content. Backs the opt-in replay dedup
   -- path — `appendMessage(runId, row, { dedup: true })` looks up an
   -- existing row by `(run, node, iteration, content_hash)` and returns

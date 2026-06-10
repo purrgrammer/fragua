@@ -23,6 +23,7 @@ export interface MessageRow {
   content: string;
   node_id: string | null;
   iteration: number;
+  pass: number;
 }
 
 /**
@@ -36,6 +37,7 @@ export interface NarrowMessageRow {
   content: string;
   node_id: string | null;
   iteration: number;
+  pass: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -43,7 +45,7 @@ export interface NarrowMessageRow {
 // ─────────────────────────────────────────────────────────────────────
 
 const SELECT_MESSAGES_BY_RUN_SQL = `
-  SELECT run_id, ordinal, content, node_id, iteration
+  SELECT run_id, ordinal, content, node_id, iteration, pass
     FROM messages
    WHERE run_id = ?1 AND ordinal > ?2
    ORDER BY ordinal ASC
@@ -51,7 +53,7 @@ const SELECT_MESSAGES_BY_RUN_SQL = `
 `;
 
 const SELECT_MESSAGES_BY_RUN_NODE_SQL = `
-  SELECT run_id, ordinal, content, node_id, iteration
+  SELECT run_id, ordinal, content, node_id, iteration, pass
     FROM messages
    WHERE run_id = ?1 AND ordinal > ?2 AND node_id = ?3
    ORDER BY ordinal ASC
@@ -59,7 +61,7 @@ const SELECT_MESSAGES_BY_RUN_NODE_SQL = `
 `;
 
 const SELECT_MESSAGES_NARROW_BY_RUN_SQL = `
-  SELECT ordinal, content, node_id, iteration
+  SELECT ordinal, content, node_id, iteration, pass
     FROM messages
    WHERE run_id = ?1 AND ordinal > ?2
    ORDER BY ordinal ASC
@@ -67,7 +69,7 @@ const SELECT_MESSAGES_NARROW_BY_RUN_SQL = `
 `;
 
 const SELECT_MESSAGES_NARROW_BY_RUN_NODE_SQL = `
-  SELECT ordinal, content, node_id, iteration
+  SELECT ordinal, content, node_id, iteration, pass
     FROM messages
    WHERE run_id = ?1 AND ordinal > ?2 AND node_id = ?3
    ORDER BY ordinal ASC
@@ -147,8 +149,8 @@ export function selectMaxMessageOrdinal(db: Database, runId: string): number {
 }
 
 const INSERT_MESSAGE_SQL = `
-  INSERT INTO messages (run_id, ordinal, content, node_id, iteration, content_hash)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO messages (run_id, ordinal, content, node_id, iteration, pass, content_hash)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertMessage(
@@ -159,6 +161,7 @@ export function insertMessage(
     content: string;
     nodeId: string | null;
     iteration: number;
+    pass: number;
     contentHash: string;
   },
 ): void {
@@ -168,13 +171,14 @@ export function insertMessage(
     args.content,
     args.nodeId,
     args.iteration,
+    args.pass,
     args.contentHash,
   );
 }
 
 const INSERT_MESSAGE_OR_IGNORE_SQL = `
-  INSERT OR IGNORE INTO messages (run_id, ordinal, content, node_id, iteration, content_hash)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT OR IGNORE INTO messages (run_id, ordinal, content, node_id, iteration, pass, content_hash)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
 `;
 
 /** Idempotent message insert for bundle import — PK `(run_id, ordinal)` makes
@@ -187,6 +191,7 @@ export function insertMessageOrIgnore(
     content: string;
     nodeId: string | null;
     iteration: number;
+    pass: number;
     contentHash: string;
   },
 ): void {
@@ -196,6 +201,7 @@ export function insertMessageOrIgnore(
     args.content,
     args.nodeId,
     args.iteration,
+    args.pass,
     args.contentHash,
   );
 }

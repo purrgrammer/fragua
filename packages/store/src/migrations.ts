@@ -58,6 +58,22 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
       db.exec("DROP TABLE IF EXISTS outputs");
     },
   },
+  // v3 → v4: messages carry the goal-gate re-entry epoch so a threadless
+  // node's resume hydration is scoped (node, iteration, PASS) — a fresh gate
+  // pass starts with a clean transcript instead of rehydrating the prior
+  // pass's. The ADD COLUMN is guarded (no `IF NOT EXISTS` for columns) so the
+  // walk stays idempotent like the table steps. `down` is lossy: which pass a
+  // message belonged to can't be rebuilt from the remaining columns.
+  4: {
+    up: (db) => {
+      const cols = db.query<{ name: string }, []>("PRAGMA table_info(messages)").all();
+      if (!cols.some((c) => c.name === "pass")) {
+        db.exec("ALTER TABLE messages ADD COLUMN pass INTEGER NOT NULL DEFAULT 0");
+      }
+    },
+    down: (db) => db.exec("ALTER TABLE messages DROP COLUMN pass"),
+    lossy: true,
+  },
 };
 
 /** Steps that deliberately ship without a `down`, each with the reason a

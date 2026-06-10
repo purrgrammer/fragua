@@ -126,7 +126,7 @@ describe("fragua db", () => {
     const cwd = makeStore(); // at CURRENT: schedules.title
     expect(schedulesCols(cwd)).toContain("title");
 
-    expect(await run({ action: "migrate", cwd, to: "1" })).toBe(0);
+    expect(await run({ action: "migrate", cwd, to: "1", allowDataLoss: true })).toBe(0);
 
     expect(schedulesCols(cwd)).toContain("input");
     expect(schedulesCols(cwd)).not.toContain("title");
@@ -144,14 +144,14 @@ describe("fragua db", () => {
 
   test("migrate --no-backup skips the pre-migrate dump", async () => {
     const cwd = makeStore();
-    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true })).toBe(0);
+    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true, allowDataLoss: true })).toBe(0);
     expect(schedulesCols(cwd)).toContain("input");
     expect(existsSync(join(cwd, ".fragua/backups"))).toBe(false);
   });
 
   test("migrate --to forward lands the rename again", async () => {
     const cwd = makeStore();
-    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true })).toBe(0);
+    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true, allowDataLoss: true })).toBe(0);
     expect(await run({ action: "migrate", cwd, to: String(CURRENT_SCHEMA_VERSION), noBackup: true })).toBe(0);
     expect(schedulesCols(cwd)).toContain("title");
   });
@@ -167,7 +167,7 @@ describe("fragua db", () => {
       Date.now() + 60_000,
     );
     db.close();
-    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true })).toBe(1);
+    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true, allowDataLoss: true })).toBe(1);
     expect(schedulesCols(cwd)).toContain("title"); // refused before mutating
   });
 
@@ -176,7 +176,7 @@ describe("fragua db", () => {
     const db = new Database(join(cwd, ".fragua/fragua.db"));
     db.query("INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at) VALUES (1, 999, 'h', 0, 0)").run();
     db.close();
-    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true })).toBe(0);
+    expect(await run({ action: "migrate", cwd, to: "1", noBackup: true, allowDataLoss: true })).toBe(0);
     expect(schedulesCols(cwd)).toContain("input");
   });
 
