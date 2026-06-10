@@ -3,7 +3,7 @@
 // (intent / done / failed) are NOT included — they're already durable via
 // the pre-commit recorder before this function runs.
 
-import { retryCountKey } from "@fragua/core";
+import { readGoalGateRetries, retryCountKey } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 
@@ -51,6 +51,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       // matches the "no outgoing edges" terminal rule if anything upstream
       // missed the substitution.
       const nextNode = result.nextNode ?? "__end__";
+      const pass = readGoalGateRetries(ctx.state.routing);
       const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
         nodeId: ctx.state.currentNode ?? "",
         iteration: nodeRetryCount(ctx.state.routing, ctx.state.currentNode ?? ""),
@@ -58,6 +59,10 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
         costUsd: result.costUsd,
         nextNode,
       };
+      // Goal-gate re-entry epoch: a retarget pass resets per-node retry
+      // counters (§3.4), so `(nodeId, iteration)` alone collides across
+      // passes — the epoch keeps each pass's facts distinct. Omitted at 0.
+      if (pass > 0) payload.pass = pass;
       if (result.modelName != null) payload.modelName = result.modelName;
       if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
       // Route field lands on the fact only when a routing-node llm
@@ -121,10 +126,12 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
           });
         }
       } else {
-        facts.push({
-          type: "fact.node_started",
-          payload: { nodeId: nextNode, iteration: nodeRetryCount(ctx.state.routing, nextNode) },
-        });
+        const startedPayload: Extract<FactEvent, { type: "fact.node_started" }>["payload"] = {
+          nodeId: nextNode,
+          iteration: nodeRetryCount(ctx.state.routing, nextNode),
+        };
+        if (pass > 0) startedPayload.pass = pass;
+        facts.push({ type: "fact.node_started", payload: startedPayload });
       }
       return facts;
     }
@@ -234,6 +241,7 @@ export function abortResultToFacts(
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
   },
+  pass = 0,
 ): FactEvent[] {
   const payload: Extract<FactEvent, { type: "fact.node_aborted" }>["payload"] = {
     nodeId,
@@ -242,6 +250,7 @@ export function abortResultToFacts(
     partialTokens: partial.tokens,
     partialCostUsd: partial.costUsd,
   };
+  if (pass > 0) payload.pass = pass;
   if (partial.inputCostUsd != null && partial.inputCostUsd > 0) payload.partialInputCostUsd = partial.inputCostUsd;
   if (partial.outputCostUsd != null && partial.outputCostUsd > 0) {
     payload.partialOutputCostUsd = partial.outputCostUsd;

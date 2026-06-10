@@ -1090,9 +1090,10 @@ steps:
     // twice, the frontier re-seeds from empty each pass (a replace, not append),
     // per-node cost is CUMULATIVE across passes (the run budget — not a per-pass
     // reset — governs a looped fan-out), and the log alone replays to the same
-    // terminal. The node-state projection collapses both passes at iteration 0
-    // (latest-seq wins) — by design; the per-pass spend is retained seq-ordered in
-    // the step/cost breakdown, not here.
+    // terminal. Each pass's facts carry the goal-gate re-entry epoch (`pass`),
+    // so the two executions of the same (nodeId, iteration: 0) stay distinct in
+    // the log and the node-state projection — the second pass no longer
+    // silently overwrites the first.
     const yaml = `name: reentry
 defaults: { provider: anthropic, model: m }
 steps:
@@ -1165,13 +1166,19 @@ steps:
 
     // Each pass re-seeds the frontier with the SAME branch set (replace, not
     // append — no stale branch from the prior pass leaks in).
-    const seededBranches = events
-      .filter((e) => e.type === "fact.fanout_started")
-      .map((e) => (e.payload as { branches: string[] }).branches);
-    expect(seededBranches).toEqual([
+    const seeds = events.filter((e) => e.type === "fact.fanout_started");
+    expect(seeds.map((e) => (e.payload as { branches: string[] }).branches)).toEqual([
       ["a", "b"],
       ["a", "b"],
     ]);
+    // The second seed carries the goal-gate re-entry epoch; the first omits it
+    // (pass 0). Branch completions inherit their pass's epoch, so the two
+    // executions of (a, iteration 0) are distinct facts, not a silent overwrite.
+    expect(seeds.map((e) => (e.payload as { pass?: number }).pass)).toEqual([undefined, 1]);
+    const aCompletions = events
+      .filter((e) => e.type === "fact.node_completed" && (e.payload as { nodeId?: string }).nodeId === "a")
+      .map((e) => (e.payload as { pass?: number }).pass);
+    expect(aCompletions).toEqual([undefined, 1]);
 
     // Per-node cost is CUMULATIVE across passes: two 0.01 dispatches each.
     expect(state.metrics.nodeCosts["a"]?.costUsd).toBeCloseTo(0.02, 6);

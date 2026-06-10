@@ -8,7 +8,13 @@
 //
 // No files, no sockets, no IPC. Just the store.
 
-import { type ExecutionEnvironment, evaluateBudget, type Graph, type OutputsValue } from "@fragua/core";
+import {
+  type ExecutionEnvironment,
+  evaluateBudget,
+  type Graph,
+  type OutputsValue,
+  readGoalGateRetries,
+} from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import {
   ConcurrencyError,
@@ -735,12 +741,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // consume the dispatch budget.
     if (state.dispatchStartedAt == null) {
       const dispatchIteration = nodeRetryCount(state.routing, currentNode);
+      const dispatchPass = readGoalGateRetries(state.routing);
       const ok = await tryAppendFact(opts.store, runId, state.version, [
         {
           type: "fact.dispatch_started",
           payload: {
             nodeId: currentNode,
             iteration: dispatchIteration,
+            ...(dispatchPass > 0 ? { pass: dispatchPass } : {}),
             resumeOf: deriveResumeOf(opts.store, runId),
           },
         },
@@ -1249,6 +1257,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     signals.push(AbortSignal.timeout(branchTimeoutMs));
     const signal = AbortSignal.any(signals);
     const iteration = nodeRetryCount(baseState.routing, branchNode);
+    const branchPass = readGoalGateRetries(baseState.routing);
     const recorder = new CommittingRecorder({
       store: opts.store,
       runId,
@@ -1343,6 +1352,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             payload: {
               nodeId: branchNode,
               iteration,
+              ...(branchPass > 0 ? { pass: branchPass } : {}),
               cause,
               partialTokens: turnBilled,
               partialCostUsd: totalCostUsd,
@@ -1408,6 +1418,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const branches = Array.isArray(node?.attrs.branches) ? (node.attrs.branches as string[]) : [];
     const join = typeof node?.attrs.join === "string" ? node.attrs.join : undefined;
     const iteration = nodeRetryCount(state.routing, parallelNode);
+    // Goal-gate re-entry epoch — a retarget re-seeds the whole region with
+    // every branch counter reset (§3.4), so the epoch is the only durable
+    // discriminator between pass executions of the same (nodeId, iteration).
+    const pass = readGoalGateRetries(state.routing);
     const concurrency =
       typeof node?.attrs.concurrency === "number" && node.attrs.concurrency > 0
         ? node.attrs.concurrency
@@ -1446,7 +1460,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // not an OCC conflict to feed the controller.
     if (active == null) {
       const res = await commitFanoutFact(
-        [{ type: "fact.fanout_started", payload: { nodeId: parallelNode, iteration, branches } }],
+        [
+          {
+            type: "fact.fanout_started",
+            payload: { nodeId: parallelNode, iteration, ...(pass > 0 ? { pass } : {}), branches },
+          },
+        ],
         takeFold(),
       );
       if (!res.ok) {
@@ -1492,7 +1511,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (reDispatched.length > 0) {
       const facts: FactEvent[] = reDispatched.map((n) => ({
         type: "fact.dispatch_started",
-        payload: { nodeId: n, iteration: nodeRetryCount(state.routing, n), resumeOf: "paused" },
+        payload: {
+          nodeId: n,
+          iteration: nodeRetryCount(state.routing, n),
+          ...(pass > 0 ? { pass } : {}),
+          resumeOf: "paused",
+        },
       }));
       const reRes = await commitFanoutFact(facts, takeFold());
       if (!reRes.ok) {
@@ -1773,7 +1797,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         if (successor !== undefined) {
           branchFacts.push({
             type: "fact.dispatch_started",
-            payload: { nodeId: successor, iteration: nodeRetryCount(freshState.routing, successor), resumeOf: "fresh" },
+            payload: {
+              nodeId: successor,
+              iteration: nodeRetryCount(freshState.routing, successor),
+              ...(pass > 0 ? { pass } : {}),
+              resumeOf: "fresh",
+            },
           });
         }
         const successRes = await commitFanoutFact(branchFacts, mergeFanoutAppendOpts(takeFold(), outcome.appendOpts));

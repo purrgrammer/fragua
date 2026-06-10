@@ -91,9 +91,14 @@ export type RunSummary = Static<typeof RunSummary>;
 export const NodeState = Type.Object({
   nodeId: Type.String(),
   /** Loop iteration this entry describes (0 for the first dispatch, 1 for
-   * the first re-entry across a backward edge or goal-gate retarget, …). A
-   * non-looping run carries only `iteration: 0` entries. */
+   * the first re-entry across a backward edge). A non-looping run carries
+   * only `iteration: 0` entries. */
   iteration: Type.Integer({ minimum: 0 }),
+  /** Goal-gate re-entry epoch (`fact.*.payload.pass`). A retarget pass
+   * resets per-node retry counters (§3.4), so two passes of the same node
+   * both run at iteration 0 — `pass` keeps each pass's entry distinct.
+   * 0 for runs that never retargeted. */
+  pass: Type.Integer({ minimum: 0 }),
   state: Type.Union([
     Type.Literal("pending"),
     Type.Literal("running"),

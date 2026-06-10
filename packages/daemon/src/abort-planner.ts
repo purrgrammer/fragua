@@ -10,7 +10,7 @@
 // the timeout-retry commit re-drives on an OCC conflict. So `planAbort`
 // returns an `outcome` tag the executor switches on, rather than committing.
 
-import { AUTO_RESUME_AT_KEY } from "@fragua/core";
+import { AUTO_RESUME_AT_KEY, readGoalGateRetries } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import { readNumber } from "./executor-helpers.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
@@ -83,14 +83,20 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
   const { currentNode, iteration, abortCause, usage, routingDelta, appliedSeqs } = input;
 
   // Base: fact.node_aborted carrying this turn's partial spend.
-  const facts = abortResultToFacts(currentNode, iteration, abortCause, {
-    tokens: usage.tokens,
-    costUsd: usage.costUsd,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    cacheReadTokens: usage.cacheReadTokens,
-    cacheWriteTokens: usage.cacheWriteTokens,
-  });
+  const facts = abortResultToFacts(
+    currentNode,
+    iteration,
+    abortCause,
+    {
+      tokens: usage.tokens,
+      costUsd: usage.costUsd,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+    },
+    readGoalGateRetries(input.effectiveRouting),
+  );
 
   // Carry this turn's fold (routing delta + applied seqs) onto the commit so a
   // queued operator intent isn't left unapplied for the next dispatch to re-fold.

@@ -443,6 +443,14 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch (`goal_gates.__retries` at dispatch) —
+         * distinguishes executions of the same `(nodeId, iteration)` across
+         * retarget passes (a gate loop resets retry counters per pass, so
+         * `iteration` alone collides). Omitted when 0 (no retarget yet).
+         *
+         * contract: no-bump — additive optional field; the reducer never
+         * reads it. */
+        pass?: number;
         /** Why this dispatch is starting. "fresh" = first dispatch of the
          * run; the others = resuming from the named prior state. Lets
          * analytics distinguish "ran straight through" from "had to be
@@ -455,6 +463,8 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. */
+        pass?: number;
       };
     }
   | {
@@ -462,6 +472,8 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. */
+        pass?: number;
         tokens: number;
         costUsd: number;
         /** USD cost split across the four token buckets (per pi-ai's
@@ -506,6 +518,8 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. */
+        pass?: number;
         cause: string;
         partialTokens: number;
         partialCostUsd: number;
@@ -856,7 +870,15 @@ export type FactEvent =
        * independently (each sub-node completion atomically commits a
        * `dispatch_started` for its successor), converging on the join. */
       type: "fact.fanout_started";
-      payload: { nodeId: string; iteration: number; branches: string[] };
+      payload: {
+        nodeId: string;
+        iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. A
+         * region re-seeded by a gate retarget carries the bumped epoch, so
+         * the projection keys each pass's branch entries distinctly. */
+        pass?: number;
+        branches: string[];
+      };
     }
   | {
       /** Fan-out join barrier: the frontier drained (every branch reached the

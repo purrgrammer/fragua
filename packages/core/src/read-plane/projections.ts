@@ -268,11 +268,19 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
 function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   const byKey = new Map<
     string,
-    { nodeId: string; iteration: number; state: NodeState["state"]; lastEventSeq: number }
+    { nodeId: string; iteration: number; pass: number; state: NodeState["state"]; lastEventSeq: number }
   >();
-  const keyOf = (nodeId: string, iteration: number) => `${nodeId}#${iteration}`;
-  const bump = (nodeId: string, iteration: number, state: NodeState["state"], seq: number) => {
-    byKey.set(keyOf(nodeId, iteration), { nodeId, iteration, state, lastEventSeq: seq });
+  // Keyed by (nodeId, pass, iteration): a goal-gate retarget resets per-node
+  // retry counters (§3.4), so two passes of the same node both run at
+  // iteration 0 — without the pass in the key the second pass silently
+  // overwrote the first and the projection lost the loop's history.
+  const keyOf = (nodeId: string, pass: number, iteration: number) => `${nodeId}#${pass}.${iteration}`;
+  const bump = (nodeId: string, pass: number, iteration: number, state: NodeState["state"], seq: number) => {
+    byKey.set(keyOf(nodeId, pass, iteration), { nodeId, iteration, pass, state, lastEventSeq: seq });
+  };
+  const passOf = (ev: StoredEvent): number => {
+    const v = (ev.payload as { pass?: unknown } | null | undefined)?.pass;
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
   };
 
   for (const ev of events) {
@@ -281,7 +289,7 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
     const iteration = iterationOf(ev) ?? 0;
     switch (ev.type) {
       case "fact.node_started":
-        bump(nodeId, iteration, "running", ev.seq);
+        bump(nodeId, passOf(ev), iteration, "running", ev.seq);
         break;
       // `dispatch_started` fires on every dispatch including resume after an
       // abort — operator-pause for a linear node, and (since the executor emits
@@ -290,28 +298,30 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
       // stays "failed" until `node_completed` finally fires — long minutes for a
       // chatty agent.
       case "fact.dispatch_started":
-        bump(nodeId, iteration, "running", ev.seq);
+        bump(nodeId, passOf(ev), iteration, "running", ev.seq);
         break;
       case "fact.fanout_started": {
         // A parallel node's branch ENTRIES are seeded into the active set here;
         // they never emit node_started/dispatch_started (that would unpin the
         // run pointer from the parallel node), so mark each branch running so
         // the graph glows it. Its own node_completed later flips it to done.
+        // The seed inherits the region's pass so a goal-gate re-seed opens
+        // fresh entries instead of reviving the prior pass's completed ones.
         // Null-safe read: a corrupted store row with `payload === null` would
         // throw on property access before `?? []` could fire.
         const raw = ev.payload as Record<string, unknown> | null | undefined;
         const rawBranches = raw?.["branches"];
         const branches = Array.isArray(rawBranches) ? (rawBranches as string[]) : [];
-        for (const b of branches) bump(b, 0, "running", ev.seq);
+        for (const b of branches) bump(b, passOf(ev), 0, "running", ev.seq);
         break;
       }
       case "fact.node_completed": {
         const outcome = (ev.payload as { outcomeStatus?: string }).outcomeStatus;
-        bump(nodeId, iteration, outcome === "fail" ? "failed" : "completed", ev.seq);
+        bump(nodeId, passOf(ev), iteration, outcome === "fail" ? "failed" : "completed", ev.seq);
         break;
       }
       case "fact.node_aborted":
-        bump(nodeId, iteration, "failed", ev.seq);
+        bump(nodeId, passOf(ev), iteration, "failed", ev.seq);
         break;
       default:
         break;

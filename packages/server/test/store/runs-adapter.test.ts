@@ -129,14 +129,16 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
       },
     ];
     const nodes = deriveNodeStates(events);
-    expect(nodes).toEqual([{ nodeId: "lint", iteration: 0, state: "failed", lastEventSeq: 2 }]);
+    expect(nodes).toEqual([{ nodeId: "lint", iteration: 0, pass: 0, state: "failed", lastEventSeq: 2 }]);
   });
 
   test("node_completed without outcomeStatus → state: completed (back-compat)", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_completed", { nodeId: "plan", iteration: 0, nextNode: "implement" }), seq: 5 },
     ];
-    expect(deriveNodeStates(events)).toEqual([{ nodeId: "plan", iteration: 0, state: "completed", lastEventSeq: 5 }]);
+    expect(deriveNodeStates(events)).toEqual([
+      { nodeId: "plan", iteration: 0, pass: 0, state: "completed", lastEventSeq: 5 },
+    ]);
   });
 
   test("node_completed with outcomeStatus=success → state: completed", () => {
@@ -209,9 +211,27 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
     ];
     const nodes = deriveNodeStates(events);
     expect(nodes).toEqual([
-      { nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 2 },
-      { nodeId: "verify", iteration: 1, state: "completed", lastEventSeq: 4 },
+      { nodeId: "verify", iteration: 0, pass: 0, state: "failed", lastEventSeq: 2 },
+      { nodeId: "verify", iteration: 1, pass: 0, state: "completed", lastEventSeq: 4 },
     ]);
+  });
+
+  test("goal-gate re-entry: each pass keeps its own entry (no iteration-0 collapse)", () => {
+    // A gate retarget resets per-node retry counters, so both passes run at
+    // iteration 0 — pre-fix the second pass's facts silently overwrote the
+    // first pass's entries (and a fan-out re-seed left phantom 'running'
+    // rows). The `pass` epoch keys them apart.
+    const events: StoredEvent[] = [
+      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, branches: ["a", "b"] }), seq: 1 },
+      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, nextNode: "synth" }), seq: 2 },
+      { ...ev("fact.node_completed", { nodeId: "b", iteration: 0, nextNode: "synth" }), seq: 3 },
+      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, pass: 1, branches: ["a", "b"] }), seq: 4 },
+      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, pass: 1, nextNode: "synth" }), seq: 5 },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(new Set(nodes.map((n) => `${n.nodeId}#${n.pass}.${n.iteration}=${n.state}`))).toEqual(
+      new Set(["a#0.0=completed", "b#0.0=completed", "a#1.0=completed", "b#1.0=running"]),
+    );
   });
 });
 
