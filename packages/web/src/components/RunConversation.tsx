@@ -23,7 +23,6 @@
 //   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
 
-import { handlerOf, parseWorkflow } from "@fragua/core";
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import {
@@ -160,7 +159,10 @@ export function RunConversation({
   // collapse into a single "(unscoped)" section — shouldn't happen
   // for agent-emitted messages but we guard defensively.
   const sections = useMemo(() => groupByNode(messages), [messages]);
-  const visibleSections = sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult"));
+  const visibleSections = useMemo(
+    () => sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult")),
+    [sections],
+  );
 
   // nodeIds with a live in-flight buffer (real nodeId only; the unscoped
   // sentinel surfaces as a null-keyed buffer handled at the tail).
@@ -169,6 +171,15 @@ export function RunConversation({
     for (const buf of streamingByNode.values()) if (buf.nodeId != null) s.add(buf.nodeId);
     return s;
   }, [streamingByNode]);
+  // Membership-stable view of the streaming node ids: `streamingByNode` is a
+  // fresh Map on every SSE delta, but WHICH nodes are streaming only changes
+  // on message_start/message_end. Funnelling through a primitive string key
+  // gives downstream memos (branch grouping) a dep that holds per token.
+  const streamingNodeKey = useMemo(() => [...streamingNodeIds].sort().join("\n"), [streamingNodeIds]);
+  const streamingNodeIdList = useMemo<readonly string[]>(
+    () => (streamingNodeKey.length === 0 ? [] : streamingNodeKey.split("\n")),
+    [streamingNodeKey],
+  );
   const hasSectionFor = useMemo(() => {
     const s = new Set<string | null>();
     for (const sec of visibleSections) s.add(sec.nodeId);
@@ -199,24 +210,17 @@ export function RunConversation({
     return out;
   }, [toolStreams, persistedToolNodeIds]);
 
-  // Set of every tool-type nodeId in the workflow. Parsed once per source
-  // change (the source is captured at run.started and never moves during a
-  // run). Used to render an empty Terminal placeholder when a tool node is
-  // running but hasn't emitted any output yet — without this, a long-silent
-  // tool node shows as an empty conversation.
+  // Set of every tool-type nodeId in the workflow, from the already-parsed
+  // fan-out topology. Used to render an empty Terminal placeholder when a
+  // tool node is running but hasn't emitted any output yet — without this,
+  // a long-silent tool node shows as an empty conversation.
   const toolNodeIds = useMemo<ReadonlySet<string>>(() => {
-    if (!workflowSource) return EMPTY_TOOL_NODE_IDS;
-    try {
-      const g = parseWorkflow(workflowSource);
-      const out = new Set<string>();
-      for (const node of Object.values(g.nodes)) {
-        if (handlerOf(node) === "tool") out.add(node.id);
-      }
-      return out;
-    } catch {
-      return EMPTY_TOOL_NODE_IDS;
+    const out = new Set<string>();
+    for (const [id, type] of fanout.nodeTypes) {
+      if (type === "tool") out.add(id);
     }
-  }, [workflowSource]);
+    return out;
+  }, [fanout.nodeTypes]);
 
   // Tool nodes that are running but have no other representation yet:
   // no persisted message, no live `tool.output_chunk` accumulator, no
@@ -302,18 +306,37 @@ export function RunConversation({
     return s;
   }, [renderItems]);
   const streamingOnlyParents = useMemo(() => {
-    const byParent = new Map<string, string[]>();
-    for (const buf of streamingByNode.values()) {
-      const nid = buf.nodeId;
-      if (nid == null) continue;
+    const parents: string[] = [];
+    for (const nid of streamingNodeIdList) {
       const parent = fanout.parentOf.get(nid);
-      if (parent === undefined || renderedParents.has(parent)) continue;
-      const list = byParent.get(parent) ?? [];
-      if (!list.includes(nid)) list.push(nid);
-      byParent.set(parent, list);
+      if (parent === undefined || renderedParents.has(parent) || parents.includes(parent)) continue;
+      parents.push(parent);
     }
-    return byParent;
-  }, [streamingByNode, fanout.parentOf, renderedParents]);
+    return parents;
+  }, [streamingNodeIdList, fanout.parentOf, renderedParents]);
+
+  // branchEntries re-walks every branch section's rows and re-sorts; called
+  // bare in the render map it re-ran per SSE delta for EVERY parallel group.
+  // Keyed on the membership-stable id list instead of the per-token Map, the
+  // regroup only happens when rows land or a stream starts/ends.
+  const parallelBranches = useMemo(() => {
+    const map = new Map<string, BranchEntry[]>();
+    for (const item of renderItems) {
+      if (item.kind !== "parallel") continue;
+      map.set(
+        `${item.parentId}-${item.indices[0]}`,
+        branchEntries(item.sections, item.parentId, fanout, streamingNodeIdList),
+      );
+    }
+    return map;
+  }, [renderItems, fanout, streamingNodeIdList]);
+  const liveOnlyBranches = useMemo(() => {
+    const map = new Map<string, BranchEntry[]>();
+    for (const parentId of streamingOnlyParents) {
+      map.set(parentId, branchEntries([], parentId, fanout, streamingNodeIdList));
+    }
+    return map;
+  }, [streamingOnlyParents, fanout, streamingNodeIdList]);
 
   const empty =
     !isLoading &&
@@ -348,7 +371,7 @@ export function RunConversation({
                   <Fragment key={`parallel-${item.parentId}-${item.indices[0]}`}>
                     <ParallelGroupSection
                       parentId={item.parentId}
-                      branches={branchEntries(item.sections, item.parentId, fanout, streamingByNode)}
+                      branches={parallelBranches.get(`${item.parentId}-${item.indices[0]}`) ?? []}
                       toolResultsById={toolResultsById}
                       streamingByNode={streamingByNode}
                       stateByNodeId={stateByNodeId}
@@ -396,11 +419,11 @@ export function RunConversation({
             {/* Streaming buffers for nodes with no section yet: a fresh fan-out
                 whose branches are mid-first-token (grouped under the parent), or
                 a lone non-branch node streaming before its first persisted row. */}
-            {[...streamingOnlyParents].map(([parentId]) => (
+            {streamingOnlyParents.map((parentId) => (
               <ParallelGroupSection
                 key={`parallel-live-${parentId}`}
                 parentId={parentId}
-                branches={branchEntries([], parentId, fanout, streamingByNode)}
+                branches={liveOnlyBranches.get(parentId) ?? []}
                 toolResultsById={toolResultsById}
                 streamingByNode={streamingByNode}
                 stateByNodeId={stateByNodeId}
@@ -585,7 +608,7 @@ function branchEntries(
   sections: Section[],
   parentId: string,
   fanout: Fanout,
-  streamingByNode: ReadonlyMap<string, StreamingMessage>,
+  streamingNodeIds: readonly string[],
 ): BranchEntry[] {
   const rowsByNode = new Map<string, RunMessageRow[]>();
   const nodeOrder: string[] = [];
@@ -602,9 +625,8 @@ function branchEntries(
     if (s.nodeId == null) continue;
     note(s.nodeId).push(...s.rows);
   }
-  for (const buf of streamingByNode.values()) {
-    const nid = buf.nodeId;
-    if (nid != null && fanout.parentOf.get(nid) === parentId) note(nid);
+  for (const nid of streamingNodeIds) {
+    if (fanout.parentOf.get(nid) === parentId) note(nid);
   }
   const byBranch = new Map<string, BranchNode[]>();
   for (const nid of nodeOrder) {
@@ -1015,8 +1037,6 @@ function ToolNodePendingRow({ testid }: { testid: string }): JSX.Element {
     </div>
   );
 }
-
-const EMPTY_TOOL_NODE_IDS: ReadonlySet<string> = new Set<string>();
 
 function composeTerminalBody(stdout: string, stderr: string): string {
   if (stderr.length === 0) return stdout;
