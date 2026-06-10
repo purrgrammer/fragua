@@ -167,10 +167,11 @@ steps:
       - quality_scan
       - coherence_scan
     next: synthesize
-    # Four in flight: full width would race six high-effort scans into provider
-    # rate limits at once; the reactive frontier back-fills a slot the moment a
-    # branch settles, so the tail two cost little wall-clock.
-    concurrency: 4
+    # Full width: six read-only scans is comfortably inside Anthropic's
+    # concurrent-stream limits, and each verify dispatches reactively as its
+    # scan settles, so the whole region completes in ~one scan + one verify
+    # of wall-clock.
+    concurrency: 6
     # Per-branch wall-clock backstop: a lens scan/verify is read-only
     # deliberation, so 15m is generous. Bounds a runaway llm branch that never
     # self-terminates (which would otherwise dam the join).
