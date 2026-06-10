@@ -118,5 +118,9 @@ export class CommittingRecorder implements SideEffectRecorder {
 }
 
 /** Bounded re-reads of the live OCC token before a recorder commit gives up —
- * intra-run sibling contention resolves in one or two tries (single committer). */
-const RECORDER_COMMIT_ATTEMPTS = 8;
+ * intra-run sibling contention resolves in one or two tries (single
+ * committer). Deliberately wider than the maximum fan-out concurrency (8):
+ * every concurrent sibling commit between two attempts costs one retry, so an
+ * attempts budget equal to the pool width could structurally exhaust under a
+ * full pool. */
+const RECORDER_COMMIT_ATTEMPTS = 16;

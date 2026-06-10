@@ -121,6 +121,71 @@ describe("dispatch interval bookkeeping", () => {
     expect(s.dispatchStartedAt).toBeNull();
   });
 
+  test("fan-out: the dispatch interval spans the whole region — branch completions don't close it, the join does", () => {
+    // Pre-fix the FIRST branch's node_completed closed the interval; every
+    // concurrent sibling's close then no-op'd and fanout_joined had no
+    // closer — activeMs accrued only fan-entry → first completion.
+    let s = applyFact(blankState(), RUN_STARTED, 100);
+    s = applyFact(
+      s,
+      { type: "fact.fanout_started", payload: { nodeId: "fan", iteration: 0, branches: ["a", "b"] } },
+      150,
+    );
+    expect(s.dispatchStartedAt).toBe(100);
+
+    // Branch a completes first (still in the active set) — interval stays open.
+    s = applyFact(
+      s,
+      { type: "fact.node_completed", payload: { nodeId: "a", iteration: 0, tokens: 1, costUsd: 0, nextNode: "j" } },
+      300,
+    );
+    expect(s.metrics.activeMs).toBe(0);
+    expect(s.dispatchStartedAt).toBe(100);
+
+    // Branch b aborts (stays in the active set) — interval still open.
+    s = applyFact(
+      s,
+      {
+        type: "fact.node_aborted",
+        payload: { nodeId: "b", iteration: 0, cause: "x", partialTokens: 0, partialCostUsd: 0 },
+      },
+      400,
+    );
+    expect(s.dispatchStartedAt).toBe(100);
+
+    // b's re-drive dispatch_started must NOT clobber the open anchor.
+    s = applyFact(
+      s,
+      { type: "fact.dispatch_started", payload: { nodeId: "b", iteration: 0, resumeOf: "paused" } },
+      450,
+    );
+    expect(s.dispatchStartedAt).toBe(100);
+    s = applyFact(
+      s,
+      { type: "fact.node_completed", payload: { nodeId: "b", iteration: 0, tokens: 1, costUsd: 0, nextNode: "j" } },
+      500,
+    );
+
+    // The barrier closes the region's interval: fan entry → join.
+    s = applyFact(
+      s,
+      { type: "fact.fanout_joined", payload: { nodeId: "fan", iteration: 0, nextNode: "j", branchesCompleted: 2 } },
+      600,
+    );
+    expect(s.metrics.activeMs).toBe(500);
+    expect(s.dispatchStartedAt).toBeNull();
+
+    // A LINEAR completion after the join still closes its own interval.
+    s = applyFact(s, { type: "fact.dispatch_started", payload: { nodeId: "j", iteration: 0, resumeOf: "fresh" } }, 700);
+    s = applyFact(
+      s,
+      { type: "fact.node_completed", payload: { nodeId: "j", iteration: 0, tokens: 1, costUsd: 0, nextNode: "exit" } },
+      900,
+    );
+    expect(s.metrics.activeMs).toBe(500 + 200);
+    expect(s.dispatchStartedAt).toBeNull();
+  });
+
   test("crash recovery (no lastAliveAt): pre-crash span dropped, post-resume span counted", () => {
     // Clean-acquire path: prior daemon released its lock cleanly but
     // left a 'running' run behind, so sweep has no priorHeartbeatAt

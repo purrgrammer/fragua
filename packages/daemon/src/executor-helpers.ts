@@ -235,9 +235,9 @@ export function readStringMap(v: unknown): Record<string, string> {
 }
 
 /** The canonical spread for stamping the goal-gate re-entry epoch on a fact
- * payload — omitted at 0 so never-retargeted runs stay byte-identical. Seven
- * emit sites carry it; one helper keeps a new fact type from silently
- * dropping the epoch (which corrupts pass-keyed projections). */
+ * payload — omitted at 0 so never-retargeted runs stay byte-identical. Every
+ * lifecycle emit site carries it; one helper keeps a new fact type from
+ * silently dropping the epoch (which corrupts pass-keyed projections). */
 export function passField(pass: number): Record<string, never> | { pass: number } {
   return pass > 0 ? { pass } : {};
 }
@@ -253,6 +253,35 @@ export function readNumber(v: unknown): number {
  * abort listener's closure hanging off it, reachable for the FULL deadline
  * after a seconds-long dispatch settled; a wide fan-out multiplied that by
  * branches × supersteps. */
+/** A releasable `AbortSignal.any`: same first-source-wins composite, plus a
+ * `release()` that removes the source listeners WITHOUT mutating signal
+ * state (safe to call after the dispatch settles, before/after
+ * `classifyAbortCause` reads the composite). `AbortSignal.any` itself pins
+ * the composite — and every closure hanging off it — on each source until
+ * that source aborts; with `opts.shutdownSignal` as a source, every branch
+ * ever dispatched stayed reachable for the daemon's lifetime. */
+export function composeAbortSignals(sources: AbortSignal[]): { signal: AbortSignal; release: () => void } {
+  const ctrl = new AbortController();
+  const offs: Array<() => void> = [];
+  for (const s of sources) {
+    if (s.aborted) {
+      if (!ctrl.signal.aborted) ctrl.abort(s.reason);
+      break;
+    }
+    const fn = (): void => {
+      if (!ctrl.signal.aborted) ctrl.abort(s.reason);
+    };
+    s.addEventListener("abort", fn, { once: true });
+    offs.push(() => s.removeEventListener("abort", fn));
+  }
+  return {
+    signal: ctrl.signal,
+    release: (): void => {
+      for (const off of offs) off();
+    },
+  };
+}
+
 export function armTimeout(ms: number): { signal: AbortSignal; disarm: () => void } {
   const ctrl = new AbortController();
   const timer = setTimeout(() => {

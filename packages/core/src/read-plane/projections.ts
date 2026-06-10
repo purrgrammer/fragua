@@ -228,13 +228,22 @@ export function runStateToDetail(
 // Workflow source is sha-pinned at enqueue and immutable, but runStateToDetail
 // runs on every detail fetch of a live run — without the memo each SSE-driven
 // refetch re-parses the same YAML and re-walks the closures. `null` caches a
-// parse failure so a corrupt source isn't re-parsed per push either.
+// parse failure so a corrupt source isn't re-parsed per push either. Bounded:
+// a long-lived daemon serving many distinct shas (schedules, iterative dev)
+// would otherwise accumulate parsed graphs forever; on overflow the oldest
+// entry is evicted (Map iteration order = insertion order), and a re-derive
+// after eviction is just one YAML parse.
+const FANOUT_TOPOLOGY_CACHE_MAX = 256;
 const fanoutTopologyCache = new Map<string, RunFanoutTopology | null>();
 
 function fanoutTopologyFor(workflowSha: string, workflowSource: string): RunFanoutTopology | undefined {
   const hit = fanoutTopologyCache.get(workflowSha);
   if (hit !== undefined) return hit ?? undefined;
   const derived = deriveFanoutTopology(workflowSource) ?? null;
+  if (fanoutTopologyCache.size >= FANOUT_TOPOLOGY_CACHE_MAX) {
+    const oldest = fanoutTopologyCache.keys().next().value;
+    if (oldest !== undefined) fanoutTopologyCache.delete(oldest);
+  }
   fanoutTopologyCache.set(workflowSha, derived);
   return derived ?? undefined;
 }
@@ -331,11 +340,6 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   const bump = (nodeId: string, pass: number, iteration: number, state: NodeState["state"], seq: number) => {
     byKey.set(keyOf(nodeId, pass, iteration), { nodeId, iteration, pass, state, lastEventSeq: seq });
   };
-  const passOf = (ev: StoredEvent): number => {
-    const v = (ev.payload as { pass?: unknown } | null | undefined)?.pass;
-    return typeof v === "number" && Number.isFinite(v) ? v : 0;
-  };
-
   for (const ev of events) {
     const nodeId = nodeIdOf(ev);
     if (nodeId == null) continue;
@@ -365,9 +369,17 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
         const raw = ev.payload as Record<string, unknown> | null | undefined;
         const rawBranches = raw?.["branches"];
         const branches = Array.isArray(rawBranches) ? (rawBranches as string[]) : [];
+        // The parallel node itself runs for the whole region — it never gets
+        // a node_started/node_completed of its own (current_node stays pinned
+        // to it; the join advances it), so without these two bumps it rendered
+        // "waiting" through the entire fan-out and forever after.
+        bump(nodeId, passOf(ev), iteration, "running", ev.seq);
         for (const b of branches) bump(b, passOf(ev), 0, "running", ev.seq);
         break;
       }
+      case "fact.fanout_joined":
+        bump(nodeId, passOf(ev), iteration, "completed", ev.seq);
+        break;
       case "fact.node_completed": {
         const outcome = (ev.payload as { outcomeStatus?: string }).outcomeStatus;
         bump(nodeId, passOf(ev), iteration, outcome === "fail" ? "failed" : "completed", ev.seq);
@@ -476,10 +488,10 @@ function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
     const ev = events[i];
     if (ev === undefined) continue;
     if (ev.type === "edge.selected") {
-      const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown; pass?: unknown };
+      const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown };
       if (typeof p.from !== "string" || typeof p.to !== "string") continue;
       const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
-      const pass = typeof p.pass === "number" && Number.isFinite(p.pass) ? p.pass : 0;
+      const pass = passOf(ev);
       const retargetTo = goalGateRetargetTarget(events, i, p.from);
       pushEdge(p.from, retargetTo ?? p.to, iteration, pass);
     }
@@ -517,6 +529,13 @@ function nodeIdOf(event: StoredEvent): string | null {
 function iterationOf(event: StoredEvent): number | null {
   const p = event.payload as { iteration?: unknown };
   return typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : null;
+}
+
+/** Goal-gate re-entry epoch from a fact payload — absent/invalid ⇒ 0.
+ * Null-payload-safe (a corrupted store row must not throw the projection). */
+function passOf(event: StoredEvent): number {
+  const v = (event.payload as { pass?: unknown } | null | undefined)?.pass;
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
 export { deriveNodeStates, deriveSelectedEdges };

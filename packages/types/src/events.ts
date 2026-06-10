@@ -885,7 +885,20 @@ export type FactEvent =
        * join). Clears the active set and advances `current_node` to the join
        * (`nextNode`) in one commit (I1 — a crash in the gap would orphan it). */
       type: "fact.fanout_joined";
-      payload: { nodeId: string; iteration: number; nextNode: string; branchesCompleted: number };
+      payload: {
+        nodeId: string;
+        iteration: number;
+        /** Goal-gate re-entry epoch, mirroring `fact.fanout_started.pass` —
+         * the projection closes the parallel node's pass-keyed entry with it
+         * (a re-entered region's join would otherwise close pass 0's entry
+         * and leave the live pass "running" forever). Omitted when 0.
+         *
+         * contract: no-bump — additive optional field; the reducer never
+         * reads it. */
+        pass?: number;
+        nextNode: string;
+        branchesCompleted: number;
+      };
     };
 
 export type FactType = FactEvent["type"];

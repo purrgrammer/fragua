@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { retryCountKey } from "@fragua/core";
+import { mergeFanoutAppendOpts } from "../src/executor.ts";
 import {
   buildSubstitutionArgs,
   classifyAbortCause,
+  composeAbortSignals,
   deriveResumeOf,
   errorMessage,
   isAbortError,
   maxRetriesOverrideKey,
   mergeRoutingPatches,
   nodeRetryCount,
+  passField,
   readBudgetOverrides,
   readBudgetWarned,
   readNumber,
@@ -157,5 +160,49 @@ describe("executor-helpers", () => {
     const start = Date.now();
     await sleep(10_000, ac.signal);
     expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  test("passField omits the key entirely at pass 0 and emits it above", () => {
+    // Consumers distinguish pre-pass facts by key ABSENCE — a `pass: 0`
+    // literal would break `'pass' in payload` checks and change fact bytes.
+    expect("pass" in passField(0)).toBe(false);
+    expect(passField(1)).toEqual({ pass: 1 });
+  });
+
+  test("mergeFanoutAppendOpts merges routingPatch key-wise (plan wins) and takes the max advanceAppliedTo", () => {
+    // A shallow spread would REPLACE the fold's routingDelta wholesale while
+    // advanceAppliedTo still committed — durably consuming the operator
+    // intent without applying it.
+    const merged = mergeFanoutAppendOpts(
+      { routingPatch: { "budget_override.run.cost": 9, keep: "fold" }, advanceAppliedTo: 12 },
+      { routingPatch: { keep: "plan", extra: 1 }, advanceAppliedTo: 7 },
+    );
+    expect(merged.routingPatch).toEqual({ "budget_override.run.cost": 9, keep: "plan", extra: 1 });
+    expect(merged.advanceAppliedTo).toBe(12);
+    // One-sided fields pass through untouched.
+    expect(mergeFanoutAppendOpts({ advanceAppliedTo: 3 }, {})).toEqual({ advanceAppliedTo: 3 });
+    expect(mergeFanoutAppendOpts({}, { routingPatch: { a: 1 } })).toEqual({ routingPatch: { a: 1 } });
+  });
+
+  test("composeAbortSignals: release() detaches source listeners without mutating signal state", () => {
+    const src = new AbortController();
+    const { signal, release } = composeAbortSignals([src.signal]);
+    release();
+    src.abort(new Error("late"));
+    // Released composite no longer follows the source...
+    expect(signal.aborted).toBe(false);
+
+    // ...while an unreleased one does, forwarding the first source's reason.
+    const src2 = new AbortController();
+    const live = composeAbortSignals([src2.signal]);
+    const reason = new Error("boom");
+    src2.abort(reason);
+    expect(live.signal.aborted).toBe(true);
+    expect(live.signal.reason).toBe(reason);
+
+    // An already-aborted source aborts the composite synchronously.
+    const pre = new AbortController();
+    pre.abort(new Error("pre"));
+    expect(composeAbortSignals([pre.signal]).signal.aborted).toBe(true);
   });
 });

@@ -59,6 +59,18 @@ describe("AbortRegistry — basics", () => {
     expect(reg.trip("nope")).toBe(false);
   });
 
+  test("linear flow: a single registration's disposer clears the run entry", () => {
+    // Mirrors invoke-handler's register → finally-dispose flow: dropping the
+    // dispose call (or swallowing it in a try/catch) would silently leak the
+    // entry and the supervisor would keep watching a settled handler.
+    const reg = new AbortRegistry();
+    const ctrl = new AbortController();
+    const dispose = reg.register("r-linear", ctrl, "step", 5_000);
+    expect(reg.has("r-linear")).toBe(true);
+    dispose();
+    expect(reg.has("r-linear")).toBe(false);
+  });
+
   test("tripAll aborts every live controller", () => {
     const reg = new AbortRegistry();
     const c1 = new AbortController();

@@ -225,13 +225,38 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
       { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, branches: ["a", "b"] }), seq: 1 },
       { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, nextNode: "synth" }), seq: 2 },
       { ...ev("fact.node_completed", { nodeId: "b", iteration: 0, nextNode: "synth" }), seq: 3 },
-      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, pass: 1, branches: ["a", "b"] }), seq: 4 },
-      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, pass: 1, nextNode: "synth" }), seq: 5 },
+      { ...ev("fact.fanout_joined", { nodeId: "fan", iteration: 0, nextNode: "synth", branchesCompleted: 2 }), seq: 4 },
+      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, pass: 1, branches: ["a", "b"] }), seq: 5 },
+      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, pass: 1, nextNode: "synth" }), seq: 6 },
     ];
     const nodes = deriveNodeStates(events);
     expect(new Set(nodes.map((n) => `${n.nodeId}#${n.pass}.${n.iteration}=${n.state}`))).toEqual(
-      new Set(["a#0.0=completed", "b#0.0=completed", "a#1.0=completed", "b#1.0=running"]),
+      new Set([
+        "fan#0.0=completed",
+        "a#0.0=completed",
+        "b#0.0=completed",
+        "fan#1.0=running",
+        "a#1.0=completed",
+        "b#1.0=running",
+      ]),
     );
+  });
+
+  test("the parallel node itself runs for the whole region and completes at the join", () => {
+    // It never emits node_started/node_completed of its own (current_node
+    // stays pinned to it; the barrier advances it) — pre-fix it had no
+    // closing transition and rendered "running" forever after the join.
+    const events: StoredEvent[] = [
+      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, branches: ["a", "b"] }), seq: 1 },
+    ];
+    expect(new Map(deriveNodeStates(events).map((n) => [n.nodeId, n.state])).get("fan")).toBe("running");
+    const joined: StoredEvent[] = [
+      ...events,
+      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, nextNode: "synth" }), seq: 2 },
+      { ...ev("fact.node_completed", { nodeId: "b", iteration: 0, nextNode: "synth" }), seq: 3 },
+      { ...ev("fact.fanout_joined", { nodeId: "fan", iteration: 0, nextNode: "synth", branchesCompleted: 2 }), seq: 4 },
+    ];
+    expect(new Map(deriveNodeStates(joined).map((n) => [n.nodeId, n.state])).get("fan")).toBe("completed");
   });
 });
 

@@ -99,6 +99,7 @@ const DETAIL_TYPES = new Set<string>([
   "fact.node_started",
   "fact.dispatch_started",
   "fact.fanout_started",
+  "fact.fanout_joined",
   "fact.node_completed",
   "fact.node_aborted",
   "edge.selected",
@@ -160,13 +161,19 @@ function foldDetailFrameInner(
       // pointer from the parallel node), so mark them running directly — the
       // graph glows them and the conversation groups their live streams.
       const branches = Array.isArray(payload?.["branches"]) ? (payload["branches"] as string[]) : [];
-      let next = prev;
+      // The parallel node itself runs for the whole region (it never emits
+      // node_started/node_completed of its own) — mark it running alongside
+      // its branches, mirroring the server's deriveNodeStates.
+      let next = setNodeState(prev, payload, "running", seq);
       // Branch entries inherit the region's pass (a goal-gate re-entry
       // re-seeds the whole fan-out at the bumped epoch).
       const regionPass = payload?.["pass"];
       for (const b of branches) next = setNodeState(next, { nodeId: b, pass: regionPass }, "running", seq);
       return next;
     }
+    case "fact.fanout_joined":
+      // The barrier completes the parallel node's region-wide entry.
+      return setNodeState(prev, payload, "completed", seq);
     case "fact.node_completed": {
       const outcome = stringField(payload, "outcomeStatus");
       return setNodeState(prev, payload, outcome === "fail" ? "failed" : "completed", seq);

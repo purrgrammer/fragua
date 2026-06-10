@@ -168,6 +168,20 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     return typeof v === "number" && Number.isFinite(v) ? v : 0;
   };
 
+  // A fan-out BRANCH step ends at its own terminal fact's ts (truthful), NOT
+  // the flat-next-step gap `fillOrphanDurations` would use — for a concurrent
+  // branch that gap is the barrier wait for its slowest sibling (a 3s verify
+  // showed 11m). Shared by the node_completed and node_aborted arms so the
+  // clamp/guard logic can't drift between them.
+  const stampBranchDuration = (nodeId: string, ts: number): void => {
+    const branchIdx = lastStepIdxForNode.get(nodeId);
+    if (branchIdx === undefined) return;
+    const branchStep = steps[branchIdx];
+    if (branchStep?.parentNodeId === undefined || branchStep.durationMs !== undefined) return;
+    const dur = ts - Date.parse(branchStep.startedAt);
+    if (Number.isFinite(dur) && dur >= 0) branchStep.durationMs = dur;
+  };
+
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
     const nodeId = stringField(data, "nodeId");
@@ -230,19 +244,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       if (nodeId) {
         pausedOpenNodes.delete(nodeId);
         pendingResumeFold.delete(nodeId);
-        // A fan-out BRANCH step ends at its node_completed.ts (truthful), NOT the
-        // flat-next-step gap `fillOrphanDurations` would use — for a concurrent
-        // branch that gap is the barrier wait for its slowest sibling (a 3s verify
-        // showed 11m). Stamp the truthful duration here so the merged Cost row
-        // spans the branch's real start → completion.
-        const branchIdx = lastStepIdxForNode.get(nodeId);
-        if (branchIdx !== undefined) {
-          const branchStep = steps[branchIdx];
-          if (branchStep?.parentNodeId !== undefined && branchStep.durationMs === undefined) {
-            const dur = ev.ts - Date.parse(branchStep.startedAt);
-            if (Number.isFinite(dur) && dur >= 0) branchStep.durationMs = dur;
-          }
-        }
+        stampBranchDuration(nodeId, ev.ts);
         const pending = pendingToolNode.get(nodeId);
         if (pending !== undefined) {
           // Tool node — no `llm.start` ever opened a step for this
@@ -268,23 +270,13 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     }
 
     if (ev.type === "fact.node_aborted") {
-      // A fan-out BRANCH that aborted (pause/shutdown/abort-loop) ends at its
-      // node_aborted.ts — stamp the truthful duration, exactly like a
-      // node_completed branch. Without this the branch step keeps
-      // `durationMs === undefined` and fillOrphanDurations' parentNodeId guard
-      // leaves it ticking `now - startedAt` forever, as if still running. A
-      // transient abort that later re-drives opens a NEW step (branch aborts
-      // aren't pause-folds), so this stamps only the ended attempt.
-      if (nodeId) {
-        const branchIdx = lastStepIdxForNode.get(nodeId);
-        if (branchIdx !== undefined) {
-          const branchStep = steps[branchIdx];
-          if (branchStep?.parentNodeId !== undefined && branchStep.durationMs === undefined) {
-            const dur = ev.ts - Date.parse(branchStep.startedAt);
-            if (Number.isFinite(dur) && dur >= 0) branchStep.durationMs = dur;
-          }
-        }
-      }
+      // An aborted branch ends at its node_aborted.ts — without the stamp the
+      // step keeps `durationMs === undefined` and fillOrphanDurations'
+      // parentNodeId guard leaves it ticking `now - startedAt` forever, as if
+      // still running. A transient abort that later re-drives opens a NEW
+      // step (branch aborts aren't pause-folds), so this stamps only the
+      // ended attempt.
+      if (nodeId) stampBranchDuration(nodeId, ev.ts);
       continue;
     }
 

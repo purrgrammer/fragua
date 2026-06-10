@@ -74,7 +74,11 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // Symmetrical with fact.run_started's status flip on the first
       // dispatch.
       if (next.status === "queued") next.status = "running";
-      next.dispatchStartedAt = now;
+      // Open the dispatch interval only when one isn't already open: during a
+      // fan-out the interval spans the whole region (fan entry → join /
+      // park), and a bundled successor dispatch_started overwriting the
+      // anchor would silently drop the span accrued so far.
+      if (next.dispatchStartedAt == null) next.dispatchStartedAt = now;
       // Frontier advance: a sub-node dispatched inside a live fan-out joins the
       // active set (the executor bundles this with the predecessor's
       // `node_completed` in one commit, so the frontier never loses a
@@ -94,7 +98,14 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.node_completed": {
       const p = fact.payload;
-      closeDispatchInterval(next, now);
+      // Close the dispatch interval only for LINEAR completions. A fan-out
+      // branch completion must not close it: the first finisher would null
+      // the anchor, every concurrent sibling's close would then no-op, and
+      // activeMs accrued only fan-entry → first completion. The region's
+      // interval closes at `fact.fanout_joined` (or a pause/halt) instead.
+      if (!readActiveNodes(next.routing)?.includes(p.nodeId)) {
+        closeDispatchInterval(next, now);
+      }
       next.metrics.billedTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
       next.metrics.totalInputCostUsd += p.inputCostUsd ?? 0;
@@ -136,8 +147,12 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.node_aborted": {
-      closeDispatchInterval(next, now);
       const p = fact.payload;
+      // Same linear-only close as node_completed: an aborted fan-out branch
+      // stays in the active set while its siblings keep running.
+      if (!readActiveNodes(next.routing)?.includes(p.nodeId)) {
+        closeDispatchInterval(next, now);
+      }
       next.metrics.billedTokens += p.partialTokens;
       next.metrics.totalCostUsd += p.partialCostUsd;
       next.metrics.totalInputCostUsd += p.partialInputCostUsd ?? 0;
@@ -168,6 +183,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.fanout_joined": {
       // Barrier: the frontier drained. Clear it and advance `current_node` to
       // the join in this same commit (I1).
+      closeDispatchInterval(next, now);
       delete next.routing[ACTIVE_NODES_ROUTING_KEY];
       next.currentNode = fact.payload.nextNode;
       next.nodeStartedAt = now;

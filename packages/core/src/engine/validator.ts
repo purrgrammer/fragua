@@ -465,6 +465,19 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     for (const d of sub) diags.push(d);
   }
 
+  // Branch closures per parallel node — walked ONCE and shared by both
+  // consumers (the W015 join-producer suppression below and the E036–E045
+  // oracle later). They answer different questions about the same region, so
+  // a second independent walk could silently diverge if closure semantics
+  // ever evolve (nested parallel, new closure predicates).
+  const closuresByParallel = new Map<string, ReturnType<typeof fanoutBranchClosures>>();
+  for (const p of nodes) {
+    if (p.type !== "parallel") continue;
+    const join = typeof p.attrs.join === "string" ? p.attrs.join : undefined;
+    const branches = Array.isArray(p.attrs.branches) ? p.attrs.branches : [];
+    closuresByParallel.set(p.id, fanoutBranchClosures(graph, { branches, join }));
+  }
+
   // Fan-out join producers: for each `type: parallel`, every node in a branch
   // closure that converges on the join. A `wait_all` barrier guarantees every
   // branch ran before the join, so a join reading `${{ outputs.<branch>.f }}`
@@ -474,10 +487,9 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   for (const p of nodes) {
     if (p.type !== "parallel") continue;
     const join = typeof p.attrs.join === "string" ? p.attrs.join : undefined;
-    const branches = Array.isArray(p.attrs.branches) ? p.attrs.branches : [];
     if (join === undefined) continue;
     const producers = fanoutJoinProducers.get(join) ?? new Set<string>();
-    for (const c of fanoutBranchClosures(graph, { branches, join })) {
+    for (const c of closuresByParallel.get(p.id) ?? []) {
       for (const n of c.nodes) producers.add(n);
     }
     fanoutJoinProducers.set(join, producers);
@@ -971,7 +983,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     // oracle can't drift from the runtime scope. Ownership tracking catches
     // overlapping branches (E044).
     const owner = new Map<string, string>();
-    for (const bc of fanoutBranchClosures(graph, { branches, join })) {
+    for (const bc of closuresByParallel.get(p.id) ?? []) {
       const entry = bc.entry;
       if (!nodeIds.has(entry)) continue;
       const closure = bc.nodes;

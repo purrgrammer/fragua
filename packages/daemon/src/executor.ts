@@ -36,6 +36,7 @@ import {
   BUDGET_WARNED_KEY,
   buildSubstitutionArgs,
   classifyAbortCause,
+  composeAbortSignals,
   deriveResumeOf,
   errorMessage,
   MAX_LOOPS_OVERRIDE_KEY,
@@ -149,7 +150,7 @@ type BranchOutcome =
  * `routingPatch` (plan wins per key) — a shallow spread would silently REPLACE
  * the fold's routingDelta with the plan's patch while `advanceAppliedTo` still
  * committed, durably consuming the operator intent without applying it. */
-function mergeFanoutAppendOpts(fold: FanoutAppendOpts, plan: FanoutAppendOpts): FanoutAppendOpts {
+export function mergeFanoutAppendOpts(fold: FanoutAppendOpts, plan: FanoutAppendOpts): FanoutAppendOpts {
   const merged: FanoutAppendOpts = { ...fold, ...plan };
   if (fold.routingPatch !== undefined && plan.routingPatch !== undefined) {
     merged.routingPatch = { ...fold.routingPatch, ...plan.routingPatch };
@@ -161,15 +162,24 @@ function mergeFanoutAppendOpts(fold: FanoutAppendOpts, plan: FanoutAppendOpts): 
 }
 
 /** A clean proceed decision for a branch sub-node — branches consume no operator
- * fold (the fan-out applies it once at the superstep boundary, not per branch). */
-const PROCEED_DECISION: Extract<core.IntentDecision, { kind: "proceed" }> = {
-  kind: "proceed",
-  routingDelta: {},
-  shouldPause: false,
-  shouldPauseAfterDispatch: false,
-  appliedSeqs: [],
-  dropped: [],
-};
+ * fold (the fan-out applies it once at the superstep boundary, not per branch).
+ * Deep-frozen: the constant is shared across every concurrent branch, so a
+ * future consumer pushing into `appliedSeqs` or patching `routingDelta` would
+ * silently cross-corrupt branches — freezing turns that into a loud throw. */
+const PROCEED_DECISION: Extract<core.IntentDecision, { kind: "proceed" }> = (() => {
+  const d: Extract<core.IntentDecision, { kind: "proceed" }> = {
+    kind: "proceed",
+    routingDelta: {},
+    shouldPause: false,
+    shouldPauseAfterDispatch: false,
+    appliedSeqs: [],
+    dropped: [],
+  };
+  Object.freeze(d.routingDelta);
+  Object.freeze(d.appliedSeqs);
+  Object.freeze(d.dropped);
+  return Object.freeze(d);
+})();
 
 export interface ExecutorOpts {
   store: IEventStore;
@@ -807,7 +817,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       signals.push(t.signal);
       deadlines.push(t.disarm);
     }
-    const signal = AbortSignal.any(signals);
+    const { signal, release: releaseSignal } = composeAbortSignals(signals);
 
     const iteration = nodeRetryCount(state.routing, currentNode);
     // Pre-commit recorder: each recordIntent/recordDone/recordFailed
@@ -963,8 +973,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       leakGraceMs: leakGrace,
     });
     // The dispatch settled (result, leak, or throw) — disarm the deadline so
-    // its timer stops pinning the composite signal + listener closures.
+    // its timer stops pinning the composite signal + listener closures, and
+    // release the composite's source listeners so the long-lived
+    // shutdownSignal doesn't accumulate one per dispatch. NOT on leak: a
+    // leaked handler still holds the composite, and a later registry abort
+    // must still propagate to it.
     for (const disarm of deadlines) disarm();
+    if (invocation.kind !== "leak") releaseSignal();
     if (invocation.kind === "leak") {
       leakedTimeout = true;
       result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
@@ -1228,12 +1243,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       deadlines.push(t.disarm);
     }
     // Backstop deadline so an unbounded llm branch can't dam the join forever.
-    // AbortSignal.any fires on the first signal, so a tighter branch `max_ms`
+    // The composite fires on the first source, so a tighter branch `max_ms`
     // (above) still wins.
     const backstop = armTimeout(branchTimeoutMs);
     signals.push(backstop.signal);
     deadlines.push(backstop.disarm);
-    const signal = AbortSignal.any(signals);
+    const { signal, release: releaseSignal } = composeAbortSignals(signals);
     // Iteration from branchRouting (the live view), not baseState — a same-turn
     // back-edge re-entry must run under its bumped counter.
     const iteration = nodeRetryCount(branchRouting as Record<string, unknown>, branchNode);
@@ -1291,8 +1306,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       maxMsOverride: branchTimeoutMs,
     });
     // The branch settled — disarm its deadlines so N settled branches don't
-    // each pin their signal + handler closures for the rest of the backstop.
+    // each pin their signal + handler closures for the rest of the backstop,
+    // and release the composite's source listeners (shutdownSignal would
+    // otherwise hold one per branch per superstep for the daemon's lifetime).
+    // NOT on leak: a leaked handler still consults the composite.
     for (const disarm of deadlines) disarm();
+    if (invocation.kind !== "leak") releaseSignal();
     obs.flush();
 
     if (invocation.kind === "leak") {
@@ -1532,7 +1551,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         [
           {
             type: "fact.fanout_joined",
-            payload: { nodeId: parallelNode, iteration, nextNode: join, branchesCompleted: branches.length },
+            payload: {
+              nodeId: parallelNode,
+              iteration,
+              ...passField(pass),
+              nextNode: join,
+              branchesCompleted: branches.length,
+            },
           },
         ],
         takeFold(),
