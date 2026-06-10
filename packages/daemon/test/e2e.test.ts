@@ -21,7 +21,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
   test("enqueue via POST /runs → daemon runs → GET /runs/:id shows success", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fragua-e2e-"));
     const store = new SqliteStore({ path: join(dir, "fragua.db") });
-    const echoSource = "name: echo-wf\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const echoSource = "name: echo-wf\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
     store.saveWorkflow("wf-sha", "echo-wf", echoSource, serializeGraph(parseWorkflow(echoSource)), CURRENT_IR_VERSION);
 
     const dispatcher = new Dispatcher();

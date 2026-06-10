@@ -17,7 +17,7 @@ import {
 import { scheduleDispatcherTick } from "../src/schedule-dispatcher.ts";
 
 const HOUR_MS = 60 * 60 * 1000;
-const TRIVIAL_YAML = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
+const TRIVIAL_YAML = "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
 
 interface Fixture {
   store: SqliteStore;

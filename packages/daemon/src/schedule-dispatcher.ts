@@ -149,7 +149,7 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
         type: "fact.schedule_invalid_workflow",
         payload: {
           scheduleId: row.id,
-          error: `parse failed: ${mint.detail}`,
+          error: `${mint.reason === "invalid" ? "validation failed" : "parse failed"}: ${mint.detail}`,
         },
       });
       paused++;

@@ -129,7 +129,7 @@ describe("intent plane — build* (validate + construct)", () => {
 });
 
 describe("intent plane — buildSaveWorkflow (workflow-identity mint)", () => {
-  const SOURCE = "name: solo\nsteps:\n  work: {type: llm, prompt: do it}\n";
+  const SOURCE = "name: solo\nsteps:\n  work: {type: llm, prompt: do it, next: exit}\n";
 
   test("valid source → sha + ir + irVersion match the canonical mint exactly", () => {
     const { plane } = rig();
@@ -152,6 +152,36 @@ describe("intent plane — buildSaveWorkflow (workflow-identity mint)", () => {
     expect(mint.detail.length).toBeGreaterThan(0);
   });
 
+  test("parseable but validator-rejected source → { ok: false, reason: 'invalid' } with the E-codes", () => {
+    // A fan-out branch that resolves to a run terminal — the exact shape the
+    // executor fails closed on (fanout_branch_terminal). The mint is the
+    // chokepoint every enqueue path routes through, so it must refuse first.
+    const { plane } = rig();
+    const mint = plane.buildSaveWorkflow(`name: bad
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a, b], next: synth }
+  a: { type: llm, prompt: x, next: exit }
+  b: { type: llm, prompt: x, next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`);
+    expect(mint.ok).toBe(false);
+    if (mint.ok) throw new Error("expected failure");
+    expect(mint.reason).toBe("invalid");
+    expect(mint.detail.length).toBeGreaterThan(0);
+    expect(mint.diagnostics?.every((d) => d.severity === "error")).toBe(true);
+  });
+
+  test("warning-only diagnostics still mint (warnings are advisory)", () => {
+    // W007: a goal gate without retry_target — warns, must not block the save.
+    const { plane } = rig();
+    const mint = plane.buildSaveWorkflow(`name: warned
+steps:
+  work: { type: llm, prompt: x, goal-gate: true, next: exit }
+`);
+    expect(mint.ok).toBe(true);
+  });
+
   test("commitSaveWorkflow forwards to store.saveWorkflow", () => {
     const saved: unknown[] = [];
     const store = {
@@ -165,7 +195,7 @@ describe("intent plane — buildSaveWorkflow (workflow-identity mint)", () => {
 
 describe("intent plane — buildEnqueue", () => {
   const WITH_INPUTS =
-    "name: cfg\ninputs:\n  ticket: {type: string, required: true}\nsteps:\n  work: {type: llm, prompt: do}\n";
+    "name: cfg\ninputs:\n  ticket: {type: string, required: true}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";
   const inputDecls = parseWorkflow(WITH_INPUTS).attrs.inputs;
 
   test("valid → params with minted runId + assembled routing", () => {

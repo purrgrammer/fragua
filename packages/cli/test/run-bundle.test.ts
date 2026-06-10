@@ -27,7 +27,7 @@ function seedStore(dir: string): { dbPath: string; runId: string } {
   const dbPath = join(dir, "store.db");
   const store = new SqliteStore({ path: dbPath });
   const sha = "a".repeat(64); // realistic content-hash sha — import shape-gates it
-  store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
+  store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n", STUB_IR, 1);
   const runId = newRunId();
   store.enqueueRun({ runId, workflowSha: sha, priority: 0 });
   store.putArtifact({ runId, nodeId: "work", iteration: 0, key: "out" }, new TextEncoder().encode("hello-bytes"));

@@ -122,7 +122,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   return withStoreClient(opts, async (client) => {
     const mint = client.plane.buildSaveWorkflow(source);
     if (!mint.ok) {
-      console.error(chalk.red(`run: ${opts.workflow} did not parse: ${mint.detail}`));
+      const verb = mint.reason === "invalid" ? "failed validation" : "did not parse";
+      console.error(chalk.red(`run: ${opts.workflow} ${verb}: ${mint.detail}`));
       return 1;
     }
     client.plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });

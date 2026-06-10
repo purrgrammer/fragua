@@ -58,8 +58,8 @@ beforeEach(() => {
   store.saveWorkflow(
     "wf",
     "t",
-    "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
-    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+    "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+    serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n")),
     CURRENT_IR_VERSION,
   );
   workflowReader = createTestWorkflowReader();
@@ -83,7 +83,7 @@ describe("POST /workflows — upload", () => {
   test("accepts YAML source, returns sha, persists via saveWorkflow", async () => {
     const res = await req("POST", "/workflows", {
       name: "hello",
-      source: "name: hello\nsteps:\n  work: {type: llm, prompt: x}\n",
+      source: "name: hello\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { sha: string; name: string };
@@ -103,12 +103,14 @@ describe("POST /workflows — upload", () => {
   test("rejects missing fields", async () => {
     const res1 = await req("POST", "/workflows", { name: "x" });
     expect(res1.status).toBe(400);
-    const res2 = await req("POST", "/workflows", { source: "name: t\nsteps:\n  work: {type: llm, prompt: x}\n" });
+    const res2 = await req("POST", "/workflows", {
+      source: "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+    });
     expect(res2.status).toBe(400);
   });
 
   test("rejects unparseable workflow source with 400 + invalid_workflow code", async () => {
-    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
     const sha = sha256Hex(source);
     const res = await req("POST", "/workflows", { name: "bad", source });
     expect(res.status).toBe(400);
@@ -119,7 +121,7 @@ describe("POST /workflows — upload", () => {
   });
 
   test("idempotent on same source — same sha, no duplicate row", async () => {
-    const src = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const src = "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
     const a = (await (await req("POST", "/workflows", { name: "x", source: src })).json()) as { sha: string };
     const b = (await (await req("POST", "/workflows", { name: "x", source: src })).json()) as { sha: string };
     expect(a.sha).toBe(b.sha);
@@ -133,6 +135,7 @@ steps:
   impl:
     type: llm
     prompt: x
+    next: exit
     timeout: "garbage"
 `,
     });
@@ -150,7 +153,7 @@ steps:
       name: "ok",
       source: `name: ok
 steps:
-  a: {type: llm, prompt: x, max_ms: 0}
+  a: {type: llm, prompt: x, max_ms: 0, next: exit}
 `,
     });
     expect(res.status).toBe(200);
@@ -164,6 +167,7 @@ steps:
   a:
     type: llm
     prompt: x
+    next: exit
     max_ms: -1
 `,
     });
@@ -176,7 +180,7 @@ steps:
     for (const t of ["0", "0s", "0ms"]) {
       const res = await req("POST", "/workflows", {
         name: "ok",
-        source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, timeout: "${t}"}\n`,
+        source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, timeout: "${t}", next: exit}\n`,
       });
       expect(res.status).toBe(200);
     }
@@ -186,7 +190,7 @@ steps:
     for (const t of ["500ms", "30s", "5m", "2h"]) {
       const res = await req("POST", "/workflows", {
         name: "ok",
-        source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, timeout: "${t}"}\n`,
+        source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, timeout: "${t}", next: exit}\n`,
       });
       expect(res.status).toBe(200);
     }
@@ -195,7 +199,7 @@ steps:
   test("accepts valid numeric max_ms", async () => {
     const res = await req("POST", "/workflows", {
       name: "ok",
-      source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, max_ms: 1500}\n`,
+      source: `name: ok\nsteps:\n  a: {type: llm, prompt: x, max_ms: 1500, next: exit}\n`,
     });
     expect(res.status).toBe(200);
   });
@@ -231,7 +235,7 @@ steps:
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: "bad",
-          source: `name: bad\nsteps:\n  impl: {type: llm, prompt: x, model: "claude-sonnet-4-6", provider: "openrouter"}\n`,
+          source: `name: bad\nsteps:\n  impl: {type: llm, prompt: x, model: "claude-sonnet-4-6", provider: "openrouter", next: exit}\n`,
         }),
       }),
     );
@@ -250,7 +254,10 @@ steps:
       new Request("http://test/workflows", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "good", source: "name: good\nsteps:\n  work: {type: llm, prompt: x}\n" }),
+        body: JSON.stringify({
+          name: "good",
+          source: "name: good\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+        }),
       }),
     );
     expect(goodRes.status).toBe(200);
@@ -283,9 +290,9 @@ describe("POST /runs — enqueue", () => {
   });
 
   test("rejects enqueue against a stored but unparseable workflow sha", async () => {
-    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
     const sha = sha256Hex(source);
-    const validIr = serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n"));
+    const validIr = serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n"));
     store.saveWorkflow(sha, "bad", source, validIr, CURRENT_IR_VERSION);
     const res = await req("POST", "/runs", { workflowSha: sha });
     expect(res.status).toBe(400);
@@ -316,7 +323,7 @@ describe("POST /runs — enqueue", () => {
     // earlier sha-pinned flow that mismatched the listing's short sha
     // against the route's full sha and always 400'd.
     const projectCwd = "/projects/alpha";
-    const yamlSource = "name: change\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const yamlSource = "name: change\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
     workflowReader.set("change", yamlSource, { cwd: projectCwd });
 
     const res = await req("POST", "/runs", {
@@ -338,7 +345,7 @@ describe("POST /runs — enqueue", () => {
   });
 
   test("rejects simple-flow enqueue when workflowReader returns unparseable source", async () => {
-    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const source = "name: [unterminated\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
     workflowReader.set("bad", source, { cwd: "/projects/alpha" });
     const res = await req("POST", "/runs", {
       cwd: "/projects/alpha",
@@ -352,8 +359,8 @@ describe("POST /runs — enqueue", () => {
   });
 
   test("simple flow: workflowScope:'global' pins lookup to the global source", async () => {
-    const yamlSource = "name: change-global\nsteps:\n  work: {type: llm, prompt: g}\n";
-    workflowReader.set("change", "name: change-local\nsteps:\n  work: {type: llm, prompt: l}\n", {
+    const yamlSource = "name: change-global\nsteps:\n  work: {type: llm, prompt: g, next: exit}\n";
+    workflowReader.set("change", "name: change-local\nsteps:\n  work: {type: llm, prompt: l, next: exit}\n", {
       cwd: "/projects/alpha",
     });
     workflowReader.set("change", yamlSource); // global
@@ -377,7 +384,7 @@ inputs:
     type: string
     required: true
 steps:
-  work: {type: llm, prompt: "fix \${{ inputs.ticket }}"}
+  work: {type: llm, prompt: "fix \${{ inputs.ticket }}", next: exit}
 `;
     workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
     const res = await req("POST", "/runs", {
@@ -398,7 +405,7 @@ inputs:
     type: choice
     options: [dev, prod]
 steps:
-  work: {type: llm, prompt: "deploy \${{ inputs.env }}"}
+  work: {type: llm, prompt: "deploy \${{ inputs.env }}", next: exit}
 `;
     workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
     const res = await req("POST", "/runs", {
@@ -422,7 +429,7 @@ inputs:
     options: [dev, prod]
     default: dev
 steps:
-  work: {type: llm, prompt: "fix \${{ inputs.ticket }} on \${{ inputs.env }}"}
+  work: {type: llm, prompt: "fix \${{ inputs.ticket }} on \${{ inputs.env }}", next: exit}
 `;
     workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
     const res = await req("POST", "/runs", {
@@ -546,8 +553,8 @@ steps:
     s.saveWorkflow(
       "wf",
       "t",
-      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
-      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n")),
       CURRENT_IR_VERSION,
     );
     const app = fresh({
@@ -574,8 +581,8 @@ steps:
     s.saveWorkflow(
       "wf",
       "t",
-      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
-      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n")),
       CURRENT_IR_VERSION,
     );
     const app = fresh({
@@ -1336,8 +1343,8 @@ describe("global event feed (cross-run)", () => {
       tStore.saveWorkflow(
         "wf",
         "t",
-        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
-        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n")),
         CURRENT_IR_VERSION,
       );
       // Window 1 @ ts=1_000_000
@@ -1378,8 +1385,8 @@ describe("global event feed (cross-run)", () => {
       tStore.saveWorkflow(
         "wf",
         "t",
-        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
-        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n")),
         CURRENT_IR_VERSION,
       );
       // ts windows: 2_000_000, 2_000_100, 2_000_200
@@ -1426,8 +1433,8 @@ describe("global event feed (cross-run)", () => {
       tStore.saveWorkflow(
         "wf",
         "t",
-        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
-        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n")),
         CURRENT_IR_VERSION,
       );
       // Seed run "z" first, then take its last delivered event as the cursor.
@@ -1467,8 +1474,8 @@ describe("global event feed (cross-run)", () => {
       tStore.saveWorkflow(
         "wf",
         "t",
-        "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
-        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+        "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n",
+        serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n")),
         CURRENT_IR_VERSION,
       );
       const runIds = ["r01", "r02", "r03", "r04", "r05", "r06", "r07", "r08"];

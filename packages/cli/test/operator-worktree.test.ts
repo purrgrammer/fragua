@@ -23,8 +23,8 @@ function rig(): Rig {
   store.saveWorkflow(
     "wf",
     "test-wf",
-    "name: test-wf\nsteps:\n  n1: {type: llm, prompt: x}\n",
-    serializeGraph(parseWorkflow("name: test-wf\nsteps:\n  n1: {type: llm, prompt: x}\n")),
+    "name: test-wf\nsteps:\n  n1: {type: llm, prompt: x, next: exit}\n",
+    serializeGraph(parseWorkflow("name: test-wf\nsteps:\n  n1: {type: llm, prompt: x, next: exit}\n")),
     CURRENT_IR_VERSION,
   );
   return {

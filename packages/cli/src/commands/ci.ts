@@ -204,7 +204,8 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // the workflow is never already present.
     const mint = plane.buildSaveWorkflow(source);
     if (!mint.ok) {
-      console.error(chalk.red(`ci: ${opts.workflow} did not parse: ${mint.detail}`));
+      const verb = mint.reason === "invalid" ? "failed validation" : "did not parse";
+      console.error(chalk.red(`ci: ${opts.workflow} ${verb}: ${mint.detail}`));
       return CLI_EXIT.usage;
     }
     plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });

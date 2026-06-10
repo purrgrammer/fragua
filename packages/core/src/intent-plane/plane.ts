@@ -17,6 +17,7 @@ import type { IntentEvent } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { type InputBindingError, validateInputBindings } from "../engine/inputs.ts";
+import { type Diagnostic, validate } from "../engine/validator.ts";
 import { sha256Hex } from "../handler/sha256.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
@@ -32,13 +33,16 @@ type IntentOf<K extends IntentEvent["type"]> = Extract<IntentEvent, { type: K }>
  * `workflow-ir.md` (B) swaps this for an IR-hash *inside this one function*),
  * `ir = serializeGraph(parseWorkflow(source))`. The single chokepoint every
  * mint site (server `POST /workflows`, the by-name resolver, the schedule
- * dispatcher) routes through. Returns the parsed `graph` so callers can run
- * their own additional validation (timeout attrs, model resolution); a parse
- * failure is reported, never thrown — each adapter maps it to its own
- * handling (HTTP 400 vs schedule auto-pause). */
+ * dispatcher) routes through. The mint REJECTS error-severity validator
+ * diagnostics (`invalid`) — every enqueue path runs through here, so a graph
+ * the validator hard-errors on (E-codes) never reaches the executor; warnings
+ * pass (`fragua validate` is the surface that shows them). Returns the parsed
+ * `graph` so callers can run their own additional validation (timeout attrs,
+ * model resolution); a failure is reported, never thrown — each adapter maps
+ * it to its own handling (HTTP 400 vs schedule auto-pause). */
 export type WorkflowMint =
   | { ok: true; sha: string; ir: string; irVersion: number; graph: Graph }
-  | { ok: false; reason: "unparseable"; detail: string };
+  | { ok: false; reason: "unparseable" | "invalid"; detail: string; diagnostics?: Diagnostic[] };
 
 /** Resolved enqueue request. The adapter resolves location/identity + the
  * workflow (§3.6) and passes them in; the plane validates the input
@@ -198,6 +202,15 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         graph = parseWorkflow(source);
       } catch (err) {
         return { ok: false, reason: "unparseable", detail: err instanceof Error ? err.message : String(err) };
+      }
+      const errors = validate(graph).filter((d) => d.severity === "error");
+      if (errors.length > 0) {
+        return {
+          ok: false,
+          reason: "invalid",
+          detail: errors.map((d) => `${d.code}: ${d.message}`).join("; "),
+          diagnostics: errors,
+        };
       }
       return { ok: true, sha: sha256Hex(source), ir: serializeGraph(graph), irVersion: CURRENT_IR_VERSION, graph };
     },
