@@ -42,13 +42,21 @@ function parseArgs(argv: string[]): Args {
   //                     (Previously null; combined with limit=30 this dropped
   //                     them below the 3-run analysis threshold.)
   //   --limit 200     — hard cap on rows so cost stays bounded for high-traffic
-  //                     projects. Override either via $ARGUMENTS.
+  //                     projects. Override either via workflow inputs.
   let limit = 200;
   let workflow: string | null = null;
   let sinceMs: number | null = Date.now() - 7 * 86400_000;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    const next = argv[i + 1];
+  // Accept both `--flag value` and `--flag=value`.
+  const tokens = argv.flatMap((a) => {
+    if (a.startsWith("--") && a.includes("=")) {
+      const eq = a.indexOf("=");
+      return [a.slice(0, eq), a.slice(eq + 1)];
+    }
+    return [a];
+  });
+  for (let i = 0; i < tokens.length; i++) {
+    const a = tokens[i];
+    const next = tokens[i + 1];
     if (a === "--db" && next) { storePath = next; i++; }
     else if (a === "--limit" && next) { limit = Number(next); i++; }
     else if (a === "--workflow" && next) { workflow = next; i++; }
