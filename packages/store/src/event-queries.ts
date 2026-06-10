@@ -180,6 +180,41 @@ export function selectSnapshotEvents(db: Database, runId: string): EventRow[] {
   return db.query<EventRow, [string]>(SELECT_SNAPSHOT_EVENTS_SQL).all(runId);
 }
 
+// Latest lifecycle fact TYPE per node — windowed over the (run_id, seq) PK
+// with the node-lifecycle vocabulary bound as JSON (NODE_LIFECYCLE_FACT_TYPES)
+// so the fan-out recovery scan never materialises the full event log just to
+// learn each active branch's most recent state.
+const SELECT_LATEST_LIFECYCLE_BY_NODE_SQL = `
+  SELECT node_id AS nodeId, type
+    FROM (
+      SELECT json_extract(payload, '$.nodeId') AS node_id,
+             type,
+             ROW_NUMBER() OVER (
+               PARTITION BY json_extract(payload, '$.nodeId')
+               ORDER BY seq DESC
+             ) AS rn
+        FROM events
+       WHERE run_id = ?1
+         AND type IN (SELECT value FROM json_each(?2))
+    )
+   WHERE rn = 1 AND node_id IS NOT NULL
+`;
+
+export interface LatestLifecycleRow {
+  nodeId: string;
+  type: string;
+}
+
+export function selectLatestLifecycleByNode(
+  db: Database,
+  runId: string,
+  lifecycleTypes: readonly string[],
+): LatestLifecycleRow[] {
+  return db
+    .query<LatestLifecycleRow, [string, string]>(SELECT_LATEST_LIFECYCLE_BY_NODE_SQL)
+    .all(runId, JSON.stringify(lifecycleTypes));
+}
+
 const SELECT_EVENTS_UNAPPLIED_INTENTS_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events

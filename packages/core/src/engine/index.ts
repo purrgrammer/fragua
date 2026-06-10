@@ -1,5 +1,6 @@
 export * from "./budget-policy.ts";
 export * from "./edge-selection.ts";
+export * from "./fanout.ts";
 export * from "./goal-gate-policy.ts";
 export * from "./inputs.ts";
 export * from "./outputs-profile.ts";

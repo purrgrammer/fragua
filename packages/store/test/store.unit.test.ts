@@ -943,3 +943,40 @@ describe("SqliteStore — gcBlobs", () => {
     store.close();
   });
 });
+
+describe("SqliteStore — getLatestLifecycleByNode", () => {
+  test("returns the latest lifecycle fact TYPE per node; non-lifecycle and node-less events are ignored", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const append = (fact: FactEvent) => {
+      const v = store.getState(runId)!.version;
+      store.appendFact(runId, [fact], v);
+    };
+    append({ type: "fact.run_started", payload: { workflowSha: "wf", contractVersion: 1, startNode: "a" } });
+    append({ type: "fact.dispatch_started", payload: { nodeId: "a", iteration: 0, resumeOf: "fresh" } });
+    append({ type: "fact.dispatch_started", payload: { nodeId: "b", iteration: 0, resumeOf: "fresh" } });
+    append({
+      type: "fact.node_completed",
+      payload: { nodeId: "a", iteration: 0, tokens: 0, costUsd: 0, nextNode: "j" },
+    });
+    append({
+      type: "fact.node_aborted",
+      payload: { nodeId: "b", iteration: 0, cause: "aborted", partialTokens: 0, partialCostUsd: 0 },
+    });
+    // Interleaved observability under a node id must not displace the fact.
+    store.appendObservabilityEvents(runId, [{ type: "llm.start", payload: { nodeId: "b", model: "m" } }]);
+
+    const latest = new Map(store.getLatestLifecycleByNode(runId).map((r) => [r.nodeId, r.type]));
+    expect(latest.get("a")).toBe("fact.node_completed");
+    expect(latest.get("b")).toBe("fact.node_aborted");
+    expect(latest.has("j")).toBe(false);
+    store.close();
+  });
+
+  test("empty log → empty result", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(store.getLatestLifecycleByNode(runId)).toEqual([]);
+    store.close();
+  });
+});

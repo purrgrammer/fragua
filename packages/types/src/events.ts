@@ -890,6 +890,17 @@ export type FactEvent =
 
 export type FactType = FactEvent["type"];
 
+/** The per-node lifecycle facts — the vocabulary both the read-plane's
+ * node-state fold and the executor's fan-out recovery scan reason over
+ * (latest-of-these-per-node decides whether a branch is running, done, or
+ * needs a re-dispatch). One declaration so the two can't drift. */
+export const NODE_LIFECYCLE_FACT_TYPES = [
+  "fact.dispatch_started",
+  "fact.node_started",
+  "fact.node_completed",
+  "fact.node_aborted",
+] as const satisfies readonly FactType[];
+
 /** Discriminated union over every typed event fragua emits. */
 export type AnyEvent = IntentEvent | FactEvent;
 export type AnyEventType = AnyEvent["type"];

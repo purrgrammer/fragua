@@ -3,6 +3,7 @@
 
 import type { Edge, Graph, NodeAttrs } from "../types/graph.ts";
 import { isOutputRecord, type OutputProfile } from "../types/outputs.ts";
+import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
 import { inputReferences, outputReferences } from "./substitution.ts";
@@ -476,18 +477,8 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     const branches = Array.isArray(p.attrs.branches) ? p.attrs.branches : [];
     if (join === undefined) continue;
     const producers = fanoutJoinProducers.get(join) ?? new Set<string>();
-    for (const entry of branches) {
-      const queue = [entry];
-      const seen = new Set<string>();
-      while (queue.length > 0) {
-        const x = queue.shift()!;
-        if (x === join || seen.has(x) || !nodeIds.has(x)) continue;
-        seen.add(x);
-        producers.add(x);
-        for (const e of graph.edges) {
-          if (e.from === x && e.attrs.fanout !== true && e.to !== join && !seen.has(e.to)) queue.push(e.to);
-        }
-      }
+    for (const c of fanoutBranchClosures(graph, { branches, join })) {
+      for (const n of c.nodes) producers.add(n);
     }
     fanoutJoinProducers.set(join, producers);
   }
@@ -961,22 +952,16 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       continue;
     }
 
-    // Per-branch closure: nodes reachable from the entry via non-fanout edges,
-    // stopping at (and excluding) the join. Track which entry owns each closure
-    // node so branches that overlap (a shared sub-node → identity collision)
-    // are caught.
+    // Per-branch closure via the shared walk (engine/fanout.ts) — the same node
+    // set the executor budgets over and the UI groups by, so the legality
+    // oracle can't drift from the runtime scope. Ownership tracking catches
+    // overlapping branches (E044).
     const owner = new Map<string, string>();
-    for (const entry of branches) {
+    for (const bc of fanoutBranchClosures(graph, { branches, join })) {
+      const entry = bc.entry;
       if (!nodeIds.has(entry)) continue;
-      const closure: string[] = [];
-      const queue = [entry];
-      const seen = new Set<string>();
-      let reachesJoin = false;
-      while (queue.length > 0) {
-        const x = queue.shift()!;
-        if (x === join || seen.has(x)) continue;
-        seen.add(x);
-        closure.push(x);
+      const closure = bc.nodes;
+      for (const x of closure) {
         const prevOwner = owner.get(x);
         if (prevOwner !== undefined && prevOwner !== entry) {
           diags.push({
@@ -988,12 +973,8 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           });
         }
         owner.set(x, entry);
-        for (const e of nonFanoutEdgesFrom(x)) {
-          if (e.to === join) reachesJoin = true;
-          else if (!seen.has(e.to)) queue.push(e.to);
-        }
       }
-      if (!reachesJoin && nodeIds.has(entry)) {
+      if (!bc.reachesJoin) {
         diags.push({
           severity: "error",
           code: "E039",

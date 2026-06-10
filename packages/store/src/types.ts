@@ -774,6 +774,14 @@ export interface IEventReader {
    */
   getLatestEvents(runId: string, limit: number): StoredEvent[];
   /**
+   * The TYPE of the most recent node-lifecycle fact per node
+   * (`NODE_LIFECYCLE_FACT_TYPES`: dispatch_started / node_started /
+   * node_completed / node_aborted). One windowed SQL pass — the fan-out
+   * recovery scan reads this instead of materialising the full event log
+   * every dispatch turn.
+   */
+  getLatestLifecycleByNode(runId: string): Array<{ nodeId: string; type: string }>;
+  /**
    * Forward direction of the global SSE feed: cross-run, ascending
    * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`
    * cursor, filtered by `kindIn`. Returns events in `(ts, run_id,

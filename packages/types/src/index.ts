@@ -45,6 +45,7 @@ export {
   type IntentType,
   isTerminal,
   type MessageRole,
+  NODE_LIFECYCLE_FACT_TYPES,
   type PauseReason,
   type QuarantineReason,
   type RawEvent,

@@ -236,6 +236,85 @@ export function readNumber(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
+/** A clearable replacement for `AbortSignal.timeout(ms)`: a plain setTimeout
+ * aborting with a TimeoutError-named reason (so `classifyAbortCause` still
+ * reads "timeout") plus a disarm. AbortSignal.timeout's timer is
+ * uncancellable — armed per dispatch it kept the composite signal, and every
+ * abort listener's closure hanging off it, reachable for the FULL deadline
+ * after a seconds-long dispatch settled; a wide fan-out multiplied that by
+ * branches × supersteps. */
+export function armTimeout(ms: number): { signal: AbortSignal; disarm: () => void } {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => {
+    const err = new Error(`dispatch deadline exceeded (${ms}ms)`);
+    err.name = "TimeoutError";
+    ctrl.abort(err);
+  }, ms);
+  return { signal: ctrl.signal, disarm: () => clearTimeout(timer) };
+}
+
+/** Per-dispatch usage totals — the shape `planTransition` takes verbatim as
+ * its `accounting` input. `lastModel` is explicitly `string | undefined`
+ * (not optional) so the object spreads cleanly under
+ * `exactOptionalPropertyTypes`. */
+export interface UsageTotals {
+  turnBilled: number;
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  lastModel: string | undefined;
+}
+
+/** Per-dispatch usage accumulator shared by the linear and fan-out branch
+ * kernels: the `addUsage` sink for `ctx.llm` plus the `cost.recorded` mirror
+ * for llm handlers that bypass `ctx.llm.call()` (the handler-bridge forwards
+ * every pi-agent-core message_end → cost.recorded; without the mirror the
+ * abort arm's partial payload reads zero and run_state.metrics undercounts
+ * aborted spend). The two kernels carried character-identical copies of this
+ * closure, and the pair had already drifted once before — one accumulator
+ * makes the next usage field land on both paths by construction. */
+export function makeUsageAccumulator(): {
+  accounting: core.LlmAccounting;
+  mirrorCostRecorded(payload: Record<string, unknown>): void;
+  totals(): Readonly<UsageTotals>;
+} {
+  const t: UsageTotals = {
+    turnBilled: 0,
+    totalCostUsd: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    lastModel: undefined,
+  };
+  return {
+    accounting: {
+      addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
+        t.turnBilled += tokens;
+        t.totalCostUsd += costUsd;
+        t.totalInputTokens += inputTokens ?? 0;
+        t.totalOutputTokens += outputTokens ?? 0;
+        t.totalCacheReadTokens += cacheReadTokens ?? 0;
+        t.totalCacheWriteTokens += cacheWriteTokens ?? 0;
+        t.lastModel = model;
+      },
+    },
+    mirrorCostRecorded: (p) => {
+      t.turnBilled += readNumber(p["total_tokens"]);
+      t.totalCostUsd += readNumber(p["cost_usd"]);
+      t.totalInputTokens += readNumber(p["input_tokens"]);
+      t.totalOutputTokens += readNumber(p["output_tokens"]);
+      t.totalCacheReadTokens += readNumber(p["cache_read_tokens"]);
+      t.totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
+      const model = p["model"];
+      if (typeof model === "string") t.lastModel = model;
+    },
+    totals: () => t,
+  };
+}
+
 /** Resolve the effective BackoffConfig for a node from
  * (node.retry_policy → graph.default_retry_policy → "none") plus the
  * custom-override attrs (retry_initial_delay_ms / retry_backoff_factor /

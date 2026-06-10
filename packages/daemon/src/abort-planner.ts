@@ -35,6 +35,26 @@ export interface AbortUsage {
   cacheWriteTokens: number;
 }
 
+/** Map a dispatch's usage totals (executor-helpers `UsageTotals`) onto the
+ * abort plan's partial-spend shape. */
+export function abortUsageOf(t: {
+  turnBilled: number;
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+}): AbortUsage {
+  return {
+    tokens: t.turnBilled,
+    costUsd: t.totalCostUsd,
+    inputTokens: t.totalInputTokens,
+    outputTokens: t.totalOutputTokens,
+    cacheReadTokens: t.totalCacheReadTokens,
+    cacheWriteTokens: t.totalCacheWriteTokens,
+  };
+}
+
 export interface AbortPlanInput {
   currentNode: string;
   iteration: number;

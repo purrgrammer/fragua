@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
-import { VALID_WRITERS } from "@fragua/types";
+import { NODE_LIFECYCLE_FACT_TYPES, VALID_WRITERS } from "@fragua/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -88,6 +88,7 @@ import {
   selectGlobalEventsForward,
   selectGlobalEventsLatest,
   selectLatestEvents,
+  selectLatestLifecycleByNode,
   selectNextPendingIntent,
   selectOrphanSideEffects,
   selectSnapshotEvents,
@@ -841,6 +842,10 @@ export class SqliteStore implements IEventStore {
 
   getLatestEvents(runId: string, limit: number): StoredEvent[] {
     return selectLatestEvents(this.db, runId, limit).map(rowToStoredEvent);
+  }
+
+  getLatestLifecycleByNode(runId: string): Array<{ nodeId: string; type: string }> {
+    return selectLatestLifecycleByNode(this.db, runId, NODE_LIFECYCLE_FACT_TYPES);
   }
 
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[] {

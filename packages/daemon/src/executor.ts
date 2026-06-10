@@ -11,6 +11,7 @@
 import {
   type ExecutionEnvironment,
   evaluateBudget,
+  fanoutClosureUnion,
   type Graph,
   type OutputsValue,
   readGoalGateRetries,
@@ -30,12 +31,14 @@ import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import {
+  armTimeout,
   BUDGET_WARNED_KEY,
   buildSubstitutionArgs,
   classifyAbortCause,
   deriveResumeOf,
   errorMessage,
   MAX_LOOPS_OVERRIDE_KEY,
+  makeUsageAccumulator,
   nodeRetryCount,
   readBudgetOverrides,
   readBudgetWarned,
@@ -50,12 +53,12 @@ import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 // are imported from executor.ts by tests and other call sites.
 export { buildSubstitutionArgs, classifyAbortCause, resolveBackoff } from "./executor-helpers.ts";
 
-import { planAbort } from "./abort-planner.ts";
+import { abortUsageOf, planAbort } from "./abort-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { makeOccController, tryAppendFact } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import { CommittingRecorder } from "./recorder.ts";
-import { cancelToFacts } from "./result-to-facts.ts";
+import { abortResultToFacts, cancelToFacts } from "./result-to-facts.ts";
 import { captureBoundarySnapshot, disposeTerminalWorktree } from "./snapshot-service.ts";
 import { planTransition } from "./transition-planner.ts";
 import { wakePending } from "./wake-pending.ts";
@@ -126,25 +129,6 @@ class FanoutBailError extends Error {
     super(`fan-out pool bailed for ${runId}`);
     this.name = "AbortError";
   }
-}
-
-/** The sub-node ids a `parallel` node's per-node budget must sum over: the branch
- * entries plus their non-fanout descendants, stopping at (and excluding) the
- * join. Branch completions commit `node_completed` under the SUB-NODE id, never
- * the parallel node, so the parent's own `nodeCosts` bucket is always 0 — the cap
- * has to read the closure. Mirrors the validator's per-branch closure BFS. */
-function fanoutClosureSet(graph: Graph, branches: readonly string[], join: string): Set<string> {
-  const closure = new Set<string>();
-  const queue = [...branches];
-  while (queue.length > 0) {
-    const x = queue.shift()!;
-    if (x === join || closure.has(x)) continue;
-    closure.add(x);
-    for (const e of graph.edges) {
-      if (e.from === x && e.attrs.fanout !== true && e.to !== join && !closure.has(e.to)) queue.push(e.to);
-    }
-  }
-  return closure;
 }
 
 /** Outcome of executing one fan-out branch sub-node (executeBranchNode). The
@@ -793,7 +777,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const spec = opts.dispatcher.get(workflowSha, currentNode);
     const steerCtrl = new AbortController();
     const signals: AbortSignal[] = [steerCtrl.signal, opts.shutdownSignal];
-    if (spec.maxMs !== undefined) signals.push(AbortSignal.timeout(spec.maxMs));
+    const deadlines: Array<() => void> = [];
+    if (spec.maxMs !== undefined) {
+      const t = armTimeout(spec.maxMs);
+      signals.push(t.signal);
+      deadlines.push(t.disarm);
+    }
     const signal = AbortSignal.any(signals);
 
     const iteration = nodeRetryCount(state.routing, currentNode);
@@ -812,13 +801,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // unconditionally; the soft timer + hard ceiling live inside `obs.push`.
     const obs = makeObservabilitySink(opts.store, runId, "linear");
 
-    let turnBilled = 0;
-    let totalCostUsd = 0;
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let totalCacheReadTokens = 0;
-    let totalCacheWriteTokens = 0;
-    let lastModel: string | undefined;
+    const usage = makeUsageAccumulator();
     // Reactive budget halt: when a `cost.recorded` event mid-handler
     // pushes cumulative spend over a `budget_policy="stop"` ceiling,
     // we abort the in-flight handler and emit fact.run_halted{
@@ -835,17 +818,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     let reactiveBudgetPauseBreach:
       | { scope: "run" | "node"; metric: "cost" | "tokens"; limit: number; actual: number }
       | undefined;
-    const accounting: core.LlmAccounting = {
-      addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
-        turnBilled += tokens;
-        totalCostUsd += costUsd;
-        totalInputTokens += inputTokens ?? 0;
-        totalOutputTokens += outputTokens ?? 0;
-        totalCacheReadTokens += cacheReadTokens ?? 0;
-        totalCacheWriteTokens += cacheWriteTokens ?? 0;
-        lastModel = model;
-      },
-    };
 
     // Hard-filter ctx.tools by the node's allowed_tools / denied_tools.
     // A handler that reaches for `ctx.tools.get("bash")` on a node that
@@ -866,7 +838,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       llm: core.makeLlmClient({
         signal,
         call: opts.llmCall,
-        accounting,
+        accounting: usage.accounting,
       }),
       http: core.makeHttpClient(
         opts.defaultHttpTimeoutMs != null ? { signal, defaultTimeoutMs: opts.defaultHttpTimeoutMs } : { signal },
@@ -879,22 +851,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // threading it through every payload. (obs.push owns the soft timer +
         // hard size ceiling.)
         obs.push({ type, payload: { nodeId: currentNode, iteration, ...payload } });
-        // Mirror handler-emitted `cost.recorded` into the per-turn accumulator.
-        // Llm bypasses ctx.llm.call() and reports usage through ctx.emit
-        // (handler-bridge forwards every pi-agent-core message_end →
-        // cost.recorded). Without this mirror, the abort arm's `partial` payload
-        // reads zero on llm handlers and run_state.metrics undercounts aborted
-        // spend. Turn-local, not a reducer fold of cost.recorded (ground rule #5).
         if (type === "cost.recorded") {
-          const p = payload as Record<string, unknown>;
-          turnBilled += readNumber(p["total_tokens"]);
-          totalCostUsd += readNumber(p["cost_usd"]);
-          totalInputTokens += readNumber(p["input_tokens"]);
-          totalOutputTokens += readNumber(p["output_tokens"]);
-          totalCacheReadTokens += readNumber(p["cache_read_tokens"]);
-          totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
-          const model = p["model"];
-          if (typeof model === "string") lastModel = model;
+          usage.mirrorCostRecorded(payload as Record<string, unknown>);
 
           // Reactive budget gate. Bounds peak overshoot to one in-flight LLM
           // message rather than the turn's full spend. Fires once per dispatch —
@@ -905,6 +863,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
             const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
             const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
+            const turn = usage.totals();
             // Read overrides from effective routing (post-fold) so the Raise &
             // Resume flow takes effect on the FIRST dispatch after resume.
             const overrides = readBudgetOverrides(effectiveRouting);
@@ -912,10 +871,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               graphAttrs: graph?.attrs ?? {},
               ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
               completedNodeId: currentNode,
-              cumulativeCostUsd: state.metrics.totalCostUsd + totalCostUsd,
-              cumulativeTokens: priorRunFresh + turnBilled,
-              nodeCumulativeCostUsd: priorNodeBucket.costUsd + totalCostUsd,
-              nodeCumulativeTokens: priorNodeBucket.tokens + turnBilled,
+              cumulativeCostUsd: state.metrics.totalCostUsd + turn.totalCostUsd,
+              cumulativeTokens: priorRunFresh + turn.turnBilled,
+              nodeCumulativeCostUsd: priorNodeBucket.costUsd + turn.totalCostUsd,
+              nodeCumulativeTokens: priorNodeBucket.tokens + turn.turnBilled,
               alreadyWarned: readBudgetWarned(effectiveRouting),
               ...(overrides !== undefined ? { overrides } : {}),
             });
@@ -979,6 +938,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       steerCtrl,
       leakGraceMs: leakGrace,
     });
+    // The dispatch settled (result, leak, or throw) — disarm the deadline so
+    // its timer stops pinning the composite signal + listener closures.
+    for (const disarm of deadlines) disarm();
     if (invocation.kind === "leak") {
       leakedTimeout = true;
       result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
@@ -1048,14 +1010,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         abortCause,
         reactiveBudgetHaltDetail,
         reactiveBudgetPauseBreach,
-        usage: {
-          tokens: turnBilled,
-          costUsd: totalCostUsd,
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          cacheReadTokens: totalCacheReadTokens,
-          cacheWriteTokens: totalCacheWriteTokens,
-        },
+        usage: abortUsageOf(usage.totals()),
         routingDelta: decision.routingDelta,
         appliedSeqs: decision.appliedSeqs,
         effectiveRouting,
@@ -1136,15 +1091,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       decision,
       graph: graphFor(state.workflowSha),
       handlerResult: result,
-      accounting: {
-        turnBilled,
-        totalCostUsd,
-        totalInputTokens,
-        totalOutputTokens,
-        totalCacheReadTokens,
-        totalCacheWriteTokens,
-        lastModel,
-      },
+      accounting: usage.totals(),
       effectiveRouting,
       currentNode,
       iteration,
@@ -1250,11 +1197,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const spec = opts.dispatcher.get(baseState.workflowSha, branchNode);
     const steerCtrl = new AbortController();
     const signals: AbortSignal[] = [steerCtrl.signal, opts.shutdownSignal];
-    if (spec.maxMs !== undefined) signals.push(AbortSignal.timeout(spec.maxMs));
+    const deadlines: Array<() => void> = [];
+    if (spec.maxMs !== undefined) {
+      const t = armTimeout(spec.maxMs);
+      signals.push(t.signal);
+      deadlines.push(t.disarm);
+    }
     // Backstop deadline so an unbounded llm branch can't dam the join forever.
     // AbortSignal.any fires on the first signal, so a tighter branch `max_ms`
     // (above) still wins.
-    signals.push(AbortSignal.timeout(branchTimeoutMs));
+    const backstop = armTimeout(branchTimeoutMs);
+    signals.push(backstop.signal);
+    deadlines.push(backstop.disarm);
     const signal = AbortSignal.any(signals);
     const iteration = nodeRetryCount(baseState.routing, branchNode);
     const branchPass = readGoalGateRetries(baseState.routing);
@@ -1266,28 +1220,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       initialVersion: baseState.version,
     });
 
-    let turnBilled = 0;
-    let totalCostUsd = 0;
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let totalCacheReadTokens = 0;
-    let totalCacheWriteTokens = 0;
-    let lastModel: string | undefined;
-    // Same streaming-flush sink as the linear path (the timer once drifted out of
-    // this branch copy — now it can't). An IN-FLIGHT branch streams its
-    // observability live rather than holding it until it joins.
+    // Same streaming-flush sink + usage accumulator as the linear path (both
+    // once drifted out of this branch copy — now they can't). An IN-FLIGHT
+    // branch streams its observability live rather than holding it until it
+    // joins.
     const obs = makeObservabilitySink(opts.store, runId, "fan-out");
-    const accounting: core.LlmAccounting = {
-      addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
-        turnBilled += tokens;
-        totalCostUsd += costUsd;
-        totalInputTokens += inputTokens ?? 0;
-        totalOutputTokens += outputTokens ?? 0;
-        totalCacheReadTokens += cacheReadTokens ?? 0;
-        totalCacheWriteTokens += cacheWriteTokens ?? 0;
-        lastModel = model;
-      },
-    };
+    const usage = makeUsageAccumulator();
     const nodeAttrs = graph?.nodes[branchNode]?.attrs;
     const { allowedTools, deniedTools } = readToolScope(nodeAttrs);
     const ctxOpts: core.BuildContextOpts = {
@@ -1297,7 +1235,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       signal,
       routing: branchRouting,
       store: opts.store,
-      llm: core.makeLlmClient({ signal, call: opts.llmCall, accounting }),
+      llm: core.makeLlmClient({ signal, call: opts.llmCall, accounting: usage.accounting }),
       http: core.makeHttpClient(
         opts.defaultHttpTimeoutMs != null ? { signal, defaultTimeoutMs: opts.defaultHttpTimeoutMs } : { signal },
       ),
@@ -1306,17 +1244,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       args: buildSubstitutionArgs(branchRouting, graph?.attrs.inputs, outputsFor()),
       emitObservability: (type, payload) => {
         obs.push({ type, payload: { nodeId: branchNode, iteration, ...payload } });
-        if (type === "cost.recorded") {
-          const p = payload as Record<string, unknown>;
-          turnBilled += readNumber(p["total_tokens"]);
-          totalCostUsd += readNumber(p["cost_usd"]);
-          totalInputTokens += readNumber(p["input_tokens"]);
-          totalOutputTokens += readNumber(p["output_tokens"]);
-          totalCacheReadTokens += readNumber(p["cache_read_tokens"]);
-          totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
-          const model = p["model"];
-          if (typeof model === "string") lastModel = model;
-        }
+        if (type === "cost.recorded") usage.mirrorCostRecorded(payload as Record<string, unknown>);
       },
     };
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
@@ -1336,6 +1264,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // rather than hanging the pool forever.
       maxMsOverride: branchTimeoutMs,
     });
+    // The branch settled — disarm its deadlines so N settled branches don't
+    // each pin their signal + handler closures for the rest of the backstop.
+    for (const disarm of deadlines) disarm();
     obs.flush();
 
     if (invocation.kind === "leak") {
@@ -1343,26 +1274,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
     if (invocation.kind === "thrown") {
       const cause = classifyAbortCause(signal, invocation.error);
+      // The same partial-spend payload `planAbort` builds for the linear path
+      // (abortResultToFacts) — built through the shared mapper so a new usage
+      // field can't land on one path and silently miss the other.
       return {
         kind: "abort",
         nodeId: branchNode,
-        facts: [
-          {
-            type: "fact.node_aborted",
-            payload: {
-              nodeId: branchNode,
-              iteration,
-              ...(branchPass > 0 ? { pass: branchPass } : {}),
-              cause,
-              partialTokens: turnBilled,
-              partialCostUsd: totalCostUsd,
-              partialInputTokens: totalInputTokens,
-              partialOutputTokens: totalOutputTokens,
-              partialCacheReadTokens: totalCacheReadTokens,
-              partialCacheWriteTokens: totalCacheWriteTokens,
-            },
-          },
-        ],
+        facts: abortResultToFacts(branchNode, iteration, cause, abortUsageOf(usage.totals()), branchPass),
       };
     }
 
@@ -1373,15 +1291,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       decision: PROCEED_DECISION,
       graph,
       handlerResult: invocation.result,
-      accounting: {
-        turnBilled,
-        totalCostUsd,
-        totalInputTokens,
-        totalOutputTokens,
-        totalCacheReadTokens,
-        totalCacheWriteTokens,
-        lastModel,
-      },
+      accounting: usage.totals(),
       effectiveRouting: branchRouting,
       currentNode: branchNode,
       iteration,
@@ -1548,12 +1458,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const freshState = opts.store.getState(runId) ?? state;
 
     // The parallel node's per-node cost/token cap sums over its fan-out closure
-    // (branches + their non-fanout descendants up to the join) — see
-    // `fanoutClosureSet`. `max_cost_usd`/`max_tokens` summed across the closure
-    // accumulate over fan-out iterations too (a goal-gate re-entry re-runs the
-    // region), consistent with per-node-cap semantics. Empty when the graph is
-    // gone (the budget then sees a 0 node-cumulative — harmless, run-level still fires).
-    const closureNodes = graph !== null ? fanoutClosureSet(graph, branches, join) : new Set<string>();
+    // (branches + their non-fanout descendants up to the join — the shared
+    // `fanoutClosureUnion` walk, so the cap scope can't drift from the set the
+    // validator certified). `max_cost_usd`/`max_tokens` summed across the
+    // closure accumulate over fan-out iterations too (a goal-gate re-entry
+    // re-runs the region), consistent with per-node-cap semantics. Empty when
+    // the graph is gone (the budget then sees a 0 node-cumulative — harmless,
+    // run-level still fires).
+    const closureNodes = graph !== null ? fanoutClosureUnion(graph, { branches, join }) : new Set<string>();
 
     // Run-level budget against the NOW-folded cumulative. Each commit advanced
     // the durable total, so a branch crossing the cap stops the next dispatch —
@@ -1951,25 +1863,12 @@ function makeObservabilitySink(
 /** Active fan-out branches whose latest lifecycle fact is `node_aborted` — they
  * are being re-dispatched (resume after a pause/shutdown abort, or an abort-loop
  * re-drive) and need a fresh `dispatch_started` so they project as running, not
- * failed. Scans the log backward, latest-fact-wins, stopping once every active
- * branch is resolved. */
+ * failed. One windowed SQL pass (`NODE_LIFECYCLE_FACT_TYPES`) — this runs every
+ * fan-out dispatch turn, and materialising the full event log per turn scaled
+ * with run lifetime, not frontier size. */
 function abortedActiveBranches(store: IEventStore, runId: string, active: readonly string[]): string[] {
-  const activeSet = new Set(active);
-  const latest = new Map<string, string>();
-  const events = store.getEvents(runId);
-  for (let i = events.length - 1; i >= 0 && latest.size < activeSet.size; i--) {
-    const ev = events[i]!;
-    const nodeId = (ev.payload as { nodeId?: string } | null)?.nodeId;
-    if (nodeId == null || !activeSet.has(nodeId) || latest.has(nodeId)) continue;
-    if (
-      ev.type === "fact.dispatch_started" ||
-      ev.type === "fact.node_started" ||
-      ev.type === "fact.node_completed" ||
-      ev.type === "fact.node_aborted"
-    ) {
-      latest.set(nodeId, ev.type);
-    }
-  }
+  if (active.length === 0) return [];
+  const latest = new Map(store.getLatestLifecycleByNode(runId).map((r) => [r.nodeId, r.type]));
   return active.filter((n) => latest.get(n) === "fact.node_aborted");
 }
 

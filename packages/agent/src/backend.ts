@@ -659,6 +659,7 @@ export class PiLlmBackend implements LlmBackend {
     if (input.signal?.aborted) {
       queueMicrotask(() => agent.abort());
     }
+    let armListener: (() => void) | undefined;
     const abortRace = input.signal
       ? new Promise<never>((_, reject) => {
           const arm = () => {
@@ -669,7 +670,10 @@ export class PiLlmBackend implements LlmBackend {
             }, ABORT_TEARDOWN_GRACE_MS);
           };
           if (input.signal!.aborted) arm();
-          else input.signal!.addEventListener("abort", arm, { once: true });
+          else {
+            armListener = arm;
+            input.signal!.addEventListener("abort", arm, { once: true });
+          }
         })
       : undefined;
 
@@ -680,7 +684,14 @@ export class PiLlmBackend implements LlmBackend {
       if (abortGraceTimer !== undefined) clearTimeout(abortGraceTimer);
       this.steering.endRun(runId, agent);
       unsubscribe();
-      if (input.signal) input.signal.removeEventListener("abort", abortListener);
+      if (input.signal) {
+        input.signal.removeEventListener("abort", abortListener);
+        // The `arm` once-listener never fires on a clean run — left registered
+        // it pins this whole run scope (agent state, transcript) to the
+        // signal's lifetime, which on a deadline-armed signal outlives the
+        // dispatch by the full timeout.
+        if (armListener !== undefined) input.signal.removeEventListener("abort", armListener);
+      }
     }
 
     // Persist the final transcript on a shared thread so subsequent nodes
