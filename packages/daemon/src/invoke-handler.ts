@@ -50,19 +50,21 @@ export async function invokeHandler(deps: {
   // un-cleared `setTimeout(maxMs + leakGrace)` would otherwise survive every
   // bounded dispatch and keep the event loop (and tests' fake timers) populated.
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
+  // Effective wall-clock deadline = the tighter of the node's own `max_ms` and
+  // any caller override (the fan-out branch backstop). `undefined` ⇒ truly
+  // unbounded (a linear node that opted out) ⇒ no leak watchdog.
+  const watchdogMaxMs =
+    spec.maxMs !== undefined && maxMsOverride !== undefined
+      ? Math.min(spec.maxMs, maxMsOverride)
+      : (spec.maxMs ?? maxMsOverride);
   // Register only here, not at steerCtrl creation: the caller's build steps
   // (graph load, context build) can throw, and the `finally` is the sole
   // dispose. `register` returns a disposer that removes exactly this entry, so
-  // concurrent fan-out branches on one run don't clobber each other.
-  const disposeRegistration = registry.register(runId, steerCtrl, ctx.nodeId);
+  // concurrent fan-out branches on one run don't clobber each other. The armed
+  // deadline rides the entry so the supervisor's leak watchdog budgets against
+  // exactly what this dispatch armed — never a re-derivation that can disagree.
+  const disposeRegistration = registry.register(runId, steerCtrl, ctx.nodeId, watchdogMaxMs);
   try {
-    // Effective wall-clock deadline = the tighter of the node's own `max_ms` and
-    // any caller override (the fan-out branch backstop). `undefined` ⇒ truly
-    // unbounded (a linear node that opted out) ⇒ no leak watchdog.
-    const watchdogMaxMs =
-      spec.maxMs !== undefined && maxMsOverride !== undefined
-        ? Math.min(spec.maxMs, maxMsOverride)
-        : (spec.maxMs ?? maxMsOverride);
     // Promise.race against a sentinel rather than a rejecting timer: a
     // rejection would mask an ignored-AbortSignal as a "handler error". A
     // resolved sentinel lets us detect the leak unambiguously.

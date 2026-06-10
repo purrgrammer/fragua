@@ -11,9 +11,8 @@
 // The supervisor owns no state of its own; it reads run_state and events and
 // trips controllers held by the abort registry.
 
-import { type IEventStore, readActiveNodes, type StoredEvent } from "@fragua/store";
+import type { IEventStore, StoredEvent } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
-import { DEFAULT_FANOUT_BRANCH_TIMEOUT_MS } from "./executor.ts";
 
 export interface SupervisorOpts {
   store: IEventStore;
@@ -22,17 +21,8 @@ export interface SupervisorOpts {
   shutdownSignal: AbortSignal;
   tickMs?: number;
   heartbeatIntervalMs?: number;
-  /** Max time a node may run past its maxMs before supervisor trips it. */
+  /** Max time a node may run past its armed deadline before supervisor trips it. */
   nodeLeakGraceMs?: number;
-  /** Per-handler maxMs lookup. Supervisor uses this to compute leak threshold.
-   * Returns `undefined` for nodes that opted out of wall-clock bounding
-   * (llm `max_ms=0`); the supervisor skips the leak-trip for those nodes. */
-  handlerMaxMsFor?: (workflowSha: string, nodeId: string) => number | undefined;
-  /** Wall-clock backstop (ms) the leak watchdog budgets an UNBOUNDED fan-out
-   * branch against, so a runaway llm branch that ignores its abort signal is
-   * still reclaimable (gap 5a). Mirrors the executor's per-branch deadline;
-   * defaults to `DEFAULT_FANOUT_BRANCH_TIMEOUT_MS`. */
-  fanoutBranchTimeoutMs?: number;
   /** Forward steer text into the llm backend's queue. pi-agent-core's
    * `Agent.steer()` enqueues into a `steeringQueue` that drains at end of
    * turn; tripping the abort controller would force the in-flight LLM
@@ -65,7 +55,6 @@ export function startSupervisor(opts: SupervisorOpts): {
   const tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
   const heartbeatMs = opts.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS;
   const leakGrace = opts.nodeLeakGraceMs ?? DEFAULT_LEAK_GRACE_MS;
-  const fanoutBranchTimeout = opts.fanoutBranchTimeoutMs ?? DEFAULT_FANOUT_BRANCH_TIMEOUT_MS;
 
   // Track per-run state so we only trip on NEW intents (seq > lastSeen).
   const lastIntentSeq = new Map<string, number>();
@@ -133,36 +122,26 @@ export function startSupervisor(opts: SupervisorOpts): {
 
       // (c) Stuck-node watchdog. Uses each handler's in-process `startedAt`
       // (via liveHandlers) so daemon pauses and restart gaps don't count — the
-      // node's maxMs budget applies to active execution only. A run reclaimed via
+      // deadline budget applies to active execution only. A run reclaimed via
       // startup-sweep gets a fresh budget; wall-clock accrued before the crash
       // is not charged.
       //
-      // Each in-flight handler is budgeted against ITS OWN node deadline and
-      // tripped INDIVIDUALLY — under a fan-out the branches have different maxMs,
-      // so budgeting the whole set against the longest let a short-deadline branch
-      // evade detection until the longest sibling expired. An UNBOUNDED fan-out
-      // branch (maxMs 0/undefined) is budgeted against the backstop — NOT skipped
-      // — so a runaway llm branch that ignores its abort signal is still
-      // reclaimable (gap 5a). A linear unbounded node opted out of wall-clock
-      // bounding, so it's left alone. The executor arms the same backstop as an
-      // AbortSignal.timeout, so a well-behaved branch self-aborts first; this is
-      // the leak backstop.
-      if (opts.handlerMaxMsFor != null) {
-        for (const runId of opts.registry.activeRuns()) {
-          const state = opts.store.getState(runId);
-          if (state == null || state.status !== "running") continue;
-          const active = readActiveNodes(state.routing);
-          for (const h of opts.registry.liveHandlers(runId)) {
-            let deadline = opts.handlerMaxMsFor(state.workflowSha, h.nodeId);
-            if (deadline === undefined || deadline === 0) {
-              // Unbounded: apply the backstop only to a fan-out branch (in the
-              // active set); a linear unbounded node is intentionally unbounded.
-              if (active?.includes(h.nodeId)) deadline = fanoutBranchTimeout;
-              else continue;
-            }
-            if (h.elapsedMs > deadline + leakGrace) {
-              h.controller.abort(new HandlerLeakedError(runId, h.nodeId));
-            }
+      // Each in-flight handler is budgeted against the deadline its OWN
+      // dispatch ARMED (the tighter of the node's max_ms and any fan-out
+      // branch backstop), stamped on the registry entry by invoke-handler —
+      // never a graph lookup or a config mirror, which can disagree with the
+      // in-flight signal (a parallel node's raised `timeout-minutes:` was
+      // force-aborted at the 20-minute default before). `undefined` ⇒
+      // intentionally unbounded (a linear node that opted out; cost/token
+      // bounds and operator intents are the operative ceiling) ⇒ left alone.
+      // Offenders trip INDIVIDUALLY, never the whole fan-out set.
+      for (const runId of opts.registry.activeRuns()) {
+        const state = opts.store.getState(runId);
+        if (state == null || state.status !== "running") continue;
+        for (const h of opts.registry.liveHandlers(runId)) {
+          if (h.deadlineMs === undefined) continue;
+          if (h.elapsedMs > h.deadlineMs + leakGrace) {
+            h.controller.abort(new HandlerLeakedError(runId, h.nodeId));
           }
         }
       }

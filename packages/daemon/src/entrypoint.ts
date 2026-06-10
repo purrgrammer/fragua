@@ -45,12 +45,6 @@ export interface DaemonMainOpts {
    * builds one loader and hands the same instance here and to the
    * auto-dispatcher. */
   graphLoader?: GraphLoader;
-  /** Supervisor's leak watchdog fallback when the dispatcher cannot
-   * resolve a spec for the run's current node. Defaults to the
-   * llm budget (30m) so the watchdog never trips a legitimate
-   * long-running node ahead of the executor's own deadline. Tests
-   * can pass a smaller value. */
-  unknownSpecFallbackMs?: number;
   /** Forwarded into executor + supervisor as their leak grace. */
   leakGraceMs?: number;
   /** Forwarded into executor as shutdown-drain budget. */
@@ -92,10 +86,6 @@ export interface DaemonMainOpts {
 
 const DEFAULT_LOCK_TTL_MS = DAEMON_LOCK_TTL_MS;
 const DEFAULT_CONCURRENCY = 16;
-// Matches @fragua/agent's llm default — the supervisor must never
-// trip a legitimate long-running llm node just because the spec
-// wasn't resolvable at the moment of the leak check.
-const DEFAULT_UNKNOWN_SPEC_FALLBACK_MS = 4 * 60 * 60 * 1000;
 
 export interface DaemonHandle {
   /** Resolves when the daemon loop exits cleanly. */
@@ -159,16 +149,14 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       });
       const registry = new AbortRegistry();
 
-      const unknownSpecFallbackMs = opts.unknownSpecFallbackMs ?? DEFAULT_UNKNOWN_SPEC_FALLBACK_MS;
+      // The leak watchdog budgets each handler against the deadline stamped on
+      // its registry entry at dispatch (invoke-handler), so no per-node maxMs
+      // lookup is wired here — the supervisor can't disagree with what was armed.
       const supervisorOpts: Parameters<typeof startSupervisor>[0] = {
         store: opts.store,
         registry,
         pid,
         shutdownSignal: ctrl.signal,
-        handlerMaxMsFor: (sha, nodeId) => {
-          if (!opts.dispatcher.has(sha, nodeId)) return unknownSpecFallbackMs;
-          return opts.dispatcher.get(sha, nodeId).maxMs;
-        },
       };
       if (opts.leakGraceMs !== undefined) supervisorOpts.nodeLeakGraceMs = opts.leakGraceMs;
       if (opts.onSteer !== undefined) supervisorOpts.onSteer = opts.onSteer;

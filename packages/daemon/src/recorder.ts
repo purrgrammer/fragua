@@ -95,6 +95,13 @@ export class CommittingRecorder implements SideEffectRecorder {
         if (!(err instanceof ConcurrencyError) || attempt >= RECORDER_COMMIT_ATTEMPTS) throw err;
         const live = this.opts.store.getState(this.opts.runId);
         if (live == null) throw err;
+        // The version moves under us for two reasons: a sibling branch's commit
+        // (benign — retry the append) or the run leaving `running` (operator
+        // pause/cancel, a leak-halt). Only the first may retry: the OCC throw is
+        // the fence that stops a zombie handler — one that ignored its abort and
+        // outlived a terminal — from landing side-effect facts AFTER
+        // fact.run_halted. Same status-vs-OCC split as commitFanoutFact.
+        if (live.status !== "running") throw err;
         this.currentVersion = live.version;
       }
     }

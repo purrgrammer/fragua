@@ -2,7 +2,8 @@
 // controllers. These tests lock the pause-aware contract: elapsed time
 // is measured from `register()` to now using a supplied clock, so a
 // test clock that never advances proves a paused process accrues no
-// elapsed time.
+// elapsed time. Each entry also carries the deadline its dispatch armed
+// (`deadlineMs`) — the supervisor's leak watchdog budgets against that.
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
@@ -19,6 +20,11 @@ function fakeClock(initial = 0): { now: () => number; advance: (ms: number) => v
       t = ms;
     },
   };
+}
+
+function elapsedOf(reg: AbortRegistry, runId: string): number | undefined {
+  const handlers = reg.liveHandlers(runId);
+  return handlers.length > 0 ? handlers[0]!.elapsedMs : undefined;
 }
 
 describe("AbortRegistry — basics", () => {
@@ -64,45 +70,46 @@ describe("AbortRegistry — basics", () => {
     expect(c2.signal.aborted).toBe(true);
   });
 
-  test("unregister removes the entry", () => {
+  test("liveHandlers carries the armed deadline; omitted means intentionally unbounded", () => {
     const reg = new AbortRegistry();
-    reg.register("r1", new AbortController());
-    reg.unregister("r1");
-    expect(reg.has("r1")).toBe(false);
-    expect(reg.elapsedMs("r1")).toBeUndefined();
+    reg.register("r1", new AbortController(), "bounded", 1_000);
+    reg.register("r1", new AbortController(), "unbounded");
+    const byNode = new Map(reg.liveHandlers("r1").map((h) => [h.nodeId, h.deadlineMs]));
+    expect(byNode.get("bounded")).toBe(1_000);
+    expect(byNode.get("unbounded")).toBeUndefined();
   });
 });
 
-describe("AbortRegistry — elapsedMs (pause-aware)", () => {
-  test("elapsedMs tracks injected clock, not wall-clock", () => {
+describe("AbortRegistry — elapsed (pause-aware)", () => {
+  test("elapsed tracks injected clock, not wall-clock", () => {
     const clk = fakeClock(1_000_000);
     const reg = new AbortRegistry(clk.now);
     reg.register("r1", new AbortController());
-    expect(reg.elapsedMs("r1")).toBe(0);
+    expect(elapsedOf(reg, "r1")).toBe(0);
     clk.advance(5_000);
-    expect(reg.elapsedMs("r1")).toBe(5_000);
+    expect(elapsedOf(reg, "r1")).toBe(5_000);
     clk.advance(10_000);
-    expect(reg.elapsedMs("r1")).toBe(15_000);
+    expect(elapsedOf(reg, "r1")).toBe(15_000);
   });
 
   test("re-registering a run (new process) resets elapsed", () => {
     const clk = fakeClock(0);
     const reg = new AbortRegistry(clk.now);
-    reg.register("r1", new AbortController());
+    const dispose = reg.register("r1", new AbortController());
     clk.advance(60_000);
-    expect(reg.elapsedMs("r1")).toBe(60_000);
-    reg.unregister("r1");
+    expect(elapsedOf(reg, "r1")).toBe(60_000);
+    dispose();
     clk.advance(600_000); // simulate 10 minutes of daemon pause
     reg.register("r1", new AbortController());
     // Brand-new entry — pause time does NOT count.
-    expect(reg.elapsedMs("r1")).toBe(0);
+    expect(elapsedOf(reg, "r1")).toBe(0);
     clk.advance(1_000);
-    expect(reg.elapsedMs("r1")).toBe(1_000);
+    expect(elapsedOf(reg, "r1")).toBe(1_000);
   });
 
-  test("elapsedMs is undefined for unknown runs", () => {
+  test("elapsed is undefined for unknown runs", () => {
     const reg = new AbortRegistry();
-    expect(reg.elapsedMs("nope")).toBeUndefined();
+    expect(elapsedOf(reg, "nope")).toBeUndefined();
   });
 });
 
@@ -117,7 +124,7 @@ describe("AbortRegistry — properties", () => {
         for (const d of advances) {
           clk.advance(d);
           totalAdvance += d;
-          const e = reg.elapsedMs("r");
+          const e = elapsedOf(reg, "r");
           expect(e).toBeDefined();
           expect(e).toBeGreaterThanOrEqual(0);
           expect(e).toBe(totalAdvance);
@@ -126,7 +133,7 @@ describe("AbortRegistry — properties", () => {
     );
   });
 
-  test("unregister+register cycle truly resets elapsed regardless of pause length", () => {
+  test("dispose+register cycle truly resets elapsed regardless of pause length", () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 0, max: 1_000_000 }),
@@ -135,13 +142,13 @@ describe("AbortRegistry — properties", () => {
         (preRun, pause, postRun) => {
           const clk = fakeClock(0);
           const reg = new AbortRegistry(clk.now);
-          reg.register("r", new AbortController());
+          const dispose = reg.register("r", new AbortController());
           clk.advance(preRun);
-          reg.unregister("r");
+          dispose();
           clk.advance(pause);
           reg.register("r", new AbortController());
           clk.advance(postRun);
-          expect(reg.elapsedMs("r")).toBe(postRun);
+          expect(elapsedOf(reg, "r")).toBe(postRun);
         },
       ),
     );

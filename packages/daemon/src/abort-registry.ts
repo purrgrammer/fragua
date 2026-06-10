@@ -24,16 +24,24 @@ export interface AbortRegistryEntry {
    * short-deadline branch evade detection until the longest sibling expired. */
   nodeId: string;
   /** `Date.now()` at register() time. Only meaningful within the
-   * current process; tripped if `now - startedAt > maxMs + leakGrace`. */
+   * current process; tripped if `now - startedAt > deadlineMs + leakGrace`. */
   startedAt: number;
+  /** The wall-clock deadline the dispatcher actually ARMED for this handler
+   * (the tighter of the node's `max_ms` and any fan-out branch backstop),
+   * stamped by invoke-handler at register() time. The leak watchdog budgets
+   * against THIS — never a graph re-derivation or a config mirror, which can
+   * disagree with the in-flight signal. `undefined` ⇒ intentionally unbounded
+   * (a linear node that opted out of wall-clock bounding). */
+  deadlineMs?: number;
 }
 
-/** One in-flight handler, with its own elapsed time + node — the unit the
- * supervisor's leak watchdog checks (and trips) per-branch. */
+/** One in-flight handler, with its own elapsed time + node + armed deadline —
+ * the unit the supervisor's leak watchdog checks (and trips) per-branch. */
 export interface LiveHandler {
   nodeId: string;
   controller: AbortController;
   elapsedMs: number;
+  deadlineMs?: number;
 }
 
 export class AbortRegistry {
@@ -45,13 +53,14 @@ export class AbortRegistry {
   }
 
   /** Register an in-flight handler's controller for a run, tagged with the node
-   * it runs (the production caller, invoke-handler, always passes `ctx.nodeId`;
-   * the watchdog needs it to budget each branch against its own deadline). The
-   * default is for registry-mechanics tests that don't exercise the watchdog.
+   * it runs and the armed wall-clock deadline (the production caller,
+   * invoke-handler, always passes `ctx.nodeId` + the watchdog deadline; the
+   * defaults are for registry-mechanics tests that don't exercise the watchdog).
    * Returns a disposer that removes exactly this entry (so concurrent fan-out
    * branches each clean up their own registration without clobbering siblings). */
-  register(runId: string, controller: AbortController, nodeId = ""): () => void {
+  register(runId: string, controller: AbortController, nodeId = "", deadlineMs?: number): () => void {
     const entry: AbortRegistryEntry = { controller, nodeId, startedAt: this.clock() };
+    if (deadlineMs !== undefined) entry.deadlineMs = deadlineMs;
     let set = this.entries.get(runId);
     if (set === undefined) {
       set = new Set();
@@ -64,11 +73,6 @@ export class AbortRegistry {
       s.delete(entry);
       if (s.size === 0) this.entries.delete(runId);
     };
-  }
-
-  /** Remove every controller for a run. */
-  unregister(runId: string): void {
-    this.entries.delete(runId);
   }
 
   /** Trip every live controller for a run. Returns true if any were found. */
@@ -94,25 +98,17 @@ export class AbortRegistry {
     return Array.from(this.entries.keys()).filter((id) => (this.entries.get(id)?.size ?? 0) > 0);
   }
 
-  /** Milliseconds since the OLDEST live handler for the run registered (the
-   * longest-running branch under a fan-out — the conservative leak bound).
-   * `undefined` when no handler is in flight. Process-local — not derivable
-   * from the store across restarts. */
-  elapsedMs(runId: string): number | undefined {
-    const set = this.entries.get(runId);
-    if (set === undefined || set.size === 0) return undefined;
-    let oldest = Number.POSITIVE_INFINITY;
-    for (const entry of set) oldest = Math.min(oldest, entry.startedAt);
-    return this.clock() - oldest;
-  }
-
-  /** Every in-flight handler for a run — each with its own node id + elapsed
-   * time — so the watchdog can check each against ITS OWN deadline and trip only
-   * the offending controller (not the whole fan-out set). */
+  /** Every in-flight handler for a run — each with its own node id, elapsed
+   * time, and armed deadline — so the watchdog can check each against ITS OWN
+   * deadline and trip only the offending controller (not the whole fan-out set). */
   liveHandlers(runId: string): LiveHandler[] {
     const set = this.entries.get(runId);
     if (set === undefined) return [];
     const now = this.clock();
-    return Array.from(set, (e) => ({ nodeId: e.nodeId, controller: e.controller, elapsedMs: now - e.startedAt }));
+    return Array.from(set, (e) => {
+      const h: LiveHandler = { nodeId: e.nodeId, controller: e.controller, elapsedMs: now - e.startedAt };
+      if (e.deadlineMs !== undefined) h.deadlineMs = e.deadlineMs;
+      return h;
+    });
   }
 }
