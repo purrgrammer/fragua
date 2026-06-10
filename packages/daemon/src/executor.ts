@@ -143,11 +143,29 @@ function fanoutClosureSet(graph: Graph, branches: readonly string[], join: strin
 
 /** Outcome of executing one fan-out branch sub-node (executeBranchNode). The
  * facts are NODE-scoped (node_completed + outputs, or node_aborted); runFanout
- * commits them serially and owns the run-level disposition. */
+ * commits them serially and owns the run-level disposition. `skipped` is a
+ * branch that acquired its semaphore slot only after the pool bailed — it never
+ * executed, so there is nothing to commit. */
 type BranchOutcome =
   | { kind: "success"; nodeId: string; nextNode: string | undefined; facts: FactEvent[]; appendOpts: FanoutAppendOpts }
   | { kind: "abort"; nodeId: string; facts: FactEvent[] }
-  | { kind: "leak"; nodeId: string; leakedAt: number };
+  | { kind: "leak"; nodeId: string; leakedAt: number }
+  | { kind: "skipped"; nodeId: string };
+
+/** Merge the operator fold's append opts with a branch plan's. Key-wise merge on
+ * `routingPatch` (plan wins per key) — a shallow spread would silently REPLACE
+ * the fold's routingDelta with the plan's patch while `advanceAppliedTo` still
+ * committed, durably consuming the operator intent without applying it. */
+function mergeFanoutAppendOpts(fold: FanoutAppendOpts, plan: FanoutAppendOpts): FanoutAppendOpts {
+  const merged: FanoutAppendOpts = { ...fold, ...plan };
+  if (fold.routingPatch !== undefined && plan.routingPatch !== undefined) {
+    merged.routingPatch = { ...fold.routingPatch, ...plan.routingPatch };
+  }
+  if (fold.advanceAppliedTo !== undefined && plan.advanceAppliedTo !== undefined) {
+    merged.advanceAppliedTo = Math.max(fold.advanceAppliedTo, plan.advanceAppliedTo);
+  }
+  return merged;
+}
 
 /** A clean proceed decision for a branch sub-node — branches consume no operator
  * fold (the fan-out applies it once at the superstep boundary, not per branch). */
@@ -1476,7 +1494,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         type: "fact.dispatch_started",
         payload: { nodeId: n, iteration: nodeRetryCount(state.routing, n), resumeOf: "paused" },
       }));
-      if (!(await commitFanoutFact(facts, takeFold())).ok) return { kind: "continue" };
+      const reRes = await commitFanoutFact(facts, takeFold());
+      if (!reRes.ok) {
+        // Same OCC-vs-status split as every other commit arm — this was the one
+        // commit that still dropped the reason, leaving the warn → occ_exhausted
+        // escalation dead under persistent re-dispatch contention.
+        if (reRes.reason === "occ") {
+          const first = reDispatched[0]!;
+          const { halted } = await onOccConflict(
+            "fact.dispatch_started",
+            first,
+            nodeRetryCount(state.routing, first),
+            state.version,
+          );
+          if (halted) return { kind: "terminal" };
+        }
+        return { kind: "continue" };
+      }
     }
 
     // ── Reactive pool (the on-log frontier, fan-out-nodes.md § Execution). One
@@ -1566,13 +1600,54 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return undefined;
     };
 
+    // Once a run-level disposition is captured we stop dispatching new
+    // successors but keep draining the in-flight pool — bounding overshoot to
+    // the branches already running — then commit the disposition at drain.
+    // ONE slot with one precedence rule applied at every capture site: a halt
+    // always overrides a pause (terminal beats resumable), a pause never
+    // downgrades a halt, first-of-each-kind wins. (Twin halt/pause slots filled
+    // by two paths made precedence depend on which path saw the breach.)
+    let disposition: FactEvent | undefined;
+    const noteDisposition = (f: FactEvent): void => {
+      if (f.type === "fact.run_halted") {
+        if (disposition?.type !== "fact.run_halted") disposition = f;
+      } else if (disposition === undefined) {
+        disposition = f;
+      }
+    };
+    const captureDisposition = (): void => {
+      if (disposition?.type === "fact.run_halted") return;
+      const disp = fanoutBudgetDisposition();
+      if (disp !== undefined) noteDisposition(disp);
+    };
+
+    // Each sub-node dispatch consumes the same loop budget as a linear handler
+    // dispatch (fan-out-nodes.md § semantics digest) — without this a
+    // branch-closure cycle (W017) was bounded by nothing but wall-clock and an
+    // opt-in budget.
+    const effectiveMaxLoops = readNumber(effectiveRouting[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
+
+    // Set on any early bail. A branch still queued on the semaphore at bail time
+    // has no registry entry for `abortInflightPool` to signal, so it re-checks
+    // the flag after acquiring and skips execution instead of starting a fresh,
+    // unabortable handler on the freed slot.
+    let poolBailed = false;
     const pool = new Map<string, Promise<{ nodeId: string; outcome: BranchOutcome }>>();
     const dispatch = (nodeId: string): void => {
+      if (dispatches >= effectiveMaxLoops) {
+        noteDisposition({
+          type: "fact.run_paused",
+          payload: { reason: "max_loops", currentLimit: effectiveMaxLoops, dispatches },
+        });
+        return;
+      }
+      dispatches++;
       pool.set(
         nodeId,
         (async () => {
           await sem.acquire();
           try {
+            if (poolBailed) return { nodeId, outcome: { kind: "skipped", nodeId } satisfies BranchOutcome };
             return { nodeId, outcome: await executeBranchNode(nodeId, freshState, effectiveRouting, branchTimeoutMs) };
           } finally {
             sem.release();
@@ -1582,24 +1657,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     };
     for (const f of active) dispatch(f);
 
-    // Once a run-level (budget) disposition is captured we stop dispatching new
-    // successors but keep draining the in-flight pool — bounding overshoot to
-    // the branches already running — then commit the disposition at drain.
-    // First breach wins; subsequent captures short-circuit.
-    let runHalt: FactEvent | undefined;
-    let runPause: FactEvent | undefined;
-    const captureDisposition = (): void => {
-      if (runHalt !== undefined || runPause !== undefined) return;
-      const disp = fanoutBudgetDisposition();
-      if (disp?.type === "fact.run_halted") runHalt = disp;
-      else if (disp?.type === "fact.run_paused") runPause = disp;
-    };
-
     // Early-terminal bail: signal every still-in-flight branch so it stops
     // burning LLM cost (a settled branch already disposed its registration, so
     // `liveHandlers` is exactly the in-flight set). Don't await — a leaked branch
     // won't settle on abort (the leak budget owns it); signal-and-return is the fix.
     const abortInflightPool = (): void => {
+      poolBailed = true;
       for (const h of opts.registry.liveHandlers(runId)) h.controller.abort(new FanoutBailError(runId));
     };
 
@@ -1614,41 +1677,115 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       await Promise.race([Promise.allSettled([...pool.values()]), sleep(leakGrace, opts.shutdownSignal)]);
     };
 
-    while (pool.size > 0) {
-      const { nodeId, outcome } = await Promise.race(pool.values());
-      pool.delete(nodeId);
+    try {
+      while (pool.size > 0) {
+        const { nodeId, outcome } = await Promise.race(pool.values());
+        pool.delete(nodeId);
 
-      // A leaked handler is unrecoverable — halt the whole run.
-      if (outcome.kind === "leak") {
-        await commitFanoutFact(
-          [
-            { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
-            { type: "fact.run_halted", payload: { reason: "error", detail: "handler_leaked" } },
-          ],
-          {},
-        );
-        leakBudget.recordLeak(runId, outcome.nodeId);
-        abortInflightPool();
-        return { kind: "terminal" };
-      }
+        // A branch that acquired its slot only after a bail never executed —
+        // nothing to commit (the bail's own exit path owns the turn).
+        if (outcome.kind === "skipped") continue;
 
-      // An aborted branch stays in the active set (node_aborted doesn't mutate
-      // it) and re-dispatches on the NEXT runFanout turn — NOT within this pool,
-      // which would busy-spin a hard-failing branch. Climb its own streak so it
-      // can't hide behind healthy siblings (the run-wide counter's masking bug).
-      if (outcome.kind === "abort") {
-        const abortRes = await commitFanoutFact(outcome.facts, takeFold());
-        if (!abortRes.ok) {
+        // A leaked handler is unrecoverable — halt the whole run.
+        if (outcome.kind === "leak") {
+          await commitFanoutFact(
+            [
+              { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
+              { type: "fact.run_halted", payload: { reason: "error", detail: "handler_leaked" } },
+            ],
+            {},
+          );
+          leakBudget.recordLeak(runId, outcome.nodeId);
           abortInflightPool();
-          // A genuine OCC exhaustion (not a status-stop) feeds the conflict
-          // controller so the warn → occ_exhausted escalation fires — the same
-          // split the seed/join arms make; the pool arms previously dropped the
-          // reason, leaving that escalation dead on the pool path.
-          if (abortRes.reason === "occ") {
+          await drainInflightPool();
+          return { kind: "terminal" };
+        }
+
+        // An aborted branch stays in the active set (node_aborted doesn't mutate
+        // it) and re-dispatches on the NEXT runFanout turn — NOT within this pool,
+        // which would busy-spin a hard-failing branch. Climb its own streak so it
+        // can't hide behind healthy siblings (the run-wide counter's masking bug).
+        if (outcome.kind === "abort") {
+          const abortRes = await commitFanoutFact(outcome.facts, takeFold());
+          if (!abortRes.ok) {
+            abortInflightPool();
+            // A genuine OCC exhaustion (not a status-stop) feeds the conflict
+            // controller so the warn → occ_exhausted escalation fires — the same
+            // split the seed/join arms make; the pool arms previously dropped the
+            // reason, leaving that escalation dead on the pool path.
+            if (abortRes.reason === "occ") {
+              const { halted } = await onOccConflict(
+                "fact.node_aborted",
+                outcome.nodeId,
+                branchAborts.get(outcome.nodeId) ?? 0,
+                state.version,
+              );
+              if (halted) return { kind: "terminal" };
+            }
+            await drainInflightPool();
+            return { kind: "continue" };
+          }
+          branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
+          // An abort still folds `partialCostUsd` into the durable total — gate on
+          // it too (the success arm does), else real partial spend slips past the cap.
+          captureDisposition();
+          continue;
+        }
+
+        // Success: split run-level facts from node facts, drop the planner's
+        // node_started{successor} (it would unpin current_node from the
+        // parallel node and deactivate siblings), and bundle dispatch_started
+        // for the successor so the frontier advances atomically (I1) — unless
+        // the successor IS the join (branch done; node_completed already
+        // removed it).
+        const branchFacts: FactEvent[] = [];
+        let branchTerminal = false;
+        for (const f of outcome.facts) {
+          if (f.type === "fact.run_halted" || f.type === "fact.run_paused") {
+            noteDisposition(f);
+          } else if (f.type === "fact.run_completed") {
+            // A branch resolving to a run terminal (`next: exit`, or a fail-only
+            // edge succeeding into `__end__`) is a structural defect: the
+            // validator rejects the shape (E032/E039/E041), but an unvalidated
+            // save still reaches the executor. Completing the run mid-fan-out
+            // would strand the in-flight siblings — fail closed instead.
+            branchTerminal = true;
+          } else if (f.type !== "fact.node_started") {
+            branchFacts.push(f);
+          }
+        }
+        let successor = outcome.nextNode !== undefined && outcome.nextNode !== join ? outcome.nextNode : undefined;
+        if (successor !== undefined && graph?.nodes[successor] === undefined) {
+          // A sentinel ("exit"/"__end__") or dangling successor must never enter
+          // the pool — dispatcher.get would throw and strand the siblings.
+          branchTerminal = true;
+          successor = undefined;
+        }
+        if (branchTerminal) {
+          // No successor either — a synthesized `exit` node exists in the graph,
+          // so the missing-node guard alone wouldn't stop its dispatch_started.
+          successor = undefined;
+          noteDisposition({
+            type: "fact.run_halted",
+            payload: { reason: "error", detail: `fanout_branch_terminal:${outcome.nodeId}` },
+          });
+        }
+        if (successor !== undefined) {
+          branchFacts.push({
+            type: "fact.dispatch_started",
+            payload: { nodeId: successor, iteration: nodeRetryCount(freshState.routing, successor), resumeOf: "fresh" },
+          });
+        }
+        const successRes = await commitFanoutFact(branchFacts, mergeFanoutAppendOpts(takeFold(), outcome.appendOpts));
+        if (!successRes.ok) {
+          abortInflightPool();
+          // Same OCC-vs-status split as the abort arm: a true OCC exhaustion
+          // escalates through the conflict controller rather than silently bailing.
+          if (successRes.reason === "occ") {
             const { halted } = await onOccConflict(
-              "fact.node_aborted",
+              "fact.node_completed",
               outcome.nodeId,
-              branchAborts.get(outcome.nodeId) ?? 0,
+              nodeRetryCount(freshState.routing, outcome.nodeId),
               state.version,
             );
             if (halted) return { kind: "terminal" };
@@ -1656,65 +1793,27 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           await drainInflightPool();
           return { kind: "continue" };
         }
-        branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
-        // An abort still folds `partialCostUsd` into the durable total — gate on
-        // it too (the success arm does), else real partial spend slips past the cap.
+        branchAborts.delete(outcome.nodeId);
         captureDisposition();
-        continue;
-      }
 
-      // Success: split run-level (budget) facts from node facts, drop the
-      // planner's node_started{successor} (it would unpin current_node from the
-      // parallel node and deactivate siblings), and bundle dispatch_started for
-      // the successor so the frontier advances atomically (I1) — unless the
-      // successor IS the join (branch done; node_completed already removed it).
-      const branchFacts: FactEvent[] = [];
-      for (const f of outcome.facts) {
-        if (f.type === "fact.run_halted") {
-          if (runHalt === undefined) runHalt = f;
-        } else if (f.type === "fact.run_paused") {
-          if (runPause === undefined) runPause = f;
-        } else if (f.type !== "fact.node_started") {
-          branchFacts.push(f);
-        }
+        // Drive the successor into the pool — but NOT once a disposition is
+        // captured. Its dispatch_started already rode the commit (durable in the
+        // active set), so on resume it re-dispatches; we just don't spend now.
+        if (successor !== undefined && disposition === undefined) dispatch(successor);
       }
-      const successor = outcome.nextNode !== undefined && outcome.nextNode !== join ? outcome.nextNode : undefined;
-      if (successor !== undefined) {
-        branchFacts.push({
-          type: "fact.dispatch_started",
-          payload: { nodeId: successor, iteration: nodeRetryCount(freshState.routing, successor), resumeOf: "fresh" },
-        });
-      }
-      const successRes = await commitFanoutFact(branchFacts, { ...takeFold(), ...outcome.appendOpts });
-      if (!successRes.ok) {
-        abortInflightPool();
-        // Same OCC-vs-status split as the abort arm: a true OCC exhaustion
-        // escalates through the conflict controller rather than silently bailing.
-        if (successRes.reason === "occ") {
-          const { halted } = await onOccConflict(
-            "fact.node_completed",
-            outcome.nodeId,
-            nodeRetryCount(freshState.routing, outcome.nodeId),
-            state.version,
-          );
-          if (halted) return { kind: "terminal" };
-        }
-        await drainInflightPool();
-        return { kind: "continue" };
-      }
-      branchAborts.delete(outcome.nodeId);
-      captureDisposition();
-
-      // Drive the successor into the pool — but NOT once a disposition is
-      // captured. Its dispatch_started already rode the commit (durable in the
-      // active set), so on resume it re-dispatches; we just don't spend now.
-      if (successor !== undefined && runHalt === undefined && runPause === undefined) dispatch(successor);
+    } catch (err) {
+      // A rejected branch arm (a dispatcher lookup, an unguarded store write)
+      // must not strand the in-flight siblings: signal and drain them before the
+      // throw unwinds to runOne's halt handler — without this they keep burning
+      // LLM cost against a halted run until the per-branch backstop fires.
+      abortInflightPool();
+      await drainInflightPool();
+      throw err;
     }
 
-    // Disposition. A captured budget breach (halt or pause) parks the run.
-    const breach = runHalt ?? runPause;
-    if (breach !== undefined) {
-      await commitFanoutFact([breach], {});
+    // Disposition. A captured run-level breach (halt or pause) parks the run.
+    if (disposition !== undefined) {
+      await commitFanoutFact([disposition], {});
       return { kind: "terminal" };
     }
     // Per-branch abort-loop: a branch that aborted `abortLoopCeiling` turns in a

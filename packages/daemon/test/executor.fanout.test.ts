@@ -5,11 +5,12 @@
 // stop resumes by re-dispatching only the unfinished sub-nodes.
 
 import { describe, expect, test } from "bun:test";
-import { deriveRunState, readActiveNodes } from "@fragua/store";
+import { ConcurrencyError, deriveRunState, readActiveNodes } from "@fragua/store";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
+import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
 
 /** A `start → begin → fan(parallel) → [n single-node branches] → synth → exit`
@@ -159,6 +160,7 @@ interface DriveOpts {
   fanoutBranchTimeoutMs?: number;
   abortLoopCeiling?: number;
   leakGraceMs?: number;
+  maxLoops?: number;
   /** Drive under a caller-owned shutdown signal so a test can simulate the daemon
    * dying mid-region (an in-handler `.abort()` leaves the run `running`). Defaults
    * to a never-aborting signal. */
@@ -179,6 +181,7 @@ async function drive(r: ReturnType<typeof rig>, runId: string, opts: DriveOpts =
     ...(opts.fanoutBranchTimeoutMs !== undefined ? { fanoutBranchTimeoutMs: opts.fanoutBranchTimeoutMs } : {}),
     ...(opts.abortLoopCeiling !== undefined ? { abortLoopCeiling: opts.abortLoopCeiling } : {}),
     ...(opts.leakGraceMs !== undefined ? { leakGraceMs: opts.leakGraceMs } : {}),
+    ...(opts.maxLoops !== undefined ? { maxLoops: opts.maxLoops } : {}),
   });
 }
 
@@ -1181,6 +1184,424 @@ steps:
     expect(replayed.currentNode).toBe(state.currentNode);
     expect(readActiveNodes(replayed.routing)).toBeNull();
 
+    r.store.close();
+  });
+});
+
+// ── Hardening: the adversarial-review fixes over the pool's bail, ceiling,
+// disposition, and fold paths. Each test pins one repaired hole.
+describe("executor — fan-out hardening", () => {
+  test("a branch resolving to a run terminal halts the run (fail closed) instead of completing it mid-fan-out", async () => {
+    const r = rig({
+      yaml: `name: bterm
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [bad, ok], next: synth }
+  bad: { type: llm, prompt: x, allowed-tools: [read], next: exit }
+  ok: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    const seen: Record<string, number> = {};
+    registerHandlers(r, counter(seen, "synth"));
+    const llm = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+      });
+    llm("bad");
+    llm("ok");
+    enqueue(r, "bterm1", "begin");
+
+    await drive(r, "bterm1");
+    const final = r.store.getState("bterm1")!;
+    // The validator rejects this shape (E032/E039/E041) but unvalidated saves
+    // still reach the executor: the branch terminal must never complete the run.
+    expect(final.status).toBe("halted");
+    const events = r.store.getEvents("bterm1");
+    expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
+    const halted = events.find((e) => e.type === "fact.run_halted");
+    expect((halted?.payload as { detail?: string }).detail).toBe("fanout_branch_terminal:bad");
+    // The branch's own work is still durable; only the run terminal was refused.
+    expect(
+      events.some((e) => e.type === "fact.node_completed" && (e.payload as { nodeId?: string }).nodeId === "bad"),
+    ).toBe(true);
+    // The join never ran, and no sentinel successor was dispatched into the pool.
+    expect(seen["synth"]).toBeUndefined();
+    r.store.close();
+  });
+
+  test("a rejected branch arm aborts and drains the in-flight sibling before unwinding", async () => {
+    const r = rig({ yaml: HUNG_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // `hung` plays the rejection vector: dispatcher.get throws for it (the same
+    // class as an unguarded store-write failure inside a pool arm).
+    const origGet = r.dispatcher.get.bind(r.dispatcher);
+    r.dispatcher.get = (sha, node) => {
+      if (node === "hung") throw new Error("boom: no handler for hung");
+      return origGet(sha, node);
+    };
+    let okSawAbort = false;
+    r.dispatcher.register(r.workflowSha, "ok", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 5000,
+      handler: async (ctx) => {
+        await new Promise<void>((resolve) => {
+          if (ctx.signal.aborted) {
+            okSawAbort = true;
+            return resolve();
+          }
+          ctx.signal.addEventListener(
+            "abort",
+            () => {
+              okSawAbort = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        throw ctx.signal.reason ?? new Error("aborted");
+      },
+    });
+    enqueue(r, "rej1b", "begin");
+
+    await expect(drive(r, "rej1b", { leakGraceMs: 50 })).rejects.toThrow("boom");
+    // runOne's outer net terminalised the run...
+    expect(r.store.getState("rej1b")!.status).toBe("halted");
+    // ...and the healthy in-flight sibling was signalled, not stranded burning
+    // cost until the per-branch backstop.
+    expect(okSawAbort).toBe(true);
+    r.store.close();
+  });
+
+  test("a status-stop bail never starts a semaphore-queued branch (no unabortable orphan)", async () => {
+    const r = rig({
+      yaml: `name: qbail
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [pauser, slow, q1, q2], concurrency: 2, next: synth }
+  pauser: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  slow: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  q1: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  q2: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // `pauser` simulates an operator pause landing mid-pool: it parks the run
+    // itself, so pauser's own success commit becomes a status-stop bail.
+    r.dispatcher.register(r.workflowSha, "pauser", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => {
+        const st = r.store.getState("qb1")!;
+        r.store.appendFact(
+          "qb1",
+          [{ type: "fact.run_paused", payload: { reason: "operator", nodeId: "fan" } }],
+          st.version,
+        );
+        return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 };
+      },
+    });
+    let slowSawAbort = false;
+    r.dispatcher.register(r.workflowSha, "slow", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 5000,
+      handler: async (ctx) => {
+        await new Promise<void>((resolve) => {
+          if (ctx.signal.aborted) {
+            slowSawAbort = true;
+            return resolve();
+          }
+          ctx.signal.addEventListener(
+            "abort",
+            () => {
+              slowSawAbort = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        throw ctx.signal.reason ?? new Error("aborted");
+      },
+    });
+    // The waiter queue is FIFO: q1 takes PAUSER's slot, freed at settle, before
+    // the loop has processed the failed commit — legitimate bounded overshoot
+    // (it registers, so the bail signal still reaches it; its commit is fenced
+    // by the status-stop). q2 takes SLOW's slot, freed by the abort teardown,
+    // i.e. strictly post-bail — pre-fix it started a fresh handler the
+    // already-fired bail signal could never reach.
+    let q2Ran = 0;
+    r.dispatcher.register(r.workflowSha, "q1", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "q2", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => {
+        q2Ran++;
+        return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 };
+      },
+    });
+    enqueue(r, "qb1", "begin");
+
+    await drive(r, "qb1", { leakGraceMs: 100 });
+    expect(r.store.getState("qb1")!.status).toBe("paused");
+    expect(slowSawAbort).toBe(true);
+    // The post-bail slot handoff never starts the queued branch.
+    expect(q2Ran).toBe(0);
+    // And no branch committed a completion against the parked run.
+    const branchIds = new Set(["pauser", "slow", "q1", "q2"]);
+    expect(
+      r.store
+        .getEvents("qb1")
+        .some(
+          (e) => e.type === "fact.node_completed" && branchIds.has((e.payload as { nodeId?: string }).nodeId ?? ""),
+        ),
+    ).toBe(false);
+    r.store.close();
+  });
+
+  test("a branch-closure cycle is bounded by the max_loops dispatch ceiling", async () => {
+    const r = rig({
+      yaml: `name: spinfo
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [spin_a, ok], next: synth }
+  spin_a: { type: llm, prompt: x, allowed-tools: [read], next: spin_b }
+  spin_b: { type: llm, prompt: x, allowed-tools: [read], next: spin_a }
+  ok: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    const seen: Record<string, number> = {};
+    const c = counter(seen, "spin_a", "spin_b", "ok", "synth");
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const llm = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => {
+          c[id]?.();
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 };
+        },
+      });
+    llm("spin_a");
+    llm("spin_b");
+    llm("ok");
+    llm("synth");
+    enqueue(r, "spin1", "begin");
+
+    // Pre-fix this spun unboundedly INSIDE one runFanout turn (no budget, no
+    // aborts — nothing else fires); the ceiling is the only durable stop.
+    await drive(r, "spin1", { maxLoops: 8 });
+    const final = r.store.getState("spin1")!;
+    expect(final.status).toBe("paused");
+    const pause = r.store.getEvents("spin1").find((e) => e.type === "fact.run_paused");
+    const p = pause?.payload as { reason?: string; currentLimit?: number };
+    expect(p.reason).toBe("max_loops");
+    expect(p.currentLimit).toBe(8);
+    // Every sub-node dispatch consumed loop budget: the cycle is bounded.
+    expect((seen["spin_a"] ?? 0) + (seen["spin_b"] ?? 0)).toBeLessThanOrEqual(8);
+    r.store.close();
+  });
+
+  test("a run-level stop breach after a captured node pause upgrades the disposition to halted", async () => {
+    const r = rig({
+      yaml: `name: updisp
+defaults: { provider: anthropic, model: m }
+budget: 0.07
+budget-policy: stop
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a, b], max-cost: 0.015, next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // `a` settles first and trips the parallel node's max-cost (pause policy);
+    // `b` is already in flight, drains, and its spend crosses the RUN-level
+    // stop ceiling — the halt must win over the earlier-captured pause.
+    r.dispatcher.register(r.workflowSha, "a", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.02 }),
+    });
+    r.dispatcher.register(r.workflowSha, "b", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => {
+        await new Promise((res) => setTimeout(res, 30));
+        return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.06 };
+      },
+    });
+    enqueue(r, "up1", "begin");
+
+    await drive(r, "up1");
+    const final = r.store.getState("up1")!;
+    // Pre-fix: first-breach-wins froze the pause and the run parked resumable
+    // despite a hard stop breach. Halt overrides pause, at every capture site.
+    expect(final.status).toBe("halted");
+    const halted = r.store.getEvents("up1").find((e) => e.type === "fact.run_halted");
+    expect((halted?.payload as { reason?: string }).reason).toBe("budget");
+    expect(r.store.getEvents("up1").some((e) => e.type === "fact.run_paused")).toBe(false);
+    r.store.close();
+  });
+
+  test("persistent OCC exhaustion on the re-dispatch commit escalates to occ_exhausted (no silent spin)", async () => {
+    const r = rig({ yaml: HOL_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    // a_scan aborts once (transient) so its re-drive goes through the
+    // re-dispatch arm on the next turn.
+    let aCalls = 0;
+    r.dispatcher.register(r.workflowSha, "a_scan", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => {
+        aCalls++;
+        const err = new Error("transient");
+        err.name = "AbortError";
+        throw err;
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "b_scan", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+    });
+    // Inject a permanent OCC conflict on the re-dispatch commit only.
+    const origAppend = r.store.appendFact.bind(r.store);
+    r.store.appendFact = (runId, facts, version, appendOpts) => {
+      const f0 = facts[0];
+      if (f0?.type === "fact.dispatch_started" && (f0.payload as { resumeOf?: string }).resumeOf === "paused") {
+        throw new ConcurrencyError(version, version + 1);
+      }
+      return origAppend(runId, facts, version, appendOpts);
+    };
+    enqueue(r, "occ1", "begin");
+
+    await drive(r, "occ1", { abortLoopCeiling: 50, maxTurns: 40 });
+    const final = r.store.getState("occ1")!;
+    // Pre-fix the arm dropped the commit reason and re-entered forever (the
+    // run stayed `running` until maxTurns); now the conflict controller parks it.
+    expect(final.status).toBe("halted");
+    const halted = r.store.getEvents("occ1").find((e) => e.type === "fact.run_halted");
+    const hp = halted?.payload as { reason?: string; detail?: string };
+    expect(hp.reason).toBe("occ_exhausted");
+    expect(hp.detail).toContain("fact.dispatch_started");
+    expect(aCalls).toBeGreaterThanOrEqual(1);
+    r.store.close();
+  });
+
+  test("an operator budget raise riding a branch's success commit merges with the plan's routing patch (intent not clobbered)", async () => {
+    const r = rig({
+      yaml: `name: foldfo
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a_scan, b_scan], max-cost: 0.015, next: synth }
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: a_verify }
+  a_verify: { type: llm, prompt: x, allowed-tools: [read], retry: a_scan, max-retries: 2, next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const llm = (id: string, costUsd: number) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd }),
+      });
+    // a_scan alone crosses the node cap: its commit bundles a_verify's
+    // dispatch_started, then the pause disposition stops the pool — a_verify is
+    // active-but-never-started when the run parks (the drain-barrier shape).
+    llm("a_scan", 0.02);
+    llm("a_verify", 0.001);
+    llm("b_scan", 0.001);
+    llm("synth", 0);
+    enqueue(r, "fold1", "begin");
+
+    await drive(r, "fold1");
+    expect(r.store.getState("fold1")!.status).toBe("paused");
+
+    // Raise & Resume: the budget override intent folds into the NEXT turn's
+    // decision and rides the first commit — which is a_verify's SUCCESS commit
+    // (no aborted branches to re-dispatch), whose goal-gate plan carries its
+    // own routingPatch. Pre-fix the plan patch shallow-replaced the fold while
+    // advanceAppliedTo still committed: the raise was consumed but never
+    // applied, and the run re-paused on the old cap forever.
+    r.store.appendIntent("fold1", {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 0.5 },
+    });
+    r.store.appendIntent("fold1", { type: "intent.resume", payload: {} });
+    wakePending(r.store);
+    expect(r.store.getState("fold1")!.status).toBe("queued");
+
+    await drive(r, "fold1");
+    const final = r.store.getState("fold1")!;
+    expect(final.status).toBe("completed");
+    // Both patches landed on the same commit: the override AND the goal-gate
+    // outcome stamp.
+    expect(final.routing["budget_override.node.cost"]).toBe(0.5);
+    expect(final.routing["goal_gates.a_verify"]).toBe("success");
     r.store.close();
   });
 });
