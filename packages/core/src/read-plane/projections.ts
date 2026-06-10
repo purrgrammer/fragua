@@ -162,7 +162,7 @@ export function runStateToDetail(
   };
   if (workflowSource !== undefined) {
     detail.workflowSource = workflowSource;
-    const fanout = deriveFanoutTopology(workflowSource);
+    const fanout = fanoutTopologyFor(state.workflowSha, workflowSource);
     if (fanout !== undefined) detail.fanout = fanout;
   }
 
@@ -223,6 +223,20 @@ export function runStateToDetail(
   if (decisions !== undefined) detail.hitlDecisions = decisions;
 
   return detail;
+}
+
+// Workflow source is sha-pinned at enqueue and immutable, but runStateToDetail
+// runs on every detail fetch of a live run — without the memo each SSE-driven
+// refetch re-parses the same YAML and re-walks the closures. `null` caches a
+// parse failure so a corrupt source isn't re-parsed per push either.
+const fanoutTopologyCache = new Map<string, RunFanoutTopology | null>();
+
+function fanoutTopologyFor(workflowSha: string, workflowSource: string): RunFanoutTopology | undefined {
+  const hit = fanoutTopologyCache.get(workflowSha);
+  if (hit !== undefined) return hit ?? undefined;
+  const derived = deriveFanoutTopology(workflowSource) ?? null;
+  fanoutTopologyCache.set(workflowSha, derived);
+  return derived ?? undefined;
 }
 
 /** Fan-out topology for the run detail, from the stored source via the
@@ -452,21 +466,22 @@ function latestRunPaused(events: StoredEvent[]): { nodeId: string; seq: number }
 function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
   const out: SelectedEdge[] = [];
   const seen = new Set<string>();
-  const pushEdge = (from: string, to: string, iteration: number) => {
-    const key = `${from} ${to} ${iteration}`;
+  const pushEdge = (from: string, to: string, iteration: number, pass: number) => {
+    const key = `${from} ${to} ${pass} ${iteration}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ from, to, iteration });
+    out.push({ from, to, iteration, pass });
   };
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     if (ev === undefined) continue;
     if (ev.type === "edge.selected") {
-      const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown };
+      const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown; pass?: unknown };
       if (typeof p.from !== "string" || typeof p.to !== "string") continue;
       const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
+      const pass = typeof p.pass === "number" && Number.isFinite(p.pass) ? p.pass : 0;
       const retargetTo = goalGateRetargetTarget(events, i, p.from);
-      pushEdge(p.from, retargetTo ?? p.to, iteration);
+      pushEdge(p.from, retargetTo ?? p.to, iteration, pass);
     }
   }
   return out;

@@ -118,7 +118,7 @@ export function selectMessagesNarrow(
 
 const SELECT_MESSAGE_BY_DEDUP_SQL = `
   SELECT ordinal FROM messages
-   WHERE run_id = ? AND node_id = ? AND iteration = ? AND content_hash = ?
+   WHERE run_id = ? AND node_id = ? AND iteration = ? AND pass = ? AND content_hash = ?
    LIMIT 1
 `;
 
@@ -130,12 +130,13 @@ export function selectMessageByDedup(
   runId: string,
   nodeId: string,
   iteration: number,
+  pass: number,
   contentHash: string,
 ): { ordinal: number } | null {
   return (
     db
-      .query<{ ordinal: number }, [string, string, number, string]>(SELECT_MESSAGE_BY_DEDUP_SQL)
-      .get(runId, nodeId, iteration, contentHash) ?? null
+      .query<{ ordinal: number }, [string, string, number, number, string]>(SELECT_MESSAGE_BY_DEDUP_SQL)
+      .get(runId, nodeId, iteration, pass, contentHash) ?? null
   );
 }
 

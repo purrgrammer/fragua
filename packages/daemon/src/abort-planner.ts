@@ -12,7 +12,7 @@
 
 import { AUTO_RESUME_AT_KEY, readGoalGateRetries } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
-import { readNumber } from "./executor-helpers.ts";
+import { readNumber, type UsageTotals } from "./executor-helpers.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
 
 // Watchdog timeout-retry policy (system-initiated, NOT workflow-initiated — so
@@ -23,37 +23,6 @@ const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
 const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
 
 const timeoutRetryKey = (nodeId: string): string => `internal.timeout_retries.${nodeId}`;
-
-/** Partial LLM usage to credit onto the `fact.node_aborted` (the executor
- * doesn't roll back blobs / side effects, so partial spend accrues). */
-export interface AbortUsage {
-  tokens: number;
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-}
-
-/** Map a dispatch's usage totals (executor-helpers `UsageTotals`) onto the
- * abort plan's partial-spend shape. */
-export function abortUsageOf(t: {
-  turnBilled: number;
-  totalCostUsd: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCacheReadTokens: number;
-  totalCacheWriteTokens: number;
-}): AbortUsage {
-  return {
-    tokens: t.turnBilled,
-    costUsd: t.totalCostUsd,
-    inputTokens: t.totalInputTokens,
-    outputTokens: t.totalOutputTokens,
-    cacheReadTokens: t.totalCacheReadTokens,
-    cacheWriteTokens: t.totalCacheWriteTokens,
-  };
-}
 
 export interface AbortPlanInput {
   currentNode: string;
@@ -69,7 +38,10 @@ export interface AbortPlanInput {
   reactiveBudgetPauseBreach:
     | { scope: "run" | "node"; metric: "cost" | "tokens"; limit: number; actual: number }
     | undefined;
-  usage: AbortUsage;
+  /** Partial spend to credit onto `fact.node_aborted` — the dispatch's usage
+   * totals, taken directly from the shared accumulator (one shape end to end;
+   * a translation bridge here drifted once before it was deleted). */
+  usage: UsageTotals;
   /** This turn's intent-fold delta + applied seqs — merged into the abort
    * commit so operator intents queued for the dying dispatch aren't lost. */
   routingDelta: Record<string, unknown>;
@@ -107,14 +79,7 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
     currentNode,
     iteration,
     abortCause,
-    {
-      tokens: usage.tokens,
-      costUsd: usage.costUsd,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      cacheReadTokens: usage.cacheReadTokens,
-      cacheWriteTokens: usage.cacheWriteTokens,
-    },
+    usage,
     readGoalGateRetries(input.effectiveRouting),
   );
 

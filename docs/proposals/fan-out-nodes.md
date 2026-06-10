@@ -206,14 +206,15 @@ branches; cross-run `run:` (Model M).
 
 ### Acceptance / testing ground — review lenses gain a verify step
 
-`review.yaml`'s full tier becomes three **2-node** branches running
-concurrently, each filtering its own hallucinated findings before the join:
+`review.yaml`'s full tier shipped as six **2-node** branches running
+concurrently (the original three defect lenses plus integration, quality, and
+coherence), each filtering its own hallucinated findings before the join, with
+`concurrency: 6` running the region at full width:
 
 ```
-review_lenses (parallel, branches: [correctness_scan, security_scan, performance_scan]) → synthesize
-  correctness_scan → correctness_verify → synthesize
-  security_scan    → security_verify    → synthesize
-  performance_scan → performance_verify → synthesize
+review_lenses (parallel, branches: [correctness_scan, integration_scan, security_scan,
+                                    performance_scan, quality_scan, coherence_scan]) → synthesize
+  <lens>_scan → <lens>_verify → synthesize   (×6)
 ```
 
 Each `*_scan` emits raw typed `findings[]`; each `*_verify` reads its scan's

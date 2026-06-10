@@ -250,18 +250,18 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
       },
     ];
     expect(deriveSelectedEdges(events)).toEqual([
-      { from: "start", to: "lint", iteration: 0 },
-      { from: "lint", to: "done", iteration: 0 },
+      { from: "start", to: "lint", iteration: 0, pass: 0 },
+      { from: "lint", to: "done", iteration: 0, pass: 0 },
     ]);
   });
 
   test("non-edge.selected events are ignored", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "x", iteration: 0 }), seq: 1 },
-      { ...ev("edge.selected", { from: "x", to: "y", iteration: 0 }), seq: 2 },
+      { ...ev("edge.selected", { from: "x", to: "y", iteration: 0, pass: 0 }), seq: 2 },
       { ...ev("fact.run_halted", { reason: "error" }), seq: 3 },
     ];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "x", to: "y", iteration: 0 }]);
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "x", to: "y", iteration: 0, pass: 0 }]);
   });
 
   test("drops edge.selected with non-string from/to", () => {
@@ -274,8 +274,8 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
 
   test("back-edge re-traversals carry distinct iterations", () => {
     const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 0 }), seq: 1 },
-      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 1 }), seq: 2 },
+      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 0, pass: 0 }), seq: 1 },
+      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 1, pass: 0 }), seq: 2 },
     ];
     const edges = deriveSelectedEdges(events);
     expect(edges).toHaveLength(2);
@@ -285,7 +285,7 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
 
   test("missing iteration on payload defaults to 0 (back-compat for older event logs)", () => {
     const events: StoredEvent[] = [{ ...ev("edge.selected", { from: "a", to: "b" }), seq: 1 }];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "a", to: "b", iteration: 0 }]);
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "a", to: "b", iteration: 0, pass: 0 }]);
   });
 
   // The bug: the executor used to record edge.selected at edge-pick time,
@@ -314,8 +314,8 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
       // First entry rewritten: from review -> done to review -> audit
       // (the actual traversal). One entry per gate visit is preserved
       // so the synthetic retarget edge can count visits.
-      { from: "review", to: "audit", iteration: 0 },
-      { from: "review", to: "propose_patch", iteration: 0 },
+      { from: "review", to: "audit", iteration: 0, pass: 0 },
+      { from: "review", to: "propose_patch", iteration: 0, pass: 0 },
     ]);
   });
 
@@ -323,10 +323,10 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
     // A retarget on a different gate must not silently rewrite an
     // unrelated node's edge selection.
     const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "diff", to: "review", iteration: 0 }), seq: 1 },
+      { ...ev("edge.selected", { from: "diff", to: "review", iteration: 0, pass: 0 }), seq: 1 },
       { ...ev("goal_gate.retarget", { failedGate: "review", target: "audit", retries: 1 }), seq: 2 },
     ];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "diff", to: "review", iteration: 0 }]);
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "diff", to: "review", iteration: 0, pass: 0 }]);
   });
 });
 
@@ -606,9 +606,9 @@ describe("runStateToDetail \u2014 lastEventSeq", () => {
     const state = makeState({ lastAppliedSeq: 1 });
     const events: StoredEvent[] = [
       evWithSeq(1, "fact.run_started", { startNode: "start" }),
-      evWithSeq(3, "edge.selected", { from: "start", to: "collect", iteration: 0 }),
-      evWithSeq(69, "edge.selected", { from: "collect", to: "analyze", iteration: 0 }),
-      evWithSeq(626, "edge.selected", { from: "analyze", to: "done", iteration: 0 }),
+      evWithSeq(3, "edge.selected", { from: "start", to: "collect", iteration: 0, pass: 0 }),
+      evWithSeq(69, "edge.selected", { from: "collect", to: "analyze", iteration: 0, pass: 0 }),
+      evWithSeq(626, "edge.selected", { from: "analyze", to: "done", iteration: 0, pass: 0 }),
       evWithSeq(628, "fact.run_completed", { finalNode: "done" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
@@ -663,7 +663,9 @@ steps:
 `;
 
   test("a parallel workflow serves parentOf/branchOf/orderOf/nodeTypes on the detail", () => {
-    const detail = runStateToDetail(makeState(), [], undefined, FANOUT_SRC);
+    // Distinct sha per test: the topology memo keys on workflowSha (a content
+    // hash in production — fabricated here, so it must not collide).
+    const detail = runStateToDetail(makeState({ workflowSha: "wf-topo-parallel" }), [], undefined, FANOUT_SRC);
     expect(detail.fanout).toBeDefined();
     expect(detail.fanout?.parentOf).toEqual({ a_scan: "fan", a_verify: "fan", b_scan: "fan" });
     expect(detail.fanout?.branchOf).toEqual({ a_scan: "a_scan", a_verify: "a_scan", b_scan: "b_scan" });
@@ -676,7 +678,7 @@ steps:
     // Type glyphs and tool-row affordances read nodeTypes on EVERY run, not
     // just fan-out ones — the field is unconditional for parseable sources.
     const detail = runStateToDetail(
-      makeState(),
+      makeState({ workflowSha: "wf-topo-linear" }),
       [],
       undefined,
       "name: t\nsteps:\n  w: {type: llm, prompt: x, next: exit}\n",

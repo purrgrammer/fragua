@@ -53,16 +53,16 @@ describe("read-plane explain", () => {
   test("traversed path mirrors edge.selected order", () => {
     const detail = baseDetail({
       selectedEdges: [
-        { from: "start", to: "n1", iteration: 0 },
-        { from: "n1", to: "n2", iteration: 0 },
-        { from: "n2", to: "exit", iteration: 0 },
+        { from: "start", to: "n1", iteration: 0, pass: 0 },
+        { from: "n1", to: "n2", iteration: 0, pass: 0 },
+        { from: "n2", to: "exit", iteration: 0, pass: 0 },
       ],
     });
     const exp = buildExplanation(detail, [], [], []);
     expect(exp.path).toEqual([
-      { from: "start", to: "n1", iteration: 0 },
-      { from: "n1", to: "n2", iteration: 0 },
-      { from: "n2", to: "exit", iteration: 0 },
+      { from: "start", to: "n1", iteration: 0, pass: 0 },
+      { from: "n1", to: "n2", iteration: 0, pass: 0 },
+      { from: "n2", to: "exit", iteration: 0, pass: 0 },
     ]);
   });
 

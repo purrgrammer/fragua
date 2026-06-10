@@ -17,6 +17,7 @@
       "!Archon",
       "!pi-mono",
       "!.fragua",
+      "!.claude/worktrees",
       "!bun.lock"
     ]
   },

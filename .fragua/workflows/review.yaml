@@ -154,7 +154,10 @@ steps:
     # as its own flags — a poisoned `--ext-diff=…` value can't smuggle a command.
     # The `run:` substitution already shell-quotes the value (blocks shell tokens);
     # this closes the git-option-injection axis. `resolve` also charset-guards it.
-    run: "git diff --end-of-options ${{ outputs.resolve.diff_spec }} > review-diff.patch 2>/dev/null; wc -l review-diff.patch"
+    # `&&` (not `;`): a failed git diff must propagate as a non-zero exit and
+    # halt the run — with `;` it left an EMPTY patch behind, every lens read
+    # nothing, and synthesize wrote a false-clean "All clear".
+    run: "git diff --end-of-options ${{ outputs.resolve.diff_spec }} > review-diff.patch && wc -l review-diff.patch"
     next: review_lenses
 
   review_lenses:

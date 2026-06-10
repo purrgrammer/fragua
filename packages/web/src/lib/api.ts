@@ -102,6 +102,8 @@ export interface RunSummary {
 }
 
 export interface NodeState {
+  /** Goal-gate re-entry epoch. Optional: pre-pass servers omit it. */
+  pass?: number;
   nodeId: string;
   /** Loop iteration this entry describes (0 for the first dispatch, 1 for
    * the first re-entry across a backward edge or goal-gate retarget, …). A
@@ -127,6 +129,8 @@ export interface SelectedEdge {
   from: string;
   to: string;
   iteration: number;
+  /** Goal-gate re-entry epoch of the traversal. Optional: pre-pass servers omit it. */
+  pass?: number;
 }
 
 export interface RunDetail {

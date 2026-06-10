@@ -28,6 +28,10 @@ export function fanoutBranchClosures(
   graph: Graph,
   parallel: { branches: readonly unknown[]; join: string | undefined },
 ): BranchClosure[] {
+  // A parallel node without a join is malformed (E038; the executor halts it
+  // as fanout_malformed) — without this guard the BFS termination check never
+  // fires and the walk tags everything downstream as branch members.
+  if (parallel.join === undefined) return [];
   const outNonFanout = new Map<string, string[]>();
   for (const e of graph.edges) {
     if (e.attrs.fanout === true) continue;

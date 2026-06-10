@@ -40,6 +40,7 @@ import {
   MAX_LOOPS_OVERRIDE_KEY,
   makeUsageAccumulator,
   nodeRetryCount,
+  passField,
   readBudgetOverrides,
   readBudgetWarned,
   readNumber,
@@ -53,7 +54,7 @@ import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 // are imported from executor.ts by tests and other call sites.
 export { buildSubstitutionArgs, classifyAbortCause, resolveBackoff } from "./executor-helpers.ts";
 
-import { abortUsageOf, planAbort } from "./abort-planner.ts";
+import { planAbort } from "./abort-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { makeOccController, tryAppendFact } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
@@ -733,7 +734,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           payload: {
             nodeId: currentNode,
             iteration: dispatchIteration,
-            ...(dispatchPass > 0 ? { pass: dispatchPass } : {}),
+            ...passField(dispatchPass),
             resumeOf: deriveResumeOf(opts.store, runId),
           },
         },
@@ -1011,7 +1012,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         abortCause,
         reactiveBudgetHaltDetail,
         reactiveBudgetPauseBreach,
-        usage: abortUsageOf(usage.totals()),
+        usage: usage.totals(),
         routingDelta: decision.routingDelta,
         appliedSeqs: decision.appliedSeqs,
         effectiveRouting,
@@ -1281,7 +1282,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return {
         kind: "abort",
         nodeId: branchNode,
-        facts: abortResultToFacts(branchNode, iteration, cause, abortUsageOf(usage.totals()), branchPass),
+        facts: abortResultToFacts(branchNode, iteration, cause, usage.totals(), branchPass),
       };
     }
 
@@ -1362,7 +1363,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return foldOpts;
     };
 
-    const active = readActiveNodes(state.routing);
+    const active = readActiveNodes(effectiveRouting as Record<string, unknown>);
 
     // Seed the frontier with the branch entries (fresh entry). Through
     // `commitFanoutFact` (not a bare append) so the SAME OCC-vs-status split as
@@ -1374,7 +1375,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         [
           {
             type: "fact.fanout_started",
-            payload: { nodeId: parallelNode, iteration, ...(pass > 0 ? { pass } : {}), branches },
+            payload: { nodeId: parallelNode, iteration, ...passField(pass), branches },
           },
         ],
         takeFold(),
@@ -1425,7 +1426,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         payload: {
           nodeId: n,
           iteration: nodeRetryCount(state.routing, n),
-          ...(pass > 0 ? { pass } : {}),
+          ...passField(pass),
           resumeOf: "paused",
         },
       }));
@@ -1654,7 +1655,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               const { halted } = await onOccConflict(
                 "fact.node_aborted",
                 outcome.nodeId,
-                branchAborts.get(outcome.nodeId) ?? 0,
+                nodeRetryCount(freshState.routing, outcome.nodeId),
                 state.version,
               );
               if (halted) return { kind: "terminal" };
@@ -1713,7 +1714,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             payload: {
               nodeId: successor,
               iteration: nodeRetryCount(freshState.routing, successor),
-              ...(pass > 0 ? { pass } : {}),
+              ...passField(pass),
               resumeOf: "fresh",
             },
           });
@@ -1753,21 +1754,31 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       throw err;
     }
 
-    // Disposition. A captured run-level breach (halt or pause) parks the run.
-    if (disposition !== undefined) {
-      await commitFanoutFact([disposition], {});
+    // A terminal/pause fact at the drain edge must actually LAND before the
+    // turn reports terminal — a silently failed commit would strand the run
+    // `running` with no executor (a zombie until daemon restart). status-stop
+    // ⇒ the run is already parked, terminal is correct; OCC exhaustion ⇒
+    // escalate and re-derive next turn (the breach re-captures from fresh state).
+    const commitParkOrTerminal = async (fact: FactEvent): Promise<DispatchOutcome> => {
+      const res = await commitFanoutFact([fact], {});
+      if (!res.ok && res.reason === "occ") {
+        const { halted } = await onOccConflict(fact.type, parallelNode, iteration, state.version);
+        return halted ? { kind: "terminal" } : { kind: "continue" };
+      }
       return { kind: "terminal" };
-    }
+    };
+
+    // Disposition. A captured run-level breach (halt or pause) parks the run.
+    if (disposition !== undefined) return commitParkOrTerminal(disposition);
     // Per-branch abort-loop: a branch that aborted `abortLoopCeiling` turns in a
     // row parks the run regardless of sibling success. `branchAborts` holds
     // exactly the branches still aborted this turn — a success deletes its entry.
     for (const [nodeId, streak] of branchAborts) {
       if (streak >= abortLoopCeiling) {
-        await commitFanoutFact(
-          [{ type: "fact.run_paused", payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak } }],
-          {},
-        );
-        return { kind: "terminal" };
+        return commitParkOrTerminal({
+          type: "fact.run_paused",
+          payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak },
+        });
       }
     }
     // Aborts below the ceiling: re-drive the still-active (aborted) nodes next turn.
@@ -1777,10 +1788,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // — the per-commit gate already caught in-region breaches), then let the
     // next turn advance current_node to the join (active is now empty).
     const barrier = fanoutBudgetDisposition({ fresh: true });
-    if (barrier !== undefined) {
-      await commitFanoutFact([barrier], {});
-      return { kind: "terminal" };
-    }
+    if (barrier !== undefined) return commitParkOrTerminal(barrier);
     return { kind: "continue" }; // frontier drained — next turn joins
   };
 

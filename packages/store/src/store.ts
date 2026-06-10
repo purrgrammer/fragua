@@ -923,7 +923,14 @@ export class SqliteStore implements IEventStore {
       // falsely allow them depending on timing. Handler-level
       // idempotency is the correct contract for those messages.
       if (dedup) {
-        const existing = selectMessageByDedup(this.db, runId, row.nodeId as string, iteration, contentHash);
+        const existing = selectMessageByDedup(
+          this.db,
+          runId,
+          row.nodeId as string,
+          iteration,
+          row.pass ?? 0,
+          contentHash,
+        );
         if (existing != null) {
           ordinal = existing.ordinal;
           return;

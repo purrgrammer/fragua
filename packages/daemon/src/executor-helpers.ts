@@ -191,11 +191,13 @@ export function recordEdgeSelected(
   fromNode: string,
   iteration: number,
   selection: EdgeSelection,
+  pass = 0,
 ): void {
   const payload: Record<string, unknown> = {
     from: fromNode,
     to: selection.edge.to,
     iteration,
+    ...passField(pass),
     rule: selection.rule,
   };
   if (selection.matched !== undefined) {
@@ -230,6 +232,14 @@ export function readStringMap(v: unknown): Record<string, string> {
     if (typeof val === "string") out[k] = val;
   }
   return out;
+}
+
+/** The canonical spread for stamping the goal-gate re-entry epoch on a fact
+ * payload — omitted at 0 so never-retargeted runs stay byte-identical. Seven
+ * emit sites carry it; one helper keeps a new fact type from silently
+ * dropping the epoch (which corrupts pass-keyed projections). */
+export function passField(pass: number): Record<string, never> | { pass: number } {
+  return pass > 0 ? { pass } : {};
 }
 
 export function readNumber(v: unknown): number {

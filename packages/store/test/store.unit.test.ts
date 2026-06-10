@@ -980,3 +980,25 @@ describe("SqliteStore — getLatestLifecycleByNode", () => {
     store.close();
   });
 });
+
+describe("SqliteStore — appendMessage dedup is pass-scoped", () => {
+  test("identical content at a new pass mints a NEW row (no cross-pass dedup hit)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const content = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same bytes" }],
+      timestamp: 1,
+    };
+    const a = store.appendMessage(runId, { content, nodeId: "n1", iteration: 0, pass: 0 }, { dedup: true });
+    // Same scope, same pass → dedup returns the existing ordinal.
+    const b = store.appendMessage(runId, { content, nodeId: "n1", iteration: 0, pass: 0 }, { dedup: true });
+    expect(b.ordinal).toBe(a.ordinal);
+    // A goal-gate re-entry (next pass) with byte-identical content is a NEW
+    // execution — matching the pass-0 row would make pass-scoped hydration
+    // find nothing and the handler would run on an empty context.
+    const c = store.appendMessage(runId, { content, nodeId: "n1", iteration: 0, pass: 1 }, { dedup: true });
+    expect(c.ordinal).not.toBe(a.ordinal);
+    store.close();
+  });
+});

@@ -669,7 +669,7 @@ export function toFlowGraph(
   // the same from→to pair) by matching the source's outcome at that iteration.
   const stateByNodeIter = new Map<string, NodeState>();
   for (const n of detail?.nodes ?? []) {
-    stateByNodeIter.set(`${n.nodeId}#${n.iteration}`, n);
+    stateByNodeIter.set(`${n.nodeId}#${n.pass ?? 0}.${n.iteration}`, n);
   }
   // Group workflow edges by (from, to) so the dispatch below can find every
   // candidate when multiple edges share an endpoint pair.
@@ -695,7 +695,7 @@ export function toFlowGraph(
     if (candidates.length === 1) {
       pick = candidates[0];
     } else {
-      const srcState = stateByNodeIter.get(`${sel.from}#${sel.iteration}`);
+      const srcState = stateByNodeIter.get(`${sel.from}#${sel.pass ?? 0}.${sel.iteration}`);
       const srcFailed = srcState?.state === "failed";
       // Prefer the candidate whose declared outcome matches the source's
       // terminal state at that iteration. Fall back to the first candidate

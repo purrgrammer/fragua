@@ -14,7 +14,9 @@ export const ACTIVE_NODES_ROUTING_KEY = "internal.active_nodes";
 
 export function readActiveNodes(routing: Record<string, unknown>): string[] | null {
   const v = routing[ACTIVE_NODES_ROUTING_KEY];
-  return Array.isArray(v) ? (v as string[]) : null;
+  // Element-validated: the only non-typed write path is a tampered bundle fed
+  // through `fragua import` — fail to "no fan-out" instead of propagating junk.
+  return Array.isArray(v) && v.every((e) => typeof e === "string") ? (v as string[]) : null;
 }
 
 export function emptyMetrics(): RunMetrics {

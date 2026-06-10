@@ -127,6 +127,27 @@ describe("POST /workflows — upload", () => {
     expect(a.sha).toBe(b.sha);
   });
 
+  test("rejects a parseable but validator-invalid workflow with 400 + invalid_workflow (E-codes in detail)", async () => {
+    // A fan-out branch resolving to a run terminal — parseable, but the mint
+    // refuses it (reason: "invalid"). The route must surface the boundary
+    // contract: 400 + code invalid_workflow + the E-codes in the detail.
+    const res = await req("POST", "/workflows", {
+      name: "bad",
+      source: `name: bad
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a, b], next: synth }
+  a: { type: llm, prompt: x, next: exit }
+  b: { type: llm, prompt: x, next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; detail: string };
+    expect(body.code).toBe("invalid_workflow");
+    expect(body.detail).toMatch(/E0\d\d/);
+  });
+
   test("rejects malformed timeout attr with 400 + invalid_timeout_attr code", async () => {
     const res = await req("POST", "/workflows", {
       name: "bad",

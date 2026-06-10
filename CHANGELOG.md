@@ -32,8 +32,11 @@ guarantee.
   and scheduled dispatch all reject a workflow carrying error-severity validator
   diagnostics (E-codes) with the diagnostic list; warnings still pass. Workflows
   that relied on implicit completion (a step with no declared successor, E032)
-  must declare `next: exit` (or `on:`/`routes:`). Already-saved workflows are
-  unaffected.
+  must declare `next: exit` (or `on:`/`routes:`). Only sha-addressed enqueues of
+  an already-stored workflow bypass the gate — `fragua run` / `fragua ci` /
+  scheduled dispatch re-mint from disk on every invocation, so an on-disk
+  workflow with an E-code stops enqueuing until fixed (a schedule auto-pauses
+  with a `fact.schedule_invalid_workflow` daemon event).
 - **Goal-gate re-entries are distinct executions.** Lifecycle facts carry an
   optional `pass` (the cumulative retarget count) so two passes of the same step
   no longer collapse onto one entry in the run-detail node states; the graph and

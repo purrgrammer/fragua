@@ -60,7 +60,7 @@ export interface BudgetWarnEntry {
 export interface RunExplanation {
   runId: string;
   /** Edge path actually traversed, in traversal order. */
-  path: Array<{ from: string; to: string; iteration: number }>;
+  path: Array<{ from: string; to: string; iteration: number; pass: number }>;
   /** One entry per executed step (LLM calls + tool nodes). */
   steps: ExplainStep[];
   /** Snapshots captured during the run. */
@@ -110,6 +110,7 @@ export function buildExplanation(
     from: e.from,
     to: e.to,
     iteration: e.iteration,
+    pass: e.pass,
   }));
 
   const explainSteps = buildSteps(events, steps);

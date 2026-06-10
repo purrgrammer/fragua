@@ -120,6 +120,10 @@ export const SelectedEdge = Type.Object({
   from: Type.String(),
   to: Type.String(),
   iteration: Type.Integer({ minimum: 0 }),
+  /** Goal-gate re-entry epoch of the traversal — pairs with NodeState.pass so
+   * the graph can match a traversal to its pass's node outcome instead of the
+   * latest pass's. */
+  pass: Type.Integer({ minimum: 0 }),
 });
 export type SelectedEdge = Static<typeof SelectedEdge>;
 

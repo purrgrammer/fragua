@@ -1083,7 +1083,10 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         // closure or hit the join — no escape, and at least one successor (a
         // dead-end branch node never reaches the barrier).
         const succ = nonFanoutEdgesFrom(nodeId);
-        if (succ.length === 0) {
+        // Skip when the branch-level E039 (never reaches the join) already
+        // fired — a single-node dead-end branch trips both checks on the same
+        // node, and one defect should yield one diagnostic.
+        if (succ.length === 0 && bc.reachesJoin) {
           diags.push({
             severity: "error",
             code: "E039",

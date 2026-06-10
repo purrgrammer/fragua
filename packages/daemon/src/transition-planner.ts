@@ -340,7 +340,13 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // so suppress its `edge.selected`. Otherwise emit it now, before
   // node_completed lands, preserving the conventional ordering.
   if (pendingEdgeSelection !== undefined && goalGateRetargetTarget === undefined && result.kind === "transition") {
-    recordEdgeSelected(observability, currentNode, iteration, pendingEdgeSelection);
+    recordEdgeSelected(
+      observability,
+      currentNode,
+      iteration,
+      pendingEdgeSelection,
+      readGoalGateRetries(effectiveRouting),
+    );
   }
 
   // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
