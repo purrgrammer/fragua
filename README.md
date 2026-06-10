@@ -52,7 +52,7 @@ Pin the action to a release tag in consumer repos:
 - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0
 ```
 
-See [`.github/actions/setup-fragua/README.md`](.github/actions/setup-fragua/README.md) for inputs, credential wiring, and artifact export.
+**[docs/CI.md](docs/CI.md)** is the CI guide — GitHub Actions setup, provider credentials, passing secrets to tool steps (`--allow-env`), and exporting/importing run bundles. [`.github/actions/setup-fragua/README.md`](.github/actions/setup-fragua/README.md) documents the action's inputs.
 
 ## workflows
 
@@ -105,6 +105,7 @@ A followed run's exit code reflects its outcome — `0` completed, non-zero by h
 
 - **[STATUS.md](STATUS.md)** — what's working today, what's not yet
 - **[docs/cli.md](docs/cli.md)** — the full CLI reference + exit-code taxonomy
+- **[docs/CI.md](docs/CI.md)** — running fragua in CI: setup, credentials, `--allow-env`, bundles
 - **[docs/SPEC.md](docs/SPEC.md)** — what fragua is
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — schema, invariants, property matrix
 - **[docs/handler-contract.md](docs/handler-contract.md)** — writing handlers
