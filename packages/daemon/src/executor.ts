@@ -15,6 +15,7 @@ import {
   type Graph,
   type OutputsValue,
   readGoalGateRetries,
+  retryCountKey,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import {
@@ -390,6 +391,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // DURABLE catch on a wedged branch is the per-branch timeout backstop
   // (`fanoutBranchTimeoutMs`) + the run-wide budget — neither resets on restart.
   const branchAborts = new Map<string, number>();
+  // A fan-out park/terminal disposition whose commit lost its OCC race —
+  // parked for re-commit at the next runFanout entry. Some dispositions
+  // (a `fanout_branch_terminal` halt, a leak halt) derive from in-memory
+  // branch outcomes that are gone next turn, so "re-derive from fresh
+  // state" cannot recapture them; without this slot the halt was silently
+  // lost and the run sailed through the join. Process-local: a crash in the
+  // (OCC-exhausted → re-commit) window loses it, like branchAborts.
+  let pendingFanoutDisposition: FactEvent[] | undefined;
   let turns = 0;
   // Dispatches counted for the max_loops ceiling. Incremented just before
   // each `spec.handler(ctx)` call — OCC-retry `continue`s and schema/start
@@ -573,7 +582,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     );
 
     if (decision.shouldPause) {
-      await tryAppendFact(
+      const paused = await tryAppendFact(
         opts.store,
         runId,
         state.version,
@@ -591,6 +600,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // the next dispatch after wakePending moves the run back to queued.
         decision.appliedSeqs.length > 0 ? { advanceAppliedTo: Math.max(...decision.appliedSeqs) } : undefined,
       );
+      // Same OCC handling as the cancel arm above: a swallowed conflict here
+      // dropped the pause AND exited the executor — a `running` zombie with
+      // the pause intent still queued.
+      if (!paused) {
+        const { halted } = await onOccConflict(
+          "fact.run_paused",
+          state.currentNode ?? "",
+          nodeRetryCount(state.routing, state.currentNode ?? ""),
+          state.version,
+        );
+        if (halted) return { kind: "terminal" };
+        return { kind: "continue" };
+      }
       return { kind: "terminal" };
     }
 
@@ -1212,7 +1234,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     signals.push(backstop.signal);
     deadlines.push(backstop.disarm);
     const signal = AbortSignal.any(signals);
-    const iteration = nodeRetryCount(baseState.routing, branchNode);
+    // Iteration from branchRouting (the live view), not baseState — a same-turn
+    // back-edge re-entry must run under its bumped counter.
+    const iteration = nodeRetryCount(branchRouting as Record<string, unknown>, branchNode);
     const branchPass = readGoalGateRetries(baseState.routing);
     const recorder = new CommittingRecorder({
       store: opts.store,
@@ -1350,6 +1374,36 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
+    // A park/terminal fact must actually LAND before the turn reports
+    // terminal — a silently failed commit would strand the run `running`
+    // with no executor (a zombie until daemon restart). status-stop ⇒ the
+    // run is already parked, terminal is correct; OCC exhaustion ⇒ park the
+    // facts in `pendingFanoutDisposition` and retry at the next turn's entry
+    // (they are NOT re-derivable from durable state once the branch outcomes
+    // that produced them are gone).
+    const commitParkOrTerminal = async (facts: FactEvent[]): Promise<DispatchOutcome> => {
+      const res = await commitFanoutFact(facts, {});
+      if (!res.ok && res.reason === "occ") {
+        const { halted } = await onOccConflict(
+          facts[0]?.type ?? "fact.unknown",
+          parallelNode,
+          iteration,
+          state.version,
+        );
+        if (halted) {
+          pendingFanoutDisposition = undefined;
+          return { kind: "terminal" };
+        }
+        pendingFanoutDisposition = facts;
+        return { kind: "continue" };
+      }
+      pendingFanoutDisposition = undefined;
+      return { kind: "terminal" };
+    };
+
+    // Land last turn's lost disposition before seeding/dispatching anything.
+    if (pendingFanoutDisposition !== undefined) return commitParkOrTerminal(pendingFanoutDisposition);
+
     // This turn's operator fold (budget raise / resume) — applied on the FIRST
     // commit so the override lands AND `last_applied_seq` advances past the
     // queued intents (else wake-pending re-resumes forever).
@@ -1362,102 +1416,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       foldPending = false;
       return foldOpts;
     };
-
-    const active = readActiveNodes(effectiveRouting as Record<string, unknown>);
-
-    // Seed the frontier with the branch entries (fresh entry). Through
-    // `commitFanoutFact` (not a bare append) so the SAME OCC-vs-status split as
-    // the join barrier holds: an operator pause/cancel landing between this
-    // turn's state read and the seed append is a `status` stop (yield the turn),
-    // not an OCC conflict to feed the controller.
-    if (active == null) {
-      const res = await commitFanoutFact(
-        [
-          {
-            type: "fact.fanout_started",
-            payload: { nodeId: parallelNode, iteration, ...passField(pass), branches },
-          },
-        ],
-        takeFold(),
-      );
-      if (!res.ok) {
-        if (res.reason !== "occ") return { kind: "continue" };
-        const { halted } = await onOccConflict("fact.fanout_started", parallelNode, iteration, state.version);
-        return halted ? { kind: "terminal" } : { kind: "continue" };
-      }
-      return { kind: "continue" }; // next turn dispatches the seeded frontier
-    }
-
-    // Frontier drained → barrier: advance current_node to the join.
-    if (active.length === 0) {
-      const res = await commitFanoutFact(
-        [
-          {
-            type: "fact.fanout_joined",
-            payload: { nodeId: parallelNode, iteration, nextNode: join, branchesCompleted: branches.length },
-          },
-        ],
-        takeFold(),
-      );
-      if (!res.ok) {
-        // Status-stop ⇒ the run is already leaving `running`; just yield the
-        // turn. Only true OCC exhaustion feeds the conflict controller.
-        if (res.reason !== "occ") return { kind: "continue" };
-        const { halted } = await onOccConflict("fact.fanout_joined", parallelNode, iteration, state.version);
-        return halted ? { kind: "terminal" } : { kind: "continue" };
-      }
-      onOccResolved(parallelNode, iteration);
-      return { kind: "continue" };
-    }
-
-    // Re-dispatch transition fact. A frontier branch whose latest lifecycle fact
-    // is `node_aborted` is being RE-dispatched (resume after a pause/shutdown
-    // abort, or an abort-loop re-drive). The initial frontier rides
-    // `fanout_started` and a successor rides a bundled `dispatch_started`, but a
-    // re-dispatch emits NEITHER — so without this the prior `node_aborted` leaves
-    // the branch projected "failed" for the whole re-run. Emit `dispatch_started`
-    // so the failed→running transition is a durable fact (ground rule #5) the
-    // projection already consumes. Safe: the reducer only ADDS to the active set
-    // when absent — the branch is already there, so this is a no-op on the frontier.
-    const reDispatched = abortedActiveBranches(opts.store, runId, active);
-    if (reDispatched.length > 0) {
-      const facts: FactEvent[] = reDispatched.map((n) => ({
-        type: "fact.dispatch_started",
-        payload: {
-          nodeId: n,
-          iteration: nodeRetryCount(state.routing, n),
-          ...passField(pass),
-          resumeOf: "paused",
-        },
-      }));
-      const reRes = await commitFanoutFact(facts, takeFold());
-      if (!reRes.ok) {
-        // Same OCC-vs-status split as every other commit arm — this was the one
-        // commit that still dropped the reason, leaving the warn → occ_exhausted
-        // escalation dead under persistent re-dispatch contention.
-        if (reRes.reason === "occ") {
-          const first = reDispatched[0]!;
-          const { halted } = await onOccConflict(
-            "fact.dispatch_started",
-            first,
-            nodeRetryCount(state.routing, first),
-            state.version,
-          );
-          if (halted) return { kind: "terminal" };
-        }
-        return { kind: "continue" };
-      }
-    }
-
-    // ── Reactive pool (the on-log frontier, fan-out-nodes.md § Execution). One
-    // runFanout call drains the whole region: dispatch the live frontier, then
-    // as EACH branch settles, commit it and dispatch its successor immediately —
-    // never waiting on siblings. A slow/hung/failed branch can no longer dam the
-    // commit of its already-finished siblings (head-of-line blocking — confirmed
-    // in a live post-mortem). Commits still serialize through `commitFanoutFact`
-    // (the linearization point); only the dispatch side races.
-    const sem = new Semaphore(concurrency);
-    const freshState = opts.store.getState(runId) ?? state;
 
     // The parallel node's per-node cost/token cap sums over its fan-out closure
     // (branches + their non-fanout descendants up to the join — the shared
@@ -1538,6 +1496,129 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return undefined;
     };
 
+    const active = readActiveNodes(effectiveRouting as Record<string, unknown>);
+
+    // Seed the frontier with the branch entries (fresh entry). Through
+    // `commitFanoutFact` (not a bare append) so the SAME OCC-vs-status split as
+    // the join barrier holds: an operator pause/cancel landing between this
+    // turn's state read and the seed append is a `status` stop (yield the turn),
+    // not an OCC conflict to feed the controller.
+    if (active == null) {
+      const res = await commitFanoutFact(
+        [
+          {
+            type: "fact.fanout_started",
+            payload: { nodeId: parallelNode, iteration, ...passField(pass), branches },
+          },
+        ],
+        takeFold(),
+      );
+      if (!res.ok) {
+        if (res.reason !== "occ") return { kind: "continue" };
+        const { halted } = await onOccConflict("fact.fanout_started", parallelNode, iteration, state.version);
+        return halted ? { kind: "terminal" } : { kind: "continue" };
+      }
+      return { kind: "continue" }; // next turn dispatches the seeded frontier
+    }
+
+    // Frontier drained → barrier: advance current_node to the join. Budget
+    // first — a breach folded by the LAST branch commit (or a disposition
+    // lost to an OCC-continue last turn) must park the run here, not ride
+    // through the join into the successor's dispatch.
+    if (active.length === 0) {
+      const drainedBarrier = fanoutBudgetDisposition({ fresh: true });
+      if (drainedBarrier !== undefined) return commitParkOrTerminal([drainedBarrier]);
+      const res = await commitFanoutFact(
+        [
+          {
+            type: "fact.fanout_joined",
+            payload: { nodeId: parallelNode, iteration, nextNode: join, branchesCompleted: branches.length },
+          },
+        ],
+        takeFold(),
+      );
+      if (!res.ok) {
+        // Status-stop ⇒ the run is already leaving `running`; just yield the
+        // turn. Only true OCC exhaustion feeds the conflict controller.
+        if (res.reason !== "occ") return { kind: "continue" };
+        const { halted } = await onOccConflict("fact.fanout_joined", parallelNode, iteration, state.version);
+        return halted ? { kind: "terminal" } : { kind: "continue" };
+      }
+      onOccResolved(parallelNode, iteration);
+      return { kind: "continue" };
+    }
+
+    // Re-dispatch transition fact. A frontier branch whose latest lifecycle fact
+    // is `node_aborted` is being RE-dispatched (resume after a pause/shutdown
+    // abort, or an abort-loop re-drive). The initial frontier rides
+    // `fanout_started` and a successor rides a bundled `dispatch_started`, but a
+    // re-dispatch emits NEITHER — so without this the prior `node_aborted` leaves
+    // the branch projected "failed" for the whole re-run. Emit `dispatch_started`
+    // so the failed→running transition is a durable fact (ground rule #5) the
+    // projection already consumes. Safe: the reducer only ADDS to the active set
+    // when absent — the branch is already there, so this is a no-op on the frontier.
+    const reDispatched = abortedActiveBranches(opts.store, runId, active);
+    if (reDispatched.length > 0) {
+      const facts: FactEvent[] = reDispatched.map((n) => ({
+        type: "fact.dispatch_started",
+        payload: {
+          nodeId: n,
+          iteration: nodeRetryCount(state.routing, n),
+          ...passField(pass),
+          resumeOf: "paused",
+        },
+      }));
+      const reRes = await commitFanoutFact(facts, takeFold());
+      if (!reRes.ok) {
+        // Same OCC-vs-status split as every other commit arm — this was the one
+        // commit that still dropped the reason, leaving the warn → occ_exhausted
+        // escalation dead under persistent re-dispatch contention.
+        if (reRes.reason === "occ") {
+          const first = reDispatched[0]!;
+          const { halted } = await onOccConflict(
+            "fact.dispatch_started",
+            first,
+            nodeRetryCount(state.routing, first),
+            state.version,
+          );
+          if (halted) return { kind: "terminal" };
+        }
+        return { kind: "continue" };
+      }
+    }
+
+    // ── Reactive pool (the on-log frontier, fan-out-nodes.md § Execution). One
+    // runFanout call drains the whole region: dispatch the live frontier, then
+    // as EACH branch settles, commit it and dispatch its successor immediately —
+    // never waiting on siblings. A slow/hung/failed branch can no longer dam the
+    // commit of its already-finished siblings (head-of-line blocking — confirmed
+    // in a live post-mortem). Commits still serialize through `commitFanoutFact`
+    // (the linearization point); only the dispatch side races.
+    const sem = new Semaphore(concurrency);
+    const freshState = opts.store.getState(runId) ?? state;
+
+    // Routing view that folds the retry-count bumps committed THIS turn. The
+    // turn-start snapshot misses a branch back-edge's `internal.retry_count.*`
+    // patch riding an earlier same-turn commit — a re-entered node then runs a
+    // second time under the SAME (nodeId, iteration), overwriting its outputs
+    // and slipping past its max-retries gate until the next turn. Only the
+    // retry-count keys fold: the rest of `effectiveRouting` carries
+    // materialized values (spilled inputs) the committed routing doesn't have.
+    let liveRouting = effectiveRouting;
+    const retryCountPrefix = retryCountKey("");
+    const foldCommittedRetryCounts = (): void => {
+      const committed = lastFanoutState?.routing;
+      if (committed === undefined) return;
+      let next: Record<string, unknown> | undefined;
+      for (const [k, v] of Object.entries(committed)) {
+        if (k.startsWith(retryCountPrefix) && liveRouting[k] !== v) {
+          if (next === undefined) next = { ...liveRouting };
+          next[k] = v;
+        }
+      }
+      if (next !== undefined) liveRouting = next;
+    };
+
     // Once a run-level disposition is captured we stop dispatching new
     // successors but keep draining the in-flight pool — bounding overshoot to
     // the branches already running — then commit the disposition at drain.
@@ -1586,7 +1667,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           await sem.acquire();
           try {
             if (poolBailed) return { nodeId, outcome: { kind: "skipped", nodeId } satisfies BranchOutcome };
-            return { nodeId, outcome: await executeBranchNode(nodeId, freshState, effectiveRouting, branchTimeoutMs) };
+            // `liveRouting` read at execution time (not dispatch time) so a
+            // successor queued behind the semaphore still sees every
+            // retry-count bump committed while it waited.
+            return { nodeId, outcome: await executeBranchNode(nodeId, freshState, liveRouting, branchTimeoutMs) };
           } finally {
             sem.release();
           }
@@ -1624,19 +1708,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // nothing to commit (the bail's own exit path owns the turn).
         if (outcome.kind === "skipped") continue;
 
-        // A leaked handler is unrecoverable — halt the whole run.
+        // A leaked handler is unrecoverable — halt the whole run. Through
+        // commitParkOrTerminal: an OCC-lost halt here (orphaned recorder
+        // streams advancing the version) must re-commit next turn, not
+        // silently strand the run `running` with no executor.
         if (outcome.kind === "leak") {
-          await commitFanoutFact(
-            [
-              { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
-              { type: "fact.run_halted", payload: { reason: "error", detail: "handler_leaked" } },
-            ],
-            {},
-          );
           leakBudget.recordLeak(runId, outcome.nodeId);
           abortInflightPool();
           await drainInflightPool();
-          return { kind: "terminal" };
+          return commitParkOrTerminal([
+            { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
+            { type: "fact.run_halted", payload: { reason: "error", detail: "handler_leaked" } },
+          ]);
         }
 
         // An aborted branch stays in the active set (node_aborted doesn't mutate
@@ -1655,7 +1738,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               const { halted } = await onOccConflict(
                 "fact.node_aborted",
                 outcome.nodeId,
-                nodeRetryCount(freshState.routing, outcome.nodeId),
+                nodeRetryCount(liveRouting as Record<string, unknown>, outcome.nodeId),
                 state.version,
               );
               if (halted) return { kind: "terminal" };
@@ -1663,6 +1746,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             await drainInflightPool();
             return { kind: "continue" };
           }
+          foldCommittedRetryCounts();
           branchAborts.set(outcome.nodeId, (branchAborts.get(outcome.nodeId) ?? 0) + 1);
           // An abort still folds `partialCostUsd` into the durable total — gate on
           // it too (the success arm does), else real partial spend slips past the cap.
@@ -1709,11 +1793,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           });
         }
         if (successor !== undefined) {
+          // A back-edge successor's retry-count bump rides THIS commit's
+          // routingPatch — the dispatch_started must stamp the post-patch
+          // iteration or it disagrees with what the branch executes under.
+          const successorRouting =
+            outcome.appendOpts.routingPatch !== undefined
+              ? { ...(liveRouting as Record<string, unknown>), ...outcome.appendOpts.routingPatch }
+              : (liveRouting as Record<string, unknown>);
           branchFacts.push({
             type: "fact.dispatch_started",
             payload: {
               nodeId: successor,
-              iteration: nodeRetryCount(freshState.routing, successor),
+              iteration: nodeRetryCount(successorRouting, successor),
               ...passField(pass),
               resumeOf: "fresh",
             },
@@ -1728,7 +1819,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             const { halted } = await onOccConflict(
               "fact.node_completed",
               outcome.nodeId,
-              nodeRetryCount(freshState.routing, outcome.nodeId),
+              nodeRetryCount(liveRouting as Record<string, unknown>, outcome.nodeId),
               state.version,
             );
             if (halted) return { kind: "terminal" };
@@ -1736,6 +1827,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           await drainInflightPool();
           return { kind: "continue" };
         }
+        foldCommittedRetryCounts();
         branchAborts.delete(outcome.nodeId);
         captureDisposition();
 
@@ -1754,31 +1846,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       throw err;
     }
 
-    // A terminal/pause fact at the drain edge must actually LAND before the
-    // turn reports terminal — a silently failed commit would strand the run
-    // `running` with no executor (a zombie until daemon restart). status-stop
-    // ⇒ the run is already parked, terminal is correct; OCC exhaustion ⇒
-    // escalate and re-derive next turn (the breach re-captures from fresh state).
-    const commitParkOrTerminal = async (fact: FactEvent): Promise<DispatchOutcome> => {
-      const res = await commitFanoutFact([fact], {});
-      if (!res.ok && res.reason === "occ") {
-        const { halted } = await onOccConflict(fact.type, parallelNode, iteration, state.version);
-        return halted ? { kind: "terminal" } : { kind: "continue" };
-      }
-      return { kind: "terminal" };
-    };
-
     // Disposition. A captured run-level breach (halt or pause) parks the run.
-    if (disposition !== undefined) return commitParkOrTerminal(disposition);
+    if (disposition !== undefined) return commitParkOrTerminal([disposition]);
     // Per-branch abort-loop: a branch that aborted `abortLoopCeiling` turns in a
     // row parks the run regardless of sibling success. `branchAborts` holds
     // exactly the branches still aborted this turn — a success deletes its entry.
     for (const [nodeId, streak] of branchAborts) {
       if (streak >= abortLoopCeiling) {
-        return commitParkOrTerminal({
-          type: "fact.run_paused",
-          payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak },
-        });
+        return commitParkOrTerminal([
+          {
+            type: "fact.run_paused",
+            payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak },
+          },
+        ]);
       }
     }
     // Aborts below the ceiling: re-drive the still-active (aborted) nodes next turn.
@@ -1788,7 +1868,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // — the per-commit gate already caught in-region breaches), then let the
     // next turn advance current_node to the join (active is now empty).
     const barrier = fanoutBudgetDisposition({ fresh: true });
-    if (barrier !== undefined) return commitParkOrTerminal(barrier);
+    if (barrier !== undefined) return commitParkOrTerminal([barrier]);
     return { kind: "continue" }; // frontier drained — next turn joins
   };
 

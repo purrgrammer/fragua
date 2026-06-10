@@ -928,6 +928,20 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         ...loc,
       });
     }
+    // The seed fact (`fact.fanout_started`) embeds the full branch list in
+    // its payload, and event payloads are capped at 4 KiB (I7). Without this
+    // bound a wide-enough fan-out validates cleanly and then dies at the
+    // seed commit with an "executor crashed" halt that points nowhere near
+    // the authoring problem. 3 KiB leaves headroom for the other fields.
+    if (JSON.stringify(branches).length > 3072) {
+      diags.push({
+        severity: "error",
+        code: "E045",
+        message: `parallel node "${p.id}" declares too many branches (${branches.length}) — the serialized branch list exceeds the 4 KiB event-payload budget`,
+        nodeId: p.id,
+        ...loc,
+      });
+    }
     const seenEntries = new Set<string>();
     for (const b of branches) {
       if (seenEntries.has(b) || !nodeIds.has(b)) {

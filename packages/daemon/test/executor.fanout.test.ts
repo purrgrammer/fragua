@@ -1241,6 +1241,62 @@ steps:
     r.store.close();
   });
 
+  test("a fanout_branch_terminal halt that loses its OCC race is re-committed next turn, never silently lost", async () => {
+    // The halt is derived from an in-memory branch outcome (the branch's
+    // node_completed already removed it from the active set), so "re-derive
+    // from fresh state next turn" can never recapture it. Pre-fix: an
+    // OCC-exhausted disposition commit returned `continue`, the next turn saw
+    // a drained frontier, committed fanout_joined, and the run sailed through
+    // the join as if healthy. Now the disposition parks in
+    // `pendingFanoutDisposition` and lands at the next turn's entry.
+    const r = rig({
+      yaml: `name: btermocc
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [bad, ok], next: synth }
+  bad: { type: llm, prompt: x, allowed-tools: [read], next: exit }
+  ok: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    const seen: Record<string, number> = {};
+    registerHandlers(r, counter(seen, "synth"));
+    const llm = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+      });
+    llm("bad");
+    llm("ok");
+    // Storm the FIRST disposition commit into OCC exhaustion (one full
+    // commitFanoutFact round), then let the re-commit through.
+    const origAppend = r.store.appendFact.bind(r.store);
+    let haltConflicts = 0;
+    r.store.appendFact = (runId, facts, version, appendOpts) => {
+      if (facts[0]?.type === "fact.run_halted" && haltConflicts < 8) {
+        haltConflicts++;
+        throw new ConcurrencyError(version, version + 1);
+      }
+      return origAppend(runId, facts, version, appendOpts);
+    };
+    enqueue(r, "btermocc1", "begin");
+
+    await drive(r, "btermocc1", { maxTurns: 40 });
+    const final = r.store.getState("btermocc1")!;
+    expect(haltConflicts).toBe(8); // the storm actually exhausted one commit round
+    expect(final.status).toBe("halted");
+    const events = r.store.getEvents("btermocc1");
+    expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
+    expect(events.some((e) => e.type === "fact.fanout_joined")).toBe(false);
+    const halted = events.find((e) => e.type === "fact.run_halted");
+    expect((halted?.payload as { detail?: string }).detail).toBe("fanout_branch_terminal:bad");
+    expect(seen["synth"]).toBeUndefined();
+    r.store.close();
+  });
+
   test("a rejected branch arm aborts and drains the in-flight sibling before unwinding", async () => {
     const r = rig({ yaml: HUNG_YAML });
     r.dispatcher.register(r.workflowSha, "begin", {

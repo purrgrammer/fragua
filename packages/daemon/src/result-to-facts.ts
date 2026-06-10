@@ -245,6 +245,13 @@ export function abortResultToFacts(
   if (partial.totalOutputTokens > 0) payload.partialOutputTokens = partial.totalOutputTokens;
   if (partial.totalCacheReadTokens > 0) payload.partialCacheReadTokens = partial.totalCacheReadTokens;
   if (partial.totalCacheWriteTokens > 0) payload.partialCacheWriteTokens = partial.totalCacheWriteTokens;
+  // Per-bucket cost splits keep the analytics invariant (bucket sums ≈
+  // total_cost_usd) intact for aborted spend — without them an aborted turn
+  // raises the total while the splits stay flat.
+  if (partial.totalInputCostUsd > 0) payload.partialInputCostUsd = partial.totalInputCostUsd;
+  if (partial.totalOutputCostUsd > 0) payload.partialOutputCostUsd = partial.totalOutputCostUsd;
+  if (partial.totalCacheReadCostUsd > 0) payload.partialCacheReadCostUsd = partial.totalCacheReadCostUsd;
+  if (partial.totalCacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = partial.totalCacheWriteCostUsd;
   return [{ type: "fact.node_aborted", payload }];
 }
 

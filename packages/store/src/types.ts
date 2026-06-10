@@ -1017,6 +1017,11 @@ export interface Schedule {
   lastFireAt: number | null;
   lastRunId: string | null;
   pausedAt: number | null;
+  /** Why the schedule was auto-paused (the latest
+   * `fact.schedule_invalid_workflow` audit error). Populated only while
+   * `pausedAt` is set — a stale error on a since-resumed schedule is noise.
+   * `null` for operator pauses with no recorded cause. */
+  lastError: string | null;
   createdAt: number;
 }
 

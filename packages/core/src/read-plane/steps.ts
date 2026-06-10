@@ -72,6 +72,11 @@ export interface StepSnapshot {
   parentNodeId?: string;
   /** Iteration metadata when the caller is a loop. */
   iteration?: { n: number; max: number };
+  /** Goal-gate re-entry epoch the step ran under (from the node's most
+   * recent lifecycle fact — `llm.start` itself doesn't carry it). Absent
+   * means pass 0; a retarget pass resets per-node retry counters, so
+   * `(nodeId, iteration)` alone collides across passes. */
+  pass?: number;
   /** ISO timestamp of when this step's node started running. For the
    * first step in each node window this comes from `fact.node_started`
    * (truthful — written sync by the daemon). For loop iterations 2+
@@ -154,6 +159,14 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // the active region (not just `fanout_started.branches`) is what nests the
   // successor steps, which the branch list alone never names.
   let activeFanoutParent: string | undefined;
+  // nodeId → goal-gate pass from the node's most recent lifecycle fact.
+  // `llm.start` is pass-blind (pi-agent-core emits it), so the step inherits
+  // the epoch from the daemon-written fact that opened its window.
+  const lastPassForNode = new Map<string, number>();
+  const passField = (data: Record<string, unknown>): number => {
+    const v = data["pass"];
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  };
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
@@ -165,6 +178,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       // written sync) so its duration isn't derived from the buffered llm.start.
       for (const b of Array.isArray(data["branches"]) ? (data["branches"] as string[]) : []) {
         lastNodeStartedTs.set(b, ev.ts);
+        lastPassForNode.set(b, passField(data));
       }
       continue;
     }
@@ -180,10 +194,12 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       // instead of the buffered llm.start. Scoped to an active fan-out so a linear
       // node's own node_started anchoring is unchanged.
       if (nodeId && activeFanoutParent !== undefined) lastNodeStartedTs.set(nodeId, ev.ts);
+      if (nodeId) lastPassForNode.set(nodeId, passField(data));
       continue;
     }
 
     if (ev.type === "fact.node_started") {
+      if (nodeId) lastPassForNode.set(nodeId, passField(data));
       if (nodeId) {
         // Resumption-after-pause: the node window never closed (no
         // `fact.node_completed`), so don't reset its anchors — mark
@@ -240,6 +256,8 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
             nodeId,
             startedAt: new Date(pending.startTs).toISOString(),
           };
+          const toolPass = lastPassForNode.get(nodeId) ?? 0;
+          if (toolPass > 0) step.pass = toolPass;
           if (Number.isFinite(dur) && dur >= 0) step.durationMs = dur;
           steps.push(step);
           lastStepIdxForNode.set(nodeId, steps.length - 1);
@@ -321,6 +339,8 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       // Nest under the in-flight parallel parent (entry scans + their verify
       // successors alike). `!== nodeId` guards the degenerate self-tag.
       if (activeFanoutParent !== undefined && activeFanoutParent !== nodeId) step.parentNodeId = activeFanoutParent;
+      const stepPass = nodeId !== "" ? (lastPassForNode.get(nodeId) ?? 0) : 0;
+      if (stepPass > 0) step.pass = stepPass;
       assignOptional(step, data);
       steps.push(step);
       if (nodeId) {

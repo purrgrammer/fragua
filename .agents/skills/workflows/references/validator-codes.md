@@ -34,6 +34,16 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E033 | An `outputs:` declaration uses a construct outside the restricted profile — most commonly a `choice` field with no `options`. (Out-of-profile JSON-Schema keys like `pattern`/`minimum`/`oneOf`/`$ref` are rejected earlier as a parse error.) |
 | E034 | Malformed `outputs:` declaration — an empty block (no fields) or an output key that isn't a valid identifier (must start with a letter, then letters/digits/underscore). |
 | E035 | A `${{ outputs.X.f }}` reference is broken (scans `prompt` / `text` / `run`): producer `X` doesn't exist, declares no `outputs:`, doesn't declare the field/path `f`, or can never reach the consumer (a dead reference). Fix the producer name, the field path, or the wiring. |
+| E036 | A `parallel` step declares fewer than 2 `branches:` — fan out or use a plain step. |
+| E037 | A `parallel` step's branch entry is a duplicate or names a step that doesn't exist. |
+| E038 | A `parallel` step's `join:` is missing or names a step that doesn't exist. |
+| E039 | A branch closure doesn't reach the join — every branch sub-pipeline must converge on `join:`. |
+| E040 | A `parallel` node inside a branch closure — fan-outs don't nest. |
+| E041 | A non-`llm` step inside a branch closure (tool / human / exit). Branches are deliberation-only. |
+| E042 | A branch-closure `llm` step requests write-class tools (`write` / `edit` / `bash`) — branches are read-class. |
+| E043 | A branch-closure step sets an explicit `thread:` — branch transcripts are per-branch synthetic threads. |
+| E044 | A step is shared by two branches' closures — closures must be disjoint. |
+| E045 | A `parallel` step's serialized branch list exceeds the 4 KiB event-payload budget (~hundreds of branches) — the seed fact embeds it whole. Split the fan-out. |
 
 ## Warnings
 

@@ -183,6 +183,7 @@ import {
   type ScheduleRow,
   selectAllSchedules,
   selectDueSchedules,
+  selectLatestScheduleError,
   selectSchedule,
   selectScheduleRuns,
   selectSchedulesByCwd,
@@ -371,6 +372,7 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     lastFireAt: row.last_fire_at,
     lastRunId: row.last_run_id,
     pausedAt: row.paused_at,
+    lastError: null,
     createdAt: row.created_at,
   };
 }
@@ -1378,18 +1380,29 @@ export class SqliteStore implements IEventStore {
       lastFireAt: null,
       lastRunId: null,
       pausedAt: null,
+      lastError: null,
       createdAt: now,
     };
   }
 
   getSchedule(id: string): Schedule | null {
     const row = selectSchedule(this.db, id);
-    return row == null ? null : rowToSchedule(row);
+    return row == null ? null : this.scheduleFromRow(row);
   }
 
   listSchedules(opts?: { cwd?: string }): Schedule[] {
     const rows = opts?.cwd != null ? selectSchedulesByCwd(this.db, opts.cwd) : selectAllSchedules(this.db);
-    return rows.map(rowToSchedule);
+    return rows.map((r) => this.scheduleFromRow(r));
+  }
+
+  /** Public schedule shape + the auto-pause cause. The cause join runs only
+   * for paused rows (the dispatcher excludes paused schedules from the due
+   * scan, so the hot path never pays it). */
+  private scheduleFromRow(row: ScheduleRow): Schedule {
+    const schedule = rowToSchedule(row);
+    if (row.paused_at == null) return schedule;
+    const err = selectLatestScheduleError(this.db, row.id);
+    return err == null ? schedule : { ...schedule, lastError: err.error };
   }
 
   getDueSchedules(now: number): Schedule[] {
@@ -1751,6 +1764,7 @@ export class SqliteStore implements IEventStore {
             content: scrubJsonStrings(m.content, registry, scrubOpts),
             nodeId: m.nodeId,
             iteration: m.iteration,
+            pass: m.pass,
           })),
         ),
       },

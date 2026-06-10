@@ -398,7 +398,11 @@ function renderExplanation(e: RunExplanation): void {
 
   // ── Path ────────────────────────────────────────────────────────────────
   if (e.path.length > 0) {
-    const pathStr = e.path.map((p) => `${p.from}→${p.to}${p.iteration > 0 ? `#${p.iteration}` : ""}`).join("  ");
+    // `~p<n>` marks a goal-gate re-entry pass — iteration resets per pass, so
+    // without it a retargeted traversal prints as an identical duplicate.
+    const pathStr = e.path
+      .map((p) => `${p.from}→${p.to}${p.iteration > 0 ? `#${p.iteration}` : ""}${p.pass > 0 ? `~p${p.pass}` : ""}`)
+      .join("  ");
     console.log(`  path:     ${chalk.dim(pathStr)}`);
   }
 
@@ -413,8 +417,9 @@ function renderExplanation(e: RunExplanation): void {
       const outcomeGlyph =
         s.outcome === "success" ? chalk.green("✓") : s.outcome === "fail" ? chalk.red("✗") : chalk.dim("?");
       const model = s.model ? chalk.dim(` ${s.model}`) : "";
+      const passTag = s.pass !== undefined && s.pass > 0 ? chalk.dim(`~p${s.pass}`) : "";
       console.log(
-        `${indent}${chalk.dim(`#${s.stepIdx}`)} ${outcomeGlyph} ${chalk.cyan(s.nodeId)}${model}` +
+        `${indent}${chalk.dim(`#${s.stepIdx}`)} ${outcomeGlyph} ${chalk.cyan(s.nodeId)}${passTag}${model}` +
           `  $${s.costUsd.toFixed(4)}` +
           (s.durationMs != null ? `  ${(s.durationMs / 1000).toFixed(1)}s` : ""),
       );

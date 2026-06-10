@@ -129,6 +129,9 @@ export async function scheduleListCommand(opts: ScheduleListOptions): Promise<nu
       const next = r.pausedAt != null ? "\u2014" : formatRelative(r.nextFireAt, now);
       const stripe = buildHealthStripe(r.recentRuns ?? []);
       console.log([r.id, r.workflowRef, r.cwd, r.intervalText, last, next, status, stripe].join("\t"));
+      // The auto-pause cause (an unresolvable/invalid workflow) \u2014 without it
+      // a dispatcher-paused schedule is indistinguishable from an operator one.
+      if (r.lastError != null) console.log(chalk.red(`  \u21b3 paused by dispatcher: ${r.lastError}`));
     }
     return 0;
   });

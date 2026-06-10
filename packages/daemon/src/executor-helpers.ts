@@ -274,6 +274,15 @@ export interface UsageTotals {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
+  /** Per-bucket COST splits, fed by the `cost.recorded` mirror (the llm
+   * handler-bridge path). The `addUsage` lane has no bucket-cost source
+   * (LlmAccounting carries token splits only), so spend routed through
+   * `ctx.llm.call` lands in `totalCostUsd` with these at 0 — the analytics
+   * rollup treats the shortfall as unsplit residual. */
+  totalInputCostUsd: number;
+  totalOutputCostUsd: number;
+  totalCacheReadCostUsd: number;
+  totalCacheWriteCostUsd: number;
   lastModel: string | undefined;
 }
 
@@ -297,6 +306,10 @@ export function makeUsageAccumulator(): {
     totalOutputTokens: 0,
     totalCacheReadTokens: 0,
     totalCacheWriteTokens: 0,
+    totalInputCostUsd: 0,
+    totalOutputCostUsd: 0,
+    totalCacheReadCostUsd: 0,
+    totalCacheWriteCostUsd: 0,
     lastModel: undefined,
   };
   return {
@@ -318,6 +331,10 @@ export function makeUsageAccumulator(): {
       t.totalOutputTokens += readNumber(p["output_tokens"]);
       t.totalCacheReadTokens += readNumber(p["cache_read_tokens"]);
       t.totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
+      t.totalInputCostUsd += readNumber(p["cost_input_usd"]);
+      t.totalOutputCostUsd += readNumber(p["cost_output_usd"]);
+      t.totalCacheReadCostUsd += readNumber(p["cost_cache_read_usd"]);
+      t.totalCacheWriteCostUsd += readNumber(p["cost_cache_write_usd"]);
       const model = p["model"];
       if (typeof model === "string") t.lastModel = model;
     },

@@ -19,6 +19,11 @@ guarantee.
   zai-coding-cn, and the Xiaomi MiMo token-plan regions. Claude Opus 4.8 and
   Claude Fable 5 (adaptive thinking, `xhigh` effort) are available on the
   Anthropic and Amazon Bedrock providers.
+- **Auto-paused schedules show their cause.** A schedule the dispatcher pauses
+  over an unresolvable or invalid workflow now carries the recorded error on
+  its row — `fragua schedule ls` prints it under the paused entry and the
+  Schedules page shows it beneath the status pill — instead of an
+  indistinguishable bare "paused".
 
 ### Changed
 
@@ -44,6 +49,17 @@ guarantee.
   (schema v4 adds `messages.pass`): an unthreaded step re-entered by a gate now
   starts with a clean conversation instead of silently rehydrating its prior
   pass's transcript — unthreaded steps rehydrate only when resumed.
+
+### Fixed
+
+- **An operator pause can no longer be silently dropped.** When the pause fact
+  lost a concurrent-write race, the executor exited while leaving the run
+  `running` with the pause intent still queued (a stranded run until daemon
+  restart); the pause now retries against fresh state like cancel does.
+- **Aborted steps record per-bucket cost splits.** A pause/steer/timeout abort
+  folded its partial spend into the run total but not the input/output/cache
+  cost splits, so the analytics spend breakdown stopped summing to the total
+  on runs with aborts.
 
 ### Removed
 

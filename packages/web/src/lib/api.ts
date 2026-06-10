@@ -975,6 +975,8 @@ export interface Schedule {
   lastFireAt: number | null;
   lastRunId: string | null;
   pausedAt: number | null;
+  /** Auto-pause cause (invalid/unresolvable workflow); only set while paused. */
+  lastError?: string | null;
   createdAt: number;
 }
 

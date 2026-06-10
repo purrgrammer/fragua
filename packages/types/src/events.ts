@@ -890,10 +890,13 @@ export type FactEvent =
 
 export type FactType = FactEvent["type"];
 
-/** The per-node lifecycle facts — the vocabulary both the read-plane's
- * node-state fold and the executor's fan-out recovery scan reason over
- * (latest-of-these-per-node decides whether a branch is running, done, or
- * needs a re-dispatch). One declaration so the two can't drift. */
+/** The per-node lifecycle facts the executor's fan-out recovery scan keys
+ * on (latest-of-these-per-node decides whether a branch was aborted and
+ * needs a corrective re-dispatch). NOT the full vocabulary the read-plane's
+ * node-state fold consumes — that fold additionally treats
+ * `fact.fanout_started` as a lifecycle transition (it marks seeded branch
+ * entries "running"); a seeded-but-never-dispatched branch is therefore
+ * absent from this scan by design, and the frontier re-dispatches it fresh. */
 export const NODE_LIFECYCLE_FACT_TYPES = [
   "fact.dispatch_started",
   "fact.node_started",

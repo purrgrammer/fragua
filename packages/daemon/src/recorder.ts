@@ -101,6 +101,15 @@ export class CommittingRecorder implements SideEffectRecorder {
         // the fence that stops a zombie handler — one that ignored its abort and
         // outlived a terminal — from landing side-effect facts AFTER
         // fact.run_halted. Same status-vs-OCC split as commitFanoutFact.
+        //
+        // ACCEPTED TRADE: status is the ONLY fence — there is no dispatch-
+        // identity token, so an ORPHANED handler whose run is still `running`
+        // under a NEWER dispatch (a bailed branch outliving the bounded
+        // drain grace, or a re-claimed run after daemon-lock expiry) retries
+        // through and can interleave side-effect facts with the new
+        // dispatch's stream under the same (nodeId, iteration). The window
+        // is abort-signaled + leakGrace-bounded on the bail path; closing it
+        // fully needs a per-dispatch claim token threaded into the recorder.
         if (live.status !== "running") throw err;
         this.currentVersion = live.version;
       }

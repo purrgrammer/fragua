@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { ValidationError, validate, validateOrThrow } from "../../src/engine/validator.ts";
 import type { NodeAttrs } from "../../src/types/graph.ts";
-import { mkGraph } from "../helpers/build-graph.ts";
+import { type EdgeSpec, mkGraph } from "../helpers/build-graph.ts";
 
 function codesOf(g: Parameters<typeof validate>[0], opts?: Parameters<typeof validate>[1]): string[] {
   return validate(g, opts).map((d) => d.code);
@@ -808,5 +808,29 @@ describe("validate — fan-out branch lints", () => {
     const codes = codesOf(g);
     expect(codes).toContain("E038");
     expect(codes).not.toContain("E044");
+  });
+
+  test("E045 fires when the serialized branch list exceeds the seed-fact payload budget", () => {
+    // ~200 × ~19 serialized bytes ≈ 3.8 KiB > the 3 KiB validator bound —
+    // `fact.fanout_started` embeds the whole list under the store's 4 KiB
+    // payload cap, so this must die at validation, not at the seed commit.
+    const branches = Array.from({ length: 200 }, (_, i) => `lens_branch_${String(i).padStart(4, "0")}`);
+    const nodes: Record<string, unknown> = {
+      s: "start",
+      fan: { type: "parallel", attrs: { branches, join: "j" } },
+      j: "llm",
+      done: "exit",
+    };
+    const edges: EdgeSpec[] = [
+      ["s", "fan"],
+      ["j", "done"],
+    ];
+    for (const b of branches) {
+      nodes[b] = { type: "llm", attrs: { allowed_tools: ["read"] } };
+      edges.push(["fan", b, { fanout: true }], [b, "j"]);
+    }
+    const g = mkGraph({ nodes: nodes as Parameters<typeof mkGraph>[0]["nodes"], edges });
+    const codes = codesOf(g);
+    expect(codes).toContain("E045");
   });
 });

@@ -27,6 +27,10 @@ const arbUsage = fc.record({
   totalOutputTokens: nat,
   totalCacheReadTokens: nat,
   totalCacheWriteTokens: nat,
+  totalInputCostUsd: usd,
+  totalOutputCostUsd: usd,
+  totalCacheReadCostUsd: usd,
+  totalCacheWriteCostUsd: usd,
   lastModel: fc.option(fc.string({ maxLength: 12 }), { nil: undefined }),
 });
 

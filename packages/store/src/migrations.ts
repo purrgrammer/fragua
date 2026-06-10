@@ -328,8 +328,11 @@ export function migrationRegistry(): { versions: number[]; reversible: number[];
  * Validate an existing store's `schema_version` without creating or mutating
  * anything — the open mode a store-client uses (`new SqliteStore({ migrate:
  * false })`). Refuses an uninitialized store (only the harness/daemon
- * bootstraps schema) and refuses any version outside the
- * `[MIN_COMPATIBLE, CURRENT]` compatible band.
+ * bootstraps schema) and requires the CURRENT version: this build's queries
+ * are compiled against the current schema (e.g. every messages read selects
+ * the v4 `pass` column), so an in-band-but-older store would open "fine" and
+ * then throw a raw `no such column` at the first prepare. Only
+ * migrate-capable opens accept the whole `[MIN_COMPATIBLE, CURRENT]` band.
  */
 export function verifySchema(db: Database): void {
   const version = readVersion(db);
@@ -337,6 +340,12 @@ export function verifySchema(db: Database): void {
     throw new Error("no fragua store here (schema uninitialized) — start the harness to create it");
   }
   checkVersion(version);
+  if (version < CURRENT_SCHEMA_VERSION) {
+    throw new Error(
+      `store schema is v${version}, this build reads v${CURRENT_SCHEMA_VERSION} — ` +
+        "start the harness/daemon (which migrates on open) or run `fragua db migrate`.",
+    );
+  }
 }
 
 function readVersion(db: Database): number | null {
