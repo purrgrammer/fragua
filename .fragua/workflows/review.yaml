@@ -75,7 +75,7 @@ steps:
 
       Review context for downstream steps:
         pr        — the PR number, or "none" for a local diff with no PR.
-        diff_spec — the exact argument to `git diff` that shows the change (e.g. "origin/main..HEAD", or "HEAD" for uncommitted). Use "" only for FILES mode (review the paths as-is, no diff).
+        diff_spec — the exact argument to `git diff` that shows the change (e.g. "origin/main..HEAD", or "HEAD" for uncommitted). Use "" only for FILES mode (review the paths as-is, no diff). It MUST be a bare ref/range/sha: if the resolved value would contain any character outside `[A-Za-z0-9._~^:/@-]` (a space, `;`, `$`, backtick, or a leading `-`), do NOT emit it — `abort` with `unsafe diff_spec`.
         paths     — an array of repo-relative paths actually touched.
         focus     — the focus hint, or "general".
 
@@ -126,7 +126,11 @@ steps:
   # outputs (fail-closed), each on its own synthetic thread.
   prep_diff:                           # materialise the diff once for the read-only lens branches
     type: tool
-    run: "git diff ${{ outputs.resolve.diff_spec }} > review-diff.patch 2>/dev/null; wc -l review-diff.patch"
+    # `--end-of-options` stops git parsing the substituted (LLM-emitted) diff_spec
+    # as its own flags — a poisoned `--ext-diff=…` value can't smuggle a command.
+    # The `run:` substitution already shell-quotes the value (blocks shell tokens);
+    # this closes the git-option-injection axis. `resolve` also charset-guards it.
+    run: "git diff --end-of-options ${{ outputs.resolve.diff_spec }} > review-diff.patch 2>/dev/null; wc -l review-diff.patch"
     next: review_lenses
 
   review_lenses:
