@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-11
+
 ### Added
 
 - **Parallel fan-out (`type: parallel`) — experimental.** A control node that
