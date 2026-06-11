@@ -51,7 +51,7 @@ run discovery is automatic (via the global DB), so `fragua run` works from any d
 Pin the action to a release tag in consumer repos:
 
 ```yaml
-- uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.2.0
+- uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.7.0
 ```
 
 **[docs/CI.md](docs/CI.md)** is the CI guide — GitHub Actions setup, provider credentials, passing secrets to tool steps (`--allow-env`), and exporting/importing run bundles. [`.github/actions/setup-fragua/README.md`](.github/actions/setup-fragua/README.md) documents the action's inputs.

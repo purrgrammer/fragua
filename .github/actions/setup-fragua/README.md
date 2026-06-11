@@ -19,7 +19,7 @@ the same way a test suite does.
 ```yaml
 steps:
   - uses: actions/checkout@v6
-  - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.3.1   # ← pin the tag
+  - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.7.0   # ← pin the tag
   - run: fragua ci my-workflow
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
