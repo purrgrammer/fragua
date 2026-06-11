@@ -56,7 +56,10 @@ function parseArgs(argv: string[]): Args {
   });
   for (let i = 0; i < tokens.length; i++) {
     const a = tokens[i];
-    const next = tokens[i + 1];
+    const rawNext = tokens[i + 1];
+    // A `--`-prefixed token is never a value — `--workflow --since-days 7`
+    // must skip the filter, not filter on the literal "--since-days".
+    const next = rawNext && !rawNext.startsWith("--") ? rawNext : undefined;
     if (a === "--db" && next) { storePath = next; i++; }
     else if (a === "--limit" && next) { limit = Number(next); i++; }
     else if (a === "--workflow" && next) { workflow = next; i++; }
