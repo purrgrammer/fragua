@@ -77,7 +77,7 @@ describe("ciCommand", () => {
   test("a tool step that fails but routes fail→exit lands gracefully → exit 0", async () => {
     writeFileSync(
       wfPath,
-      'name: ci-soft-fail\nsteps:\n  boom:\n    type: tool\n    run: "exit 1"\n    on: {fail: exit}\n',
+      'name: ci-soft-fail\nsteps:\n  boom:\n    type: tool\n    run: "exit 1"\n    on: {success: exit, fail: exit}\n',
     );
     const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
     expect(code).toBe(0);

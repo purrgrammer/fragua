@@ -142,6 +142,18 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
       </TableCell>
       <TableCell>
         <StatusPill status={status} />
+        {/* The auto-pause cause — a dispatcher-paused schedule (invalid /
+            unresolvable workflow) must be distinguishable from an operator
+            pause, or the operator has no discoverable reason to act on. */}
+        {isPaused && row.lastError != null && (
+          <div
+            className="mt-1 max-w-[28ch] truncate text-sw-xs text-sw-danger"
+            title={row.lastError}
+            data-testid={`schedule-error-${row.id}`}
+          >
+            {row.lastError}
+          </div>
+        )}
       </TableCell>
       <TableCell>
         <HealthStripe runs={row.recentRuns} />

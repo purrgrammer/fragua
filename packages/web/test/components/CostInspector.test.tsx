@@ -4,7 +4,7 @@
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { CostInspector } from "../../src/components/CostInspector.tsx";
-import type { ProviderDetail, ProviderModel, StepSnapshot } from "../../src/lib/api.ts";
+import type { ProviderDetail, ProviderModel, RunDetail, StepSnapshot } from "../../src/lib/api.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
@@ -17,10 +17,13 @@ function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
   };
 }
 
-function mount(runId: string, steps: StepSnapshot[], opts: { isLive?: boolean } = {}) {
+function mount(runId: string, steps: StepSnapshot[], opts: { isLive?: boolean; fanout?: RunDetail["fanout"] } = {}) {
   const client = createTestQueryClient();
   client.setQueryData(["runs", "steps", runId], steps);
-  return renderWithClient(<CostInspector runId={runId} isLive={opts.isLive} />, { client });
+  return renderWithClient(
+    <CostInspector runId={runId} isLive={opts.isLive} {...(opts.fanout ? { fanout: opts.fanout } : {})} />,
+    { client },
+  );
 }
 
 describe("CostInspector", () => {
@@ -230,4 +233,130 @@ describe("CostInspector", () => {
     });
     expect(q.queryByTestId("step-0-elapsed")).toBeNull();
   });
+
+  it("nests fan-out branch steps under one parallel parent group", async () => {
+    // scope (linear) → review (parallel: lens_a, lens_b) → synth (linear).
+    // The branch steps carry parentNodeId="review" (set by the steps
+    // projection from fact.fanout_started) and must render under ONE
+    // parallel group with the branch rows indented, not as flat siblings.
+    const steps = [
+      makeStep({ stepIdx: 0, startSeq: 1, nodeId: "scope" }),
+      makeStep({ stepIdx: 1, startSeq: 2, nodeId: "lens_a", parentNodeId: "review" }),
+      makeStep({ stepIdx: 2, startSeq: 3, nodeId: "lens_b", parentNodeId: "review" }),
+      makeStep({ stepIdx: 3, startSeq: 4, nodeId: "synth" }),
+    ];
+    const { container } = mount("r1", steps);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("cost-inspector")).toBeTruthy();
+    });
+    // One parallel group header for `review`.
+    const group = q.getByTestId("parallel-cost-review");
+    expect(within(group).getByText("review")).toBeTruthy();
+    // Branch rows render, marked as branches (indented); linear rows do not.
+    expect(q.getByTestId("step-1").getAttribute("data-branch")).toBe("true");
+    expect(q.getByTestId("step-2").getAttribute("data-branch")).toBe("true");
+    expect(q.getByTestId("step-0").getAttribute("data-branch")).toBeNull();
+    expect(q.getByTestId("step-3").getAttribute("data-branch")).toBeNull();
+  });
+
+  it("a RUNNING multi-turn branch ticks live and keeps the parallel group ticking", async () => {
+    // The live bug: a multi-LLM-turn entry branch (correctness_scan) is mid-flight,
+    // so the steps projection emits 2+ branch rows for it with NO durationMs (the
+    // projection no longer bills a running branch the gap to a sibling's start).
+    // collapseTurns must leave the merged branch row's durationMs undefined so the
+    // branch row ticks (`now - startedAt`) AND the parent group's wall-clock span
+    // keeps ticking — instead of both freezing until a single-turn successor runs.
+    const startedAt = new Date(Date.now() - 5000).toISOString();
+    const steps = [
+      // correctness_scan: two in-flight turns, neither carries a durationMs.
+      makeStep({ stepIdx: 0, startSeq: 1, nodeId: "correctness_scan", parentNodeId: "review_lenses", startedAt }),
+      makeStep({ stepIdx: 1, startSeq: 2, nodeId: "correctness_scan", parentNodeId: "review_lenses", startedAt }),
+      // A sibling branch that already finished — proves the group ticks off the
+      // STILL-RUNNING branch, not "all branches done".
+      makeStep({
+        stepIdx: 2,
+        startSeq: 3,
+        nodeId: "perf_scan",
+        parentNodeId: "review_lenses",
+        startedAt,
+        durationMs: 2_000,
+      }),
+    ];
+    const { container } = mount("r1", steps, { isLive: true });
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("cost-inspector")).toBeTruthy();
+    });
+    // The running branch collapses to ONE row (step-0 survives the turn merge) and
+    // its elapsed chip ticks live.
+    const elapsed = q.getByTestId("step-0-elapsed");
+    expect(elapsed.getAttribute("data-live")).toBe("true");
+    expect(elapsed.textContent).toMatch(/\d/);
+    // The completed sibling does NOT tick.
+    expect(q.getByTestId("step-2-elapsed").getAttribute("data-live")).toBeNull();
+    // The parent group's wall-clock span chip ticks too (anyRunning → groupTicking).
+    const group = q.getByTestId("parallel-cost-review_lenses");
+    const liveSpan = group.querySelector('[data-live="true"]');
+    expect(liveSpan).toBeTruthy();
+    expect(liveSpan?.textContent).toMatch(/\d/);
+  });
+
+  it("counts DISTINCT branches and merges re-drive rounds (not one row per round)", async () => {
+    // A budget re-drive re-runs every branch, so the steps stream carries
+    // multiple rows per branch (here lens_a/lens_b twice). The group header must
+    // say "2 branches" (distinct), not "4", and each branch collapses to one
+    // row summing its rounds.
+    const steps = [
+      makeStep({ stepIdx: 0, startSeq: 1, nodeId: "lens_a", parentNodeId: "review", cost: cost(0.4) }),
+      makeStep({ stepIdx: 1, startSeq: 2, nodeId: "lens_b", parentNodeId: "review", cost: cost(0.5) }),
+      makeStep({ stepIdx: 2, startSeq: 3, nodeId: "lens_a", parentNodeId: "review", cost: cost(0.3) }),
+      makeStep({ stepIdx: 3, startSeq: 4, nodeId: "lens_b", parentNodeId: "review", cost: cost(0.2) }),
+    ];
+    const { container } = mount("r1", steps);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("cost-inspector")).toBeTruthy();
+    });
+    expect(q.getByTestId("parallel-cost-review")).toBeTruthy();
+    // One row per distinct branch (the first-seen startSeq survives the merge):
+    // 2 distinct branches over 2 re-drive rounds → 2 rows, not 4.
+    expect(q.getByTestId("step-0")).toBeTruthy();
+    expect(q.getByTestId("step-1")).toBeTruthy();
+    expect(q.queryByTestId("step-2")).toBeNull();
+    expect(q.queryByTestId("step-3")).toBeNull();
+    // The merged lens_a row sums its rounds' cost (0.4 + 0.3 = 0.7).
+    expect(within(q.getByTestId("step-0")).getByText(/0\.70/)).toBeTruthy();
+  });
+
+  it("leads each row with its node-type glyph; the model badge shows only on llm steps", async () => {
+    // The served topology types `plan` as llm and `build` as tool, so the
+    // rows must read as different types (not both llm) and only the llm row
+    // carries a model badge.
+    const fanout: RunDetail["fanout"] = {
+      parentOf: {},
+      branchOf: {},
+      orderOf: {},
+      nodeTypes: { start: "start", plan: "llm", build: "tool", exit: "exit" },
+    };
+    const steps = [
+      makeStep({ stepIdx: 0, startSeq: 1, nodeId: "plan", model: "claude-opus-4-7", provider: "anthropic" }),
+      makeStep({ stepIdx: 1, startSeq: 2, nodeId: "build" }),
+    ];
+    const { container } = mount("r1", steps, { fanout });
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("cost-inspector")).toBeTruthy();
+    });
+    // lucide renders a `lucide-<name>` class on each glyph.
+    expect(q.getByTestId("step-0").querySelector(".lucide-bot")).toBeTruthy();
+    expect(q.getByTestId("step-1").querySelector(".lucide-terminal")).toBeTruthy();
+    // Model badge only on the llm step.
+    expect(within(q.getByTestId("step-0")).getByText("claude-opus-4-7")).toBeTruthy();
+    expect(within(q.getByTestId("step-1")).queryByText("claude-opus-4-7")).toBeNull();
+  });
 });
+
+function cost(usd: number): StepSnapshot["cost"] {
+  return { input_tokens: 100, output_tokens: 50, cost_usd: usd };
+}

@@ -10,6 +10,25 @@ guarantee.
 
 ### Added
 
+- **Parallel fan-out (`type: parallel`) — experimental.** A control node that
+  runs a take-all set of branches concurrently within one run and joins them at a
+  single barrier. Declare `branches: [a, b, …]` (≥2 distinct branch ENTRY steps)
+  and a `next:` sink; each branch is a sub-pipeline — one step, or several
+  distinct `type: llm` read-class steps routing among themselves to the join —
+  and they run at once, the sink reading each branch terminal's typed output via
+  `${{ outputs.<step>.f }}` (fail-closed). An optional `concurrency:` caps
+  in-flight sub-nodes (a semaphore), and `timeout-minutes:` on the parallel node
+  bounds each branch (a backstop so a runaway lens can't dam the join). Branches
+  share the worktree read-only: they may not reach a write-class tool
+  (`bash`/`write`/`edit`), nest another `parallel`, or declare their own
+  `thread:`; the validator enforces this with `E036`–`E043`. Execution is an
+  on-log reactive frontier — each branch commits the instant it settles and
+  dispatches its successor without waiting on siblings (a slow branch never
+  blocks a finished one), and every sub-node completion is a durable fact, so a
+  crash or pause mid-fan-out resumes by re-dispatching only the unfinished
+  sub-nodes and replay reproduces the run. Budget is re-checked at each sub-node
+  completion; a branch that repeatedly fails or overruns the per-branch timeout
+  pauses the run, naming it. See `docs/proposals/fan-out-nodes.md`.
 - Custom model entries and per-model overrides in `provider_config` accept
   `thinkingLevelMap`, mapping pi thinking levels (`off`–`xhigh`) to
   provider-specific values (`null` marks a level unsupported). Anthropic-style
@@ -19,6 +38,11 @@ guarantee.
   zai-coding-cn, and the Xiaomi MiMo token-plan regions. Claude Opus 4.8 and
   Claude Fable 5 (adaptive thinking, `xhigh` effort) are available on the
   Anthropic and Amazon Bedrock providers.
+- **Auto-paused schedules show their cause.** A schedule the dispatcher pauses
+  over an unresolvable or invalid workflow now carries the recorded error on
+  its row — `fragua schedule ls` prints it under the paused entry and the
+  Schedules page shows it beneath the status pill — instead of an
+  indistinguishable bare "paused".
 
 ### Changed
 
@@ -28,6 +52,35 @@ guarantee.
   what daemon autodetect picks when a workflow names a provider without a
   model.
 - Node.js 22.19.0 is the minimum supported runtime (pi's `engines` floor).
+- **Saving a workflow now validates it.** Uploading, `fragua run`, `fragua ci`,
+  and scheduled dispatch all reject a workflow carrying error-severity validator
+  diagnostics (E-codes) with the diagnostic list; warnings still pass. Workflows
+  that relied on implicit completion (a step with no declared successor, E032)
+  must declare `next: exit` (or `on:`/`routes:`) — including steps whose only
+  declared edge is `on: {fail: …}`; the success side now needs an explicit
+  route too. Only sha-addressed enqueues of
+  an already-stored workflow bypass the gate — `fragua run` / `fragua ci` /
+  scheduled dispatch re-mint from disk on every invocation, so an on-disk
+  workflow with an E-code stops enqueuing until fixed (a schedule auto-pauses
+  with a `fact.schedule_invalid_workflow` daemon event).
+- **Goal-gate re-entries are distinct executions.** Lifecycle facts carry an
+  optional `pass` (the cumulative retarget count) so two passes of the same step
+  no longer collapse onto one entry in the run-detail node states; the graph and
+  iteration history show each pass separately. Transcripts are pass-scoped too
+  (schema v4 adds `messages.pass`): an unthreaded step re-entered by a gate now
+  starts with a clean conversation instead of silently rehydrating its prior
+  pass's transcript — unthreaded steps rehydrate only when resumed.
+
+### Fixed
+
+- **An operator pause can no longer be silently dropped.** When the pause fact
+  lost a concurrent-write race, the executor exited while leaving the run
+  `running` with the pause intent still queued (a stranded run until daemon
+  restart); the pause now retries against fresh state like cancel does.
+- **Aborted steps record per-bucket cost splits.** A pause/steer/timeout abort
+  folded its partial spend into the run total but not the input/output/cache
+  cost splits, so the analytics spend breakdown stopped summing to the total
+  on runs with aborts.
 
 ### Removed
 

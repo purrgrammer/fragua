@@ -7,7 +7,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
-import type { NodeState, RunDetail, RunSummary, SelectedEdge } from "./schemas.ts";
+import { fanoutBranchClosures } from "../engine/fanout.ts";
+import { parseWorkflow } from "../parser/yaml.ts";
+import type { Graph } from "../types/graph.ts";
+import type { NodeState, RunDetail, RunFanoutTopology, RunSummary, SelectedEdge } from "./schemas.ts";
 
 export type UiStatus = RunSummary["status"];
 
@@ -157,7 +160,11 @@ export function runStateToDetail(
     nodes: deriveNodeStates(events),
     selectedEdges: deriveSelectedEdges(events),
   };
-  if (workflowSource !== undefined) detail.workflowSource = workflowSource;
+  if (workflowSource !== undefined) {
+    detail.workflowSource = workflowSource;
+    const fanout = fanoutTopologyFor(state.workflowSha, workflowSource);
+    if (fanout !== undefined) detail.fanout = fanout;
+  }
 
   detail.projectId = state.projectId;
   detail.projectName = state.projectName;
@@ -218,6 +225,61 @@ export function runStateToDetail(
   return detail;
 }
 
+// Workflow source is sha-pinned at enqueue and immutable, but runStateToDetail
+// runs on every detail fetch of a live run — without the memo each SSE-driven
+// refetch re-parses the same YAML and re-walks the closures. `null` caches a
+// parse failure so a corrupt source isn't re-parsed per push either. Bounded:
+// a long-lived daemon serving many distinct shas (schedules, iterative dev)
+// would otherwise accumulate parsed graphs forever; on overflow the oldest
+// entry is evicted (Map iteration order = insertion order), and a re-derive
+// after eviction is just one YAML parse.
+const FANOUT_TOPOLOGY_CACHE_MAX = 256;
+const fanoutTopologyCache = new Map<string, RunFanoutTopology | null>();
+
+function fanoutTopologyFor(workflowSha: string, workflowSource: string): RunFanoutTopology | undefined {
+  const hit = fanoutTopologyCache.get(workflowSha);
+  if (hit !== undefined) return hit ?? undefined;
+  const derived = deriveFanoutTopology(workflowSource) ?? null;
+  if (fanoutTopologyCache.size >= FANOUT_TOPOLOGY_CACHE_MAX) {
+    const oldest = fanoutTopologyCache.keys().next().value;
+    if (oldest !== undefined) fanoutTopologyCache.delete(oldest);
+  }
+  fanoutTopologyCache.set(workflowSha, derived);
+  return derived ?? undefined;
+}
+
+/** Fan-out topology for the run detail, from the stored source via the
+ * shared closure walk. Served for EVERY parseable workflow — `nodeTypes`
+ * feeds type glyphs and tool-row affordances on non-parallel runs too; the
+ * branch maps are simply empty then. `undefined` only when the source
+ * doesn't parse (defensive: the save-path mint validates, so a stored
+ * source parses). */
+function deriveFanoutTopology(workflowSource: string): RunFanoutTopology | undefined {
+  let graph: Graph;
+  try {
+    graph = parseWorkflow(workflowSource);
+  } catch {
+    return undefined;
+  }
+  const parentOf: Record<string, string> = {};
+  const branchOf: Record<string, string> = {};
+  const orderOf: Record<string, number> = {};
+  const nodeTypes: Record<string, string> = {};
+  for (const [id, node] of Object.entries(graph.nodes)) nodeTypes[id] = node.type;
+  for (const node of Object.values(graph.nodes)) {
+    if (node.type !== "parallel" || !Array.isArray(node.attrs.branches)) continue;
+    const join = typeof node.attrs.join === "string" ? node.attrs.join : undefined;
+    for (const bc of fanoutBranchClosures(graph, { branches: node.attrs.branches, join })) {
+      orderOf[bc.entry] = bc.index;
+      for (const x of bc.nodes) {
+        parentOf[x] = node.id;
+        branchOf[x] = bc.entry;
+      }
+    }
+  }
+  return { parentOf, branchOf, orderOf, nodeTypes };
+}
+
 function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: string; note?: string }> | undefined {
   let gateNode: string | null = null;
   let decisions: Record<string, { route: string; note?: string }> | undefined;
@@ -268,35 +330,63 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
 function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   const byKey = new Map<
     string,
-    { nodeId: string; iteration: number; state: NodeState["state"]; lastEventSeq: number }
+    { nodeId: string; iteration: number; pass: number; state: NodeState["state"]; lastEventSeq: number }
   >();
-  const keyOf = (nodeId: string, iteration: number) => `${nodeId}#${iteration}`;
-  const bump = (nodeId: string, iteration: number, state: NodeState["state"], seq: number) => {
-    byKey.set(keyOf(nodeId, iteration), { nodeId, iteration, state, lastEventSeq: seq });
+  // Keyed by (nodeId, pass, iteration): a goal-gate retarget resets per-node
+  // retry counters (§3.4), so two passes of the same node both run at
+  // iteration 0 — without the pass in the key the second pass silently
+  // overwrote the first and the projection lost the loop's history.
+  const keyOf = (nodeId: string, pass: number, iteration: number) => `${nodeId}#${pass}.${iteration}`;
+  const bump = (nodeId: string, pass: number, iteration: number, state: NodeState["state"], seq: number) => {
+    byKey.set(keyOf(nodeId, pass, iteration), { nodeId, iteration, pass, state, lastEventSeq: seq });
   };
-
   for (const ev of events) {
     const nodeId = nodeIdOf(ev);
     if (nodeId == null) continue;
     const iteration = iterationOf(ev) ?? 0;
     switch (ev.type) {
       case "fact.node_started":
-        bump(nodeId, iteration, "running", ev.seq);
+        bump(nodeId, passOf(ev), iteration, "running", ev.seq);
         break;
-      // `dispatch_started` fires on every dispatch including resume after
-      // an operator-pause abort. Without this case the prior `node_aborted`
-      // wins as the last-counted event and the node stays "failed" until
-      // `node_completed` finally fires — long minutes for a chatty agent.
+      // `dispatch_started` fires on every dispatch including resume after an
+      // abort — operator-pause for a linear node, and (since the executor emits
+      // one on re-dispatch) a fan-out BRANCH resumed by the sweep. Without this
+      // the prior `node_aborted` wins as the last-counted event and the node
+      // stays "failed" until `node_completed` finally fires — long minutes for a
+      // chatty agent.
       case "fact.dispatch_started":
-        bump(nodeId, iteration, "running", ev.seq);
+        bump(nodeId, passOf(ev), iteration, "running", ev.seq);
+        break;
+      case "fact.fanout_started": {
+        // A parallel node's branch ENTRIES are seeded into the active set here;
+        // they never emit node_started/dispatch_started (that would unpin the
+        // run pointer from the parallel node), so mark each branch running so
+        // the graph glows it. Its own node_completed later flips it to done.
+        // The seed inherits the region's pass so a goal-gate re-seed opens
+        // fresh entries instead of reviving the prior pass's completed ones.
+        // Null-safe read: a corrupted store row with `payload === null` would
+        // throw on property access before `?? []` could fire.
+        const raw = ev.payload as Record<string, unknown> | null | undefined;
+        const rawBranches = raw?.["branches"];
+        const branches = Array.isArray(rawBranches) ? (rawBranches as string[]) : [];
+        // The parallel node itself runs for the whole region — it never gets
+        // a node_started/node_completed of its own (current_node stays pinned
+        // to it; the join advances it), so without these two bumps it rendered
+        // "waiting" through the entire fan-out and forever after.
+        bump(nodeId, passOf(ev), iteration, "running", ev.seq);
+        for (const b of branches) bump(b, passOf(ev), 0, "running", ev.seq);
+        break;
+      }
+      case "fact.fanout_joined":
+        bump(nodeId, passOf(ev), iteration, "completed", ev.seq);
         break;
       case "fact.node_completed": {
         const outcome = (ev.payload as { outcomeStatus?: string }).outcomeStatus;
-        bump(nodeId, iteration, outcome === "fail" ? "failed" : "completed", ev.seq);
+        bump(nodeId, passOf(ev), iteration, outcome === "fail" ? "failed" : "completed", ev.seq);
         break;
       }
       case "fact.node_aborted":
-        bump(nodeId, iteration, "failed", ev.seq);
+        bump(nodeId, passOf(ev), iteration, "failed", ev.seq);
         break;
       default:
         break;
@@ -388,11 +478,11 @@ function latestRunPaused(events: StoredEvent[]): { nodeId: string; seq: number }
 function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
   const out: SelectedEdge[] = [];
   const seen = new Set<string>();
-  const pushEdge = (from: string, to: string, iteration: number) => {
-    const key = `${from} ${to} ${iteration}`;
+  const pushEdge = (from: string, to: string, iteration: number, pass: number) => {
+    const key = `${from} ${to} ${pass} ${iteration}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ from, to, iteration });
+    out.push({ from, to, iteration, pass });
   };
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
@@ -401,8 +491,9 @@ function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
       const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown };
       if (typeof p.from !== "string" || typeof p.to !== "string") continue;
       const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
+      const pass = passOf(ev);
       const retargetTo = goalGateRetargetTarget(events, i, p.from);
-      pushEdge(p.from, retargetTo ?? p.to, iteration);
+      pushEdge(p.from, retargetTo ?? p.to, iteration, pass);
     }
   }
   return out;
@@ -438,6 +529,13 @@ function nodeIdOf(event: StoredEvent): string | null {
 function iterationOf(event: StoredEvent): number | null {
   const p = event.payload as { iteration?: unknown };
   return typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : null;
+}
+
+/** Goal-gate re-entry epoch from a fact payload — absent/invalid ⇒ 0.
+ * Null-payload-safe (a corrupted store row must not throw the projection). */
+function passOf(event: StoredEvent): number {
+  const v = (event.payload as { pass?: unknown } | null | undefined)?.pass;
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
 export { deriveNodeStates, deriveSelectedEdges };

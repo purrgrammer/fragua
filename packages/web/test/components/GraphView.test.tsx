@@ -906,3 +906,89 @@ steps:
     expect(fail?.targetHandle).toBeDefined();
   });
 });
+
+describe("toFlowGraph — fan-out (parallel)", () => {
+  const FANOUT_SOURCE = `name: review
+steps:
+  review:
+    type: parallel
+    branches: [security, quality]
+    next: synthesize
+  security:
+    type: llm
+    allowed-tools: [read, grep]
+    prompt: sec
+    outputs: {findings: {type: string}}
+  quality:
+    type: llm
+    allowed-tools: [read, grep]
+    prompt: qual
+    outputs: {findings: {type: string}}
+  synthesize:
+    type: llm
+    prompt: "combine \${{ outputs.security.findings }} \${{ outputs.quality.findings }}"
+    next: exit
+`;
+
+  it("renders the parallel node with its branch count and take-all fan edges", () => {
+    const graph = parseWorkflow(FANOUT_SOURCE);
+    const { flowNodes, flowEdges } = toFlowGraph(null, graph);
+
+    const review = flowNodes.find((n) => n.id === "review");
+    expect((review?.data as { handler: string }).handler).toBe("parallel");
+    expect((review?.data as { branchCount?: number }).branchCount).toBe(2);
+
+    // Take-all edges: parallel → each branch, carrying the fan-out marker.
+    const fromReview = flowEdges.filter((e) => e.source === "review");
+    expect(fromReview.map((e) => e.target).sort()).toEqual(["quality", "security"]);
+    // The join (post-barrier sink) is recorded on the parallel node's attrs;
+    // single-node branches reach it through the engine frontier, so there is no
+    // declared `branch → join` graph edge (the data-model differs from a parser
+    // that synthesises barrier edges).
+    expect(graph.nodes["review"]?.attrs.join).toBe("synthesize");
+  });
+
+  it("glows every concurrent branch via activeNodeIds", () => {
+    const graph = parseWorkflow(FANOUT_SOURCE);
+    const detail: RunDetail = makeDetail({
+      workflowSource: FANOUT_SOURCE,
+      nodes: [
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2 },
+        { nodeId: "security", iteration: 0, state: "running", lastEventSeq: 3 },
+        { nodeId: "quality", iteration: 0, state: "running", lastEventSeq: 4 },
+      ],
+      selectedEdges: [{ from: "start", to: "review", iteration: 0 }],
+    });
+    const activeNodeIds = new Set(detail.nodes.filter((n) => n.state === "running").map((n) => n.nodeId));
+    const { flowNodes } = toFlowGraph(detail, graph, { activeNodeIds });
+
+    const active = (id: string) => (flowNodes.find((n) => n.id === id)?.data as { active: boolean }).active;
+    // Both branches AND the pinned parallel node glow concurrently.
+    expect(active("security")).toBe(true);
+    expect(active("quality")).toBe(true);
+    expect(active("review")).toBe(true);
+    // The not-yet-reached sink does not.
+    expect(active("synthesize")).toBe(false);
+  });
+
+  it("lights up the take-all edges once branches are reached (no edge.selected for them)", () => {
+    const graph = parseWorkflow(FANOUT_SOURCE);
+    const detail: RunDetail = makeDetail({
+      workflowSource: FANOUT_SOURCE,
+      nodes: [
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2 },
+        { nodeId: "security", iteration: 0, state: "running", lastEventSeq: 3 },
+        { nodeId: "quality", iteration: 0, state: "running", lastEventSeq: 4 },
+      ],
+      selectedEdges: [{ from: "start", to: "review", iteration: 0 }], // NO parallel→branch selection event
+    });
+    const { flowEdges } = toFlowGraph(detail, graph);
+    const takeAll = flowEdges.filter((e) => e.source === "review");
+    expect(takeAll).toHaveLength(2);
+    // Reached branches ⇒ the take-all edges are NOT dimmed, even though the
+    // executor emits no edge.selected for them.
+    for (const e of takeAll) expect((e.data as { dim: boolean }).dim).toBe(false);
+  });
+});

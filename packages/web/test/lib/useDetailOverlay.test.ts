@@ -54,9 +54,33 @@ describe("isDetailEvent", () => {
 });
 
 describe("foldDetailFrame", () => {
-  test("fact.node_started → nodeStates['n1#0'] = running", () => {
+  test("fact.node_started → nodeStates['n1#0.0'] = running", () => {
     const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n1", iteration: 0 }, 5);
-    expect(out.nodeStates.get("n1#0")).toEqual({ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 5 });
+    expect(out.nodeStates.get("n1#0.0")).toEqual({
+      nodeId: "n1",
+      iteration: 0,
+      pass: 0,
+      state: "running",
+      lastEventSeq: 5,
+    });
+  });
+
+  test("goal-gate re-entry keeps separate entries per pass", () => {
+    let s = fold(
+      EMPTY_DETAIL_OVERLAY,
+      "fact.node_completed",
+      { nodeId: "gate", iteration: 0, outcomeStatus: "fail" },
+      5,
+    );
+    s = fold(s, "fact.node_started", { nodeId: "gate", iteration: 0, pass: 1 }, 6);
+    s = fold(s, "fact.node_completed", { nodeId: "gate", iteration: 0, pass: 1, outcomeStatus: "success" }, 7);
+    expect(s.nodeStates.get("gate#0.0")?.state).toBe("failed");
+    expect(s.nodeStates.get("gate#1.0")?.state).toBe("completed");
+  });
+
+  test("edge.selected carries pass through fold and merge", () => {
+    const out = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "gate", to: "propose", iteration: 0, pass: 2 }, 9);
+    expect(out.selectedEdges[0]).toEqual({ from: "gate", to: "propose", iteration: 0, pass: 2, seq: 9 });
   });
 
   test("fact.node_completed (outcomeStatus=fail) → failed", () => {
@@ -66,17 +90,17 @@ describe("foldDetailFrame", () => {
       { nodeId: "n1", iteration: 0, outcomeStatus: "fail" },
       7,
     );
-    expect(out.nodeStates.get("n1#0")?.state).toBe("failed");
+    expect(out.nodeStates.get("n1#0.0")?.state).toBe("failed");
   });
 
   test("fact.node_completed (no outcomeStatus) → completed", () => {
     const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1", iteration: 0 }, 7);
-    expect(out.nodeStates.get("n1#0")?.state).toBe("completed");
+    expect(out.nodeStates.get("n1#0.0")?.state).toBe("completed");
   });
 
   test("fact.node_aborted → failed", () => {
     const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_aborted", { nodeId: "n1", iteration: 0 }, 9);
-    expect(out.nodeStates.get("n1#0")?.state).toBe("failed");
+    expect(out.nodeStates.get("n1#0.0")?.state).toBe("failed");
   });
 
   test("loop iterations track separate entries by (nodeId, iteration)", () => {
@@ -88,13 +112,13 @@ describe("foldDetailFrame", () => {
     );
     s = fold(s, "fact.node_started", { nodeId: "verify", iteration: 1 }, 6);
     s = fold(s, "fact.node_completed", { nodeId: "verify", iteration: 1, outcomeStatus: "success" }, 7);
-    expect(s.nodeStates.get("verify#0")?.state).toBe("failed");
-    expect(s.nodeStates.get("verify#1")?.state).toBe("completed");
+    expect(s.nodeStates.get("verify#0.0")?.state).toBe("failed");
+    expect(s.nodeStates.get("verify#0.1")?.state).toBe("completed");
   });
 
   test("missing iteration on payload defaults to 0 (back-compat with older event logs)", () => {
     const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n1" }, 5);
-    expect(out.nodeStates.get("n1#0")?.state).toBe("running");
+    expect(out.nodeStates.get("n1#0.0")?.state).toBe("running");
   });
 
   test("edge.selected appends to selectedEdges in order, with iteration and seq", () => {
@@ -106,8 +130,8 @@ describe("foldDetailFrame", () => {
     let s = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0 }, 1);
     s = fold(s, "edge.selected", { from: "b", to: "c", iteration: 0 }, 2);
     expect(s.selectedEdges).toEqual([
-      { from: "a", to: "b", iteration: 0, seq: 1 },
-      { from: "b", to: "c", iteration: 0, seq: 2 },
+      { from: "a", to: "b", iteration: 0, pass: 0, seq: 1 },
+      { from: "b", to: "c", iteration: 0, pass: 0, seq: 2 },
     ]);
   });
 
@@ -193,9 +217,9 @@ describe("foldDetailFrame", () => {
       // it re-dispatches on resume, so it must read as suspended (running),
       // not failed — the UI renders running + paused as "paused".
       let s = fold(EMPTY_DETAIL_OVERLAY, "fact.node_aborted", { nodeId: "implement", iteration: 0 }, 11);
-      expect(s.nodeStates.get("implement#0")?.state).toBe("failed");
+      expect(s.nodeStates.get("implement#0.0")?.state).toBe("failed");
       s = fold(s, "fact.run_paused", { reason: "budget", nodeId: "implement", metric: "cost" }, 12);
-      expect(s.nodeStates.get("implement#0")?.state).toBe("running");
+      expect(s.nodeStates.get("implement#0.0")?.state).toBe("running");
       expect(s.runStatus).toBe("paused");
     });
 
@@ -254,7 +278,7 @@ describe("mergeDetail", () => {
     const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 10 }] });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1", iteration: 0 }, 20);
     const merged = mergeDetail(snap, overlay);
-    expect(merged.nodes).toEqual([{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 20 }]);
+    expect(merged.nodes).toEqual([{ nodeId: "n1", iteration: 0, pass: 0, state: "completed", lastEventSeq: 20 }]);
   });
 
   test("overlay introduces nodes not in the snapshot", () => {
@@ -263,7 +287,7 @@ describe("mergeDetail", () => {
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toEqual([
       { nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10 },
-      { nodeId: "n2", iteration: 0, state: "running", lastEventSeq: 25 },
+      { nodeId: "n2", iteration: 0, pass: 0, state: "running", lastEventSeq: 25 },
     ]);
   });
 
@@ -275,7 +299,7 @@ describe("mergeDetail", () => {
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toEqual([
       { nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 10 },
-      { nodeId: "verify", iteration: 1, state: "running", lastEventSeq: 25 },
+      { nodeId: "verify", iteration: 1, pass: 0, state: "running", lastEventSeq: 25 },
     ]);
   });
 
@@ -308,8 +332,8 @@ describe("mergeDetail", () => {
     const merged = mergeDetail(snap, overlay);
     expect(merged.selectedEdges).toEqual([
       { from: "a", to: "b", iteration: 0 },
-      { from: "b", to: "c", iteration: 0 },
-      { from: "c", to: "d", iteration: 0 },
+      { from: "b", to: "c", iteration: 0, pass: 0 },
+      { from: "c", to: "d", iteration: 0, pass: 0 },
     ]);
   });
 
@@ -334,7 +358,7 @@ describe("mergeDetail", () => {
     const merged = mergeDetail(snap, overlay);
     expect(merged.selectedEdges).toEqual([
       { from: "a", to: "b", iteration: 0 }, // from snapshot, NOT duplicated
-      { from: "b", to: "c", iteration: 0 }, // genuinely fresh overlay event
+      { from: "b", to: "c", iteration: 0, pass: 0 }, // genuinely fresh overlay event
     ]);
   });
 
@@ -395,7 +419,7 @@ describe("mergeDetail", () => {
     const overlay: DetailOverlay = {
       ...EMPTY_DETAIL_OVERLAY,
       // Forge a stale entry with older seq than the snapshot's.
-      nodeStates: new Map([["n1#0", { nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 5 }]]),
+      nodeStates: new Map([["n1#0.0", { nodeId: "n1", iteration: 0, pass: 0, state: "running", lastEventSeq: 5 }]]),
       status: "running",
     };
     const merged = mergeDetail(snap, overlay);

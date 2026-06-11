@@ -23,7 +23,11 @@
 
 name: pr_review
 goal: Unattended PR review for CI — review scaled to the change, classified into a verdict, posted back to the PR (comment or request-changes) with no human gate.
-budget: 21.00 # covers the full verify-retry path: scope (0.40) + 3×(review_full 6.00 + verify 0.60) + verdict (0.15) = 20.35, so a retry never halts mid-pass on the cap. review_full bumped 2.50→6.00 so a large (multi-kLoC) diff finishes one deep pass; the real fix for huge diffs (chunked/scoped review) is tracked separately.
+budget: 21.00 # run-level governor — the sole budget. No per-step caps: a step on
+# the verify-retry loop (review_full / verify) is goal-gate-retargeted up to 3×,
+# and per-step caps are CUMULATIVE across those iterations, so they trip mid-pass
+# on a retry. The run budget bounds the whole path; a pause stalls the unattended
+# `fragua ci` job, so keep headroom for a deep review of a large diff.
 
 inputs:
   pr:
@@ -40,7 +44,6 @@ steps:
     type: llm
     thread: review
     allowed-tools: [read, grep, find, bash, write]
-    max-cost: 0.40
     prompt: |
       Review PR #${{ inputs.pr }}. Its files are already checked out on disk — read them directly. Get the diff with `gh pr diff ${{ inputs.pr }}` and metadata with `gh pr view ${{ inputs.pr }} --json baseRefName,title`.
 
@@ -73,7 +76,6 @@ steps:
     type: llm
     thread: review
     allowed-tools: [read, grep, bash, write]
-    max-cost: 0.40
     next: verdict
     prompt: |
       Quick review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). `-` lines are removed (context only — don't flag); flag only `+`/changed lines. One focused pass over correctness and any obvious security issue — it's a small change, keep it to a single pass.
@@ -94,7 +96,6 @@ steps:
     effort: high
     thread: review
     allowed-tools: [read, grep, bash, write]
-    max-cost: 6.00 # one deep pass; raised from 2.50 so a large multi-kLoC diff finishes (huge-diff chunking tracked separately)
     next: verify
     prompt: |
       Deep review of PR #${{ inputs.pr }} (`gh pr diff ${{ inputs.pr }}`; read the changed files directly). In a diff, `-` lines are being REMOVED — they are context only, never flag them; `+`/changed lines are the change under review. Apply these lenses — correctness ALWAYS; add the others only when the diff implicates them, and say which you applied:
@@ -139,10 +140,9 @@ steps:
   verify:                              # full tier — automated evidence-quality gate
     type: llm
     thread: review
-    retry: review_full                 # REJECT ⇒ re-review (capped; budget covers the full path)
+    retry: review_full                 # REJECT ⇒ re-review (bounded by max-retries + the run budget)
     max-retries: 2
     allowed-tools: [read, grep]
-    max-cost: 0.60
     next: verdict
     prompt: |
       Read `pr-review.md` (the review under gate). Judge on its own merits.
@@ -160,7 +160,6 @@ steps:
     type: llm
     model: claude-haiku-4-5
     allowed-tools: [read]
-    max-cost: 0.15
     prompt: |
       Read `pr-review.md`. Classify it by its WORST finding and call `route` once (state the deciding severity in one line first):
         changes  — there is any Critical or High finding

@@ -398,22 +398,62 @@ function renderExplanation(e: RunExplanation): void {
 
   // ── Path ────────────────────────────────────────────────────────────────
   if (e.path.length > 0) {
-    const pathStr = e.path.map((p) => `${p.from}→${p.to}${p.iteration > 0 ? `#${p.iteration}` : ""}`).join("  ");
+    // `~p<n>` marks a goal-gate re-entry pass — iteration resets per pass, so
+    // without it a retargeted traversal prints as an identical duplicate.
+    const pathStr = e.path
+      .map((p) => `${p.from}→${p.to}${p.iteration > 0 ? `#${p.iteration}` : ""}${p.pass > 0 ? `~p${p.pass}` : ""}`)
+      .join("  ");
     console.log(`  path:     ${chalk.dim(pathStr)}`);
   }
 
   // ── Steps ────────────────────────────────────────────────────────────────
+  // Mirror the Cost tab: `type: parallel` branch steps (tagged with a
+  // parentNodeId by the steps projection) nest under a parent header carrying
+  // the group's aggregate spend, indented beneath, instead of scattering as
+  // flat sibling rows.
   if (e.steps.length > 0) {
     console.log(`  steps:    ${e.steps.length}`);
-    for (const s of e.steps) {
+    const renderStep = (s: RunExplanation["steps"][number], indent: string): void => {
       const outcomeGlyph =
         s.outcome === "success" ? chalk.green("✓") : s.outcome === "fail" ? chalk.red("✗") : chalk.dim("?");
       const model = s.model ? chalk.dim(` ${s.model}`) : "";
+      const passTag = s.pass !== undefined && s.pass > 0 ? chalk.dim(`~p${s.pass}`) : "";
       console.log(
-        `    ${chalk.dim(`#${s.stepIdx}`)} ${outcomeGlyph} ${chalk.cyan(s.nodeId)}${model}` +
+        `${indent}${chalk.dim(`#${s.stepIdx}`)} ${outcomeGlyph} ${chalk.cyan(s.nodeId)}${passTag}${model}` +
           `  $${s.costUsd.toFixed(4)}` +
           (s.durationMs != null ? `  ${(s.durationMs / 1000).toFixed(1)}s` : ""),
       );
+    };
+    // Order grouped rows by DECLARED branch order (the served topology), like
+    // the web's grouping — settle order is non-deterministic under the pool.
+    // Stable sort keeps a branch's own scan→verify rows in execution order.
+    const branchRank = (nodeId: string): number => {
+      const entry = e.fanout?.branchOf[nodeId];
+      const rank = entry !== undefined ? e.fanout?.orderOf[entry] : undefined;
+      return rank ?? Number.MAX_SAFE_INTEGER;
+    };
+    let i = 0;
+    while (i < e.steps.length) {
+      const parent = e.steps[i]!.parentNodeId;
+      if (parent === undefined) {
+        renderStep(e.steps[i]!, "    ");
+        i += 1;
+        continue;
+      }
+      // Collapse the consecutive run of branch steps sharing this parent into one
+      // group — a budget re-drive or a goal-gate re-entry scatters a branch's
+      // rows, but each contiguous run is one fan-out pass.
+      const group: RunExplanation["steps"][number][] = [];
+      while (i < e.steps.length && e.steps[i]!.parentNodeId === parent) {
+        group.push(e.steps[i]!);
+        i += 1;
+      }
+      group.sort((a, b) => branchRank(a.nodeId) - branchRank(b.nodeId));
+      const groupCost = group.reduce((sum, s) => sum + s.costUsd, 0);
+      console.log(
+        `    ${chalk.magenta("⑂")} ${chalk.cyan(parent)} ${chalk.dim("(parallel)")}  $${groupCost.toFixed(4)}`,
+      );
+      for (const s of group) renderStep(s, "      ");
     }
   }
 

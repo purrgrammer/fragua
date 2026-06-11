@@ -51,17 +51,20 @@ export function shouldPersistToStore(hasThread: boolean): boolean {
  * so a synthetic id can never collide with a user-declared thread. */
 export const SYNTHETIC_THREAD_PREFIX = "\u0000node:";
 
-/** Deterministic synthetic thread id keyed by `(nodeId, iteration)`. A
- * resume of the same `(nodeId, iteration)` recomputes the same id and so
- * rehydrates the right transcript; a fresh loop pass (next iteration) gets a
- * distinct id and starts clean, preserving unthreaded "fresh each entry"
- * semantics. Readable on purpose — it surfaces in `llm.start.thread_id` and
- * on `messages` rows, where a digest would be opaque during a post-mortem.
- * The generator is injective over `(nodeId: string, iteration: ℕ)` and ids
- * are only ever compared for equality, never parsed, so a `#` inside a
- * nodeId is harmless. */
-export function syntheticThreadId(nodeId: string, iteration: number): string {
-  return `${SYNTHETIC_THREAD_PREFIX}${nodeId}#${iteration}`;
+/** Deterministic synthetic thread id keyed by `(nodeId, iteration, pass)`. A
+ * resume of the same key recomputes the same id and so rehydrates the right
+ * transcript; a fresh loop pass (next iteration) or a goal-gate re-entry
+ * (next PASS — a retarget resets retry counters, so iteration alone collides
+ * across passes) gets a distinct id and starts clean, preserving unthreaded
+ * "fresh each entry" semantics. Pass 0 keeps the un-suffixed shape so the
+ * common no-retarget case reads cleanly. Readable on purpose — it surfaces
+ * in `llm.start.thread_id` and on `messages` rows, where a digest would be
+ * opaque during a post-mortem. The generator is injective over
+ * `(nodeId, iteration, pass)` and ids are only ever compared for equality,
+ * never parsed, so a `#` inside a nodeId is harmless. */
+export function syntheticThreadId(nodeId: string, iteration: number, pass = 0): string {
+  const base = `${SYNTHETIC_THREAD_PREFIX}${nodeId}#${iteration}`;
+  return pass > 0 ? `${base}~p${pass}` : base;
 }
 
 /** Pick a sessionId hint for provider-side prompt caching:

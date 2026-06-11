@@ -340,7 +340,13 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // so suppress its `edge.selected`. Otherwise emit it now, before
   // node_completed lands, preserving the conventional ordering.
   if (pendingEdgeSelection !== undefined && goalGateRetargetTarget === undefined && result.kind === "transition") {
-    recordEdgeSelected(observability, currentNode, iteration, pendingEdgeSelection);
+    recordEdgeSelected(
+      observability,
+      currentNode,
+      iteration,
+      pendingEdgeSelection,
+      readGoalGateRetries(effectiveRouting),
+    );
   }
 
   // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
@@ -505,6 +511,19 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     appliedIntentSeqs: decision.appliedSeqs,
   };
   let facts = resultToFacts(result, factsCtx);
+
+  // A goal-gate retarget's node_started opens the NEXT pass: the epoch bump
+  // (`goal_gates.__retries`) rides this same commit's routingPatch, but
+  // resultToFacts stamped the pre-bump value read from state — leaving the
+  // target's pass-N projection entry "running" forever while every later
+  // fact for it carries pass N+1. Stamp the post-bump epoch.
+  if (goalGateRetargetTarget !== undefined && goalGateRetriesPatch !== undefined) {
+    facts = facts.map((f) =>
+      f.type === "fact.node_started" && f.payload.nodeId === goalGateRetargetTarget
+        ? { ...f, payload: { ...f.payload, pass: goalGateRetriesPatch } }
+        : f,
+    );
+  }
 
   // R3 — pause defers when paired with steer/hitl: keep the
   // node_completed accounting, then pause instead of advancing to

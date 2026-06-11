@@ -3,9 +3,10 @@
 // (intent / done / failed) are NOT included — they're already durable via
 // the pre-commit recorder before this function runs.
 
-import { retryCountKey } from "@fragua/core";
+import { readGoalGateRetries, retryCountKey } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
+import { passField, type UsageTotals } from "./executor-helpers.ts";
 
 type HandlerResult = handler.HandlerResult;
 
@@ -51,6 +52,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       // matches the "no outgoing edges" terminal rule if anything upstream
       // missed the substitution.
       const nextNode = result.nextNode ?? "__end__";
+      const pass = readGoalGateRetries(ctx.state.routing);
       const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
         nodeId: ctx.state.currentNode ?? "",
         iteration: nodeRetryCount(ctx.state.routing, ctx.state.currentNode ?? ""),
@@ -58,6 +60,10 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
         costUsd: result.costUsd,
         nextNode,
       };
+      // Goal-gate re-entry epoch: a retarget pass resets per-node retry
+      // counters (§3.4), so `(nodeId, iteration)` alone collides across
+      // passes — the epoch keeps each pass's facts distinct.
+      Object.assign(payload, passField(pass));
       if (result.modelName != null) payload.modelName = result.modelName;
       if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
       // Route field lands on the fact only when a routing-node llm
@@ -121,10 +127,12 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
           });
         }
       } else {
-        facts.push({
-          type: "fact.node_started",
-          payload: { nodeId: nextNode, iteration: nodeRetryCount(ctx.state.routing, nextNode) },
-        });
+        const startedPayload: Extract<FactEvent, { type: "fact.node_started" }>["payload"] = {
+          nodeId: nextNode,
+          iteration: nodeRetryCount(ctx.state.routing, nextNode),
+        };
+        Object.assign(startedPayload, passField(pass));
+        facts.push({ type: "fact.node_started", payload: startedPayload });
       }
       return facts;
     }
@@ -222,44 +230,28 @@ export function abortResultToFacts(
   nodeId: string,
   iteration: number,
   cause: string,
-  partial: {
-    tokens: number;
-    costUsd: number;
-    inputCostUsd?: number;
-    outputCostUsd?: number;
-    cacheReadCostUsd?: number;
-    cacheWriteCostUsd?: number;
-    inputTokens?: number;
-    outputTokens?: number;
-    cacheReadTokens?: number;
-    cacheWriteTokens?: number;
-  },
+  partial: UsageTotals,
+  pass = 0,
 ): FactEvent[] {
   const payload: Extract<FactEvent, { type: "fact.node_aborted" }>["payload"] = {
     nodeId,
     iteration,
     cause,
-    partialTokens: partial.tokens,
-    partialCostUsd: partial.costUsd,
+    partialTokens: partial.turnBilled,
+    partialCostUsd: partial.totalCostUsd,
   };
-  if (partial.inputCostUsd != null && partial.inputCostUsd > 0) payload.partialInputCostUsd = partial.inputCostUsd;
-  if (partial.outputCostUsd != null && partial.outputCostUsd > 0) {
-    payload.partialOutputCostUsd = partial.outputCostUsd;
-  }
-  if (partial.cacheReadCostUsd != null && partial.cacheReadCostUsd > 0) {
-    payload.partialCacheReadCostUsd = partial.cacheReadCostUsd;
-  }
-  if (partial.cacheWriteCostUsd != null && partial.cacheWriteCostUsd > 0) {
-    payload.partialCacheWriteCostUsd = partial.cacheWriteCostUsd;
-  }
-  if (partial.inputTokens != null && partial.inputTokens > 0) payload.partialInputTokens = partial.inputTokens;
-  if (partial.outputTokens != null && partial.outputTokens > 0) payload.partialOutputTokens = partial.outputTokens;
-  if (partial.cacheReadTokens != null && partial.cacheReadTokens > 0) {
-    payload.partialCacheReadTokens = partial.cacheReadTokens;
-  }
-  if (partial.cacheWriteTokens != null && partial.cacheWriteTokens > 0) {
-    payload.partialCacheWriteTokens = partial.cacheWriteTokens;
-  }
+  Object.assign(payload, passField(pass));
+  if (partial.totalInputTokens > 0) payload.partialInputTokens = partial.totalInputTokens;
+  if (partial.totalOutputTokens > 0) payload.partialOutputTokens = partial.totalOutputTokens;
+  if (partial.totalCacheReadTokens > 0) payload.partialCacheReadTokens = partial.totalCacheReadTokens;
+  if (partial.totalCacheWriteTokens > 0) payload.partialCacheWriteTokens = partial.totalCacheWriteTokens;
+  // Per-bucket cost splits keep the analytics invariant (bucket sums ≈
+  // total_cost_usd) intact for aborted spend — without them an aborted turn
+  // raises the total while the splits stay flat.
+  if (partial.totalInputCostUsd > 0) payload.partialInputCostUsd = partial.totalInputCostUsd;
+  if (partial.totalOutputCostUsd > 0) payload.partialOutputCostUsd = partial.totalOutputCostUsd;
+  if (partial.totalCacheReadCostUsd > 0) payload.partialCacheReadCostUsd = partial.totalCacheReadCostUsd;
+  if (partial.totalCacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = partial.totalCacheWriteCostUsd;
   return [{ type: "fact.node_aborted", payload }];
 }
 

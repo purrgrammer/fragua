@@ -91,9 +91,14 @@ export type RunSummary = Static<typeof RunSummary>;
 export const NodeState = Type.Object({
   nodeId: Type.String(),
   /** Loop iteration this entry describes (0 for the first dispatch, 1 for
-   * the first re-entry across a backward edge or goal-gate retarget, …). A
-   * non-looping run carries only `iteration: 0` entries. */
+   * the first re-entry across a backward edge). A non-looping run carries
+   * only `iteration: 0` entries. */
   iteration: Type.Integer({ minimum: 0 }),
+  /** Goal-gate re-entry epoch (`fact.*.payload.pass`). A retarget pass
+   * resets per-node retry counters (§3.4), so two passes of the same node
+   * both run at iteration 0 — `pass` keeps each pass's entry distinct.
+   * 0 for runs that never retargeted. */
+  pass: Type.Integer({ minimum: 0 }),
   state: Type.Union([
     Type.Literal("pending"),
     Type.Literal("running"),
@@ -115,8 +120,27 @@ export const SelectedEdge = Type.Object({
   from: Type.String(),
   to: Type.String(),
   iteration: Type.Integer({ minimum: 0 }),
+  /** Goal-gate re-entry epoch of the traversal — pairs with NodeState.pass so
+   * the graph can match a traversal to its pass's node outcome instead of the
+   * latest pass's. */
+  pass: Type.Integer({ minimum: 0 }),
 });
 export type SelectedEdge = Static<typeof SelectedEdge>;
+
+/** Fan-out branch topology served WITH the run detail — sub-node →
+ * parallel parent / owning branch entry / declared order, plus a node →
+ * handler-type map. Derived once in the read-plane from the stored source
+ * via the shared closure walk (engine/fanout.ts), so every surface (web
+ * grouping, CLI explain) consumes one structural answer instead of
+ * re-deriving it — and a future dynamic fan-out (virtual branch ids that
+ * exist only at runtime) has a server-side home. */
+export const RunFanoutTopology = Type.Object({
+  parentOf: Type.Record(Type.String(), Type.String()),
+  branchOf: Type.Record(Type.String(), Type.String()),
+  orderOf: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
+  nodeTypes: Type.Record(Type.String(), Type.String()),
+});
+export type RunFanoutTopology = Static<typeof RunFanoutTopology>;
 
 export const RunDetail = Type.Object({
   runId: Type.String(),
@@ -129,6 +153,10 @@ export const RunDetail = Type.Object({
   nodes: Type.Array(NodeState),
   selectedEdges: Type.Array(SelectedEdge),
   workflowSource: Type.Optional(Type.String()),
+  /** Present for every parseable workflow (`nodeTypes` serves type glyphs on
+   * non-parallel runs too); branch maps are empty without a `type: parallel`
+   * node. */
+  fanout: Type.Optional(RunFanoutTopology),
   costUsd: Type.Number({ minimum: 0, default: 0 }),
   inputTokens: Type.Integer({ minimum: 0, default: 0 }),
   outputTokens: Type.Integer({ minimum: 0, default: 0 }),

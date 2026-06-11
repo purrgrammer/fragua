@@ -79,6 +79,9 @@ export interface HandlerMessage {
   content: AgentMessage;
   nodeId: string | null;
   iteration: number;
+  /** Goal-gate re-entry epoch the message was persisted under. Threadless
+   * resume hydration filters on it — a fresh gate pass starts clean. */
+  pass: number;
 }
 
 export interface ArtifactScope {

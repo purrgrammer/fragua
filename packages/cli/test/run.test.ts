@@ -69,7 +69,7 @@ function writeWorkflow(): string {
   const workflowDir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
   tmps.push(workflowDir);
   const yamlPath = join(workflowDir, "echo.yaml");
-  writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi}\n`);
+  writeFileSync(yamlPath, `name: echo\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n`);
   return yamlPath;
 }
 

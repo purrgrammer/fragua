@@ -23,6 +23,7 @@ import { SqliteStore } from "@fragua/store";
 import { LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 import { makeLlmHandler } from "../src/handler-bridge.ts";
+import { syntheticThreadId } from "../src/thread.ts";
 
 function node(overrides: Partial<Node> = {}): Node {
   return {
@@ -36,7 +37,12 @@ function node(overrides: Partial<Node> = {}): Node {
   };
 }
 
-async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
+async function ctxFor(
+  runId: string,
+  store: SqliteStore,
+  nodeId: string,
+  routing: Record<string, unknown> = {},
+): Promise<handler.HandlerContext> {
   store.saveWorkflow(
     "sha",
     "t",
@@ -56,7 +62,7 @@ async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promis
     nodeId,
     iteration: 0,
     signal: ac.signal,
-    routing: {},
+    routing,
     store,
     llm: handler.makeLlmClient({
       signal: ac.signal,
@@ -196,6 +202,32 @@ describe("handler-bridge priorMessages hydration", () => {
     await makeLlmHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
     expect(calls[0]?.priorMessagesLen).toBe(0);
     expect(calls[0]?.summary).toBeUndefined();
+    store.close();
+  });
+
+  test("threadless: a resume of the SAME pass rehydrates; a goal-gate re-entry (next pass) starts clean", async () => {
+    // A retarget resets per-node retry counters, so a pass-2 dispatch runs at
+    // the same (nodeId, iteration: 0) as pass 1 — only the pass epoch keeps
+    // the transcripts apart. Threadless nodes rehydrate ONLY when resumed.
+    const threadless: Node = { id: "n1", type: "llm", attrs: { prompt: "hello" } };
+    const store = new SqliteStore({ path: ":memory:" });
+
+    const ctx0 = await ctxFor("rp", store, "n1");
+    store.appendMessage("rp", { content: assistantMsg("pass-0 turn"), nodeId: "n1", iteration: 0, pass: 0 });
+
+    // Same pass → resume semantics: the prior row hydrates.
+    const { backend: b0, calls: c0 } = makeInstrumentedBackend();
+    await makeLlmHandler({ node: threadless, backend: b0 }).handler(ctx0);
+    expect(c0[0]?.priorMessagesLen).toBe(1);
+    expect(c0[0]?.thread_id).toBe(syntheticThreadId("n1", 0));
+
+    // Gate re-entry: routing carries the bumped epoch → fresh transcript,
+    // pass-qualified synthetic thread id.
+    const ctx1 = await ctxFor("rp", store, "n1", { "goal_gates.__retries": 1 });
+    const { backend: b1, calls: c1 } = makeInstrumentedBackend();
+    await makeLlmHandler({ node: threadless, backend: b1 }).handler(ctx1);
+    expect(c1[0]?.priorMessagesLen).toBe(0);
+    expect(c1[0]?.thread_id).toBe(syntheticThreadId("n1", 0, 1));
     store.close();
   });
 });

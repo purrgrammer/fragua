@@ -102,7 +102,7 @@ describe("migrateTo — applies the walk and pins the target", () => {
     migrate(db); // current shape: schedules.title
     expect(scheduleCols(db)).toContain("title");
 
-    migrateTo(db, 1);
+    migrateTo(db, 1, { allowDataLoss: true }); // crosses the lossy v4 step
     expect(version(db)).toBe(1);
     expect(scheduleCols(db)).toContain("input");
     expect(scheduleCols(db)).not.toContain("title");
@@ -156,7 +156,7 @@ describe("migrateTo — applies the walk and pins the target", () => {
     // Caller owns the transaction; migrateTo must NOT open its own (a second
     // BEGIN would throw) and must NOT commit (the COMMIT below would then fail).
     db.exec("BEGIN IMMEDIATE");
-    const plan = migrateTo(db, 1, { assumeLocked: true });
+    const plan = migrateTo(db, 1, { assumeLocked: true, allowDataLoss: true });
     db.exec("COMMIT");
     expect(plan.direction).toBe("down");
     expect(version(db)).toBe(1);
@@ -183,7 +183,7 @@ describe("up ∘ down round-trips schema shape and data (non-lossy steps)", () =
         const colsV1 = scheduleCols(db);
 
         migrateTo(db, CURRENT_SCHEMA_VERSION); // up
-        migrateTo(db, 1); // down
+        migrateTo(db, 1, { allowDataLoss: true }); // down (crosses lossy v4)
 
         expect(version(db)).toBe(1);
         expect(scheduleCols(db)).toEqual(colsV1); // shape round-trips
@@ -197,5 +197,22 @@ describe("up ∘ down round-trips schema shape and data (non-lossy steps)", () =
       }),
       { numRuns: 25 },
     );
+  });
+});
+
+describe("lossy-step policy — v4 messages.pass", () => {
+  test("a down walk crossing v4 refuses without allowDataLoss, drops the column with it", () => {
+    const db = freshDb();
+    migrate(db);
+    expect(() => migrateTo(db, 3)).toThrow(/loses data at v4/i);
+
+    migrateTo(db, 3, { allowDataLoss: true });
+    expect(version(db)).toBe(3);
+    const cols = db
+      .query<{ name: string }, []>("PRAGMA table_info(messages)")
+      .all()
+      .map((c) => c.name);
+    expect(cols).not.toContain("pass");
+    db.close();
   });
 });

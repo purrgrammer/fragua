@@ -443,6 +443,14 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch (`goal_gates.__retries` at dispatch) —
+         * distinguishes executions of the same `(nodeId, iteration)` across
+         * retarget passes (a gate loop resets retry counters per pass, so
+         * `iteration` alone collides). Omitted when 0 (no retarget yet).
+         *
+         * contract: no-bump — additive optional field; the reducer never
+         * reads it. */
+        pass?: number;
         /** Why this dispatch is starting. "fresh" = first dispatch of the
          * run; the others = resuming from the named prior state. Lets
          * analytics distinguish "ran straight through" from "had to be
@@ -455,6 +463,8 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. */
+        pass?: number;
       };
     }
   | {
@@ -462,6 +472,8 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. */
+        pass?: number;
         tokens: number;
         costUsd: number;
         /** USD cost split across the four token buckets (per pi-ai's
@@ -506,6 +518,8 @@ export type FactEvent =
       payload: {
         nodeId: string;
         iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. */
+        pass?: number;
         cause: string;
         partialTokens: number;
         partialCostUsd: number;
@@ -847,9 +861,61 @@ export type FactEvent =
        * (terminal-terminal — subsequent actions fail). */
       type: "fact.run_discarded";
       payload: { refs: string[] };
+    }
+  | {
+      /** A `type: parallel` fan-out opened (Model A,
+       * docs/proposals/fan-out-nodes.md). Seeds the active-set frontier with
+       * the branch ENTRY node ids; `nodeId` is the parallel node, which stays
+       * `current_node` while the frontier advances. Branches advance
+       * independently (each sub-node completion atomically commits a
+       * `dispatch_started` for its successor), converging on the join. */
+      type: "fact.fanout_started";
+      payload: {
+        nodeId: string;
+        iteration: number;
+        /** Goal-gate re-entry epoch — see `fact.dispatch_started.pass`. A
+         * region re-seeded by a gate retarget carries the bumped epoch, so
+         * the projection keys each pass's branch entries distinctly. */
+        pass?: number;
+        branches: string[];
+      };
+    }
+  | {
+      /** Fan-out join barrier: the frontier drained (every branch reached the
+       * join). Clears the active set and advances `current_node` to the join
+       * (`nextNode`) in one commit (I1 — a crash in the gap would orphan it). */
+      type: "fact.fanout_joined";
+      payload: {
+        nodeId: string;
+        iteration: number;
+        /** Goal-gate re-entry epoch, mirroring `fact.fanout_started.pass` —
+         * the projection closes the parallel node's pass-keyed entry with it
+         * (a re-entered region's join would otherwise close pass 0's entry
+         * and leave the live pass "running" forever). Omitted when 0.
+         *
+         * contract: no-bump — additive optional field; the reducer never
+         * reads it. */
+        pass?: number;
+        nextNode: string;
+        branchesCompleted: number;
+      };
     };
 
 export type FactType = FactEvent["type"];
+
+/** The per-node lifecycle facts the executor's fan-out recovery scan keys
+ * on (latest-of-these-per-node decides whether a branch was aborted and
+ * needs a corrective re-dispatch). NOT the full vocabulary the read-plane's
+ * node-state fold consumes — that fold additionally treats
+ * `fact.fanout_started` as a lifecycle transition (it marks seeded branch
+ * entries "running"); a seeded-but-never-dispatched branch is therefore
+ * absent from this scan by design, and the frontier re-dispatches it fresh. */
+export const NODE_LIFECYCLE_FACT_TYPES = [
+  "fact.dispatch_started",
+  "fact.node_started",
+  "fact.node_completed",
+  "fact.node_aborted",
+] as const satisfies readonly FactType[];
 
 /** Discriminated union over every typed event fragua emits. */
 export type AnyEvent = IntentEvent | FactEvent;

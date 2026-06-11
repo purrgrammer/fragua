@@ -402,8 +402,11 @@ describe("reducer purity for outputs (no-bump invariant)", () => {
     expect((stateWith as unknown as Record<string, unknown>)["outputs"]).toBeUndefined();
   });
 
-  test("EVENT_CONTRACT_VERSION is still 1 (no fold-contract bump needed)", async () => {
+  test("structured outputs ride non-version-bumping lanes (the equality checks above prove the no-bump fold)", async () => {
+    // The contract is at v2 (the fan-out fold-path facts drove that bump, not
+    // outputs). Outputs remain a no-bump change — proven by the stateWith /
+    // stateWithout re-snapshot equality above, not by the contract integer.
     const { EVENT_CONTRACT_VERSION } = require("../src/pragmas.ts") as { EVENT_CONTRACT_VERSION: number };
-    expect(EVENT_CONTRACT_VERSION).toBe(1);
+    expect(EVENT_CONTRACT_VERSION).toBeGreaterThanOrEqual(2);
   });
 });

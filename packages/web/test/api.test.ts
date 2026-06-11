@@ -71,8 +71,14 @@ describe("api — /runs", () => {
     expect(res.runId).toBe("abc/weird");
   });
 
-  it("getRun surfaces workflowSource (raw YAML) when present", async () => {
+  it("getRun surfaces workflowSource (raw YAML) and the served fanout records when present", async () => {
     const source = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const fanout = {
+      parentOf: { lens_a: "review" },
+      branchOf: { lens_a: "lens_a" },
+      orderOf: { lens_a: 0 },
+      nodeTypes: { review: "parallel", lens_a: "llm" },
+    };
     mock = installFetchMock({
       "/api/runs/r1": () =>
         json({
@@ -83,10 +89,12 @@ describe("api — /runs", () => {
           nodes: [],
           selectedEdges: [],
           workflowSource: source,
+          fanout,
         }),
     });
     const res = await api.getRun("r1");
     expect(res.workflowSource).toBe(source);
+    expect(res.fanout).toEqual(fanout);
   });
 
   it("getRun accepts a response that omits workflowSource (older servers)", async () => {

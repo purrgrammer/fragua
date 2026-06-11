@@ -1,6 +1,24 @@
 import type { RunEnqueuedPayload } from "@fragua/types";
 import { AUTO_WAKE_PAUSE_REASONS, type FactEvent, type RunMetrics, type RunState } from "./types.ts";
 
+/** The active-set frontier of an in-flight `type: parallel` fan-out (Model A,
+ * docs/proposals/fan-out-nodes.md). The set of sub-node ids currently in flight
+ * across all branches. Stored in `run_state.routing` (an `internal.*`
+ * projection key, like `internal.auto_resume_at`) rather than a dedicated
+ * column — foldable from the log, riding the already-plumbed routing
+ * serialization, so no schema migration. Seeded by `fact.fanout_started` (the
+ * branch entries), advanced atomically per sub-node (a `fact.node_completed`
+ * removes the done node, a bundled `fact.dispatch_started` adds its successor),
+ * cleared by `fact.fanout_joined`. `null` ⇒ no fan-out in flight. */
+export const ACTIVE_NODES_ROUTING_KEY = "internal.active_nodes";
+
+export function readActiveNodes(routing: Record<string, unknown>): string[] | null {
+  const v = routing[ACTIVE_NODES_ROUTING_KEY];
+  // Element-validated: the only non-typed write path is a tampered bundle fed
+  // through `fragua import` — fail to "no fan-out" instead of propagating junk.
+  return Array.isArray(v) && v.every((e) => typeof e === "string") ? (v as string[]) : null;
+}
+
 export function emptyMetrics(): RunMetrics {
   return {
     billedTokens: 0,
@@ -56,7 +74,20 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // Symmetrical with fact.run_started's status flip on the first
       // dispatch.
       if (next.status === "queued") next.status = "running";
-      next.dispatchStartedAt = now;
+      // Open the dispatch interval only when one isn't already open: during a
+      // fan-out the interval spans the whole region (fan entry → join /
+      // park), and a bundled successor dispatch_started overwriting the
+      // anchor would silently drop the span accrued so far.
+      if (next.dispatchStartedAt == null) next.dispatchStartedAt = now;
+      // Frontier advance: a sub-node dispatched inside a live fan-out joins the
+      // active set (the executor bundles this with the predecessor's
+      // `node_completed` in one commit, so the frontier never loses a
+      // successor across a crash — I1). The parallel node's own dispatch fires
+      // before `fanout_started`, when the set is null, so it is unaffected.
+      const active = readActiveNodes(next.routing);
+      if (active !== null && !active.includes(fact.payload.nodeId)) {
+        next.routing[ACTIVE_NODES_ROUTING_KEY] = [...active, fact.payload.nodeId];
+      }
       return next;
     }
     case "fact.node_started": {
@@ -67,7 +98,14 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.node_completed": {
       const p = fact.payload;
-      closeDispatchInterval(next, now);
+      // Close the dispatch interval only for LINEAR completions. A fan-out
+      // branch completion must not close it: the first finisher would null
+      // the anchor, every concurrent sibling's close would then no-op, and
+      // activeMs accrued only fan-entry → first completion. The region's
+      // interval closes at `fact.fanout_joined` (or a pause/halt) instead.
+      if (!readActiveNodes(next.routing)?.includes(p.nodeId)) {
+        closeDispatchInterval(next, now);
+      }
       next.metrics.billedTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
       next.metrics.totalInputCostUsd += p.inputCostUsd ?? 0;
@@ -94,13 +132,27 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
         tokens: nodeBucket.tokens + (p.inputTokens ?? 0) + (p.outputTokens ?? 0),
         costUsd: nodeBucket.costUsd + p.costUsd,
       };
-      next.currentNode = p.nextNode;
-      next.nodeStartedAt = now;
+      // Fan-out frontier sub-node: remove it from the active set and keep
+      // `current_node` PINNED to the parallel node (the barrier advances it).
+      // Its successor — if any — was dispatched in this same commit (a bundled
+      // `dispatch_started` re-added it above). A linear completion advances the
+      // run pointer as usual.
+      const activeOnComplete = readActiveNodes(next.routing);
+      if (activeOnComplete?.includes(p.nodeId)) {
+        next.routing[ACTIVE_NODES_ROUTING_KEY] = activeOnComplete.filter((n) => n !== p.nodeId);
+      } else {
+        next.currentNode = p.nextNode;
+        next.nodeStartedAt = now;
+      }
       return next;
     }
     case "fact.node_aborted": {
-      closeDispatchInterval(next, now);
       const p = fact.payload;
+      // Same linear-only close as node_completed: an aborted fan-out branch
+      // stays in the active set while its siblings keep running.
+      if (!readActiveNodes(next.routing)?.includes(p.nodeId)) {
+        closeDispatchInterval(next, now);
+      }
       next.metrics.billedTokens += p.partialTokens;
       next.metrics.totalCostUsd += p.partialCostUsd;
       next.metrics.totalInputCostUsd += p.partialInputCostUsd ?? 0;
@@ -116,6 +168,25 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
         tokens: abortBucket.tokens + (p.partialInputTokens ?? 0) + (p.partialOutputTokens ?? 0),
         costUsd: abortBucket.costUsd + p.partialCostUsd,
       };
+      // A fan-out sub-node that aborted stays in the active set — the executor
+      // re-dispatches it on the next re-drive. (No active-set mutation here.)
+      return next;
+    }
+    case "fact.fanout_started": {
+      // Seed the frontier with the branch entries. `current_node` stays pinned
+      // to the parallel node (`fact.payload.nodeId`); the frontier is the truth
+      // for "what is running" until the barrier.
+      next.routing[ACTIVE_NODES_ROUTING_KEY] = [...fact.payload.branches];
+      next.status = "running";
+      return next;
+    }
+    case "fact.fanout_joined": {
+      // Barrier: the frontier drained. Clear it and advance `current_node` to
+      // the join in this same commit (I1).
+      closeDispatchInterval(next, now);
+      delete next.routing[ACTIVE_NODES_ROUTING_KEY];
+      next.currentNode = fact.payload.nextNode;
+      next.nodeStartedAt = now;
       return next;
     }
     case "fact.run_paused_human": {

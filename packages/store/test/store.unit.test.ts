@@ -97,6 +97,29 @@ describe("SqliteStore — appendFact", () => {
     store.close();
   });
 
+  test("returns the post-commit run_state projection (lets a caller skip a redundant getState)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const state = store.getState(runId)!;
+    const result = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: state.contractVersion, startNode: "a" },
+        },
+      ],
+      state.version,
+    );
+    const fresh = store.getState(runId)!;
+    // The folded post-commit projection rides the result — matches a fresh read.
+    expect(result.state?.version).toBe(result.newVersion);
+    expect(result.state?.version).toBe(fresh.version);
+    expect(result.state?.status).toBe("running");
+    expect(result.state?.currentNode).toBe("a");
+    store.close();
+  });
+
   test("fact.node_completed updates totals and per-model breakdown", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
@@ -917,6 +940,65 @@ describe("SqliteStore — gcBlobs", () => {
     expect(blobs.has(stray)).toBe(true);
     store.gcBlobs();
     expect(blobs.has(stray)).toBe(false);
+    store.close();
+  });
+});
+
+describe("SqliteStore — getLatestLifecycleByNode", () => {
+  test("returns the latest lifecycle fact TYPE per node; non-lifecycle and node-less events are ignored", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const append = (fact: FactEvent) => {
+      const v = store.getState(runId)!.version;
+      store.appendFact(runId, [fact], v);
+    };
+    append({ type: "fact.run_started", payload: { workflowSha: "wf", contractVersion: 1, startNode: "a" } });
+    append({ type: "fact.dispatch_started", payload: { nodeId: "a", iteration: 0, resumeOf: "fresh" } });
+    append({ type: "fact.dispatch_started", payload: { nodeId: "b", iteration: 0, resumeOf: "fresh" } });
+    append({
+      type: "fact.node_completed",
+      payload: { nodeId: "a", iteration: 0, tokens: 0, costUsd: 0, nextNode: "j" },
+    });
+    append({
+      type: "fact.node_aborted",
+      payload: { nodeId: "b", iteration: 0, cause: "aborted", partialTokens: 0, partialCostUsd: 0 },
+    });
+    // Interleaved observability under a node id must not displace the fact.
+    store.appendObservabilityEvents(runId, [{ type: "llm.start", payload: { nodeId: "b", model: "m" } }]);
+
+    const latest = new Map(store.getLatestLifecycleByNode(runId).map((r) => [r.nodeId, r.type]));
+    expect(latest.get("a")).toBe("fact.node_completed");
+    expect(latest.get("b")).toBe("fact.node_aborted");
+    expect(latest.has("j")).toBe(false);
+    store.close();
+  });
+
+  test("empty log → empty result", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(store.getLatestLifecycleByNode(runId)).toEqual([]);
+    store.close();
+  });
+});
+
+describe("SqliteStore — appendMessage dedup is pass-scoped", () => {
+  test("identical content at a new pass mints a NEW row (no cross-pass dedup hit)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const content = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same bytes" }],
+      timestamp: 1,
+    };
+    const a = store.appendMessage(runId, { content, nodeId: "n1", iteration: 0, pass: 0 }, { dedup: true });
+    // Same scope, same pass → dedup returns the existing ordinal.
+    const b = store.appendMessage(runId, { content, nodeId: "n1", iteration: 0, pass: 0 }, { dedup: true });
+    expect(b.ordinal).toBe(a.ordinal);
+    // A goal-gate re-entry (next pass) with byte-identical content is a NEW
+    // execution — matching the pass-0 row would make pass-scoped hydration
+    // find nothing and the handler would run on an empty context.
+    const c = store.appendMessage(runId, { content, nodeId: "n1", iteration: 0, pass: 1 }, { dedup: true });
+    expect(c.ordinal).not.toBe(a.ordinal);
     store.close();
   });
 });

@@ -35,11 +35,19 @@ import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
-import { makeArbGraph } from "./arbitraries/graph.ts";
+import { type ArbGraphOptions, makeArbGraph, stubOutputsFor } from "./arbitraries/graph.ts";
 import { checkRunInvariants } from "./invariants.ts";
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 const AUTO_PAUSE_REASONS = new Set(["provider_retry", "handler_retry", "timeout_retry"]);
+
+// The scripted handlers emit declared `outputs:` (via stubOutputsFor) so a
+// `type: parallel` graph's join `${{ outputs.X.findings }}` consumer resolves and
+// the fan-out frontier reaches a clean terminal under crash-and-replay. The
+// outputs-consumer SPINE shape stays off (structuredOutputs) — its `${{...}}`
+// refs sit on routing/back-edge nodes the script doesn't populate — but fan-out
+// branch outputs are exactly what the scripted success emits.
+const DRIVEABLE: ArbGraphOptions = { structuredOutputs: false, parallel: true };
 
 function isRoutingNode(node: Node): boolean {
   return node.type === "llm" && Array.isArray(node.attrs.routes) && node.attrs.routes.length > 0;
@@ -55,6 +63,8 @@ function successSpec(node: Node): handler.HandlerSpec {
     handler: async () => {
       const result: handler.HandlerResult = { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 };
       if (isRoutingNode(node)) result.route = "r0";
+      const outputs = stubOutputsFor(node);
+      if (outputs !== undefined) result.outputs = outputs;
       return result;
     },
   };
@@ -88,6 +98,8 @@ function scriptedSpec(node: Node, script: NodeScript): handler.HandlerSpec {
       }
       const result: handler.HandlerResult = { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 };
       if (isRoutingNode(node)) result.route = "r0";
+      const outputs = stubOutputsFor(node);
+      if (outputs !== undefined) result.outputs = outputs;
       return result;
     },
   };
@@ -225,7 +237,7 @@ function assertActiveMsBounded(state: RunState, clockSpanMs: number, jumpedMs: n
 describe("driven executor — tier-2", () => {
   test("slice 1: all-success over any human-free graph completes, no pauses/aborts", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { events, state, status, clockSpanMs, jumpedMs } = await drive(graph, successSpec);
         expect(status).toBe("completed");
         expect(events.at(-1)?.type).toBe("fact.run_completed");
@@ -246,7 +258,7 @@ describe("driven executor — tier-2", () => {
   test("slice 2: fail/retry/provider scripts thread the auto-wake loop and settle", async () => {
     await fc.assert(
       fc.asyncProperty(
-        makeArbGraph(["llm", "tool", "routing"]),
+        makeArbGraph(["llm", "tool", "routing"], DRIVEABLE),
         fc.array(fc.record({ providerFails: fc.nat({ max: 5 }), retries: fc.nat({ max: 2 }) }), {
           minLength: 6,
           maxLength: 6,
@@ -310,7 +322,7 @@ describe("driven executor — tier-2", () => {
 
   test("slice 3: HITL — human pauses are answered (intent.human_input) and the run completes", async () => {
     await fc.assert(
-      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing", "human"]), async (graph) => {
+      fc.asyncProperty(makeArbGraph(["llm", "tool", "routing", "human"], DRIVEABLE), async (graph) => {
         // Non-human nodes all succeed; each human gate is answered with its
         // forward route (r0). The run threads every pause and reaches exit.
         const { events, state, status } = await drive(graph, successSpec);
@@ -353,7 +365,7 @@ describe("driven executor — tier-2", () => {
   test("slice 4: crash mid-run + startup sweep recovers and completes", async () => {
     await fc.assert(
       fc.asyncProperty(
-        makeArbGraph(["llm", "tool", "routing"]),
+        makeArbGraph(["llm", "tool", "routing"], DRIVEABLE),
         fc.integer({ min: 1, max: 4 }),
         async (graph, crashTurns) => {
           const { events, state, status, requeued, clockSpanMs, jumpedMs } = await drive(graph, successSpec, {

@@ -10,9 +10,9 @@
 // the timeout-retry commit re-drives on an OCC conflict. So `planAbort`
 // returns an `outcome` tag the executor switches on, rather than committing.
 
-import { AUTO_RESUME_AT_KEY } from "@fragua/core";
+import { AUTO_RESUME_AT_KEY, readGoalGateRetries } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
-import { readNumber } from "./executor-helpers.ts";
+import { readNumber, type UsageTotals } from "./executor-helpers.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
 
 // Watchdog timeout-retry policy (system-initiated, NOT workflow-initiated — so
@@ -23,17 +23,6 @@ const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
 const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
 
 const timeoutRetryKey = (nodeId: string): string => `internal.timeout_retries.${nodeId}`;
-
-/** Partial LLM usage to credit onto the `fact.node_aborted` (the executor
- * doesn't roll back blobs / side effects, so partial spend accrues). */
-export interface AbortUsage {
-  tokens: number;
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-}
 
 export interface AbortPlanInput {
   currentNode: string;
@@ -49,7 +38,10 @@ export interface AbortPlanInput {
   reactiveBudgetPauseBreach:
     | { scope: "run" | "node"; metric: "cost" | "tokens"; limit: number; actual: number }
     | undefined;
-  usage: AbortUsage;
+  /** Partial spend to credit onto `fact.node_aborted` — the dispatch's usage
+   * totals, taken directly from the shared accumulator (one shape end to end;
+   * a translation bridge here drifted once before it was deleted). */
+  usage: UsageTotals;
   /** This turn's intent-fold delta + applied seqs — merged into the abort
    * commit so operator intents queued for the dying dispatch aren't lost. */
   routingDelta: Record<string, unknown>;
@@ -83,14 +75,13 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
   const { currentNode, iteration, abortCause, usage, routingDelta, appliedSeqs } = input;
 
   // Base: fact.node_aborted carrying this turn's partial spend.
-  const facts = abortResultToFacts(currentNode, iteration, abortCause, {
-    tokens: usage.tokens,
-    costUsd: usage.costUsd,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    cacheReadTokens: usage.cacheReadTokens,
-    cacheWriteTokens: usage.cacheWriteTokens,
-  });
+  const facts = abortResultToFacts(
+    currentNode,
+    iteration,
+    abortCause,
+    usage,
+    readGoalGateRetries(input.effectiveRouting),
+  );
 
   // Carry this turn's fold (routing delta + applied seqs) onto the commit so a
   // queued operator intent isn't left unapplied for the next dispatch to re-fold.

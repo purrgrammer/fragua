@@ -1,8 +1,9 @@
 // Graph linter. Catches structural and semantic issues before execution.
 // See docs/SPEC.md §4.1 (validation phase).
 
-import type { Edge, Graph } from "../types/graph.ts";
+import type { Edge, Graph, NodeAttrs } from "../types/graph.ts";
 import { isOutputRecord, type OutputProfile } from "../types/outputs.ts";
+import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
 import { inputReferences, outputReferences } from "./substitution.ts";
@@ -44,10 +45,27 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "retry_max_delay_ms",
   "retry_jitter",
   "outputs",
+  "branches",
+  "concurrency",
+  "join",
 ]);
 
 /** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
-const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set(["label", "thread_id", "outcome", "route"]);
+const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set(["label", "thread_id", "outcome", "route", "fanout"]);
+
+/** Tools that can mutate the shared worktree. A fan-out branch (read-class,
+ * deliberation-only) may not reach any — concurrent writes corrupt the shared
+ * snapshot nondeterministically and won't replay (E042). */
+const WRITE_CLASS_TOOLS: ReadonlySet<string> = new Set(["bash", "write", "edit"]);
+
+/** Write-class tools a node can reach. An llm node with no `allowed-tools` gets
+ * the full toolset (so every write-class tool minus `denied-tools`); an
+ * `allowed-tools` list narrows to its intersection with the write-class set. */
+function writeReachableTools(attrs: NodeAttrs): string[] {
+  const denied = new Set(attrs.denied_tools ?? []);
+  const candidates = attrs.allowed_tools !== undefined ? attrs.allowed_tools : [...WRITE_CLASS_TOOLS];
+  return candidates.filter((t) => WRITE_CLASS_TOOLS.has(t) && !denied.has(t));
+}
 
 /** Whitelist of known graph attribute names. See KNOWN_NODE_ATTRS. */
 const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
@@ -447,6 +465,36 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     for (const d of sub) diags.push(d);
   }
 
+  // Branch closures per parallel node — walked ONCE and shared by both
+  // consumers (the W015 join-producer suppression below and the E036–E045
+  // oracle later). They answer different questions about the same region, so
+  // a second independent walk could silently diverge if closure semantics
+  // ever evolve (nested parallel, new closure predicates).
+  const closuresByParallel = new Map<string, ReturnType<typeof fanoutBranchClosures>>();
+  for (const p of nodes) {
+    if (p.type !== "parallel") continue;
+    const join = typeof p.attrs.join === "string" ? p.attrs.join : undefined;
+    const branches = Array.isArray(p.attrs.branches) ? p.attrs.branches : [];
+    closuresByParallel.set(p.id, fanoutBranchClosures(graph, { branches, join }));
+  }
+
+  // Fan-out join producers: for each `type: parallel`, every node in a branch
+  // closure that converges on the join. A `wait_all` barrier guarantees every
+  // branch ran before the join, so a join reading `${{ outputs.<branch>.f }}`
+  // must NOT draw W015 (the standard dominance oracle treats the take-all fork
+  // as select-one and would warn). Keyed by join id.
+  const fanoutJoinProducers = new Map<string, Set<string>>();
+  for (const p of nodes) {
+    if (p.type !== "parallel") continue;
+    const join = typeof p.attrs.join === "string" ? p.attrs.join : undefined;
+    if (join === undefined) continue;
+    const producers = fanoutJoinProducers.get(join) ?? new Set<string>();
+    for (const c of closuresByParallel.get(p.id) ?? []) {
+      for (const n of c.nodes) producers.add(n);
+    }
+    fanoutJoinProducers.set(join, producers);
+  }
+
   // E035 / W015: `${{ outputs.X.f }}` references. Reads fail closed at runtime
   // (substituteOutputs throws → node failure), so static checking is advisory,
   // not a gate:
@@ -578,6 +626,11 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             });
             continue;
           }
+          // A fan-out join reading its own branches' outputs: the wait_all
+          // barrier guarantees every branch ran, so suppress the dominance
+          // warning (the take-all fork is an AND-join the OR-based dominance
+          // oracle can't express).
+          if (fanoutJoinProducers.get(n.id)?.has(ref.producer)) continue;
           diags.push({
             severity: "warning",
             code: "W015",
@@ -861,6 +914,229 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       code: "W013",
       message: `graph has unrecognised attribute "${key}" — typo? (see GraphAttrs for the canonical list)`,
     });
+  }
+
+  // ── E036–E044: `type: parallel` fan-out well-formedness (Model A,
+  // docs/proposals/fan-out-nodes.md). A branch entry begins a sub-pipeline (its
+  // closure of intra-fan-out nodes) that converges on the join; every closure
+  // node is a distinct, read-class llm node and the closure is an acyclic DAG
+  // terminating at the join. E038 is the structural "join not a defined step";
+  // E044 is the disjointness invariant ("a node is shared by two branches") —
+  // distinct conditions a machine consumer keys on separately.
+  const nonFanoutEdgesFrom = (id: string): Edge[] =>
+    graph.edges.filter((e) => e.from === id && e.attrs.fanout !== true);
+  for (const p of nodes) {
+    if (p.type !== "parallel") continue;
+    const branches = Array.isArray(p.attrs.branches) ? p.attrs.branches : [];
+    const join = typeof p.attrs.join === "string" ? p.attrs.join : undefined;
+    const loc = p.loc !== undefined ? { loc: p.loc } : {};
+
+    if (branches.length < 2) {
+      diags.push({
+        severity: "error",
+        code: "E036",
+        message: `parallel node "${p.id}" must declare ≥2 branches (has ${branches.length})`,
+        nodeId: p.id,
+        ...loc,
+      });
+    }
+    // The seed fact (`fact.fanout_started`) embeds the full branch list in
+    // its payload, and event payloads are capped at 4 KiB (I7). Without this
+    // bound a wide-enough fan-out validates cleanly and then dies at the
+    // seed commit with an "executor crashed" halt that points nowhere near
+    // the authoring problem. 3 KiB leaves headroom for the other fields.
+    if (JSON.stringify(branches).length > 3072) {
+      diags.push({
+        severity: "error",
+        code: "E045",
+        message: `parallel node "${p.id}" declares too many branches (${branches.length}) — the serialized branch list exceeds the 4 KiB event-payload budget`,
+        nodeId: p.id,
+        ...loc,
+      });
+    }
+    const seenEntries = new Set<string>();
+    for (const b of branches) {
+      if (seenEntries.has(b) || !nodeIds.has(b)) {
+        diags.push({
+          severity: "error",
+          code: "E037",
+          message: `parallel node "${p.id}" branch "${b}" is ${seenEntries.has(b) ? "a duplicate" : "not a defined step"}`,
+          nodeId: p.id,
+          ...loc,
+        });
+      }
+      seenEntries.add(b);
+    }
+    if (join === undefined || !nodeIds.has(join)) {
+      diags.push({
+        severity: "error",
+        code: "E038",
+        message: `parallel node "${p.id}" join "${join ?? "(none)"}" is not a defined step`,
+        nodeId: p.id,
+        ...loc,
+      });
+      continue;
+    }
+
+    // Per-branch closure via the shared walk (engine/fanout.ts) — the same node
+    // set the executor budgets over and the UI groups by, so the legality
+    // oracle can't drift from the runtime scope. Ownership tracking catches
+    // overlapping branches (E044).
+    const owner = new Map<string, string>();
+    for (const bc of closuresByParallel.get(p.id) ?? []) {
+      const entry = bc.entry;
+      if (!nodeIds.has(entry)) continue;
+      const closure = bc.nodes;
+      for (const x of closure) {
+        const prevOwner = owner.get(x);
+        if (prevOwner !== undefined && prevOwner !== entry) {
+          diags.push({
+            severity: "error",
+            code: "E044",
+            message: `node "${x}" is shared by branches "${prevOwner}" and "${entry}" of parallel "${p.id}" — branches must be disjoint`,
+            nodeId: x,
+            ...loc,
+          });
+        }
+        owner.set(x, entry);
+      }
+      if (!bc.reachesJoin) {
+        diags.push({
+          severity: "error",
+          code: "E039",
+          message: `branch "${entry}" of parallel "${p.id}" never reaches the join "${join}" (no path out — a cycle or dead-end closure)`,
+          nodeId: entry,
+          ...loc,
+        });
+      }
+
+      // W017: a cycle inside the branch closure (a back-edge to a node still on
+      // the DFS stack) can spin until the per-branch timeout fires. A bounded
+      // retry — `max_retries` or a goal gate — is legitimate, so this WARNS
+      // rather than erroring; an unbounded loop is almost always an authoring
+      // slip the runtime backstop only papers over. (E039 above catches a closure
+      // that can't reach the join at all; this catches one that can but may loop.)
+      const closureSet = new Set(closure);
+      const dfsState = new Map<string, 1 | 2>(); // 1 = on stack, 2 = done
+      let cyclic = false;
+      for (const root of closure) {
+        if (dfsState.has(root)) continue;
+        const stack: Array<{ node: string; succ: string[]; i: number }> = [
+          { node: root, succ: nonFanoutEdgesFrom(root).map((e) => e.to), i: 0 },
+        ];
+        dfsState.set(root, 1);
+        while (stack.length > 0) {
+          const top = stack[stack.length - 1]!;
+          if (top.i >= top.succ.length) {
+            dfsState.set(top.node, 2);
+            stack.pop();
+            continue;
+          }
+          const to = top.succ[top.i++]!;
+          if (to === join || !closureSet.has(to)) continue;
+          const seenState = dfsState.get(to);
+          if (seenState === 1) {
+            cyclic = true;
+            break;
+          }
+          if (seenState === undefined) {
+            stack.push({ node: to, succ: nonFanoutEdgesFrom(to).map((e) => e.to), i: 0 });
+            dfsState.set(to, 1);
+          }
+        }
+        if (cyclic) break;
+      }
+      if (cyclic) {
+        diags.push({
+          severity: "warning",
+          code: "W017",
+          message: `branch closure of "${entry}" in parallel "${p.id}" contains a cycle — it can loop until the per-branch timeout; bound it (max_retries / a goal gate) or make the closure acyclic`,
+          nodeId: entry,
+          ...loc,
+        });
+      }
+
+      for (const nodeId of closure) {
+        const cn = graph.nodes[nodeId];
+        if (cn === undefined) continue;
+        // E040: no nested parallel.
+        if (cn.type === "parallel") {
+          diags.push({
+            severity: "error",
+            code: "E040",
+            message: `branch node "${nodeId}" of parallel "${p.id}" is itself \`type: parallel\` — nested fan-out is not supported (v1)`,
+            nodeId,
+            ...loc,
+          });
+        } else if (cn.type !== "llm") {
+          // E041: deliberation-only — branch nodes must be llm.
+          diags.push({
+            severity: "error",
+            code: "E041",
+            message: `branch node "${nodeId}" of parallel "${p.id}" is \`type: ${cn.type}\` — v1 branch nodes must be \`type: llm\``,
+            nodeId,
+            ...loc,
+          });
+        } else {
+          // `llm` is the only valid branch kind; the tool / thread constraints
+          // apply to it alone. Running them on a node that already failed E040/
+          // E041 double-fires — e.g. a nested `parallel` has no `allowed_tools`,
+          // so `writeReachableTools` returns EVERY write-class tool and E042
+          // piles on top of E040.
+          const writeReachable = writeReachableTools(cn.attrs);
+          if (writeReachable.length > 0) {
+            // E042: no branch node may reach a write-class tool (shared read-only worktree).
+            diags.push({
+              severity: "error",
+              code: "E042",
+              message: `branch node "${nodeId}" of parallel "${p.id}" can reach write-class tool(s) [${writeReachable.join(", ")}] — branches share the worktree read-only; scope it with allowed-tools / denied-tools`,
+              nodeId,
+              ...loc,
+            });
+          }
+          // E043: no explicit thread on a branch node (single-writer-log invariant).
+          if (typeof cn.attrs.thread_id === "string") {
+            diags.push({
+              severity: "error",
+              code: "E043",
+              message: `branch node "${nodeId}" of parallel "${p.id}" declares \`thread:\` — concurrent branches each run on their own synthetic thread; pass results via typed outputs`,
+              nodeId,
+              ...loc,
+            });
+          }
+        }
+        // E039: every closure node's non-fanout successors stay inside the
+        // closure or hit the join — no escape, and at least one successor (a
+        // dead-end branch node never reaches the barrier).
+        const succ = nonFanoutEdgesFrom(nodeId);
+        // Skip when the branch-level E039 (never reaches the join) already
+        // fired — a single-node dead-end branch trips both checks on the same
+        // node, and one defect should yield one diagnostic.
+        if (succ.length === 0 && bc.reachesJoin) {
+          diags.push({
+            severity: "error",
+            code: "E039",
+            message: `branch node "${nodeId}" of parallel "${p.id}" has no successor — every branch path must terminate at the join "${join}"`,
+            nodeId,
+            ...loc,
+          });
+        }
+        for (const e of succ) {
+          // Membership test against the explicit `closureSet` (computed for W017),
+          // not the BFS `seen` — equivalent today, but `closureSet` is the
+          // intended set and survives a BFS refactor that dedups/early-exits.
+          if (e.to !== join && !closureSet.has(e.to)) {
+            diags.push({
+              severity: "error",
+              code: "E039",
+              message: `branch node "${nodeId}" of parallel "${p.id}" routes to "${e.to}", outside the branch closure and not the join "${join}"`,
+              nodeId,
+              ...loc,
+            });
+          }
+        }
+      }
+    }
   }
 
   if (opts.strict) {

@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
-import { SqliteStore } from "@fragua/store";
+import { ConcurrencyError, SqliteStore } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
@@ -604,6 +604,48 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     expect(finalState.metrics.activeMs).toBeGreaterThanOrEqual(5);
 
     store2.close();
+    r.cleanup();
+  });
+
+  test("an immediate pause whose fact loses its OCC race retries instead of stranding the run", async () => {
+    // Pre-fix the shouldPause arm ignored tryAppendFact's result: a
+    // ConcurrencyError silently dropped fact.run_paused AND exited the
+    // executor — a `running` zombie with the pause intent still queued.
+    // Now it routes through the same conflict controller as the cancel arm.
+    const r = makeRig(`name: pauseocc
+steps:
+  start:
+    type: llm
+    prompt: x
+    next: exit
+`);
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "step",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "pauseocc1");
+    r.store.appendIntent("pauseocc1", { type: "intent.pause_requested", payload: {} });
+
+    // One transient conflict: the first fact.run_paused append loses its
+    // race, the retry on the next turn lands. (Three consecutive conflicts
+    // would legitimately escalate to an occ_exhausted halt — also not a
+    // zombie, but a different arm.)
+    const origAppend = r.store.appendFact.bind(r.store);
+    let conflicts = 0;
+    r.store.appendFact = (runId, facts, version, appendOpts) => {
+      if (facts[0]?.type === "fact.run_paused" && conflicts < 1) {
+        conflicts++;
+        throw new ConcurrencyError(version, version + 1);
+      }
+      return origAppend(runId, facts, version, appendOpts);
+    };
+
+    await runUntilSettled(r.store, r.dispatcher, "pauseocc1");
+    const s = r.store.getState("pauseocc1")!;
+    expect(conflicts).toBe(1);
+    expect(s.status).toBe("paused");
     r.cleanup();
   });
 });

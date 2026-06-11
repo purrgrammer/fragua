@@ -330,6 +330,10 @@ export interface Message {
   content: AgentMessage;
   nodeId: string | null;
   iteration: number;
+  /** Goal-gate re-entry epoch (mirrors fact.*.payload.pass). Threadless
+   * resume hydration scopes to (nodeId, iteration, pass) so a fresh gate
+   * pass starts with a clean transcript. 0 for never-retargeted runs. */
+  pass: number;
 }
 
 /** Wire-shape projection of `Message` for the web transcript endpoint.
@@ -341,6 +345,7 @@ export interface NarrowMessage {
   content: AgentMessage;
   nodeId: string | null;
   iteration: number;
+  pass: number;
 }
 
 export interface ArtifactScope {
@@ -397,6 +402,11 @@ export interface FactAppendResult {
   committed: true;
   newVersion: number;
   seqs: number[];
+  /** The post-commit `run_state` projection, folded inside the same transaction.
+   * Lets a caller that needs fresh state right after a commit (e.g. the fan-out
+   * budget gate) reuse it instead of issuing a redundant `getState`. Optional so
+   * non-Sqlite implementers needn't compute it. */
+  state?: RunState;
 }
 
 export interface AppendFactOpts {
@@ -701,16 +711,18 @@ export interface IEventWriter {
 
   // ─── Messages (write)
   /**
-   * Append a message under `(run, node, iteration)`. Returns the assigned
-   * ordinal. Pass `opts.dedup: true` to enable replay-safe dedup: a
-   * subsequent call with byte-identical content at the same scope returns
-   * the existing ordinal instead of minting a duplicate row. Default OFF
-   * because agent transcripts carry per-call timestamps that differ even
-   * when the semantic message is the same; opting in is the caller's job.
+   * Append a message under `(run, node, iteration, pass)`. Returns the
+   * assigned ordinal. `pass` defaults to 0 (the goal-gate re-entry epoch —
+   * the dispatcher stamps it; direct callers without gate context omit it).
+   * Pass `opts.dedup: true` to enable replay-safe dedup: a subsequent call
+   * with byte-identical content at the same scope returns the existing
+   * ordinal instead of minting a duplicate row. Default OFF because agent
+   * transcripts carry per-call timestamps that differ even when the
+   * semantic message is the same; opting in is the caller's job.
    */
   appendMessage(
     runId: string,
-    row: Omit<Message, "runId" | "ordinal">,
+    row: Omit<Message, "runId" | "ordinal" | "pass"> & { pass?: number },
     opts?: { dedup?: boolean },
   ): {
     ordinal: number;
@@ -768,6 +780,14 @@ export interface IEventReader {
    * key — cheap even on long-lived runs.
    */
   getLatestEvents(runId: string, limit: number): StoredEvent[];
+  /**
+   * The TYPE of the most recent node-lifecycle fact per node
+   * (`NODE_LIFECYCLE_FACT_TYPES`: dispatch_started / node_started /
+   * node_completed / node_aborted). One windowed SQL pass — the fan-out
+   * recovery scan reads this instead of materialising the full event log
+   * every dispatch turn.
+   */
+  getLatestLifecycleByNode(runId: string): Array<{ nodeId: string; type: string }>;
   /**
    * Forward direction of the global SSE feed: cross-run, ascending
    * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`
@@ -997,6 +1017,11 @@ export interface Schedule {
   lastFireAt: number | null;
   lastRunId: string | null;
   pausedAt: number | null;
+  /** Why the schedule was auto-paused (the latest
+   * `fact.schedule_invalid_workflow` audit error). Populated only while
+   * `pausedAt` is set — a stale error on a since-resumed schedule is noise.
+   * `null` for operator pauses with no recorded cause. */
+  lastError: string | null;
   createdAt: number;
 }
 

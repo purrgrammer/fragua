@@ -21,12 +21,17 @@ const nat = fc.nat({ max: 1_000_000 });
 const usd = fc.double({ min: 0, max: 100, noNaN: true });
 
 const arbUsage = fc.record({
-  tokens: nat,
-  costUsd: usd,
-  inputTokens: nat,
-  outputTokens: nat,
-  cacheReadTokens: nat,
-  cacheWriteTokens: nat,
+  turnBilled: nat,
+  totalCostUsd: usd,
+  totalInputTokens: nat,
+  totalOutputTokens: nat,
+  totalCacheReadTokens: nat,
+  totalCacheWriteTokens: nat,
+  totalInputCostUsd: usd,
+  totalOutputCostUsd: usd,
+  totalCacheReadCostUsd: usd,
+  totalCacheWriteCostUsd: usd,
+  lastModel: fc.option(fc.string({ maxLength: 12 }), { nil: undefined }),
 });
 
 const arbPauseBreach = fc.record({

@@ -50,12 +50,24 @@ export interface ToolStream {
   stderr: string;
 }
 
+/** Map key for a streaming buffer whose frame carried no nodeId. */
+export const UNSCOPED_NODE = "\u0000unscoped";
+
 export interface UseRunLiveResult {
   /** All persisted messages for the run, ordered by ordinal. */
   messages: RunMessageRow[];
   /** In-flight assistant message being streamed, or `null` when the
-   * agent is idle or between turns. */
+   * agent is idle or between turns. Back-compat single-buffer view: the
+   * most-recently-opened in-flight buffer. Prefer `streamingByNode` —
+   * concurrent fan-out branches each stream their own buffer at once, and
+   * this single field can only surface one of them. */
   streaming: StreamingMessage | null;
+  /** In-flight assistant buffers keyed by nodeId. A `type: parallel`
+   * fan-out runs K branches concurrently, each emitting its own
+   * `agent.message_start` → deltas → `agent.message_end` interleaved on
+   * the wire; keying by node keeps each branch's buffer independent
+   * instead of clobbering a single shared one. */
+  streamingByNode: ReadonlyMap<string, StreamingMessage>;
   /** Per-nodeId in-flight tool output. Empty entries are pruned. */
   toolStreams: ReadonlyMap<string, ToolStream>;
   /** Connection status across bootstrap + stream. */
@@ -105,7 +117,7 @@ const MESSAGE_SIGNAL_TYPES = new Set<string>(["agent.message_end", "fact.message
 
 export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOptions = {}): UseRunLiveResult {
   const [messages, setMessages] = useState<RunMessageRow[]>([]);
-  const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
+  const [streamingByNode, setStreamingByNode] = useState<ReadonlyMap<string, StreamingMessage>>(() => new Map());
   const [toolStreams, setToolStreams] = useState<ReadonlyMap<string, ToolStream>>(() => new Map());
   const [totalEvents, setTotalEvents] = useState(0);
   const [liveCostFrames, setLiveCostFrames] = useState<LiveCostFrame[]>([]);
@@ -121,7 +133,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   // see the comment block on the URL gate below for rationale.
   useEffect(() => {
     setMessages([]);
-    setStreaming(null);
+    setStreamingByNode(new Map());
     setToolStreams(new Map());
     setTotalEvents(0);
     setLiveCostFrames([]);
@@ -239,16 +251,23 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         }, 30);
       }
 
-      // Streaming buffer: open on assistant message_start, accumulate
-      // deltas, clear on message_end (the persisted row replaces it).
+      // Streaming buffers, keyed by nodeId: open on assistant
+      // message_start, accumulate deltas, clear on message_end (the
+      // persisted row replaces it). Keying by node is what lets the K
+      // concurrent branches of a `type: parallel` fan-out each stream
+      // their own buffer — a single shared buffer would have one branch's
+      // message_start clobber another's, and one branch's message_end
+      // null out a sibling mid-stream.
       if (type === "agent.message_start") {
         if (payload?.["role"] === "assistant") {
-          setStreaming({ nodeId, blocks: [] });
+          const key = nodeId ?? UNSCOPED_NODE;
+          setStreamingByNode((prev) => mapSet(prev, key, { nodeId, blocks: [] }));
         }
         return;
       }
       if (type === "agent.message_end") {
-        setStreaming(null);
+        const key = nodeId ?? UNSCOPED_NODE;
+        setStreamingByNode((prev) => mapDelete(prev, key));
         return;
       }
       // `fact.message_appended` for an assistant row fires a few events
@@ -259,14 +278,15 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       // "Bash · Running" alongside the streaming-buffer raw-JSON pending
       // dump). Drop the buffer as soon as its persisted row lands.
       if (type === "fact.message_appended" && payload?.["role"] === "assistant" && nodeId !== null) {
-        setStreaming((prev) => (prev?.nodeId === nodeId ? null : prev));
+        setStreamingByNode((prev) => mapDelete(prev, nodeId));
       }
       if (type === "llm.text_delta" || type === "llm.thinking_delta" || type === "llm.toolcall_delta") {
         const delta = typeof payload?.["delta"] === "string" ? (payload["delta"] as string) : "";
         const index = typeof payload?.["content_index"] === "number" ? (payload["content_index"] as number) : 0;
         const kind: StreamingBlock["type"] =
           type === "llm.text_delta" ? "text" : type === "llm.thinking_delta" ? "thinking" : "toolCall";
-        setStreaming((prev) => applyDelta(prev, nodeId, kind, index, delta));
+        const key = nodeId ?? UNSCOPED_NODE;
+        setStreamingByNode((prev) => mapSet(prev, key, applyDelta(prev.get(key) ?? null, nodeId, kind, index, delta)));
       }
 
       // Tool node (tool node) output streaming. Each
@@ -314,6 +334,15 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     [liveCostFrames, opts.sinceSeq],
   );
 
+  // Back-compat single-buffer view: the most-recently-opened in-flight
+  // buffer (last key in insertion order). Consumers that render every
+  // concurrent branch use `streamingByNode` directly.
+  const streaming = useMemo<StreamingMessage | null>(() => {
+    let last: StreamingMessage | null = null;
+    for (const v of streamingByNode.values()) last = v;
+    return last;
+  }, [streamingByNode]);
+
   // Project the SSE primitive's status into the RunLiveStatus shape
   // callers consume — `loading` while bootstrap pending, `closed` for
   // terminal runs, otherwise the raw SSE status.
@@ -329,7 +358,28 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
             ? "loading"
             : sseStatus;
 
-  return { messages, streaming, toolStreams, status, totalEvents, liveCost, detailOverlay };
+  return { messages, streaming, streamingByNode, toolStreams, status, totalEvents, liveCost, detailOverlay };
+}
+
+/** Immutably set a key in a streaming-buffer map (fresh top-level Map so
+ * React's setState reference-check schedules a render). */
+function mapSet(
+  prev: ReadonlyMap<string, StreamingMessage>,
+  key: string,
+  value: StreamingMessage,
+): ReadonlyMap<string, StreamingMessage> {
+  const next = new Map(prev);
+  next.set(key, value);
+  return next;
+}
+
+/** Immutably remove a key; returns `prev` unchanged when absent so an
+ * unrelated nodeId's frame doesn't churn the map. */
+function mapDelete(prev: ReadonlyMap<string, StreamingMessage>, key: string): ReadonlyMap<string, StreamingMessage> {
+  if (!prev.has(key)) return prev;
+  const next = new Map(prev);
+  next.delete(key);
+  return next;
 }
 
 /** Append a `tool.output_chunk` slice into the per-node stdout/stderr

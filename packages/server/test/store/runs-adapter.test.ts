@@ -129,14 +129,16 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
       },
     ];
     const nodes = deriveNodeStates(events);
-    expect(nodes).toEqual([{ nodeId: "lint", iteration: 0, state: "failed", lastEventSeq: 2 }]);
+    expect(nodes).toEqual([{ nodeId: "lint", iteration: 0, pass: 0, state: "failed", lastEventSeq: 2 }]);
   });
 
   test("node_completed without outcomeStatus → state: completed (back-compat)", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_completed", { nodeId: "plan", iteration: 0, nextNode: "implement" }), seq: 5 },
     ];
-    expect(deriveNodeStates(events)).toEqual([{ nodeId: "plan", iteration: 0, state: "completed", lastEventSeq: 5 }]);
+    expect(deriveNodeStates(events)).toEqual([
+      { nodeId: "plan", iteration: 0, pass: 0, state: "completed", lastEventSeq: 5 },
+    ]);
   });
 
   test("node_completed with outcomeStatus=success → state: completed", () => {
@@ -157,6 +159,43 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
     expect(deriveNodeStates(events)[0]?.state).toBe("failed");
   });
 
+  test("fan-out branches mid-flight project as running (dispatch_started, no completion yet)", () => {
+    // The executor emits fact.dispatch_started per branch when a `parallel`
+    // node fans out (no per-branch node_started/node_completed yet). The
+    // read-plane must show each branch "running" so the UI glows them
+    // concurrently — not pending/absent until they complete.
+    const events: StoredEvent[] = [
+      { ...ev("fact.dispatch_started", { nodeId: "review", iteration: 0, resumeOf: "fresh" }), seq: 1 },
+      { ...ev("fact.fanout_started", { nodeId: "review", iteration: 0, branches: ["security", "quality"] }), seq: 2 },
+      { ...ev("fact.dispatch_started", { nodeId: "security", iteration: 0, resumeOf: "fresh" }), seq: 3 },
+      { ...ev("fact.dispatch_started", { nodeId: "quality", iteration: 0, resumeOf: "fresh" }), seq: 4 },
+      // security finished; quality still in flight.
+      { ...ev("fact.node_completed", { nodeId: "security", iteration: 0, nextNode: "synth" }), seq: 5 },
+    ];
+    const byId = new Map(deriveNodeStates(events).map((n) => [n.nodeId, n.state]));
+    expect(byId.get("security")).toBe("completed");
+    expect(byId.get("quality")).toBe("running"); // still in flight → glows
+    expect(byId.get("review")).toBe("running"); // the parallel node is pinned-active
+  });
+
+  test("a branch re-dispatched after an abort projects as running (fresh dispatch_started fact)", () => {
+    // A branch aborted (harness shutdown / operator pause) and resumed by the
+    // sweep emits NO dispatch_started of its own — so the executor commits one on
+    // re-dispatch, making the failed→running transition a durable fact rather than
+    // an inference. Its eventual node_completed still wins.
+    const reRunning: StoredEvent[] = [
+      { ...ev("fact.dispatch_started", { nodeId: "verify", iteration: 0, resumeOf: "fresh" }), seq: 1 },
+      { ...ev("fact.node_aborted", { nodeId: "verify", iteration: 0, cause: "aborted" }), seq: 2 },
+      { ...ev("fact.dispatch_started", { nodeId: "verify", iteration: 0, resumeOf: "paused" }), seq: 3 },
+    ];
+    expect(deriveNodeStates(reRunning)[0]?.state).toBe("running");
+    const completed: StoredEvent[] = [
+      ...reRunning,
+      { ...ev("fact.node_completed", { nodeId: "verify", iteration: 0, nextNode: "synth" }), seq: 4 },
+    ];
+    expect(deriveNodeStates(completed)[0]?.state).toBe("completed");
+  });
+
   test("loop iterations produce one entry per (nodeId, iteration)", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "verify", iteration: 0 }), seq: 1 },
@@ -172,9 +211,52 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
     ];
     const nodes = deriveNodeStates(events);
     expect(nodes).toEqual([
-      { nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 2 },
-      { nodeId: "verify", iteration: 1, state: "completed", lastEventSeq: 4 },
+      { nodeId: "verify", iteration: 0, pass: 0, state: "failed", lastEventSeq: 2 },
+      { nodeId: "verify", iteration: 1, pass: 0, state: "completed", lastEventSeq: 4 },
     ]);
+  });
+
+  test("goal-gate re-entry: each pass keeps its own entry (no iteration-0 collapse)", () => {
+    // A gate retarget resets per-node retry counters, so both passes run at
+    // iteration 0 — pre-fix the second pass's facts silently overwrote the
+    // first pass's entries (and a fan-out re-seed left phantom 'running'
+    // rows). The `pass` epoch keys them apart.
+    const events: StoredEvent[] = [
+      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, branches: ["a", "b"] }), seq: 1 },
+      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, nextNode: "synth" }), seq: 2 },
+      { ...ev("fact.node_completed", { nodeId: "b", iteration: 0, nextNode: "synth" }), seq: 3 },
+      { ...ev("fact.fanout_joined", { nodeId: "fan", iteration: 0, nextNode: "synth", branchesCompleted: 2 }), seq: 4 },
+      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, pass: 1, branches: ["a", "b"] }), seq: 5 },
+      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, pass: 1, nextNode: "synth" }), seq: 6 },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(new Set(nodes.map((n) => `${n.nodeId}#${n.pass}.${n.iteration}=${n.state}`))).toEqual(
+      new Set([
+        "fan#0.0=completed",
+        "a#0.0=completed",
+        "b#0.0=completed",
+        "fan#1.0=running",
+        "a#1.0=completed",
+        "b#1.0=running",
+      ]),
+    );
+  });
+
+  test("the parallel node itself runs for the whole region and completes at the join", () => {
+    // It never emits node_started/node_completed of its own (current_node
+    // stays pinned to it; the barrier advances it) — pre-fix it had no
+    // closing transition and rendered "running" forever after the join.
+    const events: StoredEvent[] = [
+      { ...ev("fact.fanout_started", { nodeId: "fan", iteration: 0, branches: ["a", "b"] }), seq: 1 },
+    ];
+    expect(new Map(deriveNodeStates(events).map((n) => [n.nodeId, n.state])).get("fan")).toBe("running");
+    const joined: StoredEvent[] = [
+      ...events,
+      { ...ev("fact.node_completed", { nodeId: "a", iteration: 0, nextNode: "synth" }), seq: 2 },
+      { ...ev("fact.node_completed", { nodeId: "b", iteration: 0, nextNode: "synth" }), seq: 3 },
+      { ...ev("fact.fanout_joined", { nodeId: "fan", iteration: 0, nextNode: "synth", branchesCompleted: 2 }), seq: 4 },
+    ];
+    expect(new Map(deriveNodeStates(joined).map((n) => [n.nodeId, n.state])).get("fan")).toBe("completed");
   });
 });
 
@@ -193,18 +275,18 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
       },
     ];
     expect(deriveSelectedEdges(events)).toEqual([
-      { from: "start", to: "lint", iteration: 0 },
-      { from: "lint", to: "done", iteration: 0 },
+      { from: "start", to: "lint", iteration: 0, pass: 0 },
+      { from: "lint", to: "done", iteration: 0, pass: 0 },
     ]);
   });
 
   test("non-edge.selected events are ignored", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "x", iteration: 0 }), seq: 1 },
-      { ...ev("edge.selected", { from: "x", to: "y", iteration: 0 }), seq: 2 },
+      { ...ev("edge.selected", { from: "x", to: "y", iteration: 0, pass: 0 }), seq: 2 },
       { ...ev("fact.run_halted", { reason: "error" }), seq: 3 },
     ];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "x", to: "y", iteration: 0 }]);
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "x", to: "y", iteration: 0, pass: 0 }]);
   });
 
   test("drops edge.selected with non-string from/to", () => {
@@ -217,8 +299,8 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
 
   test("back-edge re-traversals carry distinct iterations", () => {
     const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 0 }), seq: 1 },
-      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 1 }), seq: 2 },
+      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 0, pass: 0 }), seq: 1 },
+      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 1, pass: 0 }), seq: 2 },
     ];
     const edges = deriveSelectedEdges(events);
     expect(edges).toHaveLength(2);
@@ -228,7 +310,7 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
 
   test("missing iteration on payload defaults to 0 (back-compat for older event logs)", () => {
     const events: StoredEvent[] = [{ ...ev("edge.selected", { from: "a", to: "b" }), seq: 1 }];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "a", to: "b", iteration: 0 }]);
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "a", to: "b", iteration: 0, pass: 0 }]);
   });
 
   // The bug: the executor used to record edge.selected at edge-pick time,
@@ -257,8 +339,8 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
       // First entry rewritten: from review -> done to review -> audit
       // (the actual traversal). One entry per gate visit is preserved
       // so the synthetic retarget edge can count visits.
-      { from: "review", to: "audit", iteration: 0 },
-      { from: "review", to: "propose_patch", iteration: 0 },
+      { from: "review", to: "audit", iteration: 0, pass: 0 },
+      { from: "review", to: "propose_patch", iteration: 0, pass: 0 },
     ]);
   });
 
@@ -266,10 +348,10 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
     // A retarget on a different gate must not silently rewrite an
     // unrelated node's edge selection.
     const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "diff", to: "review", iteration: 0 }), seq: 1 },
+      { ...ev("edge.selected", { from: "diff", to: "review", iteration: 0, pass: 0 }), seq: 1 },
       { ...ev("goal_gate.retarget", { failedGate: "review", target: "audit", retries: 1 }), seq: 2 },
     ];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "diff", to: "review", iteration: 0 }]);
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "diff", to: "review", iteration: 0, pass: 0 }]);
   });
 });
 
@@ -549,9 +631,9 @@ describe("runStateToDetail \u2014 lastEventSeq", () => {
     const state = makeState({ lastAppliedSeq: 1 });
     const events: StoredEvent[] = [
       evWithSeq(1, "fact.run_started", { startNode: "start" }),
-      evWithSeq(3, "edge.selected", { from: "start", to: "collect", iteration: 0 }),
-      evWithSeq(69, "edge.selected", { from: "collect", to: "analyze", iteration: 0 }),
-      evWithSeq(626, "edge.selected", { from: "analyze", to: "done", iteration: 0 }),
+      evWithSeq(3, "edge.selected", { from: "start", to: "collect", iteration: 0, pass: 0 }),
+      evWithSeq(69, "edge.selected", { from: "collect", to: "analyze", iteration: 0, pass: 0 }),
+      evWithSeq(626, "edge.selected", { from: "analyze", to: "done", iteration: 0, pass: 0 }),
       evWithSeq(628, "fact.run_completed", { finalNode: "done" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
@@ -590,5 +672,50 @@ describe("runStateToDetail \u2014 worktreePath", () => {
     const state = makeState({ cwd: null });
     const detail = runStateToDetail(state, [], undefined, undefined);
     expect(detail.worktreePath).toBeUndefined();
+  });
+});
+
+describe("runStateToDetail — served fan-out topology", () => {
+  const FANOUT_SRC = `name: topo
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a_scan, b_scan], next: synth }
+  a_scan: { type: llm, prompt: x, next: a_verify }
+  a_verify: { type: llm, prompt: x, next: synth }
+  b_scan: { type: llm, prompt: x, next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+
+  test("a parallel workflow serves parentOf/branchOf/orderOf/nodeTypes on the detail", () => {
+    // Distinct sha per test: the topology memo keys on workflowSha (a content
+    // hash in production — fabricated here, so it must not collide).
+    const detail = runStateToDetail(makeState({ workflowSha: "wf-topo-parallel" }), [], undefined, FANOUT_SRC);
+    expect(detail.fanout).toBeDefined();
+    expect(detail.fanout?.parentOf).toEqual({ a_scan: "fan", a_verify: "fan", b_scan: "fan" });
+    expect(detail.fanout?.branchOf).toEqual({ a_scan: "a_scan", a_verify: "a_scan", b_scan: "b_scan" });
+    expect(detail.fanout?.orderOf).toEqual({ a_scan: 0, b_scan: 1 });
+    expect(detail.fanout?.nodeTypes?.["fan"]).toBe("parallel");
+    expect(detail.fanout?.nodeTypes?.["a_scan"]).toBe("llm");
+  });
+
+  test("a workflow with no parallel node still serves nodeTypes (empty branch maps)", () => {
+    // Type glyphs and tool-row affordances read nodeTypes on EVERY run, not
+    // just fan-out ones — the field is unconditional for parseable sources.
+    const detail = runStateToDetail(
+      makeState({ workflowSha: "wf-topo-linear" }),
+      [],
+      undefined,
+      "name: t\nsteps:\n  w: {type: llm, prompt: x, next: exit}\n",
+    );
+    expect(detail.fanout?.nodeTypes?.["w"]).toBe("llm");
+    expect(detail.fanout?.parentOf).toEqual({});
+    expect(detail.fanout?.branchOf).toEqual({});
+    expect(detail.fanout?.orderOf).toEqual({});
+  });
+
+  test("no source → no topology (and no throw)", () => {
+    const detail = runStateToDetail(makeState(), [], undefined, undefined);
+    expect(detail.fanout).toBeUndefined();
   });
 });

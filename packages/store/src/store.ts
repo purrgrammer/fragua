@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
-import { VALID_WRITERS } from "@fragua/types";
+import { NODE_LIFECYCLE_FACT_TYPES, VALID_WRITERS } from "@fragua/types";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -88,6 +88,7 @@ import {
   selectGlobalEventsForward,
   selectGlobalEventsLatest,
   selectLatestEvents,
+  selectLatestLifecycleByNode,
   selectNextPendingIntent,
   selectOrphanSideEffects,
   selectSnapshotEvents,
@@ -182,6 +183,7 @@ import {
   type ScheduleRow,
   selectAllSchedules,
   selectDueSchedules,
+  selectLatestScheduleError,
   selectSchedule,
   selectScheduleRuns,
   selectSchedulesByCwd,
@@ -269,6 +271,7 @@ function rowToMessage(r: {
   content: string;
   node_id: string | null;
   iteration: number;
+  pass: number;
 }): Message {
   return {
     runId: r.run_id,
@@ -276,6 +279,7 @@ function rowToMessage(r: {
     content: JSON.parse(r.content),
     nodeId: r.node_id,
     iteration: r.iteration,
+    pass: r.pass,
   };
 }
 
@@ -368,6 +372,7 @@ function rowToSchedule(row: ScheduleRow): Schedule {
     lastFireAt: row.last_fire_at,
     lastRunId: row.last_run_id,
     pausedAt: row.paused_at,
+    lastError: null,
     createdAt: row.created_at,
   };
 }
@@ -507,6 +512,7 @@ export class SqliteStore implements IEventStore {
     const ts = this.now();
     const seqs: number[] = [];
     let newVersion = 0;
+    let committedState: RunState | undefined;
     const startAt = performance.now();
 
     // Pre-serialise outputs payloads OUTSIDE the transaction (invariant I1:
@@ -582,6 +588,7 @@ export class SqliteStore implements IEventStore {
 
         this.writeProjection(state);
         newVersion = state.version;
+        committedState = state;
       });
       this.metrics.recordWrite(performance.now() - startAt, "fact");
     } catch (err) {
@@ -589,7 +596,7 @@ export class SqliteStore implements IEventStore {
       throw err;
     }
 
-    return { committed: true, newVersion, seqs };
+    return { committed: true, newVersion, seqs, ...(committedState !== undefined ? { state: committedState } : {}) };
   }
 
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult {
@@ -841,6 +848,10 @@ export class SqliteStore implements IEventStore {
     return selectLatestEvents(this.db, runId, limit).map(rowToStoredEvent);
   }
 
+  getLatestLifecycleByNode(runId: string): Array<{ nodeId: string; type: string }> {
+    return selectLatestLifecycleByNode(this.db, runId, NODE_LIFECYCLE_FACT_TYPES);
+  }
+
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[] {
     return selectGlobalEventsForward(this.db, opts).map(rowToStoredEvent);
   }
@@ -883,7 +894,7 @@ export class SqliteStore implements IEventStore {
 
   appendMessage(
     runId: string,
-    row: Omit<Message, "runId" | "ordinal">,
+    row: Omit<Message, "runId" | "ordinal" | "pass"> & { pass?: number },
     opts?: { dedup?: boolean },
   ): { ordinal: number } {
     // Pre-check before entering the transaction so the caller sees a typed
@@ -914,7 +925,14 @@ export class SqliteStore implements IEventStore {
       // falsely allow them depending on timing. Handler-level
       // idempotency is the correct contract for those messages.
       if (dedup) {
-        const existing = selectMessageByDedup(this.db, runId, row.nodeId as string, iteration, contentHash);
+        const existing = selectMessageByDedup(
+          this.db,
+          runId,
+          row.nodeId as string,
+          iteration,
+          row.pass ?? 0,
+          contentHash,
+        );
         if (existing != null) {
           ordinal = existing.ordinal;
           return;
@@ -927,6 +945,7 @@ export class SqliteStore implements IEventStore {
         content: serialized,
         nodeId: row.nodeId,
         iteration,
+        pass: row.pass ?? 0,
         contentHash,
       });
       // Signal the per-run SSE stream that a new message row landed, so
@@ -969,6 +988,7 @@ export class SqliteStore implements IEventStore {
       content: JSON.parse(r.content),
       nodeId: r.node_id,
       iteration: r.iteration,
+      pass: r.pass,
     }));
   }
 
@@ -1360,18 +1380,29 @@ export class SqliteStore implements IEventStore {
       lastFireAt: null,
       lastRunId: null,
       pausedAt: null,
+      lastError: null,
       createdAt: now,
     };
   }
 
   getSchedule(id: string): Schedule | null {
     const row = selectSchedule(this.db, id);
-    return row == null ? null : rowToSchedule(row);
+    return row == null ? null : this.scheduleFromRow(row);
   }
 
   listSchedules(opts?: { cwd?: string }): Schedule[] {
     const rows = opts?.cwd != null ? selectSchedulesByCwd(this.db, opts.cwd) : selectAllSchedules(this.db);
-    return rows.map(rowToSchedule);
+    return rows.map((r) => this.scheduleFromRow(r));
+  }
+
+  /** Public schedule shape + the auto-pause cause. The cause join runs only
+   * for paused rows (the dispatcher excludes paused schedules from the due
+   * scan, so the hot path never pays it). */
+  private scheduleFromRow(row: ScheduleRow): Schedule {
+    const schedule = rowToSchedule(row);
+    if (row.paused_at == null) return schedule;
+    const err = selectLatestScheduleError(this.db, row.id);
+    return err == null ? schedule : { ...schedule, lastError: err.error };
   }
 
   getDueSchedules(now: number): Schedule[] {
@@ -1733,6 +1764,7 @@ export class SqliteStore implements IEventStore {
             content: scrubJsonStrings(m.content, registry, scrubOpts),
             nodeId: m.nodeId,
             iteration: m.iteration,
+            pass: m.pass,
           })),
         ),
       },
@@ -1838,6 +1870,8 @@ export class SqliteStore implements IEventStore {
         content: unknown;
         nodeId: string | null;
         iteration: number;
+        /** Absent in bundles exported before schema v4 — import defaults to 0. */
+        pass?: number;
       }[];
       const artData = byName.get(runArtifactsPath(r.runId));
       const artifacts = (artData == null ? [] : decodeJsonl(artData)) as ArtifactListRow[];
@@ -1953,6 +1987,7 @@ export class SqliteStore implements IEventStore {
             content,
             nodeId: m.nodeId,
             iteration: m.iteration,
+            pass: m.pass,
             contentHash: sha256Hex(content),
           };
         }),
@@ -2032,6 +2067,7 @@ export class SqliteStore implements IEventStore {
               content: m.content,
               nodeId: m.nodeId,
               iteration: m.iteration,
+              pass: m.pass ?? 0,
               contentHash: m.contentHash,
             });
           }

@@ -102,6 +102,8 @@ export interface RunSummary {
 }
 
 export interface NodeState {
+  /** Goal-gate re-entry epoch. Optional: pre-pass servers omit it. */
+  pass?: number;
   nodeId: string;
   /** Loop iteration this entry describes (0 for the first dispatch, 1 for
    * the first re-entry across a backward edge or goal-gate retarget, …). A
@@ -115,9 +117,10 @@ export interface NodeState {
 /**
  * `workflowSource` is the raw workflow captured on `run.started`; absent
  * when the run predates source capture. There is intentionally NO
- * `edges` field — topology lives in the workflow source and is parsed
- * client-side by `@fragua/core`'s `parseWorkflow` so the server isn't a
- * second parser.
+ * `edges` field — graph layout topology lives in the workflow source and
+ * is parsed client-side by `@fragua/core`'s `parseWorkflow`. Fan-out
+ * grouping is the exception: the server serves it as `fanout` records so
+ * the UI can't disagree with the executor's closure walk.
  */
 /** `(from, to, iteration)` triple for an edge the executor traversed — see
  *  server's `SelectedEdge` schema. Ordered log. Multiple entries for the
@@ -126,6 +129,8 @@ export interface SelectedEdge {
   from: string;
   to: string;
   iteration: number;
+  /** Goal-gate re-entry epoch of the traversal. Optional: pre-pass servers omit it. */
+  pass?: number;
 }
 
 export interface RunDetail {
@@ -153,6 +158,16 @@ export interface RunDetail {
   nodes: NodeState[];
   selectedEdges: SelectedEdge[];
   workflowSource?: string;
+  /** Structural fan-out topology derived server-side (read-plane) from the
+   * workflow's `type: parallel` nodes. Present only when the workflow
+   * declares one. The web consumes THIS — never re-parses the YAML — so the
+   * grouping can't drift from the executor/validator closure walk. */
+  fanout?: {
+    parentOf: Record<string, string>;
+    branchOf: Record<string, string>;
+    orderOf: Record<string, number>;
+    nodeTypes: Record<string, string>;
+  };
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
@@ -302,6 +317,9 @@ export interface StepSnapshot {
    * the SQL cost-aggregate row produced by the server. Stable React key. */
   startSeq: number;
   nodeId: string;
+  /** When the node is a `type: parallel` fan-out branch, the parent
+   * parallel node's id — CostInspector nests branches under one group. */
+  parentNodeId?: string;
   iteration?: { n: number; max: number };
   /** ISO timestamp of the originating `llm.start`. The UI ticks
    * `now - startedAt` for in-flight steps before `durationMs` lands. */
@@ -957,6 +975,8 @@ export interface Schedule {
   lastFireAt: number | null;
   lastRunId: string | null;
   pausedAt: number | null;
+  /** Auto-pause cause (invalid/unresolvable workflow); only set while paused. */
+  lastError?: string | null;
   createdAt: number;
 }
 
@@ -1282,6 +1302,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     nodes?: unknown;
     selectedEdges?: unknown;
     workflowSource?: unknown;
+    fanout?: unknown;
     costUsd?: unknown;
     inputTokens?: unknown;
     outputTokens?: unknown;
@@ -1303,6 +1324,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     Array.isArray(o.nodes) &&
     Array.isArray(o.selectedEdges) &&
     (o.workflowSource === undefined || typeof o.workflowSource === "string") &&
+    (o.fanout === undefined || (typeof o.fanout === "object" && o.fanout !== null)) &&
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&

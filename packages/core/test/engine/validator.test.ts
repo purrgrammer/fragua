@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { ValidationError, validate, validateOrThrow } from "../../src/engine/validator.ts";
 import type { NodeAttrs } from "../../src/types/graph.ts";
-import { mkGraph } from "../helpers/build-graph.ts";
+import { type EdgeSpec, mkGraph } from "../helpers/build-graph.ts";
 
 function codesOf(g: Parameters<typeof validate>[0], opts?: Parameters<typeof validate>[1]): string[] {
   return validate(g, opts).map((d) => d.code);
@@ -646,5 +646,191 @@ describe("validate — W014 unknown retry preset", () => {
     });
     const diags = validate(g);
     expect(diags.filter((d) => d.code === "W014")).toHaveLength(0);
+  });
+});
+
+describe("validate — fan-out branch lints", () => {
+  // A `parallel` node fans out to branch entries and joins at `j`. Edges marked
+  // `{ fanout: true }` are the parallel→entry take-all edges; the rest is the
+  // intra-closure routing the validator's BFS walks.
+  test("E042 (write-class) is gated to llm branch nodes — a non-llm branch is not double-flagged", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["t"], join: "j" } },
+        t: { type: "tool", attrs: {} }, // no allowed_tools → writeReachableTools would return ALL write tools
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "t", { fanout: true }],
+        ["t", "j"],
+        ["j", "done"],
+      ],
+    });
+    const codes = codesOf(g);
+    expect(codes).toContain("E041"); // the non-llm branch is flagged
+    expect(codes).not.toContain("E042"); // ...and the write-class check no longer piles on
+  });
+
+  test("E040 nested parallel is not also flagged E042", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["inner"], join: "j" } },
+        inner: { type: "parallel", attrs: { branches: ["leaf"], join: "j" } },
+        leaf: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "inner", { fanout: true }],
+        ["inner", "leaf", { fanout: true }],
+        ["inner", "j"],
+        ["leaf", "j"],
+        ["j", "done"],
+      ],
+    });
+    const codes = codesOf(g);
+    expect(codes).toContain("E040"); // the nested parallel is flagged
+    expect(codes).not.toContain("E042"); // ...but not a spurious write-class error on it
+  });
+
+  test("E042 still fires for an llm branch that can reach a write-class tool", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["w"], join: "j" } },
+        w: { type: "llm", attrs: { allowed_tools: ["bash"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "w", { fanout: true }],
+        ["w", "j"],
+        ["j", "done"],
+      ],
+    });
+    expect(codesOf(g)).toContain("E042");
+  });
+
+  test("W017 warns on a cyclic branch closure that can still reach the join", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["scan"], join: "j" } },
+        scan: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        verify: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "scan", { fanout: true }],
+        ["scan", "verify"],
+        ["verify", "scan"], // back-edge — a cycle
+        ["verify", "j"], // ...but an exit to the join exists, so E039 stays quiet
+        ["j", "done"],
+      ],
+    });
+    const diags = validate(g);
+    expect(diags.map((d) => d.code)).toContain("W017");
+    expect(diags.find((d) => d.code === "W017")?.severity).toBe("warning");
+    expect(diags.filter((d) => d.code === "E039")).toHaveLength(0); // the closure CAN reach the join
+  });
+
+  test("W017 does not fire on a linear (acyclic) branch closure", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["scan"], join: "j" } },
+        scan: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        verify: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "scan", { fanout: true }],
+        ["scan", "verify"],
+        ["verify", "j"],
+        ["j", "done"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("W017");
+  });
+
+  test("E044 fires when two branches share a closure node (disjointness) — not E038", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["a", "b"], join: "j" } },
+        a: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        b: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        shared: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        j: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "a", { fanout: true }],
+        ["fan", "b", { fanout: true }],
+        ["a", "shared"],
+        ["b", "shared"], // shared sits in BOTH closures → disjointness violation
+        ["shared", "j"],
+        ["j", "done"],
+      ],
+    });
+    const diags = validate(g);
+    expect(diags.map((d) => d.code)).toContain("E044");
+    expect(diags.find((d) => d.code === "E044")?.severity).toBe("error");
+    expect(diags.filter((d) => d.code === "E038")).toHaveLength(0); // join IS defined
+  });
+
+  test("E038 fires when the join is not a defined step — distinct from the E044 disjointness code", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        fan: { type: "parallel", attrs: { branches: ["a", "b"], join: "missing" } },
+        a: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        b: { type: "llm", attrs: { allowed_tools: ["read"] } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "fan"],
+        ["fan", "a", { fanout: true }],
+        ["fan", "b", { fanout: true }],
+      ],
+    });
+    const codes = codesOf(g);
+    expect(codes).toContain("E038");
+    expect(codes).not.toContain("E044");
+  });
+
+  test("E045 fires when the serialized branch list exceeds the seed-fact payload budget", () => {
+    // ~200 × ~19 serialized bytes ≈ 3.8 KiB > the 3 KiB validator bound —
+    // `fact.fanout_started` embeds the whole list under the store's 4 KiB
+    // payload cap, so this must die at validation, not at the seed commit.
+    const branches = Array.from({ length: 200 }, (_, i) => `lens_branch_${String(i).padStart(4, "0")}`);
+    const nodes: Record<string, unknown> = {
+      s: "start",
+      fan: { type: "parallel", attrs: { branches, join: "j" } },
+      j: "llm",
+      done: "exit",
+    };
+    const edges: EdgeSpec[] = [
+      ["s", "fan"],
+      ["j", "done"],
+    ];
+    for (const b of branches) {
+      nodes[b] = { type: "llm", attrs: { allowed_tools: ["read"] } };
+      edges.push(["fan", b, { fanout: true }], [b, "j"]);
+    }
+    const g = mkGraph({ nodes: nodes as Parameters<typeof mkGraph>[0]["nodes"], edges });
+    const codes = codesOf(g);
+    expect(codes).toContain("E045");
   });
 });

@@ -24,7 +24,7 @@ export function doctorCommand(opts: DoctorOptions): Promise<number> {
     console.log(chalk.bold("fragua doctor"));
     console.log(`  store:    ${path}`);
     const contractWindow =
-      MIN_COMPATIBLE_CONTRACT_VERSION === EVENT_CONTRACT_VERSION
+      (MIN_COMPATIBLE_CONTRACT_VERSION as number) === (EVENT_CONTRACT_VERSION as number)
         ? `v${EVENT_CONTRACT_VERSION}`
         : `v${MIN_COMPATIBLE_CONTRACT_VERSION}–v${EVENT_CONTRACT_VERSION}`;
     console.log(`  engine:   ${FRAGUA_VERSION} ${chalk.dim(`(event-contract ${contractWindow})`)}`);

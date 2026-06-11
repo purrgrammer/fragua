@@ -13,7 +13,7 @@
 // handler returns.
 
 import type * as handler from "@fragua/core/handler";
-import type { FactEvent, IEventStore } from "@fragua/store";
+import { ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
 
 type SideEffectRecorder = handler.SideEffectRecorder;
 
@@ -78,7 +78,49 @@ export class CommittingRecorder implements SideEffectRecorder {
   }
 
   private commit(fact: FactEvent): void {
-    const result = this.opts.store.appendFact(this.opts.runId, [fact], this.currentVersion);
-    this.currentVersion = result.newVersion;
+    // `currentVersion` is captured at dispatch and can go stale when this is a
+    // fan-out BRANCH recorder: concurrent sibling branches advance
+    // `run_state.version` through the executor's commit lane while this branch's
+    // handler runs. A side-effect commit with the stale token would throw
+    // ConcurrencyError and abort the branch. Re-read the live version and retry
+    // the APPEND (never re-runs the side effect) — the linearization invariant
+    // (concurrency.md). On the linear path no sibling contends, so the retry
+    // never trips.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = this.opts.store.appendFact(this.opts.runId, [fact], this.currentVersion);
+        this.currentVersion = result.newVersion;
+        return;
+      } catch (err) {
+        if (!(err instanceof ConcurrencyError) || attempt >= RECORDER_COMMIT_ATTEMPTS) throw err;
+        const live = this.opts.store.getState(this.opts.runId);
+        if (live == null) throw err;
+        // The version moves under us for two reasons: a sibling branch's commit
+        // (benign — retry the append) or the run leaving `running` (operator
+        // pause/cancel, a leak-halt). Only the first may retry: the OCC throw is
+        // the fence that stops a zombie handler — one that ignored its abort and
+        // outlived a terminal — from landing side-effect facts AFTER
+        // fact.run_halted. Same status-vs-OCC split as commitFanoutFact.
+        //
+        // ACCEPTED TRADE: status is the ONLY fence — there is no dispatch-
+        // identity token, so an ORPHANED handler whose run is still `running`
+        // under a NEWER dispatch (a bailed branch outliving the bounded
+        // drain grace, or a re-claimed run after daemon-lock expiry) retries
+        // through and can interleave side-effect facts with the new
+        // dispatch's stream under the same (nodeId, iteration). The window
+        // is abort-signaled + leakGrace-bounded on the bail path; closing it
+        // fully needs a per-dispatch claim token threaded into the recorder.
+        if (live.status !== "running") throw err;
+        this.currentVersion = live.version;
+      }
+    }
   }
 }
+
+/** Bounded re-reads of the live OCC token before a recorder commit gives up —
+ * intra-run sibling contention resolves in one or two tries (single
+ * committer). Deliberately wider than the maximum fan-out concurrency (8):
+ * every concurrent sibling commit between two attempts costs one retry, so an
+ * attempts budget equal to the pool width could structurally exhaust under a
+ * full pool. */
+const RECORDER_COMMIT_ATTEMPTS = 16;

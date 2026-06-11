@@ -20,7 +20,14 @@ export interface ExplainStep {
   /** 0-based step index, matching `StepSnapshot.stepIdx`. */
   stepIdx: number;
   nodeId: string;
+  /** When this step is a `type: parallel` branch sub-node, the parent parallel
+   * node's id (from `fact.fanout_started`). Lets a renderer nest branches under
+   * their parent — mirroring the Cost tab — instead of listing them flat. Absent
+   * for non-branch steps. */
+  parentNodeId?: string;
   iteration?: { n: number; max: number };
+  /** Goal-gate re-entry epoch the step ran under. Absent ⇒ pass 0. */
+  pass?: number;
   outcome: "success" | "fail" | "unknown";
   costUsd: number;
   inputTokens: number;
@@ -55,7 +62,7 @@ export interface BudgetWarnEntry {
 export interface RunExplanation {
   runId: string;
   /** Edge path actually traversed, in traversal order. */
-  path: Array<{ from: string; to: string; iteration: number }>;
+  path: Array<{ from: string; to: string; iteration: number; pass: number }>;
   /** One entry per executed step (LLM calls + tool nodes). */
   steps: ExplainStep[];
   /** Snapshots captured during the run. */
@@ -83,6 +90,10 @@ export interface RunExplanation {
     billedTokens: number;
     durationMs?: number;
   };
+  /** Fan-out topology served on the run detail (read-plane derived) —
+   * consumers order branch rows by declared `branches:` order instead of
+   * settle order, the same structural answer the web grouping uses. */
+  fanout?: RunDetail["fanout"];
 }
 
 // ── Pure builder ──────────────────────────────────────────────────────────
@@ -101,6 +112,7 @@ export function buildExplanation(
     from: e.from,
     to: e.to,
     iteration: e.iteration,
+    pass: e.pass,
   }));
 
   const explainSteps = buildSteps(events, steps);
@@ -155,34 +167,41 @@ export function buildExplanation(
       billedTokens: totalBilledTokens,
       ...(totalDuration !== undefined ? { durationMs: totalDuration } : {}),
     },
+    ...(detail.fanout !== undefined ? { fanout: detail.fanout } : {}),
   };
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────
 
-/** Map `fact.node_completed.outcomeStatus` by `(nodeId, iteration)` from the
- * event stream, then merge onto the StepSnapshot array. */
+/** Map `fact.node_completed.outcomeStatus` by `(nodeId, pass, iteration)` from
+ * the event stream, then merge onto the StepSnapshot array. Pass-keyed: a
+ * goal-gate retarget resets per-node retry counters, so a later pass's
+ * completion at the same `(nodeId, iteration)` would otherwise overwrite the
+ * earlier pass's outcome (a failed first gate attempt rendering "success"). */
 function buildSteps(events: StoredEvent[], steps: StepSnapshot[]): ExplainStep[] {
   // Build outcome lookup from node_completed events.
   const outcomeByKey = new Map<string, "success" | "fail">();
   for (const ev of events) {
     if (ev.type !== "fact.node_completed") continue;
-    const p = ev.payload as { nodeId?: unknown; iteration?: unknown; outcomeStatus?: unknown };
+    const p = ev.payload as { nodeId?: unknown; iteration?: unknown; pass?: unknown; outcomeStatus?: unknown };
     if (typeof p.nodeId !== "string") continue;
     const iter = typeof p.iteration === "number" ? p.iteration : 0;
-    const key = `${p.nodeId}#${iter}`;
+    const pass = typeof p.pass === "number" ? p.pass : 0;
+    const key = `${p.nodeId}#${pass}.${iter}`;
     const status = p.outcomeStatus === "fail" ? "fail" : "success";
     outcomeByKey.set(key, status);
   }
 
   return steps.map((s) => {
     const iter = s.iteration?.n ?? 0;
-    const key = `${s.nodeId}#${iter}`;
+    const key = `${s.nodeId}#${s.pass ?? 0}.${iter}`;
     const outcome = outcomeByKey.get(key) ?? "unknown";
     return {
       stepIdx: s.stepIdx,
       nodeId: s.nodeId,
+      ...(s.parentNodeId !== undefined ? { parentNodeId: s.parentNodeId } : {}),
       ...(s.iteration !== undefined ? { iteration: s.iteration } : {}),
+      ...(s.pass !== undefined ? { pass: s.pass } : {}),
       outcome,
       costUsd: s.cost?.cost_usd ?? 0,
       inputTokens: s.cost?.input_tokens ?? 0,

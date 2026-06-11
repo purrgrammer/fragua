@@ -140,4 +140,33 @@ describe("schedule queries", () => {
     expect(s.nextFireAt).toBe(5_000 + HOUR_MS);
     store.close();
   });
+
+  test("lastError surfaces the latest schedule_invalid_workflow audit error while paused, never while active", () => {
+    const store = freshStore(0);
+    store.createSchedule({ id: "sch_e", workflowRef: "wf", cwd: "/r", intervalMs: HOUR_MS, intervalText: "1h" }, 0);
+
+    // Active with no audit history → null.
+    expect(store.getSchedule("sch_e")!.lastError).toBeNull();
+
+    // Dispatcher auto-pause: pause + audit event, like schedule-dispatcher does.
+    store.pauseSchedule("sch_e", 1_000);
+    store.appendDaemonEvent({
+      type: "fact.schedule_invalid_workflow",
+      payload: { scheduleId: "sch_e", error: "workflow not found: wf" },
+    });
+    store.appendDaemonEvent({
+      type: "fact.schedule_invalid_workflow",
+      payload: { scheduleId: "sch_e", error: "validation failed: E032 step has no successor" },
+    });
+    // Latest audit row wins; listSchedules carries it too.
+    expect(store.getSchedule("sch_e")!.lastError).toBe("validation failed: E032 step has no successor");
+    expect(store.listSchedules().find((s) => s.id === "sch_e")!.lastError).toBe(
+      "validation failed: E032 step has no successor",
+    );
+
+    // Resumed → the stale cause is suppressed.
+    store.resumeSchedule("sch_e", 2_000);
+    expect(store.getSchedule("sch_e")!.lastError).toBeNull();
+    store.close();
+  });
 });

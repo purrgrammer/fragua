@@ -58,7 +58,7 @@ describe("supervisor — pause-aware leak detection", () => {
     const registry = new AbortRegistry(clk.now);
     const store = makeRunningStore("r1", "sha");
     const ctrl = new AbortController();
-    registry.register("r1", ctrl);
+    registry.register("r1", ctrl, "impl", 1_000);
 
     const shutdown = new AbortController();
     const sup = startSupervisor({
@@ -69,7 +69,6 @@ describe("supervisor — pause-aware leak detection", () => {
       tickMs: 1,
       heartbeatIntervalMs: 1_000_000,
       nodeLeakGraceMs: 500,
-      handlerMaxMsFor: () => 1_000,
     });
 
     await new Promise((r) => setTimeout(r, 20));
@@ -81,42 +80,49 @@ describe("supervisor — pause-aware leak detection", () => {
     }
   });
 
-  test("trips after registry elapsed crosses maxMs + leakGrace (threshold property)", () => {
+  test("trips after registry elapsed crosses the armed deadline + leakGrace (threshold property)", () => {
     fc.assert(
-      fc.property(fc.integer({ min: 100, max: 10_000 }), fc.integer({ min: 50, max: 1_000 }), (maxMs, leakGrace) => {
-        const clk = fakeClock(0);
-        const registry = new AbortRegistry(clk.now);
-        registry.register("r", new AbortController());
+      fc.property(
+        fc.integer({ min: 100, max: 10_000 }),
+        fc.integer({ min: 50, max: 1_000 }),
+        (deadlineMs, leakGrace) => {
+          const clk = fakeClock(0);
+          const registry = new AbortRegistry(clk.now);
+          registry.register("r", new AbortController(), "n", deadlineMs);
 
-        clk.advance(maxMs + leakGrace);
-        expect((registry.elapsedMs("r") ?? 0) > maxMs + leakGrace).toBe(false);
+          clk.advance(deadlineMs + leakGrace);
+          const at = registry.liveHandlers("r")[0]!;
+          expect(at.elapsedMs > (at.deadlineMs ?? 0) + leakGrace).toBe(false);
 
-        clk.advance(1);
-        expect((registry.elapsedMs("r") ?? 0) > maxMs + leakGrace).toBe(true);
-      }),
+          clk.advance(1);
+          const past = registry.liveHandlers("r")[0]!;
+          expect(past.elapsedMs > (past.deadlineMs ?? 0) + leakGrace).toBe(true);
+        },
+      ),
     );
   });
 
-  test("cross-process reset: unregister + re-register resets the budget", () => {
+  test("cross-process reset: dispose + re-register resets the budget", () => {
     const clk = fakeClock(0);
     const registry = new AbortRegistry(clk.now);
-    registry.register("r", new AbortController());
+    const dispose = registry.register("r", new AbortController());
     clk.advance(50_000);
-    expect(registry.elapsedMs("r")).toBe(50_000);
-    registry.unregister("r");
+    expect(registry.liveHandlers("r")[0]!.elapsedMs).toBe(50_000);
+    dispose();
     clk.advance(600_000);
     registry.register("r", new AbortController());
-    expect(registry.elapsedMs("r")).toBe(0);
+    expect(registry.liveHandlers("r")[0]!.elapsedMs).toBe(0);
   });
 
-  test("does not trip a controller for a node whose handlerMaxMsFor returns undefined", async () => {
-    // Unbounded llm (max_ms=0) — the supervisor must skip the
-    // leak-trip entirely, even after arbitrarily long elapsed time.
+  test("does not trip a controller registered without a deadline (intentionally unbounded)", async () => {
+    // Unbounded llm (max_ms=0, no fan-out backstop) — invoke-handler stamps no
+    // deadline, and the supervisor must skip the leak-trip entirely, even after
+    // arbitrarily long elapsed time.
     const clk = fakeClock(1_000_000_000_000);
     const registry = new AbortRegistry(clk.now);
     const store = makeRunningStore("unbounded-1", "sha");
     const ctrl = new AbortController();
-    registry.register("unbounded-1", ctrl);
+    registry.register("unbounded-1", ctrl, "impl");
     clk.advance(10_000_000);
 
     const shutdown = new AbortController();
@@ -128,12 +134,138 @@ describe("supervisor — pause-aware leak detection", () => {
       tickMs: 1,
       heartbeatIntervalMs: 1_000_000,
       nodeLeakGraceMs: 500,
-      handlerMaxMsFor: () => undefined,
     });
 
     await new Promise((r) => setTimeout(r, 20));
     try {
       expect(ctrl.signal.aborted).toBe(false);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  /** Seed a claimed run pinned to a `parallel` node with in-flight branches. */
+  function seedFanout(store: SqliteStore, branches: string[] = ["b1"]): void {
+    const wfSrc = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
+    store.saveWorkflow("sha", "t", wfSrc, serializeGraph(parseWorkflow(wfSrc)), CURRENT_IR_VERSION);
+    store.enqueueRun({ runId: "fo", workflowSha: "sha", initialRouting: { start_node: "lenses" } });
+    store.claimNextRun(1);
+    const seed = [
+      { type: "fact.run_started" as const, payload: { workflowSha: "sha", contractVersion: 2, startNode: "lenses" } },
+      { type: "fact.fanout_started" as const, payload: { nodeId: "lenses", iteration: 0, branches } },
+    ];
+    for (const fact of seed) {
+      const v = store.getState("fo")?.version ?? 0;
+      store.appendFact("fo", [fact], v, { advanceAppliedTo: v });
+    }
+  }
+
+  test("fan-out: each branch is budgeted against its OWN armed deadline — a short branch trips while a long sibling is spared", async () => {
+    // The review's finding: the watchdog budgeted the whole set against the
+    // LONGEST branch, so a short-deadline branch evaded detection until the
+    // longest sibling expired. Both branches here registered at the same instant
+    // (identical elapsed), but only the short-deadline one must trip.
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = new SqliteStore({ path: ":memory:" });
+    closers.push(() => store.close());
+    seedFanout(store, ["short", "long"]);
+    const shortCtrl = new AbortController();
+    const longCtrl = new AbortController();
+    registry.register("fo", shortCtrl, "short", 100);
+    registry.register("fo", longCtrl, "long", 100_000);
+    clk.advance(2_000); // past short's 100ms + grace, far under long's 100_000ms
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      nodeLeakGraceMs: 500,
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(shortCtrl.signal.aborted).toBe(true); // exceeded ITS OWN deadline
+      expect(longCtrl.signal.aborted).toBe(false); // the long sibling is untouched
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  test("fan-out: a parallel node's RAISED timeout-minutes governs — no force-abort at a flat default", async () => {
+    // The review's finding: the executor armed each branch against the parallel
+    // node's own `timeout-minutes:` (45min here) while the watchdog budgeted
+    // unbounded branches against a flat 20-minute config mirror — a legitimately
+    // configured 45-minute branch was force-aborted at ~20min, re-driven, killed
+    // again, and parked via abort_loop. The armed deadline now rides the
+    // registry entry, so there is no second opinion to disagree with.
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = new SqliteStore({ path: ":memory:" });
+    closers.push(() => store.close());
+    seedFanout(store);
+    const ctrl = new AbortController();
+    const RAISED = 45 * 60_000; // what invoke-handler stamps: the parallel node's max_ms backstop
+    registry.register("fo", ctrl, "b1", RAISED);
+    clk.advance(21 * 60_000); // past the OLD 20-minute default + any grace, under 45min
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      nodeLeakGraceMs: 500,
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(ctrl.signal.aborted).toBe(false); // the author's 45min bound governs
+      clk.advance(25 * 60_000); // now past 45min + grace — the leak backstop still works
+      await new Promise((r) => setTimeout(r, 20));
+      expect(ctrl.signal.aborted).toBe(true);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  test("fan-out: an abort-ignoring branch is reclaimable at its armed backstop — never skipped", async () => {
+    // A fan-out branch ALWAYS registers with a deadline (invoke-handler passes
+    // the branch backstop as maxMsOverride even for unbounded llm branches), so
+    // a runaway branch that ignores its abort signal is reclaimed at
+    // deadline + grace rather than hanging the pool forever.
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = new SqliteStore({ path: ":memory:" });
+    closers.push(() => store.close());
+    seedFanout(store);
+    const ctrl = new AbortController();
+    registry.register("fo", ctrl, "b1", 1_000);
+    clk.advance(10_000); // past the 1000ms backstop + 500ms grace
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      nodeLeakGraceMs: 500,
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(ctrl.signal.aborted).toBe(true); // the runaway branch is reclaimed
     } finally {
       shutdown.abort();
       await sup.promise;

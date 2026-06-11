@@ -23,7 +23,6 @@
 //   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
 
-import { handlerOf, parseWorkflow } from "@fragua/core";
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import {
@@ -50,17 +49,20 @@ import { HitlStepCard } from "@/components/run-conversation/HitlStepCard";
 import { RouteToolResult } from "@/components/run-conversation/RouteToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { NodeState, RunMessageRow } from "@/lib/api";
-import type { StreamingBlock, StreamingMessage, ToolStream } from "@/lib/useRunLive";
+import type { NodeState, RunDetail, RunMessageRow } from "@/lib/api";
+import { type FanoutTopology, fanoutTopology } from "@/lib/fanout-topology";
+import { type StreamingBlock, type StreamingMessage, type ToolStream, UNSCOPED_NODE } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
 
 export interface RunConversationProps {
   messages: RunMessageRow[];
-  /** In-flight assistant message buffer from `useRunLive`. When
-   * present, renders at the tail of its node section as a pending
-   * message with a streaming shimmer. */
-  streaming?: StreamingMessage | null;
+  /** In-flight assistant buffers from `useRunLive`, keyed by nodeId.
+   * Each node section (and each fan-out branch) renders its OWN buffer at
+   * its tail — concurrent `type: parallel` branches stream at once, so a
+   * single shared buffer would clobber/interleave them. */
+  streamingByNode?: ReadonlyMap<string, StreamingMessage>;
   /** Per-node state projection from `RunDetail.nodes`, used to drive
    * the section header status dot + label. */
   nodeStates?: readonly NodeState[];
@@ -102,20 +104,21 @@ export interface RunConversationProps {
    * answered. The currently-open gate (`hitl.nodeId`) is suppressed: its
    * card takes precedence until the answer lands. */
   hitlDecisions?: Record<string, { route: string; note?: string }> | null;
-  /** Workflow YAML, used to identify tool-type nodes so we can render an
-   * empty Terminal placeholder while a tool node is running but hasn't
-   * emitted any `tool.output_chunk` yet. Without this, a tool node that
-   * sits silently for minutes (waiting on HTTP / a subprocess) shows as
-   * an empty conversation — no persisted row, no streaming buffer, no
-   * live stream. Passing the source means we can synthesize a "running"
-   * Terminal so the operator can see the run is making progress. */
-  workflowSource?: string;
+  /** Server-derived fan-out topology records (`RunDetail.fanout`). Drives
+   * branch grouping under each `type: parallel` parent, and identifies
+   * tool-type nodes so we can render an empty Terminal placeholder while
+   * a tool node is running but hasn't emitted any `tool.output_chunk`
+   * yet — without this, a tool node that sits silently for minutes shows
+   * as an empty conversation. */
+  fanout?: RunDetail["fanout"];
   className?: string;
 }
 
+const EMPTY_STREAMING: ReadonlyMap<string, StreamingMessage> = new Map();
+
 export function RunConversation({
   messages,
-  streaming = null,
+  streamingByNode = EMPTY_STREAMING,
   nodeStates,
   isLive = false,
   isPaused = false,
@@ -124,7 +127,7 @@ export function RunConversation({
   toolStreams,
   hitl = null,
   hitlDecisions = null,
-  workflowSource,
+  fanout: fanoutRecords,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -145,21 +148,42 @@ export function RunConversation({
     return map;
   }, [nodeStates]);
 
+  // Fan-out topology: branch nodeId → its `type: parallel` parent, plus
+  // each branch's declared order. Drives collapsing concurrent branches
+  // under one parent group instead of N interleaved sections.
+  const fanout = useMemo(() => fanoutTopology(fanoutRecords), [fanoutRecords]);
+
   // Group contiguous rows by nodeId. A fresh section opens whenever
   // the nodeId changes from the previous row. `null` / missing nodeIds
   // collapse into a single "(unscoped)" section — shouldn't happen
   // for agent-emitted messages but we guard defensively.
   const sections = useMemo(() => groupByNode(messages), [messages]);
-  const visibleSections = sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult"));
+  const visibleSections = useMemo(
+    () => sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult")),
+    [sections],
+  );
 
-  // The streaming buffer belongs to whichever node the last frame
-  // tagged — usually the one whose section is currently the tail.
-  // Append to that section if it exists, otherwise create a new one.
-  const streamingNodeId = streaming?.nodeId ?? null;
-  const tailSection = visibleSections[visibleSections.length - 1];
-  const tailSectionNodeId = tailSection?.nodeId ?? null;
-  const appendStreamingToTail = streaming != null && streamingNodeId != null && tailSectionNodeId === streamingNodeId;
-  const orphanStreaming = streaming != null && !appendStreamingToTail;
+  // nodeIds with a live in-flight buffer (real nodeId only; the unscoped
+  // sentinel surfaces as a null-keyed buffer handled at the tail).
+  const streamingNodeIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const buf of streamingByNode.values()) if (buf.nodeId != null) s.add(buf.nodeId);
+    return s;
+  }, [streamingByNode]);
+  // Membership-stable view of the streaming node ids: `streamingByNode` is a
+  // fresh Map on every SSE delta, but WHICH nodes are streaming only changes
+  // on message_start/message_end. Funnelling through a primitive string key
+  // gives downstream memos (branch grouping) a dep that holds per token.
+  const streamingNodeKey = useMemo(() => [...streamingNodeIds].sort().join("\n"), [streamingNodeIds]);
+  const streamingNodeIdList = useMemo<readonly string[]>(
+    () => (streamingNodeKey.length === 0 ? [] : streamingNodeKey.split("\n")),
+    [streamingNodeKey],
+  );
+  const hasSectionFor = useMemo(() => {
+    const s = new Set<string | null>();
+    for (const sec of visibleSections) s.add(sec.nodeId);
+    return s;
+  }, [visibleSections]);
 
   // In-flight tool nodes (tool node). For each entry in
   // `toolStreams` whose nodeId doesn't already have a persisted
@@ -185,24 +209,17 @@ export function RunConversation({
     return out;
   }, [toolStreams, persistedToolNodeIds]);
 
-  // Set of every tool-type nodeId in the workflow. Parsed once per source
-  // change (the source is captured at run.started and never moves during a
-  // run). Used to render an empty Terminal placeholder when a tool node is
-  // running but hasn't emitted any output yet — without this, a long-silent
-  // tool node shows as an empty conversation.
+  // Set of every tool-type nodeId in the workflow, from the already-parsed
+  // fan-out topology. Used to render an empty Terminal placeholder when a
+  // tool node is running but hasn't emitted any output yet — without this,
+  // a long-silent tool node shows as an empty conversation.
   const toolNodeIds = useMemo<ReadonlySet<string>>(() => {
-    if (!workflowSource) return EMPTY_TOOL_NODE_IDS;
-    try {
-      const g = parseWorkflow(workflowSource);
-      const out = new Set<string>();
-      for (const node of Object.values(g.nodes)) {
-        if (handlerOf(node) === "tool") out.add(node.id);
-      }
-      return out;
-    } catch {
-      return EMPTY_TOOL_NODE_IDS;
+    const out = new Set<string>();
+    for (const [id, type] of fanout.nodeTypes) {
+      if (type === "tool") out.add(id);
     }
-  }, [workflowSource]);
+    return out;
+  }, [fanout.nodeTypes]);
 
   // Tool nodes that are running but have no other representation yet:
   // no persisted message, no live `tool.output_chunk` accumulator, no
@@ -214,7 +231,6 @@ export function RunConversation({
     if (toolStreams) {
       for (const id of toolStreams.keys()) liveStreamIds.add(id);
     }
-    const streamingNode = streaming?.nodeId ?? null;
     const out: string[] = [];
     const seen = new Set<string>();
     for (const n of nodeStates) {
@@ -222,13 +238,13 @@ export function RunConversation({
       if (!toolNodeIds.has(n.nodeId)) continue;
       if (persistedToolNodeIds.has(n.nodeId)) continue;
       if (liveStreamIds.has(n.nodeId)) continue;
-      if (streamingNode === n.nodeId) continue;
+      if (streamingNodeIds.has(n.nodeId)) continue;
       if (seen.has(n.nodeId)) continue;
       seen.add(n.nodeId);
       out.push(n.nodeId);
     }
     return out;
-  }, [toolNodeIds, nodeStates, toolStreams, streaming, persistedToolNodeIds]);
+  }, [toolNodeIds, nodeStates, toolStreams, streamingNodeIds, persistedToolNodeIds]);
 
   // Decided human gates with no message rows of their own (the common
   // case — human nodes emit none) render as standalone banner sections.
@@ -270,11 +286,62 @@ export function RunConversation({
   const hasDecisions = decisionBuckets.before.length > 0 || decisionBuckets.after.size > 0;
   const sectionChrome = { stateByNodeId, isLive, isPaused };
 
+  // Collapse runs of consecutive fan-out branch sections (all branches of
+  // one `type: parallel` parent run between its fanout_started/joined, so
+  // their sections are contiguous) into a single parallel group. Normal
+  // sections pass through unchanged, carrying their original visibleSections
+  // index so decision slotting still lines up.
+  const renderItems = useMemo<RenderItem[]>(
+    () => buildRenderItems(visibleSections, fanout.parentOf),
+    [visibleSections, fanout.parentOf],
+  );
+
+  // Parents whose branches are streaming but produced no rows yet (fan-out
+  // just dispatched) — synthesize a group so they don't read as "nothing
+  // happening". Parents already rendered above are excluded.
+  const renderedParents = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of renderItems) if (it.kind === "parallel") s.add(it.parentId);
+    return s;
+  }, [renderItems]);
+  const streamingOnlyParents = useMemo(() => {
+    const parents: string[] = [];
+    for (const nid of streamingNodeIdList) {
+      const parent = fanout.parentOf.get(nid);
+      if (parent === undefined || renderedParents.has(parent) || parents.includes(parent)) continue;
+      parents.push(parent);
+    }
+    return parents;
+  }, [streamingNodeIdList, fanout.parentOf, renderedParents]);
+
+  // branchEntries re-walks every branch section's rows and re-sorts; called
+  // bare in the render map it re-ran per SSE delta for EVERY parallel group.
+  // Keyed on the membership-stable id list instead of the per-token Map, the
+  // regroup only happens when rows land or a stream starts/ends.
+  const parallelBranches = useMemo(() => {
+    const map = new Map<string, BranchEntry[]>();
+    for (const item of renderItems) {
+      if (item.kind !== "parallel") continue;
+      map.set(
+        `${item.parentId}-${item.indices[0]}`,
+        branchEntries(item.sections, item.parentId, fanout, streamingNodeIdList),
+      );
+    }
+    return map;
+  }, [renderItems, fanout, streamingNodeIdList]);
+  const liveOnlyBranches = useMemo(() => {
+    const map = new Map<string, BranchEntry[]>();
+    for (const parentId of streamingOnlyParents) {
+      map.set(parentId, branchEntries([], parentId, fanout, streamingNodeIdList));
+    }
+    return map;
+  }, [streamingOnlyParents, fanout, streamingNodeIdList]);
+
   const empty =
     !isLoading &&
     !userInput &&
     visibleSections.length === 0 &&
-    streaming == null &&
+    streamingByNode.size === 0 &&
     liveToolNodes.length === 0 &&
     placeholderToolNodes.length === 0 &&
     hitl == null &&
@@ -297,10 +364,30 @@ export function RunConversation({
             {decisionBuckets.before.map((d) => (
               <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
             ))}
-            {visibleSections.map((section, i) => {
-              const isTail = i === visibleSections.length - 1;
+            {renderItems.map((item) => {
+              if (item.kind === "parallel") {
+                return (
+                  <Fragment key={`parallel-${item.parentId}-${item.indices[0]}`}>
+                    <ParallelGroupSection
+                      parentId={item.parentId}
+                      branches={parallelBranches.get(`${item.parentId}-${item.indices[0]}`) ?? []}
+                      toolResultsById={toolResultsById}
+                      streamingByNode={streamingByNode}
+                      stateByNodeId={stateByNodeId}
+                      isLive={isLive}
+                      isPaused={isPaused}
+                    />
+                    {item.indices.flatMap((i) =>
+                      (decisionBuckets.after.get(i) ?? []).map((d) => (
+                        <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+                      )),
+                    )}
+                  </Fragment>
+                );
+              }
+              const { section, index: i } = item;
               const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
-              const showStreamHere = appendStreamingToTail && isTail;
+              const nodeStream = streamingByNode.get(section.nodeId ?? UNSCOPED_NODE);
               const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
               // The open gate's card takes precedence over its own past
               // decision (loop re-entry); suppress the banner there.
@@ -311,7 +398,7 @@ export function RunConversation({
                     {section.rows.map((row) => (
                       <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
                     ))}
-                    {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
+                    {nodeStream && <StreamingMessageRow streaming={nodeStream} />}
                     {showHitlHere && (
                       <HitlStepCard
                         runId={hitl.runId}
@@ -328,16 +415,38 @@ export function RunConversation({
                 </Fragment>
               );
             })}
-            {orphanStreaming && (
-              <NodeSection
-                nodeId={streamingNodeId}
-                state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
+            {/* Streaming buffers for nodes with no section yet: a fresh fan-out
+                whose branches are mid-first-token (grouped under the parent), or
+                a lone non-branch node streaming before its first persisted row. */}
+            {streamingOnlyParents.map((parentId) => (
+              <ParallelGroupSection
+                key={`parallel-live-${parentId}`}
+                parentId={parentId}
+                branches={liveOnlyBranches.get(parentId) ?? []}
+                toolResultsById={toolResultsById}
+                streamingByNode={streamingByNode}
+                stateByNodeId={stateByNodeId}
                 isLive={isLive}
                 isPaused={isPaused}
-              >
-                <StreamingMessageRow streaming={streaming!} />
-              </NodeSection>
-            )}
+              />
+            ))}
+            {[...streamingByNode.values()]
+              .filter((buf) => {
+                const nid = buf.nodeId;
+                if (nid == null) return !hasSectionFor.has(null);
+                return !hasSectionFor.has(nid) && !fanout.parentOf.has(nid);
+              })
+              .map((buf) => (
+                <NodeSection
+                  key={`orphan-stream-${buf.nodeId ?? "unscoped"}`}
+                  nodeId={buf.nodeId}
+                  state={buf.nodeId ? stateByNodeId.get(buf.nodeId) : undefined}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                >
+                  <StreamingMessageRow streaming={buf} />
+                </NodeSection>
+              ))}
             {hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId) && (
               <NodeSection
                 nodeId={hitl.nodeId}
@@ -435,15 +544,255 @@ function messageKey(row: RunMessageRow): string {
   return String(row.ordinal);
 }
 
+// ─── Fan-out branch grouping ────────────────────────────────────────
+
+type Fanout = FanoutTopology;
+
+type RenderItem =
+  | { kind: "node"; section: Section; index: number }
+  | { kind: "parallel"; parentId: string; sections: Section[]; indices: number[] };
+
+/** Collapse each contiguous run of fan-out branch sections (same parent)
+ * into one `parallel` render item. Non-branch sections pass through,
+ * carrying their original `visibleSections` index so decision slotting
+ * (keyed by that index) still aligns. */
+function buildRenderItems(visibleSections: Section[], parentOf: ReadonlyMap<string, string>): RenderItem[] {
+  const items: RenderItem[] = [];
+  let i = 0;
+  while (i < visibleSections.length) {
+    const sec = visibleSections[i]!;
+    const parent = sec.nodeId != null ? parentOf.get(sec.nodeId) : undefined;
+    if (parent === undefined) {
+      items.push({ kind: "node", section: sec, index: i });
+      i += 1;
+      continue;
+    }
+    const sections: Section[] = [];
+    const indices: number[] = [];
+    let j = i;
+    while (j < visibleSections.length) {
+      const s = visibleSections[j]!;
+      if (s.nodeId != null && parentOf.get(s.nodeId) === parent) {
+        sections.push(s);
+        indices.push(j);
+        j += 1;
+      } else break;
+    }
+    items.push({ kind: "parallel", parentId: parent, sections, indices });
+    i = j;
+  }
+  return items;
+}
+
+/** One member node (e.g. a `scan` or a `verify`) within a branch. */
+interface BranchNode {
+  nodeId: string;
+  rows: RunMessageRow[];
+}
+
+/** One fan-out BRANCH = its `scan → verify → …` member nodes, rendered as a
+ * mini-conversation in a single collapsible. */
+interface BranchEntry {
+  /** The branch entry (lens) id — its collapsible header + sort key. */
+  branchId: string;
+  nodes: BranchNode[];
+}
+
+/** Group a parallel group's interleaved sections into one entry PER BRANCH
+ * (a branch's scan + verify steps share a `branchOf`), each carrying its
+ * member nodes' rows in first-seen (scan → verify) order. Includes nodes that
+ * are streaming but have no persisted rows yet; orders branches by the parent's
+ * declared `branches:` order. */
+function branchEntries(
+  sections: Section[],
+  parentId: string,
+  fanout: Fanout,
+  streamingNodeIds: readonly string[],
+): BranchEntry[] {
+  const rowsByNode = new Map<string, RunMessageRow[]>();
+  const nodeOrder: string[] = [];
+  const note = (nid: string): RunMessageRow[] => {
+    let rows = rowsByNode.get(nid);
+    if (rows === undefined) {
+      rows = [];
+      rowsByNode.set(nid, rows);
+      nodeOrder.push(nid);
+    }
+    return rows;
+  };
+  for (const s of sections) {
+    if (s.nodeId == null) continue;
+    note(s.nodeId).push(...s.rows);
+  }
+  for (const nid of streamingNodeIds) {
+    if (fanout.parentOf.get(nid) === parentId) note(nid);
+  }
+  const byBranch = new Map<string, BranchNode[]>();
+  for (const nid of nodeOrder) {
+    const branch = fanout.branchOf.get(nid) ?? nid;
+    const members = byBranch.get(branch) ?? [];
+    members.push({ nodeId: nid, rows: rowsByNode.get(nid) ?? [] });
+    byBranch.set(branch, members);
+  }
+  return [...byBranch.entries()]
+    .map(([branchId, nodes]) => ({ branchId, nodes }))
+    .sort((a, b) => (fanout.orderOf.get(a.branchId) ?? 0) - (fanout.orderOf.get(b.branchId) ?? 0));
+}
+
+/** A `type: parallel` fan-out group: a parent header over a stack of
+ * per-branch collapsibles, each collapsed by default so the K concurrent
+ * branch transcripts don't interleave into one wall of text. Expanding a
+ * branch reveals its messages (+ live streaming buffer). */
+function ParallelGroupSection({
+  parentId,
+  branches,
+  toolResultsById,
+  streamingByNode,
+  stateByNodeId,
+  isLive,
+  isPaused,
+}: {
+  parentId: string;
+  branches: BranchEntry[];
+  toolResultsById: Map<string, ToolResultMessage>;
+  streamingByNode: ReadonlyMap<string, StreamingMessage>;
+  stateByNodeId: Map<string, NodeState>;
+  isLive: boolean;
+  isPaused: boolean;
+}): JSX.Element {
+  const branchStatusOf = (b: BranchEntry): NodeState["state"] | "idle" =>
+    aggregateState(b.nodes.map((n) => stateByNodeId.get(n.nodeId)?.state));
+  const groupStatus = aggregateState(branches.map(branchStatusOf));
+  return (
+    <section
+      id={`node-${parentId}`}
+      data-testid={`parallel-section-${parentId}`}
+      className="relative flex flex-col gap-3"
+    >
+      <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm">
+        <StatusDot status={groupStatus} isLive={isLive} isPaused={isPaused} />
+        <span
+          className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80"
+          title={parentId}
+        >
+          {parentId}
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sw-accent-thinking">
+          parallel · {branches.length} branches
+        </span>
+        <div className="ml-2 h-px flex-1 bg-sw-border" aria-hidden />
+      </header>
+      <div className="flex flex-col gap-2 pl-4">
+        {branches.map((b) => (
+          <BranchCollapsible
+            key={b.branchId}
+            entry={b}
+            stateByNodeId={stateByNodeId}
+            streamingByNode={streamingByNode}
+            toolResultsById={toolResultsById}
+            isLive={isLive}
+            isPaused={isPaused}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** Roll a set of member-node states into one branch/group state: running if any
+ * is running, else failed if any failed, else completed if all completed. */
+function aggregateState(states: (NodeState["state"] | "idle" | undefined)[]): NodeState["state"] | "idle" {
+  if (states.some((s) => s === "running")) return "running";
+  if (states.some((s) => s === "failed")) return "failed";
+  if (states.length > 0 && states.every((s) => s === "completed")) return "completed";
+  return "idle";
+}
+
+/** One fan-out BRANCH, collapsed by default. The header carries the branch id
+ * + rolled-up status; expanding reveals a mini-conversation — each member node
+ * (`scan`, `verify`, …) as its own node section with transcript + live stream. */
+function BranchCollapsible({
+  entry,
+  stateByNodeId,
+  streamingByNode,
+  toolResultsById,
+  isLive,
+  isPaused,
+}: {
+  entry: BranchEntry;
+  stateByNodeId: Map<string, NodeState>;
+  streamingByNode: ReadonlyMap<string, StreamingMessage>;
+  toolResultsById: Map<string, ToolResultMessage>;
+  isLive: boolean;
+  isPaused: boolean;
+}): JSX.Element {
+  const status = aggregateState(entry.nodes.map((n) => stateByNodeId.get(n.nodeId)?.state));
+  const totalRows = entry.nodes.reduce(
+    (sum, n) => sum + n.rows.filter((r) => r.content.role !== "toolResult").length,
+    0,
+  );
+  return (
+    <Collapsible
+      data-testid={`branch-${entry.branchId}`}
+      className="group/branch rounded-md border border-sw-border bg-sw-surface/40"
+    >
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sw-surface/60">
+        <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
+        <span className="font-mono text-[11px] font-semibold tracking-[0.04em] text-sw-text/90" title={entry.branchId}>
+          {entry.branchId}
+        </span>
+        {entry.nodes.length > 1 && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+            {entry.nodes.length} steps
+          </span>
+        )}
+        <AnimatedNumber value={totalRows} className="ml-auto font-mono text-[10px] text-sw-muted tabular-nums" />
+        <span className="font-mono text-[10px] opacity-60 transition group-data-[state=open]/branch:rotate-180">▾</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-2 border-t border-sw-border px-3 py-3 pl-3">
+        {entry.nodes.map((m) => {
+          const nodeStream = streamingByNode.get(m.nodeId);
+          return (
+            <NodeSection
+              key={m.nodeId}
+              nodeId={m.nodeId}
+              state={stateByNodeId.get(m.nodeId)}
+              isLive={isLive}
+              isPaused={isPaused}
+              staticHeader
+            >
+              {m.rows.map((row) => (
+                <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
+              ))}
+              {nodeStream && <StreamingMessageRow streaming={nodeStream} />}
+            </NodeSection>
+          );
+        })}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 interface NodeSectionProps {
   nodeId: string | null;
   state?: NodeState;
   isLive: boolean;
   isPaused: boolean;
   children: ReactNode;
+  /** Render the header static (not sticky). Used for member-node sections
+   * nested inside a fan-out branch collapsible — a sticky header inside the
+   * scroll container would pin and overlap as you scroll the branch. */
+  staticHeader?: boolean;
 }
 
-function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionProps): JSX.Element {
+function NodeSection({
+  nodeId,
+  state,
+  isLive,
+  isPaused,
+  children,
+  staticHeader = false,
+}: NodeSectionProps): JSX.Element {
   const label = nodeId ?? "unscoped";
   const status: NodeState["state"] | "idle" = state?.state ?? "idle";
   return (
@@ -452,7 +801,12 @@ function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionP
       data-testid={nodeId ? `node-section-${nodeId}` : "node-section-unscoped"}
       className="relative flex flex-col gap-3"
     >
-      <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm">
+      <header
+        className={cn(
+          "z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm",
+          !staticHeader && "sticky top-0",
+        )}
+      >
         <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
         <span
           className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80"
@@ -682,8 +1036,6 @@ function ToolNodePendingRow({ testid }: { testid: string }): JSX.Element {
     </div>
   );
 }
-
-const EMPTY_TOOL_NODE_IDS: ReadonlySet<string> = new Set<string>();
 
 function composeTerminalBody(stdout: string, stderr: string): string {
   if (stderr.length === 0) return stdout;

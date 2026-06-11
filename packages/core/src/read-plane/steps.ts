@@ -65,8 +65,18 @@ export interface StepSnapshot {
   extraStartSeqs?: number[];
   /** Real workflow node id (or a synthetic id for summariser steps). */
   nodeId: string;
+  /** When this node is a `type: parallel` fan-out branch, the parent
+   * parallel node's id (from `fact.fanout_started`). Lets the Cost
+   * breakdown nest concurrent branches under one parent group instead of
+   * scattering them as flat sibling rows. Absent for non-branch steps. */
+  parentNodeId?: string;
   /** Iteration metadata when the caller is a loop. */
   iteration?: { n: number; max: number };
+  /** Goal-gate re-entry epoch the step ran under (from the node's most
+   * recent lifecycle fact — `llm.start` itself doesn't carry it). Absent
+   * means pass 0; a retarget pass resets per-node retry counters, so
+   * `(nodeId, iteration)` alone collides across passes. */
+  pass?: number;
   /** ISO timestamp of when this step's node started running. For the
    * first step in each node window this comes from `fact.node_started`
    * (truthful — written sync by the daemon). For loop iterations 2+
@@ -142,12 +152,68 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // otherwise invisible there. Real duration is
   // `completed.ts − started.ts`; cost stays absent.
   const pendingToolNode = new Map<string, { startTs: number; startSeq: number }>();
+  // The `type: parallel` node whose fan-out is currently in flight (between
+  // `fact.fanout_started` and `fact.fanout_joined`). Every sub-node step that
+  // opens while it's set — branch ENTRIES (scans) AND their multi-node
+  // successors (verify steps) — nests under it in the Cost breakdown. Tracking
+  // the active region (not just `fanout_started.branches`) is what nests the
+  // successor steps, which the branch list alone never names.
+  let activeFanoutParent: string | undefined;
+  // nodeId → goal-gate pass from the node's most recent lifecycle fact.
+  // `llm.start` is pass-blind (pi-agent-core emits it), so the step inherits
+  // the epoch from the daemon-written fact that opened its window.
+  const lastPassForNode = new Map<string, number>();
+  const passField = (data: Record<string, unknown>): number => {
+    const v = data["pass"];
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  };
+
+  // A fan-out BRANCH step ends at its own terminal fact's ts (truthful), NOT
+  // the flat-next-step gap `fillOrphanDurations` would use — for a concurrent
+  // branch that gap is the barrier wait for its slowest sibling (a 3s verify
+  // showed 11m). Shared by the node_completed and node_aborted arms so the
+  // clamp/guard logic can't drift between them.
+  const stampBranchDuration = (nodeId: string, ts: number): void => {
+    const branchIdx = lastStepIdxForNode.get(nodeId);
+    if (branchIdx === undefined) return;
+    const branchStep = steps[branchIdx];
+    if (branchStep?.parentNodeId === undefined || branchStep.durationMs !== undefined) return;
+    const dur = ts - Date.parse(branchStep.startedAt);
+    if (Number.isFinite(dur) && dur >= 0) branchStep.durationMs = dur;
+  };
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
     const nodeId = stringField(data, "nodeId");
 
+    if (ev.type === "fact.fanout_started") {
+      if (nodeId) activeFanoutParent = nodeId;
+      // Anchor each branch ENTRY's truthful start to fanout_started.ts (daemon-
+      // written sync) so its duration isn't derived from the buffered llm.start.
+      for (const b of Array.isArray(data["branches"]) ? (data["branches"] as string[]) : []) {
+        lastNodeStartedTs.set(b, ev.ts);
+        lastPassForNode.set(b, passField(data));
+      }
+      continue;
+    }
+
+    if (ev.type === "fact.fanout_joined") {
+      activeFanoutParent = undefined;
+      continue;
+    }
+
+    if (ev.type === "fact.dispatch_started") {
+      // A fan-out SUCCESSOR (e.g. a verify) rides dispatch_started, not
+      // node_started — record its truthful start so its branch step anchors to it
+      // instead of the buffered llm.start. Scoped to an active fan-out so a linear
+      // node's own node_started anchoring is unchanged.
+      if (nodeId && activeFanoutParent !== undefined) lastNodeStartedTs.set(nodeId, ev.ts);
+      if (nodeId) lastPassForNode.set(nodeId, passField(data));
+      continue;
+    }
+
     if (ev.type === "fact.node_started") {
+      if (nodeId) lastPassForNode.set(nodeId, passField(data));
       if (nodeId) {
         // Resumption-after-pause: the node window never closed (no
         // `fact.node_completed`), so don't reset its anchors — mark
@@ -178,6 +244,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       if (nodeId) {
         pausedOpenNodes.delete(nodeId);
         pendingResumeFold.delete(nodeId);
+        stampBranchDuration(nodeId, ev.ts);
         const pending = pendingToolNode.get(nodeId);
         if (pending !== undefined) {
           // Tool node — no `llm.start` ever opened a step for this
@@ -191,12 +258,25 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
             nodeId,
             startedAt: new Date(pending.startTs).toISOString(),
           };
+          const toolPass = lastPassForNode.get(nodeId) ?? 0;
+          if (toolPass > 0) step.pass = toolPass;
           if (Number.isFinite(dur) && dur >= 0) step.durationMs = dur;
           steps.push(step);
           lastStepIdxForNode.set(nodeId, steps.length - 1);
           pendingToolNode.delete(nodeId);
         }
       }
+      continue;
+    }
+
+    if (ev.type === "fact.node_aborted") {
+      // An aborted branch ends at its node_aborted.ts — without the stamp the
+      // step keeps `durationMs === undefined` and fillOrphanDurations'
+      // parentNodeId guard leaves it ticking `now - startedAt` forever, as if
+      // still running. A transient abort that later re-drives opens a NEW
+      // step (branch aborts aren't pause-folds), so this stamps only the
+      // ended attempt.
+      if (nodeId) stampBranchDuration(nodeId, ev.ts);
       continue;
     }
 
@@ -248,6 +328,11 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         nodeId: nodeId || "__unknown",
         startedAt: new Date(startTs).toISOString(),
       };
+      // Nest under the in-flight parallel parent (entry scans + their verify
+      // successors alike). `!== nodeId` guards the degenerate self-tag.
+      if (activeFanoutParent !== undefined && activeFanoutParent !== nodeId) step.parentNodeId = activeFanoutParent;
+      const stepPass = nodeId !== "" ? (lastPassForNode.get(nodeId) ?? 0) : 0;
+      if (stepPass > 0) step.pass = stepPass;
       assignOptional(step, data);
       steps.push(step);
       if (nodeId) {
@@ -302,6 +387,16 @@ export function fillOrphanDurations(
     // step synthesised from `fact.node_started`/`fact.node_completed`)
     // keeps it — don't overwrite from neighbour-step boundaries.
     if (step.durationMs !== undefined) return step;
+    // A `type: parallel` BRANCH step (parentNodeId set) has no temporal
+    // "next step" — the flat-sequence successor is a SIBLING branch's
+    // step (or the post-barrier join sink), not when this branch moved
+    // on. Its duration is either its truthful `node_completed`-derived
+    // value (stamped in `eventsToSteps`) or — while still running —
+    // `undefined`, so the Cost row ticks live (`now - startedAt`) and
+    // the parent group keeps its wall-clock span ticking too. Deriving
+    // it from the flat gap froze a multi-turn running branch (its
+    // non-frontier turns got a sibling's start as their "end").
+    if (step.parentNodeId !== undefined) return step;
     const next = steps[i + 1];
     const endTs = next != null ? Date.parse(next.startedAt) : opts.runIsTerminal ? opts.lastEventTs : undefined;
     if (endTs === undefined || !Number.isFinite(endTs)) return step;

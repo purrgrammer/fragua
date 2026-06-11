@@ -175,6 +175,35 @@ export interface ScheduleRunRow {
   enqueued_at: number;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Auto-pause cause: latest invalid-workflow audit event for a schedule
+// ─────────────────────────────────────────────────────────────────────
+
+export interface ScheduleErrorRow {
+  error: string;
+  ts: number;
+}
+
+// The dispatcher auto-pauses a schedule whose workflow no longer resolves,
+// reads, or validates, and records the cause as a daemon event — without
+// this join the operator sees a paused schedule with no discoverable reason.
+const SELECT_LATEST_SCHEDULE_ERROR_SQL = `
+  SELECT json_extract(payload, '$.error') AS error, ts
+    FROM daemon_events
+   WHERE type = 'fact.schedule_invalid_workflow'
+     AND json_extract(payload, '$.scheduleId') = ?
+   ORDER BY seq DESC
+   LIMIT 1
+`;
+
+export function selectLatestScheduleError(db: Database, scheduleId: string): ScheduleErrorRow | null {
+  const row = db
+    .query<{ error: string | null; ts: number }, [string]>(SELECT_LATEST_SCHEDULE_ERROR_SQL)
+    .get(scheduleId);
+  if (row == null || row.error == null) return null;
+  return { error: row.error, ts: row.ts };
+}
+
 const SELECT_SCHEDULE_RUNS_SQL = `
   SELECT run_id, status, enqueued_at
     FROM run_state

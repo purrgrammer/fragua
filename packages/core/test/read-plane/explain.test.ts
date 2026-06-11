@@ -39,19 +39,30 @@ describe("read-plane explain", () => {
     expect(exp.budgetWarnings).toEqual([]);
   });
 
+  test("the detail's served fan-out topology passes through to the explanation", () => {
+    const fanout = {
+      parentOf: { a: "fan", b: "fan" },
+      branchOf: { a: "a", b: "b" },
+      orderOf: { a: 0, b: 1 },
+      nodeTypes: { fan: "parallel", a: "llm", b: "llm" },
+    };
+    expect(buildExplanation(baseDetail({ fanout }), [], [], []).fanout).toEqual(fanout);
+    expect(buildExplanation(baseDetail(), [], [], []).fanout).toBeUndefined();
+  });
+
   test("traversed path mirrors edge.selected order", () => {
     const detail = baseDetail({
       selectedEdges: [
-        { from: "start", to: "n1", iteration: 0 },
-        { from: "n1", to: "n2", iteration: 0 },
-        { from: "n2", to: "exit", iteration: 0 },
+        { from: "start", to: "n1", iteration: 0, pass: 0 },
+        { from: "n1", to: "n2", iteration: 0, pass: 0 },
+        { from: "n2", to: "exit", iteration: 0, pass: 0 },
       ],
     });
     const exp = buildExplanation(detail, [], [], []);
     expect(exp.path).toEqual([
-      { from: "start", to: "n1", iteration: 0 },
-      { from: "n1", to: "n2", iteration: 0 },
-      { from: "n2", to: "exit", iteration: 0 },
+      { from: "start", to: "n1", iteration: 0, pass: 0 },
+      { from: "n1", to: "n2", iteration: 0, pass: 0 },
+      { from: "n2", to: "exit", iteration: 0, pass: 0 },
     ]);
   });
 
@@ -125,6 +136,20 @@ describe("read-plane explain", () => {
     ];
     const exp = buildExplanation(baseDetail(), events, [], steps);
     expect(exp.steps[0]!.outcome).toBe("fail");
+  });
+
+  test("parentNodeId passes through so a renderer can nest fan-out branches", () => {
+    // A parallel parent's branch sub-nodes carry parentNodeId (set by the steps
+    // projection from fact.fanout_started); a non-branch step has none. The
+    // explain projection must preserve the distinction so the CLI can mirror the
+    // Cost tab's parent → branches nesting.
+    const steps: StepSnapshot[] = [
+      { stepIdx: 0, startSeq: 1, nodeId: "begin", startedAt: new Date(1000).toISOString() },
+      { stepIdx: 1, startSeq: 2, nodeId: "a_scan", parentNodeId: "fan", startedAt: new Date(2000).toISOString() },
+      { stepIdx: 2, startSeq: 3, nodeId: "b_scan", parentNodeId: "fan", startedAt: new Date(2000).toISOString() },
+    ];
+    const exp = buildExplanation(baseDetail(), [], [], steps);
+    expect(exp.steps.map((s) => s.parentNodeId)).toEqual([undefined, "fan", "fan"]);
   });
 
   test("diff summary sums committed snapshot stats vs base", () => {
