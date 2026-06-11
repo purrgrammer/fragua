@@ -248,7 +248,7 @@ steps:
         scope:       ${{ outputs.scope.verdict }} — ${{ outputs.scope.blocking }}
         notes: ${{ outputs.adversarial.notes }} | ${{ outputs.feasibility.notes }} | ${{ outputs.clarity.notes }} | ${{ outputs.precedent.notes }} | ${{ outputs.scope.notes }}
 
-      Every verdict `approve` → reply EXACTLY `APPROVE`.
+      Every verdict `approve` → OVERWRITE `proposal-critique.md` (cwd-relative) with the single line `APPROVED — no outstanding blocking.` so a later send-back can't replay a previous round's resolved demands, then reply EXACTLY `APPROVE`.
 
       Otherwise ARBITRATE — don't concatenate. Judge each blocking item against the doc and, where checkable, the code: drop what the doc already handles (cite the section) and what is taste without a concrete cost. Lenses WILL conflict (more failure coverage vs. cut scope vs. reuse a mechanism feasibility disputes) — RULE on each conflict explicitly; an unruled conflict hands the author an unsatisfiable spec and the loop oscillates. OVERWRITE `proposal-critique.md` (cwd-relative): `## Rulings` (each conflict: the ruling and the one-line reason), `## Blocking` (the surviving items, ordered by leverage, each with its demand), `## Deferred` (dropped or non-blocking, one line each — visible, not silently lost). Then `abort` with `REJECT: <n> blocking across <lenses>`.
 
@@ -262,7 +262,7 @@ steps:
 
       The revision directive is `proposal-critique.md`: address every item under `## Blocking` per the arbiter's `## Rulings`. Where you disagree with a demand, implement the ruling anyway and argue the disagreement in the rejected-alternatives section — never drop an item silently. Mine `## Deferred` for cheap wins; skip the rest. Keep the final-design register; ground new claims in `proposal-research.md` or the code, not invention.
 
-      If `proposal-critique.md` does not exist, an operator sent the run back — the directive arrives as a steering message in this conversation; no critique and no steering → `abort` with `nothing to revise`.
+      If `proposal-critique.md` does not exist or starts with `APPROVED`, an operator sent the run back — the directive arrives as a steering message in this conversation; no critique and no steering → `abort` with `nothing to revise`.
 
   signoff:                             # the operator ships or sends back
     type: human
