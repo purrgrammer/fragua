@@ -68,6 +68,15 @@ function parseArgs(argv: string[]): Args {
     }
     else if (a === "--no-since") { sinceMs = null; }
   }
+  // A call site that quotes the substituted value (`--workflow="${{ … }}"`,
+  // on top of the engine's own single-quoting) delivers literal quote
+  // characters here; an empty input must mean "no filter" under every quoting
+  // form, so strip one matched pair and ignore what's left if empty.
+  if (workflow !== null) {
+    const m = workflow.match(/^(['"])(.*)\1$/);
+    if (m) workflow = m[2] ?? "";
+    if (workflow === "") workflow = null;
+  }
   return { storePath: resolve(storePath ?? defaultStorePath()), limit, workflow, sinceMs };
 }
 

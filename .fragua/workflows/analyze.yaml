@@ -46,16 +46,19 @@ defaults:
 
 steps:
   # Materialise the snapshot ONCE — the lens branches are read-class (no bash),
-  # so the data must be on disk before the fan-out. The --flag=value form is
-  # load-bearing: an empty workflow input yields `--workflow=`, which the
-  # script's parser skips → no filter. The space-separated form would collapse
-  # to `--workflow --since-days …` and filter on the literal next flag.
+  # so the data must be on disk before the fan-out. The --flag=value form with
+  # NO manual quotes is load-bearing: the `run:` substitution single-quotes
+  # every value itself, so an empty workflow input yields `--workflow=''`,
+  # which the shell collapses to `--workflow=` and the script's parser skips
+  # → no filter. Adding quotes here would hand the script literal quote
+  # characters as the value; the space-separated form would collapse to
+  # `--workflow --since-days …` and filter on the literal next flag.
   # `&&` (not `;`): a failed collect must propagate as a non-zero exit and halt
   # the run rather than leave an empty snapshot behind for every lens to read
   # as "no runs".
   collect:
     type: tool
-    run: "bun .fragua/scripts/analyze/collect.ts --workflow=\"${{ inputs.workflow }}\" --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }} > analyze-snapshot.json && wc -c analyze-snapshot.json"
+    run: "bun .fragua/scripts/analyze/collect.ts --workflow=${{ inputs.workflow }} --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }} > analyze-snapshot.json && wc -c analyze-snapshot.json"
     timeout-minutes: 5
     next: lenses
 
