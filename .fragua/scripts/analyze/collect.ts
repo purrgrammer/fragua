@@ -781,5 +781,8 @@ const report = {
   runs: runsOut,
 };
 
-process.stdout.write(JSON.stringify(report));
+// Pretty-printed: the lens steps read this file with the `read` tool, and a
+// one-line blob defeats line-oriented reading (offsets, partial reads, grep).
+process.stdout.write(JSON.stringify(report, null, 2));
+
 db.close();
