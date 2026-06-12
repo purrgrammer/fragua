@@ -40,7 +40,7 @@ defaults:
 steps:
   triage:                              # pure classifier — isolated, no shared thread
     type: llm
-    model: claude-haiku-4-5            # classification, not reasoning — cheap by design
+    model: claude-sonnet-4-6           # classifier strength follows the cost of misclassifying: haiku fumbled 3/3 meta-briefing tasks (route_not_picked); a dead run costs more than the sonnet delta
     allowed-tools: [read, grep, find]
     prompt: |
       Task: ${{ inputs.task }}.
