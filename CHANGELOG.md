@@ -24,6 +24,9 @@ guarantee.
   such a bundle must be handled as secret-bearing (docs state the policy).
 - The server logs a structured warning when a human-input route is accepted
   without validation (no declared routes found on the pause fact).
+- The web UI surfaces its failure states: an SSE reconnect badge when the
+  live stream drops, conversation-fetch errors rendered in place, and 404
+  distinguished from 5xx on run detail.
 - Halted runs show their diagnosis inline: the read plane projects the
   terminal `fact.run_halted` reason + detail onto the run detail, and the
   web run page renders a read-only halted banner (live via SSE too) instead
@@ -38,6 +41,9 @@ guarantee.
 
 ### Fixed
 
+- A run halted without a closing node fact (`route_not_picked`,
+  `route_call_not_isolated`, `edge_no_match`) now folds the halted turn's
+  partial spend into run totals instead of reporting zero cost.
 - `runs accept` no longer refuses with spurious conflicts when the run's base
   commit is not an ancestor of the operator's HEAD (e.g. after the branch the
   run forked from was squash-merged): the base..tip change is applied 3-way
