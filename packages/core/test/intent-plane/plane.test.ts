@@ -3,6 +3,7 @@ import type { IEventStore } from "@fragua/store";
 import type { IntentEvent } from "@fragua/types";
 import { sha256Hex } from "../../src/handler/sha256.ts";
 import { makeIntentPlane } from "../../src/intent-plane/index.ts";
+import { pointerToFieldPath } from "../../src/intent-plane/plane.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../../src/ir.ts";
 import { parseWorkflow } from "../../src/parser/yaml.ts";
 
@@ -118,6 +119,46 @@ describe("intent plane — build* (validate + construct)", () => {
     expect(plane.buildGoalGate({ newLimit: 0 }).ok).toBe(false);
     expect(plane.buildMaxLoops({ newLimit: 20 }).ok).toBe(true);
     expect(plane.buildMaxLoops({ newLimit: -1 }).ok).toBe(false);
+  });
+
+  test("validation reports every invalid field with readable dotted paths", () => {
+    const { plane } = rig();
+    // Two simultaneously invalid fields: scope ∉ enum, metric ∉ enum.
+    const r = plane.buildBudget({ scope: "global", metric: "time", newLimit: 5 });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.error).toContain("scope:");
+    expect(r.error).toContain("metric:");
+    // Field names, not JSON-pointer notation.
+    expect(r.error).not.toContain("/scope");
+    expect(r.error).not.toContain("/metric");
+  });
+
+  test("root-level errors get a 'body' label, not an empty pointer", () => {
+    const { plane } = rig();
+    const r = plane.buildSteer(42);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.error).toContain("body:");
+  });
+
+  test("pointer paths map to dotted field paths with [n] array indices", () => {
+    expect(pointerToFieldPath("")).toBe("body");
+    expect(pointerToFieldPath("/text")).toBe("text");
+    expect(pointerToFieldPath("/limits/maxRetries")).toBe("limits.maxRetries");
+    expect(pointerToFieldPath("/items/0/name")).toBe("items[0].name");
+    expect(pointerToFieldPath("/0")).toBe("[0]");
+  });
+
+  test("pathological bodies cap at 10 reported errors with (+N more)", () => {
+    const { plane } = rig();
+    const body: Record<string, unknown> = {};
+    for (let i = 0; i < 30; i++) body[`junk${i}`] = i;
+    const r = plane.buildBudget(body);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.error.split("; ").length).toBe(10);
+    expect(r.error).toMatch(/\(\+\d+ more\)$/);
   });
 
   test("a non-object body is rejected, not thrown", () => {

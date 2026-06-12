@@ -35,6 +35,7 @@ guarantee.
 ### Fixed
 
 <<<<<<< ours
+<<<<<<< ours
 - `runs accept` no longer refuses with spurious conflicts when the run's base
   commit is not an ancestor of the operator's HEAD (e.g. after the branch the
   run forked from was squash-merged): the base..tip change is applied 3-way
@@ -45,6 +46,11 @@ guarantee.
   in the halt detail (`workflow_parse_failed: <message>`, truncated) — e.g.
   the JSON parse failure or an unsupported `ir_version` — instead of the
   bare constant.
+>>>>>>> theirs
+=======
+- Intent validation (steer, respond, budget, and the other control verbs)
+  now reports every invalid field at once with readable dotted field paths,
+  instead of only the first error in JSON-pointer notation.
 >>>>>>> theirs
 - W015 no longer fires for `${{ outputs.X.f }}` consumers that are only
   reachable on paths where the producer has already run (fail-path
