@@ -1321,6 +1321,7 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P29 | Fan-out crash recovery | Crash mid-region with asymmetric branch depth (A deep, B shallow) | Only uncommitted sub-nodes re-dispatch; a completed sub-node never re-runs; the region converges (no barrier required to re-derive per-branch cursors) |
 | P30 | OCC on the fan-out seams | OCC storm on `fanout_started` / branch `node_completed`+`dispatch_started` / `fanout_joined` | Region still joins exactly once; P4 holds throughout; a status-stop never mis-counts as OCC |
 | P31 | Per-branch liveness | A branch hangs / leaks / aborts every turn beside healthy siblings | Leak → `handler_timeout_leaked` + halt; abort-loop → per-branch `run_paused{abort_loop}` naming the branch; a fast branch commits without waiting on a slow one; an early bail aborts the in-flight pool |
+| P32 | Fan-out frontier isolation | Populated `internal.active_nodes` × every fact type | Only `fanout_started` / `dispatch_started` / branch `node_completed` / `fanout_joined` may change the frontier; every other fact leaves it byte-identical; `applyFact` never mutates its input state (the routing shallow copy is load-bearing) |
 
 The driven crash-replay and fault-injection (OCC-storm) harnesses generate `type: parallel` graphs alongside the linear spine, so P4 / P5 / P8 are exercised over fan-out, not just sequential runs.
 

@@ -11,18 +11,24 @@
 // P22 cascade delete removes per-run children; blobs unchanged
 // P23 STRICT rejects type coercion
 // P24 claim atomicity — each queued run claimed by exactly one caller
+// P32 fan-out frontier isolation — `internal.active_nodes` changes only under
+//     the frontier-mutating facts (fanout_started, dispatch_started,
+//     node_completed, fanout_joined); applyFact never mutates its input
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import {
+  ACTIVE_NODES_ROUTING_KEY,
   applyFact,
   emptyMetrics,
   type FactEvent,
   foldFacts,
+  genesisToInitialState,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_ROUTING_BYTES,
   type RunState,
+  readActiveNodes,
 } from "../src/index.ts";
 import { freshStore, nextId, seedRun, seedWorkflow } from "./helpers.ts";
 
@@ -358,6 +364,251 @@ describe("P23 — STRICT enforcement", () => {
     const db = getDb(store);
     expect(() => db.query("UPDATE run_state SET status = 'bogus' WHERE run_id = ?").run(runId)).toThrow();
     store.close();
+  });
+});
+
+// ─────────────── P32 — fan-out frontier isolation ───────────────
+
+/** The only fact types whose reducer arm may touch `internal.active_nodes`. */
+type FrontierMutatorType =
+  | "fact.fanout_started"
+  | "fact.dispatch_started"
+  | "fact.node_completed"
+  | "fact.fanout_joined";
+
+// Keyed over Exclude<FactType, FrontierMutatorType> so adding a fact type to
+// the union forces a classification here at typecheck time: either it joins
+// this map (must not touch the frontier) or FrontierMutatorType (and gets a
+// case in the legit-mutation test below).
+const NON_MUTATOR_BUILDERS: {
+  [T in Exclude<FactEvent["type"], FrontierMutatorType>]: (nodeId: string) => Extract<FactEvent, { type: T }>;
+} = {
+  "fact.run_started": () => ({
+    type: "fact.run_started",
+    payload: { workflowSha: "sha", contractVersion: 1, startNode: "a" },
+  }),
+  "fact.node_started": (n) => ({ type: "fact.node_started", payload: { nodeId: n, iteration: 0 } }),
+  "fact.node_aborted": (n) => ({
+    type: "fact.node_aborted",
+    payload: { nodeId: n, iteration: 0, cause: "handler_error", partialTokens: 3, partialCostUsd: 0.01 },
+  }),
+  "fact.intents_folded": () => ({
+    type: "fact.intents_folded",
+    payload: { intentSeq: 2, folded: "intent.pause_requested" },
+  }),
+  "fact.side_effect_intent": (n) => ({
+    type: "fact.side_effect_intent",
+    payload: { nodeId: n, iteration: 0, toolName: "bash", argsHash: "h", attempt: 0, idempotencyKey: "k" },
+  }),
+  "fact.side_effect_done": () => ({
+    type: "fact.side_effect_done",
+    payload: { idempotencyKey: "k", artifactKey: "a" },
+  }),
+  "fact.side_effect_failed": () => ({
+    type: "fact.side_effect_failed",
+    payload: { idempotencyKey: "k", errorCode: "e", retriable: false },
+  }),
+  "fact.tool_completed": () => ({
+    type: "fact.tool_completed",
+    payload: { toolName: "bash", argsHash: "h", artifactKey: "a", preview: "p" },
+  }),
+  "fact.message_appended": (n) => ({
+    type: "fact.message_appended",
+    payload: { ordinal: 0, role: "assistant", nodeId: n, iteration: 0 },
+  }),
+  "fact.run_paused_human": (n) => ({
+    type: "fact.run_paused_human",
+    payload: { nodeId: n, text: "choose", routes: ["ok"] },
+  }),
+  "fact.run_paused": (n) => ({ type: "fact.run_paused", payload: { reason: "operator", nodeId: n } }),
+  "fact.provider_retry_attempted": (n) => ({
+    type: "fact.provider_retry_attempted",
+    payload: { nodeId: n, attempt: 1, httpStatus: 429, delayMs: 100 },
+  }),
+  "fact.run_resumed": () => ({ type: "fact.run_resumed", payload: { fromStatus: "paused" } }),
+  "fact.run_completed": (n) => ({ type: "fact.run_completed", payload: { finalNode: n } }),
+  "fact.run_halted": () => ({ type: "fact.run_halted", payload: { reason: "error" } }),
+  "fact.run_cancelled": () => ({ type: "fact.run_cancelled", payload: { intentSeq: 2 } }),
+  "fact.snapshot_recorded": () => ({
+    type: "fact.snapshot_recorded",
+    payload: {
+      eventIdx: 1,
+      treeSha: "t",
+      commitSha: "c",
+      parentSnap: "p",
+      headSha: null,
+      headRef: null,
+      diffBaseSha: "d",
+      committed: null,
+      uncommitted: null,
+    },
+  }),
+  "fact.run_quarantined": () => ({ type: "fact.run_quarantined", payload: { reason: "other" } }),
+  "fact.run_requeued_after_crash": () => ({ type: "fact.run_requeued_after_crash", payload: {} }),
+  "fact.handler_timeout_leaked": (n) => ({
+    type: "fact.handler_timeout_leaked",
+    payload: { nodeId: n, leakedAt: 1_500 },
+  }),
+  "fact.daemon_takeover": () => ({ type: "fact.daemon_takeover", payload: { reclaimedFrom: 1, at: 1_500 } }),
+  "fact.run_accepted": () => ({ type: "fact.run_accepted", payload: { sha: "s", replayed: 1, tailStaged: false } }),
+  "fact.run_discarded": () => ({ type: "fact.run_discarded", payload: { refs: [] } }),
+};
+
+const NON_MUTATOR_FACTS: ReadonlyArray<(nodeId: string) => FactEvent> = Object.values(NON_MUTATOR_BUILDERS);
+
+const MUTATOR_FACTS: ReadonlyArray<(frontier: readonly string[]) => FactEvent> = [
+  () => ({ type: "fact.fanout_started", payload: { nodeId: "par", iteration: 0, branches: ["x", "y"] } }),
+  () => ({ type: "fact.dispatch_started", payload: { nodeId: "fresh", iteration: 0, resumeOf: "fresh" } }),
+  (f) => ({
+    type: "fact.node_completed",
+    payload: { nodeId: f[0]!, iteration: 0, tokens: 5, costUsd: 0.01, nextNode: "join" },
+  }),
+  (f) => ({
+    type: "fact.fanout_joined",
+    payload: { nodeId: "par", iteration: 0, nextNode: "join", branchesCompleted: f.length },
+  }),
+];
+
+const FRONTIER_BRANCHES = ["b1", "b2", "b3", "b4", "b5", "b6"] as const;
+const arbFrontier = fc.uniqueArray(fc.constantFrom(...FRONTIER_BRANCHES), { minLength: 1, maxLength: 6 });
+
+function fanOutState(frontier: readonly string[]): RunState {
+  const state = genesisToInitialState(
+    "r_pbt_frontier",
+    {
+      workflowSha: "sha",
+      contractVersion: 1,
+      projectId: "p",
+      projectName: "p",
+      routing: { description: "fan-out under test" },
+    },
+    1_000,
+  );
+  state.status = "running";
+  state.currentNode = "par";
+  state.dispatchStartedAt = 1_000;
+  state.routing[ACTIVE_NODES_ROUTING_KEY] = [...frontier];
+  return state;
+}
+
+describe("P32 — fan-out frontier isolation", () => {
+  test("non-mutator facts leave a populated frontier untouched", () => {
+    fc.assert(
+      fc.property(
+        arbFrontier,
+        fc.nat(NON_MUTATOR_FACTS.length - 1),
+        fc.boolean(),
+        fc.nat(5),
+        (frontier, factIdx, useFrontierNode, pick) => {
+          const nodeId = useFrontierNode ? frontier[pick % frontier.length]! : "outsider";
+          const state = fanOutState(frontier);
+          const next = applyFact(state, NON_MUTATOR_FACTS[factIdx]!(nodeId), 2_000);
+          expect(readActiveNodes(next.routing)).toEqual([...frontier]);
+        },
+      ),
+      { numRuns: pbtRuns(250) },
+    );
+  });
+
+  test("mutator-typed facts that miss the frontier are no-ops on it", () => {
+    fc.assert(
+      fc.property(arbFrontier, fc.nat(5), (frontier, pick) => {
+        // Linear completion beside the frontier: advances the run pointer,
+        // never touches the active set.
+        const linearDone: FactEvent = {
+          type: "fact.node_completed",
+          payload: { nodeId: "outsider", iteration: 0, tokens: 1, costUsd: 0.01, nextNode: "m" },
+        };
+        const afterLinear = applyFact(fanOutState(frontier), linearDone, 2_000);
+        expect(readActiveNodes(afterLinear.routing)).toEqual([...frontier]);
+        expect(afterLinear.currentNode).toBe("m");
+
+        // Re-dispatch of a node already in the frontier: no duplicate entry.
+        const member = frontier[pick % frontier.length]!;
+        const redispatch: FactEvent = {
+          type: "fact.dispatch_started",
+          payload: { nodeId: member, iteration: 0, resumeOf: "crash" },
+        };
+        const afterRedispatch = applyFact(fanOutState(frontier), redispatch, 2_000);
+        expect(readActiveNodes(afterRedispatch.routing)).toEqual([...frontier]);
+      }),
+      { numRuns: pbtRuns(100) },
+    );
+  });
+
+  test("legitimate mutators seed / advance / drain / clear the frontier", () => {
+    fc.assert(
+      fc.property(arbFrontier, fc.nat(5), (frontier, pick) => {
+        // Seed: fanout_started over a frontier-less state.
+        const preFan = fanOutState([]);
+        delete preFan.routing[ACTIVE_NODES_ROUTING_KEY];
+        const seeded = applyFact(
+          preFan,
+          { type: "fact.fanout_started", payload: { nodeId: "par", iteration: 0, branches: [...frontier] } },
+          2_000,
+        );
+        expect(readActiveNodes(seeded.routing)).toEqual([...frontier]);
+
+        // Advance: a fresh sub-node dispatch joins the active set.
+        const advanced = applyFact(
+          fanOutState(frontier),
+          { type: "fact.dispatch_started", payload: { nodeId: "fresh", iteration: 0, resumeOf: "fresh" } },
+          2_000,
+        );
+        expect(readActiveNodes(advanced.routing)).toEqual([...frontier, "fresh"]);
+
+        // Drain: a frontier member's completion removes it and keeps
+        // current_node pinned to the parallel node.
+        const member = frontier[pick % frontier.length]!;
+        const drained = applyFact(
+          fanOutState(frontier),
+          {
+            type: "fact.node_completed",
+            payload: { nodeId: member, iteration: 0, tokens: 1, costUsd: 0.01, nextNode: "join" },
+          },
+          2_000,
+        );
+        expect(readActiveNodes(drained.routing)).toEqual(frontier.filter((n) => n !== member));
+        expect(drained.currentNode).toBe("par");
+
+        // Clear: the join barrier deletes the key (not just empties it) and
+        // advances current_node.
+        const joined = applyFact(
+          fanOutState(frontier),
+          {
+            type: "fact.fanout_joined",
+            payload: { nodeId: "par", iteration: 0, nextNode: "join", branchesCompleted: frontier.length },
+          },
+          2_000,
+        );
+        expect(ACTIVE_NODES_ROUTING_KEY in joined.routing).toBe(false);
+        expect(joined.currentNode).toBe("join");
+      }),
+      { numRuns: pbtRuns(100) },
+    );
+  });
+
+  test("applyFact never mutates its input state (routing shallow copy is load-bearing)", () => {
+    const allBuilders: ReadonlyArray<(frontier: readonly string[], nodeId: string) => FactEvent> = [
+      ...MUTATOR_FACTS.map((b) => (f: readonly string[], _n: string) => b(f)),
+      ...NON_MUTATOR_FACTS.map((b) => (_f: readonly string[], n: string) => b(n)),
+    ];
+    fc.assert(
+      fc.property(
+        arbFrontier,
+        fc.nat(allBuilders.length - 1),
+        fc.boolean(),
+        fc.nat(5),
+        (frontier, builderIdx, useFrontierNode, pick) => {
+          const nodeId = useFrontierNode ? frontier[pick % frontier.length]! : "outsider";
+          const state = fanOutState(frontier);
+          const before = structuredClone(state);
+          applyFact(state, allBuilders[builderIdx]!(frontier, nodeId), 2_000);
+          expect(state).toEqual(before);
+        },
+      ),
+      { numRuns: pbtRuns(250) },
+    );
   });
 });
 
