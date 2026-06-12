@@ -11,7 +11,7 @@ durable, portable execution for engineering workflows. drive LLM agents with a d
 
 built on one bet: the **control plane** is worth making deterministic even when the LLM bodies are not. two invariants carry it:
 
-- **all durable writes for a run linearize through one committer.** fan-out branches execute *concurrently*, but their commits *serialize* — concurrent execution never means concurrent commits. the committer assigns one monotonic order to every fact, so a recorded run replays by folding that one linear log, not by re-running the model.
+- **all durable writes for a run linearize through one committer.** fan-out branches execute *concurrently*, but their commits *serialize* — concurrent execution never means concurrent commits. the committer assigns one monotonic order to every fact, so a recorded run replays by folding that one linear log, not by re-running the model. durability is turn-grained: a turn recorded before a crash never re-runs, but an LLM call still in flight when the process dies re-executes on resume — the fold is deterministic; forward re-execution is not.
 - **operator actions are intents.** pause, steer, resume, budget raises — always-appendable, conflict-free writes (no OCC) that the executor folds into the next dispatch. that's what makes steering a live LLM run mid-flight possible: the in-flight handler unwinds, the next dispatch sees your text, the run never dies.
 
 the rest follows:

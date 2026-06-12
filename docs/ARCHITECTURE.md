@@ -61,7 +61,7 @@ ctx.artifacts.get(key)                                          // implicit curr
 ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cross-scope
 ```
 
-`iteration` is the per-node retry counter (attractor §3.6), bumped each time a backward edge re-enters a node after a non-success outcome (0 on first entry). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
+`iteration` is the per-node retry counter, bumped each time a backward edge re-enters a node after a non-success outcome (0 on first entry). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
 
 ### 1.3 Unix socket IPC is net-negative
 **Attack.** `.sock` cleanup, `EADDRINUSE`, permission errors, reconnect bookkeeping — hundreds of lines for something SQLite already does in <0.1ms per query.

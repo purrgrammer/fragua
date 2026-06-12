@@ -24,6 +24,8 @@ Core values, in priority order:
 - Not a chat framework (LangChain territory).
 - Not a replacement for Claude Code or Codex — it *drives* them.
 
+**Dependency posture.** Core value 5 is a real bet: provider coverage, agent-loop semantics (turn-taking, tool dispatch and interception), and abort propagation all ride `pi-ai` + `@earendil-works/pi-agent-core`. The handler contract insulates handlers from the dependency's *machinery* — they call `ctx.llm` and return a typed `HandlerResult`, never constructing providers or driving the agent loop (see [`handler-contract.md`](./handler-contract.md)) — but not from its *shapes*: `ctx.llm.call` takes pi-ai's `Message` union and the persisted transcript is pi-agent-core's `AgentMessage` (re-exported through `@fragua/types`). The swap surface is deliberately one file: `PiLlmBackend` (`packages/agent/src/backend.ts`) implements `@fragua/core`'s `LlmBackend` interface, so replacing the dependency means rewriting that backend (and migrating the message shapes), not the engine.
+
 ---
 
 ## 2. System shape
@@ -299,14 +301,16 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **Schema downgrade (DB-structure axis).** The DB-migration counter (`CURRENT_SCHEMA_VERSION`) walks forward automatically under the daemon lock and refuses to open a store newer than the binary. **Downgrade is supported but never automatic:** each `SCHEMA_MIGRATIONS` step carries an optional `down` inverse, and `fragua db migrate --to <lower>` walks them — backed up first, refusing an irreversible step, a data-losing step (without `--allow-data-loss`), or a live daemon. It is run by the *newer* binary that defines the `down` steps. This is the schema axis only, orthogonal to the contract-drift gate above: it does **not** make a newer-contract run resumable on an older daemon. See `docs/proposals/reversible-migrations.md`.
 - **Workflow hot-reload.** `workflow_sha` is pinned at enqueue time.
 
-**Not honored from attractor-spec:**
+**Team topology.** The unit of sharing is the run, never the store. Each store is single-user and stays private to its machine; runs travel between trusted stores as `.fragua` bundles (`fragua runs export` / `fragua import`). A bundle carries the run's event log, transcript, canonical workflow, and artifact blobs — never the provider/credential tables — and text payloads are scrubbed on export; a live credential embedded verbatim in a *binary* blob is not scrubbed, and export warns loudly that the bundle is secret-bearing. CI is the one delegated execution context: an ephemeral job runs against its own throwaway store, with secrets gated by the CI platform's permissions/environments (see the non-goals in §1).
 
-- **`stack.manager_loop` / `house` shape** (attractor §4.11). Composition lives at the workflow level via separate runs sharing artifacts.
-- **`tool_hooks.pre` / `tool_hooks.post`** (attractor §9.7). The agent backend handles tool interception.
-- **Interviewer interface** (attractor §6). Replaced by `human` nodes (`type: human`) plus the `intent.human_input` event.
-- **`auto_status` node attribute** (attractor §2.6 / Appendix C). Fragua handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
-- **`loop_restart` edge attribute** (attractor §2.7). Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
-- **Non-`wait_all` joins, cross-run fan-in, and dynamic forks** (attractor §4.8 / §4.9). The intra-run `parallel` fork-all → `wait_all` primitive ships (§3.1.1), but `wait_any` / `race` / `quorum` joins are excluded **by design** — they break the single-entry/single-exit invariant that keeps dominance (and thus budget / goal-gate scoping) well-defined. Fan-*in* across runs is likewise out of scope: composition across runs stays artifact-sharing, not a graph join. And a runtime-sized fork is out: a branch set is materialised at parse time, never streamed during dispatch.
+**Also excluded by design:**
+
+- **A manager-loop / supervisor-stack primitive.** Composition lives at the workflow level via separate runs sharing artifacts.
+- **Pre/post tool hooks as workflow attributes.** The agent backend handles tool interception.
+- **A blocking interviewer interface.** Human input is `human` nodes (`type: human`) plus the `intent.human_input` event — the executor parks the run, it never blocks on a person.
+- **An `auto_status` node attribute.** Fragua handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
+- **A `loop_restart` edge attribute.** Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
+- **Non-`wait_all` joins, cross-run fan-in, and dynamic forks.** The intra-run `parallel` fork-all → `wait_all` primitive ships (§3.1.1), but `wait_any` / `race` / `quorum` joins are excluded **by design** — they break the single-entry/single-exit invariant that keeps dominance (and thus budget / goal-gate scoping) well-defined. Fan-*in* across runs is likewise out of scope: composition across runs stays artifact-sharing, not a graph join. And a runtime-sized fork is out: a branch set is materialised at parse time, never streamed during dispatch.
 
 **Surfaced as warnings, not errors:**
 
