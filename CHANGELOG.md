@@ -34,11 +34,18 @@ guarantee.
 
 ### Fixed
 
+<<<<<<< ours
 - `runs accept` no longer refuses with spurious conflicts when the run's base
   commit is not an ancestor of the operator's HEAD (e.g. after the branch the
   run forked from was squash-merged): the base..tip change is applied 3-way
   against the snapshot's base blobs instead. Genuine textual conflicts still
   refuse with `conflict`.
+=======
+- A run halted on an unparseable workflow now reports the underlying error
+  in the halt detail (`workflow_parse_failed: <message>`, truncated) — e.g.
+  the JSON parse failure or an unsupported `ir_version` — instead of the
+  bare constant.
+>>>>>>> theirs
 - W015 no longer fires for `${{ outputs.X.f }}` consumers that are only
   reachable on paths where the producer has already run (fail-path
   consumers); genuinely unreachable producers still warn.

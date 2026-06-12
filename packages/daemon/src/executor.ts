@@ -435,6 +435,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // fixtures) from "the workflow row exists but won't parse". Only the
   // latter halts the run; graphFor returns null for both.
   let workflowUnparseable = false;
+  let workflowParseError: string | undefined;
   const graphFor = (workflowSha: string | null): Graph | null => {
     if (workflowSha == null) return null;
     if (cachedGraph != null) return cachedGraph;
@@ -443,7 +444,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       cachedGraph = result.graph;
       return cachedGraph;
     }
-    if (result.reason === "unparseable") workflowUnparseable = true;
+    if (result.reason === "unparseable") {
+      workflowUnparseable = true;
+      workflowParseError = result.errorMessage;
+    }
     return null;
   };
 
@@ -523,7 +527,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         await tryAppendFact(opts.store, runId, state.version, [
           {
             type: "fact.run_halted",
-            payload: { reason: "error", detail: "workflow_parse_failed" },
+            payload: { reason: "error", detail: workflowParseFailedDetail(workflowParseError) },
           },
         ]);
         return { kind: "terminal" };
@@ -1923,6 +1927,17 @@ export interface LeakBudget {
 /** A node's allowed/denied tool scope from its graph attrs — hard-filters
  * `ctx.tools` at HandlerContext construction so a handler can't reach a tool the
  * node didn't declare. Shared by the linear + fan-out dispatch paths. */
+// The event-payload cap is 4KB; bound the appended parse error so a
+// pathological message can never make the halt append itself fail.
+const PARSE_ERROR_DETAIL_MAX = 300;
+
+function workflowParseFailedDetail(errorMessage: string | undefined): string {
+  if (errorMessage == null || errorMessage === "") return "workflow_parse_failed";
+  const bounded =
+    errorMessage.length > PARSE_ERROR_DETAIL_MAX ? `${errorMessage.slice(0, PARSE_ERROR_DETAIL_MAX)}…` : errorMessage;
+  return `workflow_parse_failed: ${bounded}`;
+}
+
 function readToolScope(nodeAttrs: { allowed_tools?: unknown; denied_tools?: unknown } | undefined): {
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];

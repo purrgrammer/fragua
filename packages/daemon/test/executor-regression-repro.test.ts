@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ExecutionEnvironment } from "@fragua/core";
+import { CURRENT_IR_VERSION, type ExecutionEnvironment, parseWorkflow, serializeGraph } from "@fragua/core";
 import { applyFact, ConcurrencyError, type FactEvent, type RunState } from "@fragua/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runExecutor, runOne } from "../src/executor.ts";
@@ -505,5 +505,36 @@ steps:
 
     expect(r.store.getState("bad-graph")?.status).toBe("halted");
     expect(r.store.getEvents("bad-graph").some((e) => e.type === "fact.run_completed")).toBe(false);
+  });
+
+  test("workflow_parse_failed halt detail carries the underlying parse error", async () => {
+    const r = rig({ ir: "not-valid-ir-json" });
+    enqueue(r, "bad-graph-detail", "start");
+    r.store.claimNextRun(1);
+    await runOne("bad-graph-detail", runOpts(r));
+
+    const halt = r.store.getEvents("bad-graph-detail").find((e) => e.type === "fact.run_halted");
+    const detail = (halt?.payload as { detail?: string } | undefined)?.detail;
+    expect(detail?.startsWith("workflow_parse_failed: ")).toBe(true);
+    expect(detail).toMatch(/JSON/i);
+  });
+
+  test("workflow_parse_failed halt detail surfaces an unsupported ir_version", async () => {
+    const r = rig();
+    const source = "name: t\nsteps:\n  start: {type: llm, prompt: hi}\n";
+    r.store.saveWorkflow("wf-future", "t", source, serializeGraph(parseWorkflow(source)), CURRENT_IR_VERSION + 1);
+    r.store.enqueueRun({
+      runId: "future-ir",
+      workflowSha: "wf-future",
+      priority: 0,
+      initialRouting: { start_node: "start" },
+    });
+    r.store.claimNextRun(1);
+    await runOne("future-ir", runOpts(r));
+
+    const halt = r.store.getEvents("future-ir").find((e) => e.type === "fact.run_halted");
+    const detail = (halt?.payload as { detail?: string } | undefined)?.detail;
+    expect(detail?.startsWith("workflow_parse_failed: ")).toBe(true);
+    expect(detail).toContain(`ir_version ${CURRENT_IR_VERSION + 1} > supported ${CURRENT_IR_VERSION}`);
   });
 });

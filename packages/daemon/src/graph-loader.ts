@@ -14,7 +14,10 @@
 import { CURRENT_IR_VERSION, convertIr, type Graph } from "@fragua/core";
 import type { IEventStore, WorkflowRow } from "@fragua/store";
 
-export type GraphLoadResult = { ok: true; graph: Graph } | { ok: false; reason: "missing" | "unparseable" };
+export type GraphLoadResult =
+  | { ok: true; graph: Graph }
+  | { ok: false; reason: "missing" }
+  | { ok: false; reason: "unparseable"; errorMessage: string };
 
 export interface GraphLoader {
   load(workflowSha: string): GraphLoadResult;
@@ -30,7 +33,10 @@ export interface GraphLoader {
  * while an unparseable source halts.
  */
 export function makeGraphLoader(store: Pick<IEventStore, "getWorkflow">): GraphLoader {
-  const memo = new Map<string, { ok: true; graph: Graph } | { ok: false; reason: "unparseable" }>();
+  const memo = new Map<
+    string,
+    { ok: true; graph: Graph } | { ok: false; reason: "unparseable"; errorMessage: string }
+  >();
 
   return {
     load(workflowSha: string): GraphLoadResult {
@@ -43,8 +49,12 @@ export function makeGraphLoader(store: Pick<IEventStore, "getWorkflow">): GraphL
         const result = { ok: true as const, graph };
         memo.set(workflowSha, result);
         return result;
-      } catch {
-        const result = { ok: false as const, reason: "unparseable" as const };
+      } catch (err) {
+        const result = {
+          ok: false as const,
+          reason: "unparseable" as const,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        };
         memo.set(workflowSha, result);
         return result;
       }
