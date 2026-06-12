@@ -13,51 +13,36 @@
 //      appear on product surfaces. Use `text-sw-accent-*` instead.
 //
 // Allowlist:
-//   CLEAN_PATHS  — shadcn-generated primitives and ai-elements, correct by design.
+//   EXEMPT_DIRS  — whole directories of shadcn-generated primitives and
+//                  ai-elements, correct by design; matched by path prefix.
+//   EXEMPT_FILES — explicit per-file extras, matched by exact relative path.
+//   Never bare substring — a product file whose path merely CONTAINS an
+//   exempt name must not be silently exempt.
 
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { describe, expect, test } from "vitest";
 
 const SRC = join(import.meta.dirname, "..", "src");
 
-// Shadcn-generated files + ai-elements: tokens are correct here by design.
-const CLEAN_PATHS_CONTAINING = [
-  "components/ui/avatar",
-  "components/ui/badge",
-  "components/ui/button",
-  "components/ui/card",
-  "components/ui/input",
-  "components/ui/separator",
-  "components/ui/sidebar",
-  "components/ui/tabs",
-  "components/ui/tooltip",
-  "components/ui/select",
-  "components/ui/popover",
-  "components/ui/dialog",
-  "components/ui/scroll-area",
-  "components/ui/progress",
-  "components/ui/alert",
-  "components/ui/breadcrumb",
-  "components/ui/hover-card",
-  "components/ui/collapsible",
-  "components/ui/dropdown-menu",
-  "components/ui/command",
-  "components/ui/input-group",
-  "components/ui/button-group",
-  "components/ui/table",
-  "components/ui/spinner",
-  "components/ui/textarea",
-  "components/ui/chart",
-  "components/ui/sheet",
-  "components/ai-elements",
+// Shadcn-generated primitives + ai-elements: tokens are correct here by
+// design. Exempting the directories themselves means new shadcn primitives
+// are covered without hand-listing.
+const EXEMPT_DIRS = ["components/ui", "components/ai-elements"];
+
+const EXEMPT_FILES = new Set([
   // DaemonBanner uses amber for an OS-level warning outside normal state accents.
-  "components/DaemonBanner",
-];
+  "components/DaemonBanner.tsx",
+]);
+
+function relPath(filePath: string): string {
+  return relative(SRC, filePath).split(sep).join("/");
+}
 
 function isExempt(filePath: string): boolean {
-  const norm = filePath.replace(/\\/g, "/");
-  return CLEAN_PATHS_CONTAINING.some((p) => norm.includes(p));
+  const rel = relPath(filePath);
+  if (EXEMPT_FILES.has(rel)) return true;
+  return EXEMPT_DIRS.some((dir) => rel.startsWith(`${dir}/`));
 }
 
 function collectTsxFiles(dir: string): string[] {
@@ -85,6 +70,16 @@ const PALETTE_COLOUR_PATTERN =
   /\b(?:text|bg|border|ring|fill|stroke)-(?:amber|rose|emerald|red|green|blue|yellow|orange|purple|pink|cyan|teal|indigo|violet|slate|stone|zinc|neutral|gray)-\d{2,3}\b/;
 
 describe("design discipline", () => {
+  test("exemption covers components/ui contents by path, never bare substring", () => {
+    const uiFiles = readdirSync(join(SRC, "components", "ui"));
+    expect(uiFiles.length).toBeGreaterThan(0);
+    for (const name of uiFiles) {
+      expect(isExempt(join(SRC, "components", "ui", name))).toBe(true);
+    }
+    expect(isExempt(join(SRC, "routes", "components", "ui", "fake.tsx"))).toBe(false);
+    expect(isExempt(join(SRC, "components", "DaemonBannerCopy.tsx"))).toBe(false);
+  });
+
   test("product surfaces use sw-* tokens, not shadcn colour utilities", () => {
     const violations: string[] = [];
     for (const file of productFiles) {

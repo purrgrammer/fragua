@@ -5,12 +5,22 @@
 // that reaches directly for `fetch`, `undici`, `node:fs`, `node:child_process`,
 // or `node:net` is breaking the invariant — the executor can't enforce
 // AbortSignal, idempotency keys, or accounting on those paths.
+//
+// Browser safety: @fragua/core's MAIN entry must stay browser-safe — no
+// `node:*` imports anywhere reachable from src/index.ts. The server-only
+// sub-entries (`handler/`, `intent-plane/`, `read-plane/`) are exempt; they
+// are imported via their own entry points and excluded from the web bundle.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
-const HANDLERS_DIR = join(__dirname, "..", "..", "src", "handler", "handlers");
+const SRC_DIR = join(__dirname, "..", "..", "src");
+const HANDLERS_DIR = join(SRC_DIR, "handler", "handlers");
+
+// Server-only sub-entries declared in package.json exports; everything else
+// under src/ is reachable from the browser-safe main entry.
+const SERVER_ONLY_DIRS = new Set(["handler", "intent-plane", "read-plane"]);
 
 const BANNED = [
   {
@@ -140,5 +150,64 @@ describe("handler discipline", () => {
     expect(externalRe.test(bad) && !usesRe.test(bad)).toBe(true);
     const good = `export const spec = { kind: "x", sideEffect: "external", maxMs: 1, handler: async (ctx) => { await ctx.externalCall({ toolName: "t", args: {} }, async () => null); return { kind: "halt", reason: "error" }; } };`;
     expect(externalRe.test(good) && !usesRe.test(good)).toBe(false);
+  });
+});
+
+// Any `node:` import — static, dynamic, or require — in browser-reachable code.
+const NODE_IMPORT_RE = /\b(?:from\s+["']node:|import\s*\(\s*["']node:|require\s*\(\s*["']node:)/;
+
+function scanNodeImports(source: string): number[] {
+  const lines = source.split("\n");
+  const hits: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i]!.trimStart();
+    if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+    if (NODE_IMPORT_RE.test(lines[i]!)) hits.push(i + 1);
+  }
+  return hits;
+}
+
+function* collectBrowserReachable(): Iterable<string> {
+  for (const name of readdirSync(SRC_DIR)) {
+    const full = join(SRC_DIR, name);
+    const st = statSync(full);
+    if (st.isDirectory()) {
+      if (SERVER_ONLY_DIRS.has(name)) continue;
+      yield* collect(full);
+    } else if (name.endsWith(".ts") && !name.endsWith(".d.ts")) {
+      yield full;
+    }
+  }
+}
+
+describe("browser safety — main entry has no node: imports", () => {
+  test("no node: import reachable from src/index.ts", () => {
+    const offenders: string[] = [];
+    for (const file of collectBrowserReachable()) {
+      const src = readFileSync(file, "utf8");
+      for (const line of scanNodeImports(src)) {
+        offenders.push(`  ${relative(SRC_DIR, file)}:${line}`);
+      }
+    }
+    if (offenders.length > 0) {
+      throw new Error(
+        `node: imports in browser-reachable @fragua/core code (main entry must stay browser-safe;\n` +
+          `move the code under a server-only sub-entry or inject the dependency):\n${offenders.join("\n")}`,
+      );
+    }
+    expect(offenders).toHaveLength(0);
+  });
+
+  test("lint catches a static node: import", () => {
+    expect(scanNodeImports(`import { readFileSync } from "node:fs";\n`)).toEqual([1]);
+  });
+
+  test("lint catches a dynamic node: import and require", () => {
+    expect(scanNodeImports(`const fs = await import("node:fs");\n`)).toEqual([1]);
+    expect(scanNodeImports(`const fs = require("node:child_process");\n`)).toEqual([1]);
+  });
+
+  test("lint ignores commented-out imports", () => {
+    expect(scanNodeImports(`// import { join } from "node:path";\n`)).toEqual([]);
   });
 });
