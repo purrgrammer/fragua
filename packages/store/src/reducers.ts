@@ -228,6 +228,32 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       closeDispatchInterval(next, now);
       next.status = "halted";
       next.nodeStartedAt = null;
+      // Structural halts (route_not_picked / route_call_not_isolated /
+      // edge_no_match, handler-returned error/budget) bypass both
+      // fact.node_completed and fact.node_aborted; their partial* fields
+      // carry the dropped turn's spend. Fold mirrors fact.node_aborted.
+      // Halts that ride alongside a node_completed (budget sentinel,
+      // aborted_exit) never carry these fields, so no double count.
+      const p = fact.payload;
+      if (p.partialTokens != null || p.partialCostUsd != null) {
+        next.metrics.billedTokens += p.partialTokens ?? 0;
+        next.metrics.totalCostUsd += p.partialCostUsd ?? 0;
+        next.metrics.totalInputCostUsd += p.partialInputCostUsd ?? 0;
+        next.metrics.totalOutputCostUsd += p.partialOutputCostUsd ?? 0;
+        next.metrics.totalCacheReadCostUsd += p.partialCacheReadCostUsd ?? 0;
+        next.metrics.totalCacheWriteCostUsd += p.partialCacheWriteCostUsd ?? 0;
+        next.metrics.totalInputTokens += p.partialInputTokens ?? 0;
+        next.metrics.totalOutputTokens += p.partialOutputTokens ?? 0;
+        next.metrics.totalCacheReadTokens += p.partialCacheReadTokens ?? 0;
+        next.metrics.totalCacheWriteTokens += p.partialCacheWriteTokens ?? 0;
+        if (p.nodeId != null) {
+          const haltBucket = next.metrics.nodeCosts[p.nodeId] ?? { tokens: 0, costUsd: 0 };
+          next.metrics.nodeCosts[p.nodeId] = {
+            tokens: haltBucket.tokens + (p.partialInputTokens ?? 0) + (p.partialOutputTokens ?? 0),
+            costUsd: haltBucket.costUsd + (p.partialCostUsd ?? 0),
+          };
+        }
+      }
       return next;
     }
     case "fact.run_cancelled": {

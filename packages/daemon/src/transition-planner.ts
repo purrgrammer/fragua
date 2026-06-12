@@ -63,6 +63,14 @@ export interface TurnAccounting {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
+  /** Per-bucket cost splits from the `cost.recorded` mirror. Optional —
+   * the `ctx.llm.call` accounting lane has no bucket-cost source. Carried
+   * onto `fact.run_halted.partial*CostUsd` when a structural halt drops
+   * the turn (see ResultContext.usage in result-to-facts). */
+  totalInputCostUsd?: number;
+  totalOutputCostUsd?: number;
+  totalCacheReadCostUsd?: number;
+  totalCacheWriteCostUsd?: number;
   lastModel: string | undefined;
 }
 
@@ -123,6 +131,14 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // hold the selection here, then emit it only if no retarget fired.
   let pendingEdgeSelection: EdgeSelection | undefined;
 
+  // When the edge_no_match backstop converts a cost-bearing transition
+  // into a halt, the handler-reported spend on that transition (already
+  // backfilled from accounting above) must survive onto the halt fact —
+  // captured here and preferred over the raw accounting mirror, which is
+  // empty for handlers that report usage on the result without emitting
+  // cost.recorded.
+  let convertedTransitionUsage: TurnAccounting | undefined;
+
   // Attach LLM accounting into the node_completed fact if the handler
   // didn't set these explicitly.
   if (result.kind === "transition") {
@@ -171,6 +187,19 @@ export function planTransition(input: TransitionInput): TransitionPlan {
           // `fact.run_halted{reason:"edge_no_match"}` with a
           // diagnostic detail; validator should make this
           // unreachable for a pinned graph.
+          convertedTransitionUsage = {
+            turnBilled: result.tokens,
+            totalCostUsd: result.costUsd,
+            totalInputTokens: result.inputTokens ?? 0,
+            totalOutputTokens: result.outputTokens ?? 0,
+            totalCacheReadTokens: result.cacheReadTokens ?? 0,
+            totalCacheWriteTokens: result.cacheWriteTokens ?? 0,
+            totalInputCostUsd: result.inputCostUsd ?? 0,
+            totalOutputCostUsd: result.outputCostUsd ?? 0,
+            totalCacheReadCostUsd: result.cacheReadCostUsd ?? 0,
+            totalCacheWriteCostUsd: result.cacheWriteCostUsd ?? 0,
+            lastModel: result.modelName,
+          };
           result = {
             kind: "halt",
             reason: "edge_no_match",
@@ -509,6 +538,7 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   const factsCtx = {
     state,
     appliedIntentSeqs: decision.appliedSeqs,
+    usage: convertedTransitionUsage ?? input.accounting,
   };
   let facts = resultToFacts(result, factsCtx);
 

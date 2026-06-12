@@ -805,6 +805,29 @@ export type FactEvent =
       payload: {
         reason: HaltReason;
         detail?: string;
+        /** Set alongside the `partial*` fields when the halt terminated a
+         * turn whose spend never reached `fact.node_completed` /
+         * `fact.node_aborted` (structural halts: `route_not_picked`,
+         * `route_call_not_isolated`, `edge_no_match`, handler-returned
+         * `error`/`budget`). Names the node whose `nodeCosts` bucket the
+         * reducer credits. Absent when the halt rides alongside a
+         * `fact.node_completed` that already carries the turn's spend
+         * (budget halt, aborted_exit). */
+        nodeId?: string;
+        /** Partial turn spend accrued before the halt — mirrors the
+         * `partial*` fields on `fact.node_aborted` so the reducer folds
+         * the halted turn into `run_state.metrics` and analytics keep
+         * bucket sums ≈ total_cost_usd. Only present when non-zero. */
+        partialTokens?: number;
+        partialCostUsd?: number;
+        partialInputTokens?: number;
+        partialOutputTokens?: number;
+        partialCacheReadTokens?: number;
+        partialCacheWriteTokens?: number;
+        partialInputCostUsd?: number;
+        partialOutputCostUsd?: number;
+        partialCacheReadCostUsd?: number;
+        partialCacheWriteCostUsd?: number;
         /** Set when `reason="occ_exhausted"`. Carries the OCC retry
          * context — count of consecutive `ConcurrencyError` failures,
          * the node + iteration where the storm hit, the last observed
