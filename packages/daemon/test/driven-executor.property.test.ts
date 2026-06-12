@@ -362,6 +362,8 @@ describe("driven executor — tier-2", () => {
     checkRunInvariants(events, state);
   });
 
+  // invariant: P5 — crash mid-run + startup sweep recovers over generated
+  // graphs. Load-bearing sentinel for invariant-coverage.test.ts.
   test("slice 4: crash mid-run + startup sweep recovers and completes", async () => {
     await fc.assert(
       fc.asyncProperty(

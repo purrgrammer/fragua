@@ -345,6 +345,7 @@ async function orphanCase(
   }
 }
 
+// invariant: P6 — load-bearing sentinel for invariant-coverage.test.ts.
 describe("executor faults — orphan side-effect (crash between intent and done)", () => {
   // A side_effect_intent with no matching _done makes the startup sweep
   // quarantine the run (orphan-side-effect invariant, I5/P6) — for ANY
@@ -379,6 +380,8 @@ const throwingProvisioner: Provisioner = {
   snapshot: async () => null,
 };
 
+// invariant: P5 — store-commit failure → bounded halt, never a wedged run.
+// Load-bearing sentinel for invariant-coverage.test.ts.
 describe("executor faults — provision + store failure", () => {
   // provisioner.ensure throwing → the executor halts the run with a clear
   // reason rather than dispatching env-less or wedging.

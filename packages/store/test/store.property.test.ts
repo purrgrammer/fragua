@@ -68,6 +68,8 @@ describe("P1 — seq monotonic & contiguous per run", () => {
   });
 });
 
+// invariant: I3 — facts are OCC-checked: a stale writer must lose the race.
+// Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("P2 — OCC rejects stale writers", () => {
   test("exactly one writer succeeds when two target the same version", async () => {
     const store = freshStore();
