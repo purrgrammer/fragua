@@ -13,9 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.79.1",
     "@sinclair/typebox": "0.34.49",
-    "@fragua/agent": "workspace:*",
     "@fragua/core": "workspace:*",
     "@fragua/store": "workspace:*",
     "@fragua/types": "workspace:*",
@@ -23,6 +21,7 @@
     "hono": "4.12.23"
   },
   "devDependencies": {
+    "@fragua/agent": "workspace:*",
     "fast-check": "3.23.1",
     "typescript": "5.7.3"
   }

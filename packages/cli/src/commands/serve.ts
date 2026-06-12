@@ -15,11 +15,12 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AuthStorage, ModelRegistry, validateWorkflowModels } from "@fragua/agent";
+import { AuthStorage, defaultModelPerProvider, ModelRegistry, validateWorkflowModels } from "@fragua/agent";
 import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@fragua/server";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
+import { streamSimpleProviderTester } from "../provider-tester.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
 
@@ -159,6 +160,8 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     validateWorkflowModels: (yamlSource: string) => validateWorkflowModels(yamlSource, modelRegistry),
     authStorage,
     modelRegistry,
+    defaultModels: defaultModelPerProvider as Record<string, string>,
+    testProvider: streamSimpleProviderTester,
     ...(maxQueuedRuns !== undefined ? { maxQueuedRuns } : {}),
     ...(webDistDir !== undefined ? { webDistDir } : {}),
     ...(COMPILED ? { webBundle: EMBEDDED_WEB_ASSETS } : {}),

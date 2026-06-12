@@ -2,7 +2,7 @@
 //
 //   GET    /providers                         — list all providers
 //   GET    /providers/:name                   — provider detail incl. models
-//   POST   /providers/:name/test              — 1-token streamSimple call
+//   POST   /providers/:name/test              — 1-token probe via the injected tester
 //   POST   /providers/:name/credentials       — add/update api_key credentials
 //   DELETE /providers/:name/credentials       — remove stored credentials
 //
@@ -17,14 +17,31 @@
 //     indirection). Transport-layer protection (TLS / loopback-only
 //     bind) is the deployment's responsibility on writes.
 
-import { streamSimple } from "@earendil-works/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@fragua/agent";
-import { defaultModelPerProvider } from "@fragua/agent";
 import { Hono } from "hono";
+
+/** A model row as resolved by the registry — the same object
+ * `ModelRegistry.find` returns, derived structurally so this module
+ * never value-imports pi-ai. */
+export type RegisteredModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
+
+export type ProviderTestOutcome =
+  | { ok: true; firstDeltaMs: number | null; totalMs: number; outputTokens: number }
+  | { ok: false; error: string };
+
+/** One-token provider probe. Injected by the caller (the CLI assembly,
+ * which legitimately depends on pi-ai) so @fragua/server carries no
+ * pi-ai runtime dependency — same seam as `validateWorkflowModels`. */
+export type ProviderTester = (model: RegisteredModel, apiKey: string) => Promise<ProviderTestOutcome>;
 
 export interface ProvidersRouteOptions {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
+  /** Default model id per provider — the CLI injects @fragua/agent's
+   * `defaultModelPerProvider` so the server doesn't import it. */
+  defaultModels: Readonly<Record<string, string>>;
+  /** Runs the 1-token probe behind `POST /providers/:name/test`. */
+  testProvider: ProviderTester;
 }
 
 interface ProviderSummary {
@@ -46,7 +63,13 @@ interface ProviderSummary {
   default_model: string | null;
 }
 
-function summarize(name: string, model_count: number, auth: AuthStorage, oauthIds: Set<string>): ProviderSummary {
+function summarize(
+  name: string,
+  model_count: number,
+  auth: AuthStorage,
+  oauthIds: Set<string>,
+  defaultModels: Readonly<Record<string, string>>,
+): ProviderSummary {
   const cred = auth.get(name);
   return {
     name,
@@ -55,13 +78,13 @@ function summarize(name: string, model_count: number, auth: AuthStorage, oauthId
     auth_source: auth.describeAuthSource(name),
     auth_kind: cred?.type === "api_key" ? "api_key" : cred?.type === "oauth" ? "oauth" : null,
     oauth_available: oauthIds.has(name),
-    default_model: (defaultModelPerProvider as Record<string, string>)[name] ?? null,
+    default_model: defaultModels[name] ?? null,
   };
 }
 
 export function providersRoutes(opts: ProvidersRouteOptions): Hono {
   const app = new Hono();
-  const { authStorage, modelRegistry } = opts;
+  const { authStorage, modelRegistry, defaultModels, testProvider } = opts;
 
   const rebuildOauthIds = () => new Set(authStorage.getOAuthProviders().map((p) => p.id));
 
@@ -73,7 +96,7 @@ export function providersRoutes(opts: ProvidersRouteOptions): Hono {
     const oauthIds = rebuildOauthIds();
     const rows: ProviderSummary[] = [...byProvider.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([name, count]) => summarize(name, count, authStorage, oauthIds));
+      .map(([name, count]) => summarize(name, count, authStorage, oauthIds, defaultModels));
     const loadError = modelRegistry.getError() ?? null;
     return c.json({ providers: rows, provider_config_error: loadError });
   });
@@ -84,7 +107,7 @@ export function providersRoutes(opts: ProvidersRouteOptions): Hono {
     if (models.length === 0) return c.json({ error: "not_found", provider: name }, 404);
     const oauthIds = rebuildOauthIds();
     return c.json({
-      ...summarize(name, models.length, authStorage, oauthIds),
+      ...summarize(name, models.length, authStorage, oauthIds, defaultModels),
       models: models.map((m) => ({
         id: m.id,
         name: m.name,
@@ -104,7 +127,7 @@ export function providersRoutes(opts: ProvidersRouteOptions): Hono {
     const body = (await c.req.json().catch(() => ({}))) as { model?: string };
 
     // Resolve model: explicit > provider default > first available.
-    const defaultId = (defaultModelPerProvider as Record<string, string>)[name];
+    const defaultId = defaultModels[name];
     let model = body.model ? modelRegistry.find(name, body.model) : undefined;
     if (!model && !body.model) {
       model = defaultId ? modelRegistry.find(name, defaultId) : undefined;
@@ -128,34 +151,18 @@ export function providersRoutes(opts: ProvidersRouteOptions): Hono {
       );
     }
 
-    const started = Date.now();
-    let firstDeltaMs: number | undefined;
-    let outputTokens = 0;
-    try {
-      const stream = streamSimple(
-        model,
-        { messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [] },
-        // biome-ignore lint/suspicious/noExplicitAny: pi-ai StreamOptions is an opaque provider-specific bag.
-        { maxTokens: 1, apiKey } as any,
-      );
-      for await (const ev of stream) {
-        if (ev.type === "text_delta" && firstDeltaMs === undefined) firstDeltaMs = Date.now() - started;
-        if (ev.type === "done") outputTokens = ev.message.usage?.output ?? 0;
-        if (ev.type === "error") {
-          return c.json({ ok: false, error: ev.error.errorMessage ?? "unknown provider error" });
-        }
-      }
-    } catch (err) {
-      return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    const outcome = await testProvider(model, apiKey);
+    if (!outcome.ok) {
+      return c.json({ ok: false, error: outcome.error });
     }
 
     return c.json({
       ok: true,
       provider: name,
       model: model.id,
-      first_delta_ms: firstDeltaMs ?? null,
-      total_ms: Date.now() - started,
-      output_tokens: outputTokens,
+      first_delta_ms: outcome.firstDeltaMs,
+      total_ms: outcome.totalMs,
+      output_tokens: outcome.outputTokens,
     });
   });
 

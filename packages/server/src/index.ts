@@ -17,7 +17,7 @@ import { createRunSnapshotReader } from "./adapters/run-snapshot-reader.ts";
 import type { ProjectTreeReader, RunSnapshotReader, ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { projectsRoutes } from "./routes/projects.ts";
-import { providersRoutes } from "./routes/providers.ts";
+import { type ProviderTester, providersRoutes } from "./routes/providers.ts";
 import { runFilesRoutes } from "./routes/run-files.ts";
 import { runSnapshotsRoutes } from "./routes/run-snapshots.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
@@ -73,12 +73,23 @@ export interface ServerOptions {
   /** Backpressure cap on queued runs. POST /runs returns 429 with a
    * Retry-After header when the cap is met. Undefined = uncapped. */
   maxQueuedRuns?: number;
-  /** When set, mounts `/providers*` for credential management + model
-   * listing. Omit in tests that don't exercise those routes. Both must
-   * be the same pair wired into the daemon / summariser so the web UI
-   * and backend share state. */
+  /** When set (together with `defaultModels` + `testProvider`), mounts
+   * `/providers*` for credential management + model listing. Omit in
+   * tests that don't exercise those routes. Both must be the same pair
+   * wired into the daemon / summariser so the web UI and backend share
+   * state. */
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
+  /** Default model id per provider for the `/providers*` routes. The CLI
+   * injects @fragua/agent's `defaultModelPerProvider`; injected rather
+   * than imported so @fragua/server carries no @fragua/agent runtime
+   * dependency. */
+  defaultModels?: Readonly<Record<string, string>>;
+  /** 1-token probe behind `POST /providers/:name/test`. The CLI wires a
+   * pi-ai `streamSimple`-backed implementation; injected rather than
+   * imported so @fragua/server stays free of pi-ai — same seam as
+   * `validateWorkflowModels`. */
+  testProvider?: ProviderTester;
 }
 
 function buildApiApp(opts: ServerOptions): Hono {
@@ -110,8 +121,16 @@ function buildApiApp(opts: ServerOptions): Hono {
   );
   api.route("/", createScheduleRoutes({ store: opts.store }));
   api.route("/", skillsRoutes({ store: opts.store, homeDir: homedir(), cwd }));
-  if (opts.authStorage && opts.modelRegistry) {
-    api.route("/", providersRoutes({ authStorage: opts.authStorage, modelRegistry: opts.modelRegistry }));
+  if (opts.authStorage && opts.modelRegistry && opts.defaultModels && opts.testProvider) {
+    api.route(
+      "/",
+      providersRoutes({
+        authStorage: opts.authStorage,
+        modelRegistry: opts.modelRegistry,
+        defaultModels: opts.defaultModels,
+        testProvider: opts.testProvider,
+      }),
+    );
   }
   return api;
 }
@@ -275,6 +294,12 @@ export {
   DAEMON_LIVENESS_TTL_MS,
   daemonInfoFromStore,
 } from "./routes/health.ts";
+export type {
+  ProvidersRouteOptions,
+  ProviderTester,
+  ProviderTestOutcome,
+  RegisteredModel,
+} from "./routes/providers.ts";
 export { providersRoutes } from "./routes/providers.ts";
 export {
   ErrorBody,
