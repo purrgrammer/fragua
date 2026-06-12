@@ -445,6 +445,16 @@ CREATE INDEX idx_outputs_run ON outputs(run_id, node_id);
 - `messages` rows: ≤ 1 MiB per row (enforced; large values spill through `ctx.artifacts.put`).
 - `blobs` row: ~100 bytes (metadata only). Content files up to 16 MiB apiece live under `blobsDir`.
 
+### 2.1 `run_state.routing` — trusted, opaque, fold-rebuildable
+
+`routing` is an unschematized JSON dict carrying load-bearing per-run state: the typed run inputs under `inputs` (with `$fragua_blob` spill refs, §0), the fan-out frontier under `internal.active_nodes` (I11), operator budget overrides under `budget_override.<scope>.<metric>`, retry/pacing counters (`internal.retry_count.<nodeId>`, `internal.timeout_retries.<nodeId>`, `internal.provider_retry.attempt`), and the auto-wake timer `internal.auto_resume_at`. Its only structural guard is the 8 KB size CHECK (I6) — there is no per-key schema. That is deliberate; the trust model:
+
+**Trust model.** `routing` is a projection cache, not a second source of truth. It is written only inside the same transaction as an event append (I1), through exactly two seams: the reducer fold (`reducers.ts` — the genesis `intent.run_enqueued` seeds `inputs`, facts evolve `internal.active_nodes`) and the `routingPatch` option on `appendFact` (the daemon materializing applied intents and retry/abort bookkeeping into the projection it just evolved). There is no out-of-band writer — the web/CLI write plane only appends intents; the single daemon writer is the only process that folds them into `routing`. Readers therefore treat the dict as trusted and opaque: no validation on read. The one read path reachable by untrusted bytes — a tampered bundle fed through `fragua import` — element-validates and degrades to a safe default (`readActiveNodes`).
+
+**Rebuild path.** Corruption is recoverable, not load-bearing: the whole `run_state` row, `routing` included, is disposable. `deriveRunState` (`packages/store/src/reducers.ts`) reconstructs it by replaying the run's event log — genesis seed + pure fact fold — and bundle import does exactly this on every import (bundles carry no projection). The fan-out property suite (P28) asserts replay-equivalence for the fold-derived keys. The `routingPatch` keys (budget overrides, retry counters, the auto-resume timer) are operational pacing state rather than fold outputs; the pure fold does not re-materialize them, but their provenance stays in the log — the `intent.budget_adjusted` / abort facts that produced them are recorded. Nothing lives *only* in `routing`.
+
+**Why not normalize.** Promoting these keys into typed columns or side tables was considered and rejected. The key set is small, heterogeneous, and churns with engine features — the fan-out frontier and the provider-retry counter both landed without a schema migration precisely because `routing` absorbed them. A column or table per key would mean a DB migration per engine feature and multi-table writes for what is cache state. The size CHECK (I6) plus the blob-spill path (§0) keeps the dict bounded, and the event log — not the dict — remains the thing that must be correct.
+
 ---
 
 ## 3. Event taxonomy

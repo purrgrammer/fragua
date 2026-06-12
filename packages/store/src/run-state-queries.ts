@@ -644,7 +644,12 @@ const WRITE_PROJECTION_SQL = `
 
 /** Write the projected run_state row. Caller serializes routing +
  *  metrics to JSON; nothing else is computed here. Runs inside the
- *  appendFact transaction. */
+ *  appendFact transaction.
+ *
+ *  `routing` is persisted as an opaque, unschematized JSON dict, guarded
+ *  only by the 8 KB CHECK (I6). Deliberate: it is a fold-rebuildable
+ *  projection cache (`deriveRunState` reconstructs it from the event
+ *  log), never a second source of truth — see ARCHITECTURE.md §2.1. */
 export function writeRunStateProjection(
   db: Database,
   args: {
