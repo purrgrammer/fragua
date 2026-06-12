@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore, sha256Hex } from "@fragua/store";
-import { FEED_EVENT_KINDS } from "@fragua/types";
+import { FEED_EVENT_KINDS, RUN_STATUSES } from "@fragua/types";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
 
@@ -754,6 +754,75 @@ describe("GET /runs?status= filter", () => {
     expect(res2.status).toBe(200);
     const body2 = (await res2.json()) as Array<{ runId: string }>;
     expect(body2.some((r) => r.runId === "ppr-1")).toBe(true);
+  });
+
+  test("?status= filter accepts every RunStatus literal", async () => {
+    // Enum-literal consumer rule (ground rule 1): VALID_STATUSES is derived
+    // from RUN_STATUSES, so this drives one run into each lifecycle status
+    // and proves the filter round-trips every literal end to end — a literal
+    // dropped by the allow-list would return an empty (or wrong) result set.
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+
+    const start = (runId: string) => {
+      store.enqueueRun({ runId, workflowSha: "wf" });
+      const s = store.getState(runId)!;
+      store.appendFact(
+        runId,
+        [
+          {
+            type: "fact.run_started",
+            payload: { workflowSha: "wf", contractVersion: s.contractVersion, startNode: "n1" },
+          },
+        ],
+        s.version,
+      );
+    };
+    const fact = (runId: string, f: Parameters<typeof store.appendFact>[1][number]) => {
+      store.appendFact(runId, [f], store.getState(runId)!.version);
+    };
+
+    store.enqueueRun({ runId: "st-queued", workflowSha: "wf" });
+    start("st-running");
+    start("st-paused");
+    fact("st-paused", { type: "fact.run_paused", payload: { reason: "operator", nodeId: "n1" } });
+    start("st-paused_human");
+    fact("st-paused_human", { type: "fact.run_paused_human", payload: { nodeId: "n1", text: "?", routes: ["a"] } });
+    start("st-paused_auto");
+    fact("st-paused_auto", {
+      type: "fact.run_paused",
+      payload: {
+        reason: "provider_retry",
+        nodeId: "n1",
+        httpStatus: 503,
+        provider: "anthropic",
+        errorMessage: "503",
+        attempt: 1,
+        resumeAt: Date.now() + 60_000,
+      },
+    });
+    start("st-completed");
+    fact("st-completed", { type: "fact.run_completed", payload: { finalNode: "n1" } });
+    start("st-cancelled");
+    fact("st-cancelled", { type: "fact.run_cancelled", payload: { intentSeq: 1 } });
+    start("st-halted");
+    fact("st-halted", { type: "fact.run_halted", payload: { reason: "error" } });
+    start("st-quarantined");
+    fact("st-quarantined", { type: "fact.run_quarantined", payload: { reason: "other" } });
+
+    for (const status of RUN_STATUSES) {
+      expect(store.getState(`st-${status}`)!.status).toBe(status);
+      const res = await app.request(`/runs?status=${status}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Array<{ runId: string }>;
+      // Exactly the one run in that status — a literal dropped by the
+      // allow-list would yield [] here; a leaky filter would yield extras.
+      // (The wire `status` field is a display status, so compare by runId.)
+      expect(
+        body.map((r) => r.runId),
+        `?status=${status} drifted — a RunStatus literal is being dropped or leaked by the filter`,
+      ).toEqual([`st-${status}`]);
+    }
   });
 });
 

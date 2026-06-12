@@ -5,6 +5,7 @@
 // All formatters fall back to the raw input when no mapping is known,
 // so a brand-new value never renders as `"unknown"`.
 
+import type { HaltReason, RunStatus } from "@fragua/types";
 import type { BucketKind } from "../types/analytics.ts";
 import { defaultLocale } from "./locale.ts";
 
@@ -13,7 +14,12 @@ import { defaultLocale } from "./locale.ts";
 // Match the vocabulary the rest of the app uses for run statuses
 // (see `format.ts` `statusLabel` and `RunStatusBadge`). "Done"/"Failed"
 // drift from "success"/"failure" and read inconsistently across surfaces.
-const HALT_LABELS: Record<string, string> = {
+//
+// `satisfies` pins the keys to the contract unions: every RunStatus must
+// have a label, HaltReason labels are an opt-in subset (the rest fall
+// back to titleCaseFromSnake), and a stale key is a compile error.
+// Exported so the enum-consumers test can assert against the real value.
+export const HALT_LABELS = {
   completed: "Success",
   halted: "Failure",
   quarantined: "Quarantined",
@@ -26,10 +32,10 @@ const HALT_LABELS: Record<string, string> = {
   route_not_picked: "Route not picked",
   route_call_not_isolated: "Route call not isolated",
   edge_no_match: "No edge matched",
-};
+} satisfies Record<RunStatus, string> & Partial<Record<HaltReason, string>>;
 
 export function humanizeHaltReason(status: string): string {
-  return HALT_LABELS[status] ?? titleCaseFromSnake(status);
+  return (HALT_LABELS as Record<string, string>)[status] ?? titleCaseFromSnake(status);
 }
 
 /** Humanize a route name — title-cases snake/kebab identifiers.
@@ -95,7 +101,9 @@ export type RunCategory = "success" | "failure" | "paused" | "queued";
 
 export const RUN_CATEGORIES: readonly RunCategory[] = ["success", "failure", "paused", "queued"];
 
-const STATUS_TO_CATEGORY: Record<string, RunCategory> = {
+// Total over RunStatus by construction — adding/removing a literal in
+// @fragua/types breaks this `satisfies` until the bucket is decided here.
+const STATUS_TO_CATEGORY = {
   completed: "success",
   queued: "queued",
   running: "queued",
@@ -105,10 +113,10 @@ const STATUS_TO_CATEGORY: Record<string, RunCategory> = {
   cancelled: "failure",
   halted: "failure",
   quarantined: "failure",
-};
+} satisfies Record<RunStatus, RunCategory>;
 
 export function statusCategory(status: string): RunCategory {
-  return STATUS_TO_CATEGORY[status] ?? "queued";
+  return (STATUS_TO_CATEGORY as Record<string, RunCategory>)[status] ?? "queued";
 }
 
 export function categoryAccentVar(c: RunCategory): string {

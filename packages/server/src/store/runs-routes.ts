@@ -8,6 +8,7 @@
 
 import { makeReadPlane } from "@fragua/core/read-plane";
 import type { IEventStore, RunStatus } from "@fragua/store";
+import { RUN_STATUSES } from "@fragua/types";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
 
@@ -138,17 +139,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   return app;
 }
 
-const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
-  "queued",
-  "running",
-  "paused",
-  "paused_human",
-  "paused_auto",
-  "completed",
-  "cancelled",
-  "halted",
-  "quarantined",
-]);
+const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(RUN_STATUSES);
 
 const LIMIT_MAX = 200;
 

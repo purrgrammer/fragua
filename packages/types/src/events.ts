@@ -145,17 +145,26 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
  *
  * Mirrored by `run_state.status` (CHECK constraint in schema.sql) and
  * the daemon's intent fold. See {@link PauseReason} for the reason
- * partition; status follows reason 1:1. */
-export type RunStatus =
-  | "queued"
-  | "running"
-  | "paused"
-  | "paused_human"
-  | "paused_auto"
-  | "completed"
-  | "cancelled"
-  | "halted"
-  | "quarantined";
+ * partition; status follows reason 1:1.
+ *
+ * The runtime tuple is the single source of truth — the `RunStatus`
+ * union is derived from it, so the values and the type cannot drift.
+ * Consumer sites that can import this tuple should derive from it;
+ * sites that can't (SQL strings, label maps) are pinned by lint tests
+ * (enum-consumers) against this export. */
+export const RUN_STATUSES = [
+  "queued",
+  "running",
+  "paused",
+  "paused_human",
+  "paused_auto",
+  "completed",
+  "cancelled",
+  "halted",
+  "quarantined",
+] as const;
+
+export type RunStatus = (typeof RUN_STATUSES)[number];
 
 const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "cancelled", "halted"]);
 
@@ -243,22 +252,29 @@ export const VALID_WRITERS: ReadonlySet<EventWriter> = new Set<EventWriter>(["da
  * (`docs/proposals/archive/event-contract-version.md` §3.2). What remains
  * here is genuinely terminal: the workflow author's `<abort>` sentinel,
  * the opt-in `budget_policy="stop"` path, OCC exhaustion, and the
- * watchdog-cap exhaustion that paused-class `timeout_retry` escalates to. */
-export type HaltReason =
-  | "budget"
-  | "error"
-  | "aborted_exit"
-  | "occ_exhausted"
-  | "timeout_exhausted"
+ * watchdog-cap exhaustion that paused-class `timeout_retry` escalates to.
+ *
+ * Like {@link RUN_STATUSES}, the runtime tuple is the source of truth;
+ * the `HaltReason` union derives from it and the enum-consumers lint
+ * tests pin the non-importable sites. */
+export const HALT_REASONS = [
+  "budget",
+  "error",
+  "aborted_exit",
+  "occ_exhausted",
+  "timeout_exhausted",
   /** Routing node's llm turn ended without an isolated call to the
    * synthesised `route` tool. */
-  | "route_not_picked"
+  "route_not_picked",
   /** Routing node's `route` tool call shared an assistant response with
    * other tool calls — side-effect isolation violation. */
-  | "route_call_not_isolated"
+  "route_call_not_isolated",
   /** Handler reported a route/outcome and no outgoing edge matched.
    * Validator should prevent this statically; runtime backstop. */
-  | "edge_no_match";
+  "edge_no_match",
+] as const;
+
+export type HaltReason = (typeof HALT_REASONS)[number];
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
