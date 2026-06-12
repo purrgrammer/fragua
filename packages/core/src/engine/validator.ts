@@ -13,7 +13,8 @@ import { inputReferences, outputReferences } from "./substitution.ts";
  * (`thread:` → `thread_id`, `context-files:` →
  * `context_files`, …). Anything outside this set trips W013, surfacing typos
  * and parser passthrough that would otherwise silently no-op. Keep in sync
- * with `NodeAttrs` declared fields in `types/graph.ts`. */
+ * with `NodeAttrs` declared fields in `types/graph.ts` — drift in either
+ * direction fails `test/lint.test.ts`. */
 const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "label",
   "type",
