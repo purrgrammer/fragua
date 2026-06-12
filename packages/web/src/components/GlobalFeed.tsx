@@ -133,7 +133,17 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
     borderVar: "var(--sw-accent-error)",
     attention: true,
   },
-  "fact.run_requeued_after_crash": { Icon: RotateCcw, verb: "requeued" },
+  // Crash requeue: a daemon died mid-dispatch and the startup sweep put the
+  // run back in the queue. Reads as an anomaly (attention strip), consistent
+  // with the takeover/timeout rows below — the operator should know the run
+  // restarted on its own, not by their hand.
+  "fact.run_requeued_after_crash": {
+    Icon: RotateCcw,
+    verb: "requeued after crash",
+    iconClass: "text-sw-accent-pause",
+    borderVar: "var(--sw-accent-pause)",
+    attention: true,
+  },
   "fact.daemon_takeover": { Icon: Server, verb: "takeover", attention: true },
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
   // Post-terminal operator actions — informational, no attention strip.

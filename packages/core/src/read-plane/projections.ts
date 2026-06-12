@@ -222,7 +222,25 @@ export function runStateToDetail(
   const decisions = collectHitlDecisions(events);
   if (decisions !== undefined) detail.hitlDecisions = decisions;
 
+  const requeues = collectCrashRequeues(events);
+  if (requeues.length > 0) detail.crashRequeues = requeues;
+
   return detail;
+}
+
+/** One entry per `fact.run_requeued_after_crash`, in log order. Null-payload-
+ * safe: a corrupted store row must not throw the projection. */
+function collectCrashRequeues(events: StoredEvent[]): NonNullable<RunDetail["crashRequeues"]> {
+  const out: NonNullable<RunDetail["crashRequeues"]> = [];
+  for (const ev of events) {
+    if (ev.type !== "fact.run_requeued_after_crash") continue;
+    const p = ev.payload as { prevNode?: unknown; lastAliveAt?: unknown } | null | undefined;
+    const entry: NonNullable<RunDetail["crashRequeues"]>[number] = { at: ev.ts };
+    if (typeof p?.prevNode === "string") entry.prevNode = p.prevNode;
+    if (typeof p?.lastAliveAt === "number" && Number.isFinite(p.lastAliveAt)) entry.lastAliveAt = p.lastAliveAt;
+    out.push(entry);
+  }
+  return out;
 }
 
 // Workflow source is sha-pinned at enqueue and immutable, but runStateToDetail

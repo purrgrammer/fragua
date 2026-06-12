@@ -187,6 +187,10 @@ export interface RunDetail {
    *  each answered human gate, derived from `intent.human_input`. Survives
    *  resume so a running/terminal run still shows past decisions. */
   hitlDecisions?: Record<string, { route: string; note?: string }>;
+  /** One entry per `fact.run_requeued_after_crash` in the log — the startup
+   *  sweep requeued the run after a daemon died mid-dispatch. `at` is the
+   *  fact's `ts` (epoch ms). Absent when the run was never crash-requeued. */
+  crashRequeues?: Array<{ at: number; prevNode?: string; lastAliveAt?: number }>;
   /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
    * The wire key for `?project_id=` and `/projects/:id`. Optional only to
    * tolerate older/ephemeral payloads — present on every daemon run. */

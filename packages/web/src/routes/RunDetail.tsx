@@ -19,6 +19,7 @@ import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
+import { CrashRequeueNotice } from "../components/CrashRequeueNotice.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { ImportedBadge } from "../components/ImportedBadge.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
@@ -203,6 +204,9 @@ export function RunDetail(): JSX.Element {
 
       {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && (
         <RunPausedNotice runId={id} eventEpoch={totalEvents} imported={detail.imported} />
+      )}
+      {detail?.crashRequeues != null && detail.crashRequeues.length > 0 && (
+        <CrashRequeueNotice crashRequeues={detail.crashRequeues} />
       )}
       {isError && !detail ? (
         <EmptyState

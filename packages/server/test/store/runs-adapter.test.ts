@@ -719,3 +719,41 @@ steps:
     expect(detail.fanout).toBeUndefined();
   });
 });
+
+describe("runStateToDetail — crash-requeue projection", () => {
+  function evWithSeq(seq: number, type: string, payload: Record<string, unknown>): StoredEvent {
+    return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
+  }
+
+  test("a fact.run_requeued_after_crash event lands in detail.crashRequeues with its ts and prevNode", () => {
+    const state = makeState({ status: "queued" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(2, "fact.node_started", { nodeId: "work" }),
+      evWithSeq(3, "fact.run_requeued_after_crash", { prevNode: "work", lastAliveAt: 999_500 }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.crashRequeues).toEqual([{ at: 1_000_003, prevNode: "work", lastAliveAt: 999_500 }]);
+  });
+
+  test("crashRequeues is absent when the log has no crash-requeue fact", () => {
+    const state = makeState({ status: "completed" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(2, "fact.run_completed", {}),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.crashRequeues).toBeUndefined();
+  });
+
+  test("multiple requeues project in log order; clean-acquire payload omits the optional fields", () => {
+    const state = makeState({ status: "running" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_requeued_after_crash", { prevNode: "a", lastAliveAt: 999_000 }),
+      // Clean-acquire path: no stale lock → neither prevNode nor lastAliveAt.
+      evWithSeq(2, "fact.run_requeued_after_crash", {}),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.crashRequeues).toEqual([{ at: 1_000_001, prevNode: "a", lastAliveAt: 999_000 }, { at: 1_000_002 }]);
+  });
+});

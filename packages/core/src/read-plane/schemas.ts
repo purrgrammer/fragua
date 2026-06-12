@@ -180,6 +180,19 @@ export const RunDetail = Type.Object({
   hitlDecisions: Type.Optional(
     Type.Record(Type.String(), Type.Object({ route: Type.String(), note: Type.Optional(Type.String()) })),
   ),
+  /** One entry per `fact.run_requeued_after_crash` in the log — the startup
+   *  sweep requeued the run after a daemon died mid-dispatch. `at` is the
+   *  fact's `ts` (epoch ms); `prevNode` / `lastAliveAt` mirror the payload
+   *  when present. Absent when the run was never crash-requeued. */
+  crashRequeues: Type.Optional(
+    Type.Array(
+      Type.Object({
+        at: Type.Integer(),
+        prevNode: Type.Optional(Type.String()),
+        lastAliveAt: Type.Optional(Type.Integer()),
+      }),
+    ),
+  ),
   /** Per-machine LOCATION — the resolved project root. Mirrors
    * `run_state.cwd`. Absent for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),

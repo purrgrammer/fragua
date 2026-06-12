@@ -281,6 +281,15 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
     );
   }
 
+  // Crash requeues: the startup sweep requeued this run after a daemon died
+  // mid-dispatch — the "why did this run restart" line.
+  for (const e of events) {
+    if (e.type !== "fact.run_requeued_after_crash") continue;
+    const p = e.payload as { prevNode?: unknown } | null;
+    const prevNode = typeof p?.prevNode === "string" ? chalk.dim(` (was at node ${p.prevNode})`) : "";
+    console.log(chalk.yellow(`  requeued after daemon crash at ${new Date(e.ts).toISOString()}`) + prevNode);
+  }
+
   // The "why" for a blocked/terminal run — the last relevant fact.
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;

@@ -218,6 +218,50 @@ describe("fragua operator verbs", () => {
     expect(out).toContain("completed");
   });
 
+  test("status: prints 'requeued after daemon crash at <ts>' when the log carries the fact", async () => {
+    seedQueued(r.store, "rcr");
+    const s0 = r.store.getState("rcr")!;
+    r.store.appendFact(
+      "rcr",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState("rcr")!;
+    r.store.appendFact(
+      "rcr",
+      [{ type: "fact.run_requeued_after_crash", payload: { prevNode: "n1", lastAliveAt: Date.now() } }],
+      s1.version,
+    );
+    const requeueTs = r.store.getEvents("rcr").find((e) => e.type === "fact.run_requeued_after_crash")!.ts;
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rcr", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain(`requeued after daemon crash at ${new Date(requeueTs).toISOString()}`);
+    expect(out).toContain("was at node n1");
+  });
+
+  test("status: no crash-requeue fact → no requeue line", async () => {
+    seedCommitted(r.store, "rnc");
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rnc", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).not.toContain("requeued after daemon crash");
+  });
+
   test("status: unknown run → exit 1", async () => {
     const code = await statusCommand({ runId: "nope", dbPath: r.dbPath });
     expect(code).toBe(1);
