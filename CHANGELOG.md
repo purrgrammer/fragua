@@ -8,6 +8,39 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- `fragua runs events` takes `--limit N` (last N events) and `--since <seq>`;
+  `fragua runs tail` bounds its backfill to the last 200 events by default
+  (flag to request the full log). Reads are bounded at the SQL level.
+- Crash-requeues are visible: `fragua runs status` prints a
+  "requeued after daemon crash" line and the web run detail renders the
+  event as a distinct entry, both driven from `fact.run_requeued_after_crash`.
+- The web feed shows a dismissible live-only indicator with a retry
+  affordance when the event backfill fails, instead of a silently empty
+  timeline. Workflow list gains a text filter; API error messages carry
+  method, path, and status; graph nodes flash on click.
+- `fragua runs export` warns when a bundle carries `liveLiteralHit` —
+  such a bundle must be handled as secret-bearing (docs state the policy).
+- The server logs a structured warning when a human-input route is accepted
+  without validation (no declared routes found on the pause fact).
+
+### Changed
+
+- `fragua validate` is store-free: provider/model pairs resolve against the
+  bundled offline registry; a model absent from it downgrades to a warning
+  (enqueue remains the authoritative gate). Validate now works with no
+  store present.
+
+### Fixed
+
+- W015 no longer fires for `${{ outputs.X.f }}` consumers that are only
+  reachable on paths where the producer has already run (fail-path
+  consumers); genuinely unreachable producers still warn.
+- `emit_output` rejects non-finite numeric values (`Infinity`, `NaN`) with a
+  clear node failure instead of letting them serialize to `null` and inject
+  the string "null" into a downstream prompt or command.
+
 ## [0.7.0] — 2026-06-11
 
 ### Added
