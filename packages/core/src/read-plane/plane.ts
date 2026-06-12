@@ -11,20 +11,19 @@
 // store-dependent sub-entry, excluded from the browser bundle just like
 // `@fragua/core/intent-plane`.
 
-import {
-  type ArtifactListRow,
-  type ArtifactScope,
-  FEED_EVENT_KINDS,
-  type GetEventsTailOpts,
-  type GetGlobalEventsAtFloorOpts,
-  type GetGlobalEventsForwardOpts,
-  type GetMessagesOpts,
-  type IEventStore,
-  isTerminal as isTerminalStatus,
-  type ListRunSummaryRowsOpts,
-  type NarrowMessage,
-  type StoredEvent,
+import type {
+  ArtifactListRow,
+  ArtifactScope,
+  GetEventsTailOpts,
+  GetGlobalEventsAtFloorOpts,
+  GetGlobalEventsForwardOpts,
+  GetMessagesOpts,
+  IEventStore,
+  ListRunSummaryRowsOpts,
+  NarrowMessage,
+  StoredEvent,
 } from "@fragua/store";
+import { FEED_EVENT_KINDS, isTerminal as isTerminalStatus } from "@fragua/types";
 import { buildExplanation, type RunExplanation } from "./explain.ts";
 import { runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
