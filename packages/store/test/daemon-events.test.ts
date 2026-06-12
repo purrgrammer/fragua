@@ -55,6 +55,36 @@ describe("daemon_events", () => {
     store.close();
   });
 
+  test("latestDaemonLifecycleEvent returns the newest started/stopped row, skipping other daemon events", () => {
+    const store = freshStore();
+    expect(store.latestDaemonLifecycleEvent()).toBeNull();
+
+    store.appendDaemonEvent({ type: "daemon.started", payload: { pid: 1, hostname: "h" } });
+    store.appendDaemonEvent({
+      type: "daemon.sweep_completed",
+      payload: { requeued: 0, quarantined: 0, durationMs: 1 },
+    });
+    store.appendDaemonEvent({
+      type: "daemon.stopped",
+      payload: { pid: 1, reason: "leak_limit", detail: "1 handler leaks", leaked: [{ runId: "r1", nodeId: "hang" }] },
+    });
+    store.appendDaemonEvent({
+      type: "daemon.leak_detected",
+      payload: { runId: "r1", nodeId: "hang", count: 1, ceiling: 1 },
+    });
+
+    const latest = store.latestDaemonLifecycleEvent();
+    expect(latest).not.toBeNull();
+    expect(latest!.type).toBe("daemon.stopped");
+    expect(latest!.payload).toEqual({
+      pid: 1,
+      reason: "leak_limit",
+      detail: "1 handler leaks",
+      leaked: [{ runId: "r1", nodeId: "hang" }],
+    });
+    store.close();
+  });
+
   test("payload over 4KB is rejected with PayloadTooLargeError", () => {
     const store = freshStore();
     const big = "x".repeat(5000);

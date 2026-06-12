@@ -8,6 +8,7 @@ import * as handler from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { Dispatcher } from "../src/dispatch.ts";
 import { startDaemon } from "../src/entrypoint.ts";
+import { enqueue, rig as fullRig } from "./helpers.ts";
 
 function rig(): {
   store: SqliteStore;
@@ -141,6 +142,63 @@ describe("daemon entrypoint — daemon_events", () => {
     const started = events.find((e) => e.type === "daemon.started");
     expect(started!.seq).toBeLessThan(sweep!.seq);
     expect(sweep!.seq).toBeLessThan(stopped!.seq);
+    r.store.close();
+  });
+
+  test("daemon.stopped records reason leak_limit and the leaked runId/nodeId pairs", async () => {
+    const yaml = "name: t\nsteps:\n  hang: {type: llm, prompt: x}\n";
+    const r = fullRig({ yaml });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "hang", tokens: 0, costUsd: 0 }),
+    });
+    let release!: () => void;
+    const pending = new Promise<handler.HandlerResult>((resolve) => {
+      release = () => resolve({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 });
+    });
+    r.dispatcher.register(r.workflowSha, "hang", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 20,
+      handler: () => pending, // ignores ctx.signal entirely
+    });
+
+    enqueue(r, "rleak", "start");
+    const handle = startDaemon({
+      store: r.store,
+      dispatcher: r.dispatcher,
+      tools: r.tools,
+      llmCall: r.llmCall,
+      pid: 7777,
+      hostname: "hostLeak",
+      maxConcurrentRuns: 1,
+      maxLeakedHandlers: 1,
+      leakGraceMs: 30,
+      shutdownDrainMs: 200,
+      blobGcIntervalMs: 0,
+      scheduleTickMs: 0,
+    });
+    await handle.done;
+
+    const stopped = r.store.getDaemonEvents().find((e) => e.type === "daemon.stopped");
+    expect(stopped).toBeDefined();
+    const payload = stopped!.payload as {
+      pid: number;
+      reason: string;
+      detail?: string;
+      leaked?: Array<{ runId: string; nodeId: string }>;
+    };
+    expect(payload.pid).toBe(7777);
+    expect(payload.reason).toBe("leak_limit");
+    expect(payload.leaked).toEqual([{ runId: "rleak", nodeId: "hang" }]);
+
+    // The newest lifecycle row is the shutdown record — what doctor reads.
+    const latest = r.store.latestDaemonLifecycleEvent();
+    expect(latest?.type).toBe("daemon.stopped");
+
+    release();
     r.store.close();
   });
 });

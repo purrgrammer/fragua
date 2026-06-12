@@ -8,6 +8,14 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- The daemon's `daemon.stopped` record now carries the leaked `runId`/`nodeId`
+  pairs when the leak budget forces a shutdown (`reason: leak_limit`), and
+  `fragua doctor` prints a `last exit:` line (reason, time, and the leaked
+  nodes) when no live daemon holds the lock — a missing shutdown record after
+  a `daemon.started` is reported as a likely crash.
+
 ### Fixed
 
 - An unclassified agent-loop error (a generic provider/SDK failure with no

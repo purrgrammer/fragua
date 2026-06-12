@@ -261,8 +261,10 @@ export interface ExecutorOpts {
    * `maxLeakedHandlers`. Default: log to stderr (tests use this). The
    * production daemon entrypoint wires this to `ctrl.abort()` so the
    * outer shutdown drain takes over and the singleton + sweep recover
-   * stuck runs on restart. The callback fires at most once per process. */
-  onLeakLimitExceeded?: (count: number) => void;
+   * stuck runs on restart, and records `leaked` (the leaked
+   * runId/nodeId pairs, leak order) on the `daemon.stopped` payload.
+   * The callback fires at most once per process. */
+  onLeakLimitExceeded?: (count: number, leaked: ReadonlyArray<{ runId: string; nodeId: string }>) => void;
 }
 
 const DEFAULT_POLL_MS = 50;
@@ -1918,6 +1920,10 @@ export interface LeakBudget {
   recordLeak(runId: string, nodeId: string): void;
   /** Read-only — for tests and observability. */
   count(): number;
+  /** The leaked handler sites in leak order, capped at
+   * `MAX_RECORDED_LEAK_SITES` so the `daemon.stopped` payload stays
+   * under the 4 KB cap regardless of `maxLeakedHandlers`. */
+  leaked(): ReadonlyArray<{ runId: string; nodeId: string }>;
 }
 
 /** A node's allowed/denied tool scope from its graph attrs — hard-filters
@@ -2005,6 +2011,8 @@ function resolveRunOutputs(store: IEventStore, runId: string): Record<string, Ou
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+const MAX_RECORDED_LEAK_SITES = 20;
+
 export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
   const limit = opts.maxLeakedHandlers ?? DEFAULT_MAX_LEAKED_HANDLERS;
   const onExceeded =
@@ -2015,9 +2023,11 @@ export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
     });
   let n = 0;
   let fired = false;
+  const sites: Array<{ runId: string; nodeId: string }> = [];
   return {
     recordLeak: (runId, nodeId) => {
       n += 1;
+      if (sites.length < MAX_RECORDED_LEAK_SITES) sites.push({ runId, nodeId });
       try {
         opts.store.appendDaemonEvent(
           { type: "daemon.leak_detected", payload: { runId, nodeId, count: n, ceiling: limit } },
@@ -2031,7 +2041,7 @@ export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
       if (!fired && n >= limit) {
         fired = true;
         try {
-          onExceeded(n);
+          onExceeded(n, sites);
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error("[executor] onLeakLimitExceeded threw:", err);
@@ -2039,5 +2049,6 @@ export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
       }
     },
     count: () => n,
+    leaked: () => sites,
   };
 }
