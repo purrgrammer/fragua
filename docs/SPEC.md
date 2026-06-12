@@ -6,7 +6,9 @@
 
 ## 1. Vision
 
-**fragua** is a git-native, auditable, local software dark factory. A workflow is a declarative YAML document; fragua executes it through a deterministic state machine that drives LLMs across any provider, and produces a complete, replayable audit trail.
+**fragua** is a git-native, auditable, local software dark factory — "dark factory" in the lights-out-manufacturing sense: workflows run unattended on the operator's machine, and the operator reviews finished work (inbox, accept/discard) instead of supervising each step. A workflow is a declarative YAML document; fragua executes it through a deterministic state machine that drives LLMs across any provider, and produces a complete, replayable audit trail.
+
+Local-first is the trust model, not a deployment limitation. The store — one SQLite file on the operator's machine — is the single trusted surface: every event, message, and artifact lands there and never leaves unless the operator exports it. When execution must happen elsewhere, it happens in ephemeral CI jobs, and trust is delegated to mechanisms the operator already audits: PR review gates the workflow library (no unreviewed graph runs), CI permissions and environments gate the secrets a run can touch. There is no shared runner, no hosted control plane, no third party holding the log — so the multi-tenant authz problem a service would create never has to be solved.
 
 Core values, in priority order:
 
@@ -20,9 +22,14 @@ Core values, in priority order:
 
 - Not a data-engineering orchestrator (Airflow / Dagster / Prefect territory).
 - Not a cloud-scale workflow service (Temporal territory).
-- Not a multi-tenant always-on server. Execution is local or in ephemeral CI jobs; there is no shared runner that accepts submitted workflows. Trust is delegated to git (PR review gates the workflow library) and CI (permissions/environments gate secrets) — so the workflow-authz / multi-user-isolation problem a shared runner would create simply isn't in scope.
+- Not a multi-tenant always-on server. Execution is local or in ephemeral CI jobs; there is no shared runner that accepts submitted workflows (see the trust-delegation paragraph above).
 - Not a chat framework (LangChain territory).
-- Not a replacement for Claude Code or Codex — it *drives* them.
+- Not a replacement for Claude Code or Codex, and it does not drive them — fragua drives the *models*: it is its own harness, running its own agent loop directly against providers.
+
+### How this differs from the nearest systems
+
+- **LangGraph** — interrupts land at checkpoint boundaries, before or after a node executes; in fragua, operator steering is an always-appendable intent that trips the run's `AbortSignal`, hard-aborting the in-flight handler mid-turn, and is folded deterministically into the next dispatch (intent-fold rules R1–R7).
+- **Restate / DBOS** (durable execution) — recovery re-executes workflow code against a journal of recorded step results; fragua never re-executes code to recover state — `run_state` is a pure fold over one linear event log, and signals workflow code would have to poll for are instead intents the fold applies at the dispatch boundary (ARCH §1.11, [`intent-fold.md`](./intent-fold.md)).
 
 **Dependency posture.** Core value 5 is a real bet: provider coverage, agent-loop semantics (turn-taking, tool dispatch and interception), and abort propagation all ride `pi-ai` + `@earendil-works/pi-agent-core`. The handler contract insulates handlers from the dependency's *machinery* — they call `ctx.llm` and return a typed `HandlerResult`, never constructing providers or driving the agent loop (see [`handler-contract.md`](./handler-contract.md)) — but not from its *shapes*: `ctx.llm.call` takes pi-ai's `Message` union and the persisted transcript is pi-agent-core's `AgentMessage` (re-exported through `@fragua/types`). The swap surface is deliberately one file: `PiLlmBackend` (`packages/agent/src/backend.ts`) implements `@fragua/core`'s `LlmBackend` interface, so replacing the dependency means rewriting that backend (and migrating the message shapes), not the engine.
 
