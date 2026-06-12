@@ -42,13 +42,24 @@ function parseArgs(argv: string[]): Args {
   //                     (Previously null; combined with limit=30 this dropped
   //                     them below the 3-run analysis threshold.)
   //   --limit 200     — hard cap on rows so cost stays bounded for high-traffic
-  //                     projects. Override either via $ARGUMENTS.
+  //                     projects. Override either via workflow inputs.
   let limit = 200;
   let workflow: string | null = null;
   let sinceMs: number | null = Date.now() - 7 * 86400_000;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    const next = argv[i + 1];
+  // Accept both `--flag value` and `--flag=value`.
+  const tokens = argv.flatMap((a) => {
+    if (a.startsWith("--") && a.includes("=")) {
+      const eq = a.indexOf("=");
+      return [a.slice(0, eq), a.slice(eq + 1)];
+    }
+    return [a];
+  });
+  for (let i = 0; i < tokens.length; i++) {
+    const a = tokens[i];
+    const rawNext = tokens[i + 1];
+    // A `--`-prefixed token is never a value — `--workflow --since-days 7`
+    // must skip the filter, not filter on the literal "--since-days".
+    const next = rawNext && !rawNext.startsWith("--") ? rawNext : undefined;
     if (a === "--db" && next) { storePath = next; i++; }
     else if (a === "--limit" && next) { limit = Number(next); i++; }
     else if (a === "--workflow" && next) { workflow = next; i++; }
@@ -56,6 +67,15 @@ function parseArgs(argv: string[]): Args {
       sinceMs = Date.now() - Number(next) * 86400_000; i++;
     }
     else if (a === "--no-since") { sinceMs = null; }
+  }
+  // A call site that quotes the substituted value (`--workflow="${{ … }}"`,
+  // on top of the engine's own single-quoting) delivers literal quote
+  // characters here; an empty input must mean "no filter" under every quoting
+  // form, so strip one matched pair and ignore what's left if empty.
+  if (workflow !== null) {
+    const m = workflow.match(/^(['"])(.*)\1$/);
+    if (m) workflow = m[2] ?? "";
+    if (workflow === "") workflow = null;
   }
   return { storePath: resolve(storePath ?? defaultStorePath()), limit, workflow, sinceMs };
 }
@@ -761,5 +781,8 @@ const report = {
   runs: runsOut,
 };
 
-process.stdout.write(JSON.stringify(report));
+// Pretty-printed: the lens steps read this file with the `read` tool, and a
+// one-line blob defeats line-oriented reading (offsets, partial reads, grep).
+process.stdout.write(JSON.stringify(report, null, 2));
+
 db.close();

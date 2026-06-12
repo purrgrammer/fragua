@@ -35,11 +35,12 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-fable-5
 
 steps:
   triage:                              # pure classifier — isolated, no shared thread
     type: llm
+    model: claude-haiku-4-5            # classification, not reasoning — cheap by design
     allowed-tools: [read, grep, find]
     prompt: |
       Task: ${{ inputs.task }}.
@@ -58,7 +59,6 @@ steps:
 
   plan:                                # feature preamble — writes the plan into `build`
     type: llm
-    model: claude-opus-4-7
     thread: build
     allowed-tools: [read, grep, find, ls]
     prompt: |
@@ -131,6 +131,7 @@ steps:
 
   fix:
     type: llm
+    model: claude-sonnet-4-6           # mechanical CI fixing under a tight cumulative cap
     allowed-tools: [read, write, edit, bash]
     max-cost: 0.30
     max-tokens: 800000

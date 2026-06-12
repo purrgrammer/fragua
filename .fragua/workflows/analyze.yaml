@@ -1,23 +1,32 @@
 # analyze.yaml — mine recent fragua runs for cost / confusion / redundancy patterns.
 #
-# Loop A from the meta-evaluation design: discovery only. A single llm
-# runs `.fragua/scripts/analyze/collect.ts` via the bash tool to get a JSON
-# snapshot of recent runs, then synthesises evidence-backed hypotheses in
-# its own reply. Does NOT apply changes — that lives in a separate optimize
-# workflow with an eval gate.
+# Loop A from the meta-evaluation design: discovery only. `collect` materialises
+# a JSON snapshot of recent runs ONCE (.fragua/scripts/analyze/collect.ts), then
+# three read-only lenses scan it CONCURRENTLY — cost, confusion, redundancy —
+# each emitting typed hypotheses; `synthesize` reconciles them into one ranked
+# report. Does NOT apply changes — that lives in a separate optimize workflow
+# with an eval gate.
 #
-# Defaults: --since-days 7 --limit 200. Picks up low-traffic drift
-# workflows that run 1–2×/week; capped so cost stays bounded on
-# high-traffic projects. Override via inputs as needed.
+# Effort strategy — strength follows the cost of being wrong:
+#   cost / redundancy lenses   sonnet, medium — numeric / structural pattern
+#                                               mining over a bounded JSON
+#   confusion lens             sonnet, high   — interpretive: reading per-run
+#                                               records for intent vs outcome
+#   synthesize                 sonnet, high   — cross-lens dedup + the prose
+#                                               the human reads
+#
+# Defaults: --since-days 7 --limit 200. Picks up low-traffic drift workflows
+# that run 1–2×/week; capped so cost stays bounded on high-traffic projects.
 #
 #   bun run fragua run analyze
 #   bun run fragua run analyze --input workflow=change
-#   bun run fragua run analyze --input since-days=30
-#   bun run fragua run analyze --input limit=50
+#   bun run fragua run analyze --input since-days=30 --input limit=50
 
 name: analyze
 goal: Mine recent fragua runs for cost, confusion, and redundancy patterns; emit ranked, evidence-backed hypotheses for workflow improvements.
-budget: 1.50
+# Single governor: the run-level budget. No per-step max-cost — a per-node cap
+# sums across the node's iterations and bites on retargets.
+budget: 5.00
 
 inputs:
   workflow:
@@ -36,18 +45,124 @@ defaults:
   model: claude-sonnet-4-6
 
 steps:
-  analyze:
+  # Materialise the snapshot ONCE — the lens branches are read-class (no bash),
+  # so the data must be on disk before the fan-out. The --flag=value form with
+  # NO manual quotes is load-bearing: the `run:` substitution single-quotes
+  # every value itself, so an empty workflow input yields `--workflow=''`,
+  # which the shell collapses to `--workflow=` and the script's parser skips
+  # → no filter. Adding quotes here would hand the script literal quote
+  # characters as the value; the space-separated form would collapse to
+  # `--workflow --since-days …` and filter on the literal next flag.
+  # `&&` (not `;`): a failed collect must propagate as a non-zero exit and halt
+  # the run rather than leave an empty snapshot behind for every lens to read
+  # as "no runs".
+  collect:
+    type: tool
+    run: "bun .fragua/scripts/analyze/collect.ts --workflow=${{ inputs.workflow }} --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }} > analyze-snapshot.json && wc -c analyze-snapshot.json"
+    timeout-minutes: 5
+    next: lenses
+
+  lenses:
+    type: parallel
+    branches:
+      - cost_lens
+      - confusion_lens
+      - redundancy_lens
+    next: synthesize
+    concurrency: 3
+    # Per-branch wall-clock backstop: each lens is a read-only pass over one
+    # JSON file; 10m bounds a runaway branch that would otherwise dam the join.
+    timeout-minutes: 10
+
+  # ── Lens 1: cost — where does the money/token spend concentrate?
+  cost_lens:
     type: llm
-    next: exit
-    allowed-tools: [bash, read]
-    effort: high
-    max-cost: 1.20
+    effort: medium
+    allowed-tools: [read]
+    next: synthesize
+    outputs:
+      hypotheses:
+        type: array
+        items:
+          type: object
+          fields:
+            workflow:   { type: string }
+            claim:      { type: string }
+            evidence:   { type: string }
+            change:     { type: string }
+            confidence: { type: choice, options: [low, medium, high] }
+            impact:     { type: string }
     prompt: |
-      Audit recent fragua runs and emit ranked, evidence-backed improvement hypotheses.
+      Read `analyze-snapshot.json` (fields: `totals`, `by_workflow[]` with `node_profiles[]`, `runs[]` with `per_node[]`). Trust its numbers; quote only them; never invent fields. Mine the **cost** lens ONLY: wide p50→p90 cost/token spread, a node dominating run cost, model overkill (a strong model on a mechanical step), retry/loop-driven spend (loop counts × node cost), dispatch overhead dwarfing compute.
 
-      First: run `bun .fragua/scripts/analyze/collect.ts --workflow=${{ inputs.workflow }} --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }}` via the bash tool and read its JSON report. Fields: `totals`, `by_workflow[]` (aggregates + `node_profiles[]`), `runs[]` (per-run records + `per_node[]`). Trust its numbers; quote only them; never invent fields.
+      Field caveats: `partial`/`partial_in_runs` are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`human`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap (`llm` is the only token-bearing type).
 
-      Field caveats: `partial`/`partial_in_runs` figures are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`human`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap (`human` nodes are HITL waits; `llm` is the only token-bearing type).
+      Emit `hypotheses`, only for workflows with >= 3 runs: `workflow`; `claim` (the pattern, one sentence); `evidence` (specific run_ids + at least 2 numbers from the JSON); `change` (one concrete edit naming the .yaml file and step — prompt reword, model swap, max-retries, step split, tool removal); `confidence`; `impact` (estimated $ / % / token delta with a number). Rank by impact × confidence, cap at 6. One run = low confidence, probably skip. Healthy spend → empty array; don't manufacture findings.
+
+  # ── Lens 2: confusion — where do runs fight the workflow? (interpretive: high)
+  confusion_lens:
+    type: llm
+    effort: high
+    allowed-tools: [read]
+    next: synthesize
+    outputs:
+      hypotheses:
+        type: array
+        items:
+          type: object
+          fields:
+            workflow:   { type: string }
+            claim:      { type: string }
+            evidence:   { type: string }
+            change:     { type: string }
+            confidence: { type: choice, options: [low, medium, high] }
+            impact:     { type: string }
+    prompt: |
+      Read `analyze-snapshot.json` (fields: `totals`, `by_workflow[]` with `node_profiles[]`, `runs[]` with `per_node[]`). Trust its numbers; quote only them; never invent fields. Mine the **confusion** lens ONLY — places where runs fight the workflow's shape: aborts and halts (which step, what reason class), goal-gate retarget loops hitting their cap, repeated retries on the same node, operator steers/cancels mid-run, quarantines, human gates that always take the same route (a decision that no longer needs a human).
+
+      Field caveats: `partial`/`partial_in_runs` are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`human`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap (`llm` is the only token-bearing type).
+
+      Emit `hypotheses`, only for workflows with >= 3 runs: `workflow`; `claim` (the pattern, one sentence); `evidence` (specific run_ids + at least 2 numbers from the JSON); `change` (one concrete edit naming the .yaml file and step); `confidence`; `impact` (reliability delta with a number, or cost of the failure mode). Rank by impact × confidence, cap at 6. One run = low confidence, probably skip. Zero confusion signals → empty array; don't manufacture findings.
+
+  # ── Lens 3: redundancy — what work adds no signal?
+  redundancy_lens:
+    type: llm
+    effort: medium
+    allowed-tools: [read]
+    next: synthesize
+    outputs:
+      hypotheses:
+        type: array
+        items:
+          type: object
+          fields:
+            workflow:   { type: string }
+            claim:      { type: string }
+            evidence:   { type: string }
+            change:     { type: string }
+            confidence: { type: choice, options: [low, medium, high] }
+            impact:     { type: string }
+    prompt: |
+      Read `analyze-snapshot.json` (fields: `totals`, `by_workflow[]` with `node_profiles[]`, `runs[]` with `per_node[]`). Trust its numbers; quote only them; never invent fields. Mine the **redundancy** lens ONLY: steps that add no signal (trivial token output, always-success pass-throughs that could merge into a neighbour), the same data collected or re-read by multiple steps, token-heavy thread history a `summary:` would compress, steps whose tool pool is wider than what they ever use, overlapping workflows doing near-identical work.
+
+      Field caveats: `partial`/`partial_in_runs` are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`human`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap (`llm` is the only token-bearing type).
+
+      Emit `hypotheses`, only for workflows with >= 3 runs: `workflow`; `claim` (the pattern, one sentence); `evidence` (specific run_ids + at least 2 numbers from the JSON); `change` (one concrete edit naming the .yaml file and step — step merge/removal, summary level, tool removal); `confidence`; `impact` (estimated $ / token delta with a number). Rank by impact × confidence, cap at 6. One run = low confidence, probably skip. Lean workflows → empty array; don't manufacture findings.
+
+  # ── Reconcile the three lens results → the ranked report (final message)
+  synthesize:
+    type: llm
+    effort: high
+    allowed-tools: [read]
+    next: exit
+    prompt: |
+      Reconcile three lens results into the analysis report. The hypotheses are typed arrays:
+
+        cost:       ${{ outputs.cost_lens.hypotheses }}
+        confusion:  ${{ outputs.confusion_lens.hypotheses }}
+        redundancy: ${{ outputs.redundancy_lens.hypotheses }}
+
+      Read `analyze-snapshot.json` for the scope and health numbers (`totals`, `by_workflow[]`). Merge: a pattern flagged by two lenses is ONE hypothesis at the higher confidence, noted `(cross-flagged)`. Re-rank by impact × confidence across the merged set — you see the whole picture; each lens saw a slice. Quote only numbers from the snapshot or the hypotheses' evidence.
 
       Emit a markdown report as your FINAL message verbatim — no file writes, no preamble, no postscript. Headings, exactly:
 
@@ -59,8 +174,8 @@ steps:
       ## Per-workflow findings
       Per workflow with n_runs >= 3, a `### <workflow>` subsection:
       **Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.
-      **Hypotheses.** Up to 5, ranked by impact * confidence. Each a numbered item with labelled lines — **Claim:** the pattern in one sentence. **Evidence:** specific run_ids and >=2 numbers from the JSON. **Proposed change:** one concrete edit (prompt reword, max-retries, model swap, step split, tool removal), naming the .yaml file and step. **Confidence:** low|medium|high + one sentence why. **Estimated impact:** cost delta $/%, or token delta, or reliability with a number.
-      Zero confusion signals (no aborts/steers/retargets/halts) + tight cost variance → 'no actionable hypotheses; workflow appears healthy'. Don't manufacture findings.
+      **Hypotheses.** Up to 5, ranked. Each a numbered item with labelled lines — **Claim:** / **Evidence:** / **Proposed change:** / **Confidence:** (+ one sentence why) / **Estimated impact:**.
+      All three lenses empty for a workflow → 'no actionable hypotheses; workflow appears healthy'.
 
       ## Workflows below sample threshold
       <workflow> (n=N): not analysed. One line each.
@@ -68,4 +183,5 @@ steps:
       ## Cross-workflow observations
       Only if something holds across workflows; else omit.
 
-      Rules: cite numbers not vibes; one run = low confidence, probably skip; a wanted-but-absent signal goes under a final '## Signals not collected'.
+      ## Signals not collected
+      Only if a lens hypothesis or your synthesis wanted a signal the snapshot lacks; one line each; else omit.
