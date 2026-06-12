@@ -588,7 +588,7 @@ export class SqliteStore implements IEventStore {
           lastAppliedSeq: opts.advanceAppliedTo != null ? opts.advanceAppliedTo : state.lastAppliedSeq,
         };
 
-        this.writeProjection(state);
+        this.writeProjection(state, expectedVersion);
         newVersion = state.version;
         committedState = state;
       });
@@ -2037,6 +2037,8 @@ export class SqliteStore implements IEventStore {
             writeRunStateProjection(this.db, {
               runId: d.runId,
               version: d.version,
+              // The row was inserted just above at version 1.
+              expectedVersion: 1,
               status: d.status,
               currentNode: d.currentNode,
               routingJson: r.routingJson,
@@ -2207,16 +2209,17 @@ export class SqliteStore implements IEventStore {
     }
   }
 
-  private writeProjection(state: RunState): void {
+  private writeProjection(state: RunState, expectedVersion: number): void {
     const routing = JSON.stringify(state.routing);
     if (routing.length >= MAX_ROUTING_BYTES) {
       throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
     }
     const metrics = JSON.stringify(state.metrics);
     const changeStatJson = state.changeStat != null ? JSON.stringify(state.changeStat) : null;
-    writeRunStateProjection(this.db, {
+    const applied = writeRunStateProjection(this.db, {
       runId: state.runId,
       version: state.version,
+      expectedVersion,
       status: state.status,
       currentNode: state.currentNode,
       routingJson: routing,
@@ -2236,6 +2239,10 @@ export class SqliteStore implements IEventStore {
       inboxStatus: state.inboxStatus,
       acceptedSha: state.acceptedSha,
     });
+    if (!applied) {
+      const row = selectRunStateRow(this.db, state.runId);
+      throw new ConcurrencyError(expectedVersion, row?.version ?? -1);
+    }
   }
 
   private validatePayload(payload: unknown): string {

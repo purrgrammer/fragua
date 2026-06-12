@@ -639,7 +639,8 @@ const WRITE_PROJECTION_SQL = `
     change_stat         = ?,
     inbox_status        = ?,
     accepted_sha        = ?
-  WHERE run_id = ?
+  WHERE run_id = ? AND version = ?
+  RETURNING run_id
 `;
 
 /** Write the projected run_state row. Caller serializes routing +
@@ -649,12 +650,22 @@ const WRITE_PROJECTION_SQL = `
  *  `routing` is persisted as an opaque, unschematized JSON dict, guarded
  *  only by the 8 KB CHECK (I6). Deliberate: it is a fold-rebuildable
  *  projection cache (`deriveRunState` reconstructs it from the event
- *  log), never a second source of truth — see ARCHITECTURE.md §2.1. */
+ *  log), never a second source of truth — see ARCHITECTURE.md §2.1.
+ *
+ *  OCC guard: the UPDATE only matches when the row still carries
+ *  `expectedVersion` (the pre-bump version the caller validated against).
+ *  Returns `true` when exactly one row changed, `false` when the version
+ *  moved underneath the caller — the caller throws `ConcurrencyError` on
+ *  `false` instead of silently corrupting the projection. This makes the
+ *  invariant structural; appendFact's pre-check remains as the first line
+ *  of defense. */
 export function writeRunStateProjection(
   db: Database,
   args: {
     runId: string;
     version: number;
+    /** Pre-bump version the row must still hold for the write to apply. */
+    expectedVersion: number;
     status: RunStatus;
     currentNode: string | null;
     routingJson: string;
@@ -674,29 +685,33 @@ export function writeRunStateProjection(
     inboxStatus: string | null;
     acceptedSha: string | null;
   },
-): void {
-  db.query(WRITE_PROJECTION_SQL).run(
-    args.version,
-    args.status,
-    args.currentNode,
-    args.routingJson,
-    args.metricsJson,
-    args.lastAppliedSeq,
-    args.priority,
-    args.readyAt,
-    args.nodeStartedAt,
-    args.dispatchStartedAt,
-    args.updatedAt,
-    args.baseGitSha,
-    args.baseGitRef,
-    args.finalGitSha,
-    args.finalHeadRef,
-    args.diffBaseSha,
-    args.changeStatJson,
-    args.inboxStatus,
-    args.acceptedSha,
-    args.runId,
-  );
+): boolean {
+  const row = db
+    .query<{ run_id: string }, (string | number | null)[]>(WRITE_PROJECTION_SQL)
+    .get(
+      args.version,
+      args.status,
+      args.currentNode,
+      args.routingJson,
+      args.metricsJson,
+      args.lastAppliedSeq,
+      args.priority,
+      args.readyAt,
+      args.nodeStartedAt,
+      args.dispatchStartedAt,
+      args.updatedAt,
+      args.baseGitSha,
+      args.baseGitRef,
+      args.finalGitSha,
+      args.finalHeadRef,
+      args.diffBaseSha,
+      args.changeStatJson,
+      args.inboxStatus,
+      args.acceptedSha,
+      args.runId,
+      args.expectedVersion,
+    );
+  return row != null;
 }
 
 // ─────────────────────────────────────────────────────────────────────
