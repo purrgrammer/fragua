@@ -102,6 +102,35 @@ Discovery flags on the `runs` verbs: `--cwd` (scopes `ls`/`inbox`, resolves
 
 ---
 
+## move runs between stores — export / import
+
+```sh
+fragua runs export <id> --to <file.fragua>   # write the run as a portable bundle
+fragua show <file.fragua>                    # inspect a bundle without importing it
+fragua import <file.fragua>                  # merge a bundle's runs into a store (default: the harness store)
+```
+
+A `.fragua` bundle carries the run's event log, transcript, workflow, and
+artifact blobs — `run_state` is re-derived on import by replaying the event
+log, and an imported run is inert (its derived `cwd` is null), so the daemon
+never picks it up.
+
+**Bundles are secret-free by construction — with one residual.** Export runs a
+scrubber over every *text* surface (messages, event payloads, routing inputs,
+text-ish artifacts), replacing credentials with `[REDACTED]` markers. **Binary
+artifacts are not scrubbed** — they are only *scanned*: if a live credential
+value appears verbatim inside a binary blob, the export still succeeds but
+reports `liveLiteralHit=true` and prints a warning.
+
+**Policy for a `liveLiteralHit` bundle: treat it as secret-bearing.** Do not
+share it, publish it, or attach it to CI artifacts without first rotating the
+implicated credential (or re-exporting after removing the offending binary
+artifact). `fragua runs export` warns and continues; `fragua ci --export`
+fails closed on the same condition with exit code `80` (see
+[Exit codes](#exit-codes)).
+
+---
+
 ## one-shot CI — `fragua ci <workflow>`
 
 ```sh
