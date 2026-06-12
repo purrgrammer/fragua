@@ -310,17 +310,31 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
 
 export interface TailOptions extends DiscoveryOpts {
   runId: string;
+  full?: boolean;
 }
 
+const TAIL_BACKFILL_LIMIT = 200;
+
 /** Tail an existing run's event log to terminal — the same live follow +
- * inline HITL picker `fragua run` uses, for a run you didn't just enqueue. */
+ * inline HITL picker `fragua run` uses, for a run you didn't just enqueue.
+ * Backfill is bounded to the last 200 events by default (`--full` replays
+ * the entire log); the follow loop then renders the window and goes live. */
 export function tailCommand(opts: TailOptions): Promise<number> {
   return withStoreClient(opts, (client) => {
     if (client.store.getState(opts.runId) == null) {
       console.error(chalk.red("tail: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    return followRun(client, opts.runId);
+    let startCursor = 0;
+    if (opts.full !== true) {
+      const back = client.readPlane.eventsTail(opts.runId, { limit: TAIL_BACKFILL_LIMIT }) ?? [];
+      if (back.length === TAIL_BACKFILL_LIMIT) {
+        console.error(chalk.dim(`(showing last ${TAIL_BACKFILL_LIMIT} events — --full for the entire log)`));
+      }
+      const first = back[0];
+      if (first != null) startCursor = first.seq - 1;
+    }
+    return followRun(client, opts.runId, pickRoute, startCursor);
   });
 }
 
@@ -838,24 +852,29 @@ export interface EventsOptions extends DiscoveryOpts {
   runId: string;
   type?: string;
   limit?: number;
+  since?: number;
   json?: boolean;
 }
 
-/** Dump a run's event log. `--type <prefix>` filters by `type.startsWith`,
- * `--limit N` keeps the last N (default 50), printed oldest-first. `--json`
- * emits the raw `StoredEvent[]` with full payloads (the operate skill's
- * forensics reference mines these); the default render reuses the live-follow
- * `[seq] type payload` line. */
+/** Dump a run's event log. `--type <prefix>` filters by type prefix,
+ * `--limit N` keeps the last N (default 50), `--since <seq>` keeps events
+ * with seq strictly greater (unbounded unless `--limit` is also given),
+ * printed oldest-first. The bound is a SQL-level read — long runs never
+ * hydrate the full log. `--json` emits the raw `StoredEvent[]` with full
+ * payloads (the operate skill's forensics reference mines these); the
+ * default render reuses the live-follow `[seq] type payload` line. */
 export function eventsCommand(opts: EventsOptions): Promise<number> {
   return withStoreClient(opts, ({ readPlane }) => {
-    const all = readPlane.events(opts.runId);
-    if (all == null) {
+    const limit = opts.limit != null && opts.limit > 0 ? opts.limit : opts.since != null ? undefined : 50;
+    const tail = readPlane.eventsTail(opts.runId, {
+      ...(opts.since != null ? { sinceSeq: opts.since } : {}),
+      ...(opts.type != null && opts.type.length > 0 ? { typePrefix: opts.type } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    if (tail == null) {
       console.error(chalk.red("events: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    const filtered = opts.type != null && opts.type.length > 0 ? all.filter((e) => e.type.startsWith(opts.type!)) : all;
-    const n = opts.limit != null && opts.limit > 0 ? opts.limit : 50;
-    const tail = filtered.slice(-n);
     if (opts.json === true) {
       console.log(JSON.stringify(tail, null, 2));
       return 0;

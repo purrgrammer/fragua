@@ -585,12 +585,12 @@ function runsHelp(): void {
     inbox               [--json]      runs needing attention (2 sections)
     ls [--status a,b] [--limit N] [--json]  list runs
     status <id>         [--json]      one run's state + the why + active budget warnings
-    tail   <id>                       follow a run's event log to terminal (live, like \`run\` without --no-follow)
+    tail   <id> [--full]              follow a run's event log to terminal (live; backfill = last 200 events, --full for all)
     explain <id>        [--json]      narrative: path taken, per-step outcome/cost, diff summary, terminal reason
     worktree <id>                     print the absolute worktree path (exit 1 if cleaned up)
 
   Inspect (forensics — dissect a run, no raw SQL):
-    events    <id> [--type <prefix>] [--limit N] [--json]   the event log (default last 50, oldest-first)
+    events    <id> [--type <prefix>] [--limit N] [--since <seq>] [--json]   the event log (default last 50, oldest-first)
     steps     <id> [--json]                                 per-LLM-call cost / tokens / duration
     messages  <id> [--node <id>] [--json]                   the LLM-visible transcript (one preview line each)
     artifacts <id>                                          list a run's artifacts (metadata)
@@ -616,6 +616,8 @@ cli
   .option("--node <id>", "max-retries / messages: the node whose retry cap to raise / scope the transcript")
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
   .option("--limit <n>", "ls/inbox/events: cap results")
+  .option("--since <seq>", "events: only events with seq greater than <seq>")
+  .option("--full", "tail: replay the entire event log instead of the last 200")
   .option("--type <prefix>", "events: filter by event-type prefix (e.g. fact.)")
   .option("--json", "events/steps/messages/ls/status/inbox/explain: emit full JSON instead of one-line render")
   .option("--key <k>", "artifact: the artifact key to fetch")
@@ -638,6 +640,14 @@ cli
             ? Number.parseInt(limitRaw, 10)
             : undefined;
       const limitOpt = limit !== undefined && Number.isFinite(limit) ? { limit } : {};
+      const sinceRaw = options["since"];
+      const since =
+        typeof sinceRaw === "number"
+          ? sinceRaw
+          : typeof sinceRaw === "string"
+            ? Number.parseInt(sinceRaw, 10)
+            : undefined;
+      const sinceOpt = since !== undefined && Number.isFinite(since) ? { since } : {};
       const needId = (): string => {
         if (runId == null) {
           console.error(chalk.red(`runs ${action}: <runId> required`));
@@ -685,7 +695,13 @@ cli
           );
           break;
         case "tail":
-          process.exit(await tailCommand({ runId: needId(), ...discovery(options) }));
+          process.exit(
+            await tailCommand({
+              runId: needId(),
+              ...(options["full"] === true ? { full: true } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         case "diff": {
           const snapRaw = options["snap"];
@@ -818,6 +834,7 @@ cli
               runId: needId(),
               ...(pickStr(options, "type") !== undefined ? { type: pickStr(options, "type")! } : {}),
               ...limitOpt,
+              ...sinceOpt,
               ...(options["json"] === true ? { json: true } : {}),
               ...discovery(options),
             }),

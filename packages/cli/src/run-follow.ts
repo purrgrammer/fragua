@@ -49,8 +49,13 @@ function followExitCode(ev: StoredEvent): number {
  * each new event, return the run's terminal exit code. A daemon must be running
  * for events to appear — with none the run sits queued and this waits (Ctrl-C
  * to stop), same as the old SSE follow. */
-export async function followRun(client: StoreClient, runId: string, pick: RoutePicker = pickRoute): Promise<number> {
-  let cursor = 0;
+export async function followRun(
+  client: StoreClient,
+  runId: string,
+  pick: RoutePicker = pickRoute,
+  startCursor = 0,
+): Promise<number> {
+  let cursor = startCursor;
   for (;;) {
     const batch = client.readPlane.eventsSince(runId, cursor, BATCH);
     for (const ev of batch) {

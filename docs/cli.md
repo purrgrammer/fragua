@@ -60,7 +60,7 @@ tick (always-appendable, so they succeed even with the daemon down).
 fragua runs ls [--status running,paused_human] [--limit N] [--json]  # one line per run (--json: array)
 fragua runs inbox [--json]                                           # runs needing attention (2 sections)
 fragua runs status <id> [--json]                                     # lifecycle + outcome + warnings
-fragua runs tail <id>                                                # follow an existing run's log to terminal (live)
+fragua runs tail <id> [--full]                                       # follow an existing run's log to terminal (live)
 fragua runs explain <id> [--json]                                    # narrative: path, per-step cost/outcome, diff, reason
 fragua runs worktree <id>                                            # print the absolute worktree path (exit 1 if cleaned up)
 
@@ -85,7 +85,7 @@ fragua runs goal-gate   <id> <n>
 fragua runs max-loops   <id> <n>
 
 # inspect (forensics — no raw SQL)
-fragua runs events    <id> [--type <prefix>] [--limit N] [--json]
+fragua runs events    <id> [--type <prefix>] [--limit N] [--since <seq>] [--json]
 fragua runs steps     <id> [--json]               # per-LLM-call cost / tokens / duration
 fragua runs messages  <id> [--node <id>] [--json] # the LLM-visible transcript
 fragua runs artifacts <id>                        # list a run's artifacts
@@ -96,6 +96,13 @@ fragua runs artifact  <id> <nodeId> --key <k> [--iteration N]   # one artifact's
 before the hard pause); `fragua runs tail` prefixes the same event with ⚠ in
 the live log. `fragua runs explain` synthesises the full narrative: path taken,
 per-step outcome and cost, diff-vs-base summary, and the terminal reason.
+
+`fragua runs tail` backfills the last 200 events before going live (the bound
+is a SQL-level read — long runs never hydrate the full log); pass `--full` to
+replay the entire log. `fragua runs events` prints the last 50 by default;
+`--limit N` keeps the last N matching events, and `--since <seq>` keeps only
+events with seq strictly greater than `<seq>` (unbounded unless `--limit` is
+also given — a forward cursor for scripts).
 
 Discovery flags on the `runs` verbs: `--cwd` (scopes `ls`/`inbox`, resolves
 `diff` worktrees) and `--db` (default: the harness store `~/.fragua/fragua.db`).

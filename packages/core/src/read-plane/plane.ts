@@ -15,6 +15,7 @@ import {
   type ArtifactListRow,
   type ArtifactScope,
   FEED_EVENT_KINDS,
+  type GetEventsTailOpts,
   type GetGlobalEventsAtFloorOpts,
   type GetGlobalEventsForwardOpts,
   type GetMessagesOpts,
@@ -61,6 +62,11 @@ export interface ReadPlane {
   /** Raw store event log (`fact.*` + `intent.*`), or `null` when the run
    *  is absent. Mirrors `GET /runs/:id/events.json`. */
   events(runId: string): StoredEvent[] | null;
+  /** Bounded tail of the raw event log — the last `opts.limit` events
+   *  strictly after `opts.sinceSeq`, optionally type-prefix filtered,
+   *  oldest-first — or `null` when the run is absent. SQL-level bound;
+   *  backs the CLI's `runs events` / `runs tail` reads. */
+  eventsTail(runId: string, opts?: GetEventsTailOpts): StoredEvent[] | null;
   /** A run's artifact listing (metadata only), or `null` when the run is
    *  absent. The bytes come from {@link ReadPlane.artifactBody}. */
   artifacts(runId: string): ArtifactListRow[] | null;
@@ -141,6 +147,10 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     events(runId) {
       if (store.getState(runId) == null) return null;
       return store.getEvents(runId);
+    },
+    eventsTail(runId, opts = {}) {
+      if (store.getState(runId) == null) return null;
+      return store.getEventsTail(runId, opts);
     },
     artifacts(runId) {
       if (store.getState(runId) == null) return null;

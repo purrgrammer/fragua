@@ -588,6 +588,16 @@ export interface GetEventsOpts {
   limit?: number;
 }
 
+export interface GetEventsTailOpts {
+  /** Only events with `seq > sinceSeq` qualify. Default 0 (all). */
+  sinceSeq?: number;
+  /** Restrict to event types starting with this literal prefix
+   * (e.g. `"fact."`). LIKE metacharacters in the prefix are escaped. */
+  typePrefix?: string;
+  /** Keep only the LAST `limit` qualifying events. Default unbounded. */
+  limit?: number;
+}
+
 export interface GetGlobalEventsForwardOpts {
   /** Boundary `ts` cursor; events at `ts > floorTs`, plus events at
    * `ts == floorTs` with `(run_id, seq) > (lastRunId, lastSeq)`, are
@@ -780,6 +790,14 @@ export interface IEventReader {
    * key — cheap even on long-lived runs.
    */
   getLatestEvents(runId: string, limit: number): StoredEvent[];
+  /**
+   * The last `opts.limit` events for `runId` strictly after
+   * `opts.sinceSeq`, optionally filtered to types starting with
+   * `opts.typePrefix`, oldest-first. The bound applies at SQL level to
+   * the filtered set — backs the CLI's bounded `runs events` /
+   * `runs tail` reads.
+   */
+  getEventsTail(runId: string, opts?: GetEventsTailOpts): StoredEvent[];
   /**
    * The TYPE of the most recent node-lifecycle fact per node
    * (`NODE_LIFECYCLE_FACT_TYPES`: dispatch_started / node_started /

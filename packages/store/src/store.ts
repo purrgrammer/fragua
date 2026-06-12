@@ -82,6 +82,7 @@ import {
   type PendingIntentRow,
   selectEvents,
   selectEventsByType,
+  selectEventsTail,
   selectFactSideEffectDone,
   selectFactSideEffectIntent,
   selectGlobalEventsAtFloor,
@@ -215,6 +216,7 @@ import {
   type FactEvent,
   type GetDaemonEventsOpts,
   type GetEventsOpts,
+  type GetEventsTailOpts,
   type GetGlobalEventsAtFloorOpts,
   type GetGlobalEventsForwardOpts,
   type GetGlobalEventsLatestOpts,
@@ -846,6 +848,10 @@ export class SqliteStore implements IEventStore {
 
   getLatestEvents(runId: string, limit: number): StoredEvent[] {
     return selectLatestEvents(this.db, runId, limit).map(rowToStoredEvent);
+  }
+
+  getEventsTail(runId: string, opts: GetEventsTailOpts = {}): StoredEvent[] {
+    return selectEventsTail(this.db, runId, opts).map(rowToStoredEvent);
   }
 
   getLatestLifecycleByNode(runId: string): Array<{ nodeId: string; type: string }> {

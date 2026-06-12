@@ -484,6 +484,26 @@ describe("fragua forensics verbs", () => {
     expect(out()).not.toContain("fact.run_started");
   });
 
+  test("events: --since skips events at or below the seq", async () => {
+    seedCommitted(r.store, "ev5");
+    const started = r.store.getEventsByType("ev5", "fact.run_started")[0]!;
+    const code = await eventsCommand({ runId: "ev5", since: started.seq, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("fact.run_completed");
+    expect(out()).not.toContain("fact.run_started");
+    expect(out()).not.toContain("intent.run_enqueued");
+  });
+
+  test("events: --limit returns exactly the last N lines, oldest-first", async () => {
+    seedCommitted(r.store, "ev6");
+    const code = await eventsCommand({ runId: "ev6", limit: 2, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(logs).toHaveLength(2);
+    expect(logs[0]).toContain("fact.run_completed");
+    expect(logs[1]).toContain("fact.snapshot_recorded");
+    expect(out()).not.toContain("fact.run_started");
+  });
+
   test("events: --json emits an array of stored events", async () => {
     seedCommitted(r.store, "ev3");
     const code = await eventsCommand({ runId: "ev3", json: true, dbPath: r.dbPath });
@@ -495,6 +515,48 @@ describe("fragua forensics verbs", () => {
   test("events: unknown run → exit 1", async () => {
     const code = await eventsCommand({ runId: "nope", dbPath: r.dbPath });
     expect(code).toBe(1);
+  });
+
+  test("tail: backfill bounded to last 200 by default, --full replays all", async () => {
+    const runId = "tl1";
+    r.store.enqueueRun({ runId, workflowSha: "wf", cwd: "/tmp/repo" });
+    const s0 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: "wf",
+            contractVersion: s0.contractVersion,
+            startNode: "n1",
+            baseGitSha: BASE,
+            baseGitRef: "main",
+          },
+        },
+      ],
+      s0.version,
+    );
+    for (let i = 0; i < 250; i++) {
+      r.store.appendObservabilityEvents(runId, [{ type: "llm.start", payload: { nodeId: "n1", iteration: i } }]);
+    }
+    const s1 = r.store.getState(runId)!;
+    r.store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
+    const total = r.store.getEvents(runId).length; // 253: enqueue + started + 250 obs + completed
+
+    const errs: string[] = [];
+    (console.error as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errs.push(a.join(" "));
+    });
+
+    await tailCommand({ runId, dbPath: r.dbPath });
+    expect(logs).toHaveLength(200); // bounded backfill, stdout = event lines only
+    expect(errs.join("\n")).toContain("last 200 events"); // truncation notice on stderr
+
+    logs.length = 0;
+    await tailCommand({ runId, full: true, dbPath: r.dbPath });
+    expect(logs).toHaveLength(total); // --full replays the entire log
   });
 
   test("steps: seedCommitted (no llm.start) → (no LLM steps), exit 0", async () => {

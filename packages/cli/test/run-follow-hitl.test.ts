@@ -34,6 +34,31 @@ function fakeClient(events: StoredEvent[]) {
   return { client: client as unknown as StoreClient, commits };
 }
 
+describe("followRun — startCursor", () => {
+  test("startCursor skips already-rendered backfill", async () => {
+    const events = [
+      ev(1, "fact.run_started", {}),
+      ev(2, "llm.start", {}),
+      ev(3, "llm.done", {}),
+      ev(4, "fact.run_completed", {}),
+    ];
+    const cursors: number[] = [];
+    const client = {
+      readPlane: {
+        eventsSince: (_runId: string, sinceSeq: number, limit?: number) => {
+          cursors.push(sinceSeq);
+          return events.filter((e) => e.seq > sinceSeq).slice(0, limit ?? events.length);
+        },
+      },
+    } as unknown as StoreClient;
+
+    const code = await followRun(client, RUN_ID, undefined, 2);
+
+    expect(code).toBe(cliExitCode("completed"));
+    expect(cursors[0]).toBe(2); // first poll starts at the given cursor, not 0
+  });
+});
+
 describe("followRun — HITL gate answered elsewhere (#33)", () => {
   let savedTTY: unknown;
   beforeEach(() => {
