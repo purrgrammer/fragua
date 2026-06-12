@@ -9,6 +9,13 @@
 
 durable, portable execution for engineering workflows. drive LLM agents with a deterministic control plane, humans in the loop, full event-log audit, and a live operator dashboard. runs on your laptop and on CI.
 
+built on one bet: the **control plane** is worth making deterministic even when the LLM bodies are not. two invariants carry it:
+
+- **all durable writes for a run linearize through one committer.** fan-out branches execute *concurrently*, but their commits *serialize* — concurrent execution never means concurrent commits. the committer assigns one monotonic order to every fact, so a recorded run replays by folding that one linear log, not by re-running the model.
+- **operator actions are intents.** pause, steer, resume, budget raises — always-appendable, conflict-free writes (no OCC) that the executor folds into the next dispatch. that's what makes steering a live LLM run mid-flight possible: the in-flight handler unwinds, the next dispatch sees your text, the run never dies.
+
+the rest follows:
+
 - declarative YAML workflows
 - survives crashes, provider outages, and transient errors
 - provider-agnostic
@@ -18,15 +25,13 @@ durable, portable execution for engineering workflows. drive LLM agents with a d
 - superb observability
 - a run is a portable artifact
 
-built on one bet: the **control plane** is worth making deterministic even when the LLM bodies are not — so a recorded run replays by folding its event log, not by re-running the model.
-
 ## what you get
 
 - **workflows are text.** plain YAML. diff them, version them, code-review them. no DSL.
 - **survives crashes & provider hiccups.** intent/fact split with OCC; transient errors (408/429/5xx/network) auto-retry; recoverable failures (budget caps, loop/goal ceilings, watchdog timeouts, engine incompatibility) pause instead of dying. raise the cap, resume. daemon restart picks up mid-flight runs.
 - **same workflow, any provider.** per-step `provider` / `model` overrides, pre-flighted against pi-ai's registry — bad combos fail in milliseconds, not after 30 retries.
-- **operator surface, not an afterthought.** live web UI on `:6767`: per-run + global SSE, run-scoped file tree + git-aware diff, transcripts, cost panels, steering + HITL — all driven by intents on the event log.
-- **fan out when it pays.** a `parallel` step forks read-only branches that run concurrently and converge on a single `wait_all` join; typed `outputs:` carry each branch's result forward. one shared abort, one interleaved log, replay by fold — a topology change, not a second scheduler.
+- **operator surface, not an afterthought.** live web UI on `:6767`: per-run + global SSE, run-scoped file tree + git-aware diff, transcripts, cost panels, steering + HITL — all intents on the event log, appendable daemon up or down.
+- **fan out when it pays.** a `parallel` step forks read-only branches that run concurrently and converge on a single `wait_all` join; typed `outputs:` carry each branch's result forward. every branch commits through the run's one committer — one shared abort, one interleaved log, replay by fold. a topology change, not a second scheduler.
 - **schedules built in.** fire on a fixed interval (`30m`…`7d`) with skip / queue / concurrent overlap, late-fire catch-up, per-schedule run history.
 - **a run is a portable artifact.** the event log, messages, canonical workflow IR and a git-bundle of the worktree snapshots together are self-contained and portable. share them, replay them, debug them on another machine.
 
