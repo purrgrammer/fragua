@@ -51,7 +51,7 @@ steps:
         bugfix  — a reported defect to reproduce, then fix
 
       Not a workable software task (empty / illegible / off-topic / ambiguous / already-shipped) → `abort` with the reason instead of routing.
-      Don't plan, reproduce, or implement.
+      Don't plan, reproduce, or implement. Read at most 2-3 files to SIZE the task — never to verify its claims (downstream steps do that). Your final action is exactly one `route` (or `abort`) call on its own response; never end with prose.
     routes:
       small:   {to: implement, label: "Small change"}
       feature: {to: plan,      label: "Feature scope"}
