@@ -10,6 +10,13 @@ guarantee.
 
 ### Fixed
 
+- An unclassified agent-loop error (a generic provider/SDK failure with no
+  HTTP 4xx/5xx status and no `abort` tool call in the transcript) now pauses
+  the run as `provider_error` with the error message as detail, instead of
+  halting it terminally with `aborted_exit`. `aborted_exit` is reserved for a
+  deliberate agent abort; genuine abort-tool exits and existing
+  provider-error/retry classifications are unchanged.
+
 - A handler that honors a late-delivered abort is no longer falsely declared
   leaked. The leak grace is now measured from when the abort actually reached
   the handler, not as an absolute deadline from dispatch — previously, system

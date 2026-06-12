@@ -758,8 +758,30 @@ export class PiLlmBackend implements LlmBackend {
         err.name = "AbortError";
         throw err;
       }
-      return fail(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
-        notes: summarizeMessage(last),
+      // A deliberate self-abort can leave a trailing error envelope (the
+      // `abort` tool call landed, then a later turn's stream died). The
+      // abort still wins — `aborted_exit` is reserved for exactly this
+      // transcript evidence, and routing it as a provider pause would
+      // resurrect a run the agent declared unworkable.
+      const abortedEarlier = findAbortToolCall(agent.state.messages);
+      if (abortedEarlier) {
+        return fail(abortedEarlier.reason, { notes: summarizeMessage(last), non_retryable: true });
+      }
+      // Unclassified failure envelope: no abort tool call, no 4xx/5xx
+      // status, content non-empty (partial stream, or pi-agent-core's
+      // handleRunFailure shape `[{type:"text", text:""}]`). FAIL OPEN to a
+      // resumable pause — the handler-bridge maps `provider_error` to
+      // `pause_provider` and the daemon emits
+      // `fact.run_paused{reason:"provider_error"}` with the message as
+      // detail. A plain `fail` here would route a transient transport
+      // failure into the no-fail-edge terminal halt (`aborted_exit`),
+      // which is reserved for a deliberate abort tool call.
+      const unclassifiedStatus =
+        lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null);
+      return failProvider(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
+        httpStatus: unclassifiedStatus,
+        provider,
+        ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
       });
     }
 
