@@ -34,6 +34,11 @@ guarantee.
 
 ### Fixed
 
+- `runs accept` no longer refuses with spurious conflicts when the run's base
+  commit is not an ancestor of the operator's HEAD (e.g. after the branch the
+  run forked from was squash-merged): the base..tip change is applied 3-way
+  against the snapshot's base blobs instead. Genuine textual conflicts still
+  refuse with `conflict`.
 - W015 no longer fires for `${{ outputs.X.f }}` consumers that are only
   reachable on paths where the producer has already run (fail-path
   consumers); genuinely unreachable producers still warn.
