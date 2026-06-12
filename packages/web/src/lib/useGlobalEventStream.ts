@@ -16,7 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 import { getFeedEvents, getFeedStreamUrl } from "./api.ts";
-import { appendFeedEventsAtom, feedLoadingAtom, feedSseStatusAtom } from "./globalFeed.ts";
+import { appendFeedEventsAtom, feedBackfillFailedAtom, feedLoadingAtom, feedSseStatusAtom } from "./globalFeed.ts";
 import { queries } from "./queries.ts";
 import { useEventSource } from "./useEventSource.ts";
 
@@ -81,6 +81,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
   const appendFeed = useSetAtom(appendFeedEventsAtom);
   const setLoading = useSetAtom(feedLoadingAtom);
   const setSseStatus = useSetAtom(feedSseStatusAtom);
+  const setBackfillFailed = useSetAtom(feedBackfillFailedAtom);
 
   // Cursor for the live SSE: undefined until backfill resolves. The
   // SSE URL is gated on this so we don't open a stream that immediately
@@ -97,6 +98,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
       .then((events) => {
         if (cancelled) return;
         appendFeed(events);
+        setBackfillFailed(false);
         const last = events[events.length - 1];
         // If the backfill is empty, start from "now" so the stream
         // doesn't replay a whole DB worth of history. Slightly past
@@ -108,17 +110,21 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
       .catch((err: unknown) => {
         if (cancelled) return;
         console.warn("[useGlobalEventStream] backfill failed:", err);
-        // Still open the stream from now — the feed will just be
-        // empty until live events arrive.
+        // Still open the stream from now — live-only mode is useful —
+        // but flag the failure so the feed can tell the operator that
+        // history is missing and offer a retry (see GlobalFeed's
+        // BackfillFailedNotice).
+        setBackfillFailed(true);
         setFromTs(Date.now());
         setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-    // appendFeed/setLoading are stable jotai atom setters; listing them
-    // satisfies the exhaustive-deps rule without changing behaviour.
-  }, [appendFeed, setLoading]);
+    // appendFeed/setLoading/setBackfillFailed are stable jotai atom
+    // setters; listing them satisfies the exhaustive-deps rule without
+    // changing behaviour.
+  }, [appendFeed, setLoading, setBackfillFailed]);
 
   const onFrame = useCallback(
     (ev: MessageEvent): void => {

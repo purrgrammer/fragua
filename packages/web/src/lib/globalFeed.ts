@@ -35,6 +35,13 @@ export const feedLoadingAtom = atom<boolean>(true);
  * doesn't flash "open" before the first SSE handshake completes. */
 export const feedSseStatusAtom = atom<SseStatus>("connecting");
 
+/** True when the initial `GET /events` backfill failed. The SSE stream
+ * still opens from "now" (live-only mode is useful), but the feed is
+ * missing history — the UI surfaces a dismissible notice with a retry.
+ * Set by `useGlobalEventStream`; cleared on a successful backfill
+ * (initial or retried) or when the operator dismisses the notice. */
+export const feedBackfillFailedAtom = atom<boolean>(false);
+
 /**
  * Identity for a feed event, used for client-side dedup. The triple
  * `(runId, seq)` is globally unique (`(run_id, seq)` is the events

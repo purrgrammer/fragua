@@ -13,8 +13,8 @@
 //     concurrent reads of the same id.
 
 import { AUTO_WAKE_PAUSE_REASONS, type FeedEvent, type PauseReason } from "@fragua/types";
-import { useQuery } from "@tanstack/react-query";
-import { useAtomValue } from "jotai";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useAtomValue, useSetAtom } from "jotai";
 import {
   AlertOctagon,
   AlertTriangle,
@@ -32,10 +32,16 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { memo, useMemo } from "react";
 import { Link } from "react-router-dom";
-import type { RunDetail } from "../lib/api.ts";
+import { getFeedEvents, type RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { rowEnterFromTop } from "../lib/feedMotion.ts";
-import { feedAtom, feedEventKey, feedLoadingAtom } from "../lib/globalFeed.ts";
+import {
+  appendFeedEventsAtom,
+  feedAtom,
+  feedBackfillFailedAtom,
+  feedEventKey,
+  feedLoadingAtom,
+} from "../lib/globalFeed.ts";
 import { humanizeOperatorActionShortVerb } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
@@ -200,6 +206,7 @@ export function GlobalFeed(): JSX.Element {
   return (
     <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
       <ActivityHeading />
+      <BackfillFailedNotice />
       {/* Three body states — initial-load skeleton (sized to match the
           populated layout so the backfill lands without reflow), empty
           state, and the live list. */}
@@ -241,6 +248,50 @@ export function GlobalFeed(): JSX.Element {
         </ul>
       )}
     </section>
+  );
+}
+
+/** Non-blocking notice shown when the initial event backfill failed.
+ * The SSE stream is still live (the hook opens it from "now"), so the
+ * timeline below only carries events from this moment on — the notice
+ * says so and offers a retry. Retried backfill events merge into the
+ * feed atom (dedup absorbs any overlap with live SSE frames); success
+ * clears the flag. Dismiss clears it without retrying. */
+function BackfillFailedNotice(): JSX.Element | null {
+  const failed = useAtomValue(feedBackfillFailedAtom);
+  const setFailed = useSetAtom(feedBackfillFailedAtom);
+  const appendFeed = useSetAtom(appendFeedEventsAtom);
+
+  const { mutate: retry, isPending } = useMutation({
+    mutationFn: () => getFeedEvents(),
+    onSuccess: (events) => {
+      appendFeed(events);
+      setFailed(false);
+    },
+  });
+
+  if (!failed) return null;
+
+  return (
+    <output className="flex items-center gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-sm">
+      <AlertTriangle className="size-4 shrink-0 text-sw-accent-warn" aria-hidden />
+      <span className="min-w-0 flex-1 text-sw-muted">Event backfill failed — only live events are shown.</span>
+      <button
+        type="button"
+        onClick={() => retry()}
+        disabled={isPending}
+        className="shrink-0 text-sw-text underline-offset-2 hover:underline disabled:opacity-55"
+      >
+        {isPending ? "retrying…" : "retry"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setFailed(false)}
+        className="shrink-0 text-sw-muted underline-offset-2 hover:underline"
+      >
+        dismiss
+      </button>
+    </output>
   );
 }
 
