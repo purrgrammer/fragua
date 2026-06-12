@@ -8,6 +8,16 @@ guarantee.
 
 ## [Unreleased]
 
+### Fixed
+
+- A handler that honors a late-delivered abort is no longer falsely declared
+  leaked. The leak grace is now measured from when the abort actually reached
+  the handler, not as an absolute deadline from dispatch — previously, system
+  sleep froze the abort timer and the leak sentinel together and flushed both
+  in one wake tick, halting healthy runs with `handler_leaked` (and shutting
+  the daemon down at the leak limit). Handlers that ignore their abort signal
+  still leak on the same schedule.
+
 ## [0.7.0] — 2026-06-11
 
 ### Added

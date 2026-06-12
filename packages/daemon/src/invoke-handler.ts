@@ -50,6 +50,17 @@ export async function invokeHandler(deps: {
   // un-cleared `setTimeout(maxMs + leakGrace)` would otherwise survive every
   // bounded dispatch and keep the event loop (and tests' fake timers) populated.
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
+  // When the abort actually reached the handler. The leak grace is measured
+  // from THIS moment, never from dispatch: absolute timers freeze during
+  // system sleep and flush together on wake, so the sentinel can fire in the
+  // same tick the (equally late) maxMs abort lands — a handler that honors
+  // that abort needs its grace to start at delivery, or it is falsely leaked.
+  let abortDeliveredAtMs: number | undefined;
+  const stampAbort = (): void => {
+    abortDeliveredAtMs = Date.now();
+  };
+  if (ctx.signal.aborted) stampAbort();
+  else ctx.signal.addEventListener("abort", stampAbort, { once: true });
   // Effective wall-clock deadline = the tighter of the node's own `max_ms` and
   // any caller override (the fan-out branch backstop). `undefined` ⇒ truly
   // unbounded (a linear node that opted out) ⇒ no leak watchdog.
@@ -69,15 +80,28 @@ export async function invokeHandler(deps: {
     // rejection would mask an ignored-AbortSignal as a "handler error". A
     // resolved sentinel lets us detect the leak unambiguously.
     if (watchdogMaxMs !== undefined) {
-      const watchdogMs = watchdogMaxMs + leakGraceMs;
-      const raced = await Promise.race<core.HandlerResult | typeof TIMEOUT_SENTINEL>([
-        spec.handler(ctx),
-        new Promise<typeof TIMEOUT_SENTINEL>((res) => {
-          watchdogTimer = setTimeout(() => res(TIMEOUT_SENTINEL), watchdogMs);
-        }),
-      ]);
-      if (raced === TIMEOUT_SENTINEL) return { kind: "leak" };
-      return { kind: "result", result: raced };
+      const handlerPromise = spec.handler(ctx);
+      let waitMs = watchdogMaxMs + leakGraceMs;
+      // Leak ⟺ the handler stayed unsettled for ≥ leakGraceMs AFTER the abort
+      // was delivered. When the sentinel fires before that holds (its absolute
+      // timer flushed late together with the abort's, or the abort hasn't
+      // flushed yet), re-arm for the remaining post-abort grace instead of
+      // declaring. Termination: an abort timer is always armed alongside a
+      // watchdog deadline (executor armTimeout / fan-out backstop / supervisor
+      // trip), so `abortDeliveredAtMs` is eventually set and the residual
+      // grace strictly shrinks to zero.
+      for (;;) {
+        const raced = await Promise.race<core.HandlerResult | typeof TIMEOUT_SENTINEL>([
+          handlerPromise,
+          new Promise<typeof TIMEOUT_SENTINEL>((res) => {
+            watchdogTimer = setTimeout(() => res(TIMEOUT_SENTINEL), waitMs);
+          }),
+        ]);
+        if (raced !== TIMEOUT_SENTINEL) return { kind: "result", result: raced };
+        const sinceAbortMs = abortDeliveredAtMs === undefined ? undefined : Date.now() - abortDeliveredAtMs;
+        if (sinceAbortMs !== undefined && sinceAbortMs >= leakGraceMs) return { kind: "leak" };
+        waitMs = sinceAbortMs === undefined ? leakGraceMs : leakGraceMs - sinceAbortMs;
+      }
     }
     // Truly unbounded (a linear node that opted out): no AbortSignal.timeout in
     // the merged signal, so no leak watchdog either — cost/token bounds and
@@ -87,6 +111,7 @@ export async function invokeHandler(deps: {
     return { kind: "thrown", error: err, abortByName: isAbortError(err) };
   } finally {
     if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
+    ctx.signal.removeEventListener("abort", stampAbort);
     disposeRegistration();
   }
 }
