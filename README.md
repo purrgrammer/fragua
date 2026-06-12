@@ -35,19 +35,56 @@ the rest follows:
 - **schedules built in.** fire on a fixed interval (`30m`…`7d`) with skip / queue / concurrent overlap, late-fire catch-up, per-schedule run history.
 - **a run is a portable artifact.** the event log, messages, canonical workflow IR and a git-bundle of the worktree snapshots together are self-contained and portable. share them, replay them, debug them on another machine.
 
-## quickstart
+## prerequisites
+
+- **git** — required. every run executes in an isolated git worktree under `.fragua/worktrees/<run-id>/`, snapshots land on `refs/fragua/*`, and diff / accept / discard are git operations; outside a git repo, `fragua init` warns and worktree isolation — most of the value proposition — is unavailable.
+- **a provider API key** — Anthropic, OpenAI, or any provider [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai) supports. `fragua providers add` stores it.
+- **Bun ≥ 1.2** — only to build from source; the release binaries are self-contained.
+
+## install
+
+### release binary
+
+every [release](https://github.com/purrgrammer/fragua/releases) publishes self-contained binaries for **linux x64/arm64 and macOS x64/arm64** (no Windows build today), each in a full flavor (`fragua-<target>`, web UI embedded) and a headless one (`fragua-headless-<target>`, ~20% smaller, no `harness`/`serve` UI — what CI installs). a `SHA256SUMS` file and Sigstore build-provenance attestations cover every asset.
+
+```sh
+gh release download --repo purrgrammer/fragua \
+  --pattern "fragua-bun-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed -e 's/x86_64/x64/' -e 's/aarch64/arm64/')" \
+  --output fragua
+chmod +x fragua && mv fragua ~/.local/bin/   # anywhere on PATH
+fragua --version
+```
+
+### from source (contributors)
 
 ```sh
 bun install
 bun run build:bin              # compiles dist/fragua (web UI embedded)
 export PATH="$PWD/dist:$PATH"   # or symlink dist/fragua into /usr/local/bin
-
-fragua providers add            # pick a provider, paste a key
-fragua harness                  # daemon + HTTP on :6767, Ctrl-C to stop
-fragua run work --input task="add a touch tool to @fragua/workspace"
 ```
 
 > hacking on fragua itself? skip the build — `bun run fragua <args…>` hits the same entry point. `fragua` and `bun run fragua` are interchangeable.
+
+## quickstart — adopt fragua in your project
+
+three steps from zero to a first run on your own repo:
+
+```sh
+# 1. install (above), add a key, start the harness
+fragua providers add            # pick a provider, paste a key
+fragua harness                  # daemon + web UI on :6767, Ctrl-C to stop
+
+# 2. initialise your repo (separate terminal) and copy in a portable starter
+cd ~/code/acme-webshop
+fragua init                     # writes .fragua/config.yaml + an empty .fragua/workflows/
+curl -fsSL -o .fragua/workflows/review.yaml \
+  https://raw.githubusercontent.com/purrgrammer/fragua/main/.fragua/workflows/review.yaml
+
+# 3. run a code review over your last commit
+fragua run review --input target="HEAD~1..HEAD"
+```
+
+`review` is portable — it assumes nothing about your project beyond git (and `gh` for PR targets). the run streams to your terminal (`fragua runs tail <id>` re-attaches later); it scales the review to the diff, writes `review.md` into the run's worktree, then pauses at a signoff gate — answer with `fragua runs respond <id> <route>` or from the web UI inbox. **cost:** a one-commit diff routes through the cheap tier — typically well under $1; the workflow's `budget: 12.00` is a hard cap at which the run pauses for you to raise it or stop, never overspending silently.
 
 run discovery is automatic (via the global DB), so `fragua run` works from any directory. point it at a `.yaml` path or a bare name resolved under `~/.fragua/workflows/` then `<cwd>/.fragua/workflows/`. inputs: `-i name=value` (repeatable, `@path` reads a file, `@-` reads stdin). `--title` names the run, `--no-follow` prints the id and exits.
 
@@ -63,14 +100,19 @@ Pin the action to a release tag in consumer repos:
 
 ## workflows
 
-ships under `.fragua/workflows/` — run from the repo, or copy into `~/.fragua/workflows/` to use anywhere.
+ships under `.fragua/workflows/` — run from the repo, or copy into `~/.fragua/workflows/` to use anywhere. **`review` and `pr_review` are portable starters**: they assume nothing but git / `gh` and work on any repo. the rest are wired to fragua's own scripts, conventions, and docs — run them here, or read them as authoring references.
 
-| workflow | what it does |
-|---|---|
-| `work`    | triage → (plan / reproduce) → implement → review → CI. leaves the change in the worktree to accept. |
-| `review`  | scope a PR / diff → structured review, with a gated apply tail. |
-| `analyze` | cost / token / latency analytics over recorded runs. |
-| `drift`   | audit fragua's own arch / spec / skill docs against the code. |
+each `budget:` is a run-level hard cap, not the typical cost — small inputs spend a fraction of it. at the cap the run pauses for the operator (raise or stop), except where noted.
+
+| workflow | what it does | portability | spend |
+|---|---|---|---|
+| `review`  | scope a PR / diff → structured review, with a gated apply tail. | **portable — works on any repo** | `budget: 12.00` cap |
+| `pr_review` | unattended PR review for CI — posts the verdict back to the PR. | **portable — works on any repo** (needs `gh` + `GH_TOKEN`) | `budget: 21.00` cap |
+| `work`    | triage → (plan / reproduce) → implement → review → CI. leaves the change in the worktree to accept. | fragua-internal (`bun run ci`, repo conventions) | **no default budget — set one**; defaults to a frontier model |
+| `analyze` | cost / token / latency analytics over recorded runs. | fragua-internal (repo scripts) | `budget: 5.00` cap |
+| `dependencies` | bump outdated dependency pins, keep typecheck + CI green. | fragua-internal (`bun run typecheck` / `bun run ci`) | `budget: 6.00` cap |
+| `drift`   | audit fragua's own arch / spec / skill docs against the code. | fragua-internal | `budget: 10.00` cap, **stops** at the cap |
+| `propose` | draft a design proposal through a five-lens adversarial panel. | fragua-internal (SPEC / proposals corpus) | `budget: 40.00` cap |
 
 author your own; `fragua validate <file>` parses + lints before you run. the `workflows` skill is the authoring guide.
 
