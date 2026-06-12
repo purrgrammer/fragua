@@ -75,6 +75,12 @@ guarantee.
 
 ### Fixed
 
+- **`emit_output` rejects non-finite numbers.** A number output carrying
+  `Infinity`, `-Infinity`, or `NaN` (scalar or nested in a record/array) now
+  fails the producing step with a clear validation message; previously JSON
+  serialization silently degraded the value to `null`, so a downstream
+  `${{ outputs.X.f }}` read injected the literal string "null" instead of
+  failing closed.
 - **An operator pause can no longer be silently dropped.** When the pause fact
   lost a concurrent-write race, the executor exited while leaving the run
   `running` with the pause intent still queued (a stranded run until daemon

@@ -192,6 +192,14 @@ function validateValueAgainstProfile(profile: OutputProfile, value: unknown, pat
   }
   if (profile.kind === "number") {
     if (typeof value !== "number") return `field "${path}" must be a number, got ${typeof value}`;
+    // Non-finite numbers (Infinity, -Infinity, NaN) are not representable in
+    // JSON — JSON.stringify turns them into null, which a downstream
+    // ${{ outputs.X.f }} substitution would inject as the literal string
+    // "null" with no error. Reject at emit time so the producing node fails
+    // loudly instead of emitting a poisoned value (reads fail closed).
+    if (!Number.isFinite(value)) {
+      return `field "${path}" must be a finite number, got ${String(value)} (Infinity/NaN are not JSON-representable and would degrade to null)`;
+    }
     return null;
   }
   if (profile.kind === "boolean") {
