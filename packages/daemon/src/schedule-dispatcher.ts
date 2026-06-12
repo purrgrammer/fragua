@@ -26,6 +26,7 @@ import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
 import { type IEventStore, isTerminal as isTerminalStatus, newRunId as mintRunId } from "@fragua/store";
+import { sleep } from "./executor-helpers.ts";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
 
@@ -240,19 +241,4 @@ function resolveSchedulingWorkflow(
     return { dotPath: path, name, scope: "path" };
   }
   return null;
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(t);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }

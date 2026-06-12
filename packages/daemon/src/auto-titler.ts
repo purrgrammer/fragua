@@ -26,6 +26,7 @@
 
 import { type EventType, type SummariseInput, type SummariserBackend, titleSyntheticNodeId } from "@fragua/core";
 import type { IEventStore } from "@fragua/store";
+import { sleep } from "./executor-helpers.ts";
 
 export interface AutoTitlerOpts {
   /** Summariser implementation. When unset, `titleRun` is a no-op — the
@@ -63,21 +64,6 @@ const DEFAULT_MAX_TITLE_CHARS = 80;
 /** Best-effort retry for the summariser call (transient provider blips). */
 const TITLE_MAX_ATTEMPTS = 3;
 const TITLE_RETRY_BASE_MS = 500;
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(t);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
 
 export class AutoTitler {
   private readonly backend: SummariserBackend | undefined;

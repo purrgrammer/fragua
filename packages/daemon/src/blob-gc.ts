@@ -11,6 +11,7 @@
 // tick (default 1000 rows). It's idempotent and safe to call any time.
 
 import type { IEventStore } from "@fragua/store";
+import { sleep } from "./executor-helpers.ts";
 
 export interface BlobGcOpts {
   store: IEventStore;
@@ -56,19 +57,4 @@ export function startBlobGc(opts: BlobGcOpts): { promise: Promise<void> } {
   })();
 
   return { promise };
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(t);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
