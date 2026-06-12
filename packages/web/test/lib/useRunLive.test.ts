@@ -424,4 +424,83 @@ describe("useRunLive — bootstrap fetch is gated on a settled snapshot", () => 
       mock.restore();
     }
   });
+
+  it("messagesError: set on initial-fetch failure, cleared on refetch success, set again on refetch failure — keeping stale rows", async () => {
+    const origWarn = console.warn;
+    console.warn = () => {};
+    const row = {
+      ordinal: 1,
+      nodeId: "fix",
+      iteration: 0,
+      content: { role: "assistant", content: [{ type: "text", text: "hello" }], timestamp: 0 },
+    };
+    // Call 1 (bootstrap): 500. Call 2 (refetch): rows. Call 3 (refetch): 500.
+    let call = 0;
+    const mock = installFetchMock({}, ({ url }) => {
+      if (url.includes("/messages")) {
+        call++;
+        if (call === 2) {
+          return new Response(JSON.stringify([row]), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("boom", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    try {
+      FakeEventSource.instances = [];
+      const { result } = renderHook(() =>
+        useRunLive("r1", {
+          terminal: false,
+          sinceSeq: 0,
+          eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        }),
+      );
+      await waitFor(() => {
+        expect(FakeEventSource.instances.length).toBe(1);
+      });
+      const es = FakeEventSource.instances[0]!;
+      act(() => es._open());
+
+      // Bootstrap failed → error surfaced.
+      await waitFor(() => {
+        expect(result.current.messagesError).toBe(true);
+      });
+
+      // SSE signal triggers a refetch that succeeds → error clears, rows land.
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "fact.message_appended",
+            payload: { ordinal: 1, role: "assistant", nodeId: "fix", iteration: 0 },
+          }),
+          "1",
+        );
+      });
+      await waitFor(() => {
+        expect(result.current.messagesError).toBe(false);
+        expect(result.current.messages.length).toBe(1);
+      });
+
+      // Next refetch fails → error sets again, stale rows are NOT wiped.
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "fact.message_appended",
+            payload: { ordinal: 2, role: "assistant", nodeId: "fix", iteration: 0 },
+          }),
+          "2",
+        );
+      });
+      await waitFor(() => {
+        expect(result.current.messagesError).toBe(true);
+      });
+      expect(result.current.messages.length).toBe(1);
+    } finally {
+      mock.restore();
+      console.warn = origWarn;
+    }
+  });
 });

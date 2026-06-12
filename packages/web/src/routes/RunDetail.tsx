@@ -36,7 +36,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { WorkflowLink } from "../components/WorkflowLink.tsx";
-import type { RunDetail as RunDetailT } from "../lib/api.ts";
+import { ApiError, type RunDetail as RunDetailT } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
@@ -77,7 +77,7 @@ export function RunDetail(): JSX.Element {
   // are folded into `detailOverlay` and merged in-memory via
   // `mergeDetail` for display, avoiding a full-payload refetch on every
   // SSE frame.
-  const { data: snapshot, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
+  const { data: snapshot, isError, error } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
 
   // Tri-state: `undefined` while the snapshot is loading; `true` only
   // when we've confirmed a terminal status. `useRunLive` defers opening
@@ -87,6 +87,7 @@ export function RunDetail(): JSX.Element {
 
   const {
     messages,
+    messagesError,
     streamingByNode,
     toolStreams,
     status: liveStatus,
@@ -131,6 +132,12 @@ export function RunDetail(): JSX.Element {
   // Reads the overlay-merged status so the badge flips the moment a
   // pause / resume / cancel fact lands, without waiting for a refetch.
   const isLive = (liveStatus === "live" || liveStatus === "loading") && detail?.status === "running";
+  // The run is still producing events server-side but the SSE stream is
+  // down (transient error, or closed awaiting backoff-reconnect). The
+  // page is degraded — say so where the live pill normally sits instead
+  // of going visually dark. `useEventSource` keeps reconnecting; this
+  // yields back to the live pill the moment the stream recovers.
+  const isReconnecting = (liveStatus === "error" || liveStatus === "closed") && detail?.status === "running";
 
   const qc = useQueryClient();
   const prevNodeStatesRef = useRef<typeof detailOverlay.nodeStates>(detailOverlay.nodeStates);
@@ -201,7 +208,14 @@ export function RunDetail(): JSX.Element {
 
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
-      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
+      <DetailHeader
+        detail={detail ?? null}
+        id={id}
+        isLive={isLive}
+        isReconnecting={isReconnecting}
+        liveCost={liveCost}
+        runId={id}
+      />
 
       {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && (
         <RunPausedNotice runId={id} eventEpoch={totalEvents} imported={detail.imported} />
@@ -213,16 +227,29 @@ export function RunDetail(): JSX.Element {
         <CrashRequeueNotice crashRequeues={detail.crashRequeues} />
       )}
       {isError && !detail ? (
-        <EmptyState
-          data-testid="detail-error"
-          title="Couldn't load this run"
-          description="The server didn't return details for this run."
-          action={
-            <Link to="/runs" className="text-xs text-sw-muted hover:text-sw-text hover:underline">
-              ← all runs
-            </Link>
-          }
-        />
+        error instanceof ApiError && error.status === 404 ? (
+          <EmptyState
+            data-testid="detail-not-found"
+            title="Run not found"
+            description="No run with this id exists in this store — the link may be stale or point at a different store."
+            action={
+              <Link to="/runs" className="text-xs text-sw-muted hover:text-sw-text hover:underline">
+                ← all runs
+              </Link>
+            }
+          />
+        ) : (
+          <EmptyState
+            data-testid="detail-error"
+            title="Couldn't load this run"
+            description="The server returned an error — reload the page to retry."
+            action={
+              <Link to="/runs" className="text-xs text-sw-muted hover:text-sw-text hover:underline">
+                ← all runs
+              </Link>
+            }
+          />
+        )
       ) : (
         <Tabs
           value={view}
@@ -253,6 +280,7 @@ export function RunDetail(): JSX.Element {
             <TabsContent value="conversation" className="h-full">
               <RunConversation
                 messages={messages}
+                messagesError={messagesError}
                 streamingByNode={streamingByNode}
                 toolStreams={toolStreams}
                 nodeStates={detail?.nodes}
@@ -318,16 +346,19 @@ const DetailHeader = memo(function DetailHeader({
   detail,
   id,
   isLive,
+  isReconnecting,
   liveCost,
   runId,
 }: {
   detail: RunDetailT | null;
   id: string;
   isLive: boolean;
+  isReconnecting: boolean;
   liveCost: CostAggregate;
   runId: string;
 }): JSX.Element {
   const showLive = isLive && detail?.status === "running";
+  const showReconnecting = !showLive && isReconnecting && detail?.status === "running";
   const nodes = detail?.nodes ?? [];
   const runningNode = nodes.find((n) => n.state === "running");
   const currentLabel = runningNode
@@ -393,6 +424,19 @@ const DetailHeader = memo(function DetailHeader({
             >
               <span className="sw-pulse inline-block size-1.5 rounded-full bg-sw-accent-thinking ring-2 ring-sw-accent-thinking/30" />
               live
+            </span>
+          </>
+        )}
+        {showReconnecting && (
+          <>
+            <span className="text-xs text-sw-muted/40">·</span>
+            <span
+              data-testid="detail-reconnecting-pill"
+              title="Live updates interrupted — reconnecting to the event stream"
+              className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-sw-accent-warn"
+            >
+              <span className="sw-pulse inline-block size-1.5 rounded-full bg-sw-accent-warn ring-2 ring-sw-accent-warn/30" />
+              reconnecting…
             </span>
           </>
         )}
