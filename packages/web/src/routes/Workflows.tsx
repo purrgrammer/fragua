@@ -13,19 +13,26 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { FileCode2 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { EmptyState } from "../components/ui/empty-state.tsx";
+import { Input } from "../components/ui/input.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import { queries } from "../lib/queries.ts";
 
 export function Workflows(): JSX.Element {
   const { data: rows, isPending, isError, error } = useQuery(queries.workflows.list());
+  const [filter, setFilter] = useState("");
 
   useEffect(() => {
     if (error)
       console.warn("[Workflows] failed to load workflows —", error instanceof Error ? error.message : String(error));
   }, [error]);
+
+  const needle = filter.trim().toLowerCase();
+  const filtered = (rows ?? []).filter(
+    (row) => row.name.toLowerCase().includes(needle) || (row.label ?? "").toLowerCase().includes(needle),
+  );
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-3">
@@ -57,6 +64,22 @@ export function Workflows(): JSX.Element {
         />
       )}
       {rows && rows.length > 0 && (
+        <Input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter by name…"
+          aria-label="Filter workflows"
+          className="max-w-64"
+          data-testid="workflows-filter"
+        />
+      )}
+      {rows && rows.length > 0 && filtered.length === 0 && (
+        <p className="text-sw-sm text-sw-muted" data-testid="workflows-no-match">
+          No workflows match “{filter.trim()}”.
+        </p>
+      )}
+      {filtered.length > 0 && (
         <div className="w-full min-w-0 overflow-x-auto">
           <Table data-testid="workflows-table" className="table-fixed">
             <TableHeader>
@@ -68,7 +91,7 @@ export function Workflows(): JSX.Element {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => {
+              {filtered.map((row) => {
                 const sourceLabel = row.cwd ? basename(row.cwd) : "global";
                 const sourceTitle = row.cwd ?? "~/.fragua/workflows";
                 const rowKey = `${row.cwd ?? ""}::${row.path}`;

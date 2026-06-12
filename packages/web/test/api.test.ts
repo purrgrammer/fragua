@@ -146,6 +146,49 @@ describe("api — /workflows", () => {
   });
 });
 
+describe("api — error formatting names method, path, and status", () => {
+  it("httpErrorMessage composes method + path + status code + status text", () => {
+    expect(api.httpErrorMessage("DELETE", "/api/jobs/9", 409, "Conflict")).toBe("DELETE /api/jobs/9 → 409 Conflict");
+  });
+
+  it("httpErrorMessage tolerates an empty statusText", () => {
+    expect(api.httpErrorMessage("GET", "/api/runs", 503, "")).toBe("GET /api/runs → 503");
+  });
+
+  it("networkErrorMessage carries method, path, and the underlying cause", () => {
+    expect(api.networkErrorMessage("GET", "/api/health", new TypeError("Failed to fetch"))).toBe(
+      "GET /api/health → network error (Failed to fetch)",
+    );
+  });
+
+  it("non-2xx ApiError messages include method, path, and status", async () => {
+    mock = mockResponse("/api/runs", new Response("boom", { status: 503, statusText: "Service Unavailable" }));
+    await expect(api.listRuns()).rejects.toThrow("GET /api/runs → 503 Service Unavailable");
+  });
+
+  it("a rejected GET fetch (network down) is wrapped with method + path", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new TypeError("Failed to fetch"))) as unknown as typeof globalThis.fetch;
+    try {
+      await expect(api.listRuns()).rejects.toThrow("GET /api/runs → network error (Failed to fetch)");
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("a rejected POST fetch is wrapped with method + path", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new TypeError("Failed to fetch"))) as unknown as typeof globalThis.fetch;
+    try {
+      await expect(api.steerRun("run-7", "hi")).rejects.toThrow(
+        "POST /api/runs/run-7/steer → network error (Failed to fetch)",
+      );
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
 describe("api — URL helpers are relative and /api-prefixed", () => {
   it("getRunEventsUrl returns a relative /api/runs/:id/stream (SSE endpoint)", () => {
     // Must point at /stream (text/event-stream) not /events (application/json).

@@ -398,11 +398,37 @@ export interface JobSummary {
 
 const url = (path: string): string => `${BASE_URL}${path}`;
 
+/** One audit point for the HTTP-failure message shape. Operators copy
+ *  this string straight into bug reports, so it always names the
+ *  method, the path, and the status code. */
+export function httpErrorMessage(method: string, requestUrl: string, status: number, statusText: string): string {
+  return `${method} ${requestUrl} → ${status}${statusText ? ` ${statusText}` : ""}`;
+}
+
+/** Message for a fetch that rejected before any response existed (DNS
+ *  failure, refused connection, server down). The browser's bare
+ *  TypeError ("Failed to fetch") names neither method nor path — this
+ *  wrapper restores both so the failure is reportable. */
+export function networkErrorMessage(method: string, requestUrl: string, cause: unknown): string {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  return `${method} ${requestUrl} → network error (${reason})`;
+}
+
+/** Every request in this module goes through here so a network-level
+ *  rejection carries method + path instead of the generic TypeError. */
+async function apiFetch(method: string, requestUrl: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(requestUrl, { ...init, method });
+  } catch (cause) {
+    throw new Error(networkErrorMessage(method, requestUrl, cause));
+  }
+}
+
 async function getJson<T>(path: string, validate: (v: unknown) => v is T): Promise<T> {
   const u = url(path);
-  const res = await fetch(u);
+  const res = await apiFetch("GET", u);
   if (!res.ok) {
-    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    throw new ApiError(httpErrorMessage("GET", u, res.status, res.statusText), res.status, u);
   }
   const body = (await res.json()) as unknown;
   if (!validate(body)) {
@@ -417,12 +443,12 @@ async function postJson<T>(
   validate: (v: unknown) => v is T,
 ): Promise<T> {
   const u = url(path);
-  const init: RequestInit = { method: "POST" };
+  const init: RequestInit = {};
   if (body !== undefined) {
     init.headers = { "content-type": "application/json" };
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(u, init);
+  const res = await apiFetch("POST", u, init);
   if (!res.ok) {
     let refusalBody: { error?: string; code?: string } | undefined;
     try {
@@ -430,7 +456,7 @@ async function postJson<T>(
     } catch {
       // non-JSON error body — leave refusalBody undefined
     }
-    throw new ApiError(`POST ${u} → ${res.status} ${res.statusText}`, res.status, u, refusalBody);
+    throw new ApiError(httpErrorMessage("POST", u, res.status, res.statusText), res.status, u, refusalBody);
   }
   const payload = (await res.json()) as unknown;
   if (!validate(payload)) {
@@ -573,9 +599,9 @@ export async function getProjectTree(projectId: string): Promise<ProjectTreeEntr
  *  state. */
 export async function getProjectBlob(projectId: string, path: string): Promise<string> {
   const u = url(`/projects/${encodeURIComponent(projectId)}/blob?path=${encodeURIComponent(path)}`);
-  const res = await fetch(u);
+  const res = await apiFetch("GET", u);
   if (!res.ok) {
-    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    throw new ApiError(httpErrorMessage("GET", u, res.status, res.statusText), res.status, u);
   }
   return res.text();
 }
@@ -592,9 +618,9 @@ export async function getRunTree(runId: string): Promise<ProjectTreeEntry[]> {
 
 export async function getRunBlob(runId: string, path: string): Promise<string> {
   const u = url(`/runs/${encodeURIComponent(runId)}/blob?path=${encodeURIComponent(path)}`);
-  const res = await fetch(u);
+  const res = await apiFetch("GET", u);
   if (!res.ok) {
-    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    throw new ApiError(httpErrorMessage("GET", u, res.status, res.statusText), res.status, u);
   }
   return res.text();
 }
@@ -656,18 +682,18 @@ export async function getRunSnapshotDiff(
   const u = url(
     `/runs/${encodeURIComponent(runId)}/snapshots/${encodeURIComponent(String(eventIdx))}/diff${qs ? `?${qs}` : ""}`,
   );
-  const res = await fetch(u);
+  const res = await apiFetch("GET", u);
   if (!res.ok) {
-    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    throw new ApiError(httpErrorMessage("GET", u, res.status, res.statusText), res.status, u);
   }
   return res.text();
 }
 
 export async function getRunDiff(runId: string): Promise<string> {
   const u = url(`/runs/${encodeURIComponent(runId)}/diff`);
-  const res = await fetch(u);
+  const res = await apiFetch("GET", u);
   if (!res.ok) {
-    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    throw new ApiError(httpErrorMessage("GET", u, res.status, res.statusText), res.status, u);
   }
   return res.text();
 }
@@ -730,9 +756,9 @@ export async function getSkillTree(locId: string): Promise<SkillTreeResponse> {
  * a directory. */
 export async function getSkillFile(locId: string, path: string): Promise<{ bytes: Uint8Array; contentType: string }> {
   const u = url(`/skills/${encodeURIComponent(locId)}/file?path=${encodeURIComponent(path)}`);
-  const res = await fetch(u);
+  const res = await apiFetch("GET", u);
   if (!res.ok) {
-    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    throw new ApiError(httpErrorMessage("GET", u, res.status, res.statusText), res.status, u);
   }
   const buf = await res.arrayBuffer();
   return {
@@ -798,8 +824,8 @@ export async function getJob(id: string): Promise<JobSummary> {
 
 export async function cancelJob(id: string): Promise<{ status: string; jobId: string }> {
   const u = url(`/jobs/${encodeURIComponent(id)}`);
-  const res = await fetch(u, { method: "DELETE" });
-  if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  const res = await apiFetch("DELETE", u);
+  if (!res.ok) throw new ApiError(httpErrorMessage("DELETE", u, res.status, res.statusText), res.status, u);
   const payload = (await res.json()) as unknown;
   if (
     typeof payload !== "object" ||
@@ -1008,8 +1034,8 @@ export async function resumeSchedule(id: string): Promise<Schedule> {
 
 export async function deleteSchedule(id: string): Promise<{ deleted: string }> {
   const u = url(`/schedules/${encodeURIComponent(id)}`);
-  const res = await fetch(u, { method: "DELETE" });
-  if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  const res = await apiFetch("DELETE", u);
+  if (!res.ok) throw new ApiError(httpErrorMessage("DELETE", u, res.status, res.statusText), res.status, u);
   const body = (await res.json()) as { deleted?: unknown };
   if (typeof body.deleted !== "string") throw new Error(`DELETE ${u} → malformed response`);
   return { deleted: body.deleted };
@@ -1248,8 +1274,8 @@ export async function setProviderCredentials(name: string, key: string): Promise
 
 export async function removeProviderCredentials(name: string): Promise<{ ok: boolean; removed: boolean }> {
   const u = url(`/providers/${encodeURIComponent(name)}/credentials`);
-  const res = await fetch(u, { method: "DELETE" });
-  if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  const res = await apiFetch("DELETE", u);
+  if (!res.ok) throw new ApiError(httpErrorMessage("DELETE", u, res.status, res.statusText), res.status, u);
   const body = (await res.json()) as { ok?: unknown; removed?: unknown };
   if (typeof body.ok !== "boolean") throw new Error(`DELETE ${u} → malformed response`);
   return { ok: body.ok, removed: typeof body.removed === "boolean" ? body.removed : false };
