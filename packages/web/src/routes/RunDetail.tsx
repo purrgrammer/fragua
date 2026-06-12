@@ -27,6 +27,7 @@ import { ProjectLink } from "../components/ProjectLink.tsx";
 import { RunControls } from "../components/RunControls.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
 import { hasDiff, RunDiffTab } from "../components/RunDiffTab.tsx";
+import { RunHaltedNotice } from "../components/RunHaltedNotice.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
@@ -204,6 +205,9 @@ export function RunDetail(): JSX.Element {
 
       {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && (
         <RunPausedNotice runId={id} eventEpoch={totalEvents} imported={detail.imported} />
+      )}
+      {detail?.runStatus === "halted" && (
+        <RunHaltedNotice haltReason={detail.haltReason} haltDetail={detail.haltDetail} />
       )}
       {detail?.crashRequeues != null && detail.crashRequeues.length > 0 && (
         <CrashRequeueNotice crashRequeues={detail.crashRequeues} />

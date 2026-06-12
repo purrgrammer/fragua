@@ -20,7 +20,7 @@
 // boundary (`mock.module`) — both standard bun patterns, no in-module
 // injection seam required.
 
-import type { AgentMessage, FeedEvent, SnapshotStat } from "@fragua/types";
+import type { AgentMessage, FeedEvent, HaltReason, SnapshotStat } from "@fragua/types";
 import type { AnalyticsPayload, AnalyticsRunsPage, BucketKind } from "../types/analytics.ts";
 
 export type { FeedEvent };
@@ -175,6 +175,12 @@ export interface RunDetail {
   cacheWriteTokens?: number;
   durationMs?: number;
   title?: string;
+  /** Terminal halt diagnosis from the run's `fact.run_halted` payload
+   *  (when `runStatus === 'halted'`). Projected by the read plane — the
+   *  web never re-derives these from raw events. Optional because older
+   *  server builds may omit them. */
+  haltReason?: HaltReason;
+  haltDetail?: string;
   hitlNodeId?: string;
   hitlLabel?: string;
   /** Declared route names from the paused human node's `routes=` attr;

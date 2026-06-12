@@ -616,6 +616,50 @@ describe("runStateToDetail — HITL projection", () => {
   });
 });
 
+describe("runStateToDetail — halt projection", () => {
+  function evWithSeq(seq: number, type: string, payload: Record<string, unknown>): StoredEvent {
+    return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
+  }
+
+  test("halted projects reason/detail from the terminal fact.run_halted", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(2, "fact.node_started", { nodeId: "implement" }),
+      evWithSeq(3, "fact.node_aborted", { nodeId: "implement", cause: "error" }),
+      evWithSeq(4, "fact.run_halted", { reason: "error", detail: "handler threw: boom" }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.runStatus).toBe("halted");
+    expect(detail.haltReason).toBe("error");
+    expect(detail.haltDetail).toBe("handler threw: boom");
+  });
+
+  test("halted without a detail string leaves haltDetail undefined", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBe("occ_exhausted");
+    expect(detail.haltDetail).toBeUndefined();
+  });
+
+  test("non-halted statuses leave halt fields undefined", () => {
+    const state = makeState({ status: "running" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_started", { startNode: "start" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBeUndefined();
+    expect(detail.haltDetail).toBeUndefined();
+  });
+
+  test("halted tolerates malformed payload (fields stay undefined)", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: 42, detail: { nested: true } })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBeUndefined();
+    expect(detail.haltDetail).toBeUndefined();
+  });
+});
+
 describe("runStateToDetail \u2014 lastEventSeq", () => {
   function evWithSeq(seq: number, type: string, payload: Record<string, unknown> = {}): StoredEvent {
     return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };

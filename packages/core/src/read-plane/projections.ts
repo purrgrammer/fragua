@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
+import { HALT_REASONS, type HaltReason } from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
 import type { Graph } from "../types/graph.ts";
@@ -179,6 +180,20 @@ export function runStateToDetail(
   // NOT `cwd == null` — a legitimately-enqueued run can have a null cwd and must
   // keep its operate controls.
   if (state.imported === true) detail.imported = true;
+
+  if (state.status === "halted") {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i]!;
+      if (ev.type === "fact.run_halted") {
+        const p = ev.payload as { reason?: unknown; detail?: unknown } | null | undefined;
+        if (typeof p?.reason === "string" && (HALT_REASONS as readonly string[]).includes(p.reason)) {
+          detail.haltReason = p.reason as HaltReason;
+        }
+        if (typeof p?.detail === "string") detail.haltDetail = p.detail;
+        break;
+      }
+    }
+  }
 
   if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {

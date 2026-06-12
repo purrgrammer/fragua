@@ -13,6 +13,7 @@
 // Folds are pure and additive — same shape as `foldCostFrame` in
 // `useLiveCostAggregate.ts`.
 
+import { HALT_REASONS, type HaltReason } from "@fragua/types";
 import type { NodeState, RunDetail, SelectedEdge } from "./api.ts";
 
 /** UI-side run statuses. Exact strings match `RunDetail["status"]`. */
@@ -64,6 +65,11 @@ export interface DetailOverlay {
    * Used to downgrade still-"running" nodes to "failed" on merge,
    * matching the server's terminal-halt patch. */
   haltSeq: number | undefined;
+  /** Terminal diagnosis from a live `fact.run_halted` — mirrors the
+   * read-plane's `haltReason` / `haltDetail` projection so the halted
+   * banner appears without a refetch. Null until a halt fact arrives. */
+  haltReason: HaltReason | null;
+  haltDetail: string | null;
   /** Seq of the latest run-LEVEL status fact folded (run_started / paused /
    * paused_human / resumed / completed / halted / cancelled / quarantined).
    * `mergeDetail` gates the overlay's run-level fields (status, runStatus,
@@ -85,6 +91,8 @@ export const EMPTY_DETAIL_OVERLAY: DetailOverlay = {
   hitlOptionLabels: null,
   hitlDecisions: null,
   haltSeq: undefined,
+  haltReason: null,
+  haltDetail: null,
   runStateSeq: undefined,
 };
 
@@ -192,8 +200,19 @@ function foldDetailFrameInner(
       return { ...prev, status: "running" };
     case "fact.run_completed":
       return { ...prev, status: "success" };
-    case "fact.run_halted":
-      return { ...prev, status: "fail", haltSeq: prev.haltSeq ?? seq };
+    case "fact.run_halted": {
+      const reason = stringField(payload, "reason");
+      const haltReason =
+        reason !== undefined && (HALT_REASONS as readonly string[]).includes(reason) ? (reason as HaltReason) : null;
+      return {
+        ...prev,
+        status: "fail",
+        runStatus: "halted",
+        haltSeq: prev.haltSeq ?? seq,
+        haltReason,
+        haltDetail: stringField(payload, "detail") ?? null,
+      };
+    }
     case "fact.run_cancelled":
       return { ...prev, status: "canceled", haltSeq: prev.haltSeq ?? seq };
     case "fact.run_quarantined":
@@ -328,7 +347,9 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     overlay.hitlOptions === null &&
     overlay.hitlOptionLabels === null &&
     overlay.hitlDecisions === null &&
-    overlay.haltSeq === undefined
+    overlay.haltSeq === undefined &&
+    overlay.haltReason === null &&
+    overlay.haltDetail === null
   ) {
     return snapshot;
   }
@@ -412,6 +433,8 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     // to a pause the run has already left.
     status: overlayRunFresh ? (overlay.status ?? snapshot.status) : snapshot.status,
     runStatus: overlayRunFresh && overlay.runStatus !== null ? overlay.runStatus : snapshot.runStatus,
+    haltReason: overlayRunFresh && overlay.haltReason !== null ? overlay.haltReason : snapshot.haltReason,
+    haltDetail: overlayRunFresh && overlay.haltDetail !== null ? overlay.haltDetail : snapshot.haltDetail,
     hitlNodeId: overlayRunFresh && overlay.hitlNodeId !== null ? overlay.hitlNodeId : snapshot.hitlNodeId,
     hitlLabel: overlayRunFresh && overlay.hitlLabel !== null ? overlay.hitlLabel : snapshot.hitlLabel,
     hitlOptions: overlayRunFresh && overlay.hitlOptions !== null ? overlay.hitlOptions : snapshot.hitlOptions,

@@ -24,6 +24,10 @@ guarantee.
   such a bundle must be handled as secret-bearing (docs state the policy).
 - The server logs a structured warning when a human-input route is accepted
   without validation (no declared routes found on the pause fact).
+- Halted runs show their diagnosis inline: the read plane projects the
+  terminal `fact.run_halted` reason + detail onto the run detail, and the
+  web run page renders a read-only halted banner (live via SSE too) instead
+  of a bare fail badge.
 
 ### Changed
 

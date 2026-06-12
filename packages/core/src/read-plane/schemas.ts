@@ -3,7 +3,12 @@
 // detail reads. Re-exported by `@fragua/server`'s schemas so existing
 // `import { RunSummary } from "../schemas.ts"` consumers keep working.
 
+import { HALT_REASONS } from "@fragua/types";
 import { type Static, Type } from "@sinclair/typebox";
+
+/** Terminal halt reason, derived from the `@fragua/types` runtime tuple
+ * (the source of truth) — never re-declare the literals here. */
+const HaltReasonSchema = Type.Union(HALT_REASONS.map((r) => Type.Literal(r)));
 
 /** Coarse UI status — one badge per category. The Inbox / fine-grained
  * filters use `runStatus` (the raw store status) instead. */
@@ -164,6 +169,11 @@ export const RunDetail = Type.Object({
   cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
+  /** Terminal halt diagnosis from the run's `fact.run_halted` payload
+   *  (when `runStatus === 'halted'`). Mirrors the HITL pause-field
+   *  extraction so the UI can explain the failure inline. */
+  haltReason: Type.Optional(HaltReasonSchema),
+  haltDetail: Type.Optional(Type.String()),
   hitlNodeId: Type.Optional(Type.String()),
   /** Operator-facing question text from the paused human node's `text=`
    *  attr (when `runStatus === 'paused_human'`). */
