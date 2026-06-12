@@ -138,7 +138,7 @@ function shellQuote(v: string): string {
 /** Every distinct `{ producer, path }` reference in a template string.
  * Used by the validator to hard-error on an undeclared producer/field or a
  * producer that can never reach the consumer (E035), and to warn (W015) when
- * the producer doesn't dominate the consumer's success path.
+ * the producer doesn't run on every path to the consumer.
  * `path` is the dot-split array of segments after the producer id. */
 export function outputReferences(template: string): Array<{ producer: string; path: string[] }> {
   const out: Array<{ producer: string; path: string[] }> = [];

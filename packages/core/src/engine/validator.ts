@@ -502,13 +502,15 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   //   - hard error (E035) when producer X doesn't exist, declares no outputs,
   //     doesn't declare field f, or can never reach the consumer (a dead
   //     reference — always a typo / wiring mistake);
-  //   - warning (W015) when X can reach the consumer but doesn't dominate its
-  //     success path — the ref might be unpopulated on some run path, where it
-  //     fails closed at runtime.
-  // Success-dominance is computed only to SUPPRESS the warning; it never
-  // blocks. The runtime guarantee is fail-closed reads, not this analysis.
+  //   - warning (W015) when X can reach the consumer but doesn't run on every
+  //     path to it — the ref might be unpopulated on some run path, where it
+  //     fails closed at runtime. A consumer reachable ONLY on paths where X
+  //     already ran (e.g. behind X's own `fail:` edge) is silent — X has run,
+  //     even if the emission itself is not guaranteed.
+  // Run-dominance is computed only to SUPPRESS the warning; it never blocks.
+  // The runtime guarantee is fail-closed reads, not this analysis.
   {
-    const dominance = buildSuccessDominance(graph);
+    const dominance = buildRunDominance(graph);
     const reachableCache = new Map<string, Set<string>>();
     const producerReaches = (producerId: string, consumerId: string): boolean => {
       let set = reachableCache.get(producerId);
@@ -595,7 +597,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           }
           // Producer exists and declares the field. Decide error-vs-warn:
           // can't reach the consumer at all → dead ref (E035); reachable but
-          // not success-dominating → advisory (W015), fail-closed at runtime.
+          // not run-dominating → advisory (W015), fail-closed at runtime.
           if (dominance.dominates(ref.producer, n.id)) {
             // Producer always runs first, so W015 stays silent — but the read can
             // still fail closed if it reaches through an optional field the
@@ -637,7 +639,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             code: "W015",
             message:
               `node "${n.id}" reads \`${refToken}\` but "${ref.producer}" does not run on every path to it — ` +
-              `if it didn't run (or failed before emitting), the reference fails closed at runtime (node failure, not "")`,
+              `if it didn't run, the reference fails closed at runtime (node failure, not "")`,
             nodeId: n.id,
             ...(n.loc !== undefined ? { loc: n.loc } : {}),
           });
@@ -1157,33 +1159,26 @@ function reachableSet(graph: Graph, startId: string): Set<string> {
   return reachableFromSet(graph, [startId]);
 }
 
-export interface SuccessDominance {
+export interface RunDominance {
   /**
-   * Does producer X "success-dominate" consumer N — i.e. does EVERY path from
-   * start to N cross X and leave it via a non-fail (output-emitting) edge? When
-   * true, X's outputs are guaranteed populated by the time N runs.
+   * Does producer X "run-dominate" consumer N — i.e. does EVERY path from
+   * start to N cross X? When true, X has run by the time N does, so a
+   * `${{ outputs.X.f }}` read in N is not a not-on-every-path wiring problem
+   * (the emission itself is still fail-closed at runtime).
    */
   dominates(producer: string, consumer: string): boolean;
 }
 
-/** Virtual "X emitted its outputs" node, inserted on each producer's non-fail
- * out-edges. `:` can't appear in a node id, so this never collides. */
-const emitNodeId = (producer: string): string => `:emit:${producer}`;
-
 /**
- * Build a success-dominance oracle for `${{ outputs.X.f }}` reference checking.
+ * Build a run-dominance oracle for `${{ outputs.X.f }}` reference checking.
  *
- * "X success-dominates N" means every path start→N crosses X AND leaves X via a
- * non-fail edge — only then is X's output guaranteed populated when N runs. The
- * subtlety: N may legitimately be reached via *another* node's fail edge (a
- * recovery step `fix` reached through a gate's `fail:`), and that must NOT break
- * X's dominance — only X's *own* fail exits should.
- *
- * Encoding (standard edge-subdivision): insert a virtual `emit::X` node on each
- * producer X's non-fail out-edges (`X → emit::X → targets`); X's fail edges stay
- * direct, bypassing it. Then `emit::X` dominates N in the ordinary control-flow
- * graph IFF X success-dominates N. All producers' emit-nodes coexist in one
- * augmented graph, so a single dominator-tree build answers every (X, N) query.
+ * "X run-dominates N" means every path start→N crosses X — X has run (with
+ * whatever outcome) before N does. This is plain control-flow dominance,
+ * including over fail edges: a consumer behind X's *own* `fail:` edge, or a
+ * recovery step behind another node's `fail:`, is dominated as long as no
+ * path bypasses X. W015 is about wiring ("X might not have run at all"), not
+ * about whether the emission succeeded — a failed-before-emit read fails
+ * closed at runtime regardless of static analysis.
  *
  * Dominators via Cooper–Harvey–Kennedy ("A Simple, Fast Dominance Algorithm"):
  * iterate immediate dominators over reverse-postorder, intersecting by walking
@@ -1191,10 +1186,7 @@ const emitNodeId = (producer: string): string => `:emit:${producer}`;
  * dominator sets. Ancestor (dominance) queries are O(1) via dom-tree DFS
  * enter/exit intervals.
  */
-function buildSuccessDominance(graph: Graph): SuccessDominance {
-  const producers = new Set(Object.keys(graph.nodes).filter((id) => graph.nodes[id]?.attrs.outputs !== undefined));
-
-  // Augmented adjacency: subdivide each producer's non-fail out-edges with emit::X.
+function buildRunDominance(graph: Graph): RunDominance {
   const succ = new Map<string, string[]>();
   const ensure = (n: string): string[] => {
     let list = succ.get(n);
@@ -1205,16 +1197,7 @@ function buildSuccessDominance(graph: Graph): SuccessDominance {
     return list;
   };
   for (const id of Object.keys(graph.nodes)) ensure(id);
-  const emitNeeded = new Set<string>();
-  for (const e of graph.edges) {
-    if (producers.has(e.from) && e.attrs.outcome !== "fail") {
-      ensure(emitNodeId(e.from)).push(e.to);
-      emitNeeded.add(e.from);
-    } else {
-      ensure(e.from).push(e.to);
-    }
-  }
-  for (const p of emitNeeded) ensure(p).push(emitNodeId(p));
+  for (const e of graph.edges) ensure(e.from).push(e.to);
 
   const start = Object.keys(graph.nodes).find((id) => graph.nodes[id]?.type === "start") ?? Object.keys(graph.nodes)[0];
   if (start === undefined) return { dominates: () => false };
@@ -1305,9 +1288,11 @@ function buildSuccessDominance(graph: Graph): SuccessDominance {
 
   return {
     dominates(producer: string, consumer: string): boolean {
-      const a = emitNodeId(producer);
-      const ea = enter.get(a);
-      const xa = exit.get(a);
+      // Strict dominance: a node never run-dominates itself — a self-read
+      // happens before the node's own emission.
+      if (producer === consumer) return false;
+      const ea = enter.get(producer);
+      const xa = exit.get(producer);
       const en = enter.get(consumer);
       const xn = exit.get(consumer);
       if (ea === undefined || xa === undefined || en === undefined || xn === undefined) return false;
@@ -1316,7 +1301,7 @@ function buildSuccessDominance(graph: Graph): SuccessDominance {
   };
 }
 
-export { buildSuccessDominance };
+export { buildRunDominance };
 
 function reachableFromSet(graph: Graph, startIds: string[]): Set<string> {
   const visited = new Set<string>();

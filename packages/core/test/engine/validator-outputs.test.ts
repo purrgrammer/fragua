@@ -56,11 +56,13 @@ steps:
 // Reads fail closed at runtime, so static checks are advisory: E035 hard-errors
 // only on a broken reference (missing producer/field, or a producer that can
 // never reach the consumer); W015 warns when the producer can reach the
-// consumer but doesn't success-dominate it (might be unpopulated → fails closed).
+// consumer but doesn't run on every path to it (might be unpopulated → fails
+// closed). A consumer reachable only on paths where the producer already ran
+// (including the producer's own fail edge) stays silent.
 
 describe("E035 / W015 — outputs references", () => {
-  test("producer success-dominates consumer — no E035, no W015", () => {
-    // A -> B linear chain: A success-dominates B
+  test("producer dominates consumer — no E035, no W015", () => {
+    // A -> B linear chain: A dominates B
     const outRef = OUT("scope", "pr_number");
     const src = [
       "name: wf",
@@ -128,11 +130,20 @@ describe("E035 / W015 — outputs references", () => {
     expect(d.filter((x) => x.code === "E035")).toHaveLength(0);
   });
 
-  test("producer reachable only via fail edge — W015 warning, not error", () => {
+  test("fail-edge consumer ALSO reachable bypassing the producer — W015 warning, not error", () => {
+    // The consumer sits on the producer's fail edge, but a triage route can
+    // also reach it without the producer ever running — the bypass path is
+    // what W015 must keep flagging.
     const outRef = OUT("scope", "pr_number");
     const src = [
       "name: wf",
       "steps:",
+      "  triage:",
+      "    type: llm",
+      "    prompt: Triage.",
+      "    routes:",
+      "      go: scope",
+      "      skip: consumer",
       "  scope:",
       "    type: llm",
       "    prompt: Produce.",
@@ -154,13 +165,42 @@ describe("E035 / W015 — outputs references", () => {
     expect(w15[0]?.severity).toBe("warning");
   });
 
+  test("consumer on the producer's OWN fail edge — producer already ran, no W015", () => {
+    // The `dependencies` shape that surfaced the false positive: the producer
+    // routes `on: {success, fail}` and the fail-edge consumer reads the
+    // producer's output. Every path to the consumer crosses the producer (it
+    // has already run), so W015 must stay silent — the read fails closed at
+    // runtime only in the emitted-nothing edge case, which is not a
+    // not-on-every-path wiring problem.
+    const outRef = OUT("update", "bumps");
+    const src = [
+      "name: wf",
+      "steps:",
+      "  update:",
+      "    type: llm",
+      "    prompt: Update deps.",
+      "    outputs:",
+      "      bumps:",
+      "        type: string",
+      "    on:",
+      "      success: exit",
+      "      fail: report",
+      "  report:",
+      "    type: tool",
+      `    run: echo ${outRef}`,
+      "    next: exit",
+    ].join("\n");
+    const d = diags(src);
+    expect(d.filter((x) => x.code === "E035")).toHaveLength(0);
+    expect(d.filter((x) => x.code === "W015")).toHaveLength(0);
+  });
+
   test("recovery step reached via ANOTHER node's fail edge, producer dominates — no W015", () => {
-    // The `dependencies` shape: a producer runs, a deterministic gate fails, and
-    // a recovery step (reached via the GATE's fail edge, not the producer's)
-    // reads the producer's output. The producer success-dominates the recovery
-    // step — every path to it crosses the producer via a non-fail edge — so the
-    // ref is guaranteed populated. Success-dominance must see through the gate's
-    // fail edge (it belongs to the gate, not the producer).
+    // A producer runs, a deterministic gate fails, and a recovery step
+    // (reached via the GATE's fail edge, not the producer's) reads the
+    // producer's output. The producer dominates the recovery step — every
+    // path to it crosses the producer — so the ref is populated. Dominance
+    // must see through the gate's fail edge.
     const outRef = OUT("update", "bumps");
     const src = [
       "name: wf",
@@ -189,7 +229,7 @@ describe("E035 / W015 — outputs references", () => {
   });
 
   test("producer dominates a recovery step reached via a gate's fail edge — no W015", () => {
-    // `update` (non-routing) success-dominates `fix` even though `fix` is reached
+    // `update` (non-routing) dominates `fix` even though `fix` is reached
     // only via `gate`'s fail edge — every path to `fix` runs `update` first. The
     // fail-path is what the W015 dominance check must not false-positive on.
     const outRef = OUT("update", "bumps");
