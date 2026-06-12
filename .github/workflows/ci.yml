@@ -9,7 +9,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -31,6 +31,15 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      # PBT depth ladder: 1× (baseline `bun run test` above) / 3× (this PR gate) /
+      # 20× (property-nightly.yml). Keeps rare-branch fault-recovery regressions
+      # (OCC, sweep, HITL durability, abort loop) from merging and only surfacing
+      # at night. 3× measured at ~73s locally — keep it unsharded.
+      - name: Property/fault-injection gate (FRAGUA_PBT_RUNS=3×, node suites only)
+        env:
+          FRAGUA_PBT_RUNS: "3"
+        run: bun test --timeout 120000 ./packages/store ./packages/daemon ./packages/core ./packages/agent
 
       - name: Event-contract version touch-gate
         run: |
