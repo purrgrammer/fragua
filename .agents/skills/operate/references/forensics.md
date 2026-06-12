@@ -78,7 +78,8 @@ If the ending is ambiguous (`fact.run_halted { reason: "error" }` with no detail
 fragua runs events "$RUN"                       # full timeline, newest-relevant tail
 fragua runs events "$RUN" --type fact.          # facts only
 fragua runs events "$RUN" --type intent.        # operator intents only
-fragua runs events "$RUN" --limit 100           # cap the window — events run to thousands on long runs
+fragua runs events "$RUN" --limit 100           # last N matching events (SQL-bounded — long runs never hydrate the full log)
+fragua runs events "$RUN" --since 9500          # only events with seq > 9500 (pair with --limit to bound)
 fragua runs events "$RUN" --json                # raw payloads (the field references below live here)
 ```
 
@@ -356,7 +357,7 @@ fragua runs ls [--status …] [--limit N]     # find / resolve a run (copy the f
 
 fragua runs status "$RUN"                   # lifecycle + outcome + the why
 fragua runs events "$RUN" --type fact.run_  # terminal facts (the ending)
-fragua runs events "$RUN" [--type <prefix>] [--limit N] [--json]   # full timeline; --json = raw payloads
+fragua runs events "$RUN" [--type <prefix>] [--limit N] [--since <seq>] [--json]   # timeline; --json = raw payloads
 
 fragua runs steps "$RUN" [--json]           # per-LLM-call snapshots; --json = resolved prompts
 fragua runs messages "$RUN" [--node <id>] [--json]   # transcript; default preview, --json = full blocks

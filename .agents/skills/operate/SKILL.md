@@ -74,18 +74,18 @@ fragua run <workflow>  \
 fragua runs ls [--status queued,running,…] [--limit N]   # one line per run: id · status · title
 fragua runs inbox                                        # runs awaiting an operator decision (2 sections)
 fragua runs status <id>                                  # one run: lifecycle + outcome + the why (pause/halt reason, quarantine orphans, HITL gate)
-fragua runs tail <id>                                    # follow an existing run's event log to terminal (live)
+fragua runs tail <id> [--full]                           # follow an existing run's event log to terminal (live; backfills the last 200 events, --full for the whole log)
 fragua runs diff <id> [--against base|previous|<eventIdx>] [--snap <eventIdx>] [--path <p>]   # review the change
 ```
 
-`fragua run` tails the run it enqueues; to watch a run you *didn't* just start, `fragua runs tail <id>` (live event log to terminal, same renderer + inline HITL picker); for a one-shot snapshot, `fragua runs status <id>`. `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
+`fragua run` tails the run it enqueues; to watch a run you *didn't* just start, `fragua runs tail <id>` (live event log to terminal, same renderer + inline HITL picker); for a one-shot snapshot, `fragua runs status <id>` (which also prints a "requeued after daemon crash" line when the startup sweep recovered the run). `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
 
 **Two status words, don't conflate.** Lifecycle (`queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) answers "still going?"; outcome (`success | fail | null`) answers "did it succeed?" once terminal. `fragua runs ls` shows the lifecycle status.
 
 **Move a run between stores (experimental).** A run that executed elsewhere — a CI `.fragua` artifact, a teammate's box — imports into your store so you can inspect it here:
 
 ```sh
-fragua runs export <id> --to <file.fragua>   # write a run as a portable, secret-free bundle
+fragua runs export <id> --to <file.fragua>   # write a run as a portable, secret-free bundle (warns on liveLiteralHit — treat such a bundle as secret-bearing; rotate the implicated credential before sharing)
 fragua show <file.fragua>                     # validate + summarize a bundle (no store needed)
 fragua import <file.fragua> [--db <target>]   # merge its runs into a store (default: the harness store)
 ```
