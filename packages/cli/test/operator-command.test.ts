@@ -388,6 +388,46 @@ describe("fragua operator verbs", () => {
     expect(code).toBe(1);
   });
 
+  test("respond: gate with no declared routes → accepted with a skip warning, exit 0", async () => {
+    // Fail-open path: routes: [] (older event shape) skips the enum check.
+    // The input still lands (compat), but the skip must surface as a
+    // structured warning carrying run id + route.
+    r.store.enqueueRun({ runId: "rh4", workflowSha: "wf", cwd: "/tmp/repo" });
+    const s0 = r.store.getState("rh4")!;
+    r.store.appendFact(
+      "rh4",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState("rh4")!;
+    r.store.appendFact(
+      "rh4",
+      [{ type: "fact.run_paused_human", payload: { nodeId: "n1", text: "approve?", routes: [] } }],
+      s1.version,
+    );
+
+    const warnings: string[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((...a: unknown[]) => {
+      warnings.push(a.join(" "));
+    });
+    try {
+      const code = await respondCommand({ runId: "rh4", route: "anything", dbPath: r.dbPath });
+      expect(code).toBe(0);
+      expect(lastIntent(r.store, "rh4")).toBe("intent.human_input");
+      const warned = warnings.join("\n");
+      expect(warned).toContain("without route validation");
+      expect(warned).toContain("rh4");
+      expect(warned).toContain('route="anything"');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("respond: run not at a HITL gate → exit 1", async () => {
     seedCommitted(r.store, "rh3"); // terminal, not paused_human
     const code = await respondCommand({ runId: "rh3", route: "approve", dbPath: r.dbPath });

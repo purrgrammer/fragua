@@ -555,6 +555,16 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
       console.error(chalk.red(`respond: unknown route "${route}" (expected one of: ${routes.join(", ")})`));
       return 1;
     }
+    if (routes.length === 0) {
+      // Fail-open is intentional (older event shapes carry no route enum),
+      // but the skip must be observable so an off-list route accepted here
+      // can be traced back when the daemon later halts the run on resume.
+      console.warn(
+        chalk.yellow(
+          `respond: human input accepted without route validation — no declared routes on the latest fact.run_paused_human (run=${opts.runId} route="${route}")`,
+        ),
+      );
+    }
     const body: { route: string; note?: string } = { route };
     if (opts.note != null && opts.note.length > 0) body.note = opts.note;
     const built = plane.buildHuman(body);

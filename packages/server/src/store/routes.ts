@@ -500,6 +500,14 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (declaredRoutes.length > 0 && !declaredRoutes.includes(route)) {
       return c.json({ error: `unknown route "${route}" (expected one of: ${declaredRoutes.join(", ")})` }, 400);
     }
+    if (declaredRoutes.length === 0) {
+      // Fail-open is intentional (older event shapes carry no route enum),
+      // but the skip must be observable so an off-list route accepted here
+      // can be traced back when the daemon later halts the run on resume.
+      console.warn(
+        `[server] human input accepted without route validation: no declared routes on the latest fact.run_paused_human (run=${runId} route="${route}")`,
+      );
+    }
     return appendIntentOr413(c, runId, built.intent);
   });
 

@@ -6,7 +6,7 @@
 //   - GET /metrics/global aggregates via generated columns + json_each pivot
 //   - P19: SSE replay via Last-Event-ID
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore, sha256Hex } from "@fragua/store";
 import { FEED_EVENT_KINDS, RUN_STATUSES } from "@fragua/types";
@@ -938,6 +938,34 @@ describe("intent-write routes", () => {
     const body = (await bad.json()) as { error: string };
     expect(body.error).toMatch(/unknown route "ship"/);
     expect(body.error).toMatch(/approve, reject/);
+  });
+
+  test("POST /runs/:id/human accepts any route but warns when the pause fact declares no routes", async () => {
+    // Fail-open path: an older fact.run_paused_human shape (routes: []) means
+    // the enum check is skipped. The input is still accepted (compat), but the
+    // skip must surface as a structured warning carrying run id + route.
+    store.enqueueRun({ runId: "rh4", workflowSha: "wf" });
+    const state = store.getState("rh4")!;
+    store.appendFact(
+      "rh4",
+      [{ type: "fact.run_paused_human", payload: { nodeId: "ask", text: "?", routes: [] } }],
+      state.version,
+    );
+
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const res = await req("POST", "/runs/rh4/human", { route: "anything" });
+      expect(res.status).toBe(200);
+      const events = store.getEvents("rh4");
+      expect(events.some((e) => e.type === "intent.human_input")).toBe(true);
+
+      const warned = warnSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(warned).toContain("without route validation");
+      expect(warned).toContain("rh4");
+      expect(warned).toContain('route="anything"');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("POST /runs/:id/human returns 409 when the run is not paused at a human node", async () => {
