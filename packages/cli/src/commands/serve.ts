@@ -156,7 +156,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     preflightProviders: registryPreflight({
       hasAnyAuth: () => modelRegistry.getAvailable().length > 0,
     }),
-    validateWorkflowModels,
+    validateWorkflowModels: (yamlSource: string) => validateWorkflowModels(yamlSource, modelRegistry),
     authStorage,
     modelRegistry,
     ...(maxQueuedRuns !== undefined ? { maxQueuedRuns } : {}),

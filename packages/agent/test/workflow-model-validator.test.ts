@@ -3,12 +3,17 @@
 // before we spend tokens on a plan phase only to halt at implement.
 
 import { describe, expect, test } from "bun:test";
+import { SqliteStore } from "@fragua/store";
+import { AuthStorage, ModelRegistry } from "../src/credentials/index.ts";
 import { validateWorkflowModels } from "../src/workflow-model-validator.ts";
+
+// In-memory registry: built-in pi-ai models only, no global-store handle.
+const registry = ModelRegistry.inMemory(AuthStorage.fromStore(new SqliteStore()));
 
 describe("validateWorkflowModels", () => {
   test("accepts a workflow with no model declarations (runtime default)", () => {
     const yaml = `name: t\nsteps:\n  plan: {type: llm, prompt: p}\n`;
-    expect(validateWorkflowModels(yaml).ok).toBe(true);
+    expect(validateWorkflowModels(yaml, registry).ok).toBe(true);
   });
 
   test("accepts a llm step with a correct (provider, model) pair", () => {
@@ -16,13 +21,13 @@ describe("validateWorkflowModels", () => {
 steps:
   impl: {type: llm, prompt: x, model: "claude-sonnet-4-6", provider: "anthropic"}
 `;
-    expect(validateWorkflowModels(yamlAnthropic).ok).toBe(true);
+    expect(validateWorkflowModels(yamlAnthropic, registry).ok).toBe(true);
 
     const yamlOpenRouter = `name: t
 steps:
   impl: {type: llm, prompt: x, model: "anthropic/claude-sonnet-4.6", provider: "openrouter"}
 `;
-    expect(validateWorkflowModels(yamlOpenRouter).ok).toBe(true);
+    expect(validateWorkflowModels(yamlOpenRouter, registry).ok).toBe(true);
   });
 
   test("rejects a hyphen-form OpenRouter model id", () => {
@@ -30,7 +35,7 @@ steps:
 steps:
   impl: {type: llm, prompt: x, model: "claude-sonnet-4-6", provider: "openrouter"}
 `;
-    const r = validateWorkflowModels(yaml);
+    const r = validateWorkflowModels(yaml, registry);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.offenders).toHaveLength(1);
@@ -46,7 +51,7 @@ steps:
 steps:
   impl: {type: llm, prompt: x, model: "claude-sonnet-4-6"}
 `;
-    expect(validateWorkflowModels(yaml).ok).toBe(true);
+    expect(validateWorkflowModels(yaml, registry).ok).toBe(true);
   });
 
   test("rejects a model that no known provider recognises", () => {
@@ -54,7 +59,7 @@ steps:
 steps:
   impl: {type: llm, prompt: x, model: "claude-zapp-brannigan-v9"}
 `;
-    const r = validateWorkflowModels(yaml);
+    const r = validateWorkflowModels(yaml, registry);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.offenders).toHaveLength(1);
@@ -70,7 +75,7 @@ steps:
   impl:   {type: llm, prompt: x, model: "claude-sonnet-4-6", provider: "openrouter", next: verify}
   verify: {type: llm, prompt: v, model: "claude-zapp-brannigan-v9"}
 `;
-    const r = validateWorkflowModels(yaml);
+    const r = validateWorkflowModels(yaml, registry);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.offenders).toHaveLength(2);
@@ -80,7 +85,7 @@ steps:
   });
 
   test("accepts when source cannot be parsed (lets the downstream parser surface the real error)", () => {
-    const r = validateWorkflowModels("not a valid workflow");
+    const r = validateWorkflowModels("not a valid workflow", registry);
     expect(r.ok).toBe(true);
   });
 
@@ -90,6 +95,6 @@ steps:
   plan:   {type: llm, prompt: p, next: impl}
   impl:   {type: llm, prompt: i, model: "anthropic/claude-sonnet-4.6"}
 `;
-    expect(validateWorkflowModels(yaml).ok).toBe(true);
+    expect(validateWorkflowModels(yaml, registry).ok).toBe(true);
   });
 });
