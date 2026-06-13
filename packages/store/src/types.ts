@@ -674,19 +674,10 @@ export interface GetDaemonEventsOpts {
 // The surface is split into concern-scoped sub-interfaces that map onto the
 // actual SQL boundaries:
 //
-//   IEventWriter        — every CLIENT-writable mutation of run-level state
-//                         (intents, observability, run_state, messages,
-//                         artifacts, workflows, projects). One transaction
-//                         surface; shares the writer connection.
-//   IFactCommitter      — the daemon-only fact lane: `appendFact` (the
-//                         OCC-checked terminal write that bumps
-//                         `run_state.version` and runs the reducer) and
-//                         `startupSweep` (crash-recovery facts). Carved out
-//                         of IEventWriter so fact provenance is a typed
-//                         surface, not a convention: the daemon is the single
-//                         writer; the server reaper and `fragua ci` are the
-//                         only declared cross-boundary exemptions, pinned by
-//                         `server/test/intent-plane-discipline.test.ts`.
+//   IEventWriter        — every method that mutates run-level state
+//                         (events, run_state, messages, artifacts,
+//                         workflows, projects). One transaction surface;
+//                         shares the writer connection.
 //   IEventReader        — read-only run-level reads (state, events,
 //                         messages, artifacts, workflows, aggregates).
 //   IAnalyticsReader    — dashboard aggregations. Distinct from
@@ -708,6 +699,7 @@ export interface GetDaemonEventsOpts {
 // implementations from composing them out of separate connections / backends.
 
 export interface IEventWriter {
+  appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
   /**
    * Append observability events (agent.*, llm.*, tool.*, cost.recorded).
@@ -727,6 +719,15 @@ export interface IEventWriter {
    * eligible.
    */
   claimNextRun(maxInFlight: number): { runId: string } | null;
+  /**
+   * Heal crash damage on daemon startup (requeue 'running' runs,
+   * quarantine orphan side-effect intents). When the caller is the
+   * reaper that just force-acquired the lock, pass
+   * `priorHeartbeatAt` from the prior daemon's lock row so the
+   * `fact.run_requeued_after_crash` payload carries `lastAliveAt` and
+   * the reducer can credit the pre-crash active span within ~5s.
+   */
+  startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult;
   /**
    * Project an auto-generated title onto `run_state.title`. Idempotent —
    * last-writer wins. Never bumps `version` (the title is a UI hint, not
@@ -770,30 +771,6 @@ export interface IEventWriter {
   vacuum(): void;
   gcBlobs(maxRows?: number): { deleted: number };
   close(): void;
-}
-
-/**
- * The daemon-only fact lane. `appendFact` is the OCC-checked terminal write
- * that evolves `run_state` (bumps `version`, runs the reducer); `startupSweep`
- * heals crash damage by appending the same class of facts. Both are narrowed
- * OUT of {@link IEventWriter} so fact provenance is a typed surface rather than
- * a convention: facts are written by the single daemon writer, and the only
- * legitimate cross-boundary fact writers — the server reaper and `fragua ci`
- * (which embeds the executor) — are declared exemptions in the discipline scan
- * (`server/test/intent-plane-discipline.test.ts`), so a third writer can't slip
- * in silently.
- */
-export interface IFactCommitter {
-  appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
-  /**
-   * Heal crash damage on daemon startup (requeue 'running' runs,
-   * quarantine orphan side-effect intents). When the caller is the
-   * reaper that just force-acquired the lock, pass
-   * `priorHeartbeatAt` from the prior daemon's lock row so the
-   * `fact.run_requeued_after_crash` payload carries `lastAliveAt` and
-   * the reducer can credit the pre-crash active span within ~5s.
-   */
-  startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult;
 }
 
 export interface IEventReader {
@@ -1261,7 +1238,6 @@ export interface IProviderConfigStore {
  * `test/event-store-sub-interface.lint.test.ts`.
  */
 export type IEventStore = IEventWriter &
-  IFactCommitter &
   IEventReader &
   IAnalyticsReader &
   IDaemonCoordinator &
