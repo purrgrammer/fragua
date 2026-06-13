@@ -16,6 +16,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 export interface RunHaltedNoticeProps {
   haltReason?: HaltReason;
   haltDetail?: string;
+  /** Structured diagnostic context recorded on the halt fact (OCC-exhaustion).
+   *  Rendered as a micro-data row below the message when present. */
+  haltContext?: {
+    count?: number;
+    nodeId?: string;
+    iteration?: number;
+    lastVersion?: number;
+    attemptedFactType?: string;
+  };
 }
 
 const REASON_LABELS: Record<HaltReason, string> = {
@@ -29,8 +38,33 @@ const REASON_LABELS: Record<HaltReason, string> = {
   edge_no_match: "No matching edge",
 };
 
-export function RunHaltedNotice({ haltReason, haltDetail }: RunHaltedNoticeProps): JSX.Element {
+function HaltContextRow({
+  haltContext,
+}: {
+  haltContext: NonNullable<RunHaltedNoticeProps["haltContext"]>;
+}): JSX.Element {
+  const fields: Array<{ label: string; value: string }> = [];
+  if (haltContext.nodeId !== undefined) fields.push({ label: "node", value: haltContext.nodeId });
+  if (haltContext.iteration !== undefined) fields.push({ label: "iteration", value: String(haltContext.iteration) });
+  if (haltContext.count !== undefined) fields.push({ label: "conflicts", value: String(haltContext.count) });
+  if (haltContext.attemptedFactType !== undefined)
+    fields.push({ label: "attempted", value: haltContext.attemptedFactType });
+  if (haltContext.lastVersion !== undefined) fields.push({ label: "version", value: String(haltContext.lastVersion) });
+  return (
+    <span data-testid="run-halted-context" className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sw-xs text-sw-muted">
+      {fields.map((f) => (
+        <span key={f.label} className="flex gap-1">
+          <span>{f.label}</span>
+          <span className="text-sw-text">{f.value}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export function RunHaltedNotice({ haltReason, haltDetail, haltContext }: RunHaltedNoticeProps): JSX.Element {
   const label = haltReason !== undefined ? REASON_LABELS[haltReason] : undefined;
+  const hasContext = haltContext !== undefined && Object.values(haltContext).some((v) => v !== undefined);
   return (
     <Alert variant="destructive" data-testid="run-halted-notice" data-halt-reason={haltReason}>
       <AlertCircle />
@@ -39,6 +73,7 @@ export function RunHaltedNotice({ haltReason, haltDetail }: RunHaltedNoticeProps
         <span data-testid="run-halted-message">
           {haltDetail ?? "The run ended in a terminal failure. The event log has the full trail."}
         </span>
+        {hasContext ? <HaltContextRow haltContext={haltContext} /> : null}
       </AlertDescription>
     </Alert>
   );

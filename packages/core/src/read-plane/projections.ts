@@ -190,11 +190,13 @@ export function runStateToDetail(
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
       if (ev.type === "fact.run_halted") {
-        const p = ev.payload as { reason?: unknown; detail?: unknown } | null | undefined;
+        const p = ev.payload as { reason?: unknown; detail?: unknown; occContext?: unknown } | null | undefined;
         if (typeof p?.reason === "string" && (HALT_REASONS as readonly string[]).includes(p.reason)) {
           detail.haltReason = p.reason as HaltReason;
         }
         if (typeof p?.detail === "string") detail.haltDetail = p.detail;
+        const haltContext = parseHaltContext(p?.occContext);
+        if (haltContext !== undefined) detail.haltContext = haltContext;
         break;
       }
     }
@@ -246,6 +248,27 @@ export function runStateToDetail(
   if (requeues.length > 0) detail.crashRequeues = requeues;
 
   return detail;
+}
+
+/** Narrow a halt fact's `occContext` blob into the typed `haltContext`. Every
+ * field is defended individually so a partial or malformed payload still
+ * projects what it carries; returns `undefined` when nothing survives. */
+function parseHaltContext(raw: unknown): RunDetail["haltContext"] {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const p = raw as {
+    count?: unknown;
+    nodeId?: unknown;
+    iteration?: unknown;
+    lastVersion?: unknown;
+    attemptedFactType?: unknown;
+  };
+  const out: NonNullable<RunDetail["haltContext"]> = {};
+  if (typeof p.count === "number" && Number.isFinite(p.count)) out.count = p.count;
+  if (typeof p.nodeId === "string") out.nodeId = p.nodeId;
+  if (typeof p.iteration === "number" && Number.isFinite(p.iteration)) out.iteration = p.iteration;
+  if (typeof p.lastVersion === "number" && Number.isFinite(p.lastVersion)) out.lastVersion = p.lastVersion;
+  if (typeof p.attemptedFactType === "string") out.attemptedFactType = p.attemptedFactType;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** One entry per `fact.run_requeued_after_crash`, in log order. Null-payload-

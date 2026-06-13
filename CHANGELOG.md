@@ -39,6 +39,11 @@ guarantee.
   terminal `fact.run_halted` reason + detail onto the run detail, and the
   web run page renders a read-only halted banner (live via SSE too) instead
   of a bare fail badge.
+- OCC-exhaustion halts surface their diagnostic context (node, iteration,
+  conflict count, attempted fact type, last version) through the run detail's
+  `haltContext` — rendered in the web halted banner and in
+  `fragua runs status`, so investigating an `occ_exhausted` halt no longer
+  means hand-parsing raw events.
 
 ### Changed
 

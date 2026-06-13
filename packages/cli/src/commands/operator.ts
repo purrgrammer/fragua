@@ -352,6 +352,21 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
       break;
     }
   }
+
+  // Structured halt diagnostics from the read plane (e.g. occ_exhausted) — the
+  // operator shouldn't have to hand-parse the raw event for the why.
+  if (d.haltContext != null) {
+    const c = d.haltContext;
+    const parts: string[] = [];
+    if (c.nodeId != null) parts.push(`node ${c.nodeId}`);
+    if (c.iteration != null) parts.push(`iter ${c.iteration}`);
+    if (c.count != null && c.attemptedFactType != null) parts.push(`${c.count} conflicts on ${c.attemptedFactType}`);
+    else if (c.count != null) parts.push(`${c.count} conflicts`);
+    else if (c.attemptedFactType != null) parts.push(`on ${c.attemptedFactType}`);
+    if (c.lastVersion != null) parts.push(`v${c.lastVersion}`);
+    if (parts.length > 0) console.log(`  context:  ${chalk.dim(parts.join(" · "))}`);
+  }
+
   if (d.runStatus === "paused_human" && d.hitlLabel != null) {
     console.log(`  awaiting: ${chalk.yellow(d.hitlLabel)}`);
     console.log(`  routes:   ${(d.hitlOptions ?? []).join("  |  ")} ${chalk.dim("→ fragua runs respond")}`);

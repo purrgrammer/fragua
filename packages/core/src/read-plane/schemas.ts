@@ -147,6 +147,19 @@ export const RunFanoutTopology = Type.Object({
 });
 export type RunFanoutTopology = Static<typeof RunFanoutTopology>;
 
+/** Diagnostic context recorded on an OCC-exhaustion halt fact (`occContext`).
+ * Every field is optional so a partial/older payload still projects what it
+ * carries; the projection populates this only when at least one field survives
+ * a defensive narrow. */
+export const HaltContext = Type.Object({
+  count: Type.Optional(Type.Integer({ minimum: 0 })),
+  nodeId: Type.Optional(Type.String()),
+  iteration: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastVersion: Type.Optional(Type.Integer({ minimum: 0 })),
+  attemptedFactType: Type.Optional(Type.String()),
+});
+export type HaltContext = Static<typeof HaltContext>;
+
 export const RunDetail = Type.Object({
   runId: Type.String(),
   workflow: Type.Optional(Type.String()),
@@ -174,6 +187,10 @@ export const RunDetail = Type.Object({
    *  extraction so the UI can explain the failure inline. */
   haltReason: Type.Optional(HaltReasonSchema),
   haltDetail: Type.Optional(Type.String()),
+  /** Structured diagnostic context from the `fact.run_halted` payload's
+   *  `occContext` — recorded on an OCC-exhaustion halt. Only populated for
+   *  halts that carried it; spares the operator hand-parsing raw events. */
+  haltContext: Type.Optional(HaltContext),
   hitlNodeId: Type.Optional(Type.String()),
   /** Operator-facing question text from the paused human node's `text=`
    *  attr (when `runStatus === 'paused_human'`). */

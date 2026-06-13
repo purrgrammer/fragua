@@ -225,7 +225,11 @@ export function RunDetail(): JSX.Element {
         <RunPausedNotice runId={id} eventEpoch={totalEvents} imported={detail.imported} />
       )}
       {detail?.runStatus === "halted" && (
-        <RunHaltedNotice haltReason={detail.haltReason} haltDetail={detail.haltDetail} />
+        <RunHaltedNotice
+          haltReason={detail.haltReason}
+          haltDetail={detail.haltDetail}
+          haltContext={detail.haltContext}
+        />
       )}
       {detail?.crashRequeues != null && detail.crashRequeues.length > 0 && (
         <CrashRequeueNotice crashRequeues={detail.crashRequeues} />

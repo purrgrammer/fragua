@@ -181,6 +181,16 @@ export interface RunDetail {
    *  server builds may omit them. */
   haltReason?: HaltReason;
   haltDetail?: string;
+  /** Structured diagnostic context from the halt fact's `occContext`
+   *  (OCC-exhaustion halts). Projected by the read plane — the web never
+   *  re-derives it from raw events. Optional; only populated when recorded. */
+  haltContext?: {
+    count?: number;
+    nodeId?: string;
+    iteration?: number;
+    lastVersion?: number;
+    attemptedFactType?: string;
+  };
   hitlNodeId?: string;
   hitlLabel?: string;
   /** Declared route names from the paused human node's `routes=` attr;

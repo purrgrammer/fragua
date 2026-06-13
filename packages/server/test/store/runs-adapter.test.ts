@@ -635,6 +635,46 @@ describe("runStateToDetail — halt projection", () => {
     expect(detail.haltDetail).toBe("handler threw: boom");
   });
 
+  test("occ_exhausted halt projects haltContext from occContext", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_halted", {
+        reason: "occ_exhausted",
+        detail: "8 consecutive OCC conflicts on fact.node_completed for node implement",
+        occContext: {
+          count: 8,
+          nodeId: "implement",
+          iteration: 3,
+          lastVersion: 42,
+          attemptedFactType: "fact.node_completed",
+        },
+      }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBe("occ_exhausted");
+    expect(detail.haltContext).toEqual({
+      count: 8,
+      nodeId: "implement",
+      iteration: 3,
+      lastVersion: 42,
+      attemptedFactType: "fact.node_completed",
+    });
+  });
+
+  test("halt without occContext leaves haltContext undefined", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltContext).toBeUndefined();
+  });
+
+  test("halt tolerates malformed occContext (haltContext stays undefined)", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted", occContext: "garbage" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltContext).toBeUndefined();
+  });
+
   test("halted without a detail string leaves haltDetail undefined", () => {
     const state = makeState({ status: "halted" });
     const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted" })];
