@@ -71,7 +71,14 @@ export type {
   RawEvent,
   RunStatus,
 } from "@fragua/types";
-export { ALL_DAEMON_EVENT_TYPES, AUTO_WAKE_PAUSE_REASONS, isTerminal } from "@fragua/types";
+export {
+  ALL_DAEMON_EVENT_TYPES,
+  AUTO_WAKE_PAUSE_REASONS,
+  isSettled,
+  isTerminal,
+  RUN_STATUSES,
+  SETTLED_STATUSES,
+} from "@fragua/types";
 export type {
   AnalyticsWindow,
   BucketedWindow,

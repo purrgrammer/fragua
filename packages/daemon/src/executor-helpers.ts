@@ -19,11 +19,14 @@ import {
   type SubstitutionArgs,
 } from "@fragua/core";
 import type * as core from "@fragua/core/handler";
+import { SETTLED_STATUSES } from "@fragua/store";
 
-/** Hard-terminal statuses — the run will never execute another node. Drives
- * worktree dispose + the terminal snapshot gate. (paused_human is excluded:
- * the env survives across HITL pauses for reuse on resume.) */
-export const TERMINAL_STATUSES = new Set(["completed", "cancelled", "halted", "quarantined"]);
+/** Settled statuses — the run has stopped progressing on its own (terminal
+ * OR quarantined). Drives worktree dispose + the terminal snapshot gate.
+ * Derived from the canonical {@link SETTLED_STATUSES} tuple so it can't drift
+ * (quarantined is settled-but-resumable; paused_human is excluded — the env
+ * survives across HITL pauses for reuse on resume). */
+export const TERMINAL_STATUSES = new Set<string>(SETTLED_STATUSES);
 
 /** Reserved routing key for budget-warn dedup. Holds the set of
  * `(scope:metric)` tags that have already fired their once-per-run

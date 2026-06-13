@@ -175,6 +175,30 @@ export function isTerminal(status: RunStatus): boolean {
   return TERMINAL_STATUSES.has(status);
 }
 
+/** Settled-for-progress statuses: the three terminal states PLUS
+ * `quarantined`. A quarantined run is NOT terminal — it is resumable via
+ * unquarantine — but for any consumer that only asks "has this run stopped
+ * making progress on its own?" it counts as settled: no further events will
+ * arrive until an operator intervenes, so a live SSE stream should close and
+ * an overlap=skip schedule should treat it as not-in-flight. Resume/accept
+ * gating stays on the narrower {@link isTerminal} set. The tuple is the
+ * source of truth; consumer sets derive from it (executor worktree-dispose,
+ * web run-detail socket-skip) and the enum-consumer lints pin the rest. */
+export const SETTLED_STATUSES = [
+  "completed",
+  "cancelled",
+  "halted",
+  "quarantined",
+] as const satisfies readonly RunStatus[];
+
+const SETTLED_STATUS_SET: ReadonlySet<RunStatus> = new Set<RunStatus>(SETTLED_STATUSES);
+
+/** True when a run has stopped progressing on its own — terminal or
+ * quarantined. See {@link SETTLED_STATUSES}. */
+export function isSettled(status: RunStatus): boolean {
+  return SETTLED_STATUS_SET.has(status);
+}
+
 /** Reason discriminator on `fact.run_paused`. Status follows reason —
  * the reducer reads `payload.reason` and projects without consulting
  * any other field. Partition:

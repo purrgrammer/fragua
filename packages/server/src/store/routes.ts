@@ -12,7 +12,7 @@ import {
   type IEventReader,
   type IEventWriter,
   type IntentEvent,
-  isTerminal as isTerminalStatus,
+  isSettled,
   newRunId,
   PayloadTooLargeError,
 } from "@fragua/store";
@@ -640,8 +640,11 @@ export function createRoutes(deps: ServerDeps): Hono {
         cursorOf: (event) => event.seq,
         idOf: (event) => String(event.seq),
         shouldClose: () => {
+          // Settled, not terminal: a quarantined run emits no further events
+          // until an operator unquarantines it, so close the socket rather
+          // than hold it open indefinitely (resume reopens it).
           const state = deps.store.getState(runId);
-          return state != null && isTerminalStatus(state.status);
+          return state != null && isSettled(state.status);
         },
         batchSize,
         pollMs,

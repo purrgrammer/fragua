@@ -190,7 +190,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   status TEXT NOT NULL CHECK (status IN (
     'queued','running','paused','paused_human','paused_auto',
     'completed','cancelled','halted','quarantined'
-  )),
+  )),                                             -- @fragua/types predicates: isTerminal = {completed,cancelled,halted} (resume/accept gate); isSettled = isTerminal ∪ {quarantined} (SSE-close + schedule overlap-skip — quarantined stopped progressing but stays resumable via unquarantine)
   current_node TEXT,
   workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
   contract_version INTEGER NOT NULL,              -- EVENT_CONTRACT_VERSION pin; run-resume gate, NOT the DB counter

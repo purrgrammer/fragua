@@ -14,7 +14,14 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
 import type { DiffRange, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
-import type { ArtifactScope, NarrowMessage, RunStatus, SqliteStore, StoredEvent } from "@fragua/store";
+import {
+  type ArtifactScope,
+  type NarrowMessage,
+  RUN_STATUSES,
+  type RunStatus,
+  type SqliteStore,
+  type StoredEvent,
+} from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
 import { pickRoute } from "../route-picker.ts";
@@ -133,7 +140,41 @@ export interface InboxOptions extends DiscoveryOpts {
   json?: boolean;
 }
 
-const BLOCKED_STATUSES: RunStatus[] = ["paused_human", "paused", "paused_auto", "quarantined"];
+/** Statuses a run can sit in while waiting on the operator — the NEEDS INPUT
+ * section of the inbox. An intentional non-derivable subset of `RunStatus`
+ * (the complement is the unblocked set below); `satisfies` pins membership and
+ * the completeness check guarantees the two sets partition `RUN_STATUSES`, so
+ * a newly-added lifecycle literal can't silently fall through the inbox.
+ * Exported for the enum-consumer drift lint. */
+export const BLOCKED_STATUSES = [
+  "paused_human",
+  "paused",
+  "paused_auto",
+  "quarantined",
+] as const satisfies readonly RunStatus[];
+
+/** The complement of {@link BLOCKED_STATUSES}: statuses that never appear in
+ * the NEEDS INPUT section (in-flight or settled). Kept explicit so the
+ * completeness check can assert an exact partition of `RUN_STATUSES`. */
+export const UNBLOCKED_STATUSES = [
+  "queued",
+  "running",
+  "completed",
+  "cancelled",
+  "halted",
+] as const satisfies readonly RunStatus[];
+
+// Completeness: BLOCKED ⊎ UNBLOCKED must equal RUN_STATUSES exactly. A missing
+// literal means a lifecycle status that renders in neither inbox section.
+{
+  const partitioned = new Set<string>([...BLOCKED_STATUSES, ...UNBLOCKED_STATUSES]);
+  const missing = RUN_STATUSES.filter((s) => !partitioned.has(s));
+  if (missing.length > 0 || partitioned.size !== RUN_STATUSES.length) {
+    throw new Error(
+      `operator.ts BLOCKED_STATUSES/UNBLOCKED_STATUSES drifted from RUN_STATUSES: missing ${JSON.stringify(missing)}`,
+    );
+  }
+}
 
 /** Display label for a run, mirroring the web's `displayTitle` fallback
  * (RunRow.tsx): generated title → workflow name. `run_state.title` is only
@@ -169,7 +210,7 @@ export function inboxCommand(opts: InboxOptions): Promise<number> {
   const cwd = resolve(opts.cwd ?? process.cwd());
   return withStoreClient(opts, ({ readPlane }) => {
     const common = { cwd, order: "oldest" as const, ...(opts.limit != null ? { limit: opts.limit } : {}) };
-    const blocked = readPlane.runSummaries({ ...common, statuses: BLOCKED_STATUSES });
+    const blocked = readPlane.runSummaries({ ...common, statuses: [...BLOCKED_STATUSES] });
     const ready = readPlane.runSummaries({ ...common, inbox: "pending" });
     if (opts.json === true) {
       console.log(JSON.stringify({ needsInput: blocked, readyToLand: ready }, null, 2));

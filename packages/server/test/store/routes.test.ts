@@ -1284,6 +1284,50 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     expect(closed).toBe(true);
     expect(chunks).toContain("fact.run_completed");
   });
+
+  test("/runs/:id/stream closes once the run reaches the quarantined status", async () => {
+    // Quarantined is settled-but-resumable: no further events arrive until an
+    // operator unquarantines, so the socket must close rather than poll
+    // forever. Before the settled-set fix this stream stayed open
+    // indefinitely because `isTerminal(quarantined)` is false.
+    store.enqueueRun({ runId: "quar", workflowSha: "wf" });
+    const s0 = store.getState("quar")!;
+    store.appendFact(
+      "quar",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "a" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = store.getState("quar")!;
+    store.appendFact("quar", [{ type: "fact.run_quarantined", payload: { reason: "other" } }], s1.version);
+    expect(store.getState("quar")!.status).toBe("quarantined");
+
+    const routes = createRoutes({ store, ssePollMs: 10 });
+    const res = await routes.fetch(new Request("http://test/runs/quar/stream"));
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let chunks = "";
+    let closed = false;
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) {
+        closed = true;
+        break;
+      }
+      chunks += decoder.decode(value, { stream: true });
+    }
+    await reader.cancel().catch(() => {});
+
+    expect(closed).toBe(true);
+    expect(chunks).toContain("fact.run_quarantined");
+  });
 });
 
 describe("global event feed (cross-run)", () => {

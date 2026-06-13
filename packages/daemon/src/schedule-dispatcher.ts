@@ -29,7 +29,7 @@ import {
   type IDaemonCoordinator,
   type IEventReader,
   type IEventWriter,
-  isTerminal as isTerminalStatus,
+  isSettled,
   newRunId as mintRunId,
 } from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
@@ -94,10 +94,12 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
   let paused = 0;
 
   for (const row of due) {
-    // Skip-on-overlap: don't fire if the prior run is still active.
+    // Skip-on-overlap: don't fire if the prior run is still active. A
+    // quarantined prior run counts as settled (not in flight) — it owes an
+    // operator action, not a scheduler wait — so it must NOT block the fire.
     if (row.overlapPolicy === "skip" && row.lastRunId != null) {
       const prior = opts.store.getState(row.lastRunId);
-      if (prior != null && !isTerminalStatus(prior.status)) {
+      if (prior != null && !isSettled(prior.status)) {
         opts.store.recordScheduleSkipped(row.id, now);
         opts.store.appendDaemonEvent(
           {

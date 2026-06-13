@@ -14,6 +14,7 @@
 // a run's essentials: status, duration, cost, tokens, current node.
 
 import { parseWorkflow } from "@fragua/core";
+import { SETTLED_STATUSES } from "@fragua/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +40,7 @@ import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import { ApiError, type RunDetail as RunDetailT } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { mapStatus } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
@@ -56,10 +58,12 @@ type TabId = (typeof VIEWS)[number];
  * `durationMs` already reflects `lastEvent - firstEvent`). */
 const LIVE_STATUSES = new Set<string>(["queued", "running"]);
 
-/** Statuses where no further events will ever arrive. The SSE socket is
- * skipped entirely so we don't waste a server connection per historical
- * run view. */
-const TERMINAL_STATUSES = new Set<string>(["success", "fail", "canceled"]);
+/** UI statuses where the SSE socket is skipped entirely so we don't waste a
+ * server connection per settled run view. Derived from the canonical
+ * `SETTLED_STATUSES` tuple (terminal + quarantined) projected through the
+ * raw→UI `mapStatus` — resolves to {success, fail, canceled} and can't drift
+ * from the lifecycle taxonomy. */
+const TERMINAL_STATUSES = new Set<string>(SETTLED_STATUSES.map(mapStatus));
 
 function isTabId(x: string | undefined): x is TabId {
   return !!x && (VIEWS as readonly string[]).includes(x);

@@ -6,10 +6,10 @@
 // checks membership, not completeness) — these runtime assertions close
 // that gap against the real exported values from @fragua/types.
 
-import { HALT_REASONS, RUN_STATUSES } from "@fragua/types";
+import { HALT_REASONS, RUN_STATUSES, SETTLED_STATUSES } from "@fragua/types";
 import { describe, expect, test } from "vitest";
 import { RUN_STATUS_KEYS } from "../types/analytics.ts";
-import { HALT_LABELS } from "./humanize.ts";
+import { HALT_LABELS, mapStatus } from "./humanize.ts";
 
 describe("enum-literal consumers (web)", () => {
   test("RUN_STATUS_KEYS covers exactly the RunStatus union", () => {
@@ -20,6 +20,17 @@ describe("enum-literal consumers (web)", () => {
       { stale, missing },
       "web/src/types/analytics.ts RUN_STATUS_KEYS drifted from RUN_STATUSES (@fragua/types)",
     ).toEqual({ stale: [], missing: [] });
+  });
+
+  test("mapStatus is total over RUN_STATUSES and the run-detail terminal set derives to {success, fail, canceled}", () => {
+    for (const s of RUN_STATUSES) {
+      expect(mapStatus(s)).toBeDefined();
+    }
+    // RunDetail.tsx derives its socket-skip set as SETTLED_STATUSES.map(mapStatus);
+    // pin the resolved UI set so a taxonomy change surfaces here.
+    expect(new Set(SETTLED_STATUSES.map(mapStatus))).toEqual(new Set(["success", "fail", "canceled"]));
+    // Intentional spelling split survives the mapping.
+    expect(mapStatus("cancelled")).toBe("canceled");
   });
 
   test("HALT_LABELS keys are exactly RunStatus ∪ a HaltReason subset, with all statuses covered", () => {

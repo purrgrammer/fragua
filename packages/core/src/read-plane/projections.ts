@@ -19,6 +19,11 @@ export function mapStatus(status: RunStatus): UiStatus {
   switch (status) {
     case "completed":
       return "success";
+    // Intentional spelling split: the raw RunStatus literal is the
+    // double-l `cancelled` (British; the persisted/schema value, never
+    // rename it), while the UI-facing UiStatus is the single-l `canceled`
+    // (American; what the web renders). The two layers spell it differently
+    // on purpose — this arm is the seam between them.
     case "cancelled":
       return "canceled";
     case "halted":

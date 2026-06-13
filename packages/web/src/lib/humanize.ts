@@ -38,6 +38,37 @@ export function humanizeHaltReason(status: string): string {
   return (HALT_LABELS as Record<string, string>)[status] ?? titleCaseFromSnake(status);
 }
 
+/** Coarse UI status the badge renders — the same vocabulary the server's
+ *  read-plane `mapStatus` projects raw `RunStatus` into. Mirrors
+ *  `RunSummary["status"]` minus the soft-validate `"unknown"` fallback. */
+export type UiStatus = "queued" | "running" | "paused" | "success" | "fail" | "canceled";
+
+/** Browser-safe raw `RunStatus` → `UiStatus` mapper. The canonical copy is
+ *  `@fragua/core`'s read-plane `mapStatus`, which runs server-side; this is
+ *  the byte-for-byte mirror for the few web sites that must reason about the
+ *  raw lifecycle status (e.g. deriving the run-detail socket-skip set from
+ *  `SETTLED_STATUSES`). The `satisfies` keeps it total over `RunStatus`, and
+ *  the enum-consumers test pins the mapping against the canonical tuples.
+ *
+ *  Spelling split is intentional: raw `cancelled` (double-l, the persisted
+ *  store value) → UI `canceled` (single-l, what the web renders). Never
+ *  rename the raw literal to match. */
+const STATUS_TO_UI = {
+  completed: "success",
+  cancelled: "canceled",
+  halted: "fail",
+  quarantined: "fail",
+  running: "running",
+  queued: "queued",
+  paused: "paused",
+  paused_human: "paused",
+  paused_auto: "paused",
+} satisfies Record<RunStatus, UiStatus>;
+
+export function mapStatus(status: RunStatus): UiStatus {
+  return STATUS_TO_UI[status];
+}
+
 /** Humanize a route name — title-cases snake/kebab identifiers.
  *  Used by edge label fallback and HitlChoice button labels. */
 export function humanizeRouteName(route: string): string {

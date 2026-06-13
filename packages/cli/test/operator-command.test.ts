@@ -16,12 +16,13 @@ import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import type { RunSnapshotReader } from "@fragua/server";
 import { createServer } from "@fragua/server";
-import { type IEventStore, SqliteStore } from "@fragua/store";
+import { type IEventStore, RUN_STATUSES, SqliteStore } from "@fragua/store";
 import { doctorCommand } from "../src/commands/doctor.ts";
 import {
   acceptCommand,
   artifactCommand,
   artifactsCommand,
+  BLOCKED_STATUSES,
   budgetCommand,
   cancelCommand,
   discardCommand,
@@ -40,8 +41,26 @@ import {
   steerCommand,
   stepsCommand,
   tailCommand,
+  UNBLOCKED_STATUSES,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
+
+describe("operator inbox status taxonomy", () => {
+  test("BLOCKED_STATUSES are all valid RunStatuses", () => {
+    for (const s of BLOCKED_STATUSES) {
+      expect(RUN_STATUSES).toContain(s);
+    }
+  });
+
+  test("BLOCKED ⊎ UNBLOCKED partitions RUN_STATUSES exactly (completeness)", () => {
+    const union = new Set<string>([...BLOCKED_STATUSES, ...UNBLOCKED_STATUSES]);
+    // No overlap and no gap: every lifecycle status renders in exactly one
+    // inbox section. A newly-added literal that fits neither trips this.
+    expect(union.size).toBe(BLOCKED_STATUSES.length + UNBLOCKED_STATUSES.length);
+    expect(union).toEqual(new Set<string>(RUN_STATUSES));
+    expect(BLOCKED_STATUSES).toContain("quarantined");
+  });
+});
 
 // Permissive snapshot reader for the server (inbox/diff routes). The CLI
 // store-clients don't use it; the real git lives in @fragua/workspace tests.

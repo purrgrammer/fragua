@@ -153,6 +153,34 @@ describe("schedule-dispatcher", () => {
     expect((skipped[0]!.payload as { reason: string }).reason).toBe("overlap");
   });
 
+  test("overlap=skip fires when the prior run is quarantined (settled, not in flight)", () => {
+    f.writeWorkflow("wf", TRIVIAL_YAML);
+    const sha = "wf_sha_quar";
+    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML, serializeGraph(parseWorkflow(TRIVIAL_YAML)), CURRENT_IR_VERSION);
+    const priorRun = "run_prior_quar";
+    f.store.enqueueRun({ runId: priorRun, workflowSha: sha, scheduleId: "sch_quar" });
+    appendQuarantine(f.store, priorRun);
+    // Quarantined is NOT terminal (resumable via unquarantine) but IS settled.
+    expect(isTerminalStatus(f.store.getState(priorRun)!.status)).toBe(false);
+    expect(f.store.getState(priorRun)!.status).toBe("quarantined");
+
+    f.store.createSchedule(
+      { id: "sch_quar", workflowRef: "wf", cwd: f.cwd, intervalMs: HOUR_MS, intervalText: "1h" },
+      f.now,
+    );
+    f.store.recordScheduleFire("sch_quar", priorRun, f.now);
+    f.setNow(f.now + HOUR_MS);
+
+    const out = f.tick();
+    // The fix: a quarantined prior run no longer blocks the fire under
+    // overlap=skip; without it this stays stuck at skipped=1 forever.
+    expect(out.fired).toBe(1);
+    expect(out.skipped).toBe(0);
+
+    const sched = f.store.getSchedule("sch_quar")!;
+    expect(sched.lastRunId).not.toBe(priorRun); // a fresh run was minted
+  });
+
   test("queue overlap policy fires regardless of in-flight last run", () => {
     f.writeWorkflow("wf", TRIVIAL_YAML);
     const sha = "wf_sha_q";
@@ -391,4 +419,32 @@ function appendTerminalFailure(store: IEventStore, runId: string): void {
     if (!(err instanceof ConcurrencyError)) throw err;
   }
   store.appendFact(runId, [{ type: "fact.run_halted", payload: { reason: "error", detail: "test" } } as FactEvent], v);
+}
+
+/** Walk a run to a quarantined state (settled-but-resumable) so the next
+ *  tick treats the prior run as not-in-flight under overlap=skip. */
+function appendQuarantine(store: IEventStore, runId: string): void {
+  const state = store.getState(runId);
+  if (state == null) throw new Error(`unknown run ${runId}`);
+  let v = state.version;
+  try {
+    const r = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: state.contractVersion, startNode: "a" },
+        } as FactEvent,
+      ],
+      v,
+    );
+    v = r.newVersion;
+  } catch (err) {
+    if (!(err instanceof ConcurrencyError)) throw err;
+  }
+  store.appendFact(
+    runId,
+    [{ type: "fact.run_quarantined", payload: { reason: "orphan_side_effect" } } as FactEvent],
+    v,
+  );
 }

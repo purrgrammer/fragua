@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { retryCountKey } from "@fragua/core";
+import { SETTLED_STATUSES } from "@fragua/store";
 import { mergeFanoutAppendOpts } from "../src/executor.ts";
 import {
   buildSubstitutionArgs,
@@ -21,9 +22,18 @@ import {
   resolveMaxRetries,
   routingString,
   sleep,
+  TERMINAL_STATUSES,
 } from "../src/executor-helpers.ts";
 
 describe("executor-helpers", () => {
+  test("TERMINAL_STATUSES is derived from the canonical SETTLED_STATUSES tuple", () => {
+    expect(TERMINAL_STATUSES).toEqual(new Set<string>(SETTLED_STATUSES));
+    // Settled, not terminal: quarantined is included (worktree dispose +
+    // terminal snapshot gate fire for it), but it stays resumable.
+    expect(TERMINAL_STATUSES.has("quarantined")).toBe(true);
+    expect(TERMINAL_STATUSES.has("paused_human")).toBe(false);
+  });
+
   test("nodeRetryCount reads the per-node retry counter, not a flat key", () => {
     expect(nodeRetryCount({}, "work")).toBe(0);
     expect(nodeRetryCount({ retry_count: 3 }, "work")).toBe(0); // flat key is ignored
