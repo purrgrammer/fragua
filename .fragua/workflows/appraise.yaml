@@ -26,10 +26,10 @@
 #   product       usefulness: who is served today, what caps the reach
 #
 # Model strategy — strength follows the cost of being wrong:
-#   vision/architecture scans   FABLE, high — judgment that shapes the verdict
+#   vision/architecture scans   OPUS 4.8, high — judgment that shapes the verdict
 #   rigor/craft/product scans   sonnet, high — evidence-gathering reads
 #   verifies                    sonnet, medium — checking, not searching
-#   synthesize + backlog        FABLE, high — the scorecard the human reads,
+#   synthesize + backlog        OPUS 4.8, high — the scorecard the human reads,
 #                               and the task statements a fleet will execute:
 #                               a sloppy task file burns a whole run downstream
 #
@@ -50,7 +50,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-fable-5
+  model: claude-opus-4-8
 
 steps:
   survey:                              # ground the lenses once — they read this instead of re-deriving the map

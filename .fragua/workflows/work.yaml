@@ -35,7 +35,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-fable-5
+  model: claude-opus-4-8
 
 steps:
   triage:                              # pure classifier — isolated, no shared thread
