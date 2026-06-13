@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RESUME_AT_KEY } from "@fragua/core";
 import fc from "fast-check";
-import { pbtRuns } from "../../../test/pbt-runs.ts";
+import { pbtFaultRuns } from "../../../test/pbt-runs.ts";
 import { type AbortPlanInput, planAbort } from "../src/abort-planner.ts";
 
 const NODE_IDS = ["plan", "implement", "review", "gate"] as const;
@@ -87,7 +87,7 @@ describe("planAbort — properties", () => {
         expect(a).toEqual(b);
         expect(input).toEqual(before);
       }),
-      { numRuns: pbtRuns(1000) },
+      { numRuns: pbtFaultRuns(1000) },
     );
   });
 
@@ -100,7 +100,7 @@ describe("planAbort — properties", () => {
         // ...and only once.
         expect(facts.filter((f) => f.type === "fact.node_aborted").length).toBe(1);
       }),
-      { numRuns: pbtRuns(1000) },
+      { numRuns: pbtFaultRuns(1000) },
     );
   });
 
@@ -115,7 +115,7 @@ describe("planAbort — properties", () => {
         // Never a terminal-completed on the abort path.
         expect(has(facts, "fact.run_completed")).toBe(false);
       }),
-      { numRuns: pbtRuns(1000) },
+      { numRuns: pbtFaultRuns(1000) },
     );
   });
 
@@ -147,7 +147,7 @@ describe("planAbort — properties", () => {
             break;
         }
       }),
-      { numRuns: pbtRuns(1000) },
+      { numRuns: pbtFaultRuns(1000) },
     );
   });
 
@@ -165,7 +165,7 @@ describe("planAbort — properties", () => {
           expect(reasonOf(paused!)).toBe("budget");
         }
       }),
-      { numRuns: pbtRuns(1000) },
+      { numRuns: pbtFaultRuns(1000) },
     );
   });
 
@@ -196,7 +196,7 @@ describe("planAbort — properties", () => {
           expect(reasonOf(halted!)).toBe("timeout_exhausted");
         }
       }),
-      { numRuns: pbtRuns(1000) },
+      { numRuns: pbtFaultRuns(1000) },
     );
   });
 
@@ -219,7 +219,7 @@ describe("planAbort — properties", () => {
           expect(Object.keys(input.routingDelta).length).toBe(0);
         }
       }),
-      { numRuns: pbtRuns(1000) },
+      { numRuns: pbtFaultRuns(1000) },
     );
   });
 });
