@@ -10,6 +10,10 @@ guarantee.
 
 ### Added
 
+- `hello-world` starter workflow: a provider-neutral smoke test that pins no
+  `provider:` / `model:`, demonstrating that a workflow which omits the provider
+  runs on whatever credential is configured (workflow `defaults:` → config
+  `defaults:` → autodetect) with no YAML editing to switch providers.
 - `fragua runs wait <id...>` blocks until a set of runs settles, replacing
   hand-rolled `while fragua runs ls | grep` polling loops. Select the set by id,
   `--workflow <name>`, or `--all-running`; it polls the store (no HTTP), prints

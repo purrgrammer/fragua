@@ -68,24 +68,51 @@ export PATH="$PWD/dist:$PATH"   # or symlink dist/fragua into /usr/local/bin
 
 ## quickstart — adopt fragua in your project
 
-three steps from zero to a first run on your own repo:
+three steps from zero to a first run, on **whatever one provider you hold a key for**:
 
 ```sh
 # 1. install (above), add a key, start the harness
-fragua providers add            # pick a provider, paste a key
+fragua providers add            # pick ANY provider — Anthropic, OpenAI, Gemini, … — paste a key
 fragua harness                  # daemon + web UI on :6767, Ctrl-C to stop
 
-# 2. initialise your repo (separate terminal) and copy in a portable starter
+# 2. initialise your repo (separate terminal) and copy in the starter workflows
 cd ~/code/acme-webshop
 fragua init                     # writes .fragua/config.yaml + an empty .fragua/workflows/
+curl -fsSL -o .fragua/workflows/hello-world.yaml \
+  https://raw.githubusercontent.com/purrgrammer/fragua/main/.fragua/workflows/hello-world.yaml
+
+# 3. run the provider-neutral smoke test
+fragua run hello-world --input name="Ada"
+```
+
+`hello-world` is the **same workflow, any provider** promise made literal: it pins no `provider:` / `model:`, so it runs on whatever credential you added in step 1 — no YAML editing to switch providers. The run greets `Ada`, writes `hello.txt` into its worktree, and exits; **cost:** a fraction of its `budget: 1.00` hard cap.
+
+**switching / pinning a provider.** A workflow that omits `provider:` resolves the provider/model in this order — first match wins:
+
+1. a `defaults:` block in the workflow file itself;
+2. `defaults:` in `~/.fragua/config.yaml` (applies to every workflow that omits one);
+3. autodetect — the first provider you hold a credential for.
+
+So to point every provider-neutral workflow at, say, OpenAI without touching any `.yaml`, set the config defaults:
+
+```yaml
+# ~/.fragua/config.yaml
+defaults:
+  provider: openai
+  model: gpt-5
+```
+
+> `--input` binds typed run inputs (`${{ inputs.name }}` in prompts) — it does **not** change the provider. Provider selection is the config-`defaults:` / workflow-`defaults:` surface above.
+
+once the smoke test passes, run a **portable code review** over your last commit:
+
+```sh
 curl -fsSL -o .fragua/workflows/review.yaml \
   https://raw.githubusercontent.com/purrgrammer/fragua/main/.fragua/workflows/review.yaml
-
-# 3. run a code review over your last commit
 fragua run review --input target="HEAD~1..HEAD"
 ```
 
-`review` is portable — it assumes nothing about your project beyond git (and `gh` for PR targets). the run streams to your terminal (`fragua runs tail <id>` re-attaches later); it scales the review to the diff, writes `review.md` into the run's worktree, then pauses at a signoff gate — answer with `fragua runs respond <id> <route>` or from the web UI inbox. **cost:** a one-commit diff routes through the cheap tier — typically well under $1; the workflow's `budget: 12.00` is a hard cap at which the run pauses for you to raise it or stop, never overspending silently.
+`review` assumes nothing about your project beyond git (and `gh` for PR targets), but it **does** pin a provider in its `defaults:` — edit that block (or override via the config defaults above) to run it on your provider. the run streams to your terminal (`fragua runs tail <id>` re-attaches later); it scales the review to the diff, writes `review.md` into the run's worktree, then pauses at a signoff gate — answer with `fragua runs respond <id> <route>` or from the web UI inbox. **cost:** a one-commit diff routes through the cheap tier — typically well under $1; the workflow's `budget: 12.00` is a hard cap at which the run pauses for you to raise it or stop, never overspending silently.
 
 run discovery is automatic (via the global DB), so `fragua run` works from any directory. point it at a `.yaml` path or a bare name resolved under `~/.fragua/workflows/` then `<cwd>/.fragua/workflows/`. inputs: `-i name=value` (repeatable, `@path` reads a file, `@-` reads stdin). `--title` names the run, `--no-follow` prints the id and exits.
 
@@ -101,12 +128,13 @@ Pin the action to a release tag in consumer repos:
 
 ## workflows
 
-ships under `.fragua/workflows/` — run from the repo, or copy into `~/.fragua/workflows/` to use anywhere. **`review` and `pr_review` are portable starters**: they assume nothing but git / `gh` and work on any repo. the rest are wired to fragua's own scripts, conventions, and docs — run them here, or read them as authoring references.
+ships under `.fragua/workflows/` — run from the repo, or copy into `~/.fragua/workflows/` to use anywhere. **`hello-world`, `review`, and `pr_review` are portable starters**: `hello-world` pins no provider and needs no project at all; `review` / `pr_review` assume nothing but git / `gh` and work on any repo. the rest are wired to fragua's own scripts, conventions, and docs — run them here, or read them as authoring references.
 
 each `budget:` is a run-level hard cap, not the typical cost — small inputs spend a fraction of it. at the cap the run pauses for the operator (raise or stop), except where noted.
 
 | workflow | what it does | portability | spend |
 |---|---|---|---|
+| `hello-world` | greet the operator and write `hello.txt` — the zero-dependency smoke test. | **portable — pins no provider; runs on any configured key** | `budget: 1.00` cap |
 | `review`  | scope a PR / diff → structured review, with a gated apply tail. | **portable — works on any repo** | `budget: 12.00` cap |
 | `pr_review` | unattended PR review for CI — posts the verdict back to the PR. | **portable — works on any repo** (needs `gh` + `GH_TOKEN`) | `budget: 21.00` cap |
 | `work`    | triage → (plan / reproduce) → implement → review → CI. leaves the change in the worktree to accept. | fragua-internal (`bun run ci`, repo conventions) | **no default budget — set one**; defaults to a frontier model |
