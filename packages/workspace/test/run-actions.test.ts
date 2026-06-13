@@ -234,7 +234,7 @@ describe("applyAccept across a squash-merged base (base not ancestor of HEAD)", 
 
     if (opts.mainConflictsWithRun) {
       // A genuine textual conflict: main re-edits the run's line.
-      write((await must(cwd, ["show", "HEAD:f.txt"])).replace("L08", "L08-MAIN") + "\n");
+      write(`${(await must(cwd, ["show", "HEAD:f.txt"])).replace("L08", "L08-MAIN")}\n`);
       await must(cwd, ["commit", "-qam", "main edits L08"]);
     }
     return { cwd, runBase };

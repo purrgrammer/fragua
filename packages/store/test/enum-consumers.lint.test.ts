@@ -9,7 +9,14 @@
 //      RunStatus literals (no stale, no missing);
 //   2. every quoted literal inside any `status IN (…)` clause under
 //      packages/store/src must be a known RunStatus (these clauses are
-//      intentional subsets — membership only).
+//      intentional subsets — membership only);
+//   3. the union of literals across all `… WHEN status = '…'` CASE arms
+//      under packages/store/src must EQUAL the RunStatus set — no stale,
+//      no missing. A pivot that fans run_state into one column per status
+//      (the /analytics Runs chart) would otherwise silently grow a zero
+//      column when a new status is added, with no compiler signal: the
+//      SQL hardcodes the arms and the row type carries no `satisfies`.
+//      Equality (not membership) is what catches the MISSING arm.
 //
 // Conservative regex, same spirit as lint.test.ts (invariant I1). Scanning
 // the whole src tree means new SQL sites are covered the moment they exist.
@@ -35,7 +42,7 @@ function collectSources(root: string): string[] {
   return out;
 }
 
-interface StatusInSite {
+interface StatusSite {
   file: string;
   line: number;
   literals: string[];
@@ -45,8 +52,8 @@ interface StatusInSite {
  * quoted literals inside it. Parameterized clauses (`IN (?,?)`) yield no
  * literals and are skipped. `inbox_status IN (…)` is a different enum and
  * is excluded by the word boundary on `status` plus an explicit guard. */
-function statusInSites(file: string, source: string): StatusInSite[] {
-  const sites: StatusInSite[] = [];
+function statusInSites(file: string, source: string): StatusSite[] {
+  const sites: StatusSite[] = [];
   const CLAUSE_RE = /([A-Za-z_.]*status)\s+IN\s*\(([^)]*)\)/gi;
   for (const match of source.matchAll(CLAUSE_RE)) {
     const column = match[1] ?? "";
@@ -56,6 +63,23 @@ function statusInSites(file: string, source: string): StatusInSite[] {
     if (literals.length === 0) continue;
     const line = source.slice(0, match.index).split("\n").length;
     sites.push({ file: relative(join(__dirname, "..", ".."), file), line, literals });
+  }
+  return sites;
+}
+
+/** Extract every `WHEN <alias.>status = 'literal'` CASE arm and the quoted
+ * literal it compares against. Covers the analytics pivots that fan
+ * run_state into one numeric column per status. `inbox_status` is a
+ * different enum and is excluded. */
+function statusCaseSites(file: string, source: string): StatusSite[] {
+  const sites: StatusSite[] = [];
+  const ARM_RE = /\bWHEN\s+([A-Za-z_.]*status)\s*=\s*'([^']*)'/gi;
+  for (const match of source.matchAll(ARM_RE)) {
+    const column = match[1] ?? "";
+    if (column.includes("inbox_status")) continue;
+    const literal = match[2] ?? "";
+    const line = source.slice(0, match.index).split("\n").length;
+    sites.push({ file: relative(join(__dirname, "..", ".."), file), line, literals: [literal] });
   }
   return sites;
 }
@@ -94,5 +118,29 @@ describe("enum-literal consumers (SQL)", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("the union of `WHEN status = '…'` CASE arms under store/src equals the RunStatus set", () => {
+    const seen = new Set<string>();
+    const stale: string[] = [];
+    for (const file of sources) {
+      const source = readFileSync(file, "utf8");
+      for (const site of statusCaseSites(file, source)) {
+        for (const literal of site.literals) {
+          seen.add(literal);
+          if (!known.has(literal)) {
+            stale.push(
+              `${site.file}:${site.line} — '${literal}' is not a RunStatus (see RUN_STATUSES in @fragua/types)`,
+            );
+          }
+        }
+      }
+    }
+    const missing = RUN_STATUSES.filter((s) => !seen.has(s));
+    expect(
+      { stale, missing },
+      "status CASE-WHEN pivots drifted from RUN_STATUSES (@fragua/types): a missing status would" +
+        " silently yield a zero analytics column — update the pivot in store/src/analytics-queries.ts",
+    ).toEqual({ stale: [], missing: [] });
   });
 });
