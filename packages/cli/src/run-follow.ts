@@ -22,6 +22,10 @@ import type { StoreClient } from "./store-client.ts";
 const POLL_MS = 200;
 const BATCH = 500;
 
+/** How long an empty tail may stay silent before we hint that no daemon may be
+ * running. Long enough that a busy daemon's gaps never trip it. */
+const IDLE_HINT_MS = 15_000;
+
 /** The HITL picker, injectable so tests can drive the gate without a TTY. */
 type RoutePicker = typeof pickRoute;
 
@@ -77,19 +81,24 @@ function followExitCode(ev: StoredEvent): number {
 /** Tail a run's event log to terminal: poll `readPlane.eventsSince`, render
  * each new event, return the run's terminal exit code. A daemon must be running
  * for events to appear — with none the run sits queued and this waits (Ctrl-C
- * to stop), same as the old SSE follow. */
+ * to stop), same as the old SSE follow. `idleHintMs` is injectable so tests can
+ * drive the silent-tail hint without a 15s wait. */
 export async function followRun(
   client: StoreClient,
   runId: string,
   pick: RoutePicker = pickRoute,
   startCursor = 0,
+  idleHintMs = IDLE_HINT_MS,
 ): Promise<number> {
   let cursor = startCursor;
+  let lastProgressAt = Date.now();
+  let idleHintShown = false;
   for (;;) {
     const batch = client.readPlane.eventsSince(runId, cursor, BATCH);
     for (const ev of batch) {
       renderEvent(ev);
       cursor = ev.seq;
+      lastProgressAt = Date.now();
       if (ev.type === "fact.run_paused_human") {
         // Answer the gate inline (TTY) and keep following — the daemon folds
         // the human_input and the run resumes. Off a TTY, exit so scripts
@@ -112,7 +121,15 @@ export async function followRun(
       }
     }
     // A non-full batch means we've caught up to the live tail — wait for more.
-    if (batch.length < BATCH) await sleep(POLL_MS);
+    if (batch.length < BATCH) {
+      // Silent for a while? A queued run with no daemon produces no events at
+      // all — hint once so the wait isn't presented as normal, then keep going.
+      if (!idleHintShown && Date.now() - lastProgressAt >= idleHintMs) {
+        console.log(chalk.dim("no events yet — is a daemon running? try: fragua harness"));
+        idleHintShown = true;
+      }
+      await sleep(POLL_MS);
+    }
   }
 }
 

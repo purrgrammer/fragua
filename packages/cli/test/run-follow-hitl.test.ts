@@ -59,6 +59,36 @@ describe("followRun — startCursor", () => {
   });
 });
 
+describe("followRun — idle hint (no daemon)", () => {
+  test("emits the daemon hint exactly once on a silent tail, then keeps following", async () => {
+    let polls = 0;
+    const completed = ev(1, "fact.run_completed", {});
+    const client = {
+      readPlane: {
+        // Stays silent for several polls (so the idle window elapses), then the
+        // run finishes — mimicking a daemon finally coming up.
+        eventsSince: (_runId: string, _sinceSeq: number, _limit?: number) => {
+          polls += 1;
+          return polls >= 6 ? [completed] : [];
+        },
+      },
+    } as unknown as StoreClient;
+
+    const lines: string[] = [];
+    const orig = console.log;
+    console.log = (msg?: unknown) => lines.push(String(msg ?? ""));
+    try {
+      const code = await followRun(client, RUN_ID, undefined, 0, 1);
+      expect(code).toBe(cliExitCode("completed"));
+    } finally {
+      console.log = orig;
+    }
+
+    const hints = lines.filter((l) => l.includes("is a daemon running?"));
+    expect(hints).toHaveLength(1);
+  }, 5000);
+});
+
 describe("followRun — non-human pause", () => {
   test("renders fact.run_paused{budget} and exits non-zero instead of hanging", async () => {
     const { client } = fakeClient([
