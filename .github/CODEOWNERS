@@ -13,6 +13,6 @@
 # settings (GitHub: Settings → Branches → require review from Code Owners).
 # Adjust the @owner below to match your forge's user or team handles.
 
-/scripts/check-contract-bump.sh                        @dialelo
-/packages/store/src/reducers.ts                        @dialelo
-/packages/store/test/contract-surface.snapshot.json    @dialelo
+/scripts/check-contract-bump.sh                        @purrgrammer
+/packages/store/src/reducers.ts                        @purrgrammer
+/packages/store/test/contract-surface.snapshot.json    @purrgrammer
