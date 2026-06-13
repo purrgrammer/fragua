@@ -73,6 +73,7 @@ import {
 import { serveCommand } from "../src/commands/serve.ts";
 import { showCommand } from "../src/commands/show.ts";
 import { validateCommand } from "../src/commands/validate.ts";
+import { waitCommand } from "../src/commands/wait.ts";
 import { FRAGUA_VERSION } from "../src/version.ts";
 
 const cli = cac("fragua");
@@ -589,6 +590,12 @@ function runsHelp(): void {
     explain <id>        [--json]      narrative: path taken, per-step outcome/cost, diff summary, terminal reason
     worktree <id>                     print the absolute worktree path (exit 1 if cleaned up)
 
+  Wait (block on a set until settled):
+    wait <id...> | --workflow <name> | --all-running
+         [--timeout <dur>] [--settle terminal|blocked]   block until every selected run settles;
+                                                         exit 0 (all completed) / banded (halt/quarantine) /
+                                                         60 (blocked) / 75 (timeout)
+
   Inspect (forensics — dissect a run, no raw SQL):
     events    <id> [--type <prefix>] [--limit N] [--since <seq>] [--json]   the event log (default last 50, oldest-first)
     steps     <id> [--json]                                 per-LLM-call cost / tokens / duration
@@ -615,6 +622,10 @@ cli
   .option("--new-limit <n>", "budget: the raised ceiling")
   .option("--node <id>", "max-retries / messages: the node whose retry cap to raise / scope the transcript")
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
+  .option("--workflow <name>", "wait: select every active run of a workflow")
+  .option("--all-running", "wait: select every active run")
+  .option("--timeout <dur>", "wait: give up after a duration (e.g. 30s, 5m, 1h)")
+  .option("--settle <mode>", "wait: terminal | blocked (default blocked: paused counts as settled)")
   .option("--limit <n>", "ls/inbox/events: cap results")
   .option("--since <seq>", "events: only events with seq greater than <seq>")
   .option("--full", "tail: replay the entire event log instead of the last 200")
@@ -912,6 +923,22 @@ cli
         case "worktree":
           process.exit(await worktreeCommand({ runId: needId(), ...discovery(options) }));
           break;
+        case "wait": {
+          // Variadic ids: cac binds the first two positionals to runId/arg; any
+          // further ids land in parsed.args. A single selector flag replaces ids.
+          const ids = [runId, arg, ...parsed.args.slice(3)].filter((s): s is string => typeof s === "string");
+          process.exit(
+            await waitCommand({
+              ...(ids.length > 0 ? { ids } : {}),
+              ...(pickStr(options, "workflow") !== undefined ? { workflow: pickStr(options, "workflow")! } : {}),
+              ...(options["allRunning"] === true ? { allRunning: true } : {}),
+              ...(pickStr(options, "timeout") !== undefined ? { timeout: pickStr(options, "timeout")! } : {}),
+              ...(pickStr(options, "settle") !== undefined ? { settle: pickStr(options, "settle")! } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        }
         default:
           console.error(chalk.red(`unknown runs action: ${action}`));
           runsHelp();

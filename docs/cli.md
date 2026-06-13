@@ -63,6 +63,8 @@ fragua runs status <id> [--json]                                     # lifecycle
 fragua runs tail <id> [--full]                                       # follow an existing run's log to terminal (live)
 fragua runs explain <id> [--json]                                    # narrative: path, per-step cost/outcome, diff, reason
 fragua runs worktree <id>                                            # print the absolute worktree path (exit 1 if cleaned up)
+fragua runs wait <id...> | --workflow <name> | --all-running         # block until every selected run settles (no HTTP)
+     [--timeout <dur>] [--settle terminal|blocked]                   #   exit 0 / banded (halt/quarantine) / 60 (blocked) / 75 (timeout)
 
 # disposition — nothing touches your git until you ask
 fragua runs diff    <id> [--against base|previous|<idx>] [--snap <idx>] [--path <p>]
@@ -96,6 +98,19 @@ fragua runs artifact  <id> <nodeId> --key <k> [--iteration N]   # one artifact's
 before the hard pause); `fragua runs tail` prefixes the same event with ⚠ in
 the live log. `fragua runs explain` synthesises the full narrative: path taken,
 per-step outcome and cost, diff-vs-base summary, and the terminal reason.
+
+`fragua runs wait` blocks a fleet driver until a *set* of runs settles, instead
+of a hand-rolled `while fragua runs ls | grep` loop. Select the set with
+explicit ids, `--workflow <name>` (every currently-active run of that workflow),
+or `--all-running`. It polls the read plane (no HTTP) and prints one line per
+run per lifecycle change. A run is *settled* when terminal
+(completed/halted/cancelled/quarantined) or — under the default `--settle
+blocked` — when blocked (paused/paused_human), since an operator wait wants to
+stop the moment a run needs them; `--settle terminal` keeps polling through a
+pause. `paused_auto` is never settled (the daemon owns its wake). The exit code
+is the worst-outcome run's code through the shared map below — `0` when all
+completed, the halt/quarantine band on a failure, `60` when any run is blocked
+awaiting input — and `75` when `--timeout <dur>` expires first.
 
 `fragua runs tail` backfills the last 200 events before going live (the bound
 is a SQL-level read — long runs never hydrate the full log); pass `--full` to
@@ -232,9 +247,10 @@ never downgrades — only this explicit, backed-up command does.
 
 ## Exit codes
 
-`ci`, `run --follow`, and `runs tail` all exit through the same status+reason →
-code map (`packages/cli/src/cli-exit.ts` `cliExitCode`), so a script can
-`case $?` on exactly how a run stopped. Codes are banded by status class.
+`ci`, `run --follow`, `runs tail`, and `runs wait` all exit through the same
+status+reason → code map (`packages/cli/src/cli-exit.ts` `cliExitCode`), so a
+script can `case $?` on exactly how a run stopped. Codes are banded by status
+class. `runs wait` reports the *worst-outcome* run in its selected set.
 
 | Code | Meaning |
 |---|---|
@@ -245,6 +261,7 @@ code map (`packages/cli/src/cli-exit.ts` `cliExitCode`), so a script can
 | `50`–`51` | `quarantined` — `orphan_side_effect` 50, `other` 51 |
 | `60` | `paused_human` — the workflow asked a question (no responder) |
 | `70` | a non-terminal status reached as a stop-state (a driver bug) |
+| `75` | `runs wait --timeout` expired before every selected run settled |
 | `80` | `ci` bundle's binary artifact contains a live secret value verbatim (scrubber perimeter — text surfaces are always scrubbed; binary artifacts are scanned-and-fail-closed) |
 | `130` | `cancelled`, or a SIGINT/SIGTERM interrupt |
 

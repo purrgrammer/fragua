@@ -10,6 +10,14 @@ guarantee.
 
 ### Added
 
+- `fragua runs wait <id...>` blocks until a set of runs settles, replacing
+  hand-rolled `while fragua runs ls | grep` polling loops. Select the set by id,
+  `--workflow <name>`, or `--all-running`; it polls the store (no HTTP), prints
+  one line per run per lifecycle change, and exits through the shared cli-exit
+  map — `0` when all completed, the halt/quarantine band on a failure, `60` when
+  any run is blocked awaiting input. `--timeout <dur>` gives up with exit `75`;
+  `--settle terminal|blocked` (default `blocked`) chooses whether a paused run
+  counts as settled.
 - `fragua runs events` takes `--limit N` (last N events) and `--since <seq>`;
   `fragua runs tail` bounds its backfill to the last 200 events by default
   (flag to request the full log). Reads are bounded at the SQL level.
