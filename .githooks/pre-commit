@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fast local fast-fail before a commit lands. Lint + typecheck only — no test run,
+# so it stays under ~10s. This is the hook the `git commit --no-verify` ban refers to.
+set -euo pipefail
+
+bun run lint && bun run typecheck

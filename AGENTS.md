@@ -71,7 +71,7 @@ Skills (domain context loaded on demand) come from two layers: `~/.agents/skills
 
 - Imperative mood. Tag the subsystem: `[store] fix OCC race`, `[daemon] trim supervisor tick`.
 - Every non-trivial change updates a test. If infeasible, say so in the commit body.
-- `git commit --no-verify` is banned. Fix the hook.
+- `git commit --no-verify` is banned. Fix the hook. The pre-commit hook lives at `.githooks/pre-commit` and runs `bun run lint && bun run typecheck` (no test run, ~sub-10s); `bun install` wires it via the `prepare` script (`git config core.hooksPath .githooks`).
 
 ## Changelog
 
