@@ -177,7 +177,7 @@ describe("executor + worktree provisioner", () => {
     const halt = events.find((e) => e.type === "fact.run_halted");
     expect(halt).toBeDefined();
     const payload = halt!.payload as { reason: string; detail?: string };
-    expect(payload.reason).toBe("error");
+    expect(payload.reason).toBe("worktree_error");
     expect(payload.detail).toContain("worktree_provision_failed");
     expect(payload.detail).toContain("no disk space");
 

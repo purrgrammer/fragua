@@ -47,6 +47,10 @@ guarantee.
 
 ### Changed
 
+- Worktree-provisioning failures now halt with a distinct `worktree_error`
+  reason instead of the catch-all `error`, so operators can filter and triage
+  provision failures separately from generic exceptions and parse failures. It
+  carries CLI exit code 18.
 - `fragua validate` is store-free: provider/model pairs resolve against the
   bundled offline registry; a model absent from it downgrades to a warning
   (enqueue remains the authoritative gate). Validate now works with no

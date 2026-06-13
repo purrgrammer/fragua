@@ -8,6 +8,10 @@ describe("humanizeHaltReason", () => {
     expect(humanizeHaltReason("edge_no_match")).toBe("No edge matched");
   });
 
+  it("labels worktree_error", () => {
+    expect(humanizeHaltReason("worktree_error")).toBe("Worktree provision failed");
+  });
+
   it("keeps Paused label for paused_human (rename-stable)", () => {
     expect(humanizeHaltReason("paused_human")).toBe("Paused");
   });

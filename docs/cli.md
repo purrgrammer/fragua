@@ -266,7 +266,7 @@ class. `runs wait` reports the *worst-outcome* run in its selected set.
 |---|---|
 | `0` | `completed` — the only zero |
 | `1` | couldn't run the workflow at all (not found / unparseable / bad config) |
-| `10`–`17` | `halted` by reason — `error` 10, `aborted_exit` 11, `budget` 12, `occ_exhausted` 13, `timeout_exhausted` 14, `route_not_picked` 15, `route_call_not_isolated` 16, `edge_no_match` 17 |
+| `10`–`18` | `halted` by reason — `error` 10, `aborted_exit` 11, `budget` 12, `occ_exhausted` 13, `timeout_exhausted` 14, `route_not_picked` 15, `route_call_not_isolated` 16, `edge_no_match` 17, `worktree_error` 18 |
 | `30`–`39` | `paused` by reason — `operator` 30, `provider_error` 31, `payment_required` 32, `budget` 33, `max_retries` 34, `goal_gate` 35, `max_loops` 36, `abort_loop` 37, `provider_exhausted` 38, `engine_incompatible` 39 |
 | `50`–`51` | `quarantined` — `orphan_side_effect` 50, `other` 51 |
 | `60` | `paused_human` — the workflow asked a question (no responder) |

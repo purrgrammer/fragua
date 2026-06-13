@@ -393,7 +393,7 @@ describe("executor faults — provision + store failure", () => {
         // Halted with a clear provision-failure reason (in the fact log;
         // daemon.worktree_provisioned is a daemon-stream event, not here).
         const halt = events.find((e) => e.type === "fact.run_halted");
-        expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("error");
+        expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("worktree_error");
         expect((halt?.payload as { detail?: string } | undefined)?.detail ?? "").toContain("worktree_provision_failed");
         checkRunInvariants(events, state);
       }),

@@ -757,6 +757,38 @@ steps:
       }
     });
 
+    it("renders the worktree_error label for a provision-failed halt", async () => {
+      const detail: RunDetailT = {
+        runId: "run-worktree-fail",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "fail",
+        runStatus: "halted",
+        lastEventSeq: 4,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        haltReason: "worktree_error",
+        haltDetail: "worktree_provision_failed: no disk space",
+      };
+      const { client, mock } = prepare("run-worktree-fail", detail);
+      try {
+        const { container } = mount(client, "/runs/run-worktree-fail");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-halted-notice")).toBeTruthy();
+        });
+        const notice = q.getByTestId("run-halted-notice");
+        expect(notice.getAttribute("data-halt-reason")).toBe("worktree_error");
+        expect(notice.textContent).toContain("worktree provision failed");
+        expect(q.getByTestId("run-halted-message").textContent).toContain("worktree_provision_failed: no disk space");
+      } finally {
+        mock.restore();
+        cleanup();
+      }
+    });
+
     it("does not render the notice for running or paused runs", async () => {
       for (const [id, status, runStatus] of [
         ["run-not-halted-run", "running", "running"],

@@ -296,6 +296,10 @@ export const HALT_REASONS = [
   /** Handler reported a route/outcome and no outgoing edge matched.
    * Validator should prevent this statically; runtime backstop. */
   "edge_no_match",
+  /** Worktree provisioning failed before the first `run_started` could
+   * commit — distinct from the catch-all `error` so operators can filter
+   * and triage provision failures separately. */
+  "worktree_error",
 ] as const;
 
 export type HaltReason = (typeof HALT_REASONS)[number];

@@ -664,7 +664,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           {
             type: "fact.run_halted",
             payload: {
-              reason: "error",
+              reason: "worktree_error",
               detail: `worktree_provision_failed: ${detail}`,
             },
           },

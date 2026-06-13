@@ -42,6 +42,7 @@ describe("cliExitCode — stop-state + reason → exit code", () => {
       "route_not_picked",
       "route_call_not_isolated",
       "edge_no_match",
+      "worktree_error",
     ];
     for (const r of reasons) expect(cliExitCode("halted", { halt: r })).toBe(HALT_EXIT[r]);
     expect(new Set(reasons.map((r) => HALT_EXIT[r])).size).toBe(reasons.length);

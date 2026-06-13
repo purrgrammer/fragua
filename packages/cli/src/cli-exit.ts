@@ -60,6 +60,7 @@ export const HALT_EXIT: Record<HaltReason, number> = {
   route_not_picked: 15,
   route_call_not_isolated: 16,
   edge_no_match: 17,
+  worktree_error: 18,
 };
 
 /** `paused` reason → exit code (band 30–39). The auto-wake reasons project

@@ -32,6 +32,7 @@ export const HALT_LABELS = {
   route_not_picked: "Route not picked",
   route_call_not_isolated: "Route call not isolated",
   edge_no_match: "No edge matched",
+  worktree_error: "Worktree provision failed",
 } satisfies Record<RunStatus, string> & Partial<Record<HaltReason, string>>;
 
 export function humanizeHaltReason(status: string): string {

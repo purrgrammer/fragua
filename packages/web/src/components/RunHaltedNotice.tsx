@@ -36,6 +36,7 @@ const REASON_LABELS: Record<HaltReason, string> = {
   route_not_picked: "No route picked",
   route_call_not_isolated: "Route call not isolated",
   edge_no_match: "No matching edge",
+  worktree_error: "Worktree provision failed",
 };
 
 function HaltContextRow({

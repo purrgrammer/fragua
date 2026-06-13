@@ -66,6 +66,7 @@ export const OutcomeSchema = Type.Object(
         Type.Literal("route_not_picked"),
         Type.Literal("route_call_not_isolated"),
         Type.Literal("edge_no_match"),
+        Type.Literal("worktree_error"),
       ]),
     ),
   },
