@@ -376,7 +376,10 @@ export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: Lea
       await tryAppendFact(opts.store, runId, state.version, [
         {
           type: "fact.run_halted",
-          payload: { reason: "error", detail: `executor crashed: ${errorMessage(err)}` },
+          payload: {
+            reason: "error",
+            detail: `executor crashed at ${state.currentNode ?? "<no-node>"}: ${errorMessage(err)}`,
+          },
         },
       ]);
     }
