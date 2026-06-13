@@ -365,11 +365,29 @@ const COVERAGE: InvariantCoverage[] = [
 // Critical invariants pinned one level deeper: the owning file must carry a
 // `// invariant: <ID>` sentinel next to the asserting test, so a file that
 // survives while the assertion is deleted or renamed away still trips the gate.
+//
+// WHY this set and not all 36: a sentinel only earns its comment-cost on an
+// invariant whose silent regression ships *corruption*, not a visible failure.
+// We promote the highest-consequence correctness family — OCC / single-writer
+// txn atomicity (I1, I3, P2), fold-determinism (P4), durability of intents and
+// the crash/orphan recovery path (P3, P5, P6), the side-effect idempotency key
+// (I5), seq monotonicity (P1), claim atomicity (P24), and the payload/routing
+// caps (P12, P13). For these, an emptied-out test file passing the gate would
+// let a data-corrupting change land green; for the lower-consequence matrix
+// rows (blob dedup, SSE replay, STRICT, …) file-existence remains the bar.
 const SENTINELS: Record<string, string[]> = {
+  I1: [STORE_LINT, STORE_PBT],
   I3: [STORE_PBT],
   I5: [MATRIX],
+  P1: [STORE_PBT],
+  P2: [STORE_PBT],
+  P3: [DAEMON_PBT],
+  P4: [STORE_PBT, INVARIANTS],
   P5: [DAEMON_PBT, DRIVEN, FAULTS],
   P6: [MATRIX, FAULTS],
+  P12: [STORE_PBT],
+  P13: [STORE_PBT],
+  P24: [STORE_PBT],
 };
 
 function sentinelPattern(id: string): RegExp {
@@ -433,7 +451,9 @@ describe("invariant coverage map", () => {
 
   test("sentinel registry is consistent with the map", () => {
     const byId = new Map(COVERAGE.map((c) => [c.id, c]));
-    for (const id of ["I3", "I5", "P5", "P6"]) {
+    // The high-consequence family must stay promoted — dropping any of these
+    // back to file-existence would re-open the gap this gate closes.
+    for (const id of ["I1", "I3", "I5", "P1", "P2", "P3", "P4", "P5", "P6", "P12", "P13", "P24"]) {
       expect(Object.keys(SENTINELS)).toContain(id);
     }
     for (const [id, files] of Object.entries(SENTINELS)) {

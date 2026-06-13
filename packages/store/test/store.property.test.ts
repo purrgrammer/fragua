@@ -35,6 +35,8 @@ import { freshStore, nextId, seedRun, seedWorkflow } from "./helpers.ts";
 type AnyDb = import("bun:sqlite").Database;
 const getDb = (s: unknown): AnyDb => (s as { db: AnyDb }).db;
 
+// invariant: P1 — per-run seq is monotonic and contiguous (1..N, no gaps).
+// Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("P1 — seq monotonic & contiguous per run", () => {
   test("appendFact + appendIntent produce 1..N with no gaps", async () => {
     await fc.assert(
@@ -68,8 +70,8 @@ describe("P1 — seq monotonic & contiguous per run", () => {
   });
 });
 
-// invariant: I3 — facts are OCC-checked: a stale writer must lose the race.
-// Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
+// invariant: I3, P2 — facts are OCC-checked: a stale writer must lose the race;
+// exactly one writer wins. Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("P2 — OCC rejects stale writers", () => {
   test("exactly one writer succeeds when two target the same version", async () => {
     const store = freshStore();
@@ -88,6 +90,9 @@ describe("P2 — OCC rejects stale writers", () => {
   });
 });
 
+// invariant: I1, P4 — events + projection land in one txn, and the projection
+// equals the pure fold of the fact log. Load-bearing sentinel for
+// daemon/test/invariant-coverage.test.ts.
 describe("P4 — projection equals fold of facts", () => {
   test("random fact sequence folded purely matches DB projection", async () => {
     await fc.assert(
@@ -174,6 +179,8 @@ describe("P4 — projection equals fold of facts", () => {
   });
 });
 
+// invariant: P12 — event payloads are capped at MAX_EVENT_PAYLOAD_BYTES.
+// Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("P12 — event payload bound", () => {
   test("payload >= MAX rejects; payload well under MAX accepts", async () => {
     const store = freshStore();
@@ -212,6 +219,8 @@ describe("P12 — event payload bound", () => {
   });
 });
 
+// invariant: P13 — run_state.routing is capped at MAX_ROUTING_BYTES.
+// Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("P13 — routing bound", () => {
   test("oversize initial routing rejected", async () => {
     const store = freshStore();
@@ -614,6 +623,8 @@ describe("P32 — fan-out frontier isolation", () => {
   });
 });
 
+// invariant: P24 — each queued run is claimed by exactly one caller.
+// Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("P24 — claim atomicity", () => {
   test("concurrent claims each pop exactly one unique run", async () => {
     const store = freshStore();

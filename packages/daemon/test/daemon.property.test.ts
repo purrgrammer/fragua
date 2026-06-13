@@ -33,6 +33,8 @@ afterEach(() => {
   }
 });
 
+// invariant: P3 — intents are never lost: every intent submitted during a run
+// stays visible in the event log. Load-bearing sentinel for invariant-coverage.test.ts.
 describe("P3 — intents never lost", () => {
   test("random intents submitted during run remain visible in the event log", async () => {
     await fc.assert(
