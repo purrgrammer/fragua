@@ -145,6 +145,8 @@ import {
   countDispatchableRunningRuns,
   countQueuedRuns,
   countRunningRuns,
+  type FleetSummary,
+  type FleetSummaryOpts,
   type GcSnapshotRunRow,
   type GlobalMetricsTotalsRow,
   type GlobalModelBreakdownRow,
@@ -163,6 +165,7 @@ import {
   type StepAggregateRow,
   selectAllRoutings,
   selectCwds,
+  selectFleetSummary,
   selectGcEligibleSnapshotRuns,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
@@ -787,6 +790,10 @@ export class SqliteStore implements IEventStore {
 
   listRunSummaryRows(opts: ListRunSummaryRowsOpts = {}): RunSummaryRow[] {
     return selectRunSummaryRows(this.db, opts);
+  }
+
+  fleetSummary(opts: FleetSummaryOpts = {}): FleetSummary {
+    return selectFleetSummary(this.db, opts);
   }
 
   claimNextRun(maxInFlight: number): { runId: string } | null {

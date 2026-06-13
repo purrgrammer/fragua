@@ -40,6 +40,8 @@ import type {
 } from "./analytics-queries.ts";
 import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 import type {
+  FleetSummary,
+  FleetSummaryOpts,
   GcSnapshotRunRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
@@ -99,6 +101,9 @@ export type {
 export { decodeCursor, encodeCursor, getFirstRunAt } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 export type {
+  FleetSummary,
+  FleetSummaryOpts,
+  FleetWorkflowRow,
   GcSnapshotRunRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
@@ -779,6 +784,10 @@ export interface IEventReader {
    * they do not hydrate thousands of events per run just to derive
    * count, duration, title, and metrics. */
   listRunSummaryRows(opts?: ListRunSummaryRowsOpts): RunSummaryRow[];
+  /** Fleet rollup — status counts, per-workflow breakdown, and total
+   * in-flight cost. Every number is a SQL aggregation (COUNT / SUM),
+   * never a TS fold over the event log. Powers `fragua runs ls --summary`. */
+  fleetSummary(opts?: FleetSummaryOpts): FleetSummary;
   /** Counts used by the `/health` daemon enrichment. Cheap (indexed). */
   runStateCounts(): { running: number; queued: number };
 

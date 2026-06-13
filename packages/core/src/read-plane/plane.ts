@@ -14,6 +14,8 @@
 import type {
   ArtifactListRow,
   ArtifactScope,
+  FleetSummary,
+  FleetSummaryOpts,
   GetEventsTailOpts,
   GetGlobalEventsAtFloorOpts,
   GetGlobalEventsForwardOpts,
@@ -30,7 +32,7 @@ import type { RunDetail, RunSummary } from "./schemas.ts";
 import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnapshot } from "./steps.ts";
 
-export type { ArtifactListRow, ArtifactScope } from "@fragua/store";
+export type { ArtifactListRow, ArtifactScope, FleetSummary, FleetSummaryOpts, FleetWorkflowRow } from "@fragua/store";
 
 export interface ReadPlaneDeps {
   store: IEventReader;
@@ -49,6 +51,11 @@ export interface ReadPlane {
   /** SQL-backed list projection — one `RunSummary` per row, no per-row
    *  event-log fetch. Mirrors `GET /runs`. */
   runSummaries(opts?: ListRunSummaryRowsOpts): RunSummary[];
+  /** Fleet rollup — status counts, per-workflow breakdown, and total
+   *  in-flight cost across the (optionally `--status`/`--cwd`/`--limit`
+   *  scoped) set. All sums/counts come from SQL aggregation. Backs
+   *  `fragua runs ls --summary`. */
+  fleetSummary(opts?: FleetSummaryOpts): FleetSummary;
   /** Full detail projection for one run, or `null` when the run is absent.
    *  Mirrors `GET /runs/:id`. */
   runDetail(runId: string): RunDetail | null;
@@ -107,6 +114,9 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
   return {
     runSummaries(opts = {}) {
       return store.listRunSummaryRows(opts).map(runSummaryRowToSummary);
+    },
+    fleetSummary(opts = {}) {
+      return store.fleetSummary(opts);
     },
     runDetail(runId) {
       const state = store.getState(runId);

@@ -584,7 +584,7 @@ function runsHelp(): void {
 
   Listing:
     inbox               [--json]      runs needing attention (2 sections)
-    ls [--status a,b] [--limit N] [--json]  list runs
+    ls [--status a,b] [--limit N] [--summary] [--json]  list runs (--summary: fleet rollup)
     status <id>         [--json]      one run's state + the why + active budget warnings
     tail   <id> [--full]              follow a run's event log to terminal (live; backfill = last 200 events, --full for all)
     explain <id>        [--json]      narrative: path taken, per-step outcome/cost, diff summary, terminal reason
@@ -621,6 +621,10 @@ cli
   .option("--metric <m>", "budget: metric (e.g. cost | tokens)")
   .option("--new-limit <n>", "budget: the raised ceiling")
   .option("--node <id>", "max-retries / messages: the node whose retry cap to raise / scope the transcript")
+  .option(
+    "--summary",
+    "ls: print a fleet rollup (status counts, per-workflow table, in-flight cost) instead of the list",
+  )
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
   .option("--workflow <name>", "wait: select every active run of a workflow")
   .option("--all-running", "wait: select every active run")
@@ -686,6 +690,7 @@ cli
               ...(pickStr(options, "status") !== undefined ? { status: pickStr(options, "status")! } : {}),
               ...limitOpt,
               ...(options["json"] === true ? { json: true } : {}),
+              ...(options["summary"] === true ? { summary: true } : {}),
               ...discovery(options),
             }),
           );

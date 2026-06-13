@@ -9,6 +9,9 @@ export {
 export {
   type ArtifactListRow,
   type ArtifactScope,
+  type FleetSummary,
+  type FleetSummaryOpts,
+  type FleetWorkflowRow,
   type GlobalFeedAtFloorCursor,
   type GlobalFeedForwardCursor,
   makeReadPlane,

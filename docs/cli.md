@@ -57,7 +57,7 @@ store-client; control verbs append an `intent.*` the daemon folds on its next
 tick (always-appendable, so they succeed even with the daemon down).
 
 ```sh
-fragua runs ls [--status running,paused_human] [--limit N] [--json]  # one line per run (--json: array)
+fragua runs ls [--status running,paused_human] [--limit N] [--summary] [--json]  # one line per run (--json: array; --summary: fleet rollup)
 fragua runs inbox [--json]                                           # runs needing attention (2 sections)
 fragua runs status <id> [--json]                                     # lifecycle + outcome + warnings
 fragua runs tail <id> [--full]                                       # follow an existing run's log to terminal (live)
@@ -118,6 +118,16 @@ replay the entire log. `fragua runs events` prints the last 50 by default;
 `--limit N` keeps the last N matching events, and `--since <seq>` keeps only
 events with seq strictly greater than `<seq>` (unbounded unless `--limit` is
 also given — a forward cursor for scripts).
+
+`fragua runs ls --summary` swaps the per-run list for a fleet rollup: a
+status-count line (queued / running / paused\* / completed / halted / …), a
+per-workflow table (`workflow | running | done | failed`), and the total cost
+across non-terminal runs (the live burn — completed / cancelled / halted are
+excluded). Counts and the cost SUM are SQL aggregations, not a fold over the
+event log. `--status` and `--limit` scope the aggregated set the same way they
+scope the list (`--limit` keeps the most-recently-updated N); `--cwd` narrows
+to one project root; `--json` emits the raw rollup object. Imported runs (they
+executed elsewhere) are excluded.
 
 Discovery flags on the `runs` verbs: `--cwd` (scopes `ls`/`inbox`, resolves
 `diff` worktrees) and `--db` (default: the harness store `~/.fragua/fragua.db`).

@@ -13,7 +13,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import type { DiffRange, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
+import type { DiffRange, FleetSummary, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
 import {
   type ArtifactScope,
   type NarrowMessage,
@@ -808,9 +808,11 @@ export interface LsOptions extends DiscoveryOpts {
   status?: string;
   limit?: number;
   json?: boolean;
+  summary?: boolean;
 }
 
-/** List runs (optionally filtered by lifecycle status). */
+/** List runs (optionally filtered by lifecycle status). With `--summary`,
+ *  print a fleet rollup instead of the per-run list. */
 export function lsCommand(opts: LsOptions): Promise<number> {
   const cwd = resolve(opts.cwd ?? process.cwd());
   const statuses =
@@ -821,6 +823,19 @@ export function lsCommand(opts: LsOptions): Promise<number> {
           .filter((s) => s.length > 0) as RunStatus[])
       : undefined;
   return withStoreClient(opts, ({ readPlane }) => {
+    if (opts.summary === true) {
+      const summary = readPlane.fleetSummary({
+        cwd,
+        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(statuses !== undefined ? { statuses } : {}),
+      });
+      if (opts.json === true) {
+        console.log(JSON.stringify(summary, null, 2));
+        return 0;
+      }
+      renderFleetSummary(summary);
+      return 0;
+    }
     const rows = readPlane.runSummaries({
       cwd,
       order: "newest",
@@ -840,6 +855,38 @@ export function lsCommand(opts: LsOptions): Promise<number> {
     }
     return 0;
   });
+}
+
+/** Render the `--summary` fleet rollup: a status-count line, a per-workflow
+ *  table, and the total in-flight (non-terminal) cost. */
+function renderFleetSummary(s: FleetSummary): void {
+  if (s.totalRuns === 0) {
+    console.log(chalk.dim("ls --summary: no runs"));
+    return;
+  }
+
+  const statusLine = RUN_STATUSES.filter((st) => s.statusCounts[st] > 0)
+    .map((st) => `${st}:${chalk.cyan(s.statusCounts[st])}`)
+    .join("  ");
+  console.log(`${chalk.dim("status")}  ${statusLine}  ${chalk.dim(`(${s.totalRuns} total)`)}`);
+
+  if (s.workflows.length > 0) {
+    const nameW = Math.max(8, ...s.workflows.map((w) => w.workflow.length));
+    console.log(
+      chalk.dim(
+        `${"workflow".padEnd(nameW)}  ${"running".padStart(7)}  ${"done".padStart(4)}  ${"failed".padStart(6)}`,
+      ),
+    );
+    for (const w of s.workflows) {
+      console.log(
+        `${w.workflow.padEnd(nameW)}  ${String(w.running).padStart(7)}  ${String(w.done).padStart(4)}  ${String(
+          w.failed,
+        ).padStart(6)}`,
+      );
+    }
+  }
+
+  console.log(`${chalk.dim("in-flight cost")}  $${s.inFlightCostUsd.toFixed(4)}`);
 }
 
 export interface DiffOptions extends DiscoveryOpts {
