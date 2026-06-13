@@ -7,7 +7,13 @@
 // appear; with none the run sits queued and this waits (Ctrl-C to stop).
 
 import type { StoredEvent } from "@fragua/store";
-import type { HaltReason, QuarantineReason } from "@fragua/types";
+import {
+  AUTO_WAKE_PAUSE_REASONS,
+  type FactEvent,
+  type HaltReason,
+  type PauseReason,
+  type QuarantineReason,
+} from "@fragua/types";
 import chalk from "chalk";
 import { cliExitCode } from "./cli-exit.ts";
 import { humanizeRoute, pickRoute } from "./route-picker.ts";
@@ -19,13 +25,34 @@ const BATCH = 500;
 /** The HITL picker, injectable so tests can drive the gate without a TTY. */
 type RoutePicker = typeof pickRoute;
 
-const TERMINAL_TYPES = new Set<string>([
+// Typed as the FactEvent union so the compiler rejects a stale literal — the
+// unguarded `Set<string>` here is exactly the enum-consumer footgun (AGENTS.md).
+// `fact.run_paused` is conditionally terminal (operator reasons stop; auto-wake
+// reasons continue), so it's handled explicitly in the loop, not via this set.
+const TERMINAL_TYPES = new Set<FactEvent["type"]>([
   "fact.run_completed",
   "fact.run_halted",
   "fact.run_cancelled",
   "fact.run_paused_human",
   "fact.run_quarantined",
 ]);
+
+const isTerminalType = (type: string): boolean => TERMINAL_TYPES.has(type as FactEvent["type"]);
+
+/** Per non-auto-wake pause reason: the verb an operator runs to unblock, shown
+ * after the structural pause render so a followed stop is self-documenting. */
+const PAUSE_HINTS: Record<Exclude<PauseReason, "provider_retry" | "handler_retry" | "timeout_retry">, string> = {
+  operator: "resume with `fragua runs resume <run>`",
+  provider_error: "fix creds, then `fragua runs resume <run>`",
+  payment_required: "top up the provider, then `fragua runs resume <run>`",
+  provider_exhausted: "switch provider / wait, then `fragua runs resume <run>`",
+  engine_incompatible: "run a compatible daemon build, then `fragua runs resume <run>`",
+  budget: "raise the cap with `fragua runs budget <run> ...`, then `fragua runs resume <run>`",
+  max_retries: "grant retries with `fragua runs max-retries <run> ...`, then `fragua runs resume <run>`",
+  goal_gate: "grant cycles with `fragua runs goal-gate <run> ...`, then `fragua runs resume <run>`",
+  max_loops: "raise the ceiling with `fragua runs max-loops <run> ...`, then `fragua runs resume <run>`",
+  abort_loop: "investigate, then `fragua runs resume <run>`",
+};
 
 /** A terminal (or unanswered-HITL) event → process exit code, through the
  * shared `cliExitCode` map. The reason rides on the fact's payload. */
@@ -40,6 +67,8 @@ function followExitCode(ev: StoredEvent): number {
       return cliExitCode("quarantined", reason ? { quarantine: reason as QuarantineReason } : {});
     case "fact.run_paused_human":
       return cliExitCode("paused_human");
+    case "fact.run_paused":
+      return cliExitCode("paused", reason ? { pause: reason as PauseReason } : {});
     default:
       return cliExitCode("completed"); // fact.run_completed
   }
@@ -70,7 +99,15 @@ export async function followRun(
         // exit `needsHuman`, not 0, so a script doesn't read it as success.
         return followExitCode(ev);
       }
-      if (TERMINAL_TYPES.has(ev.type)) {
+      if (ev.type === "fact.run_paused") {
+        const reason = (ev.payload as { reason?: PauseReason }).reason;
+        // Auto-wake reasons: the daemon owes a clock tick and will resume on
+        // its own — keep following the retry rather than exiting.
+        if (reason && AUTO_WAKE_PAUSE_REASONS.has(reason)) continue;
+        // Operator-action pause: the run needs a human to steer. Exit non-zero.
+        return followExitCode(ev);
+      }
+      if (isTerminalType(ev.type)) {
         return followExitCode(ev);
       }
     }
@@ -91,7 +128,7 @@ async function pollUntilResumed(
 ): Promise<void> {
   while (!signal.aborted) {
     for (const ev of client.readPlane.eventsSince(runId, sinceSeq, BATCH)) {
-      if (ev.type === "fact.run_resumed" || (TERMINAL_TYPES.has(ev.type) && ev.type !== "fact.run_paused_human")) {
+      if (ev.type === "fact.run_resumed" || (isTerminalType(ev.type) && ev.type !== "fact.run_paused_human")) {
         return;
       }
     }
@@ -162,6 +199,27 @@ export function renderEvent(ev: StoredEvent): void {
     console.log(
       `${chalk.dim(`[${ev.seq}]`)} ${chalk.yellow(`⚠ ${ev.type}`)} ` +
         chalk.yellow(`${pct} of ${scope}:${metric} budget (actual ${p.actual ?? "?"}, limit ${p.limit ?? "?"})`),
+    );
+    return;
+  }
+  if (ev.type === "fact.run_paused") {
+    const p = ev.payload as { reason?: PauseReason; nodeId?: string; resumeAt?: number; attempt?: number };
+    const reason = p.reason ?? "operator";
+    if (AUTO_WAKE_PAUSE_REASONS.has(reason)) {
+      const secs = typeof p.resumeAt === "number" ? Math.max(0, Math.round((p.resumeAt - Date.now()) / 1000)) : null;
+      const when = secs === null ? "shortly" : `in ~${secs}s`;
+      const attempt = typeof p.attempt === "number" ? ` (attempt ${p.attempt})` : "";
+      console.log(
+        `${chalk.dim(`[${ev.seq}]`)} ${chalk.yellow(`⏳ ${ev.type}`)} ` +
+          chalk.yellow(`auto-retry ${reason}${attempt} — resuming ${when}`),
+      );
+      return;
+    }
+    const hint = PAUSE_HINTS[reason as keyof typeof PAUSE_HINTS] ?? "`fragua runs resume <run>`";
+    console.log(
+      `${chalk.dim(`[${ev.seq}]`)} ${chalk.red(`⏸ ${ev.type}`)} ` +
+        chalk.red(`paused: ${reason}${p.nodeId ? ` @ ${p.nodeId}` : ""}`) +
+        chalk.dim(` — ${hint}`),
     );
     return;
   }

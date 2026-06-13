@@ -59,6 +59,33 @@ describe("followRun — startCursor", () => {
   });
 });
 
+describe("followRun — non-human pause", () => {
+  test("renders fact.run_paused{budget} and exits non-zero instead of hanging", async () => {
+    const { client } = fakeClient([
+      ev(1, "fact.run_started", {}),
+      ev(2, "fact.run_paused", { reason: "budget", nodeId: "n", scope: "run", metric: "cost", limit: 1, actual: 2 }),
+    ]);
+
+    const code = await followRun(client, RUN_ID);
+
+    expect(code).toBe(cliExitCode("paused", { pause: "budget" }));
+    expect(code).not.toBe(0);
+  }, 3000);
+
+  test("continues following on an auto-wake pause (timeout_retry) until the run resolves", async () => {
+    const { client } = fakeClient([
+      ev(1, "fact.run_started", {}),
+      ev(2, "fact.run_paused", { reason: "timeout_retry", nodeId: "n", resumeAt: Date.now() + 1000, attempt: 1 }),
+      ev(3, "fact.run_resumed", {}),
+      ev(4, "fact.run_completed", {}),
+    ]);
+
+    const code = await followRun(client, RUN_ID);
+
+    expect(code).toBe(cliExitCode("completed")); // never exited on the pause
+  }, 3000);
+});
+
 describe("followRun — HITL gate answered elsewhere (#33)", () => {
   let savedTTY: unknown;
   beforeEach(() => {
