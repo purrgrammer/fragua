@@ -2,7 +2,7 @@
 // Matrix: dirt-only / commits-only / both × target-at-base / moved /
 // conflict, plus author + message preservation and "untouched on conflict".
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAccept, applyDiscard, defaultGitExec, type GitExec, type RunActionGate } from "../src/run-actions.ts";
@@ -185,6 +185,61 @@ describe("applyAccept", () => {
     const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("no_work");
+  });
+});
+
+describe("applyAccept --autostash", () => {
+  /** Dirty the operator tree in a file the run never touches. */
+  const dirtyUnrelated = (cwd: string) => writeFileSync(join(cwd, "unrelated.txt"), "operator's own edit\n");
+  const stashCount = async (cwd: string) => (await git(cwd, ["stash", "list"])).stdout.trim();
+
+  test("without the flag, an unrelated dirty file still refuses dirty_tree", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false);
+    dirtyUnrelated(cwd);
+    const r = await applyAccept(git, gate(cwd, base));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("dirty_tree");
+    // The operator's file is left exactly as it was.
+    expect((await git(cwd, ["show", ":unrelated.txt"])).exitCode).not.toBe(0); // never staged
+    expect(await staged(cwd)).toBe("");
+  });
+
+  test("with the flag, lands the run and restores the unrelated dirty file", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false);
+    dirtyUnrelated(cwd);
+    const r = await applyAccept(git, gate(cwd, base), { autostash: true });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.stashPopConflict ?? false).toBe(false);
+    expect(await has(cwd, "L02-RUN")).toBe(true); // run landed on HEAD
+    // The unrelated dirt is back in the working tree, and no stash lingers.
+    expect(readFileSync(join(cwd, "unrelated.txt"), "utf8")).toBe("operator's own edit\n");
+    expect(await stashCount(cwd)).toBe("");
+  });
+
+  test("with the flag, a conflict refusal still restores the dirt", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false);
+    await moveTarget(cwd, "L02"); // HEAD now conflicts with the run's commit
+    dirtyUnrelated(cwd);
+    const r = await applyAccept(git, gate(cwd, base), { autostash: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("conflict");
+    expect(readFileSync(join(cwd, "unrelated.txt"), "utf8")).toBe("operator's own edit\n");
+    expect(await stashCount(cwd)).toBe("");
+  });
+
+  test("with the flag, a pop conflict keeps the stash and reports it", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false); // run lands an edit at L02
+    // Operator dirt on the SAME line the run lands → the pop can't reapply.
+    writeFileSync(join(cwd, "f.txt"), lines().replace("L02\n", "L02-LOCAL\n"));
+    const r = await applyAccept(git, gate(cwd, base), { autostash: true });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.stashPopConflict).toBe(true);
+    // The stash is preserved, not dropped — the operator can resolve it.
+    expect(await stashCount(cwd)).not.toBe("");
   });
 });
 

@@ -10,6 +10,13 @@ guarantee.
 
 ### Added
 
+- `fragua runs accept --autostash` lands a run even when the operator's working
+  tree is dirty only in files the run doesn't touch. It stashes the unrelated
+  changes (`git stash push --include-untracked`) before the apply and restores
+  them after — on success and on a conflict refusal — mirroring
+  `git rebase --autostash`. Without the flag accept still refuses a dirty tree.
+  If the restore conflicts with the just-landed change the stash is kept (not
+  dropped) and accept reports it.
 - `hello-world` starter workflow: a provider-neutral smoke test that pins no
   `provider:` / `model:`, demonstrating that a workflow which omits the provider
   runs on whatever credential is configured (workflow `defaults:` → config

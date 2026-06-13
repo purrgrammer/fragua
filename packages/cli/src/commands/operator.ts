@@ -86,6 +86,7 @@ export function discardCommand(opts: DiscardOptions): Promise<number> {
 
 export interface AcceptOptions extends DiscoveryOpts {
   runId: string;
+  autostash?: boolean;
 }
 
 export function acceptCommand(opts: AcceptOptions): Promise<number> {
@@ -95,7 +96,7 @@ export function acceptCommand(opts: AcceptOptions): Promise<number> {
       console.error(chalk.red("accept: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    const res = await applyAccept(defaultGitExec, gate);
+    const res = await applyAccept(defaultGitExec, gate, { autostash: opts.autostash === true });
     if (!res.ok) {
       console.error(chalk.red(`accept: ${res.detail}`) + chalk.dim(` [${res.reason}]`));
       return 1;
@@ -103,6 +104,12 @@ export function acceptCommand(opts: AcceptOptions): Promise<number> {
     plane.commit(opts.runId, plane.buildAcceptRun(res));
     const tail = res.tailStaged ? "; tail staged — `git commit` when ready" : "";
     console.log(chalk.green("accepted") + chalk.dim(` (run ${opts.runId}, replayed ${res.replayed}${tail})`));
+    if (res.stashPopConflict === true) {
+      console.warn(
+        chalk.yellow("accept: autostash pop conflicted with the landed change") +
+          chalk.dim(" — your changes are kept in `git stash`; resolve with `git stash pop`"),
+      );
+    }
     return 0;
   });
 }

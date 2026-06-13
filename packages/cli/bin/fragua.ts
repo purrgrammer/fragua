@@ -561,7 +561,7 @@ function runsHelp(): void {
   console.log(`fragua runs <verb> <runId> — operate on an existing run
 
   Disposition (terminal runs with recoverable work):
-    accept  <id>                      replay the run's commits onto your branch + stage the tail to commit
+    accept  <id> [--autostash]        replay the run's commits onto your branch + stage the tail to commit
     discard <id>                      drop the run's fragua refs
     diff    <id> [--against <ref>] [--snap <idx>] [--path <p>]  print the snapshot diff
 
@@ -611,6 +611,7 @@ function runsHelp(): void {
 cli
   .command("runs [action] [runId] [arg]", "Operate on an existing run (run without args for help)")
   .option("--against <ref>", "diff: base | previous | <eventIdx> (default base)")
+  .option("--autostash", "accept: stash unrelated working-tree changes around the apply, then restore them")
   .option("--snap <eventIdx>", "diff: snapshot to show (default: latest)")
   .option("--path <path>", "diff: restrict to a repo-relative path")
   .option("--route <route>", "respond: HITL route (omit for interactive)")
@@ -696,7 +697,13 @@ cli
           );
           break;
         case "accept":
-          process.exit(await acceptCommand({ runId: needId(), ...discovery(options) }));
+          process.exit(
+            await acceptCommand({
+              runId: needId(),
+              ...(options["autostash"] === true ? { autostash: true } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         case "discard":
           process.exit(await discardCommand({ runId: needId(), ...discovery(options) }));

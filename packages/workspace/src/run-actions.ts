@@ -84,8 +84,16 @@ function checkGate(
 }
 
 export type AcceptResult =
-  | { ok: true; sha: string; replayed: number; tailStaged: boolean }
+  | { ok: true; sha: string; replayed: number; tailStaged: boolean; stashPopConflict?: boolean }
   | { ok: false; reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict"; detail: string };
+
+/** Knobs on the accept action. `autostash` mirrors `git rebase --autostash`:
+ * stash the operator's unrelated working-tree changes before the apply and
+ * restore them after — so a tree dirty only in files the run doesn't touch no
+ * longer refuses with `dirty_tree`. Off by default (behavior unchanged). */
+export interface AcceptActionOptions {
+  autostash?: boolean;
+}
 
 /**
  * Land a terminal run's work on the operator's current branch (HEAD in `cwd`).
@@ -104,12 +112,45 @@ export type AcceptResult =
  * cherry-pick (each against its own parent), the tail via `apply --3way`
  * against the snapshot's base blobs. A genuine textual conflict still rolls
  * back and refuses with `conflict`.
+ *
+ * With `options.autostash`, the operator's unrelated working-tree changes are
+ * stashed (`git stash push --include-untracked`) before the apply and popped
+ * after — on success AND on a refusal, so the stash is always restored. If the
+ * pop itself conflicts with the just-landed change the stash is left intact
+ * (not dropped) and the success result carries `stashPopConflict:true`.
  */
-export async function applyAccept(git: GitExec, gate: RunActionGate): Promise<AcceptResult> {
+export async function applyAccept(
+  git: GitExec,
+  gate: RunActionGate,
+  options?: AcceptActionOptions,
+): Promise<AcceptResult> {
   const g = checkGate(gate);
   if (!g.ok) return g;
-  const { runId, baseGitSha } = gate;
   const cwd = g.cwd;
+  if (options?.autostash !== true) return acceptInner(git, gate, cwd);
+
+  // Autostash: park unrelated dirt so the clean-tree gate doesn't refuse, then
+  // restore it whatever the outcome. `stash push` is a no-op (exit 0, no new
+  // stash) on a clean tree, so compare refs/stash to know if we actually saved.
+  const before = await revParse(git, cwd, "refs/stash");
+  await git(cwd, ["stash", "push", "--include-untracked", "--quiet"]);
+  const after = await revParse(git, cwd, "refs/stash");
+  const stashed = after != null && after !== before;
+
+  const result = await acceptInner(git, gate, cwd);
+  if (!stashed) return result;
+
+  const pop = await git(cwd, ["stash", "pop"]);
+  if (pop.exitCode !== 0 && result.ok) {
+    // The pop collides with the change we just landed. Don't drop the stash —
+    // the operator's work would be lost. Leave it on the stack and flag it.
+    return { ...result, stashPopConflict: true };
+  }
+  return result;
+}
+
+async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Promise<AcceptResult> {
+  const { runId, baseGitSha } = gate;
   const snapRef = `refs/fragua/snapshots/${runId}`;
 
   const snapCommit = await revParse(git, cwd, snapRef);

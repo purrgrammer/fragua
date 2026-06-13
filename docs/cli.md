@@ -68,7 +68,8 @@ fragua runs wait <id...> | --workflow <name> | --all-running         # block unt
 
 # disposition — nothing touches your git until you ask
 fragua runs diff    <id> [--against base|previous|<idx>] [--snap <idx>] [--path <p>]
-fragua runs accept  <id>                          # replay the run's commits onto your branch + stage the tail
+fragua runs accept  <id> [--autostash]            # replay the run's commits onto your branch + stage the tail
+                                                  #   --autostash: stash unrelated dirty files around the apply, then restore them (mirrors git rebase --autostash)
 fragua runs discard <id>                          # drop the run's fragua refs
 
 # lifecycle + control
