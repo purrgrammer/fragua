@@ -723,6 +723,140 @@ steps:
     });
   });
 
+  describe("RunHaltedNotice — halted-run banner", () => {
+    it("renders the read-only notice with reason + detail for a halted run", async () => {
+      const detail: RunDetailT = {
+        runId: "run-halted",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "fail",
+        runStatus: "halted",
+        lastEventSeq: 4,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        haltReason: "error",
+        haltDetail: "handler threw: boom",
+      };
+      const { client, mock } = prepare("run-halted", detail);
+      try {
+        const { container } = mount(client, "/runs/run-halted");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-halted-notice")).toBeTruthy();
+        });
+        const notice = q.getByTestId("run-halted-notice");
+        expect(notice.getAttribute("data-halt-reason")).toBe("error");
+        expect(notice.textContent).toContain("unrecoverable error");
+        expect(q.getByTestId("run-halted-message").textContent).toContain("handler threw: boom");
+        // Read-only: no action buttons inside the notice.
+        expect(notice.querySelector("button")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("renders the worktree_error label for a provision-failed halt", async () => {
+      const detail: RunDetailT = {
+        runId: "run-worktree-fail",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "fail",
+        runStatus: "halted",
+        lastEventSeq: 4,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        haltReason: "worktree_error",
+        haltDetail: "worktree_provision_failed: no disk space",
+      };
+      const { client, mock } = prepare("run-worktree-fail", detail);
+      try {
+        const { container } = mount(client, "/runs/run-worktree-fail");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-halted-notice")).toBeTruthy();
+        });
+        const notice = q.getByTestId("run-halted-notice");
+        expect(notice.getAttribute("data-halt-reason")).toBe("worktree_error");
+        expect(notice.textContent).toContain("worktree provision failed");
+        expect(q.getByTestId("run-halted-message").textContent).toContain("worktree_provision_failed: no disk space");
+      } finally {
+        mock.restore();
+        cleanup();
+      }
+    });
+
+    it("does not render the notice for running or paused runs", async () => {
+      for (const [id, status, runStatus] of [
+        ["run-not-halted-run", "running", "running"],
+        ["run-not-halted-paused", "paused", "paused"],
+      ] as const) {
+        const detail: RunDetailT = {
+          runId: id,
+          startedAt: "2024-01-01T00:00:00Z",
+          status,
+          runStatus,
+          lastEventSeq: 1,
+          nodes: [],
+          selectedEdges: [],
+          costUsd: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+        const { client, mock } = prepare(id, detail);
+        try {
+          const { container } = mount(client, `/runs/${id}`);
+          const q = within(container);
+          await waitFor(() => {
+            expect(q.getByTestId("detail-status")).toBeTruthy();
+          });
+          expect(q.queryByTestId("run-halted-notice")).toBeNull();
+        } finally {
+          mock.restore();
+          cleanup();
+        }
+      }
+    });
+
+    it("shows the notice without a refetch when fact.run_halted arrives via SSE", async () => {
+      const detail: RunDetailT = {
+        runId: "run-live-halt",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "running",
+        runStatus: "running",
+        lastEventSeq: 5,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      const { client, mock } = prepare("run-live-halt", detail);
+      const fakeEs = installFakeEventSource();
+      try {
+        const { container } = mount(client, "/runs/run-live-halt");
+        const q = within(container);
+        await waitFor(() => expect(fakeEs.getEs()).toBeTruthy());
+        expect(q.queryByTestId("run-halted-notice")).toBeNull();
+        await act(async () => {
+          fakeEs.getEs()!.dispatch("fact.run_halted", { reason: "budget", detail: "run cost cap reached" }, 6);
+        });
+        await waitFor(() => {
+          expect(q.getByTestId("run-halted-notice")).toBeTruthy();
+        });
+        const notice = q.getByTestId("run-halted-notice");
+        expect(notice.getAttribute("data-halt-reason")).toBe("budget");
+        expect(q.getByTestId("run-halted-message").textContent).toContain("run cost cap reached");
+      } finally {
+        mock.restore();
+        fakeEs.restore();
+      }
+    });
+  });
+
   describe("RunDetail — Diff tab", () => {
     const snapshots = [
       {

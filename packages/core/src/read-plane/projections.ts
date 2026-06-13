@@ -6,7 +6,8 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
+import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
+import { HALT_REASONS, type HaltReason } from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
 import type { Graph } from "../types/graph.ts";
@@ -18,6 +19,11 @@ export function mapStatus(status: RunStatus): UiStatus {
   switch (status) {
     case "completed":
       return "success";
+    // Intentional spelling split: the raw RunStatus literal is the
+    // double-l `cancelled` (British; the persisted/schema value, never
+    // rename it), while the UI-facing UiStatus is the single-l `canceled`
+    // (American; what the web renders). The two layers spell it differently
+    // on purpose — this arm is the seam between them.
     case "cancelled":
       return "canceled";
     case "halted":
@@ -180,6 +186,22 @@ export function runStateToDetail(
   // keep its operate controls.
   if (state.imported === true) detail.imported = true;
 
+  if (state.status === "halted") {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i]!;
+      if (ev.type === "fact.run_halted") {
+        const p = ev.payload as { reason?: unknown; detail?: unknown; occContext?: unknown } | null | undefined;
+        if (typeof p?.reason === "string" && (HALT_REASONS as readonly string[]).includes(p.reason)) {
+          detail.haltReason = p.reason as HaltReason;
+        }
+        if (typeof p?.detail === "string") detail.haltDetail = p.detail;
+        const haltContext = parseHaltContext(p?.occContext);
+        if (haltContext !== undefined) detail.haltContext = haltContext;
+        break;
+      }
+    }
+  }
+
   if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
@@ -222,7 +244,46 @@ export function runStateToDetail(
   const decisions = collectHitlDecisions(events);
   if (decisions !== undefined) detail.hitlDecisions = decisions;
 
+  const requeues = collectCrashRequeues(events);
+  if (requeues.length > 0) detail.crashRequeues = requeues;
+
   return detail;
+}
+
+/** Narrow a halt fact's `occContext` blob into the typed `haltContext`. Every
+ * field is defended individually so a partial or malformed payload still
+ * projects what it carries; returns `undefined` when nothing survives. */
+function parseHaltContext(raw: unknown): RunDetail["haltContext"] {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const p = raw as {
+    count?: unknown;
+    nodeId?: unknown;
+    iteration?: unknown;
+    lastVersion?: unknown;
+    attemptedFactType?: unknown;
+  };
+  const out: NonNullable<RunDetail["haltContext"]> = {};
+  if (typeof p.count === "number" && Number.isFinite(p.count)) out.count = p.count;
+  if (typeof p.nodeId === "string") out.nodeId = p.nodeId;
+  if (typeof p.iteration === "number" && Number.isFinite(p.iteration)) out.iteration = p.iteration;
+  if (typeof p.lastVersion === "number" && Number.isFinite(p.lastVersion)) out.lastVersion = p.lastVersion;
+  if (typeof p.attemptedFactType === "string") out.attemptedFactType = p.attemptedFactType;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** One entry per `fact.run_requeued_after_crash`, in log order. Null-payload-
+ * safe: a corrupted store row must not throw the projection. */
+function collectCrashRequeues(events: StoredEvent[]): NonNullable<RunDetail["crashRequeues"]> {
+  const out: NonNullable<RunDetail["crashRequeues"]> = [];
+  for (const ev of events) {
+    if (ev.type !== "fact.run_requeued_after_crash") continue;
+    const p = ev.payload as { prevNode?: unknown; lastAliveAt?: unknown } | null | undefined;
+    const entry: NonNullable<RunDetail["crashRequeues"]>[number] = { at: ev.ts };
+    if (typeof p?.prevNode === "string") entry.prevNode = p.prevNode;
+    if (typeof p?.lastAliveAt === "number" && Number.isFinite(p.lastAliveAt)) entry.lastAliveAt = p.lastAliveAt;
+    out.push(entry);
+  }
+  return out;
 }
 
 // Workflow source is sha-pinned at enqueue and immutable, but runStateToDetail
@@ -542,8 +603,8 @@ export { deriveNodeStates, deriveSelectedEdges };
 
 export type ListRunsOpts = ListRunIdsOpts;
 
-/** Wire to `IEventStore.listRunIds` — kept for callers that already
+/** Wire to `IEventReader.listRunIds` — kept for callers that already
  *  imported `listRuns`. SQL pushdown lives in the store. */
-export function listRuns(store: IEventStore, opts: ListRunsOpts = {}): string[] {
+export function listRuns(store: Pick<IEventReader, "listRunIds">, opts: ListRunsOpts = {}): string[] {
   return store.listRunIds(opts);
 }

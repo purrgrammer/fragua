@@ -2,7 +2,7 @@
 // Matrix: dirt-only / commits-only / both × target-at-base / moved /
 // conflict, plus author + message preservation and "untouched on conflict".
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAccept, applyDiscard, defaultGitExec, type GitExec, type RunActionGate } from "../src/run-actions.ts";
@@ -185,6 +185,154 @@ describe("applyAccept", () => {
     const r = await applyAccept(git, gate(cwd, base));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("no_work");
+  });
+});
+
+describe("applyAccept --autostash", () => {
+  /** Dirty the operator tree in a file the run never touches. */
+  const dirtyUnrelated = (cwd: string) => writeFileSync(join(cwd, "unrelated.txt"), "operator's own edit\n");
+  const stashCount = async (cwd: string) => (await git(cwd, ["stash", "list"])).stdout.trim();
+
+  test("without the flag, an unrelated dirty file still refuses dirty_tree", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false);
+    dirtyUnrelated(cwd);
+    const r = await applyAccept(git, gate(cwd, base));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("dirty_tree");
+    // The operator's file is left exactly as it was.
+    expect((await git(cwd, ["show", ":unrelated.txt"])).exitCode).not.toBe(0); // never staged
+    expect(await staged(cwd)).toBe("");
+  });
+
+  test("with the flag, lands the run and restores the unrelated dirty file", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false);
+    dirtyUnrelated(cwd);
+    const r = await applyAccept(git, gate(cwd, base), { autostash: true });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.stashPopConflict ?? false).toBe(false);
+    expect(await has(cwd, "L02-RUN")).toBe(true); // run landed on HEAD
+    // The unrelated dirt is back in the working tree, and no stash lingers.
+    expect(readFileSync(join(cwd, "unrelated.txt"), "utf8")).toBe("operator's own edit\n");
+    expect(await stashCount(cwd)).toBe("");
+  });
+
+  test("with the flag, a conflict refusal still restores the dirt", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false);
+    await moveTarget(cwd, "L02"); // HEAD now conflicts with the run's commit
+    dirtyUnrelated(cwd);
+    const r = await applyAccept(git, gate(cwd, base), { autostash: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("conflict");
+    expect(readFileSync(join(cwd, "unrelated.txt"), "utf8")).toBe("operator's own edit\n");
+    expect(await stashCount(cwd)).toBe("");
+  });
+
+  test("with the flag, a pop conflict keeps the stash and reports it", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false); // run lands an edit at L02
+    // Operator dirt on the SAME line the run lands → the pop can't reapply.
+    writeFileSync(join(cwd, "f.txt"), lines().replace("L02\n", "L02-LOCAL\n"));
+    const r = await applyAccept(git, gate(cwd, base), { autostash: true });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.stashPopConflict).toBe(true);
+    // The stash is preserved, not dropped — the operator can resolve it.
+    expect(await stashCount(cwd)).not.toBe("");
+  });
+});
+
+describe("applyAccept across a squash-merged base (base not ancestor of HEAD)", () => {
+  /** main at BASE → feature branch gains F1 (edits L02) → run refs created off
+   * F1 (run commit edits L08) → feature gains F2 (re-edits L02) → feature is
+   * SQUASH-merged to main and main is checked out. The run's base (F1) is no
+   * longer an ancestor of HEAD, but the run's actual delta (F1..tip = L08
+   * only) applies cleanly onto HEAD. */
+  async function setupSquashScenario(opts: { mainConflictsWithRun: boolean; dirtOnly?: boolean }): Promise<{
+    cwd: string;
+    runBase: string;
+  }> {
+    const { cwd, base } = await setupRepo();
+    const write = (content: string) => writeFileSync(join(cwd, "f.txt"), content);
+
+    await must(cwd, ["checkout", "-qb", "feat", base]);
+    let featContent = lines().replace("L02\n", "L02-F1\n");
+    write(featContent);
+    await must(cwd, ["commit", "-qam", "feat: F1"]);
+    const runBase = await must(cwd, ["rev-parse", "HEAD"]);
+
+    // Run refs off F1: the run edits L08 — as a workflow commit, or as
+    // uncommitted dirt (snapshot-only) when dirtOnly.
+    const wt = mkdtempSync(join(tmpdir(), "ra-wt-"));
+    dirs.push(wt);
+    await must(cwd, ["worktree", "add", "-q", "--detach", wt, runBase]);
+    writeFileSync(join(wt, "f.txt"), featContent.replace("L08\n", "L08-RUN\n"));
+    if (!opts.dirtOnly) await must(wt, ["commit", "-qam", "[run] edit L08", "--author=Bot <bot@fragua>"]);
+    await must(wt, ["add", "-A"]);
+    const runHead = await must(wt, ["rev-parse", "HEAD"]);
+    const snTree = await must(wt, ["write-tree"]);
+    const snapCommit = await must(cwd, ["commit-tree", snTree, "-p", runHead, "-m", "fragua-snap"]);
+    await must(cwd, ["update-ref", `refs/fragua/snapshots/${RUN}`, snapCommit]);
+    if (!opts.dirtOnly) await must(cwd, ["update-ref", `refs/fragua/heads/${RUN}`, runHead]);
+    await must(cwd, ["worktree", "remove", "--force", wt]);
+
+    // Feature moves past the run's base, re-editing the line F1 touched.
+    featContent = featContent.replace("L02-F1\n", "L02-F2\n");
+    write(featContent);
+    await must(cwd, ["commit", "-qam", "feat: F2"]);
+
+    // Squash-merge feature to main: ancestry to F1 is broken.
+    await must(cwd, ["checkout", "-q", "main"]);
+    await must(cwd, ["merge", "--squash", "-q", "feat"]);
+    await must(cwd, ["commit", "-qm", "squash feat (PR 50)"]);
+
+    if (opts.mainConflictsWithRun) {
+      // A genuine textual conflict: main re-edits the run's line.
+      write(`${(await must(cwd, ["show", "HEAD:f.txt"])).replace("L08", "L08-MAIN")}\n`);
+      await must(cwd, ["commit", "-qam", "main edits L08"]);
+    }
+    return { cwd, runBase };
+  }
+
+  test("H. clean run delta lands despite the broken ancestry", async () => {
+    const { cwd, runBase } = await setupSquashScenario({ mainConflictsWithRun: false });
+    const r = await applyAccept(git, gate(cwd, runBase));
+    expect(r).toMatchObject({ ok: true, replayed: 1 });
+    expect(await has(cwd, "L08-RUN")).toBe(true); // the run's change landed
+    expect(await has(cwd, "L02-F2")).toBe(true); // squashed feature content kept
+  });
+
+  test("I. genuine textual conflict still refuses with [conflict], repo untouched", async () => {
+    const { cwd, runBase } = await setupSquashScenario({ mainConflictsWithRun: true });
+    const saved = await must(cwd, ["rev-parse", "HEAD"]);
+    const r = await applyAccept(git, gate(cwd, runBase));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("conflict");
+    expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(saved);
+    expect(await clean(cwd)).toBe(true);
+  });
+
+  test("J. dirt-only run: clean tail staged via 3-way despite the broken ancestry", async () => {
+    const { cwd, runBase } = await setupSquashScenario({ mainConflictsWithRun: false, dirtOnly: true });
+    const head = await must(cwd, ["rev-parse", "HEAD"]);
+    const r = await applyAccept(git, gate(cwd, runBase));
+    expect(r).toEqual({ ok: true, sha: head, replayed: 0, tailStaged: true });
+    expect(await staged(cwd)).toBe("f.txt");
+    const idx = await must(cwd, ["show", ":f.txt"]);
+    expect(idx.includes("L08-RUN")).toBe(true); // the run's dirt staged
+    expect(idx.includes("L02-F2")).toBe(true); // squashed feature content kept
+    expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(head); // no commit authored
+  });
+
+  test("K. dirt-only run: genuine conflict still refuses, repo untouched", async () => {
+    const { cwd, runBase } = await setupSquashScenario({ mainConflictsWithRun: true, dirtOnly: true });
+    const saved = await must(cwd, ["rev-parse", "HEAD"]);
+    const r = await applyAccept(git, gate(cwd, runBase));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("conflict");
+    expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(saved);
+    expect(await clean(cwd)).toBe(true);
   });
 });
 

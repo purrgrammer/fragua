@@ -6,7 +6,7 @@
 // the cross-cutting invariants.
 
 import { describe, expect, test } from "bun:test";
-import type { HaltReason, PauseReason, QuarantineReason, RunStatus } from "@fragua/types";
+import { HALT_REASONS, type HaltReason, type PauseReason, type QuarantineReason, type RunStatus } from "@fragua/types";
 import { CLI_EXIT, cliExitCode, HALT_EXIT, PAUSE_EXIT, QUARANTINE_EXIT } from "../src/cli-exit.ts";
 
 describe("cliExitCode — stop-state + reason → exit code", () => {
@@ -42,6 +42,7 @@ describe("cliExitCode — stop-state + reason → exit code", () => {
       "route_not_picked",
       "route_call_not_isolated",
       "edge_no_match",
+      "worktree_error",
     ];
     for (const r of reasons) expect(cliExitCode("halted", { halt: r })).toBe(HALT_EXIT[r]);
     expect(new Set(reasons.map((r) => HALT_EXIT[r])).size).toBe(reasons.length);
@@ -77,6 +78,13 @@ describe("cliExitCode — stop-state + reason → exit code", () => {
     const reasons: QuarantineReason[] = ["orphan_side_effect", "other"];
     for (const r of reasons) expect(cliExitCode("quarantined", { quarantine: r })).toBe(QUARANTINE_EXIT[r]);
     expect(new Set(reasons.map((r) => QUARANTINE_EXIT[r])).size).toBe(reasons.length);
+  });
+
+  test("HALT_EXIT keys are exactly the HaltReason literals", () => {
+    // `Record<HaltReason, number>` already makes a missing key a compile
+    // error; this runtime belt asserts against the real exported tuple so
+    // the enum-consumers sweep has one mechanized check per known site.
+    expect(new Set(Object.keys(HALT_EXIT))).toEqual(new Set(HALT_REASONS));
   });
 
   test("paused_human is a single code (no reason enum)", () => {

@@ -11,11 +11,12 @@
 // The supervisor owns no state of its own; it reads run_state and events and
 // trips controllers held by the abort registry.
 
-import type { IEventStore, StoredEvent } from "@fragua/store";
+import type { IDaemonCoordinator, IEventReader, StoredEvent } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
+import { sleep } from "./executor-helpers.ts";
 
 export interface SupervisorOpts {
-  store: IEventStore;
+  store: IEventReader & IDaemonCoordinator;
   registry: AbortRegistry;
   pid: number;
   shutdownSignal: AbortSignal;
@@ -156,21 +157,6 @@ export function startSupervisor(opts: SupervisorOpts): {
   })();
 
   return { promise };
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 function readSteerText(ev: StoredEvent): string | undefined {

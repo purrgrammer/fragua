@@ -13,8 +13,15 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import type { DiffRange, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
-import type { ArtifactScope, NarrowMessage, RunStatus, SqliteStore, StoredEvent } from "@fragua/store";
+import type { DiffRange, FleetSummary, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
+import {
+  type ArtifactScope,
+  type NarrowMessage,
+  RUN_STATUSES,
+  type RunStatus,
+  type SqliteStore,
+  type StoredEvent,
+} from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
 import chalk from "chalk";
 import { pickRoute } from "../route-picker.ts";
@@ -79,6 +86,7 @@ export function discardCommand(opts: DiscardOptions): Promise<number> {
 
 export interface AcceptOptions extends DiscoveryOpts {
   runId: string;
+  autostash?: boolean;
 }
 
 export function acceptCommand(opts: AcceptOptions): Promise<number> {
@@ -88,7 +96,7 @@ export function acceptCommand(opts: AcceptOptions): Promise<number> {
       console.error(chalk.red("accept: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    const res = await applyAccept(defaultGitExec, gate);
+    const res = await applyAccept(defaultGitExec, gate, { autostash: opts.autostash === true });
     if (!res.ok) {
       console.error(chalk.red(`accept: ${res.detail}`) + chalk.dim(` [${res.reason}]`));
       return 1;
@@ -96,6 +104,12 @@ export function acceptCommand(opts: AcceptOptions): Promise<number> {
     plane.commit(opts.runId, plane.buildAcceptRun(res));
     const tail = res.tailStaged ? "; tail staged — `git commit` when ready" : "";
     console.log(chalk.green("accepted") + chalk.dim(` (run ${opts.runId}, replayed ${res.replayed}${tail})`));
+    if (res.stashPopConflict === true) {
+      console.warn(
+        chalk.yellow("accept: autostash pop conflicted with the landed change") +
+          chalk.dim(" — your changes are kept in `git stash`; resolve with `git stash pop`"),
+      );
+    }
     return 0;
   });
 }
@@ -133,7 +147,41 @@ export interface InboxOptions extends DiscoveryOpts {
   json?: boolean;
 }
 
-const BLOCKED_STATUSES: RunStatus[] = ["paused_human", "paused", "paused_auto", "quarantined"];
+/** Statuses a run can sit in while waiting on the operator — the NEEDS INPUT
+ * section of the inbox. An intentional non-derivable subset of `RunStatus`
+ * (the complement is the unblocked set below); `satisfies` pins membership and
+ * the completeness check guarantees the two sets partition `RUN_STATUSES`, so
+ * a newly-added lifecycle literal can't silently fall through the inbox.
+ * Exported for the enum-consumer drift lint. */
+export const BLOCKED_STATUSES = [
+  "paused_human",
+  "paused",
+  "paused_auto",
+  "quarantined",
+] as const satisfies readonly RunStatus[];
+
+/** The complement of {@link BLOCKED_STATUSES}: statuses that never appear in
+ * the NEEDS INPUT section (in-flight or settled). Kept explicit so the
+ * completeness check can assert an exact partition of `RUN_STATUSES`. */
+export const UNBLOCKED_STATUSES = [
+  "queued",
+  "running",
+  "completed",
+  "cancelled",
+  "halted",
+] as const satisfies readonly RunStatus[];
+
+// Completeness: BLOCKED ⊎ UNBLOCKED must equal RUN_STATUSES exactly. A missing
+// literal means a lifecycle status that renders in neither inbox section.
+{
+  const partitioned = new Set<string>([...BLOCKED_STATUSES, ...UNBLOCKED_STATUSES]);
+  const missing = RUN_STATUSES.filter((s) => !partitioned.has(s));
+  if (missing.length > 0 || partitioned.size !== RUN_STATUSES.length) {
+    throw new Error(
+      `operator.ts BLOCKED_STATUSES/UNBLOCKED_STATUSES drifted from RUN_STATUSES: missing ${JSON.stringify(missing)}`,
+    );
+  }
+}
 
 /** Display label for a run, mirroring the web's `displayTitle` fallback
  * (RunRow.tsx): generated title → workflow name. `run_state.title` is only
@@ -169,7 +217,7 @@ export function inboxCommand(opts: InboxOptions): Promise<number> {
   const cwd = resolve(opts.cwd ?? process.cwd());
   return withStoreClient(opts, ({ readPlane }) => {
     const common = { cwd, order: "oldest" as const, ...(opts.limit != null ? { limit: opts.limit } : {}) };
-    const blocked = readPlane.runSummaries({ ...common, statuses: BLOCKED_STATUSES });
+    const blocked = readPlane.runSummaries({ ...common, statuses: [...BLOCKED_STATUSES] });
     const ready = readPlane.runSummaries({ ...common, inbox: "pending" });
     if (opts.json === true) {
       console.log(JSON.stringify({ needsInput: blocked, readyToLand: ready }, null, 2));
@@ -281,6 +329,15 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
     );
   }
 
+  // Crash requeues: the startup sweep requeued this run after a daemon died
+  // mid-dispatch — the "why did this run restart" line.
+  for (const e of events) {
+    if (e.type !== "fact.run_requeued_after_crash") continue;
+    const p = e.payload as { prevNode?: unknown } | null;
+    const prevNode = typeof p?.prevNode === "string" ? chalk.dim(` (was at node ${p.prevNode})`) : "";
+    console.log(chalk.yellow(`  requeued after daemon crash at ${new Date(e.ts).toISOString()}`) + prevNode);
+  }
+
   // The "why" for a blocked/terminal run — the last relevant fact.
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
@@ -302,6 +359,21 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
       break;
     }
   }
+
+  // Structured halt diagnostics from the read plane (e.g. occ_exhausted) — the
+  // operator shouldn't have to hand-parse the raw event for the why.
+  if (d.haltContext != null) {
+    const c = d.haltContext;
+    const parts: string[] = [];
+    if (c.nodeId != null) parts.push(`node ${c.nodeId}`);
+    if (c.iteration != null) parts.push(`iter ${c.iteration}`);
+    if (c.count != null && c.attemptedFactType != null) parts.push(`${c.count} conflicts on ${c.attemptedFactType}`);
+    else if (c.count != null) parts.push(`${c.count} conflicts`);
+    else if (c.attemptedFactType != null) parts.push(`on ${c.attemptedFactType}`);
+    if (c.lastVersion != null) parts.push(`v${c.lastVersion}`);
+    if (parts.length > 0) console.log(`  context:  ${chalk.dim(parts.join(" · "))}`);
+  }
+
   if (d.runStatus === "paused_human" && d.hitlLabel != null) {
     console.log(`  awaiting: ${chalk.yellow(d.hitlLabel)}`);
     console.log(`  routes:   ${(d.hitlOptions ?? []).join("  |  ")} ${chalk.dim("→ fragua runs respond")}`);
@@ -310,17 +382,31 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
 
 export interface TailOptions extends DiscoveryOpts {
   runId: string;
+  full?: boolean;
 }
 
+const TAIL_BACKFILL_LIMIT = 200;
+
 /** Tail an existing run's event log to terminal — the same live follow +
- * inline HITL picker `fragua run` uses, for a run you didn't just enqueue. */
+ * inline HITL picker `fragua run` uses, for a run you didn't just enqueue.
+ * Backfill is bounded to the last 200 events by default (`--full` replays
+ * the entire log); the follow loop then renders the window and goes live. */
 export function tailCommand(opts: TailOptions): Promise<number> {
   return withStoreClient(opts, (client) => {
     if (client.store.getState(opts.runId) == null) {
       console.error(chalk.red("tail: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    return followRun(client, opts.runId);
+    let startCursor = 0;
+    if (opts.full !== true) {
+      const back = client.readPlane.eventsTail(opts.runId, { limit: TAIL_BACKFILL_LIMIT }) ?? [];
+      if (back.length === TAIL_BACKFILL_LIMIT) {
+        console.error(chalk.dim(`(showing last ${TAIL_BACKFILL_LIMIT} events — --full for the entire log)`));
+      }
+      const first = back[0];
+      if (first != null) startCursor = first.seq - 1;
+    }
+    return followRun(client, opts.runId, pickRoute, startCursor);
   });
 }
 
@@ -555,6 +641,16 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
       console.error(chalk.red(`respond: unknown route "${route}" (expected one of: ${routes.join(", ")})`));
       return 1;
     }
+    if (routes.length === 0) {
+      // Fail-open is intentional (older event shapes carry no route enum),
+      // but the skip must be observable so an off-list route accepted here
+      // can be traced back when the daemon later halts the run on resume.
+      console.warn(
+        chalk.yellow(
+          `respond: human input accepted without route validation — no declared routes on the latest fact.run_paused_human (run=${opts.runId} route="${route}")`,
+        ),
+      );
+    }
     const body: { route: string; note?: string } = { route };
     if (opts.note != null && opts.note.length > 0) body.note = opts.note;
     const built = plane.buildHuman(body);
@@ -734,9 +830,11 @@ export interface LsOptions extends DiscoveryOpts {
   status?: string;
   limit?: number;
   json?: boolean;
+  summary?: boolean;
 }
 
-/** List runs (optionally filtered by lifecycle status). */
+/** List runs (optionally filtered by lifecycle status). With `--summary`,
+ *  print a fleet rollup instead of the per-run list. */
 export function lsCommand(opts: LsOptions): Promise<number> {
   const cwd = resolve(opts.cwd ?? process.cwd());
   const statuses =
@@ -747,6 +845,19 @@ export function lsCommand(opts: LsOptions): Promise<number> {
           .filter((s) => s.length > 0) as RunStatus[])
       : undefined;
   return withStoreClient(opts, ({ readPlane }) => {
+    if (opts.summary === true) {
+      const summary = readPlane.fleetSummary({
+        cwd,
+        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(statuses !== undefined ? { statuses } : {}),
+      });
+      if (opts.json === true) {
+        console.log(JSON.stringify(summary, null, 2));
+        return 0;
+      }
+      renderFleetSummary(summary);
+      return 0;
+    }
     const rows = readPlane.runSummaries({
       cwd,
       order: "newest",
@@ -766,6 +877,38 @@ export function lsCommand(opts: LsOptions): Promise<number> {
     }
     return 0;
   });
+}
+
+/** Render the `--summary` fleet rollup: a status-count line, a per-workflow
+ *  table, and the total in-flight (non-terminal) cost. */
+function renderFleetSummary(s: FleetSummary): void {
+  if (s.totalRuns === 0) {
+    console.log(chalk.dim("ls --summary: no runs"));
+    return;
+  }
+
+  const statusLine = RUN_STATUSES.filter((st) => s.statusCounts[st] > 0)
+    .map((st) => `${st}:${chalk.cyan(s.statusCounts[st])}`)
+    .join("  ");
+  console.log(`${chalk.dim("status")}  ${statusLine}  ${chalk.dim(`(${s.totalRuns} total)`)}`);
+
+  if (s.workflows.length > 0) {
+    const nameW = Math.max(8, ...s.workflows.map((w) => w.workflow.length));
+    console.log(
+      chalk.dim(
+        `${"workflow".padEnd(nameW)}  ${"running".padStart(7)}  ${"done".padStart(4)}  ${"failed".padStart(6)}`,
+      ),
+    );
+    for (const w of s.workflows) {
+      console.log(
+        `${w.workflow.padEnd(nameW)}  ${String(w.running).padStart(7)}  ${String(w.done).padStart(4)}  ${String(
+          w.failed,
+        ).padStart(6)}`,
+      );
+    }
+  }
+
+  console.log(`${chalk.dim("in-flight cost")}  $${s.inFlightCostUsd.toFixed(4)}`);
 }
 
 export interface DiffOptions extends DiscoveryOpts {
@@ -828,24 +971,29 @@ export interface EventsOptions extends DiscoveryOpts {
   runId: string;
   type?: string;
   limit?: number;
+  since?: number;
   json?: boolean;
 }
 
-/** Dump a run's event log. `--type <prefix>` filters by `type.startsWith`,
- * `--limit N` keeps the last N (default 50), printed oldest-first. `--json`
- * emits the raw `StoredEvent[]` with full payloads (the operate skill's
- * forensics reference mines these); the default render reuses the live-follow
- * `[seq] type payload` line. */
+/** Dump a run's event log. `--type <prefix>` filters by type prefix,
+ * `--limit N` keeps the last N (default 50), `--since <seq>` keeps events
+ * with seq strictly greater (unbounded unless `--limit` is also given),
+ * printed oldest-first. The bound is a SQL-level read — long runs never
+ * hydrate the full log. `--json` emits the raw `StoredEvent[]` with full
+ * payloads (the operate skill's forensics reference mines these); the
+ * default render reuses the live-follow `[seq] type payload` line. */
 export function eventsCommand(opts: EventsOptions): Promise<number> {
   return withStoreClient(opts, ({ readPlane }) => {
-    const all = readPlane.events(opts.runId);
-    if (all == null) {
+    const limit = opts.limit != null && opts.limit > 0 ? opts.limit : opts.since != null ? undefined : 50;
+    const tail = readPlane.eventsTail(opts.runId, {
+      ...(opts.since != null ? { sinceSeq: opts.since } : {}),
+      ...(opts.type != null && opts.type.length > 0 ? { typePrefix: opts.type } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    if (tail == null) {
       console.error(chalk.red("events: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    const filtered = opts.type != null && opts.type.length > 0 ? all.filter((e) => e.type.startsWith(opts.type!)) : all;
-    const n = opts.limit != null && opts.limit > 0 ? opts.limit : 50;
-    const tail = filtered.slice(-n);
     if (opts.json === true) {
       console.log(JSON.stringify(tail, null, 2));
       return 0;

@@ -16,6 +16,32 @@ export interface ResultContext {
   appliedIntentSeqs: number[];
   /** For cancel: the seq of the cancel intent. */
   cancelIntentSeq?: number;
+  /** This turn's accrued spend, for halts that bypass both
+   * `fact.node_completed` and `fact.node_aborted` (route_not_picked /
+   * route_call_not_isolated / edge_no_match, handler-returned error or
+   * budget halts). The halt arm surfaces it as `partial*` fields on
+   * `fact.run_halted` — mirroring `abortResultToFacts` — so the reducer
+   * folds the halted turn into `run_state.metrics` instead of dropping
+   * it. The pause translations and non-halt arms ignore it (their fact
+   * lists either carry a spend-bearing `fact.node_completed` already or
+   * the run resumes and the spend lands on a later fact). */
+  usage?: HaltUsage;
+}
+
+/** Turn-spend shape the halt arm reads. Structurally satisfied by both the
+ * executor's `UsageTotals` and the planner's `TurnAccounting` (bucket-cost
+ * splits optional — the `addUsage` lane has no bucket-cost source). */
+export interface HaltUsage {
+  turnBilled: number;
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  totalInputCostUsd?: number;
+  totalOutputCostUsd?: number;
+  totalCacheReadCostUsd?: number;
+  totalCacheWriteCostUsd?: number;
 }
 
 /**
@@ -190,6 +216,31 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       }
       const payload: Extract<FactEvent, { type: "fact.run_halted" }>["payload"] = { reason };
       if (result.detail != null) payload.detail = result.detail;
+      // Halts reaching this point bypass fact.node_completed AND
+      // fact.node_aborted, so the turn's spend would otherwise vanish
+      // from run totals. Surface it as partial* fields (same shape and
+      // >0 gating as abortResultToFacts) for the reducer to fold. The
+      // budget-halt sentinel path never comes through here (it keeps the
+      // transition shape so node_completed lands first), so this cannot
+      // double-count a turn.
+      const usage = ctx.usage;
+      if (usage != null && (usage.turnBilled > 0 || usage.totalCostUsd > 0)) {
+        payload.nodeId = nodeId;
+        payload.partialTokens = usage.turnBilled;
+        payload.partialCostUsd = usage.totalCostUsd;
+        if (usage.totalInputTokens > 0) payload.partialInputTokens = usage.totalInputTokens;
+        if (usage.totalOutputTokens > 0) payload.partialOutputTokens = usage.totalOutputTokens;
+        if (usage.totalCacheReadTokens > 0) payload.partialCacheReadTokens = usage.totalCacheReadTokens;
+        if (usage.totalCacheWriteTokens > 0) payload.partialCacheWriteTokens = usage.totalCacheWriteTokens;
+        const inputCostUsd = usage.totalInputCostUsd ?? 0;
+        const outputCostUsd = usage.totalOutputCostUsd ?? 0;
+        const cacheReadCostUsd = usage.totalCacheReadCostUsd ?? 0;
+        const cacheWriteCostUsd = usage.totalCacheWriteCostUsd ?? 0;
+        if (inputCostUsd > 0) payload.partialInputCostUsd = inputCostUsd;
+        if (outputCostUsd > 0) payload.partialOutputCostUsd = outputCostUsd;
+        if (cacheReadCostUsd > 0) payload.partialCacheReadCostUsd = cacheReadCostUsd;
+        if (cacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = cacheWriteCostUsd;
+      }
       facts.push({ type: "fact.run_halted", payload });
       return facts;
     }

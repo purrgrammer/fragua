@@ -1,9 +1,15 @@
 // `fragua validate <workflow>` — parse + lint a workflow without executing.
 // `<workflow>` resolves the same way `fragua run` does: bare name looks up
 // `<cwd>/.fragua/workflows/<name>.yaml`, anything pathy is read directly.
+//
+// Store-free by contract: never opens the SQLite store, so it works in
+// CI and editor contexts with no DB present. Model ids are checked
+// against the bundled offline pi-ai registry; an id absent from it
+// warns (it may be a custom model registered only in a store) — the
+// authoritative model check happens at enqueue.
 
 import { readFile } from "node:fs/promises";
-import { validateWorkflowModels } from "@fragua/agent";
+import { validateWorkflowModelsOffline } from "@fragua/agent";
 import { DEFAULT_TOOL_MAX_MS, parseWorkflow, validate } from "@fragua/core";
 import chalk from "chalk";
 import { resolveWorkflow } from "../workflow-path.ts";
@@ -22,9 +28,10 @@ export async function validateCommand(workflow: string): Promise<number> {
   const source = await readFile(resolved.dotPath, "utf8");
   const graph = parseWorkflow(source);
   const diags = validate(graph);
-  const modelCheck = validateWorkflowModels(source);
+  const modelCheck = validateWorkflowModelsOffline(source);
 
-  const modelErrorCount = modelCheck.ok ? 0 : modelCheck.offenders.length;
+  const modelErrors = modelCheck.offenders.filter((o) => o.severity === "error");
+  const modelWarnings = modelCheck.offenders.filter((o) => o.severity === "warning");
 
   // Info: surface the default tool timeout for any tool step without an
   // explicit `timeout-minutes`. This is a silent killer for long scripts.
@@ -40,14 +47,14 @@ export async function validateCommand(workflow: string): Promise<number> {
     }
   }
 
-  if (diags.length === 0 && modelErrorCount === 0 && toolTimeoutInfos.length === 0) {
+  if (diags.length === 0 && modelCheck.offenders.length === 0 && toolTimeoutInfos.length === 0) {
     console.log(chalk.green("ok — no diagnostics"));
     return 0;
   }
   for (const info of toolTimeoutInfos) {
     console.log(info);
   }
-  if (diags.length === 0 && modelErrorCount === 0) {
+  if (diags.length === 0 && modelCheck.offenders.length === 0) {
     console.log(chalk.green("ok — no diagnostics"));
     return 0;
   }
@@ -57,13 +64,15 @@ export async function validateCommand(workflow: string): Promise<number> {
     console.log(color(`[${d.code}] ${d.severity}: ${d.message}`));
     if (d.severity === "error") errors++;
   }
-  if (!modelCheck.ok) {
-    for (const o of modelCheck.offenders) {
-      const where = o.provider ? `${o.provider}/${o.model}` : o.model;
-      console.log(chalk.red(`[model] error: node "${o.nodeId}" → ${where}: ${o.reason}`));
-    }
-    errors += modelCheck.offenders.length;
+  for (const o of modelErrors) {
+    const where = o.provider ? `${o.provider}/${o.model}` : o.model;
+    console.log(chalk.red(`[model] error: node "${o.nodeId}" → ${where}: ${o.reason}`));
   }
-  console.log(`\n${diags.length + modelErrorCount} issue(s), ${errors} error(s)`);
+  errors += modelErrors.length;
+  for (const o of modelWarnings) {
+    const where = o.provider ? `${o.provider}/${o.model}` : o.model;
+    console.log(chalk.yellow(`[model] warning: node "${o.nodeId}" → ${where}: ${o.reason}`));
+  }
+  console.log(`\n${diags.length + modelCheck.offenders.length} issue(s), ${errors} error(s)`);
   return errors > 0 ? 1 : 0;
 }

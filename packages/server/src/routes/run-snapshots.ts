@@ -24,12 +24,12 @@
 // direct git calls here; pure request routing + error shaping.
 
 import { extractCommitSha, makeReadPlane, parseEventIdx } from "@fragua/core/read-plane";
-import type { IEventStore } from "@fragua/store";
+import type { IEventReader } from "@fragua/store";
 import { Hono } from "hono";
 import type { RunSnapshotReader } from "../ports.ts";
 
 export interface RunSnapshotsRouteOptions {
-  store: IEventStore;
+  store: IEventReader;
   reader: RunSnapshotReader;
 }
 
@@ -136,7 +136,7 @@ type ResolveResult =
   | { kind: "snapshot_not_found" }
   | { kind: "ok"; cwd: string; commitSha: string };
 
-function resolveSnapshot(store: IEventStore, runId: string, idxParam: string): ResolveResult {
+function resolveSnapshot(store: IEventReader, runId: string, idxParam: string): ResolveResult {
   const state = store.getState(runId);
   if (state == null) return { kind: "run_not_found" };
   if (state.cwd == null) return { kind: "run_not_found" };

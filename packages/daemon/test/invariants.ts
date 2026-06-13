@@ -20,10 +20,11 @@ const TERMINAL_FACTS = new Set(["fact.run_completed", "fact.run_halted", "fact.r
 const autoWake: ReadonlySet<string> = AUTO_WAKE_PAUSE_REASONS as ReadonlySet<string>;
 
 export function checkRunInvariants(events: StoredEvent[], state: RunState): void {
-  // P4 — projection = fold. Re-folding the fact log from a reset initial
-  // reconstructs the projection's status / currentNode / metrics: the whole
-  // reducer, validated against this run's stream. (Precedent + field choice:
-  // store/test/store.property.test.ts.)
+  // invariant: P4 — projection = fold. Re-folding the fact log from a reset
+  // initial reconstructs the projection's status / currentNode / metrics: the
+  // whole reducer, validated against this run's stream. (Precedent + field
+  // choice: store/test/store.property.test.ts.) Load-bearing sentinel for
+  // invariant-coverage.test.ts.
   const facts = events
     .filter((e) => e.type.startsWith("fact."))
     .map((e) => ({ type: e.type, payload: e.payload }) as FactEvent);

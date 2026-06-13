@@ -616,6 +616,90 @@ describe("runStateToDetail — HITL projection", () => {
   });
 });
 
+describe("runStateToDetail — halt projection", () => {
+  function evWithSeq(seq: number, type: string, payload: Record<string, unknown>): StoredEvent {
+    return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
+  }
+
+  test("halted projects reason/detail from the terminal fact.run_halted", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(2, "fact.node_started", { nodeId: "implement" }),
+      evWithSeq(3, "fact.node_aborted", { nodeId: "implement", cause: "error" }),
+      evWithSeq(4, "fact.run_halted", { reason: "error", detail: "handler threw: boom" }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.runStatus).toBe("halted");
+    expect(detail.haltReason).toBe("error");
+    expect(detail.haltDetail).toBe("handler threw: boom");
+  });
+
+  test("occ_exhausted halt projects haltContext from occContext", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_halted", {
+        reason: "occ_exhausted",
+        detail: "8 consecutive OCC conflicts on fact.node_completed for node implement",
+        occContext: {
+          count: 8,
+          nodeId: "implement",
+          iteration: 3,
+          lastVersion: 42,
+          attemptedFactType: "fact.node_completed",
+        },
+      }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBe("occ_exhausted");
+    expect(detail.haltContext).toEqual({
+      count: 8,
+      nodeId: "implement",
+      iteration: 3,
+      lastVersion: 42,
+      attemptedFactType: "fact.node_completed",
+    });
+  });
+
+  test("halt without occContext leaves haltContext undefined", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltContext).toBeUndefined();
+  });
+
+  test("halt tolerates malformed occContext (haltContext stays undefined)", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted", occContext: "garbage" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltContext).toBeUndefined();
+  });
+
+  test("halted without a detail string leaves haltDetail undefined", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBe("occ_exhausted");
+    expect(detail.haltDetail).toBeUndefined();
+  });
+
+  test("non-halted statuses leave halt fields undefined", () => {
+    const state = makeState({ status: "running" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_started", { startNode: "start" })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBeUndefined();
+    expect(detail.haltDetail).toBeUndefined();
+  });
+
+  test("halted tolerates malformed payload (fields stay undefined)", () => {
+    const state = makeState({ status: "halted" });
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: 42, detail: { nested: true } })];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.haltReason).toBeUndefined();
+    expect(detail.haltDetail).toBeUndefined();
+  });
+});
+
 describe("runStateToDetail \u2014 lastEventSeq", () => {
   function evWithSeq(seq: number, type: string, payload: Record<string, unknown> = {}): StoredEvent {
     return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
@@ -717,5 +801,43 @@ steps:
   test("no source → no topology (and no throw)", () => {
     const detail = runStateToDetail(makeState(), [], undefined, undefined);
     expect(detail.fanout).toBeUndefined();
+  });
+});
+
+describe("runStateToDetail — crash-requeue projection", () => {
+  function evWithSeq(seq: number, type: string, payload: Record<string, unknown>): StoredEvent {
+    return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
+  }
+
+  test("a fact.run_requeued_after_crash event lands in detail.crashRequeues with its ts and prevNode", () => {
+    const state = makeState({ status: "queued" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(2, "fact.node_started", { nodeId: "work" }),
+      evWithSeq(3, "fact.run_requeued_after_crash", { prevNode: "work", lastAliveAt: 999_500 }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.crashRequeues).toEqual([{ at: 1_000_003, prevNode: "work", lastAliveAt: 999_500 }]);
+  });
+
+  test("crashRequeues is absent when the log has no crash-requeue fact", () => {
+    const state = makeState({ status: "completed" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(2, "fact.run_completed", {}),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.crashRequeues).toBeUndefined();
+  });
+
+  test("multiple requeues project in log order; clean-acquire payload omits the optional fields", () => {
+    const state = makeState({ status: "running" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_requeued_after_crash", { prevNode: "a", lastAliveAt: 999_000 }),
+      // Clean-acquire path: no stale lock → neither prevNode nor lastAliveAt.
+      evWithSeq(2, "fact.run_requeued_after_crash", {}),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.crashRequeues).toEqual([{ at: 1_000_001, prevNode: "a", lastAliveAt: 999_000 }, { at: 1_000_002 }]);
   });
 });

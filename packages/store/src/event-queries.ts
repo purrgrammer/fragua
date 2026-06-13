@@ -151,6 +151,43 @@ export function selectLatestEvents(db: Database, runId: string, limit: number): 
   return db.query<EventRow, [string, number]>(SELECT_LATEST_EVENTS_SQL).all(runId, limit);
 }
 
+// Tail read for the CLI forensics verbs: take the last N matching events
+// DESC inside a subquery, then re-sort ASC outside it so the caller gets
+// oldest-first in one round-trip (same shape as the global-feed backfill).
+// `?3` is a LIKE prefix pattern (caller escapes metacharacters and appends
+// `%`), NULL to skip the type filter.
+const SELECT_EVENTS_TAIL_SQL = `
+  SELECT * FROM (
+    SELECT run_id, seq, type, writer, payload, ts
+      FROM events
+     WHERE run_id = ?1
+       AND seq > ?2
+       AND (?3 IS NULL OR type LIKE ?3 ESCAPE '\\')
+     ORDER BY seq DESC
+     LIMIT ?4
+  )
+  ORDER BY seq ASC
+`;
+
+function escapeLikePrefix(prefix: string): string {
+  return `${prefix.replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+/** The last `limit` events for `runId` strictly after `sinceSeq`, optionally
+ *  restricted to types starting with `typePrefix`, oldest-first. The bound
+ *  applies to the FILTERED set, so "last N matching events" is exact. Backs
+ *  the CLI's `runs events` / `runs tail` bounded reads. */
+export function selectEventsTail(
+  db: Database,
+  runId: string,
+  opts: { sinceSeq?: number; typePrefix?: string; limit?: number },
+): EventRow[] {
+  const pattern = opts.typePrefix != null && opts.typePrefix.length > 0 ? escapeLikePrefix(opts.typePrefix) : null;
+  return db
+    .query<EventRow, [string, number, string | null, number]>(SELECT_EVENTS_TAIL_SQL)
+    .all(runId, opts.sinceSeq ?? 0, pattern, opts.limit ?? NO_LIMIT);
+}
+
 const SELECT_EVENTS_BY_TYPE_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events

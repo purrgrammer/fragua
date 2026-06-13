@@ -26,7 +26,7 @@ import { CURRENT_IR_VERSION, type Graph, type Node, serializeGraph } from "@frag
 import * as handler from "@fragua/core/handler";
 import { type RunState, SqliteStore, type StoredEvent } from "@fragua/store";
 import fc from "fast-check";
-import { pbtRuns } from "../../../test/pbt-runs.ts";
+import { pbtFaultRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
@@ -213,7 +213,7 @@ describe("executor faults — OCC conflict at the commit seam", () => {
           expect(faultsInjected).toBeLessThanOrEqual(1);
         },
       ),
-      { numRuns: pbtRuns(150) },
+      { numRuns: pbtFaultRuns(150) },
     );
   });
 
@@ -236,7 +236,7 @@ describe("executor faults — OCC conflict at the commit seam", () => {
         }
         checkRunInvariants(events, state);
       }),
-      { numRuns: pbtRuns(150) },
+      { numRuns: pbtFaultRuns(150) },
     );
   });
 
@@ -250,7 +250,7 @@ describe("executor faults — OCC conflict at the commit seam", () => {
         expect(faultsInjected).toBe(0);
         checkRunInvariants(events, state);
       }),
-      { numRuns: pbtRuns(60) },
+      { numRuns: pbtFaultRuns(60) },
     );
   });
 });
@@ -269,7 +269,7 @@ describe("executor faults — handler hang (leaked watchdog timeout)", () => {
         expect(haltReason(events)).toBe("error");
         checkRunInvariants(events, state);
       }),
-      { numRuns: pbtRuns(60) },
+      { numRuns: pbtFaultRuns(60) },
     );
   });
 });
@@ -345,6 +345,7 @@ async function orphanCase(
   }
 }
 
+// invariant: P6 — load-bearing sentinel for invariant-coverage.test.ts.
 describe("executor faults — orphan side-effect (crash between intent and done)", () => {
   // A side_effect_intent with no matching _done makes the startup sweep
   // quarantine the run (orphan-side-effect invariant, I5/P6) — for ANY
@@ -361,7 +362,7 @@ describe("executor faults — orphan side-effect (crash between intent and done)
         expect(payload.orphanedIntents).toContain(orphanSeq);
         checkRunInvariants(events, state);
       }),
-      { numRuns: pbtRuns(80) },
+      { numRuns: pbtFaultRuns(80) },
     );
   });
 });
@@ -379,6 +380,8 @@ const throwingProvisioner: Provisioner = {
   snapshot: async () => null,
 };
 
+// invariant: P5 — store-commit failure → bounded halt, never a wedged run.
+// Load-bearing sentinel for invariant-coverage.test.ts.
 describe("executor faults — provision + store failure", () => {
   // provisioner.ensure throwing → the executor halts the run with a clear
   // reason rather than dispatching env-less or wedging.
@@ -390,11 +393,11 @@ describe("executor faults — provision + store failure", () => {
         // Halted with a clear provision-failure reason (in the fact log;
         // daemon.worktree_provisioned is a daemon-stream event, not here).
         const halt = events.find((e) => e.type === "fact.run_halted");
-        expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("error");
+        expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("worktree_error");
         expect((halt?.payload as { detail?: string } | undefined)?.detail ?? "").toContain("worktree_provision_failed");
         checkRunInvariants(events, state);
       }),
-      { numRuns: pbtRuns(80) },
+      { numRuns: pbtFaultRuns(80) },
     );
   });
 
@@ -423,7 +426,7 @@ describe("executor faults — provision + store failure", () => {
           checkRunInvariants(events, state);
         },
       ),
-      { numRuns: pbtRuns(80) },
+      { numRuns: pbtFaultRuns(80) },
     );
   });
 });

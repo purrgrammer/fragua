@@ -32,7 +32,7 @@
 | **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
 | **I7** | Event payloads ≤ 4KB | `CHECK (length(payload) < 4096)` column constraint |
 | **I8** | Raw tool output addressed by sha256 on the filesystem under `blobsDir`; `blobs` row holds metadata only; artifacts are named refs scoped by `(run, node, iteration, key)`; replay-safe by default — same-content rewrite is a no-op, different-content rewrite at the same scope throws `ArtifactCollisionError` unless the caller passes `{ replace: true }` | Store API writes file→row in that order so orphans are always files, never dangling rows; `putArtifact` checks existing ref and either matches sha (no-op), throws collision, or overwrites with explicit replace |
-| **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages ≤ 1 MiB | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
+| **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages < 1,048,576 characters | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
 | **I10** | Seq assignment is O(1) via per-run counter on `run_state.next_seq`; never scanned | Store module; `UPDATE run_state SET next_seq = next_seq + 1 RETURNING ...` inside append txn |
 | **I11** | A `parallel` region is single-entry/single-exit: `wait_all` is its only join, pause is run-global (one shared `AbortSignal`), the per-branch active set is a log-derived **diagnostic** (the scalar `run_state.status` stays sole lifecycle authority), and branches commit through the one daemon writer (commit unit = branch-step, not a synchronised superstep) | Validator E036–E045; `runFanout` single-writer commit lane (§6.2); the fan-out property suite (P28–P31) |
 
@@ -61,7 +61,7 @@ ctx.artifacts.get(key)                                          // implicit curr
 ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cross-scope
 ```
 
-`iteration` is the per-node retry counter (attractor §3.6), bumped each time a backward edge re-enters a node after a non-success outcome (0 on first entry). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
+`iteration` is the per-node retry counter, bumped each time a backward edge re-enters a node after a non-success outcome (0 on first entry). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
 
 ### 1.3 Unix socket IPC is net-negative
 **Attack.** `.sock` cleanup, `EADDRINUSE`, permission errors, reconnect bookkeeping — hundreds of lines for something SQLite already does in <0.1ms per query.
@@ -190,7 +190,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   status TEXT NOT NULL CHECK (status IN (
     'queued','running','paused','paused_human','paused_auto',
     'completed','cancelled','halted','quarantined'
-  )),
+  )),                                             -- @fragua/types predicates: isTerminal = {completed,cancelled,halted} (resume/accept gate); isSettled = isTerminal ∪ {quarantined} (SSE-close + schedule overlap-skip — quarantined stopped progressing but stays resumable via unquarantine)
   current_node TEXT,
   workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
   contract_version INTEGER NOT NULL,              -- EVENT_CONTRACT_VERSION pin; run-resume gate, NOT the DB counter
@@ -442,8 +442,18 @@ CREATE INDEX idx_outputs_run ON outputs(run_id, node_id);
 **Size targets:**
 - `run_state` row: ~500 bytes; thousands of rows negligible.
 - `events` row: ~300 bytes; partial indexes small.
-- `messages` rows: ≤ 1 MiB per row (enforced; large values spill through `ctx.artifacts.put`).
+- `messages` rows: < 1,048,576 characters per row (enforced; large values spill through `ctx.artifacts.put`).
 - `blobs` row: ~100 bytes (metadata only). Content files up to 16 MiB apiece live under `blobsDir`.
+
+### 2.1 `run_state.routing` — trusted, opaque, fold-rebuildable
+
+`routing` is an unschematized JSON dict carrying load-bearing per-run state: the typed run inputs under `inputs` (with `$fragua_blob` spill refs, §0), the fan-out frontier under `internal.active_nodes` (I11), operator budget overrides under `budget_override.<scope>.<metric>`, retry/pacing counters (`internal.retry_count.<nodeId>`, `internal.timeout_retries.<nodeId>`, `internal.provider_retry.attempt`), and the auto-wake timer `internal.auto_resume_at`. Its only structural guard is the 8 KB size CHECK (I6) — there is no per-key schema. That is deliberate; the trust model:
+
+**Trust model.** `routing` is a projection cache, not a second source of truth. It is written only inside the same transaction as an event append (I1), through exactly two seams: the reducer fold (`reducers.ts` — the genesis `intent.run_enqueued` seeds `inputs`, facts evolve `internal.active_nodes`) and the `routingPatch` option on `appendFact` (the daemon materializing applied intents and retry/abort bookkeeping into the projection it just evolved). There is no out-of-band writer — the web/CLI write plane only appends intents; the single daemon writer is the only process that folds them into `routing`. Readers therefore treat the dict as trusted and opaque: no validation on read. The one read path reachable by untrusted bytes — a tampered bundle fed through `fragua import` — element-validates and degrades to a safe default (`readActiveNodes`).
+
+**Rebuild path.** Corruption is recoverable, not load-bearing: the whole `run_state` row, `routing` included, is disposable. `deriveRunState` (`packages/store/src/reducers.ts`) reconstructs it by replaying the run's event log — genesis seed + pure fact fold — and bundle import does exactly this on every import (bundles carry no projection). The fan-out property suite (P28) asserts replay-equivalence for the fold-derived keys. The `routingPatch` keys (budget overrides, retry counters, the auto-resume timer) are operational pacing state rather than fold outputs; the pure fold does not re-materialize them, but their provenance stays in the log — the `intent.budget_adjusted` / abort facts that produced them are recorded. Nothing lives *only* in `routing`.
+
+**Why not normalize.** Promoting these keys into typed columns or side tables was considered and rejected. The key set is small, heterogeneous, and churns with engine features — the fan-out frontier and the provider-retry counter both landed without a schema migration precisely because `routing` absorbed them. A column or table per key would mean a DB migration per engine feature and multi-table writes for what is cache state. The size CHECK (I6) plus the blob-spill path (§0) keeps the dict bounded, and the event log — not the dict — remains the thing that must be correct.
 
 ---
 
@@ -490,7 +500,7 @@ Post-terminal operator actions run **synchronously in the caller** (intent-plane
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
-| `fact.run_halted` | `reason: 'budget'\|'error'\|'aborted_exit'\|'occ_exhausted'\|'timeout_exhausted'\|'route_not_picked'\|'route_call_not_isolated'\|'edge_no_match'`, `detail?`, `occContext?` (set when reason="occ_exhausted") | Terminal failure. The reason set is genuinely-terminal only; operator-recoverable failure modes (`max_loops`, `abort_loop`, `goal_gate`, `max_retries`, `provider_exhausted`, and version mismatch via `engine_incompatible`) are `fact.run_paused` reasons instead. `timeout_exhausted` lands when the per-`(nodeId)` watchdog-retry counter saturates (default 3 attempts) — see `paused_auto{reason:"timeout_retry"}` for the recoverable side. The three `route_*` reasons land when a routing node fails to commit a route via the synthesised `route` tool or chose a route the graph doesn't handle |
+| `fact.run_halted` | `reason: 'budget'\|'error'\|'aborted_exit'\|'occ_exhausted'\|'timeout_exhausted'\|'route_not_picked'\|'route_call_not_isolated'\|'edge_no_match'\|'worktree_error'`, `detail?`, `occContext?` (set when reason="occ_exhausted"), `nodeId?` + `partialTokens?`/`partialCostUsd?` (+ optional per-bucket token/cost splits, set when the halt terminated a turn whose spend never reached `fact.node_completed`/`fact.node_aborted` — the reducer folds them into `run_state.metrics`, mirroring `fact.node_aborted.partial*`) | Terminal failure. The reason set is genuinely-terminal only; operator-recoverable failure modes (`max_loops`, `abort_loop`, `goal_gate`, `max_retries`, `provider_exhausted`, and version mismatch via `engine_incompatible`) are `fact.run_paused` reasons instead. `timeout_exhausted` lands when the per-`(nodeId)` watchdog-retry counter saturates (default 3 attempts) — see `paused_auto{reason:"timeout_retry"}` for the recoverable side. The three `route_*` reasons land when a routing node fails to commit a route via the synthesised `route` tool or chose a route the graph doesn't handle |
 | `fact.run_cancelled` | `intentSeq` | Terminal cancel |
 | `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot. Once per worktree-backed run, after the terminal status fact. Reducer projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event, not facts. |
 | `fact.run_quarantined` | `reason: 'orphan_side_effect'\|'other'`, `orphanedIntents?: seq[]` | Awaiting operator |
@@ -1311,6 +1321,7 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P29 | Fan-out crash recovery | Crash mid-region with asymmetric branch depth (A deep, B shallow) | Only uncommitted sub-nodes re-dispatch; a completed sub-node never re-runs; the region converges (no barrier required to re-derive per-branch cursors) |
 | P30 | OCC on the fan-out seams | OCC storm on `fanout_started` / branch `node_completed`+`dispatch_started` / `fanout_joined` | Region still joins exactly once; P4 holds throughout; a status-stop never mis-counts as OCC |
 | P31 | Per-branch liveness | A branch hangs / leaks / aborts every turn beside healthy siblings | Leak → `handler_timeout_leaked` + halt; abort-loop → per-branch `run_paused{abort_loop}` naming the branch; a fast branch commits without waiting on a slow one; an early bail aborts the in-flight pool |
+| P32 | Fan-out frontier isolation | Populated `internal.active_nodes` × every fact type | Only `fanout_started` / `dispatch_started` / branch `node_completed` / `fanout_joined` may change the frontier; every other fact leaves it byte-identical; `applyFact` never mutates its input state (the routing shallow copy is load-bearing) |
 
 The driven crash-replay and fault-injection (OCC-storm) harnesses generate `type: parallel` graphs alongside the linear spine, so P4 / P5 / P8 are exercised over fan-out, not just sequential runs.
 

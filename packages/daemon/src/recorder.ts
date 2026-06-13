@@ -13,12 +13,12 @@
 // handler returns.
 
 import type * as handler from "@fragua/core/handler";
-import { ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
+import { ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
 
 type SideEffectRecorder = handler.SideEffectRecorder;
 
 export interface CommittingRecorderOpts {
-  store: IEventStore;
+  store: IEventWriter & IEventReader;
   runId: string;
   nodeId: string;
   iteration: number;

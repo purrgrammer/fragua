@@ -12,7 +12,7 @@
 // compatibility. 404 when neither source resolves the identifier.
 
 import { parseWorkflow } from "@fragua/core";
-import type { IEventStore } from "@fragua/store";
+import type { IEventReader } from "@fragua/store";
 import { Hono } from "hono";
 import type { WorkflowDetail, WorkflowReader } from "../ports.ts";
 
@@ -24,7 +24,7 @@ export interface WorkflowsRouteOptions {
   /** Optional store for sha-keyed workflow lookups (populated by POST
    * /workflows on enqueue). When provided, GET /workflows/:sha resolves
    * via the DB rather than the filesystem. */
-  store?: IEventStore;
+  store?: Pick<IEventReader, "getWorkflow">;
 }
 
 export function workflowsRoutes(opts: WorkflowsRouteOptions): Hono {

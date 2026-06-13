@@ -74,6 +74,8 @@ function matchBrace(source: string, openIdx: number): number {
   return -1;
 }
 
+// invariant: I1 — every store write is one txn; no await / JSON.stringify may
+// run inside a txn body. Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("I1 — no await / JSON.stringify inside transaction bodies", () => {
   const offenders: { file: string; snippet: string; kind: string }[] = [];
   for (const root of ROOTS) {

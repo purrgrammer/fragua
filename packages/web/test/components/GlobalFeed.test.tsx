@@ -70,6 +70,13 @@ describe("metaForEvent", () => {
     expect(haltedMeta.attention).toBe(true);
   });
 
+  test("fact.run_requeued_after_crash → distinct crash verb with attention strip", () => {
+    const m = meta("fact.run_requeued_after_crash", { prevNode: "work", lastAliveAt: 1_000 });
+    expect(m.verb).toBe("requeued after crash");
+    expect(m.attention).toBe(true);
+    expect(m.borderVar).toBe("var(--sw-accent-pause)");
+  });
+
   test("fact.run_paused with auto-wake reason → paused_auto (blue) via reason peek", () => {
     const providerRetry = meta("fact.run_paused", {
       reason: "provider_retry",

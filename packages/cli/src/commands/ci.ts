@@ -26,7 +26,7 @@ import { AUTO_RESUME_AT_KEY } from "@fragua/core";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import { AbortRegistry, type ExecutorOpts, runOne, WorktreeProvisioner, wakePending } from "@fragua/daemon";
-import { type IEventStore, newRunId, SqliteStore, type StoredEvent } from "@fragua/store";
+import { type IEventReader, newRunId, SqliteStore, type StoredEvent } from "@fragua/store";
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
@@ -79,7 +79,7 @@ export interface CiCommandOptions {
  * from `routing.internal.auto_resume_at` (set by the engine when it parks
  * the run for `provider_retry` / `handler_retry` / `timeout_retry`).
  * `undefined` if the run isn't auto-paused or the key is missing. */
-function autoResumeAt(store: IEventStore, runId: string): number | undefined {
+function autoResumeAt(store: Pick<IEventReader, "getState">, runId: string): number | undefined {
   const v = store.getState(runId)?.routing[AUTO_RESUME_AT_KEY];
   return typeof v === "number" ? v : undefined;
 }

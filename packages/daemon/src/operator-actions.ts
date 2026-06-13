@@ -15,7 +15,7 @@
 // throw) yields `null` / a throw and the intent is left unadvanced — never a
 // half-applied mutation. The operator revives or re-issues.
 
-import { ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
+import { ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
 import type { IntentType } from "@fragua/types";
 
 const OPERATOR_INTENT_TYPES = ["intent.accept_run", "intent.discard_run"] as const satisfies readonly IntentType[];
@@ -30,7 +30,11 @@ interface PendingOperatorIntent {
  * types and taking the earliest so actions apply in operator order. Every
  * intent is satisfiable (the action already ran in the request path; the fold
  * is pure projection), so there is no refused-set / jam to manage. */
-function nextOperatorIntent(store: IEventStore, runId: string, sinceSeq: number): PendingOperatorIntent | null {
+function nextOperatorIntent(
+  store: Pick<IEventReader, "getNextPendingIntent">,
+  runId: string,
+  sinceSeq: number,
+): PendingOperatorIntent | null {
   let best: PendingOperatorIntent | null = null;
   for (const type of OPERATOR_INTENT_TYPES) {
     const it = store.getNextPendingIntent(runId, type, sinceSeq);
@@ -67,7 +71,7 @@ function applyAction(intent: PendingOperatorIntent): FactEvent {
  * Idempotent and safe on every executor tick — `getInboxActionCandidates`
  * returns nothing when no operator has acted. Returns the run ids written.
  */
-export function processOperatorActions(store: IEventStore): string[] {
+export function processOperatorActions(store: IEventWriter & IEventReader): string[] {
   const applied: string[] = [];
   for (const row of store.getInboxActionCandidates()) {
     const intent = nextOperatorIntent(store, row.runId, row.lastAppliedSeq);

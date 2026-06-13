@@ -1,6 +1,6 @@
 ---
 title: Pluggable HITL channel — the interviewer pattern over pause-fact/answer-intent
-summary: "Make the human-in-the-loop channel pluggable, porting attractor's Interviewer pattern mutatis mutandis. fragua's HITL is already event-sourced (fact.run_paused{reason:human} parks the run; intent.human_input answers it), so the port is an async resolver — observe the pause fact, write the answer intent — not a blocking ask(). Built-ins: auto-approve (CI), console (TTY), web (exists), queue (tests); recording is subsumed by the event log."
+summary: "Make the human-in-the-loop channel pluggable. fragua's HITL is already event-sourced (fact.run_paused{reason:human} parks the run; intent.human_input answers it), so a channel is an async resolver — observe the pause fact, write the answer intent — not a blocking ask(). Built-ins: auto-approve (CI), console (TTY), web (exists), queue (tests); recording is subsumed by the event log."
 status: proposed
 maturity: sketch
 last-reviewed: 2026-05-28
@@ -29,27 +29,27 @@ web UI already drives this over HTTP. The gap is that the channel is implicit �
 there is no abstraction for *who answers a pending human gate*, so CI and
 scripted/test contexts have no first-class path.
 
-## 2. The port: attractor's interviewer, mutatis mutandis
+## 2. The shape: an async resolver, not a blocking ask
 
-attractor's `Interviewer.ask(Question) → Answer` (`~/attractor/attractor-spec.md`
-§6) is a **blocking, in-handler** call. fragua cannot block the executor on a
-human — the executor parks the run via a fact and moves on. So the abstraction
-is ported as an **async resolver**, not a synchronous `ask`:
+The classic interviewer interface is a **blocking, in-handler**
+`ask(Question) → Answer` call. fragua cannot block the executor on a
+human — the executor parks the run via a fact and moves on. So the
+abstraction is an **async resolver**, not a synchronous `ask`:
 
 > A HITL channel observes `fact.run_paused{reason:human}` on the store and writes
 > back an `intent.human_input`. It is a store-client like everything else; the
 > answer intent is constructed via the intent plane (shipped).
 
-The Question/Answer/Option models port near-verbatim; the transport changes from
+The Question/Answer/Option models stay; the transport changes from
 a function return to a store intent.
 
-| attractor interviewer | fragua channel | role |
+| resolver archetype | fragua channel | role |
 |---|---|---|
-| `AutoApproveInterviewer` | **`fragua ci` default** | resolve `paused_human` with the default/first route, or fail. Surfaced as `--on-pause=auto\|fail\|first`. |
-| `ConsoleInterviewer` | **`fragua watch` in a TTY** | prompt the human, write `intent.human_input`. |
-| `CallbackInterviewer` | **web UI** | the existing pause→respond flow. Already shipped. |
-| `QueueInterviewer` | **PBT / replay tests** | pre-filled answers; fits the `fast-check` suites. |
-| `RecordingInterviewer` | **subsumed** | every `intent.human_input` is already durably in the event log. Audit/replay for free; no implementation. |
+| auto-approve | **`fragua ci` default** | resolve `paused_human` with the default/first route, or fail. Surfaced as `--on-pause=auto\|fail\|first`. |
+| console prompt | **`fragua watch` in a TTY** | prompt the human, write `intent.human_input`. |
+| callback | **web UI** | the existing pause→respond flow. Already shipped. |
+| pre-filled queue | **PBT / replay tests** | pre-filled answers; fits the `fast-check` suites. |
+| recording | **subsumed** | every `intent.human_input` is already durably in the event log. Audit/replay for free; no implementation. |
 
 ## 3. Scope / dependencies / MVP
 
@@ -71,7 +71,7 @@ a function return to a store intent.
 - ~~The Question presented to a channel is reconstructed from the pause fact +
   the node's outgoing edges / route options.~~ **Closed:** `fact.run_paused_human`
   ships `routes` + `routeLabels` (see §5.2).
-- Timeout/default handling (attractor §6.5) maps onto the existing `paused_auto`
+- Timeout/default handling maps onto the existing `paused_auto`
   / `auto_resume_at` machinery — decide whether a human-gate timeout reuses it or
   stays channel-local.
 

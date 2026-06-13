@@ -7,14 +7,14 @@
 import type { Graph, Node, NodeAttrs } from "@fragua/core";
 import { InvalidDurationError, parseDurationMs } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
-import type { IEventStore } from "@fragua/store";
+import type { IEventReader } from "@fragua/store";
 import type { DispatcherResolver } from "./dispatch.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 
 type HandlerSpec = handler.HandlerSpec;
 
 export interface AutoDispatcherOpts {
-  store: IEventStore;
+  store: Pick<IEventReader, "getWorkflow">;
   /**
    * Optional shared parse-once boundary. When omitted, the resolver
    * builds one from `opts.store` so a caller that only passes `{ store }`

@@ -1,5 +1,6 @@
 import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
+import { CrashRequeueNotice } from "../components/CrashRequeueNotice.tsx";
 import type { RunDetail } from "../lib/api.ts";
 import { StatsStrip } from "./RunDetail.tsx";
 
@@ -29,6 +30,35 @@ describe("RunDetail.input — dead field", () => {
     const _dead: string | undefined = d.input;
     // Runtime guard: the field resolves to undefined (server never sends it).
     expect(_dead).toBeUndefined();
+  });
+});
+
+describe("CrashRequeueNotice — crash-requeue banner", () => {
+  afterEach(() => cleanup());
+
+  test("renders crash-requeue notice when detail.crashRequeues is populated", () => {
+    const at = Date.UTC(2024, 0, 4, 15, 42);
+    const { container } = render(
+      <CrashRequeueNotice crashRequeues={[{ at, prevNode: "work", lastAliveAt: at - 5_000 }]} />,
+    );
+    const notice = within(container).getByTestId("crash-requeue-notice");
+    expect(notice.textContent).toContain("Requeued after daemon crash");
+    expect(notice.textContent).toContain("requeued this run at");
+    expect(notice.textContent).toContain("was at node work");
+  });
+
+  test("one line per requeue when the run crashed more than once", () => {
+    const { container } = render(
+      <CrashRequeueNotice crashRequeues={[{ at: 1_000_000 }, { at: 2_000_000, prevNode: "verify" }]} />,
+    );
+    const msg = within(container).getByTestId("crash-requeue-message");
+    expect(msg.children.length).toBe(2);
+    expect(msg.textContent).toContain("was at node verify");
+  });
+
+  test("renders nothing for an empty crashRequeues list", () => {
+    const { container } = render(<CrashRequeueNotice crashRequeues={[]} />);
+    expect(within(container).queryByTestId("crash-requeue-notice")).toBeNull();
   });
 });
 

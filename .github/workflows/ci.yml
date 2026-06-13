@@ -9,7 +9,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -31,6 +31,23 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      # PBT depth ladder: 1× (baseline `bun run test` above) / 3× full suite +
+      # 5× fault suites (this PR gate) / 20× (property-nightly.yml). Keeps
+      # rare-branch fault-recovery regressions (OCC, sweep, HITL durability,
+      # abort loop) from merging and only surfacing at night. The fault-injection
+      # suites (executor-faults + abort-planner) carry a dedicated
+      # FRAGUA_PBT_FAULT_RUNS multiplier so OCC-conflict / orphan-quarantine /
+      # abort-ceiling get 5× depth here — their rare paths only surface deep —
+      # while the rest of the node suite stays at 3× to keep PR wall-time bounded.
+      # When FRAGUA_PBT_FAULT_RUNS is unset (nightly), the fault suites inherit
+      # the global 20×. The 5× fault depth adds ~17s locally (full gate ~48s →
+      # ~65s; the fault suites alone ~24s → ~38s) — keep it unsharded.
+      - name: Property/fault-injection gate (FRAGUA_PBT_RUNS=3×, fault suites 5×, node suites only)
+        env:
+          FRAGUA_PBT_RUNS: "3"
+          FRAGUA_PBT_FAULT_RUNS: "5"
+        run: bun test --timeout 120000 ./packages/store ./packages/daemon ./packages/core ./packages/agent
 
       - name: Event-contract version touch-gate
         run: |

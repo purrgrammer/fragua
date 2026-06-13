@@ -57,16 +57,19 @@ store-client; control verbs append an `intent.*` the daemon folds on its next
 tick (always-appendable, so they succeed even with the daemon down).
 
 ```sh
-fragua runs ls [--status running,paused_human] [--limit N] [--json]  # one line per run (--json: array)
+fragua runs ls [--status running,paused_human] [--limit N] [--summary] [--json]  # one line per run (--json: array; --summary: fleet rollup)
 fragua runs inbox [--json]                                           # runs needing attention (2 sections)
 fragua runs status <id> [--json]                                     # lifecycle + outcome + warnings
-fragua runs tail <id>                                                # follow an existing run's log to terminal (live)
+fragua runs tail <id> [--full]                                       # follow an existing run's log to terminal (live)
 fragua runs explain <id> [--json]                                    # narrative: path, per-step cost/outcome, diff, reason
 fragua runs worktree <id>                                            # print the absolute worktree path (exit 1 if cleaned up)
+fragua runs wait <id...> | --workflow <name> | --all-running         # block until every selected run settles (no HTTP)
+     [--timeout <dur>] [--settle terminal|blocked]                   #   exit 0 / banded (halt/quarantine) / 60 (blocked) / 75 (timeout)
 
 # disposition — nothing touches your git until you ask
 fragua runs diff    <id> [--against base|previous|<idx>] [--snap <idx>] [--path <p>]
-fragua runs accept  <id>                          # replay the run's commits onto your branch + stage the tail
+fragua runs accept  <id> [--autostash]            # replay the run's commits onto your branch + stage the tail
+                                                  #   --autostash: stash unrelated dirty files around the apply, then restore them (mirrors git rebase --autostash)
 fragua runs discard <id>                          # drop the run's fragua refs
 
 # lifecycle + control
@@ -85,7 +88,7 @@ fragua runs goal-gate   <id> <n>
 fragua runs max-loops   <id> <n>
 
 # inspect (forensics — no raw SQL)
-fragua runs events    <id> [--type <prefix>] [--limit N] [--json]
+fragua runs events    <id> [--type <prefix>] [--limit N] [--since <seq>] [--json]
 fragua runs steps     <id> [--json]               # per-LLM-call cost / tokens / duration
 fragua runs messages  <id> [--node <id>] [--json] # the LLM-visible transcript
 fragua runs artifacts <id>                        # list a run's artifacts
@@ -97,8 +100,67 @@ before the hard pause); `fragua runs tail` prefixes the same event with ⚠ in
 the live log. `fragua runs explain` synthesises the full narrative: path taken,
 per-step outcome and cost, diff-vs-base summary, and the terminal reason.
 
+`fragua runs wait` blocks a fleet driver until a *set* of runs settles, instead
+of a hand-rolled `while fragua runs ls | grep` loop. Select the set with
+explicit ids, `--workflow <name>` (every currently-active run of that workflow),
+or `--all-running`. It polls the read plane (no HTTP) and prints one line per
+run per lifecycle change. A run is *settled* when terminal
+(completed/halted/cancelled/quarantined) or — under the default `--settle
+blocked` — when blocked (paused/paused_human), since an operator wait wants to
+stop the moment a run needs them; `--settle terminal` keeps polling through a
+pause. `paused_auto` is never settled (the daemon owns its wake). The exit code
+is the worst-outcome run's code through the shared map below — `0` when all
+completed, the halt/quarantine band on a failure, `60` when any run is blocked
+awaiting input — and `75` when `--timeout <dur>` expires first.
+
+`fragua runs tail` backfills the last 200 events before going live (the bound
+is a SQL-level read — long runs never hydrate the full log); pass `--full` to
+replay the entire log. `fragua runs events` prints the last 50 by default;
+`--limit N` keeps the last N matching events, and `--since <seq>` keeps only
+events with seq strictly greater than `<seq>` (unbounded unless `--limit` is
+also given — a forward cursor for scripts).
+
+`fragua runs ls --summary` swaps the per-run list for a fleet rollup: a
+status-count line (queued / running / paused\* / completed / halted / …), a
+per-workflow table (`workflow | running | done | failed`), and the total cost
+across non-terminal runs (the live burn — completed / cancelled / halted are
+excluded). Counts and the cost SUM are SQL aggregations, not a fold over the
+event log. `--status` and `--limit` scope the aggregated set the same way they
+scope the list (`--limit` keeps the most-recently-updated N); `--cwd` narrows
+to one project root; `--json` emits the raw rollup object. Imported runs (they
+executed elsewhere) are excluded.
+
 Discovery flags on the `runs` verbs: `--cwd` (scopes `ls`/`inbox`, resolves
 `diff` worktrees) and `--db` (default: the harness store `~/.fragua/fragua.db`).
+
+---
+
+## move runs between stores — export / import
+
+```sh
+fragua runs export <id> --to <file.fragua>   # write the run as a portable bundle
+fragua show <file.fragua>                    # inspect a bundle without importing it
+fragua import <file.fragua>                  # merge a bundle's runs into a store (default: the harness store)
+```
+
+A `.fragua` bundle carries the run's event log, transcript, workflow, and
+artifact blobs — `run_state` is re-derived on import by replaying the event
+log, and an imported run is inert (its derived `cwd` is null), so the daemon
+never picks it up.
+
+**Bundles are secret-free by construction — with one residual.** Export runs a
+scrubber over every *text* surface (messages, event payloads, routing inputs,
+text-ish artifacts), replacing credentials with `[REDACTED]` markers. **Binary
+artifacts are not scrubbed** — they are only *scanned*: if a live credential
+value appears verbatim inside a binary blob, the export still succeeds but
+reports `liveLiteralHit=true` and prints a warning.
+
+**Policy for a `liveLiteralHit` bundle: treat it as secret-bearing.** Do not
+share it, publish it, or attach it to CI artifacts without first rotating the
+implicated credential (or re-exporting after removing the offending binary
+artifact). `fragua runs export` warns and continues; `fragua ci --export`
+fails closed on the same condition with exit code `80` (see
+[Exit codes](#exit-codes)).
 
 ---
 
@@ -159,6 +221,15 @@ fragua db backup --to <path>             # online backup to a file
 fragua db migrate [--to <version>] [--dry-run] [--allow-data-loss] [--no-backup]
 ```
 
+`validate` is **store-free**: it never opens `~/.fragua/fragua.db` (or any
+store), so it works in CI and editor contexts with no DB present. Model ids
+are checked against the bundled offline pi-ai registry: a near-miss typo of a
+known id (wrong separator, e.g. `claude-sonnet-4.6` for `claude-sonnet-4-6`)
+is an error; an id absent from the bundled registry is only a *warning* —
+it may be a custom model registered in a store's `provider_config` table,
+which `validate` cannot see. The authoritative model check happens at
+enqueue, against the store-backed registry.
+
 `db migrate` is the manual schema-version path: store-client verbs open
 *without* migrating and, on a version mismatch, point here. Direction is
 inferred from `--to <version>` vs the store's current version:
@@ -187,19 +258,21 @@ never downgrades — only this explicit, backed-up command does.
 
 ## Exit codes
 
-`ci`, `run --follow`, and `runs tail` all exit through the same status+reason →
-code map (`packages/cli/src/cli-exit.ts` `cliExitCode`), so a script can
-`case $?` on exactly how a run stopped. Codes are banded by status class.
+`ci`, `run --follow`, `runs tail`, and `runs wait` all exit through the same
+status+reason → code map (`packages/cli/src/cli-exit.ts` `cliExitCode`), so a
+script can `case $?` on exactly how a run stopped. Codes are banded by status
+class. `runs wait` reports the *worst-outcome* run in its selected set.
 
 | Code | Meaning |
 |---|---|
 | `0` | `completed` — the only zero |
 | `1` | couldn't run the workflow at all (not found / unparseable / bad config) |
-| `10`–`17` | `halted` by reason — `error` 10, `aborted_exit` 11, `budget` 12, `occ_exhausted` 13, `timeout_exhausted` 14, `route_not_picked` 15, `route_call_not_isolated` 16, `edge_no_match` 17 |
+| `10`–`18` | `halted` by reason — `error` 10, `aborted_exit` 11, `budget` 12, `occ_exhausted` 13, `timeout_exhausted` 14, `route_not_picked` 15, `route_call_not_isolated` 16, `edge_no_match` 17, `worktree_error` 18 |
 | `30`–`39` | `paused` by reason — `operator` 30, `provider_error` 31, `payment_required` 32, `budget` 33, `max_retries` 34, `goal_gate` 35, `max_loops` 36, `abort_loop` 37, `provider_exhausted` 38, `engine_incompatible` 39 |
 | `50`–`51` | `quarantined` — `orphan_side_effect` 50, `other` 51 |
 | `60` | `paused_human` — the workflow asked a question (no responder) |
 | `70` | a non-terminal status reached as a stop-state (a driver bug) |
+| `75` | `runs wait --timeout` expired before every selected run settled |
 | `80` | `ci` bundle's binary artifact contains a live secret value verbatim (scrubber perimeter — text surfaces are always scrubbed; binary artifacts are scanned-and-fail-closed) |
 | `130` | `cancelled`, or a SIGINT/SIGTERM interrupt |
 

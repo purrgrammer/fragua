@@ -31,7 +31,7 @@ import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { IEventStore, StoredEvent } from "@fragua/store";
+import type { IEventReader, StoredEvent } from "@fragua/store";
 import { Hono } from "hono";
 import type { ProjectTreeReader } from "../ports.ts";
 
@@ -48,7 +48,7 @@ const GIT_TIMEOUT_MS = 5_000;
 const MAX_CHANGES = 5_000;
 
 export interface RunFilesRouteOptions {
-  store: IEventStore;
+  store: IEventReader;
   reader: ProjectTreeReader;
 }
 
@@ -145,7 +145,7 @@ export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
 
 type WorktreeLookup = { kind: "ok"; cwd: string; worktreePath: string } | { kind: "not_found" } | { kind: "disposed" };
 
-async function resolveRunWorktree(store: IEventStore, runId: string): Promise<WorktreeLookup> {
+async function resolveRunWorktree(store: IEventReader, runId: string): Promise<WorktreeLookup> {
   const state = store.getState(runId);
   if (state == null) return { kind: "not_found" };
   if (state.cwd == null) return { kind: "disposed" };

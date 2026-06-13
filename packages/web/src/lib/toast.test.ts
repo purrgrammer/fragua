@@ -23,14 +23,14 @@ beforeEach(() => {
 });
 
 describe("extractErrorMessage", () => {
-  test("unwraps ApiError.body.error", () => {
-    const err = new ApiError("HTTP 409", 409, "/api/foo", { error: "merge conflict detected" });
-    expect(extractErrorMessage(err)).toBe("merge conflict detected");
+  test("leads with ApiError.body.error and appends the wire context (method, path, status)", () => {
+    const err = new ApiError("POST /api/foo → 409 Conflict", 409, "/api/foo", { error: "merge conflict detected" });
+    expect(extractErrorMessage(err)).toBe("merge conflict detected (POST /api/foo → 409 Conflict)");
   });
 
   test("falls back to ApiError.message when body.error is absent", () => {
-    const err = new ApiError("HTTP 500", 500, "/api/foo");
-    expect(extractErrorMessage(err)).toBe("HTTP 500");
+    const err = new ApiError("GET /api/foo → 500 Internal Server Error", 500, "/api/foo");
+    expect(extractErrorMessage(err)).toBe("GET /api/foo → 500 Internal Server Error");
   });
 
   test("returns Error.message for plain errors", () => {
@@ -63,11 +63,11 @@ describe("mutationToast", () => {
     expect(successSpy).not.toHaveBeenCalled();
   });
 
-  test("onError calls toast.error with ApiError.body.error", () => {
+  test("onError calls toast.error with ApiError.body.error plus wire context", () => {
     const { onError } = mutationToast({});
-    const err = new ApiError("HTTP 409", 409, "/api/foo", { error: "boom" });
+    const err = new ApiError("POST /api/foo → 409 Conflict", 409, "/api/foo", { error: "boom" });
     onError(err, undefined);
-    expect(errorSpy).toHaveBeenCalledWith("boom");
+    expect(errorSpy).toHaveBeenCalledWith("boom (POST /api/foo → 409 Conflict)");
   });
 
   test("onError uses static error string override when provided", () => {

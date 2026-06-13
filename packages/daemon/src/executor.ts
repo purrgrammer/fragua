@@ -22,7 +22,9 @@ import {
   ConcurrencyError,
   EVENT_CONTRACT_VERSION,
   type FactEvent,
-  type IEventStore,
+  type IDaemonCoordinator,
+  type IEventReader,
+  type IEventWriter,
   MIN_COMPATIBLE_CONTRACT_VERSION,
   materializeRouting,
   type RunState,
@@ -182,7 +184,7 @@ const PROCEED_DECISION: Extract<core.IntentDecision, { kind: "proceed" }> = (() 
 })();
 
 export interface ExecutorOpts {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IDaemonCoordinator;
   dispatcher: Dispatcher;
   registry: AbortRegistry;
   tools: core.ToolRegistry;
@@ -376,7 +378,10 @@ export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: Lea
       await tryAppendFact(opts.store, runId, state.version, [
         {
           type: "fact.run_halted",
-          payload: { reason: "error", detail: `executor crashed: ${errorMessage(err)}` },
+          payload: {
+            reason: "error",
+            detail: `executor crashed at ${state.currentNode ?? "<no-node>"}: ${errorMessage(err)}`,
+          },
         },
       ]);
     }
@@ -437,6 +442,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // fixtures) from "the workflow row exists but won't parse". Only the
   // latter halts the run; graphFor returns null for both.
   let workflowUnparseable = false;
+  let workflowParseError: string | undefined;
   const graphFor = (workflowSha: string | null): Graph | null => {
     if (workflowSha == null) return null;
     if (cachedGraph != null) return cachedGraph;
@@ -445,7 +451,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       cachedGraph = result.graph;
       return cachedGraph;
     }
-    if (result.reason === "unparseable") workflowUnparseable = true;
+    if (result.reason === "unparseable") {
+      workflowUnparseable = true;
+      workflowParseError = result.errorMessage;
+    }
     return null;
   };
 
@@ -525,7 +534,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         await tryAppendFact(opts.store, runId, state.version, [
           {
             type: "fact.run_halted",
-            payload: { reason: "error", detail: "workflow_parse_failed" },
+            payload: { reason: "error", detail: workflowParseFailedDetail(workflowParseError) },
           },
         ]);
         return { kind: "terminal" };
@@ -657,7 +666,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           {
             type: "fact.run_halted",
             payload: {
-              reason: "error",
+              reason: "worktree_error",
               detail: `worktree_provision_failed: ${detail}`,
             },
           },
@@ -1929,6 +1938,17 @@ export interface LeakBudget {
 /** A node's allowed/denied tool scope from its graph attrs — hard-filters
  * `ctx.tools` at HandlerContext construction so a handler can't reach a tool the
  * node didn't declare. Shared by the linear + fan-out dispatch paths. */
+// The event-payload cap is 4KB; bound the appended parse error so a
+// pathological message can never make the halt append itself fail.
+const PARSE_ERROR_DETAIL_MAX = 300;
+
+function workflowParseFailedDetail(errorMessage: string | undefined): string {
+  if (errorMessage == null || errorMessage === "") return "workflow_parse_failed";
+  const bounded =
+    errorMessage.length > PARSE_ERROR_DETAIL_MAX ? `${errorMessage.slice(0, PARSE_ERROR_DETAIL_MAX)}…` : errorMessage;
+  return `workflow_parse_failed: ${bounded}`;
+}
+
 function readToolScope(nodeAttrs: { allowed_tools?: unknown; denied_tools?: unknown } | undefined): {
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];
@@ -1944,7 +1964,7 @@ function readToolScope(nodeAttrs: { allowed_tools?: unknown; denied_tools?: unkn
  * fan-out dispatch paths so this batching can't drift between them (it did once:
  * the fan-out path silently lacked the timer until it was re-added). */
 function makeObservabilitySink(
-  store: IEventStore,
+  store: IEventWriter,
   runId: string,
   label: string,
 ): { push: (ev: { type: string; payload: Record<string, unknown> }) => void; flush: () => void } {
@@ -1986,7 +2006,7 @@ function makeObservabilitySink(
  * failed. One windowed SQL pass (`NODE_LIFECYCLE_FACT_TYPES`) — this runs every
  * fan-out dispatch turn, and materialising the full event log per turn scaled
  * with run lifetime, not frontier size. */
-function abortedActiveBranches(store: IEventStore, runId: string, active: readonly string[]): string[] {
+function abortedActiveBranches(store: IEventReader, runId: string, active: readonly string[]): string[] {
   if (active.length === 0) return [];
   const latest = new Map(store.getLatestLifecycleByNode(runId).map((r) => [r.nodeId, r.type]));
   return active.filter((n) => latest.get(n) === "fact.node_aborted");
@@ -1996,7 +2016,7 @@ function abortedActiveBranches(store: IEventStore, runId: string, active: readon
  * them into a Record<nodeId, OutputsValue> with last-write-wins semantics
  * (the last iteration wins per node). Called before each dispatch so
  * outputs substitution resolves in prompts and tool commands. */
-function resolveRunOutputs(store: IEventStore, runId: string): Record<string, OutputsValue> | undefined {
+function resolveRunOutputs(store: IEventReader, runId: string): Record<string, OutputsValue> | undefined {
   const rows = store.getOutputsForRun(runId);
   if (rows.length === 0) return undefined;
   const out: Record<string, OutputsValue> = {};

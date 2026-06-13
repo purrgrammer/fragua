@@ -74,18 +74,20 @@ fragua run <workflow>  \
 fragua runs ls [--status queued,running,…] [--limit N]   # one line per run: id · status · title
 fragua runs inbox                                        # runs awaiting an operator decision (2 sections)
 fragua runs status <id>                                  # one run: lifecycle + outcome + the why (pause/halt reason, quarantine orphans, HITL gate)
-fragua runs tail <id>                                    # follow an existing run's event log to terminal (live)
+fragua runs tail <id> [--full]                           # follow an existing run's event log to terminal (live; backfills the last 200 events, --full for the whole log)
+fragua runs wait <id...> | --workflow <name> | --all-running   # block until a SET of runs settles; one line per run per change
+     [--timeout <dur>] [--settle terminal|blocked]       #   exit 0 (all completed) / banded (halt/quarantine) / 60 (blocked) / 75 (timeout)
 fragua runs diff <id> [--against base|previous|<eventIdx>] [--snap <eventIdx>] [--path <p>]   # review the change
 ```
 
-`fragua run` tails the run it enqueues; to watch a run you *didn't* just start, `fragua runs tail <id>` (live event log to terminal, same renderer + inline HITL picker); for a one-shot snapshot, `fragua runs status <id>`. `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
+`fragua run` tails the run it enqueues; to watch a run you *didn't* just start, `fragua runs tail <id>` (live event log to terminal, same renderer + inline HITL picker); for a one-shot snapshot, `fragua runs status <id>` (which also prints a "requeued after daemon crash" line when the startup sweep recovered the run). `inbox` is the operator's worklist: **NEEDS INPUT** (blocked: HITL / paused / quarantined) and **READY TO LAND** (terminal runs with recoverable work + diffstat).
 
 **Two status words, don't conflate.** Lifecycle (`queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) answers "still going?"; outcome (`success | fail | null`) answers "did it succeed?" once terminal. `fragua runs ls` shows the lifecycle status.
 
 **Move a run between stores (experimental).** A run that executed elsewhere — a CI `.fragua` artifact, a teammate's box — imports into your store so you can inspect it here:
 
 ```sh
-fragua runs export <id> --to <file.fragua>   # write a run as a portable, secret-free bundle
+fragua runs export <id> --to <file.fragua>   # write a run as a portable, secret-free bundle (warns on liveLiteralHit — treat such a bundle as secret-bearing; rotate the implicated credential before sharing)
 fragua show <file.fragua>                     # validate + summarize a bundle (no store needed)
 fragua import <file.fragua> [--db <target>]   # merge its runs into a store (default: the harness store)
 ```
@@ -93,10 +95,16 @@ fragua import <file.fragua> [--db <target>]   # merge its runs into a store (def
 A bundle is its own entity: it carries each run's raw **event log**, transcript, workflow, and artifact blobs — **never credentials** (secret-free by construction), and **no `run_state`** (that's a projection, re-derived on import by replaying the log). `fragua ci --export <file.fragua>` writes the same bundle for the run it just executed. `import` is a store-client like the other verbs — it lands in an **existing** store (never creates or migrates one); the imported run is **inert** (its derived `cwd` is null, so the daemon never picks it up), and `runs status|events|messages <id>` work against it. A bundle from a newer engine still imports for inspection — only *resume* would gate on the contract version, and resume of an imported run isn't supported (inspect, not resume). The format and verbs are release-gated and may change.
 
 ```sh
-# Poll to terminal (lifecycle status, not outcome):
-until fragua runs ls --limit 50 | grep "$RID" \
-      | grep -qE 'completed|halted|cancelled|paused_human|paused|quarantined'; do sleep 30; done
+# Block until a set of runs settles — replaces a hand-rolled `runs ls | grep` loop.
+# Polls the read plane (no HTTP), prints one line per run per lifecycle change, and
+# exits through the shared cli-exit map: 0 when all completed, the halt/quarantine
+# band on a failure, 60 when any run is blocked awaiting input, 75 on --timeout.
+fragua runs wait "$RID"                          # one or more ids
+fragua runs wait --workflow nightly-sweep        # every currently-active run of a workflow
+fragua runs wait --all-running --timeout 30m     # the whole fleet, with a deadline
 ```
+
+A run is *settled* when terminal (completed/halted/cancelled/quarantined) or — under the default `--settle blocked` — when blocked (paused/paused_human): an operator wait should stop the moment a run needs them. `--settle terminal` keeps polling through a pause; `paused_auto` is never settled (the daemon owns its wake), so `wait` polls through it in both modes.
 
 **Lifecycle states beyond `running`/`completed`:**
 

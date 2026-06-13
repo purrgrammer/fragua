@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { OutputsProfileError, parseOutputsDecl, validateOutputsDeclStatic } from "../../src/engine/outputs-profile.ts";
+import { substituteOutputs } from "../../src/engine/outputs-substitution.ts";
 import { canonicalizeOutputsDecl, compileOutputsToTypeBox, validateOutputsValue } from "../../src/types/outputs.ts";
 
 describe("outputs profile parser", () => {
@@ -404,6 +405,35 @@ describe("validateOutputsValue (runtime)", () => {
     expect(ok).toBeNull();
     const bad = validateOutputsValue(decl, { tags: ["a", 2] });
     expect(bad).toContain("must be a string");
+  });
+
+  test("rejects non-finite numbers in a scalar number field (Infinity, -Infinity, NaN)", () => {
+    const decl = parseOutputsDecl({ count: { type: "number" } });
+    expect(validateOutputsValue(decl, { count: Infinity })).toContain("finite");
+    expect(validateOutputsValue(decl, { count: -Infinity })).toContain("finite");
+    expect(validateOutputsValue(decl, { count: NaN })).toContain("finite");
+  });
+
+  test("rejects non-finite numbers nested in records and arrays", () => {
+    const recDecl = parseOutputsDecl({ meta: { type: "object", fields: { loc: { type: "number" } } } });
+    expect(validateOutputsValue(recDecl, { meta: { loc: Infinity } })).toContain("finite");
+    const arrDecl = parseOutputsDecl({ nums: { type: "array", items: { type: "number" } } });
+    expect(validateOutputsValue(arrDecl, { nums: [1, NaN] })).toContain("finite");
+  });
+
+  test("a non-finite number accepted by emit_output validation poisons substitution as the string 'null'", () => {
+    // End-to-end repro of the silent degradation: validation lets Infinity
+    // through, and JSON serialization of the record renders it as "null" in
+    // the consuming prompt — no error, fail-closed contract broken. Once
+    // validation rejects non-finite values, the poisoned value can never
+    // reach substitution.
+    const decl = parseOutputsDecl({ meta: { type: "object", fields: { loc: { type: "number" } } } });
+    const err = validateOutputsValue(decl, { meta: { loc: Infinity } });
+    if (err === null) {
+      const rendered = substituteOutputs("data=${{ outputs.scope.meta }}", { scope: { meta: { loc: Infinity } } });
+      expect(rendered).not.toBe('data={"loc":null}'); // FAILS today: renders the poisoned "null"
+    }
+    expect(err).toContain("finite");
   });
 
   test("an optional field may be omitted, null, or a valid value — required ones may not", () => {

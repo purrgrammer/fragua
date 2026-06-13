@@ -290,4 +290,44 @@ describe("executor — concurrency", () => {
 
     r.store.close();
   });
+
+  test("outer-crash halt detail names the node that was executing", async () => {
+    const yaml = `name: t\nsteps:\n  work: {type: llm, prompt: x}\n`;
+    const r = rig({ yaml });
+    setupRun(r, "work", 10);
+
+    enqueue(r, "boom", "start");
+    r.store.claimNextRun(1);
+
+    // Let the run advance to the `work` node, then crash inside the
+    // dispatch path — by which point `current_node` is pinned to
+    // `work`, so the outer safety net can read it and name it.
+    const origGet = r.dispatcher.get.bind(r.dispatcher);
+    r.dispatcher.get = ((sha: string, nodeId: string) => {
+      if (nodeId === "work") throw new Error("induced dispatch crash");
+      return origGet(sha, nodeId);
+    }) as typeof r.dispatcher.get;
+
+    const shutdown = new AbortController();
+    let caught: unknown = null;
+    try {
+      await runOne("boom", commonOpts(r, shutdown.signal, 1));
+    } catch (err) {
+      caught = err;
+    }
+    expect((caught as Error).message).toMatch(/induced dispatch crash/);
+
+    r.dispatcher.get = origGet;
+    const events = r.store.getEvents("boom");
+    const halt = events.find((e) => e.type === "fact.run_halted");
+    expect(halt).not.toBeUndefined();
+    const payload = halt!.payload as { reason: string; detail: string };
+    expect(payload.reason).toBe("error");
+    expect(payload.detail).toMatch(/executor crashed at work/);
+    expect(payload.detail).toMatch(/induced dispatch crash/);
+
+    expect(r.store.getState("boom")?.status).toBe("halted");
+
+    r.store.close();
+  });
 });

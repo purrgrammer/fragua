@@ -48,7 +48,9 @@ export function exportCommand(opts: ExportOptions): Promise<number> {
     writeFileSync(dest, bytes);
     if (liveLiteralHit) {
       console.warn(
-        chalk.yellow(`export: bundle's binary artifacts contain a live secret value verbatim — review before sharing`),
+        chalk.yellow(
+          `export: a live credential is verbatim in a binary artifact (binary blobs are not scrubbed) — treat this bundle as secret-bearing: do not share it or attach it to CI artifacts without rotating the implicated credential`,
+        ),
       );
     }
     console.log(chalk.green(`exported run ${opts.runId} → ${dest}`));

@@ -30,10 +30,15 @@ const SNAPSHOT = join(__dirname, "contract-surface.snapshot.json");
  * shapes. `TERMINAL_STATUSES` + `AUTO_WAKE_PAUSE_REASONS` are in because the
  * reducer projects status through them. */
 const SURFACE_DECLS = [
+  // contract: no-bump — RunStatus/HaltReason reshaped into derived types over
+  // the RUN_STATUSES/HALT_REASONS tuples (enum-consumer mechanization); the
+  // literal sets are unchanged and now hashed via the tuple declarations.
+  "RUN_STATUSES",
   "RunStatus",
   "TERMINAL_STATUSES",
   "PauseReason",
   "AUTO_WAKE_PAUSE_REASONS",
+  "HALT_REASONS",
   "HaltReason",
   "QuarantineReason",
   "RunEnqueuedPayload",

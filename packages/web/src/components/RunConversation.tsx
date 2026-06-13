@@ -22,6 +22,8 @@
 //   - `reasoning-<ordinal>-<idx>`  — one per thinking block
 //   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
+//   - `conversation-messages-error` — messages fetch failed, nothing to show
+//   - `conversation-messages-error-inline` — fetch failed but stale rows render
 
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
@@ -51,6 +53,7 @@ import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { EmptyState } from "@/components/ui/empty-state";
 import type { NodeState, RunDetail, RunMessageRow } from "@/lib/api";
 import { type FanoutTopology, fanoutTopology } from "@/lib/fanout-topology";
 import { type StreamingBlock, type StreamingMessage, type ToolStream, UNSCOPED_NODE } from "@/lib/useRunLive";
@@ -73,6 +76,11 @@ export interface RunConversationProps {
    * landed) but no work is happening. */
   isPaused?: boolean;
   isLoading?: boolean;
+  /** The most recent messages fetch failed (`useRunLive.messagesError`).
+   * With no rows to show this renders the standard error EmptyState;
+   * with stale rows it renders them plus an inline failure note — a
+   * fetch error must never wipe or blank the transcript. */
+  messagesError?: boolean;
   /** Free-form text the run was launched with. Rendered as the first
    * user message at the top. The agent's event stream carries only
    * synthesized `role=user` shells, so the initial prompt lives here. */
@@ -123,6 +131,7 @@ export function RunConversation({
   isLive = false,
   isPaused = false,
   isLoading = false,
+  messagesError = false,
   userInput,
   toolStreams,
   hitl = null,
@@ -337,8 +346,7 @@ export function RunConversation({
     return map;
   }, [streamingOnlyParents, fanout, streamingNodeIdList]);
 
-  const empty =
-    !isLoading &&
+  const noContent =
     !userInput &&
     visibleSections.length === 0 &&
     streamingByNode.size === 0 &&
@@ -346,20 +354,43 @@ export function RunConversation({
     placeholderToolNodes.length === 0 &&
     hitl == null &&
     !hasDecisions;
+  // The fetch-failed state isn't gated on `isLoading` — the messages
+  // request already settled (in failure); waiting on the SSE handshake
+  // would leave the pane blank exactly when it must explain itself.
+  const empty = noContent && (messagesError || !isLoading);
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
       <Conversation className="flex-1">
         {empty ? (
           <ConversationContent>
-            <ConversationEmptyState
-              data-testid="conversation-empty"
-              title="No conversation yet"
-              description="The agent hasn't produced any messages for this run."
-            />
+            {messagesError ? (
+              <EmptyState
+                data-testid="conversation-messages-error"
+                title="Couldn't load the conversation"
+                description="The messages request failed. It retries automatically as new events arrive — or reload the page."
+              />
+            ) : (
+              <ConversationEmptyState
+                data-testid="conversation-empty"
+                title="No conversation yet"
+                description="The agent hasn't produced any messages for this run."
+              />
+            )}
           </ConversationContent>
         ) : (
           <ConversationContent>
+            {messagesError && (
+              // biome-ignore lint/a11y/useSemanticElements: <output> is form-oriented; role="status" is the established live-region pattern (same rationale as EmptyState).
+              <div
+                data-testid="conversation-messages-error-inline"
+                role="status"
+                className="flex items-center gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-xs text-sw-muted"
+              >
+                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-sw-accent-warn" />
+                <span>Couldn't refresh the conversation — showing the last loaded messages.</span>
+              </div>
+            )}
             {userInput && <UserPromptMessage text={userInput} />}
             {decisionBuckets.before.map((d) => (
               <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />

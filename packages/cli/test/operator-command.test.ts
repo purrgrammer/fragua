@@ -16,12 +16,13 @@ import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import type { RunSnapshotReader } from "@fragua/server";
 import { createServer } from "@fragua/server";
-import { type IEventStore, SqliteStore } from "@fragua/store";
+import { type IEventStore, RUN_STATUSES, SqliteStore } from "@fragua/store";
 import { doctorCommand } from "../src/commands/doctor.ts";
 import {
   acceptCommand,
   artifactCommand,
   artifactsCommand,
+  BLOCKED_STATUSES,
   budgetCommand,
   cancelCommand,
   discardCommand,
@@ -40,8 +41,26 @@ import {
   steerCommand,
   stepsCommand,
   tailCommand,
+  UNBLOCKED_STATUSES,
   unquarantineCommand,
 } from "../src/commands/operator.ts";
+
+describe("operator inbox status taxonomy", () => {
+  test("BLOCKED_STATUSES are all valid RunStatuses", () => {
+    for (const s of BLOCKED_STATUSES) {
+      expect(RUN_STATUSES).toContain(s);
+    }
+  });
+
+  test("BLOCKED ⊎ UNBLOCKED partitions RUN_STATUSES exactly (completeness)", () => {
+    const union = new Set<string>([...BLOCKED_STATUSES, ...UNBLOCKED_STATUSES]);
+    // No overlap and no gap: every lifecycle status renders in exactly one
+    // inbox section. A newly-added literal that fits neither trips this.
+    expect(union.size).toBe(BLOCKED_STATUSES.length + UNBLOCKED_STATUSES.length);
+    expect(union).toEqual(new Set<string>(RUN_STATUSES));
+    expect(BLOCKED_STATUSES).toContain("quarantined");
+  });
+});
 
 // Permissive snapshot reader for the server (inbox/diff routes). The CLI
 // store-clients don't use it; the real git lives in @fragua/workspace tests.
@@ -218,6 +237,50 @@ describe("fragua operator verbs", () => {
     expect(out).toContain("completed");
   });
 
+  test("status: prints 'requeued after daemon crash at <ts>' when the log carries the fact", async () => {
+    seedQueued(r.store, "rcr");
+    const s0 = r.store.getState("rcr")!;
+    r.store.appendFact(
+      "rcr",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState("rcr")!;
+    r.store.appendFact(
+      "rcr",
+      [{ type: "fact.run_requeued_after_crash", payload: { prevNode: "n1", lastAliveAt: Date.now() } }],
+      s1.version,
+    );
+    const requeueTs = r.store.getEvents("rcr").find((e) => e.type === "fact.run_requeued_after_crash")!.ts;
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rcr", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain(`requeued after daemon crash at ${new Date(requeueTs).toISOString()}`);
+    expect(out).toContain("was at node n1");
+  });
+
+  test("status: no crash-requeue fact → no requeue line", async () => {
+    seedCommitted(r.store, "rnc");
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rnc", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).not.toContain("requeued after daemon crash");
+  });
+
   test("status: unknown run → exit 1", async () => {
     const code = await statusCommand({ runId: "nope", dbPath: r.dbPath });
     expect(code).toBe(1);
@@ -388,6 +451,46 @@ describe("fragua operator verbs", () => {
     expect(code).toBe(1);
   });
 
+  test("respond: gate with no declared routes → accepted with a skip warning, exit 0", async () => {
+    // Fail-open path: routes: [] (older event shape) skips the enum check.
+    // The input still lands (compat), but the skip must surface as a
+    // structured warning carrying run id + route.
+    r.store.enqueueRun({ runId: "rh4", workflowSha: "wf", cwd: "/tmp/repo" });
+    const s0 = r.store.getState("rh4")!;
+    r.store.appendFact(
+      "rh4",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState("rh4")!;
+    r.store.appendFact(
+      "rh4",
+      [{ type: "fact.run_paused_human", payload: { nodeId: "n1", text: "approve?", routes: [] } }],
+      s1.version,
+    );
+
+    const warnings: string[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((...a: unknown[]) => {
+      warnings.push(a.join(" "));
+    });
+    try {
+      const code = await respondCommand({ runId: "rh4", route: "anything", dbPath: r.dbPath });
+      expect(code).toBe(0);
+      expect(lastIntent(r.store, "rh4")).toBe("intent.human_input");
+      const warned = warnings.join("\n");
+      expect(warned).toContain("without route validation");
+      expect(warned).toContain("rh4");
+      expect(warned).toContain('route="anything"');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("respond: run not at a HITL gate → exit 1", async () => {
     seedCommitted(r.store, "rh3"); // terminal, not paused_human
     const code = await respondCommand({ runId: "rh3", route: "approve", dbPath: r.dbPath });
@@ -444,6 +547,26 @@ describe("fragua forensics verbs", () => {
     expect(out()).not.toContain("fact.run_started");
   });
 
+  test("events: --since skips events at or below the seq", async () => {
+    seedCommitted(r.store, "ev5");
+    const started = r.store.getEventsByType("ev5", "fact.run_started")[0]!;
+    const code = await eventsCommand({ runId: "ev5", since: started.seq, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(out()).toContain("fact.run_completed");
+    expect(out()).not.toContain("fact.run_started");
+    expect(out()).not.toContain("intent.run_enqueued");
+  });
+
+  test("events: --limit returns exactly the last N lines, oldest-first", async () => {
+    seedCommitted(r.store, "ev6");
+    const code = await eventsCommand({ runId: "ev6", limit: 2, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(logs).toHaveLength(2);
+    expect(logs[0]).toContain("fact.run_completed");
+    expect(logs[1]).toContain("fact.snapshot_recorded");
+    expect(out()).not.toContain("fact.run_started");
+  });
+
   test("events: --json emits an array of stored events", async () => {
     seedCommitted(r.store, "ev3");
     const code = await eventsCommand({ runId: "ev3", json: true, dbPath: r.dbPath });
@@ -455,6 +578,48 @@ describe("fragua forensics verbs", () => {
   test("events: unknown run → exit 1", async () => {
     const code = await eventsCommand({ runId: "nope", dbPath: r.dbPath });
     expect(code).toBe(1);
+  });
+
+  test("tail: backfill bounded to last 200 by default, --full replays all", async () => {
+    const runId = "tl1";
+    r.store.enqueueRun({ runId, workflowSha: "wf", cwd: "/tmp/repo" });
+    const s0 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: "wf",
+            contractVersion: s0.contractVersion,
+            startNode: "n1",
+            baseGitSha: BASE,
+            baseGitRef: "main",
+          },
+        },
+      ],
+      s0.version,
+    );
+    for (let i = 0; i < 250; i++) {
+      r.store.appendObservabilityEvents(runId, [{ type: "llm.start", payload: { nodeId: "n1", iteration: i } }]);
+    }
+    const s1 = r.store.getState(runId)!;
+    r.store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
+    const total = r.store.getEvents(runId).length; // 253: enqueue + started + 250 obs + completed
+
+    const errs: string[] = [];
+    (console.error as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errs.push(a.join(" "));
+    });
+
+    await tailCommand({ runId, dbPath: r.dbPath });
+    expect(logs).toHaveLength(200); // bounded backfill, stdout = event lines only
+    expect(errs.join("\n")).toContain("last 200 events"); // truncation notice on stderr
+
+    logs.length = 0;
+    await tailCommand({ runId, full: true, dbPath: r.dbPath });
+    expect(logs).toHaveLength(total); // --full replays the entire log
   });
 
   test("steps: seedCommitted (no llm.start) → (no LLM steps), exit 0", async () => {

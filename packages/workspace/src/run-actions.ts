@@ -84,8 +84,16 @@ function checkGate(
 }
 
 export type AcceptResult =
-  | { ok: true; sha: string; replayed: number; tailStaged: boolean }
+  | { ok: true; sha: string; replayed: number; tailStaged: boolean; stashPopConflict?: boolean }
   | { ok: false; reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict"; detail: string };
+
+/** Knobs on the accept action. `autostash` mirrors `git rebase --autostash`:
+ * stash the operator's unrelated working-tree changes before the apply and
+ * restore them after — so a tree dirty only in files the run doesn't touch no
+ * longer refuses with `dirty_tree`. Off by default (behavior unchanged). */
+export interface AcceptActionOptions {
+  autostash?: boolean;
+}
 
 /**
  * Land a terminal run's work on the operator's current branch (HEAD in `cwd`).
@@ -95,12 +103,54 @@ export type AcceptResult =
  * `merge-tree` of the whole run, or by the cherry-pick / tail-apply — leaves
  * the operator's branch and working tree untouched and returns
  * `{ ok:false, reason:"conflict" }` (resolve via revive).
+ *
+ * When the run's base is NOT an ancestor of HEAD (e.g. the branch the run
+ * forked from was squash-merged), the merge-tree probe's auto merge-base
+ * falls back to an older fork point and re-merges changes HEAD already has,
+ * reporting spurious conflicts. In that case the probe is skipped and the
+ * base..tip change is applied 3-way directly — commits replayed in order via
+ * cherry-pick (each against its own parent), the tail via `apply --3way`
+ * against the snapshot's base blobs. A genuine textual conflict still rolls
+ * back and refuses with `conflict`.
+ *
+ * With `options.autostash`, the operator's unrelated working-tree changes are
+ * stashed (`git stash push --include-untracked`) before the apply and popped
+ * after — on success AND on a refusal, so the stash is always restored. If the
+ * pop itself conflicts with the just-landed change the stash is left intact
+ * (not dropped) and the success result carries `stashPopConflict:true`.
  */
-export async function applyAccept(git: GitExec, gate: RunActionGate): Promise<AcceptResult> {
+export async function applyAccept(
+  git: GitExec,
+  gate: RunActionGate,
+  options?: AcceptActionOptions,
+): Promise<AcceptResult> {
   const g = checkGate(gate);
   if (!g.ok) return g;
-  const { runId, baseGitSha } = gate;
   const cwd = g.cwd;
+  if (options?.autostash !== true) return acceptInner(git, gate, cwd);
+
+  // Autostash: park unrelated dirt so the clean-tree gate doesn't refuse, then
+  // restore it whatever the outcome. `stash push` is a no-op (exit 0, no new
+  // stash) on a clean tree, so compare refs/stash to know if we actually saved.
+  const before = await revParse(git, cwd, "refs/stash");
+  await git(cwd, ["stash", "push", "--include-untracked", "--quiet"]);
+  const after = await revParse(git, cwd, "refs/stash");
+  const stashed = after != null && after !== before;
+
+  const result = await acceptInner(git, gate, cwd);
+  if (!stashed) return result;
+
+  const pop = await git(cwd, ["stash", "pop"]);
+  if (pop.exitCode !== 0 && result.ok) {
+    // The pop collides with the change we just landed. Don't drop the stash —
+    // the operator's work would be lost. Leave it on the stack and flag it.
+    return { ...result, stashPopConflict: true };
+  }
+  return result;
+}
+
+async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Promise<AcceptResult> {
+  const { runId, baseGitSha } = gate;
   const snapRef = `refs/fragua/snapshots/${runId}`;
 
   const snapCommit = await revParse(git, cwd, snapRef);
@@ -120,20 +170,38 @@ export async function applyAccept(git: GitExec, gate: RunActionGate): Promise<Ac
     return { ok: false, reason: "dirty_tree", detail: "operator working tree is not clean" };
   }
 
-  // Pre-probe: 3-way merge of the WHOLE run (commits + dirt) onto HEAD, in
-  // memory, no mutation. auto-base = merge-base(HEAD, snapCommit) = the run's
-  // base, so this single probe predicts both the replay and the tail.
-  const probe = await git(cwd, ["merge-tree", "--write-tree", target, snapCommit]);
-  if (probe.exitCode !== 0) {
-    return { ok: false, reason: "conflict", detail: "run does not merge cleanly onto HEAD" };
-  }
+  // The probe below is only sound when the run's base is in HEAD's ancestry:
+  // merge-tree's auto merge-base must resolve to the run's base, not an older
+  // fork point (squash-merges break this and yield false conflicts).
+  const baseIsAncestor = (await git(cwd, ["merge-base", "--is-ancestor", baseGitSha, target])).exitCode === 0;
 
-  // Dirt-only run (no workflow commits): stage the merged tree the probe
-  // already produced — no cherry-pick needed.
-  if (runHead === baseGitSha) {
-    const mergedTree = probe.stdout.trim().split("\n", 1)[0] ?? "";
-    await mustGit(git, cwd, ["read-tree", mergedTree]);
-    await mustGit(git, cwd, ["checkout-index", "-a", "-f"]);
+  if (baseIsAncestor) {
+    // Pre-probe: 3-way merge of the WHOLE run (commits + dirt) onto HEAD, in
+    // memory, no mutation. auto-base = merge-base(HEAD, snapCommit) = the run's
+    // base, so this single probe predicts both the replay and the tail.
+    const probe = await git(cwd, ["merge-tree", "--write-tree", target, snapCommit]);
+    if (probe.exitCode !== 0) {
+      return { ok: false, reason: "conflict", detail: "run does not merge cleanly onto HEAD" };
+    }
+
+    // Dirt-only run (no workflow commits): stage the merged tree the probe
+    // already produced — no cherry-pick needed.
+    if (runHead === baseGitSha) {
+      const mergedTree = probe.stdout.trim().split("\n", 1)[0] ?? "";
+      await mustGit(git, cwd, ["read-tree", mergedTree]);
+      await mustGit(git, cwd, ["checkout-index", "-a", "-f"]);
+      return { ok: true, sha: target, replayed: 0, tailStaged: snapTree !== runTree };
+    }
+  } else if (runHead === baseGitSha) {
+    // Dirt-only run across a broken ancestry: 3-way apply of the base..snap
+    // delta — the snapshot keeps the base blobs, so resolution works even
+    // though the base commit is not in HEAD's history.
+    const patch = await git(cwd, ["diff", "--full-index", "--binary", runTree, snapTree]);
+    const apply = await git(cwd, ["apply", "--3way", "--index"], { stdin: patch.stdout });
+    if (apply.exitCode !== 0) {
+      await git(cwd, ["reset", "--hard", target]);
+      return { ok: false, reason: "conflict", detail: "run does not apply onto HEAD (3-way across squashed base)" };
+    }
     return { ok: true, sha: target, replayed: 0, tailStaged: snapTree !== runTree };
   }
 

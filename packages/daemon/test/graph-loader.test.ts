@@ -43,14 +43,37 @@ describe("makeGraphLoader — deserialize stored IR", () => {
     expect(res).toEqual({ ok: false, reason: "missing" });
   });
 
-  test("malformed IR JSON → reason 'unparseable'", () => {
+  test("malformed IR JSON → reason 'unparseable' carrying the JSON parse message", () => {
     const loader = makeGraphLoader(fakeStore({ s: row({ ir: "}{ broken", irVersion: CURRENT_IR_VERSION }) }));
-    expect(loader.load("s")).toEqual({ ok: false, reason: "unparseable" });
+    const res = loader.load("s");
+    expect(res.ok).toBe(false);
+    if (res.ok || res.reason !== "unparseable") throw new Error("expected unparseable");
+    expect(res.errorMessage).toMatch(/JSON/i);
   });
 
-  test("ir_version newer than this runtime → 'unparseable' (no down-conversion)", () => {
+  test("ir_version newer than this runtime → 'unparseable' (no down-conversion) with the version message", () => {
     const ir = serializeGraph(parseWorkflow(SOURCE));
     const loader = makeGraphLoader(fakeStore({ s: row({ ir, irVersion: CURRENT_IR_VERSION + 1 }) }));
-    expect(loader.load("s")).toEqual({ ok: false, reason: "unparseable" });
+    const res = loader.load("s");
+    expect(res.ok).toBe(false);
+    if (res.ok || res.reason !== "unparseable") throw new Error("expected unparseable");
+    expect(res.errorMessage).toContain(`ir_version ${CURRENT_IR_VERSION + 1} > supported ${CURRENT_IR_VERSION}`);
+  });
+
+  test("unparseable result — including its message — is memoized (no re-parse per dispatch)", () => {
+    let calls = 0;
+    const broken = row({ ir: "}{ broken", irVersion: CURRENT_IR_VERSION });
+    const loader = makeGraphLoader({
+      getWorkflow: () => {
+        calls++;
+        return broken;
+      },
+    });
+    const first = loader.load("s");
+    const second = loader.load("s");
+    expect(second).toEqual(first);
+    if (second.ok || second.reason !== "unparseable") throw new Error("expected unparseable");
+    expect(second.errorMessage).toMatch(/JSON/i);
+    expect(calls).toBe(1);
   });
 });

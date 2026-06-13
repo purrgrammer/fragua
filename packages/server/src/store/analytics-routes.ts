@@ -21,7 +21,8 @@ import {
   type BucketKind,
   type DrilldownFilters,
   decodeCursor,
-  type IEventStore,
+  type IAnalyticsReader,
+  type IEventReader,
   type WorkflowScopeFilter,
 } from "@fragua/store";
 import { Hono } from "hono";
@@ -29,7 +30,7 @@ import type { WorkflowReader } from "../ports.ts";
 import { runStateToSummary } from "./runs-adapter.ts";
 
 export interface AnalyticsRoutesOpts {
-  store: IEventStore;
+  store: IAnalyticsReader & IEventReader;
   workflowReader?: WorkflowReader;
 }
 

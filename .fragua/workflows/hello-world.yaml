@@ -1,0 +1,45 @@
+# hello-world.yaml — the zero-dependency first run.
+#
+# Provider-neutral by omission: this workflow pins NO `provider:` / `model:`,
+# so it executes on whatever provider you configured with `fragua providers
+# add`. The same file runs on Anthropic, OpenAI, Gemini, or any pi-ai provider
+# — switch providers without editing a single line here.
+#
+# Resolution when a step omits provider/model (highest wins):
+#   1. `defaults:` in this file (none here, on purpose).
+#   2. `defaults:` in ~/.fragua/config.yaml  → `provider:` + `model:`.
+#   3. Autodetect — the first provider you hold a credential for.
+#
+# To pin a provider/model for every workflow that omits one, set the config
+# defaults (no YAML edit here needed):
+#
+#   # ~/.fragua/config.yaml
+#   defaults:
+#     provider: openai
+#     model: gpt-5
+#
+#   bun run fragua run hello-world
+#   bun run fragua run hello-world --input name="Ada"
+
+name: hello-world
+goal: Greet the operator and write a one-line hello file, proving the install runs end to end on the operator's chosen provider.
+
+# A tiny hard cap — the greeting costs a fraction of this; at the cap the run
+# pauses for the operator rather than overspending.
+budget: 1.00
+budget-policy: pause
+
+inputs:
+  name:
+    type: string
+    default: world
+    description: Who to greet
+
+steps:
+  greet:
+    type: llm
+    allowed-tools: [write]
+    prompt: |
+      Write a short, friendly one-line greeting addressed to "${{ inputs.name }}"
+      into a file named hello.txt in the current directory, then stop.
+    next: exit

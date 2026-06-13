@@ -1,10 +1,12 @@
 // Intent-plane discipline (intent-plane.md §3.1): the plane
 // (@fragua/core/intent-plane) is the ONLY place allowed to call the three
 // store-write methods it owns — `appendIntent`, `enqueueRun`, `saveWorkflow`.
-// Adapters (HTTP routes, the daemon dispatcher) must go through
-// `plane.commit` / `commitEnqueue` / `commitSaveWorkflow`. This scan fails the
-// build if a store-write call appears in an adapter, so "one audit surface for
-// writes" is enforced, not merely asserted in prose.
+// Adapters (HTTP routes, the daemon dispatcher, the CLI store-client) must
+// go through `plane.commit` / `commitEnqueue` / `commitSaveWorkflow`. This
+// scan fails the build if a store-write call appears in an adapter, so "one
+// audit surface for writes" is enforced, not merely asserted in prose.
+// The plane's own internals (packages/core/src/intent-plane) are exempt by
+// construction: core is not in SCAN_DIRS.
 //
 // Shape: packages/core/test/handler/discipline.test.ts, store/test/lint.test.ts.
 
@@ -14,7 +16,11 @@ import { join } from "node:path";
 
 const WRITE_METHODS = ["appendIntent", "enqueueRun", "saveWorkflow"] as const;
 const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages/server/test
-const SCAN_DIRS = [join(ROOT, "packages/server/src"), join(ROOT, "packages/daemon/src")];
+const SCAN_DIRS = [
+  join(ROOT, "packages/server/src"),
+  join(ROOT, "packages/daemon/src"),
+  join(ROOT, "packages/cli/src"),
+];
 
 function walkTs(dir: string): string[] {
   const out: string[] = [];
@@ -41,7 +47,7 @@ for (const dir of SCAN_DIRS) {
 }
 
 describe("intent-plane discipline — store writes only inside the plane", () => {
-  test("no store-write call in any adapter (server routes, daemon dispatcher)", () => {
+  test("no store-write call in any adapter (server routes, daemon dispatcher, cli)", () => {
     // If this fails: route the write through plane.commit / commitEnqueue /
     // commitSaveWorkflow instead of calling the store method directly.
     expect(hits).toEqual([]);

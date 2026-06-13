@@ -228,6 +228,16 @@ describe("handler-bridge priorMessages hydration", () => {
     await makeLlmHandler({ node: threadless, backend: b1 }).handler(ctx1);
     expect(c1[0]?.priorMessagesLen).toBe(0);
     expect(c1[0]?.thread_id).toBe(syntheticThreadId("n1", 0, 1));
+
+    // Resume WITHIN the fresh pass: hydration must load ONLY pass-1 rows.
+    // The store now holds 2 pass-0 rows (the manual turn + b0's reply) and
+    // 1 pass-1 row (b1's reply) at the identical (nodeId, iteration) — a
+    // scope-by-(node, iteration) alone would leak all 3.
+    const ctx2 = await ctxFor("rp", store, "n1", { "goal_gates.__retries": 1 });
+    const { backend: b2, calls: c2 } = makeInstrumentedBackend();
+    await makeLlmHandler({ node: threadless, backend: b2 }).handler(ctx2);
+    expect(c2[0]?.priorMessagesLen).toBe(1);
+    expect(c2[0]?.thread_id).toBe(syntheticThreadId("n1", 0, 1));
     store.close();
   });
 });

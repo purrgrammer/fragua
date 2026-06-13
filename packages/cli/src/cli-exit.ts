@@ -34,6 +34,10 @@ export const CLI_EXIT = {
   /** A non-terminal status (`queued` / `running` / `paused_auto`) observed
    * as a STOP-state — a `ci` driver bug, not a workflow outcome. */
   internal: 70,
+  /** `runs wait --timeout` expired before every selected run settled. A
+   * deadline outcome, not a run outcome — distinct so a fleet script can
+   * branch on "gave up waiting" specifically. */
+  timeout: 75,
   /** A live secret value (provider-credential or `env:*` literal) was found
    * VERBATIM in an UN-SCRUBBED binary artifact shipped in the bundle (text
    * surfaces are always scrubbed; binary artifacts ship as-is and are scanned
@@ -56,6 +60,7 @@ export const HALT_EXIT: Record<HaltReason, number> = {
   route_not_picked: 15,
   route_call_not_isolated: 16,
   edge_no_match: 17,
+  worktree_error: 18,
 };
 
 /** `paused` reason → exit code (band 30–39). The auto-wake reasons project

@@ -161,6 +161,23 @@ describe("fragua runs --json flags", () => {
     expect(parsed.budgetWarns[0]!.metric).toBe("cost");
   });
 
+  test("status --json includes crashRequeues", async () => {
+    seedCompleted(r.store, "stj3");
+    const s = r.store.getState("stj3")!;
+    r.store.appendFact(
+      "stj3",
+      [{ type: "fact.run_requeued_after_crash", payload: { prevNode: "n1", lastAliveAt: 999_500 } }],
+      s.version,
+    );
+    const code = await statusCommand({ runId: "stj3", json: true, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out()) as RunDetail;
+    expect(parsed.crashRequeues).toHaveLength(1);
+    expect(parsed.crashRequeues![0]!.prevNode).toBe("n1");
+    expect(parsed.crashRequeues![0]!.lastAliveAt).toBe(999_500);
+    expect(typeof parsed.crashRequeues![0]!.at).toBe("number");
+  });
+
   test("status --json: unknown run → exit 1", async () => {
     const code = await statusCommand({ runId: "nope", json: true, dbPath: r.dbPath });
     expect(code).toBe(1);

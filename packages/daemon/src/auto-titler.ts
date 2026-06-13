@@ -25,7 +25,8 @@
 // the run with `title = null`, and the UI falls back to the workflow name.
 
 import { type EventType, type SummariseInput, type SummariserBackend, titleSyntheticNodeId } from "@fragua/core";
-import type { IEventStore } from "@fragua/store";
+import type { IEventWriter } from "@fragua/store";
+import { sleep } from "./executor-helpers.ts";
 
 export interface AutoTitlerOpts {
   /** Summariser implementation. When unset, `titleRun` is a no-op — the
@@ -35,7 +36,7 @@ export interface AutoTitlerOpts {
   /** Policy toggle — `auto-title: false` in config disables even when a
    * backend is configured. Defaults to `true`. */
   enabled?: boolean;
-  store: IEventStore;
+  store: IEventWriter;
   /** Tripped when the daemon starts shutting down. Passed into the
    * summariser call so in-flight title generation cancels cleanly. */
   shutdownSignal: AbortSignal;
@@ -64,25 +65,10 @@ const DEFAULT_MAX_TITLE_CHARS = 80;
 const TITLE_MAX_ATTEMPTS = 3;
 const TITLE_RETRY_BASE_MS = 500;
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(t);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export class AutoTitler {
   private readonly backend: SummariserBackend | undefined;
   private readonly enabled: boolean;
-  private readonly store: IEventStore;
+  private readonly store: IEventWriter;
   private readonly shutdownSignal: AbortSignal;
   private readonly maxTitleChars: number;
   private readonly inflight = new Set<Promise<void>>();

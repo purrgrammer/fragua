@@ -3,7 +3,12 @@
 // detail reads. Re-exported by `@fragua/server`'s schemas so existing
 // `import { RunSummary } from "../schemas.ts"` consumers keep working.
 
+import { HALT_REASONS } from "@fragua/types";
 import { type Static, Type } from "@sinclair/typebox";
+
+/** Terminal halt reason, derived from the `@fragua/types` runtime tuple
+ * (the source of truth) — never re-declare the literals here. */
+const HaltReasonSchema = Type.Union(HALT_REASONS.map((r) => Type.Literal(r)));
 
 /** Coarse UI status — one badge per category. The Inbox / fine-grained
  * filters use `runStatus` (the raw store status) instead. */
@@ -142,6 +147,19 @@ export const RunFanoutTopology = Type.Object({
 });
 export type RunFanoutTopology = Static<typeof RunFanoutTopology>;
 
+/** Diagnostic context recorded on an OCC-exhaustion halt fact (`occContext`).
+ * Every field is optional so a partial/older payload still projects what it
+ * carries; the projection populates this only when at least one field survives
+ * a defensive narrow. */
+export const HaltContext = Type.Object({
+  count: Type.Optional(Type.Integer({ minimum: 0 })),
+  nodeId: Type.Optional(Type.String()),
+  iteration: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastVersion: Type.Optional(Type.Integer({ minimum: 0 })),
+  attemptedFactType: Type.Optional(Type.String()),
+});
+export type HaltContext = Static<typeof HaltContext>;
+
 export const RunDetail = Type.Object({
   runId: Type.String(),
   workflow: Type.Optional(Type.String()),
@@ -164,6 +182,15 @@ export const RunDetail = Type.Object({
   cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
+  /** Terminal halt diagnosis from the run's `fact.run_halted` payload
+   *  (when `runStatus === 'halted'`). Mirrors the HITL pause-field
+   *  extraction so the UI can explain the failure inline. */
+  haltReason: Type.Optional(HaltReasonSchema),
+  haltDetail: Type.Optional(Type.String()),
+  /** Structured diagnostic context from the `fact.run_halted` payload's
+   *  `occContext` — recorded on an OCC-exhaustion halt. Only populated for
+   *  halts that carried it; spares the operator hand-parsing raw events. */
+  haltContext: Type.Optional(HaltContext),
   hitlNodeId: Type.Optional(Type.String()),
   /** Operator-facing question text from the paused human node's `text=`
    *  attr (when `runStatus === 'paused_human'`). */
@@ -179,6 +206,19 @@ export const RunDetail = Type.Object({
    *  resume so a running/terminal run still shows past decisions. */
   hitlDecisions: Type.Optional(
     Type.Record(Type.String(), Type.Object({ route: Type.String(), note: Type.Optional(Type.String()) })),
+  ),
+  /** One entry per `fact.run_requeued_after_crash` in the log — the startup
+   *  sweep requeued the run after a daemon died mid-dispatch. `at` is the
+   *  fact's `ts` (epoch ms); `prevNode` / `lastAliveAt` mirror the payload
+   *  when present. Absent when the run was never crash-requeued. */
+  crashRequeues: Type.Optional(
+    Type.Array(
+      Type.Object({
+        at: Type.Integer(),
+        prevNode: Type.Optional(Type.String()),
+        lastAliveAt: Type.Optional(Type.Integer()),
+      }),
+    ),
   ),
   /** Per-machine LOCATION — the resolved project root. Mirrors
    * `run_state.cwd`. Absent for ephemeral runs (CI primitives, tests). */

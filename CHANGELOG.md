@@ -15,15 +15,66 @@ guarantee.
   `fragua doctor` prints a `last exit:` line (reason, time, and the leaked
   nodes) when no live daemon holds the lock — a missing shutdown record after
   a `daemon.started` is reported as a likely crash.
+- `fragua runs accept --autostash` lands a run even when the operator's working
+  tree is dirty only in files the run doesn't touch. It stashes the unrelated
+  changes (`git stash push --include-untracked`) before the apply and restores
+  them after — on success and on a conflict refusal — mirroring
+  `git rebase --autostash`. Without the flag accept still refuses a dirty tree.
+  If the restore conflicts with the just-landed change the stash is kept (not
+  dropped) and accept reports it.
+- `hello-world` starter workflow: a provider-neutral smoke test that pins no
+  `provider:` / `model:`, demonstrating that a workflow which omits the provider
+  runs on whatever credential is configured (workflow `defaults:` → config
+  `defaults:` → autodetect) with no YAML editing to switch providers.
+- `fragua runs wait <id...>` blocks until a set of runs settles, replacing
+  hand-rolled `while fragua runs ls | grep` polling loops. Select the set by id,
+  `--workflow <name>`, or `--all-running`; it polls the store (no HTTP), prints
+  one line per run per lifecycle change, and exits through the shared cli-exit
+  map — `0` when all completed, the halt/quarantine band on a failure, `60` when
+  any run is blocked awaiting input. `--timeout <dur>` gives up with exit `75`;
+  `--settle terminal|blocked` (default `blocked`) chooses whether a paused run
+  counts as settled.
+- `fragua runs events` takes `--limit N` (last N events) and `--since <seq>`;
+  `fragua runs tail` bounds its backfill to the last 200 events by default
+  (flag to request the full log). Reads are bounded at the SQL level.
+- Crash-requeues are visible: `fragua runs status` prints a
+  "requeued after daemon crash" line and the web run detail renders the
+  event as a distinct entry, both driven from `fact.run_requeued_after_crash`.
+- The web feed shows a dismissible live-only indicator with a retry
+  affordance when the event backfill fails, instead of a silently empty
+  timeline. Workflow list gains a text filter; API error messages carry
+  method, path, and status; graph nodes flash on click.
+- `fragua runs export` warns when a bundle carries `liveLiteralHit` —
+  such a bundle must be handled as secret-bearing (docs state the policy).
+- The server logs a structured warning when a human-input route is accepted
+  without validation (no declared routes found on the pause fact).
+- The web UI surfaces its failure states: an SSE reconnect badge when the
+  live stream drops, conversation-fetch errors rendered in place, and 404
+  distinguished from 5xx on run detail.
+- Halted runs show their diagnosis inline: the read plane projects the
+  terminal `fact.run_halted` reason + detail onto the run detail, and the
+  web run page renders a read-only halted banner (live via SSE too) instead
+  of a bare fail badge.
+- OCC-exhaustion halts surface their diagnostic context (node, iteration,
+  conflict count, attempted fact type, last version) through the run detail's
+  `haltContext` — rendered in the web halted banner and in
+  `fragua runs status`, so investigating an `occ_exhausted` halt no longer
+  means hand-parsing raw events.
+- `fragua runs ls --summary` prints a fleet rollup — status counts, a
+  per-workflow table, and total in-flight cost — aggregated in SQL.
+
+### Changed
+
+- Worktree-provisioning failures now halt with a distinct `worktree_error`
+  reason instead of the catch-all `error`, so operators can filter and triage
+  provision failures separately from generic exceptions and parse failures. It
+  carries CLI exit code 18.
+- `fragua validate` is store-free: provider/model pairs resolve against the
+  bundled offline registry; a model absent from it downgrades to a warning
+  (enqueue remains the authoritative gate). Validate now works with no
+  store present.
 
 ### Fixed
-
-- An unclassified agent-loop error (a generic provider/SDK failure with no
-  HTTP 4xx/5xx status and no `abort` tool call in the transcript) now pauses
-  the run as `provider_error` with the error message as detail, instead of
-  halting it terminally with `aborted_exit`. `aborted_exit` is reserved for a
-  deliberate agent abort; genuine abort-tool exits and existing
-  provider-error/retry classifications are unchanged.
 
 - A handler that honors a late-delivered abort is no longer falsely declared
   leaked. The leak grace is now measured from when the abort actually reached
@@ -32,6 +83,39 @@ guarantee.
   in one wake tick, halting healthy runs with `handler_leaked` (and shutting
   the daemon down at the leak limit). Handlers that ignore their abort signal
   still leak on the same schedule.
+- An unclassified agent-loop error (a generic provider/SDK failure with no
+  HTTP 4xx/5xx status and no `abort` tool call in the transcript) now pauses
+  the run as `provider_error` with the error message as detail, instead of
+  halting it terminally with `aborted_exit`. `aborted_exit` is reserved for a
+  deliberate agent abort; genuine abort-tool exits and existing
+  provider-error/retry classifications are unchanged.
+- Quarantined runs no longer wedge two surfaces: the server SSE stream now
+  closes for them (it previously stayed open indefinitely), and the schedule
+  dispatcher no longer treats a quarantined prior run as live (it previously
+  blocked every future scheduled fire under overlap-skip). Backed by a
+  canonical `SETTLED_STATUSES` (terminal + quarantined) tuple from which every
+  consumer status-set is now derived; quarantined remains resumable.
+- A run halted without a closing node fact (`route_not_picked`,
+  `route_call_not_isolated`, `edge_no_match`) now folds the halted turn's
+  partial spend into run totals instead of reporting zero cost.
+- `runs accept` no longer refuses with spurious conflicts when the run's base
+  commit is not an ancestor of the operator's HEAD (e.g. after the branch the
+  run forked from was squash-merged): the base..tip change is applied 3-way
+  against the snapshot's base blobs instead. Genuine textual conflicts still
+  refuse with `conflict`.
+- A run halted on an unparseable workflow now reports the underlying error
+  in the halt detail (`workflow_parse_failed: <message>`, truncated) — e.g.
+  the JSON parse failure or an unsupported `ir_version` — instead of the
+  bare constant.
+- Intent validation (steer, respond, budget, and the other control verbs)
+  now reports every invalid field at once with readable dotted field paths,
+  instead of only the first error in JSON-pointer notation.
+- W015 no longer fires for `${{ outputs.X.f }}` consumers that are only
+  reachable on paths where the producer has already run (fail-path
+  consumers); genuinely unreachable producers still warn.
+- `emit_output` rejects non-finite numeric values (`Infinity`, `NaN`) with a
+  clear node failure instead of letting them serialize to `null` and inject
+  the string "null" into a downstream prompt or command.
 
 ## [0.7.0] — 2026-06-11
 
@@ -100,6 +184,12 @@ guarantee.
 
 ### Fixed
 
+- **`emit_output` rejects non-finite numbers.** A number output carrying
+  `Infinity`, `-Infinity`, or `NaN` (scalar or nested in a record/array) now
+  fails the producing step with a clear validation message; previously JSON
+  serialization silently degraded the value to `null`, so a downstream
+  `${{ outputs.X.f }}` read injected the literal string "null" instead of
+  failing closed.
 - **An operator pause can no longer be silently dropped.** When the pause fact
   lost a concurrent-write race, the executor exited while leaving the run
   `running` with the pause intent still queued (a stranded run until daemon

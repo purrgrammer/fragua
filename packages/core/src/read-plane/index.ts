@@ -9,6 +9,9 @@ export {
 export {
   type ArtifactListRow,
   type ArtifactScope,
+  type FleetSummary,
+  type FleetSummaryOpts,
+  type FleetWorkflowRow,
   type GlobalFeedAtFloorCursor,
   type GlobalFeedForwardCursor,
   makeReadPlane,
@@ -26,7 +29,7 @@ export {
   runSummaryRowToSummary,
   type UiStatus,
 } from "./projections.ts";
-export { NodeState, RunDetail, RunSummary, SelectedEdge } from "./schemas.ts";
+export { HaltContext, NodeState, RunDetail, RunSummary, SelectedEdge } from "./schemas.ts";
 export {
   type DiffRange,
   extractCommitSha,

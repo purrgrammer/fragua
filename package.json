@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "typecheck": "bun run --filter='*' typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",

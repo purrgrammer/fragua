@@ -26,6 +26,9 @@ import { CommittingRecorder } from "../src/recorder.ts";
 import { enqueue, rig } from "./helpers.ts";
 
 // ─────────────── P6 ───────────────
+// invariant: I5, P6 — side effects carry an idempotency key; an orphaned
+// side_effect_intent quarantines the run on the startup sweep. Load-bearing
+// sentinel for invariant-coverage.test.ts.
 describe("P6 — orphan quarantine on crash between intent and done", () => {
   test("side_effect_intent without matching done → startupSweep quarantines", async () => {
     const r = rig();
@@ -176,6 +179,8 @@ describe("P8 — mid-flight abort replay: external call ≤ 1 per key", () => {
 // terminal appendFact at handler return. A buffered (non-pre-commit) recorder
 // would lose the intent on hard crash mid-`fn` and the sweep would find
 // nothing to quarantine.
+// invariant: I5 — the recorder persists the intent (with its idempotency key)
+// before the side effect runs. Load-bearing sentinel for invariant-coverage.test.ts.
 describe("P25 — pre-commit recorder durability across hard crash", () => {
   test("recordIntent is durable before fn runs; sweep finds the orphan", async () => {
     const r = rig();

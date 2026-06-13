@@ -16,7 +16,7 @@
 // where they care about recency.
 
 import type { Database } from "bun:sqlite";
-import type { InboxStatus, RunStatus } from "@fragua/types";
+import { type InboxStatus, isTerminal, RUN_STATUSES, type RunStatus } from "@fragua/types";
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared SQL fragments
@@ -639,17 +639,33 @@ const WRITE_PROJECTION_SQL = `
     change_stat         = ?,
     inbox_status        = ?,
     accepted_sha        = ?
-  WHERE run_id = ?
+  WHERE run_id = ? AND version = ?
+  RETURNING run_id
 `;
 
 /** Write the projected run_state row. Caller serializes routing +
  *  metrics to JSON; nothing else is computed here. Runs inside the
- *  appendFact transaction. */
+ *  appendFact transaction.
+ *
+ *  `routing` is persisted as an opaque, unschematized JSON dict, guarded
+ *  only by the 8 KB CHECK (I6). Deliberate: it is a fold-rebuildable
+ *  projection cache (`deriveRunState` reconstructs it from the event
+ *  log), never a second source of truth — see ARCHITECTURE.md §2.1.
+ *
+ *  OCC guard: the UPDATE only matches when the row still carries
+ *  `expectedVersion` (the pre-bump version the caller validated against).
+ *  Returns `true` when exactly one row changed, `false` when the version
+ *  moved underneath the caller — the caller throws `ConcurrencyError` on
+ *  `false` instead of silently corrupting the projection. This makes the
+ *  invariant structural; appendFact's pre-check remains as the first line
+ *  of defense. */
 export function writeRunStateProjection(
   db: Database,
   args: {
     runId: string;
     version: number;
+    /** Pre-bump version the row must still hold for the write to apply. */
+    expectedVersion: number;
     status: RunStatus;
     currentNode: string | null;
     routingJson: string;
@@ -669,29 +685,33 @@ export function writeRunStateProjection(
     inboxStatus: string | null;
     acceptedSha: string | null;
   },
-): void {
-  db.query(WRITE_PROJECTION_SQL).run(
-    args.version,
-    args.status,
-    args.currentNode,
-    args.routingJson,
-    args.metricsJson,
-    args.lastAppliedSeq,
-    args.priority,
-    args.readyAt,
-    args.nodeStartedAt,
-    args.dispatchStartedAt,
-    args.updatedAt,
-    args.baseGitSha,
-    args.baseGitRef,
-    args.finalGitSha,
-    args.finalHeadRef,
-    args.diffBaseSha,
-    args.changeStatJson,
-    args.inboxStatus,
-    args.acceptedSha,
-    args.runId,
-  );
+): boolean {
+  const row = db
+    .query<{ run_id: string }, (string | number | null)[]>(WRITE_PROJECTION_SQL)
+    .get(
+      args.version,
+      args.status,
+      args.currentNode,
+      args.routingJson,
+      args.metricsJson,
+      args.lastAppliedSeq,
+      args.priority,
+      args.readyAt,
+      args.nodeStartedAt,
+      args.dispatchStartedAt,
+      args.updatedAt,
+      args.baseGitSha,
+      args.baseGitRef,
+      args.finalGitSha,
+      args.finalHeadRef,
+      args.diffBaseSha,
+      args.changeStatJson,
+      args.inboxStatus,
+      args.acceptedSha,
+      args.runId,
+      args.expectedVersion,
+    );
+  return row != null;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -893,6 +913,127 @@ const SELECT_GLOBAL_MODEL_BREAKDOWN_SQL = `
 
 export function selectGlobalModelBreakdown(db: Database, sinceMs: number): GlobalModelBreakdownRow[] {
   return db.query<GlobalModelBreakdownRow, [number]>(SELECT_GLOBAL_MODEL_BREAKDOWN_SQL).all(sinceMs);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Fleet rollup (powers `fragua runs ls --summary`)
+// ─────────────────────────────────────────────────────────────────────
+
+export interface FleetSummaryOpts {
+  /** `WHERE status IN (…)` scope. Empty array yields an empty summary;
+   *  `undefined` covers every status. Mirrors `selectRunIds`. */
+  statuses?: RunStatus[];
+  /** Narrow to one project root (`run_state.cwd`). */
+  cwd?: string;
+  /** Scope the aggregated set to the most-recently-updated `limit` runs
+   *  (the same window the per-run `ls` list would show). Omitted =
+   *  unbounded. */
+  limit?: number;
+}
+
+/** One per-workflow row: `running` / `done` (completed) / `failed`
+ *  (halted + cancelled) counts, plus the row total. */
+export interface FleetWorkflowRow {
+  workflow: string;
+  running: number;
+  done: number;
+  failed: number;
+  total: number;
+}
+
+export interface FleetSummary {
+  /** Count per lifecycle status. Every {@link RUN_STATUSES} key is present
+   *  (zero-filled), so a renderer never has to guess at missing buckets. */
+  statusCounts: Record<RunStatus, number>;
+  /** Per-workflow breakdown, busiest-first. */
+  workflows: FleetWorkflowRow[];
+  /** SUM of `total_cost_usd` across NON-terminal runs (the live burn —
+   *  excludes completed / cancelled / halted). */
+  inFlightCostUsd: number;
+  /** Total runs in scope (after filters + limit). */
+  totalRuns: number;
+}
+
+/** Build the `WHERE`/args + the `WITH selected` CTE shared by every fleet
+ *  aggregation, so the `--status` / `--cwd` filters and the `--limit` scope
+ *  bound the AGGREGATED set, not the output rows. Imported runs are always
+ *  excluded (they executed elsewhere). */
+function fleetSelectedCte(opts: FleetSummaryOpts): { cte: string; args: (string | number)[] } {
+  const { statuses, cwd, limit } = opts;
+  const clauses: string[] = [notImportedSql("run_state")];
+  const args: (string | number)[] = [];
+  if (statuses) {
+    clauses.push(`status IN (${statuses.map(() => "?").join(",")})`);
+    args.push(...statuses);
+  }
+  if (cwd !== undefined) {
+    clauses.push("cwd = ?");
+    args.push(cwd);
+  }
+  const limitClause = limit !== undefined ? "LIMIT ?" : "";
+  if (limit !== undefined) args.push(limit);
+  const cte = `
+    WITH selected AS (
+      SELECT status, workflow_name, total_cost_usd
+        FROM run_state
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY updated_at DESC, run_id ASC
+       ${limitClause}
+    )`;
+  return { cte, args };
+}
+
+/** Non-terminal statuses, derived from the source-of-truth tuple so the
+ *  in-flight cost scope can't drift as the lifecycle evolves. */
+const NON_TERMINAL_STATUSES: readonly RunStatus[] = RUN_STATUSES.filter((s) => !isTerminal(s));
+
+/** Fleet rollup: status counts, per-workflow breakdown, and total in-flight
+ *  cost — all in SQL, never a TS fold. `statuses: []` short-circuits to an
+ *  empty summary without hitting the DB. */
+export function selectFleetSummary(db: Database, opts: FleetSummaryOpts = {}): FleetSummary {
+  const statusCounts = Object.fromEntries(RUN_STATUSES.map((s) => [s, 0])) as Record<RunStatus, number>;
+  if (opts.statuses !== undefined && opts.statuses.length === 0) {
+    return { statusCounts, workflows: [], inFlightCostUsd: 0, totalRuns: 0 };
+  }
+
+  const { cte, args } = fleetSelectedCte(opts);
+
+  const countRows = db
+    .query<{ status: RunStatus; n: number }, (string | number)[]>(
+      `${cte} SELECT status, COUNT(*) AS n FROM selected GROUP BY status`,
+    )
+    .all(...args);
+  let totalRuns = 0;
+  for (const row of countRows) {
+    statusCounts[row.status] = row.n;
+    totalRuns += row.n;
+  }
+
+  const workflows = db
+    .query<FleetWorkflowRow, (string | number)[]>(
+      `${cte}
+       SELECT COALESCE(workflow_name, '(unknown)') AS workflow,
+              SUM(CASE WHEN status = 'running'             THEN 1 ELSE 0 END) AS running,
+              SUM(CASE WHEN status = 'completed'          THEN 1 ELSE 0 END) AS done,
+              SUM(CASE WHEN status IN ('halted', 'cancelled') THEN 1 ELSE 0 END) AS failed,
+              COUNT(*) AS total
+         FROM selected
+        GROUP BY workflow
+        ORDER BY total DESC, workflow ASC`,
+    )
+    .all(...args);
+
+  const placeholders = NON_TERMINAL_STATUSES.map(() => "?").join(",");
+  const cost = db
+    .query<{ inFlightCostUsd: number }, (string | number)[]>(
+      `${cte}
+       SELECT COALESCE(SUM(CASE WHEN status IN (${placeholders}) THEN total_cost_usd ELSE 0 END), 0)
+              AS inFlightCostUsd
+         FROM selected`,
+    )
+    .get(...args, ...NON_TERMINAL_STATUSES);
+
+  return { statusCounts, workflows, inFlightCostUsd: cost?.inFlightCostUsd ?? 0, totalRuns };
 }
 
 const SELECT_ALL_ROUTINGS_SQL = `SELECT routing FROM run_state`;

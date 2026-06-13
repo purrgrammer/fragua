@@ -608,3 +608,58 @@ describe("getSnapshotEvents", () => {
     store.close();
   });
 });
+
+describe("selectEventsTail (store.getEventsTail)", () => {
+  test("returns the last N events oldest-first", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    for (let i = 0; i < 10; i++) {
+      store.appendObservabilityEvents(runId, [startEv("n1", { i })]);
+    }
+    const all = store.getEvents(runId);
+    const lastThree = all.slice(-3).map((e) => e.seq);
+    const tail = store.getEventsTail(runId, { limit: 3 });
+    expect(tail.map((e) => e.seq)).toEqual(lastThree);
+    expect(tail.map((e) => e.seq)).toEqual([...lastThree].sort((a, b) => a - b));
+    store.close();
+  });
+
+  test("sinceSeq excludes events at or below the cursor", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    for (let i = 0; i < 5; i++) {
+      store.appendObservabilityEvents(runId, [startEv("n1", { i })]);
+    }
+    const all = store.getEvents(runId);
+    const cursor = all.at(-3)!.seq;
+    const tail = store.getEventsTail(runId, { sinceSeq: cursor, limit: 10 });
+    expect(tail.map((e) => e.seq)).toEqual(all.slice(-2).map((e) => e.seq));
+    store.close();
+  });
+
+  test("typePrefix bounds at SQL level and escapes LIKE metacharacters", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    // `_` is a LIKE single-char wildcard — an unescaped prefix
+    // "custom.a_" would also match "custom.aXdone".
+    const ev = (type: string): Parameters<typeof store.appendObservabilityEvents>[1][number] =>
+      ({ type, payload: { nodeId: "n1" } }) as Parameters<typeof store.appendObservabilityEvents>[1][number];
+    store.appendObservabilityEvents(runId, [
+      ev("custom.a_done"),
+      ev("custom.aXdone"),
+      ev("custom.a_start"),
+      ev("custom.a_done"),
+    ]);
+    const tail = store.getEventsTail(runId, { typePrefix: "custom.a_", limit: 2 });
+    expect(tail.map((e) => e.type)).toEqual(["custom.a_start", "custom.a_done"]);
+    const allMatching = store.getEventsTail(runId, { typePrefix: "custom.a_" });
+    expect(allMatching.map((e) => e.type)).toEqual(["custom.a_done", "custom.a_start", "custom.a_done"]);
+    store.close();
+  });
+
+  test("empty run → empty array", async () => {
+    const store = freshStore();
+    expect(store.getEventsTail("rg_no_such_run", { limit: 5 })).toEqual([]);
+    store.close();
+  });
+});

@@ -2,6 +2,7 @@
 // by `packages/server/src/store/analytics-queries.ts` so the client gets
 // strong typing on every chart's data without re-deriving the shape.
 
+import type { RunStatus } from "@fragua/types";
 import type { RunSummary } from "../lib/api.ts";
 
 export type BucketKind = "hour" | "day" | "month";
@@ -31,7 +32,11 @@ export interface RunsBucketRow {
 /** Ordered list of `RunsBucketRow` status keys — the canonical stack
  *  order used by the Runs chart (success at the bottom, failures at
  *  the top, in-flight states layered between). Drives bar render
- *  order, tooltip rank, and legend labels. */
+ *  order, tooltip rank, and legend labels.
+ *
+ *  The ORDER is this chart's own concern; the MEMBERSHIP is the
+ *  RunStatus contract: `satisfies` rejects stale literals at compile
+ *  time, and the enum-consumers test pins full coverage at runtime. */
 export const RUN_STATUS_KEYS = [
   "completed",
   "queued",
@@ -42,7 +47,7 @@ export const RUN_STATUS_KEYS = [
   "cancelled",
   "halted",
   "quarantined",
-] as const;
+] as const satisfies readonly RunStatus[];
 
 export type RunStatusKey = (typeof RUN_STATUS_KEYS)[number];
 

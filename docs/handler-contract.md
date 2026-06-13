@@ -287,7 +287,7 @@ rule and slot in alongside the builtins.
 ## Tool nodes (graph-level shell)
 
 A `type: tool` node runs its `run:` command as a single
-shell invocation (attractor §4.10) — no LLM, no agent loop. Use it for
+shell invocation — no LLM, no agent loop. Use it for
 deterministic steps: running tests, linters, git plumbing, small
 scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
 
@@ -348,7 +348,7 @@ removed from `.fragua/workflows/*.yaml` and should not be reintroduced.
 
 ## Loops
 
-Graph-level only, via backward edges (attractor §3.6 / §5.2).
+Graph-level only, via backward edges.
 There is no `loop` primitive. To re-run a node on failure, route back to
 it (or to an upstream node) via `on: {fail: …}`, and set `max-retries`
 on the target:

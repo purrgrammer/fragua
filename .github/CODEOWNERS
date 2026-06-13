@@ -1,0 +1,18 @@
+# Code owners — the in-tree half of the fold-contract review gate.
+#
+# The contract touch-gate (scripts/check-contract-bump.sh) demands that any diff
+# to reducers.ts either bumps EVENT_CONTRACT_VERSION or carries a self-service
+# "// contract: no-bump" marker. The marker is written by the same author who
+# writes the diff: no second reviewer sees the no-bump claim. These rules require
+# a code owner's review on the three files where a silent fold-behavior change can
+# hide — so a no-bump claim is reviewed by someone other than its author.
+#
+# This file is only the in-tree half. The matching enforcement — branch
+# protection / required-review on these paths so a CODEOWNERS review actually
+# BLOCKS merge — is a repository-admin action a human must take in the forge
+# settings (GitHub: Settings → Branches → require review from Code Owners).
+# Adjust the @owner below to match your forge's user or team handles.
+
+/scripts/check-contract-bump.sh                        @purrgrammer
+/packages/store/src/reducers.ts                        @purrgrammer
+/packages/store/test/contract-surface.snapshot.json    @purrgrammer

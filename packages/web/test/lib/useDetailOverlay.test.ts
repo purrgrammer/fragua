@@ -143,7 +143,20 @@ describe("foldDetailFrame", () => {
   test("fact.run_halted records haltSeq for the terminal-halt patch", () => {
     const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", null, 42);
     expect(out.status).toBe("fail");
+    expect(out.runStatus).toBe("halted");
     expect(out.haltSeq).toBe(42);
+  });
+
+  test("fact.run_halted captures haltReason + haltDetail from the payload", () => {
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "error", detail: "handler threw: boom" }, 42);
+    expect(out.haltReason).toBe("error");
+    expect(out.haltDetail).toBe("handler threw: boom");
+  });
+
+  test("fact.run_halted with an unknown reason leaves haltReason null", () => {
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "not_a_reason" }, 42);
+    expect(out.haltReason).toBeNull();
+    expect(out.haltDetail).toBeNull();
   });
 
   test("malformed payloads (missing nodeId/from/to) are ignored", () => {
@@ -318,6 +331,22 @@ describe("mergeDetail", () => {
     expect(merged.nodes.find((n) => n.nodeId === "running-node")?.state).toBe("failed");
     expect(merged.nodes.find((n) => n.nodeId === "done-node")?.state).toBe("completed");
     expect(merged.status).toBe("fail");
+  });
+
+  test("live halt surfaces haltReason/haltDetail + runStatus halted on the merged detail", () => {
+    const snap = snapshot({ status: "running", runStatus: "running", lastEventSeq: 100 });
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "budget", detail: "run cost cap" }, 142);
+    const merged = mergeDetail(snap, overlay);
+    expect(merged.runStatus).toBe("halted");
+    expect(merged.haltReason).toBe("budget");
+    expect(merged.haltDetail).toBe("run cost cap");
+  });
+
+  test("a stale overlay halt (seq ≤ snapshot frontier) defers to the snapshot's halt fields", () => {
+    const snap = snapshot({ status: "fail", runStatus: "halted", lastEventSeq: 200, haltReason: "error" });
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "budget" }, 142);
+    const merged = mergeDetail(snap, overlay);
+    expect(merged.haltReason).toBe("error");
   });
 
   test("selectedEdges concatenate snapshot + overlay in order (overlay seq > snapshot.lastEventSeq)", () => {

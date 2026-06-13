@@ -18,13 +18,13 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import type { IEventStore } from "@fragua/store";
+import type { IEventReader } from "@fragua/store";
 import type { Skill, SkillsConfig } from "@fragua/types";
 import { discoverSkills, parseSkillMd } from "@fragua/workspace";
 import { Hono } from "hono";
 
 export interface SkillsRoutesOpts {
-  store: IEventStore;
+  store: Pick<IEventReader, "listCwds">;
   /** User home directory. Drives `~/.agents/skills/` + `~/.claude/skills/`. */
   homeDir: string;
   /** Server's startup cwd. Always unioned into the project enumeration so

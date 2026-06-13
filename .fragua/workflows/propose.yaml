@@ -24,11 +24,11 @@
 # "I don't like it" can't survive the schema.
 #
 # Model/effort strategy — strength follows the cost of being wrong:
-#   survey/draft/revise   FABLE, high — they shape the design
-#   adversarial/feasibility/scope  FABLE, high — judgment that kills or saves it
+#   survey/draft/revise   OPUS 4.8, high — they shape the design
+#   adversarial/feasibility/scope  OPUS 4.8, high — judgment that kills or saves it
 #   clarity               sonnet, medium — prose discipline, not design
 #   precedent             sonnet, high — careful reading of SPEC/proposals
-#   arbitrate             FABLE, high — the one highest-leverage call: ruling on
+#   arbitrate             OPUS 4.8, high — the one highest-leverage call: ruling on
 #                         conflicting demands so the loop converges, not oscillates
 #
 #   bun run fragua run propose --input topic=@problem.txt
@@ -38,7 +38,7 @@ name: propose
 goal: Draft a design proposal and converge it through a parallel five-lens adversarial review panel.
 
 # Single governor: the run-level budget. No per-step max-cost caps — a per-node
-# cap sums across iterations and the revise↔panel loop re-runs fable steps.
+# cap sums across iterations and the revise↔panel loop re-runs opus steps.
 # Budget-policy pause (default) lets the operator raise it mid-run.
 budget: 40.00
 
@@ -58,7 +58,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-fable-5
+  model: claude-opus-4-8
 
 steps:
   survey:                              # heavy research, runs ONCE — outside the revision loop

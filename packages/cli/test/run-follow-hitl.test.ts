@@ -34,6 +34,88 @@ function fakeClient(events: StoredEvent[]) {
   return { client: client as unknown as StoreClient, commits };
 }
 
+describe("followRun — startCursor", () => {
+  test("startCursor skips already-rendered backfill", async () => {
+    const events = [
+      ev(1, "fact.run_started", {}),
+      ev(2, "llm.start", {}),
+      ev(3, "llm.done", {}),
+      ev(4, "fact.run_completed", {}),
+    ];
+    const cursors: number[] = [];
+    const client = {
+      readPlane: {
+        eventsSince: (_runId: string, sinceSeq: number, limit?: number) => {
+          cursors.push(sinceSeq);
+          return events.filter((e) => e.seq > sinceSeq).slice(0, limit ?? events.length);
+        },
+      },
+    } as unknown as StoreClient;
+
+    const code = await followRun(client, RUN_ID, undefined, 2);
+
+    expect(code).toBe(cliExitCode("completed"));
+    expect(cursors[0]).toBe(2); // first poll starts at the given cursor, not 0
+  });
+});
+
+describe("followRun — idle hint (no daemon)", () => {
+  test("emits the daemon hint exactly once on a silent tail, then keeps following", async () => {
+    let polls = 0;
+    const completed = ev(1, "fact.run_completed", {});
+    const client = {
+      readPlane: {
+        // Stays silent for several polls (so the idle window elapses), then the
+        // run finishes — mimicking a daemon finally coming up.
+        eventsSince: (_runId: string, _sinceSeq: number, _limit?: number) => {
+          polls += 1;
+          return polls >= 6 ? [completed] : [];
+        },
+      },
+    } as unknown as StoreClient;
+
+    const lines: string[] = [];
+    const orig = console.log;
+    console.log = (msg?: unknown) => lines.push(String(msg ?? ""));
+    try {
+      const code = await followRun(client, RUN_ID, undefined, 0, 1);
+      expect(code).toBe(cliExitCode("completed"));
+    } finally {
+      console.log = orig;
+    }
+
+    const hints = lines.filter((l) => l.includes("is a daemon running?"));
+    expect(hints).toHaveLength(1);
+  }, 5000);
+});
+
+describe("followRun — non-human pause", () => {
+  test("renders fact.run_paused{budget} and exits non-zero instead of hanging", async () => {
+    const { client } = fakeClient([
+      ev(1, "fact.run_started", {}),
+      ev(2, "fact.run_paused", { reason: "budget", nodeId: "n", scope: "run", metric: "cost", limit: 1, actual: 2 }),
+    ]);
+
+    const code = await followRun(client, RUN_ID);
+
+    expect(code).toBe(cliExitCode("paused", { pause: "budget" }));
+    expect(code).not.toBe(0);
+  }, 3000);
+
+  test("continues following on an auto-wake pause (timeout_retry) until the run resolves", async () => {
+    const { client } = fakeClient([
+      ev(1, "fact.run_started", {}),
+      ev(2, "fact.run_paused", { reason: "timeout_retry", nodeId: "n", resumeAt: Date.now() + 1000, attempt: 1 }),
+      ev(3, "fact.run_resumed", {}),
+      ev(4, "fact.run_completed", {}),
+    ]);
+
+    const code = await followRun(client, RUN_ID);
+
+    expect(code).toBe(cliExitCode("completed")); // never exited on the pause
+  }, 3000);
+});
+
 describe("followRun — HITL gate answered elsewhere (#33)", () => {
   let savedTTY: unknown;
   beforeEach(() => {

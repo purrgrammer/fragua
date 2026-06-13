@@ -15,7 +15,7 @@
 // The reaper is IDEMPOTENT: calling it while a live daemon is heart-
 // beating is a no-op (the TTL check exits early).
 
-import type { IEventStore, SweepResult } from "@fragua/store";
+import type { IDaemonCoordinator, IEventWriter, SweepResult } from "@fragua/store";
 
 /** Heartbeats are ~10s; 30s without one is the established "dead" line.
  * Kept here (not imported from /routes/health.ts) so the reaper has no
@@ -32,7 +32,7 @@ export interface ReapResult {
 }
 
 export interface ReapOptions {
-  store: IEventStore;
+  store: IEventWriter & IDaemonCoordinator;
   /** Heartbeat staleness threshold. Defaults to {@link DEFAULT_REAP_TTL_MS}. */
   ttlMs?: number;
   /** Wall-clock provider (testing). */

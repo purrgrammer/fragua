@@ -11,29 +11,31 @@
 // store-dependent sub-entry, excluded from the browser bundle just like
 // `@fragua/core/intent-plane`.
 
-import {
-  type ArtifactListRow,
-  type ArtifactScope,
-  FEED_EVENT_KINDS,
-  type GetGlobalEventsAtFloorOpts,
-  type GetGlobalEventsForwardOpts,
-  type GetMessagesOpts,
-  type IEventStore,
-  isTerminal as isTerminalStatus,
-  type ListRunSummaryRowsOpts,
-  type NarrowMessage,
-  type StoredEvent,
+import type {
+  ArtifactListRow,
+  ArtifactScope,
+  FleetSummary,
+  FleetSummaryOpts,
+  GetEventsTailOpts,
+  GetGlobalEventsAtFloorOpts,
+  GetGlobalEventsForwardOpts,
+  GetMessagesOpts,
+  IEventReader,
+  ListRunSummaryRowsOpts,
+  NarrowMessage,
+  StoredEvent,
 } from "@fragua/store";
+import { FEED_EVENT_KINDS, isTerminal as isTerminalStatus } from "@fragua/types";
 import { buildExplanation, type RunExplanation } from "./explain.ts";
 import { runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
 import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnapshot } from "./steps.ts";
 
-export type { ArtifactListRow, ArtifactScope } from "@fragua/store";
+export type { ArtifactListRow, ArtifactScope, FleetSummary, FleetSummaryOpts, FleetWorkflowRow } from "@fragua/store";
 
 export interface ReadPlaneDeps {
-  store: IEventStore;
+  store: IEventReader;
 }
 
 /** Forward-cursor fields for the global feed, MINUS the `kindIn`
@@ -49,6 +51,11 @@ export interface ReadPlane {
   /** SQL-backed list projection — one `RunSummary` per row, no per-row
    *  event-log fetch. Mirrors `GET /runs`. */
   runSummaries(opts?: ListRunSummaryRowsOpts): RunSummary[];
+  /** Fleet rollup — status counts, per-workflow breakdown, and total
+   *  in-flight cost across the (optionally `--status`/`--cwd`/`--limit`
+   *  scoped) set. All sums/counts come from SQL aggregation. Backs
+   *  `fragua runs ls --summary`. */
+  fleetSummary(opts?: FleetSummaryOpts): FleetSummary;
   /** Full detail projection for one run, or `null` when the run is absent.
    *  Mirrors `GET /runs/:id`. */
   runDetail(runId: string): RunDetail | null;
@@ -61,6 +68,11 @@ export interface ReadPlane {
   /** Raw store event log (`fact.*` + `intent.*`), or `null` when the run
    *  is absent. Mirrors `GET /runs/:id/events.json`. */
   events(runId: string): StoredEvent[] | null;
+  /** Bounded tail of the raw event log — the last `opts.limit` events
+   *  strictly after `opts.sinceSeq`, optionally type-prefix filtered,
+   *  oldest-first — or `null` when the run is absent. SQL-level bound;
+   *  backs the CLI's `runs events` / `runs tail` reads. */
+  eventsTail(runId: string, opts?: GetEventsTailOpts): StoredEvent[] | null;
   /** A run's artifact listing (metadata only), or `null` when the run is
    *  absent. The bytes come from {@link ReadPlane.artifactBody}. */
   artifacts(runId: string): ArtifactListRow[] | null;
@@ -103,6 +115,9 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     runSummaries(opts = {}) {
       return store.listRunSummaryRows(opts).map(runSummaryRowToSummary);
     },
+    fleetSummary(opts = {}) {
+      return store.fleetSummary(opts);
+    },
     runDetail(runId) {
       const state = store.getState(runId);
       if (state == null) return null;
@@ -141,6 +156,10 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     events(runId) {
       if (store.getState(runId) == null) return null;
       return store.getEvents(runId);
+    },
+    eventsTail(runId, opts = {}) {
+      if (store.getState(runId) == null) return null;
+      return store.getEventsTail(runId, opts);
     },
     artifacts(runId) {
       if (store.getState(runId) == null) return null;

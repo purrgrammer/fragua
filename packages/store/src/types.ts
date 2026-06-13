@@ -40,6 +40,8 @@ import type {
 } from "./analytics-queries.ts";
 import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 import type {
+  FleetSummary,
+  FleetSummaryOpts,
   GcSnapshotRunRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
@@ -71,7 +73,14 @@ export type {
   RawEvent,
   RunStatus,
 } from "@fragua/types";
-export { ALL_DAEMON_EVENT_TYPES, AUTO_WAKE_PAUSE_REASONS, isTerminal } from "@fragua/types";
+export {
+  ALL_DAEMON_EVENT_TYPES,
+  AUTO_WAKE_PAUSE_REASONS,
+  isSettled,
+  isTerminal,
+  RUN_STATUSES,
+  SETTLED_STATUSES,
+} from "@fragua/types";
 export type {
   AnalyticsWindow,
   BucketedWindow,
@@ -92,6 +101,9 @@ export type {
 export { decodeCursor, encodeCursor, getFirstRunAt } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 export type {
+  FleetSummary,
+  FleetSummaryOpts,
+  FleetWorkflowRow,
   GcSnapshotRunRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
@@ -588,6 +600,16 @@ export interface GetEventsOpts {
   limit?: number;
 }
 
+export interface GetEventsTailOpts {
+  /** Only events with `seq > sinceSeq` qualify. Default 0 (all). */
+  sinceSeq?: number;
+  /** Restrict to event types starting with this literal prefix
+   * (e.g. `"fact."`). LIKE metacharacters in the prefix are escaped. */
+  typePrefix?: string;
+  /** Keep only the LAST `limit` qualifying events. Default unbounded. */
+  limit?: number;
+}
+
 export interface GetGlobalEventsForwardOpts {
   /** Boundary `ts` cursor; events at `ts > floorTs`, plus events at
    * `ts == floorTs` with `(run_id, seq) > (lastRunId, lastSeq)`, are
@@ -649,8 +671,8 @@ export interface GetDaemonEventsOpts {
 
 // ─── Segregated store interfaces ───
 //
-// `IEventStore` was a god interface; the surface is now split into four
-// concerns that map onto the actual SQL boundaries:
+// The surface is split into concern-scoped sub-interfaces that map onto the
+// actual SQL boundaries:
 //
 //   IEventWriter        — every method that mutates run-level state
 //                         (events, run_state, messages, artifacts,
@@ -662,14 +684,19 @@ export interface GetDaemonEventsOpts {
 //                         IEventReader because analytics queries warrant
 //                         dedicated tuning (cache_size, multi-query
 //                         consistent snapshots).
-//   IDaemonCoordinator  — the daemon_events / daemon_lock surface. Truly
-//                         orthogonal: no transactional overlap with
-//                         run_state, no OCC, separate tables.
+//   IDaemonCoordinator  — the daemon_events / daemon_lock / schedules
+//                         surface. Truly orthogonal: no transactional
+//                         overlap with run_state, no OCC, separate tables.
+//   IProviderCredentialStore / IProviderConfigStore — per-provider
+//                         credential + config rows (declared further down).
 //
-// `IEventStore` is preserved as a type-alias intersection so existing
-// callers don't break. `SqliteStore` implements all four sub-interfaces
-// in one class today; nothing prevents future implementations from
-// composing them out of separate connections / backends.
+// Every consumer types its `store` seam against the narrowest slice (or
+// intersection) it calls — NEVER the composite `IEventStore` below. This is
+// enforced by `test/event-store-sub-interface.lint.test.ts`; only the
+// assembly seams that construct the real store (server + daemon entrypoints,
+// CLI store-client) hold the composite to hand slices out. `SqliteStore`
+// implements all sub-interfaces in one class today; nothing prevents future
+// implementations from composing them out of separate connections / backends.
 
 export interface IEventWriter {
   appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
@@ -757,6 +784,10 @@ export interface IEventReader {
    * they do not hydrate thousands of events per run just to derive
    * count, duration, title, and metrics. */
   listRunSummaryRows(opts?: ListRunSummaryRowsOpts): RunSummaryRow[];
+  /** Fleet rollup — status counts, per-workflow breakdown, and total
+   * in-flight cost. Every number is a SQL aggregation (COUNT / SUM),
+   * never a TS fold over the event log. Powers `fragua runs ls --summary`. */
+  fleetSummary(opts?: FleetSummaryOpts): FleetSummary;
   /** Counts used by the `/health` daemon enrichment. Cheap (indexed). */
   runStateCounts(): { running: number; queued: number };
 
@@ -780,6 +811,14 @@ export interface IEventReader {
    * key — cheap even on long-lived runs.
    */
   getLatestEvents(runId: string, limit: number): StoredEvent[];
+  /**
+   * The last `opts.limit` events for `runId` strictly after
+   * `opts.sinceSeq`, optionally filtered to types starting with
+   * `opts.typePrefix`, oldest-first. The bound applies at SQL level to
+   * the filtered set — backs the CLI's bounded `runs events` /
+   * `runs tail` reads.
+   */
+  getEventsTail(runId: string, opts?: GetEventsTailOpts): StoredEvent[];
   /**
    * The TYPE of the most recent node-lifecycle fact per node
    * (`NODE_LIFECYCLE_FACT_TYPES`: dispatch_started / node_started /
@@ -1197,10 +1236,13 @@ export interface IProviderConfigStore {
 }
 
 /**
- * Composite store contract — backward-compatible alias for the original
- * `IEventStore` shape. New code should depend on the narrowest sub-
- * interface that fits its needs (e.g. analytics routes only need
- * `IAnalyticsReader`, the daemon supervisor only needs `IDaemonCoordinator`).
+ * Composite store contract — the full intersection that `SqliteStore`
+ * implements. Only the store package and the assembly seams that construct
+ * the real store depend on this; every other consumer types against the
+ * narrowest sub-interface it calls (e.g. analytics routes only need
+ * `IAnalyticsReader & IEventReader`, the schedule routes only
+ * `IDaemonCoordinator`). Enforced by
+ * `test/event-store-sub-interface.lint.test.ts`.
  */
 export type IEventStore = IEventWriter &
   IEventReader &

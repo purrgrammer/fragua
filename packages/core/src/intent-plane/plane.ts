@@ -12,7 +12,7 @@
 // Enqueue (the two-op `buildSaveWorkflow` + `buildEnqueue`) and the run-id
 // minter land in a follow-on increment; this is the control-intent surface.
 
-import type { EnqueueRunParams, IEventStore } from "@fragua/store";
+import type { EnqueueRunParams, IEventWriter } from "@fragua/store";
 import type { IntentEvent } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -69,13 +69,32 @@ export type EnqueueBuild =
   | { ok: true; runId: string; params: EnqueueRunParams }
   | { ok: false; error: string; inputErrors: InputBindingError[] };
 
+const MAX_REPORTED_ERRORS = 10;
+
+/** "/limits/maxRetries" → "limits.maxRetries"; array indices as "[n]"
+ * ("/items/0/name" → "items[0].name"); root (empty path) → "body". */
+export function pointerToFieldPath(pointer: string): string {
+  if (pointer === "") return "body";
+  return pointer
+    .slice(1)
+    .split("/")
+    .map((seg, i) => (/^\d+$/.test(seg) ? `[${seg}]` : i === 0 ? seg : `.${seg}`))
+    .join("");
+}
+
 function fail(schema: TSchema, body: unknown): { ok: false; error: string } {
-  const first = [...Value.Errors(schema, body)][0];
-  return { ok: false, error: first ? `${first.path || "/"} ${first.message}`.trim() : "invalid request body" };
+  const errors = [...Value.Errors(schema, body)];
+  if (errors.length === 0) return { ok: false, error: "invalid request body" };
+  const shown = errors
+    .slice(0, MAX_REPORTED_ERRORS)
+    .map((e) => `${pointerToFieldPath(e.path)}: ${e.message}`)
+    .join("; ");
+  const overflow = errors.length - MAX_REPORTED_ERRORS;
+  return { ok: false, error: overflow > 0 ? `${shown} (+${overflow} more)` : shown };
 }
 
 export interface IntentPlaneDeps {
-  store: IEventStore;
+  store: IEventWriter;
   /** Run-id minter, injected (§3.3) — production passes `@fragua/store`'s
    * full-entropy ULID `newRunId`; tests/PBT pass a deterministic counter.
    * The uniqueness/import contract lives on the default, never the seam. */

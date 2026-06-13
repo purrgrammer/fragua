@@ -8,9 +8,11 @@ import { InvalidDurationError, parseDurationMs, type parseWorkflow } from "@frag
 import { type BuildResult, makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import {
-  type IEventStore,
+  type IAnalyticsReader,
+  type IEventReader,
+  type IEventWriter,
   type IntentEvent,
-  isTerminal as isTerminalStatus,
+  isSettled,
   newRunId,
   PayloadTooLargeError,
 } from "@fragua/store";
@@ -31,7 +33,7 @@ export type WorkflowModelValidator = (
   | { ok: false; offenders: Array<{ nodeId: string; provider?: string; model: string; reason: string }> };
 
 export interface ServerDeps {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IAnalyticsReader;
   /** Snapshot/ref git reader — used by `POST /runs/:id/merge` to refuse a
    *  non-ff or conflicting merge synchronously. Omit to skip git-level
    *  merge validation (the daemon sweep is the defense-in-depth backstop). */
@@ -500,6 +502,14 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (declaredRoutes.length > 0 && !declaredRoutes.includes(route)) {
       return c.json({ error: `unknown route "${route}" (expected one of: ${declaredRoutes.join(", ")})` }, 400);
     }
+    if (declaredRoutes.length === 0) {
+      // Fail-open is intentional (older event shapes carry no route enum),
+      // but the skip must be observable so an off-list route accepted here
+      // can be traced back when the daemon later halts the run on resume.
+      console.warn(
+        `[server] human input accepted without route validation: no declared routes on the latest fact.run_paused_human (run=${runId} route="${route}")`,
+      );
+    }
     return appendIntentOr413(c, runId, built.intent);
   });
 
@@ -630,8 +640,11 @@ export function createRoutes(deps: ServerDeps): Hono {
         cursorOf: (event) => event.seq,
         idOf: (event) => String(event.seq),
         shouldClose: () => {
+          // Settled, not terminal: a quarantined run emits no further events
+          // until an operator unquarantines it, so close the socket rather
+          // than hold it open indefinitely (resume reopens it).
           const state = deps.store.getState(runId);
-          return state != null && isTerminalStatus(state.status);
+          return state != null && isSettled(state.status);
         },
         batchSize,
         pollMs,

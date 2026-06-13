@@ -25,12 +25,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
-import { type IEventStore, isTerminal as isTerminalStatus, newRunId as mintRunId } from "@fragua/store";
+import {
+  type IDaemonCoordinator,
+  type IEventReader,
+  type IEventWriter,
+  isSettled,
+  newRunId as mintRunId,
+} from "@fragua/store";
+import { sleep } from "./executor-helpers.ts";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
 
 export interface ScheduleDispatcherOpts {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IDaemonCoordinator;
   shutdownSignal: AbortSignal;
   /** Tick interval. Defaults to 60s; tests inject smaller values. */
   tickIntervalMs?: number;
@@ -87,10 +94,12 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
   let paused = 0;
 
   for (const row of due) {
-    // Skip-on-overlap: don't fire if the prior run is still active.
+    // Skip-on-overlap: don't fire if the prior run is still active. A
+    // quarantined prior run counts as settled (not in flight) — it owes an
+    // operator action, not a scheduler wait — so it must NOT block the fire.
     if (row.overlapPolicy === "skip" && row.lastRunId != null) {
       const prior = opts.store.getState(row.lastRunId);
-      if (prior != null && !isTerminalStatus(prior.status)) {
+      if (prior != null && !isSettled(prior.status)) {
         opts.store.recordScheduleSkipped(row.id, now);
         opts.store.appendDaemonEvent(
           {
@@ -240,19 +249,4 @@ function resolveSchedulingWorkflow(
     return { dotPath: path, name, scope: "path" };
   }
   return null;
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(t);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }

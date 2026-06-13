@@ -5,7 +5,7 @@
 //
 
 import { describe, expect, test } from "bun:test";
-import { AuthStorage, ModelRegistry } from "@fragua/agent";
+import { AuthStorage, defaultModelPerProvider, ModelRegistry } from "@fragua/agent";
 import { SqliteStore } from "@fragua/store";
 import { providersRoutes } from "../src/routes/providers.ts";
 
@@ -13,7 +13,12 @@ function mount(): { app: ReturnType<typeof providersRoutes>; store: SqliteStore 
   const store = new SqliteStore();
   const authStorage = AuthStorage.fromStore(store);
   const modelRegistry = ModelRegistry.inMemory(authStorage);
-  const app = providersRoutes({ authStorage, modelRegistry });
+  const app = providersRoutes({
+    authStorage,
+    modelRegistry,
+    defaultModels: defaultModelPerProvider as Record<string, string>,
+    testProvider: async () => ({ ok: false, error: "stub tester — not exercised in this suite" }),
+  });
   return { app, store };
 }
 

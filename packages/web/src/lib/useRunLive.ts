@@ -72,6 +72,12 @@ export interface UseRunLiveResult {
   toolStreams: ReadonlyMap<string, ToolStream>;
   /** Connection status across bootstrap + stream. */
   status: RunLiveStatus;
+  /** True when the most recent messages fetch (bootstrap or
+   * SSE-triggered refetch) failed. Cleared the moment a fetch
+   * succeeds, so a transient blip self-heals on the next signal.
+   * Consumers surface this — a blank conversation with only a
+   * console.warn is a swallowed failure. */
+  messagesError: boolean;
   /** Monotonic counter bumped on every SSE frame. Cheap invalidation
    * trigger for queries keyed on it (e.g. CostInspector's `/steps`
    * refresh). Detail-level state is folded into `detailOverlay` and
@@ -117,6 +123,7 @@ const MESSAGE_SIGNAL_TYPES = new Set<string>(["agent.message_end", "fact.message
 
 export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOptions = {}): UseRunLiveResult {
   const [messages, setMessages] = useState<RunMessageRow[]>([]);
+  const [messagesError, setMessagesError] = useState(false);
   const [streamingByNode, setStreamingByNode] = useState<ReadonlyMap<string, StreamingMessage>>(() => new Map());
   const [toolStreams, setToolStreams] = useState<ReadonlyMap<string, ToolStream>>(() => new Map());
   const [totalEvents, setTotalEvents] = useState(0);
@@ -133,6 +140,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   // see the comment block on the URL gate below for rationale.
   useEffect(() => {
     setMessages([]);
+    setMessagesError(false);
     setStreamingByNode(new Map());
     setToolStreams(new Map());
     setTotalEvents(0);
@@ -145,13 +153,16 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     let cancelled = false;
     getRunMessages(runId, 0)
       .then((rows) => {
-        if (cancelled || rows.length === 0) return;
+        if (cancelled) return;
+        setMessagesError(false);
+        if (rows.length === 0) return;
         lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
         setMessages(rows);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         console.warn("[useRunLive] messages fetch failed for", runId, "—", err);
+        setMessagesError(true);
       });
     return () => {
       cancelled = true;
@@ -223,6 +234,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
           refetchTimerRef.current = null;
           getRunMessages(id, 0)
             .then((rows) => {
+              setMessagesError(false);
               if (rows.length === 0) return;
               lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
               setMessages(rows);
@@ -247,6 +259,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
             })
             .catch((err: unknown) => {
               console.warn("[useRunLive] messages fetch failed for", id, "—", err);
+              setMessagesError(true);
             });
         }, 30);
       }
@@ -358,7 +371,17 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
             ? "loading"
             : sseStatus;
 
-  return { messages, streaming, streamingByNode, toolStreams, status, totalEvents, liveCost, detailOverlay };
+  return {
+    messages,
+    messagesError,
+    streaming,
+    streamingByNode,
+    toolStreams,
+    status,
+    totalEvents,
+    liveCost,
+    detailOverlay,
+  };
 }
 
 /** Immutably set a key in a streaming-buffer map (fresh top-level Map so

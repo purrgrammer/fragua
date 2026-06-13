@@ -25,6 +25,7 @@
 // the user's local midnight on every bucket.
 
 import type { Database } from "bun:sqlite";
+import type { RunStatus } from "@fragua/types";
 
 export type BucketKind = "hour" | "day" | "month";
 
@@ -196,6 +197,17 @@ export interface RunsByBucketRow {
   halted: number;
   quarantined: number;
 }
+
+// Compile-time pin: RunsByBucketRow must carry exactly one numeric column per
+// RunStatus (the CASE-WHEN pivot in getRunsByBucket mirrors these columns).
+// Adding or removing a RUN_STATUSES literal (@fragua/types) becomes a type
+// error here — a missing column fails the first `satisfies`, an extra column
+// fails the second — so a new status can't silently yield a zero column.
+type RunStatusColumns = Omit<RunsByBucketRow, "bucket">;
+const _runsByBucketColumnsCoverRunStatus = {} as RunStatusColumns satisfies Record<RunStatus, number>;
+const _runStatusCoversRunsByBucketColumns = {} as Record<RunStatus, number> satisfies RunStatusColumns;
+void _runsByBucketColumnsCoverRunStatus;
+void _runStatusCoversRunsByBucketColumns;
 
 /** One column per actual run status (mirrors the schema's CHECK enum
  *  and the Outcomes donut), so the Runs chart can stack a single

@@ -31,6 +31,10 @@ if grep -qE '^\+[^+].*EVENT_CONTRACT_VERSION[[:space:]]*=[[:space:]]*[0-9]+' <<<
   exit 0
 fi
 
+# The no-bump marker is deliberately self-service while the repo has a single
+# maintainer: the author who writes the diff also writes the marker. When a
+# second regular committer lands, this gate should grow CODEOWNERS-or-label
+# enforcement so a no-bump claim is reviewed by someone other than its author.
 reducers_diff="$(git diff "${BASE}...HEAD" -- "${REDUCERS}")"
 if grep -qiE '^\+.*contract:[[:space:]]*no-bump' <<<"${reducers_diff}"; then
   echo "contract touch-gate: '// contract: no-bump' marker present — ok"

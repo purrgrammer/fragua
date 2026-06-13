@@ -36,7 +36,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import type { Edge as FlowEdge, Node as FlowNode, NodeProps as FlowNodeProps } from "@xyflow/react";
 import { Handle, MarkerType, Position } from "@xyflow/react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { NodeState, RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
@@ -88,6 +88,10 @@ export interface GraphViewProps {
 
 const NODE_TYPE = "fraguaNode";
 const EDGE_TYPE = "fraguaEdge";
+
+// How long the click-feedback press-scale holds before releasing. Long
+// enough to read as "registered", short enough to never lag a second click.
+const FLASH_MS = 200;
 
 // Arrowhead used on every edge so flow direction is unambiguous.
 // Theme tokens via CSS vars — modern browsers resolve var() in SVG
@@ -163,6 +167,18 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     }
   }, [graphProp, readyDetail?.workflowSource, readyDetail?.runId]);
 
+  // Transient click feedback: the clicked node compresses briefly
+  // (press-scale) so the click visibly registered even when selection
+  // doesn't change — motion indicating state, cleared on a short timer.
+  const [flashNodeId, setFlashNodeId] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+
   const { flowNodes, flowEdges } = useMemo(() => {
     if (!graph) return { flowNodes: [], flowEdges: [] };
     const resolvedHitlNodeId =
@@ -177,11 +193,15 @@ export function GraphView(props: GraphViewProps): JSX.Element {
       orientation,
       hitlNodeId: resolvedHitlNodeId,
       activeNodeIds: activeNodeIds ?? null,
+      flashNodeId,
     });
-  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation, hitlNodeId, activeNodeIds]);
+  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation, hitlNodeId, activeNodeIds, flashNodeId]);
 
   const handleNodeClick = useCallback(
     (_e: unknown, node: FlowNode) => {
+      setFlashNodeId(node.id);
+      if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlashNodeId(null), FLASH_MS);
       onNodeClick?.(node.id);
     },
     [onNodeClick],
@@ -320,16 +340,20 @@ function FraguaNode({ data }: FlowNodeProps): JSX.Element {
       data-handler={handlerLabel}
       data-compact={isTerminal ? "true" : undefined}
       data-dim={d.dim ? "true" : undefined}
+      data-flash={d.flash ? "true" : undefined}
       className={cn(
         // Unified width across archetypes — terminals used to render at
         // w-44, which broke the column gridline against w-60 regular
         // nodes. The compact form (header-only body, no metadata rows)
         // is preserved via `data-compact` + the `isTerminal ? null` body
         // branch below; only the bounding box widens.
-        "relative w-60 overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
+        "relative w-60 overflow-hidden transition-[colors,opacity,transform] duration-[var(--sw-duration-status)]",
         d.dim && "opacity-35",
         d.active && "ring-2 ring-sw-accent-thinking",
         d.selected && !d.active && "ring-2 ring-sw-accent-idle",
+        // Click feedback: press-scale (transform-only) released by the
+        // GraphView flash timer.
+        d.flash && "scale-[0.97]",
       )}
     >
       {stripTone ? (
@@ -618,6 +642,9 @@ interface FraguaNodeData extends Record<string, unknown> {
    *  opacity so the executed path visually dominates. Always `false` in
    *  workflow-detail mode (no run, everything dims-equally would be noise). */
   dim: boolean;
+  /** Transient click feedback — `true` only for the just-clicked node
+   *  while the GraphView flash timer is live. */
+  flash: boolean;
   orientation: LayoutOrientation;
 }
 
@@ -628,6 +655,8 @@ export interface ToFlowGraphOptions {
   hitlNodeId?: string | null;
   /** Set of every running nodeId. */
   activeNodeIds?: ReadonlySet<string> | null;
+  /** Just-clicked node — renders a transient press-scale as click feedback. */
+  flashNodeId?: string | null;
 }
 
 /**
@@ -658,6 +687,7 @@ export function toFlowGraph(
     orientation = "TB",
     hitlNodeId = null,
     activeNodeIds = null,
+    flashNodeId = null,
   } = opts;
   // `detail.nodes` is sorted by `(nodeId, iteration)` ascending, so
   // overwriting by nodeId keeps the latest iteration's state — the
@@ -844,6 +874,7 @@ export function toFlowGraph(
       hasOutgoing: outgoing.has(id),
       active: activeNodeIds ? activeNodeIds.has(id) : activeNodeId === id,
       selected: selectedNodeId === id,
+      flash: flashNodeId === id,
       // Unreached nodes during a run fade. Workflow-detail mode leaves
       // everything at full opacity.
       dim: hasRun && !reached.has(id),

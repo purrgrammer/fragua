@@ -12,12 +12,12 @@
 // All filesystem work happens in the injected `ProjectTreeReader`. The
 // routes only do lookup and response shaping.
 
-import type { IEventStore } from "@fragua/store";
+import type { IEventReader } from "@fragua/store";
 import { Hono } from "hono";
 import type { ProjectTreeReader } from "../ports.ts";
 
 export interface ProjectsRouteOptions {
-  store: IEventStore;
+  store: Pick<IEventReader, "listProjects">;
   reader: ProjectTreeReader;
 }
 
@@ -72,7 +72,7 @@ type ProjectLookup = { kind: "ok"; cwd: string } | { kind: "invalid_id" } | { ki
 /** Resolve a `project_id` to a local cwd via the project enumeration.
  *  Unknown id → not_found; known but no local checkout (imported-only,
  *  NULL cwdHint) → not_found so the web shows "not checked out here". */
-function resolveProjectCwd(store: IEventStore, id: string | undefined): ProjectLookup {
+function resolveProjectCwd(store: Pick<IEventReader, "listProjects">, id: string | undefined): ProjectLookup {
   if (typeof id !== "string" || id.length === 0) return { kind: "invalid_id" };
   const project = store.listProjects().find((row) => row.projectId === id);
   if (project == null || project.cwdHint == null) return { kind: "not_found" };

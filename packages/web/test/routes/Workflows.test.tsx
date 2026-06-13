@@ -2,7 +2,7 @@
 // seed the react-query cache via `setQueryData` for happy-path renders,
 // and install a URL-routing fake `fetch` for error paths.
 
-import { cleanup, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WorkflowSummary } from "../../src/lib/api.ts";
@@ -68,6 +68,48 @@ describe("Workflows route", () => {
       console.warn = origWarn;
     }
   });
+  it("filters rows by name as the operator types, and restores them on clear", async () => {
+    const rows: WorkflowSummary[] = [
+      { name: "alpha", path: "workflows/alpha.yaml", sha: "abcdef1234567890", label: "Alpha" },
+      { name: "beta", path: "workflows/beta.yaml", sha: "fedcba0987654321" },
+    ];
+    const client = createTestQueryClient();
+    client.setQueryData(queries.workflows.list().queryKey, rows);
+
+    const { container } = mount(client);
+    const q = within(container);
+    const input = await waitFor(() => q.getByLabelText("Filter workflows"));
+
+    fireEvent.change(input, { target: { value: "alp" } });
+    expect(q.getByTestId("workflow-row-alpha")).toBeTruthy();
+    expect(q.queryByTestId("workflow-row-beta")).toBeNull();
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(q.getByTestId("workflow-row-alpha")).toBeTruthy();
+    expect(q.getByTestId("workflow-row-beta")).toBeTruthy();
+  });
+
+  it("matches the display label case-insensitively and shows a no-match notice otherwise", async () => {
+    const rows: WorkflowSummary[] = [
+      { name: "alpha", path: "workflows/alpha.yaml", sha: "abcdef1234567890", label: "Release train" },
+    ];
+    const client = createTestQueryClient();
+    client.setQueryData(queries.workflows.list().queryKey, rows);
+
+    const { container } = mount(client);
+    const q = within(container);
+    const input = await waitFor(() => q.getByLabelText("Filter workflows"));
+
+    fireEvent.change(input, { target: { value: "RELEASE" } });
+    expect(q.getByTestId("workflow-row-alpha")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "zzz" } });
+    expect(q.queryByTestId("workflows-table")).toBeNull();
+    expect(q.getByTestId("workflows-no-match").textContent).toContain("zzz");
+    // The full-list empty state stays reserved for "no workflows exist".
+    expect(q.queryByTestId("workflows-empty")).toBeNull();
+  });
+
   it("links each row's name to /workflows/:name", async () => {
     const rows: WorkflowSummary[] = [
       { name: "alpha", path: "workflows/alpha.yaml", sha: "abcdef1234567890", label: "Alpha" },

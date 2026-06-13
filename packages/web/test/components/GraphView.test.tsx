@@ -352,6 +352,21 @@ steps:
     expect(clicks).toEqual(["start"]);
   });
 
+  it("flashes the clicked node briefly, then clears (click feedback)", async () => {
+    const { container } = render(<GraphView detail={makeDetail()} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const middleFlow = canvas.querySelector('.react-flow__node[data-id="middle"]');
+    expect(middleFlow).toBeTruthy();
+
+    const flashed = () => canvas.querySelector('[data-node-id="middle"]')?.getAttribute("data-flash") ?? null;
+    expect(flashed()).toBeNull();
+
+    fireEvent.click(middleFlow as Element);
+    await waitFor(() => expect(flashed()).toBe("true"));
+    // Transient: the flash releases on its own shortly after the click.
+    await waitFor(() => expect(flashed()).toBeNull(), { timeout: 2000 });
+  });
+
   it("renders model row with provider logo + effort row when attrs present", async () => {
     const src = `name: styled
 steps:

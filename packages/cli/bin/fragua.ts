@@ -73,6 +73,7 @@ import {
 import { serveCommand } from "../src/commands/serve.ts";
 import { showCommand } from "../src/commands/show.ts";
 import { validateCommand } from "../src/commands/validate.ts";
+import { waitCommand } from "../src/commands/wait.ts";
 import { FRAGUA_VERSION } from "../src/version.ts";
 
 const cli = cac("fragua");
@@ -560,7 +561,7 @@ function runsHelp(): void {
   console.log(`fragua runs <verb> <runId> — operate on an existing run
 
   Disposition (terminal runs with recoverable work):
-    accept  <id>                      replay the run's commits onto your branch + stage the tail to commit
+    accept  <id> [--autostash]        replay the run's commits onto your branch + stage the tail to commit
     discard <id>                      drop the run's fragua refs
     diff    <id> [--against <ref>] [--snap <idx>] [--path <p>]  print the snapshot diff
 
@@ -583,14 +584,20 @@ function runsHelp(): void {
 
   Listing:
     inbox               [--json]      runs needing attention (2 sections)
-    ls [--status a,b] [--limit N] [--json]  list runs
+    ls [--status a,b] [--limit N] [--summary] [--json]  list runs (--summary: fleet rollup)
     status <id>         [--json]      one run's state + the why + active budget warnings
-    tail   <id>                       follow a run's event log to terminal (live, like \`run\` without --no-follow)
+    tail   <id> [--full]              follow a run's event log to terminal (live; backfill = last 200 events, --full for all)
     explain <id>        [--json]      narrative: path taken, per-step outcome/cost, diff summary, terminal reason
     worktree <id>                     print the absolute worktree path (exit 1 if cleaned up)
 
+  Wait (block on a set until settled):
+    wait <id...> | --workflow <name> | --all-running
+         [--timeout <dur>] [--settle terminal|blocked]   block until every selected run settles;
+                                                         exit 0 (all completed) / banded (halt/quarantine) /
+                                                         60 (blocked) / 75 (timeout)
+
   Inspect (forensics — dissect a run, no raw SQL):
-    events    <id> [--type <prefix>] [--limit N] [--json]   the event log (default last 50, oldest-first)
+    events    <id> [--type <prefix>] [--limit N] [--since <seq>] [--json]   the event log (default last 50, oldest-first)
     steps     <id> [--json]                                 per-LLM-call cost / tokens / duration
     messages  <id> [--node <id>] [--json]                   the LLM-visible transcript (one preview line each)
     artifacts <id>                                          list a run's artifacts (metadata)
@@ -604,6 +611,7 @@ function runsHelp(): void {
 cli
   .command("runs [action] [runId] [arg]", "Operate on an existing run (run without args for help)")
   .option("--against <ref>", "diff: base | previous | <eventIdx> (default base)")
+  .option("--autostash", "accept: stash unrelated working-tree changes around the apply, then restore them")
   .option("--snap <eventIdx>", "diff: snapshot to show (default: latest)")
   .option("--path <path>", "diff: restrict to a repo-relative path")
   .option("--route <route>", "respond: HITL route (omit for interactive)")
@@ -614,8 +622,18 @@ cli
   .option("--metric <m>", "budget: metric (e.g. cost | tokens)")
   .option("--new-limit <n>", "budget: the raised ceiling")
   .option("--node <id>", "max-retries / messages: the node whose retry cap to raise / scope the transcript")
+  .option(
+    "--summary",
+    "ls: print a fleet rollup (status counts, per-workflow table, in-flight cost) instead of the list",
+  )
   .option("--status <list>", "ls: comma-separated lifecycle statuses")
+  .option("--workflow <name>", "wait: select every active run of a workflow")
+  .option("--all-running", "wait: select every active run")
+  .option("--timeout <dur>", "wait: give up after a duration (e.g. 30s, 5m, 1h)")
+  .option("--settle <mode>", "wait: terminal | blocked (default blocked: paused counts as settled)")
   .option("--limit <n>", "ls/inbox/events: cap results")
+  .option("--since <seq>", "events: only events with seq greater than <seq>")
+  .option("--full", "tail: replay the entire event log instead of the last 200")
   .option("--type <prefix>", "events: filter by event-type prefix (e.g. fact.)")
   .option("--json", "events/steps/messages/ls/status/inbox/explain: emit full JSON instead of one-line render")
   .option("--key <k>", "artifact: the artifact key to fetch")
@@ -638,6 +656,14 @@ cli
             ? Number.parseInt(limitRaw, 10)
             : undefined;
       const limitOpt = limit !== undefined && Number.isFinite(limit) ? { limit } : {};
+      const sinceRaw = options["since"];
+      const since =
+        typeof sinceRaw === "number"
+          ? sinceRaw
+          : typeof sinceRaw === "string"
+            ? Number.parseInt(sinceRaw, 10)
+            : undefined;
+      const sinceOpt = since !== undefined && Number.isFinite(since) ? { since } : {};
       const needId = (): string => {
         if (runId == null) {
           console.error(chalk.red(`runs ${action}: <runId> required`));
@@ -665,12 +691,19 @@ cli
               ...(pickStr(options, "status") !== undefined ? { status: pickStr(options, "status")! } : {}),
               ...limitOpt,
               ...(options["json"] === true ? { json: true } : {}),
+              ...(options["summary"] === true ? { summary: true } : {}),
               ...discovery(options),
             }),
           );
           break;
         case "accept":
-          process.exit(await acceptCommand({ runId: needId(), ...discovery(options) }));
+          process.exit(
+            await acceptCommand({
+              runId: needId(),
+              ...(options["autostash"] === true ? { autostash: true } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         case "discard":
           process.exit(await discardCommand({ runId: needId(), ...discovery(options) }));
@@ -685,7 +718,13 @@ cli
           );
           break;
         case "tail":
-          process.exit(await tailCommand({ runId: needId(), ...discovery(options) }));
+          process.exit(
+            await tailCommand({
+              runId: needId(),
+              ...(options["full"] === true ? { full: true } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         case "diff": {
           const snapRaw = options["snap"];
@@ -818,6 +857,7 @@ cli
               runId: needId(),
               ...(pickStr(options, "type") !== undefined ? { type: pickStr(options, "type")! } : {}),
               ...limitOpt,
+              ...sinceOpt,
               ...(options["json"] === true ? { json: true } : {}),
               ...discovery(options),
             }),
@@ -895,6 +935,22 @@ cli
         case "worktree":
           process.exit(await worktreeCommand({ runId: needId(), ...discovery(options) }));
           break;
+        case "wait": {
+          // Variadic ids: cac binds the first two positionals to runId/arg; any
+          // further ids land in parsed.args. A single selector flag replaces ids.
+          const ids = [runId, arg, ...parsed.args.slice(3)].filter((s): s is string => typeof s === "string");
+          process.exit(
+            await waitCommand({
+              ...(ids.length > 0 ? { ids } : {}),
+              ...(pickStr(options, "workflow") !== undefined ? { workflow: pickStr(options, "workflow")! } : {}),
+              ...(options["allRunning"] === true ? { allRunning: true } : {}),
+              ...(pickStr(options, "timeout") !== undefined ? { timeout: pickStr(options, "timeout")! } : {}),
+              ...(pickStr(options, "settle") !== undefined ? { settle: pickStr(options, "settle")! } : {}),
+              ...discovery(options),
+            }),
+          );
+          break;
+        }
         default:
           console.error(chalk.red(`unknown runs action: ${action}`));
           runsHelp();
