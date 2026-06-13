@@ -41,6 +41,12 @@ guarantee.
 
 ### Fixed
 
+- Quarantined runs no longer wedge two surfaces: the server SSE stream now
+  closes for them (it previously stayed open indefinitely), and the schedule
+  dispatcher no longer treats a quarantined prior run as live (it previously
+  blocked every future scheduled fire under overlap-skip). Backed by a
+  canonical `SETTLED_STATUSES` (terminal + quarantined) tuple from which every
+  consumer status-set is now derived; quarantined remains resumable.
 - A run halted without a closing node fact (`route_not_picked`,
   `route_call_not_isolated`, `edge_no_match`) now folds the halted turn's
   partial spend into run totals instead of reporting zero cost.
