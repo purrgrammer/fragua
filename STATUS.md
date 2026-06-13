@@ -11,7 +11,7 @@ see `docs/ARCHITECTURE.md` and `docs/SPEC.md`.
 - Foreground harness — daemon + HTTP under one supervisor (`fragua harness`) per machine, against a global `~/.fragua/fragua.db`; SQLite is the only coordination surface
 - Project-aware run schema (cwd + workflow metadata + harness URL columns) — `run_state.cwd` keys runs to project roots, `server_endpoint.{url, port, harness_version}` carry the running URL so CLIs discover the harness via the DB itself (no JSON rendezvous file in the default install)
 - Event store with intent/fact split, OCC on facts, content-addressed blobs on disk
-- 5 node kinds: `start`, `exit`, `llm` (LLM agent), `human` (operator-gated routing), `tool` (graph-level shell). No concurrent-dispatch primitive — steps run one at a time; concurrent work is composed as separate runs sharing artifacts
+- 6 node kinds: `start`, `exit`, `llm` (LLM agent), `human` (operator-gated routing), `tool` (graph-level shell), `parallel` (concurrent fan-out). A `parallel` node dispatches read-only `llm` branches — no write-class tools, enforced by validator E042 — and commits serialize through a single committer (branches produce, one committer merges), so determinism and the single-writer invariant hold. The flagship `review.yaml` fans out concurrent lens branches over this primitive
 - Replayable **control plane** (state machine, edge selection, intent fold). LLM bodies are best-effort and depend on provider determinism
 - Two-layer config cascade — global `~/.fragua/config.yaml` (defaults, auto-title, blocklist, …) overlaid by `<project>/.fragua/config.yaml` (project-specific bootstrap). Project keys win; nested objects merge one level deep. YAML only.
 
