@@ -32,7 +32,7 @@
 | **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
 | **I7** | Event payloads ≤ 4KB | `CHECK (length(payload) < 4096)` column constraint |
 | **I8** | Raw tool output addressed by sha256 on the filesystem under `blobsDir`; `blobs` row holds metadata only; artifacts are named refs scoped by `(run, node, iteration, key)`; replay-safe by default — same-content rewrite is a no-op, different-content rewrite at the same scope throws `ArtifactCollisionError` unless the caller passes `{ replace: true }` | Store API writes file→row in that order so orphans are always files, never dangling rows; `putArtifact` checks existing ref and either matches sha (no-op), throws collision, or overwrites with explicit replace |
-| **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages ≤ 1 MiB | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
+| **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages < 1,048,576 characters | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
 | **I10** | Seq assignment is O(1) via per-run counter on `run_state.next_seq`; never scanned | Store module; `UPDATE run_state SET next_seq = next_seq + 1 RETURNING ...` inside append txn |
 | **I11** | A `parallel` region is single-entry/single-exit: `wait_all` is its only join, pause is run-global (one shared `AbortSignal`), the per-branch active set is a log-derived **diagnostic** (the scalar `run_state.status` stays sole lifecycle authority), and branches commit through the one daemon writer (commit unit = branch-step, not a synchronised superstep) | Validator E036–E045; `runFanout` single-writer commit lane (§6.2); the fan-out property suite (P28–P31) |
 
@@ -442,7 +442,7 @@ CREATE INDEX idx_outputs_run ON outputs(run_id, node_id);
 **Size targets:**
 - `run_state` row: ~500 bytes; thousands of rows negligible.
 - `events` row: ~300 bytes; partial indexes small.
-- `messages` rows: ≤ 1 MiB per row (enforced; large values spill through `ctx.artifacts.put`).
+- `messages` rows: < 1,048,576 characters per row (enforced; large values spill through `ctx.artifacts.put`).
 - `blobs` row: ~100 bytes (metadata only). Content files up to 16 MiB apiece live under `blobsDir`.
 
 ### 2.1 `run_state.routing` — trusted, opaque, fold-rebuildable
