@@ -27,6 +27,12 @@
 name: work
 goal: Triage a task and route it through a scope-appropriate plan/implement/review/ship pipeline.
 
+# Run-level budget bounds the whole run, including the ci↔fix loop — the right
+# lever for a looped workflow (a per-node max-cost sums across iterations and
+# trips mid-loop; see the fix step). Pause-on-breach lets the operator raise it.
+budget: 4.00
+budget-policy: pause
+
 inputs:
   task:
     type: string
@@ -131,10 +137,8 @@ steps:
 
   fix:
     type: llm
-    model: claude-sonnet-4-6           # mechanical CI fixing under a tight cumulative cap
+    model: claude-sonnet-4-6           # mechanical CI fixing; bounded by the run budget, not a per-node cap
     allowed-tools: [read, write, edit, bash]
-    max-cost: 0.30
-    max-tokens: 800000
     prompt: |
       CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
     next: ci
