@@ -11,13 +11,13 @@
 // Both take only the store + provisioner, not the full ExecutorOpts, so the
 // service has no dependency on the loop's other knobs.
 
-import type { FactEvent, IEventStore } from "@fragua/store";
+import type { FactEvent, IDaemonCoordinator, IEventReader, IEventWriter } from "@fragua/store";
 import { TERMINAL_STATUSES } from "./executor-helpers.ts";
 import { tryAppendFact } from "./occ-append.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
 
 export interface SnapshotDeps {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IDaemonCoordinator;
   provisioner?: Provisioner;
 }
 

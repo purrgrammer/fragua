@@ -8,7 +8,9 @@ import { InvalidDurationError, parseDurationMs, type parseWorkflow } from "@frag
 import { type BuildResult, makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import {
-  type IEventStore,
+  type IAnalyticsReader,
+  type IEventReader,
+  type IEventWriter,
   type IntentEvent,
   isTerminal as isTerminalStatus,
   newRunId,
@@ -31,7 +33,7 @@ export type WorkflowModelValidator = (
   | { ok: false; offenders: Array<{ nodeId: string; provider?: string; model: string; reason: string }> };
 
 export interface ServerDeps {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IAnalyticsReader;
   /** Snapshot/ref git reader — used by `POST /runs/:id/merge` to refuse a
    *  non-ff or conflicting merge synchronously. Omit to skip git-level
    *  merge validation (the daemon sweep is the defense-in-depth backstop). */

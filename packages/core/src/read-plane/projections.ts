@@ -6,7 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
+import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
 import { HALT_REASONS, type HaltReason } from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
@@ -575,8 +575,8 @@ export { deriveNodeStates, deriveSelectedEdges };
 
 export type ListRunsOpts = ListRunIdsOpts;
 
-/** Wire to `IEventStore.listRunIds` — kept for callers that already
+/** Wire to `IEventReader.listRunIds` — kept for callers that already
  *  imported `listRuns`. SQL pushdown lives in the store. */
-export function listRuns(store: IEventStore, opts: ListRunsOpts = {}): string[] {
+export function listRuns(store: Pick<IEventReader, "listRunIds">, opts: ListRunsOpts = {}): string[] {
   return store.listRunIds(opts);
 }

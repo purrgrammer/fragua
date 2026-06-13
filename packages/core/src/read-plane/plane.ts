@@ -18,7 +18,7 @@ import type {
   GetGlobalEventsAtFloorOpts,
   GetGlobalEventsForwardOpts,
   GetMessagesOpts,
-  IEventStore,
+  IEventReader,
   ListRunSummaryRowsOpts,
   NarrowMessage,
   StoredEvent,
@@ -33,7 +33,7 @@ import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnap
 export type { ArtifactListRow, ArtifactScope } from "@fragua/store";
 
 export interface ReadPlaneDeps {
-  store: IEventStore;
+  store: IEventReader;
 }
 
 /** Forward-cursor fields for the global feed, MINUS the `kindIn`

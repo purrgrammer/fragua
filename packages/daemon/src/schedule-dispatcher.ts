@@ -25,13 +25,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
-import { type IEventStore, isTerminal as isTerminalStatus, newRunId as mintRunId } from "@fragua/store";
+import {
+  type IDaemonCoordinator,
+  type IEventReader,
+  type IEventWriter,
+  isTerminal as isTerminalStatus,
+  newRunId as mintRunId,
+} from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
 
 export const DEFAULT_SCHEDULE_TICK_MS = 60_000;
 
 export interface ScheduleDispatcherOpts {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IDaemonCoordinator;
   shutdownSignal: AbortSignal;
   /** Tick interval. Defaults to 60s; tests inject smaller values. */
   tickIntervalMs?: number;

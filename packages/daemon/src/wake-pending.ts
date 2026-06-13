@@ -23,7 +23,13 @@
 // intent and an unquarantine / human_input ends up cancelled (fold rule
 // R1: cancel beats everything).
 
-import { ConcurrencyError, type FactEvent, type IEventStore, type OrphanSideEffectRow } from "@fragua/store";
+import {
+  ConcurrencyError,
+  type FactEvent,
+  type IEventReader,
+  type IEventWriter,
+  type OrphanSideEffectRow,
+} from "@fragua/store";
 
 export interface WakePendingResult {
   cancelled: string[];
@@ -38,7 +44,7 @@ export interface WakePendingResult {
  * terminal or queued state. Idempotent — safe to call on every executor
  * tick.
  */
-export function wakePending(store: IEventStore, now: () => number = Date.now): WakePendingResult {
+export function wakePending(store: IEventWriter & IEventReader, now: () => number = Date.now): WakePendingResult {
   const cancelled = wakeCancel(store);
   const humanWoken = wakeHuman(store);
   const resumed = wakeResume(store);
@@ -51,7 +57,7 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
  * Cancel any paused_* / quarantined run with an unapplied
  * `intent.cancel_requested`. Emits `fact.run_cancelled { intentSeq }`.
  */
-function wakeCancel(store: IEventStore): string[] {
+function wakeCancel(store: IEventWriter & IEventReader): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
     statuses: ["paused", "paused_human", "paused_auto", "quarantined", "queued"],
@@ -77,7 +83,7 @@ function wakeCancel(store: IEventStore): string[] {
  * dispatch's fold consumes it as `decision.humanInput`. lastAppliedSeq
  * stays put so the fold sees the intent.
  */
-function wakeHuman(store: IEventStore): string[] {
+function wakeHuman(store: IEventWriter & IEventReader): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({ statuses: ["paused_human"] });
   for (const row of candidates) {
@@ -111,7 +117,7 @@ function wakeHuman(store: IEventStore): string[] {
  * swept here; they require the typed `intent.unquarantine { resolution }`
  * because the operator has to pick one of treat_as_done / retry / cancel.
  */
-function wakeResume(store: IEventStore): string[] {
+function wakeResume(store: IEventWriter & IEventReader): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
     statuses: ["paused", "paused_human", "paused_auto"],
@@ -168,7 +174,7 @@ function wakeResume(store: IEventStore): string[] {
  * (`paused`, `paused_human`) ignore this routing key — they wake on
  * `intent.resume` only.
  */
-function wakeAutoResume(store: IEventStore, now: () => number): string[] {
+function wakeAutoResume(store: IEventWriter & IEventReader, now: () => number): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
     statuses: ["paused_auto"],
@@ -212,7 +218,7 @@ function wakeAutoResume(store: IEventStore, now: () => number): string[] {
  * Unknown / malformed resolutions are skipped (no fact emitted) so the
  * operator can re-issue with a valid one.
  */
-function wakeUnquarantine(store: IEventStore): string[] {
+function wakeUnquarantine(store: IEventWriter & IEventReader): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({ statuses: ["quarantined"] });
   for (const row of candidates) {

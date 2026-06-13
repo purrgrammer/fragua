@@ -10,11 +10,11 @@
 // This loop ticks slowly (default every 6 hours) and bounds work per
 // tick (default 1000 rows). It's idempotent and safe to call any time.
 
-import type { IEventStore } from "@fragua/store";
+import type { IDaemonCoordinator, IEventWriter } from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
 
 export interface BlobGcOpts {
-  store: IEventStore;
+  store: IEventWriter & IDaemonCoordinator;
   shutdownSignal: AbortSignal;
   /** How often to sweep, in ms. Default 6 hours. */
   intervalMs?: number;

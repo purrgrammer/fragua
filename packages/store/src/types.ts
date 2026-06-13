@@ -659,8 +659,8 @@ export interface GetDaemonEventsOpts {
 
 // ─── Segregated store interfaces ───
 //
-// `IEventStore` was a god interface; the surface is now split into four
-// concerns that map onto the actual SQL boundaries:
+// The surface is split into concern-scoped sub-interfaces that map onto the
+// actual SQL boundaries:
 //
 //   IEventWriter        — every method that mutates run-level state
 //                         (events, run_state, messages, artifacts,
@@ -672,14 +672,19 @@ export interface GetDaemonEventsOpts {
 //                         IEventReader because analytics queries warrant
 //                         dedicated tuning (cache_size, multi-query
 //                         consistent snapshots).
-//   IDaemonCoordinator  — the daemon_events / daemon_lock surface. Truly
-//                         orthogonal: no transactional overlap with
-//                         run_state, no OCC, separate tables.
+//   IDaemonCoordinator  — the daemon_events / daemon_lock / schedules
+//                         surface. Truly orthogonal: no transactional
+//                         overlap with run_state, no OCC, separate tables.
+//   IProviderCredentialStore / IProviderConfigStore — per-provider
+//                         credential + config rows (declared further down).
 //
-// `IEventStore` is preserved as a type-alias intersection so existing
-// callers don't break. `SqliteStore` implements all four sub-interfaces
-// in one class today; nothing prevents future implementations from
-// composing them out of separate connections / backends.
+// Every consumer types its `store` seam against the narrowest slice (or
+// intersection) it calls — NEVER the composite `IEventStore` below. This is
+// enforced by `test/event-store-sub-interface.lint.test.ts`; only the
+// assembly seams that construct the real store (server + daemon entrypoints,
+// CLI store-client) hold the composite to hand slices out. `SqliteStore`
+// implements all sub-interfaces in one class today; nothing prevents future
+// implementations from composing them out of separate connections / backends.
 
 export interface IEventWriter {
   appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
@@ -1208,10 +1213,13 @@ export interface IProviderConfigStore {
 }
 
 /**
- * Composite store contract — backward-compatible alias for the original
- * `IEventStore` shape. New code should depend on the narrowest sub-
- * interface that fits its needs (e.g. analytics routes only need
- * `IAnalyticsReader`, the daemon supervisor only needs `IDaemonCoordinator`).
+ * Composite store contract — the full intersection that `SqliteStore`
+ * implements. Only the store package and the assembly seams that construct
+ * the real store depend on this; every other consumer types against the
+ * narrowest sub-interface it calls (e.g. analytics routes only need
+ * `IAnalyticsReader & IEventReader`, the schedule routes only
+ * `IDaemonCoordinator`). Enforced by
+ * `test/event-store-sub-interface.lint.test.ts`.
  */
 export type IEventStore = IEventWriter &
   IEventReader &

@@ -6,7 +6,7 @@
 // `GET /schedules` (small surface) or stream daemon events.
 
 import { randomBytes } from "node:crypto";
-import type { IEventStore } from "@fragua/store";
+import type { IDaemonCoordinator } from "@fragua/store";
 import { Hono } from "hono";
 
 /** Whitelist of supported intervals (`30m`, `1h`, `6h`, `24h`, `3d`,
@@ -37,7 +37,7 @@ function newScheduleId(): string {
 }
 
 export interface ScheduleRoutesDeps {
-  store: IEventStore;
+  store: IDaemonCoordinator;
   now?: () => number;
 }
 

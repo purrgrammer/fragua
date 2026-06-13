@@ -25,7 +25,7 @@
 // the run with `title = null`, and the UI falls back to the workflow name.
 
 import { type EventType, type SummariseInput, type SummariserBackend, titleSyntheticNodeId } from "@fragua/core";
-import type { IEventStore } from "@fragua/store";
+import type { IEventWriter } from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
 
 export interface AutoTitlerOpts {
@@ -36,7 +36,7 @@ export interface AutoTitlerOpts {
   /** Policy toggle — `auto-title: false` in config disables even when a
    * backend is configured. Defaults to `true`. */
   enabled?: boolean;
-  store: IEventStore;
+  store: IEventWriter;
   /** Tripped when the daemon starts shutting down. Passed into the
    * summariser call so in-flight title generation cancels cleanly. */
   shutdownSignal: AbortSignal;
@@ -68,7 +68,7 @@ const TITLE_RETRY_BASE_MS = 500;
 export class AutoTitler {
   private readonly backend: SummariserBackend | undefined;
   private readonly enabled: boolean;
-  private readonly store: IEventStore;
+  private readonly store: IEventWriter;
   private readonly shutdownSignal: AbortSignal;
   private readonly maxTitleChars: number;
   private readonly inflight = new Set<Promise<void>>();

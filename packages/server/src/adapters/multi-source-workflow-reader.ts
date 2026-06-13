@@ -16,12 +16,12 @@
 // not supplied: global → projects in `listCwds()` order (most-recent
 // activity first); first hit wins.
 
-import type { IEventStore } from "@fragua/store";
+import type { IEventReader } from "@fragua/store";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../ports.ts";
 import { createFsWorkflowReader } from "./fs-workflow-reader.ts";
 
 export interface MultiSourceWorkflowReaderOptions {
-  store: IEventStore;
+  store: Pick<IEventReader, "listCwds">;
   /** Global workflows directory. Convention: `~/.fragua/workflows`. */
   globalDir: string;
   /** Optional extra project roots to always include even if absent from

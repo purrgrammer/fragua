@@ -7,13 +7,13 @@
 // share one projection.
 
 import { makeReadPlane } from "@fragua/core/read-plane";
-import type { IEventStore, RunStatus } from "@fragua/store";
+import type { IEventReader, RunStatus } from "@fragua/store";
 import { RUN_STATUSES } from "@fragua/types";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
 
 export interface RunsRoutesOpts {
-  store: IEventStore;
+  store: IEventReader;
   /** Optional workflow reader for resolving workflow display names. */
   workflowReader?: WorkflowReader;
 }

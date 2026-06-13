@@ -12,7 +12,7 @@
 // Enqueue (the two-op `buildSaveWorkflow` + `buildEnqueue`) and the run-id
 // minter land in a follow-on increment; this is the control-intent surface.
 
-import type { EnqueueRunParams, IEventStore } from "@fragua/store";
+import type { EnqueueRunParams, IEventWriter } from "@fragua/store";
 import type { IntentEvent } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -94,7 +94,7 @@ function fail(schema: TSchema, body: unknown): { ok: false; error: string } {
 }
 
 export interface IntentPlaneDeps {
-  store: IEventStore;
+  store: IEventWriter;
   /** Run-id minter, injected (§3.3) — production passes `@fragua/store`'s
    * full-entropy ULID `newRunId`; tests/PBT pass a deterministic counter.
    * The uniqueness/import contract lives on the default, never the seam. */

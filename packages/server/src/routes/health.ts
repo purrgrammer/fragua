@@ -23,7 +23,7 @@
 // the standalone `fragua serve` path leaves it unset. That keeps
 // `createServer()` free of daemon lifecycle concerns.
 
-import type { IEventStore } from "@fragua/store";
+import type { IDaemonCoordinator, IEventReader, IEventWriter } from "@fragua/store";
 import { Hono } from "hono";
 import { reapStaleDaemon } from "../reaper.ts";
 
@@ -32,7 +32,7 @@ import { reapStaleDaemon } from "../reaper.ts";
 export const DAEMON_LIVENESS_TTL_MS = 30_000;
 
 export interface DaemonInfoFromStoreOptions {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IDaemonCoordinator;
   /** ISO startup time of the *server* — only used in the placeholder
    * fallback if the lock row is missing `started_at` (it never is). */
   fallbackStartedAt?: string;

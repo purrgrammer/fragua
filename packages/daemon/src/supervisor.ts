@@ -11,12 +11,12 @@
 // The supervisor owns no state of its own; it reads run_state and events and
 // trips controllers held by the abort registry.
 
-import type { IEventStore, StoredEvent } from "@fragua/store";
+import type { IDaemonCoordinator, IEventReader, StoredEvent } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import { sleep } from "./executor-helpers.ts";
 
 export interface SupervisorOpts {
-  store: IEventStore;
+  store: IEventReader & IDaemonCoordinator;
   registry: AbortRegistry;
   pid: number;
   shutdownSignal: AbortSignal;

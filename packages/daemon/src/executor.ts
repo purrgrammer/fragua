@@ -22,7 +22,9 @@ import {
   ConcurrencyError,
   EVENT_CONTRACT_VERSION,
   type FactEvent,
-  type IEventStore,
+  type IDaemonCoordinator,
+  type IEventReader,
+  type IEventWriter,
   MIN_COMPATIBLE_CONTRACT_VERSION,
   materializeRouting,
   type RunState,
@@ -182,7 +184,7 @@ const PROCEED_DECISION: Extract<core.IntentDecision, { kind: "proceed" }> = (() 
 })();
 
 export interface ExecutorOpts {
-  store: IEventStore;
+  store: IEventWriter & IEventReader & IDaemonCoordinator;
   dispatcher: Dispatcher;
   registry: AbortRegistry;
   tools: core.ToolRegistry;
@@ -1953,7 +1955,7 @@ function readToolScope(nodeAttrs: { allowed_tools?: unknown; denied_tools?: unkn
  * fan-out dispatch paths so this batching can't drift between them (it did once:
  * the fan-out path silently lacked the timer until it was re-added). */
 function makeObservabilitySink(
-  store: IEventStore,
+  store: IEventWriter,
   runId: string,
   label: string,
 ): { push: (ev: { type: string; payload: Record<string, unknown> }) => void; flush: () => void } {
@@ -1995,7 +1997,7 @@ function makeObservabilitySink(
  * failed. One windowed SQL pass (`NODE_LIFECYCLE_FACT_TYPES`) — this runs every
  * fan-out dispatch turn, and materialising the full event log per turn scaled
  * with run lifetime, not frontier size. */
-function abortedActiveBranches(store: IEventStore, runId: string, active: readonly string[]): string[] {
+function abortedActiveBranches(store: IEventReader, runId: string, active: readonly string[]): string[] {
   if (active.length === 0) return [];
   const latest = new Map(store.getLatestLifecycleByNode(runId).map((r) => [r.nodeId, r.type]));
   return active.filter((n) => latest.get(n) === "fact.node_aborted");
@@ -2005,7 +2007,7 @@ function abortedActiveBranches(store: IEventStore, runId: string, active: readon
  * them into a Record<nodeId, OutputsValue> with last-write-wins semantics
  * (the last iteration wins per node). Called before each dispatch so
  * outputs substitution resolves in prompts and tool commands. */
-function resolveRunOutputs(store: IEventStore, runId: string): Record<string, OutputsValue> | undefined {
+function resolveRunOutputs(store: IEventReader, runId: string): Record<string, OutputsValue> | undefined {
   const rows = store.getOutputsForRun(runId);
   if (rows.length === 0) return undefined;
   const out: Record<string, OutputsValue> = {};

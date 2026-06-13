@@ -12,11 +12,11 @@
 // correct semantics (the bug shape is "supervisor wedged this turn", which
 // doesn't survive a process restart).
 
-import { ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
+import { ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
 
 export async function tryAppendFact(
-  store: IEventStore,
+  store: IEventWriter & IEventReader,
   runId: string,
   expectedVersion: number,
   facts: FactEvent[],
@@ -56,7 +56,7 @@ export interface OccController {
 }
 
 export function makeOccController(deps: {
-  store: IEventStore;
+  store: IEventWriter & IEventReader;
   runId: string;
   shutdownSignal: AbortSignal;
 }): OccController {
