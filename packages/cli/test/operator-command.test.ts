@@ -400,6 +400,55 @@ describe("fragua operator verbs", () => {
     expect(code).toBe(1);
   });
 
+  // ─── --resume: the ceiling-raiser also lands an intent.resume in one step
+
+  test("budget --resume: lands both intent.budget_adjusted and intent.resume", async () => {
+    seedCommitted(r.store, "rbr");
+    const code = await budgetCommand({
+      runId: "rbr",
+      scope: "run",
+      metric: "cost",
+      newLimit: 5,
+      resume: true,
+      dbPath: r.dbPath,
+    });
+    expect(code).toBe(0);
+    expect(wrote("rbr", "intent.budget_adjusted")).toBe(true);
+    expect(wrote("rbr", "intent.resume")).toBe(true);
+  });
+
+  test("max-retries --resume: lands both intent.max_retries_adjusted and intent.resume", async () => {
+    seedCommitted(r.store, "rmrr");
+    const code = await maxRetriesCommand({ runId: "rmrr", nodeId: "n1", newLimit: 5, resume: true, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(wrote("rmrr", "intent.max_retries_adjusted")).toBe(true);
+    expect(wrote("rmrr", "intent.resume")).toBe(true);
+  });
+
+  test("goal-gate --resume: lands both intent.goal_gate_adjusted and intent.resume", async () => {
+    seedCommitted(r.store, "rggr");
+    const code = await goalGateCommand({ runId: "rggr", newLimit: 3, resume: true, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(wrote("rggr", "intent.goal_gate_adjusted")).toBe(true);
+    expect(wrote("rggr", "intent.resume")).toBe(true);
+  });
+
+  test("max-loops --resume: lands both intent.max_loops_adjusted and intent.resume", async () => {
+    seedCommitted(r.store, "rmlr");
+    const code = await maxLoopsCommand({ runId: "rmlr", newLimit: 3, resume: true, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(wrote("rmlr", "intent.max_loops_adjusted")).toBe(true);
+    expect(wrote("rmlr", "intent.resume")).toBe(true);
+  });
+
+  test("budget without --resume: no intent.resume (default stays two-step)", async () => {
+    seedCommitted(r.store, "rbnr");
+    const code = await budgetCommand({ runId: "rbnr", scope: "run", metric: "cost", newLimit: 5, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(wrote("rbnr", "intent.budget_adjusted")).toBe(true);
+    expect(wrote("rbnr", "intent.resume")).toBe(false);
+  });
+
   test("max-retries: exit 0, appends intent.max_retries_adjusted", async () => {
     seedCommitted(r.store, "rmr");
     const code = await maxRetriesCommand({ runId: "rmr", nodeId: "n1", newLimit: 5, dbPath: r.dbPath });

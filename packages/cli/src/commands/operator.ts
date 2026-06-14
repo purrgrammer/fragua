@@ -40,6 +40,7 @@ function writeIntent(
   runId: string,
   verb: string,
   build: (plane: IntentPlane) => BuildResult,
+  resumeAfter = false,
 ): Promise<number> {
   return withStoreClient(opts, ({ store, plane }) => {
     if (store.getState(runId) == null) {
@@ -53,6 +54,16 @@ function writeIntent(
     }
     try {
       const { seq } = plane.commit(runId, built.intent);
+      if (resumeAfter) {
+        const resume = plane.buildResume({});
+        if (!resume.ok) {
+          console.error(chalk.red(`${verb}: ${resume.error}`));
+          return 1;
+        }
+        plane.commit(runId, resume.intent);
+        console.log(chalk.green(`${verb} requested + resumed`) + chalk.dim(` (run ${runId})`));
+        return 0;
+      }
       console.log(chalk.green(`${verb} requested`) + chalk.dim(` (run ${runId}, intent seq ${seq})`));
       return 0;
     } catch (err) {
@@ -750,9 +761,11 @@ export interface BudgetOptions extends DiscoveryOpts {
   metric?: string;
   newLimit?: number;
   note?: string;
+  resume?: boolean;
 }
 
-/** Raise a cap on a `paused{reason:"budget"}` run, then `resume` to continue. */
+/** Raise a cap on a `paused{reason:"budget"}` run. Pass `--resume` to continue
+ *  in one step; otherwise `resume` separately. */
 export function budgetCommand(opts: BudgetOptions): Promise<number> {
   if (opts.scope == null || opts.metric == null || opts.newLimit == null || !Number.isFinite(opts.newLimit)) {
     console.error(chalk.red("budget: --scope <s> --metric <m> --new-limit <n> required"));
@@ -764,7 +777,7 @@ export function budgetCommand(opts: BudgetOptions): Promise<number> {
     newLimit: opts.newLimit,
   };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return writeIntent(opts, opts.runId, "budget", (p) => p.buildBudget(body));
+  return writeIntent(opts, opts.runId, "budget", (p) => p.buildBudget(body), opts.resume === true);
 }
 
 export interface MaxRetriesOptions extends DiscoveryOpts {
@@ -772,9 +785,11 @@ export interface MaxRetriesOptions extends DiscoveryOpts {
   nodeId?: string;
   newLimit: number;
   note?: string;
+  resume?: boolean;
 }
 
-/** Raise one node's handler-retry cap on a `paused{reason:"max_retries"}` run, then `resume`. */
+/** Raise one node's handler-retry cap on a `paused{reason:"max_retries"}` run.
+ *  Pass `--resume` to continue in one step; otherwise `resume` separately. */
 export function maxRetriesCommand(opts: MaxRetriesOptions): Promise<number> {
   if (opts.nodeId == null || opts.nodeId.length === 0) {
     console.error(chalk.red("max-retries: --node <nodeId> required"));
@@ -789,16 +804,18 @@ export function maxRetriesCommand(opts: MaxRetriesOptions): Promise<number> {
     newLimit: opts.newLimit,
   };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return writeIntent(opts, opts.runId, "max-retries", (p) => p.buildMaxRetries(body));
+  return writeIntent(opts, opts.runId, "max-retries", (p) => p.buildMaxRetries(body), opts.resume === true);
 }
 
 export interface GoalGateOptions extends DiscoveryOpts {
   runId: string;
   newLimit: number;
   note?: string;
+  resume?: boolean;
 }
 
-/** Raise the goal-gate retry cap on a `paused{reason:"goal_gate"}` run, then `resume`. */
+/** Raise the goal-gate retry cap on a `paused{reason:"goal_gate"}` run. Pass
+ *  `--resume` to continue in one step; otherwise `resume` separately. */
 export function goalGateCommand(opts: GoalGateOptions): Promise<number> {
   if (!Number.isFinite(opts.newLimit)) {
     console.error(chalk.red("goal-gate: <newLimit> integer required"));
@@ -806,16 +823,18 @@ export function goalGateCommand(opts: GoalGateOptions): Promise<number> {
   }
   const body: { newLimit: number; note?: string } = { newLimit: opts.newLimit };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return writeIntent(opts, opts.runId, "goal-gate", (p) => p.buildGoalGate(body));
+  return writeIntent(opts, opts.runId, "goal-gate", (p) => p.buildGoalGate(body), opts.resume === true);
 }
 
 export interface MaxLoopsOptions extends DiscoveryOpts {
   runId: string;
   newLimit: number;
   note?: string;
+  resume?: boolean;
 }
 
-/** Raise the per-run dispatch ceiling on a `paused{reason:"max_loops"}` run, then `resume`. */
+/** Raise the per-run dispatch ceiling on a `paused{reason:"max_loops"}` run.
+ *  Pass `--resume` to continue in one step; otherwise `resume` separately. */
 export function maxLoopsCommand(opts: MaxLoopsOptions): Promise<number> {
   if (!Number.isFinite(opts.newLimit)) {
     console.error(chalk.red("max-loops: <newLimit> integer required"));
@@ -823,7 +842,7 @@ export function maxLoopsCommand(opts: MaxLoopsOptions): Promise<number> {
   }
   const body: { newLimit: number; note?: string } = { newLimit: opts.newLimit };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return writeIntent(opts, opts.runId, "max-loops", (p) => p.buildMaxLoops(body));
+  return writeIntent(opts, opts.runId, "max-loops", (p) => p.buildMaxLoops(body), opts.resume === true);
 }
 
 export interface LsOptions extends DiscoveryOpts {

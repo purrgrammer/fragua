@@ -10,6 +10,11 @@ guarantee.
 
 ### Added
 
+- `--resume` flag on the ceiling-raiser verbs (`fragua runs budget`,
+  `max-retries`, `goal-gate`, `max-loops`) raises the cap and resumes the run in
+  one step, instead of leaving it paused until a separate `fragua runs resume`.
+  Without the flag the two-step behavior is unchanged, so an operator can still
+  inspect before resuming.
 - The daemon's `daemon.stopped` record now carries the leaked `runId`/`nodeId`
   pairs when the leak budget forces a shutdown (`reason: leak_limit`), and
   `fragua doctor` prints a `last exit:` line (reason, time, and the leaked

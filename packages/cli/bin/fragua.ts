@@ -575,9 +575,9 @@ function runsHelp(): void {
     steer    <id> <text>             nudge the next LLM call; aborts + re-dispatches
     pause    <id>                    pause a running run (resume to continue)
     priority <id> <n>                re-order a queued run (higher first)
-    budget   <id> --scope <s> --metric <m> --new-limit <n>   raise a cap, then resume
+    budget   <id> --scope <s> --metric <m> --new-limit <n>   raise a cap (--resume to continue)
 
-  Ceiling raisers (paused runs — raise the cap, then resume):
+  Ceiling raisers (paused runs — raise the cap, then resume; or pass --resume to do both):
     max-retries <id> <n> --node <id> raise one node's handler-retry cap
     goal-gate   <id> <n>             raise the goal-gate retry cap
     max-loops   <id> <n>             raise the per-run dispatch ceiling
@@ -621,6 +621,7 @@ cli
   .option("--scope <s>", "budget: scope (e.g. run)")
   .option("--metric <m>", "budget: metric (e.g. cost | tokens)")
   .option("--new-limit <n>", "budget: the raised ceiling")
+  .option("--resume", "budget/max-retries/goal-gate/max-loops: resume the run after raising the cap")
   .option("--node <id>", "max-retries / messages: the node whose retry cap to raise / scope the transcript")
   .option(
     "--summary",
@@ -815,6 +816,7 @@ cli
               ...(pickStr(options, "metric") !== undefined ? { metric: pickStr(options, "metric")! } : {}),
               ...(nl !== undefined && Number.isFinite(nl) ? { newLimit: nl } : {}),
               ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...(options["resume"] === true ? { resume: true } : {}),
               ...discovery(options),
             }),
           );
@@ -827,6 +829,7 @@ cli
               newLimit: Number.parseInt(arg ?? "", 10),
               ...(pickStr(options, "node") !== undefined ? { nodeId: pickStr(options, "node")! } : {}),
               ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...(options["resume"] === true ? { resume: true } : {}),
               ...discovery(options),
             }),
           );
@@ -837,6 +840,7 @@ cli
               runId: needId(),
               newLimit: Number.parseInt(arg ?? "", 10),
               ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...(options["resume"] === true ? { resume: true } : {}),
               ...discovery(options),
             }),
           );
@@ -847,6 +851,7 @@ cli
               runId: needId(),
               newLimit: Number.parseInt(arg ?? "", 10),
               ...(pickStr(options, "note") !== undefined ? { note: pickStr(options, "note")! } : {}),
+              ...(options["resume"] === true ? { resume: true } : {}),
               ...discovery(options),
             }),
           );
