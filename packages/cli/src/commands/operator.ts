@@ -33,6 +33,13 @@ interface DiscoveryOpts {
   dbPath?: string;
 }
 
+function failedResume(verb: string, runId: string, capSeq: number, error: string): string {
+  return (
+    chalk.red(`${verb}: cap raised (seq ${capSeq}) but resume failed: ${error}`) +
+    chalk.dim(` — run \`fragua runs resume ${runId}\``)
+  );
+}
+
 /** Write a control intent through the plane against the local store. Checks
  * the run exists, builds + validates via the plane, commits, prints the seq. */
 function writeIntent(
@@ -56,13 +63,22 @@ function writeIntent(
       const { seq } = plane.commit(runId, built.intent);
       if (resumeAfter) {
         const resume = plane.buildResume({});
+        // Cap raise already persisted: on resume failure point at `resume`, since
+        // re-running this verb would commit the cap raise twice.
         if (!resume.ok) {
-          console.error(chalk.red(`${verb}: ${resume.error}`));
+          console.error(failedResume(verb, runId, seq, resume.error));
           return 1;
         }
-        plane.commit(runId, resume.intent);
-        console.log(chalk.green(`${verb} requested + resumed`) + chalk.dim(` (run ${runId})`));
-        return 0;
+        try {
+          const r = plane.commit(runId, resume.intent);
+          console.log(
+            chalk.green(`${verb} requested + resumed`) + chalk.dim(` (run ${runId}, intents seq ${seq}, ${r.seq})`),
+          );
+          return 0;
+        } catch (err) {
+          console.error(failedResume(verb, runId, seq, (err as Error).message));
+          return 1;
+        }
       }
       console.log(chalk.green(`${verb} requested`) + chalk.dim(` (run ${runId}, intent seq ${seq})`));
       return 0;
