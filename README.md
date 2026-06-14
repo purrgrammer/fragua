@@ -10,8 +10,8 @@
 *fragua — Spanish for forge.*
 
 [![CI](https://github.com/purrgrammer/fragua/actions/workflows/ci.yml/badge.svg)](https://github.com/purrgrammer/fragua/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/purrgrammer/fragua)](https://github.com/purrgrammer/fragua/releases)
-[![License: MIT](https://img.shields.io/github/license/purrgrammer/fragua)](LICENSE)
+[![Release](https://img.shields.io/badge/release-v0.7.0-blue)](https://github.com/purrgrammer/fragua/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 **Durable AI workflows for engineering.** Wire LLM agents into a YAML state machine; fragua runs it deterministically — survives crashes and provider outages, lets you steer a live run mid-flight, and records every run as a replayable artifact. On your laptop and in CI.
 
