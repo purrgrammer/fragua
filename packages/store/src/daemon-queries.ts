@@ -61,6 +61,21 @@ export function selectDaemonEvents(db: Database, sinceSeq: number, limit: number
   return db.query<DaemonEventDbRow, [number, number]>(SELECT_DAEMON_EVENTS_SQL).all(sinceSeq, limit);
 }
 
+const SELECT_LATEST_DAEMON_LIFECYCLE_SQL = `
+  SELECT seq, type, payload, ts, run_id
+    FROM daemon_events
+   WHERE type IN ('daemon.started', 'daemon.stopped')
+   ORDER BY seq DESC
+   LIMIT 1
+`;
+
+/** Newest process-lifecycle row (`daemon.started` / `daemon.stopped`).
+ *  A `daemon.started` result with no later stop means the prior daemon
+ *  crashed hard — it never reached its shutdown append. */
+export function selectLatestDaemonLifecycleEvent(db: Database): DaemonEventDbRow | null {
+  return db.query<DaemonEventDbRow, []>(SELECT_LATEST_DAEMON_LIFECYCLE_SQL).get() ?? null;
+}
+
 export function selectDaemonEventsByRun(
   db: Database,
   runId: string,

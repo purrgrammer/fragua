@@ -529,7 +529,7 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 | Type | Payload fields | Semantics |
 |---|---|---|
 | `daemon.started` | `pid`, `hostname` | Daemon acquired the lock and started the executor |
-| `daemon.stopped` | `pid`, `reason: 'clean'\|'leak_limit'\|'signal'\|'error'`, `detail?` | Daemon exiting; emitted before lock release |
+| `daemon.stopped` | `pid`, `reason: 'clean'\|'leak_limit'\|'signal'\|'error'`, `detail?`, `leaked?: {runId, nodeId}[]` | Daemon exiting; emitted before lock release. `leaked` carries the handler-leak sites (leak order, producer-capped) when `reason='leak_limit'`. `fragua doctor` reads the newest `daemon.started`/`daemon.stopped` row to print a "last exit:" line when no live daemon holds the lock — a `daemon.started` with no later stop means the prior daemon crashed hard |
 | `daemon.reaper_took_over` | `priorPid`, `priorHostname`, `priorHeartbeatAt`, `staleForMs` | Lock TTL exceeded; this daemon force-acquired |
 | `daemon.sweep_completed` | `requeued: number`, `quarantined: number`, `durationMs` | Startup sweep finished |
 | `daemon.blob_gc_completed` | `deleted: number`, `durationMs` | Orphan-blob GC sweep finished |

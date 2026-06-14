@@ -10,6 +10,11 @@ guarantee.
 
 ### Added
 
+- The daemon's `daemon.stopped` record now carries the leaked `runId`/`nodeId`
+  pairs when the leak budget forces a shutdown (`reason: leak_limit`), and
+  `fragua doctor` prints a `last exit:` line (reason, time, and the leaked
+  nodes) when no live daemon holds the lock — a missing shutdown record after
+  a `daemon.started` is reported as a likely crash.
 - `fragua runs accept --autostash` lands a run even when the operator's working
   tree is dirty only in files the run doesn't touch. It stashes the unrelated
   changes (`git stash push --include-untracked`) before the apply and restores
@@ -55,6 +60,8 @@ guarantee.
   `haltContext` — rendered in the web halted banner and in
   `fragua runs status`, so investigating an `occ_exhausted` halt no longer
   means hand-parsing raw events.
+- `fragua runs ls --summary` prints a fleet rollup — status counts, a
+  per-workflow table, and total in-flight cost — aggregated in SQL.
 
 ### Changed
 
@@ -69,6 +76,19 @@ guarantee.
 
 ### Fixed
 
+- A handler that honors a late-delivered abort is no longer falsely declared
+  leaked. The leak grace is now measured from when the abort actually reached
+  the handler, not as an absolute deadline from dispatch — previously, system
+  sleep froze the abort timer and the leak sentinel together and flushed both
+  in one wake tick, halting healthy runs with `handler_leaked` (and shutting
+  the daemon down at the leak limit). Handlers that ignore their abort signal
+  still leak on the same schedule.
+- An unclassified agent-loop error (a generic provider/SDK failure with no
+  HTTP 4xx/5xx status and no `abort` tool call in the transcript) now pauses
+  the run as `provider_error` with the error message as detail, instead of
+  halting it terminally with `aborted_exit`. `aborted_exit` is reserved for a
+  deliberate agent abort; genuine abort-tool exits and existing
+  provider-error/retry classifications are unchanged.
 - Quarantined runs no longer wedge two surfaces: the server SSE stream now
   closes for them (it previously stayed open indefinitely), and the schedule
   dispatcher no longer treats a quarantined prior run as live (it previously

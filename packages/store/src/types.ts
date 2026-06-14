@@ -1097,6 +1097,13 @@ export interface IDaemonCoordinator {
    * `run_id` matches qualify (NULL run_ids excluded).
    */
   getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
+  /**
+   * Newest process-lifecycle row (`daemon.started` / `daemon.stopped`),
+   * or `null` when no daemon has ever run against this store. A
+   * `daemon.started` result with no later stop means the prior daemon
+   * crashed hard — it never reached its shutdown append.
+   */
+  latestDaemonLifecycleEvent(): DaemonEventRow | null;
 
   // ─── Daemon lock
   acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;

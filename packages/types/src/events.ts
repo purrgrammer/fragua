@@ -1003,7 +1003,17 @@ export type DaemonEvent =
   | { type: "daemon.started"; payload: { pid: number; hostname: string } }
   | {
       type: "daemon.stopped";
-      payload: { pid: number; reason: "clean" | "leak_limit" | "signal" | "error"; detail?: string };
+      payload: {
+        pid: number;
+        reason: "clean" | "leak_limit" | "signal" | "error";
+        detail?: string;
+        /** The leaked handler sites that tripped the leak budget when
+         * `reason === "leak_limit"` — capped by the producer so the row
+         * stays under the 4 KB payload cap.
+         *
+         * contract: no-bump — additive optional field; nothing folds it. */
+        leaked?: Array<{ runId: string; nodeId: string }>;
+      };
     }
   | {
       type: "daemon.reaper_took_over";

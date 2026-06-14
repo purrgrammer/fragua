@@ -59,6 +59,7 @@ describe("executor — leak budget", () => {
     });
 
     const exceededCalls: number[] = [];
+    let exceededLeaked: ReadonlyArray<{ runId: string; nodeId: string }> | undefined;
     const baseOpts = {
       store: r.store,
       dispatcher: r.dispatcher,
@@ -70,8 +71,9 @@ describe("executor — leak budget", () => {
       leakGraceMs: 30,
       shutdownSignal: new AbortController().signal,
       maxLeakedHandlers: 3,
-      onLeakLimitExceeded: (n: number) => {
+      onLeakLimitExceeded: (n: number, leaked: ReadonlyArray<{ runId: string; nodeId: string }>) => {
         exceededCalls.push(n);
+        exceededLeaked = leaked;
       },
     };
 
@@ -93,8 +95,16 @@ describe("executor — leak budget", () => {
     }
     expect(budget.count()).toBe(3);
 
-    // Limit is 3; third leak crosses it → callback fires once with count=3.
+    // Limit is 3; third leak crosses it → callback fires once with count=3
+    // and the leaked runId/nodeId pairs in leak order.
     expect(exceededCalls).toEqual([3]);
+    const expectedSites = [
+      { runId: "rl0", nodeId: "hang" },
+      { runId: "rl1", nodeId: "hang" },
+      { runId: "rl2", nodeId: "hang" },
+    ];
+    expect(exceededLeaked).toEqual(expectedSites);
+    expect(budget.leaked()).toEqual(expectedSites);
 
     // Each leak also lands a daemon.leak_detected event scoped to its
     // run (run_id populated). counts run 1..3, ceiling=3.

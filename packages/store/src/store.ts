@@ -68,6 +68,7 @@ import {
   selectDaemonEvents,
   selectDaemonEventsByRun,
   selectDaemonLock,
+  selectLatestDaemonLifecycleEvent,
   selectServerEndpoint,
   updateDaemonLockHeartbeat,
   upsertDaemonLock,
@@ -692,6 +693,18 @@ export class SqliteStore implements IEventStore {
       ts: r.ts,
       runId: r.run_id,
     }));
+  }
+
+  latestDaemonLifecycleEvent(): DaemonEventRow | null {
+    const r = selectLatestDaemonLifecycleEvent(this.db);
+    if (r == null) return null;
+    return {
+      seq: r.seq,
+      type: r.type,
+      payload: JSON.parse(r.payload),
+      ts: r.ts,
+      runId: r.run_id,
+    };
   }
 
   // ─────────────── Run lifecycle ───────────────

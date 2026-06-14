@@ -136,6 +136,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
 
     let stoppedReason: "clean" | "leak_limit" | "signal" | "error" = "clean";
     let stoppedDetail: string | undefined;
+    let stoppedLeaked: ReadonlyArray<{ runId: string; nodeId: string }> | undefined;
     try {
       const sweepStart = Date.now();
       const sweepResult = opts.store.startupSweep(priorHeartbeatAt != null ? { priorHeartbeatAt } : undefined);
@@ -213,9 +214,10 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       // When too many handlers leak, trip the shutdown controller so the
       // outer drain takes over. The daemon singleton + startup sweep
       // recovers stuck runs when a fresh daemon takes over.
-      executorOpts.onLeakLimitExceeded = (count) => {
+      executorOpts.onLeakLimitExceeded = (count, leaked) => {
         stoppedReason = "leak_limit";
         stoppedDetail = `${count} handler leaks`;
+        stoppedLeaked = leaked;
         // eslint-disable-next-line no-console
         console.error(`[daemon] ${count} handler leaks — initiating shutdown so a fresh daemon can recover`);
         ctrl.abort();
@@ -234,11 +236,17 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       throw err;
     } finally {
       try {
-        const stoppedPayload: { pid: number; reason: typeof stoppedReason; detail?: string } = {
+        const stoppedPayload: {
+          pid: number;
+          reason: typeof stoppedReason;
+          detail?: string;
+          leaked?: Array<{ runId: string; nodeId: string }>;
+        } = {
           pid,
           reason: stoppedReason,
         };
         if (stoppedDetail !== undefined) stoppedPayload.detail = stoppedDetail;
+        if (stoppedLeaked !== undefined) stoppedPayload.leaked = [...stoppedLeaked];
         opts.store.appendDaemonEvent({ type: "daemon.stopped", payload: stoppedPayload });
       } catch {
         // Best-effort — never let event-emit failure mask the underlying stop.
