@@ -1,6 +1,6 @@
 ---
 title: fact.* event taxonomy — the shared engine contract (v0)
-summary: "The versioned event contract that fragua and Ernesto both implement — the load-bearing half of two-engines-one-contract (ernesto-interop.md §4). Stance: CONVERGE, don't reconcile — where the engines encode the same event differently, pick one encoding and move both to it. Defines the envelope ({runId, seq, type, payload, ts, routing?}), the fact.<subject>_<event> naming grammar, a small CORE event set both engines emit with agreed payload minima (run_started, run_resumed, run_paused_human, node_completed, plus a terminal), and the v0 convergence target for the terminal: ONE fact.run_terminated { status: completed | failed | cancelled } — Ernesto already emits this; fragua converges (collapsing its three terminal facts is a losslesss discriminated-union change, a fragua-side work item). Plus the extension rule (an engine may emit beyond core; promoting into core is a versioned change PR'd to both repos) and the forward-compat rule (consumers ignore unknown types, never throw — this is what lets a convergence land in one repo before the other). NOT a shared npm package — each repo checks in a copy carrying the same taxonomy_version. Open sub-decision: the status string set (neutral completed|failed|cancelled vs Ernesto's errored|aborted vs fragua's halted). This is the fragua-side copy; canonical home TBD. v0 / DRAFT."
+summary: "The versioned event contract that fragua and Ernesto both implement — the load-bearing half of two-engines-one-contract (ernesto-interop.md §4). Stance: CONVERGE, don't reconcile — where the engines encode the same event differently, pick one encoding and move both to it. Defines the envelope ({runId, seq, type, payload, ts, routing?}), the fact.<subject>_<event> naming grammar, a small CORE event set both engines emit with agreed payload minima (run_started, run_resumed, run_paused_human, node_completed, plus a terminal), and the v0 convergence target for the terminal: ONE fact.run_terminated { status: completed | failed | cancelled } — Ernesto already emits this; fragua converges (collapsing its three terminal facts is a losslesss discriminated-union change, a fragua-side work item). Convergence runs in three tiers: tier-1 pure-encoding (converge now — terminal fact + usage carrier, the latter converged on a sibling fact.usage as THE carrier, fragua emitting it alongside its internal node_completed cost); tier-2 converge-on-capability (gated on the laggard building it — fragua gaining an external-wait/signal pause, which it intends but needs its own design); tier-3 stays-divergent-by-design (streaming granularity, workflow-identity form). Plus the extension rule (promoting into core is a versioned change PR'd to both repos) and the forward-compat rule (consumers ignore unknown types, never throw — what lets a convergence land in one repo before the other and a tier-3 difference coexist). NOT a shared npm package — each repo checks in a copy carrying the same taxonomy_version. Open sub-decision: the status string set (neutral completed|failed|cancelled vs Ernesto's errored|aborted vs fragua's halted). This is the fragua-side copy; canonical home TBD. v0 / DRAFT."
 status: draft
 maturity: sketch
 taxonomy_version: 0
@@ -29,13 +29,24 @@ last-reviewed: 2026-06-15
 
 Where the two engines encode the *same* event differently, the contract's job
 is to pick **one** encoding and move both to it — not to bless two wire forms
-and translate between them forever. Reconciliation (a mapping table) is the
-*migration bridge*, not the destination. v0 applies this to the terminal fact
-(§3.1): one `fact.run_terminated { status }`, which Ernesto already emits and
-fragua converges toward. The live follow-on convergence candidates are the
-usage carrier (§4) and node-completion payload (§6). The forward-compat rule
-(§5.2) is what lets a convergence land in one repo before the other without
-breaking either in the interim.
+and translate forever. Reconciliation (a mapping table) is the *migration
+bridge*, not the destination. But not every difference is an accident to
+erase. Each one falls into one of three tiers (cataloged in §6):
+
+1. **Converge now — pure encoding.** Same event, same information, different
+   shape. The contract picks one form; both move. Closed in v0: the terminal
+   fact (§3.1) and the usage carrier (§4).
+2. **Converge on capability.** One engine has a primitive the other lacks;
+   convergence is wanted but waits on the laggard *building* the capability
+   (its own design), after which the taxonomy adopts the shared shape.
+   Live: fragua gaining an external-wait / signal pause (§6.2).
+3. **Architectural choice — stays divergent by design.** A deliberate
+   difference (e.g. fragua keeping token deltas off-log), carried by the
+   forward-compat rule (§5.2), not erased.
+
+The forward-compat rule is what lets a tier-1 convergence land in one repo
+before the other, and a tier-3 difference coexist permanently, without either
+breaking the consumer.
 
 ## 1. The envelope
 
@@ -83,7 +94,8 @@ the emitting engine.
 | `fact.run_started` | `{}` (the run is identified by the envelope's `runId`) | The run began. A workflow identifier rides as an extension — fragua `workflowSha`, Ernesto `workflow` name — because the two identify workflows differently (§6). |
 | `fact.run_resumed` | `{}` | A paused run resumed (re-entry after a human/auto/signal pause or a crash). |
 | `fact.node_started` | `{ nodeId }` | A step began. *(Optional in core — fragua emits it; an engine may go straight to `node_completed`.)* |
-| `fact.node_completed` | `{ nodeId }` | A step finished. Its result and cost ride as extensions: fragua inlines `outcomeStatus` + `tokens`/`costUsd` + typed `outputs`; Ernesto inlines `output` and emits cost as a separate `fact.usage`. A core consumer learns *that* the node finished; *what* it produced is read per-engine (§4 cost, §6 outputs). |
+| `fact.node_completed` | `{ nodeId }` | A step finished. Its **result** rides as an engine-specific extension — fragua a typed `outputs` record (plural for `inputs:` symmetry, §6.3), Ernesto an `output` value; **cost does not ride here**, it rides `fact.usage` (§4). A core consumer learns *that* the node finished. |
+| `fact.usage` | `{ nodeId, inputTokens, outputTokens, costUsd }` | Cost/usage for a node that incurred it (LLM steps; a pure tool step may emit none). The converged carrier — §4. |
 | `fact.run_paused_human` | `{ nodeId, text, routes }` | The run parked for a human decision. `text` is the operator prompt; `routes` the choices. Strongly aligned already — fragua adds `routeLabels` + an embedded snapshot, Ernesto adds `promptId`. |
 | `fact.run_terminated` | `{ status }` (§3.1) | The run reached a terminal state, classified by `status`. |
 
@@ -131,22 +143,27 @@ strings, and the three engines-in-play disagree:
 This is the single string-level call the convergence forces — see
 [`ernesto-interop.md`](ernesto-interop.md) §9.
 
-## 4. Cost / usage
+## 4. Cost / usage — converge on `fact.usage` (tier 1)
 
-Cost attribution must reach a cross-engine consumer, but the two engines
-*carry* it differently:
+The converged carrier is a sibling **`fact.usage`** fact, with the minimum:
 
-- **fragua** inlines it on `fact.node_completed`: `{ tokens, costUsd }` plus an
-  input/output/cache split.
-- **Ernesto** emits a sibling `fact.usage { inputTokens, outputTokens,
-  cacheRead?, cacheWrite?, costUsd?, modelUsage? }` per step.
+```
+fact.usage { nodeId, inputTokens, outputTokens, costUsd, cacheRead?, cacheWrite?, modelUsage? }
+```
 
-The **core usage minimum**, wherever it rides, is `{ inputTokens,
-outputTokens, costUsd }` attributable to a `nodeId`. A consumer aggregating
-cost reads it from `node_completed` (fragua) or `fact.usage` (Ernesto). Which
-carrier an engine uses is an engine choice; that a per-node usage signal
-exists is the contract. (Unifying the carrier — `fact.usage` on both, or a
-generic `cost {unit,value}` — is a §5 candidate, not a v0 requirement.)
+Ernesto's form is the chosen one because it is the more general carrier — a
+sibling fact admits **per-turn** and **per-model** granularity, and run-level
+(non-node) usage, that a field inlined on `node_completed` cannot express.
+
+**Convergence state.** Ernesto already emits `fact.usage`. fragua today
+inlines cost on `fact.node_completed` (`{ tokens, costUsd }` + input/output/
+cache split); it converges by **also emitting `fact.usage`** at node
+completion — cheap, it already has the numbers — while keeping the inline
+`node_completed` cost fields as a **fragua-internal extension** that its budget
+reducer and `total_cost_usd` / `billed_tokens` generated columns fold from. So
+the cross-engine carrier becomes `fact.usage`; the inline fields stay, demoted
+from contract to fragua-internal. A consumer reads cost from `fact.usage` on
+either engine.
 
 ## 5. Extension and versioning rules
 
@@ -168,35 +185,72 @@ generic `cost {unit,value}` — is a §5 candidate, not a v0 requirement.)
    by an older consumer (rule 2 covers it). A bump that *removes* or *retypes*
    a core minimum is breaking and must be called out as such.
 
-## 6. Engine-specific extensions (informative)
+## 6. Beyond the core — the three tiers (informative)
 
-Not part of the contract — a catalogue, so a reader knows what is core (§3)
-versus what belongs to one engine. These are the raw material for §5
-promotions and for the convergence candidates in
-[`ernesto-interop.md`](ernesto-interop.md) §6.
+A classification of every non-core `fact.*`, so a reader knows what is
+converging, what is waiting on a build, and what stays divergent by design
+(§0). The core (§3) stays small; the periphery is sorted, not erased.
 
-**fragua-only, on `main`:**
-`run_paused` / `paused_auto` (operator + daemon-owed clock pauses);
-`dispatch_started`, `node_aborted`, `tool_completed`, `message_appended`;
-`snapshot_recorded` (git provenance); `fanout_started` / `fanout_joined`
-(parallel regions); `schedule_*`; `run_quarantined` / `run_requeued_after_crash`
-/ `daemon_takeover` (the durable-daemon lifecycle); `provider_retry_attempted`,
-`handler_timeout_leaked`, `side_effect_*`. Workflow identity is a content
-`workflowSha`; `node_completed` carries typed `outputs` (the structured-outputs
-MVP).
+### 6.1 Converging — pure encoding (tier 1)
 
-**Ernesto-only:**
-`run_paused_signal` (park on an opaque `signalKey`, a durable worker resumes —
-the cleaner external-wait primitive [`ernesto-interop.md`](ernesto-interop.md)
-§6.4 flags for fragua); streaming deltas on-log (`assistant_delta`,
-`assistant_message`, `tool_call`, `tool_result`, `thinking`); `fact.usage`
-(§4); `subagent_started` / `subagent_completed`; `fact.component` (typed UI
-intents per-transport renderers consume — a candidate fragua may want).
-Workflow identity is a `workflow` name + `inputs`; `node_completed` carries a
-single `output` value.
+Same event and information, different shape; the contract picks one form and
+both engines move. **Closed in v0:** the terminal fact (§3.1) and the usage
+carrier (§4). No open tier-1 items remain.
 
-The asymmetry to keep in mind: **fragua's message-level facts are coarser**
-(whole `message_appended`; per-token deltas are off-log, SSE-only) while
-**Ernesto's are finer** (per-token `assistant_delta` on-log). A bridge from
-fragua → Ernesto forwards at message granularity; that is faithful, not lossy
-(§3's core never promised token deltas).
+### 6.2 Converge-on-capability (tier 2)
+
+One engine has a runtime primitive the other lacks. Convergence is *wanted*
+but waits on the laggard building it (its own design); the taxonomy then adopts
+the shared shape. A real capability gap, not an encoding one.
+
+- **External wait / `fact.run_paused_signal`.** Ernesto parks a run on an
+  opaque `signalKey` and a durable worker resumes it on an external
+  state-change (its `monitor` kind rides this). fragua has no external-wait
+  primitive — a fragua workflow can't wait on CI, a deploy, or a remote job
+  without an LLM step polling. **fragua intends to add one; it needs its own
+  design** (the resume mechanism, the durable watcher, how it folds — fragua's
+  single-daemon model differs from Ernesto's any-pod worker). Once it lands,
+  the pause taxonomy converges on the `human | signal` split — the clean
+  model, rather than fragua growing more `paused_*` statuses. Tracked:
+  [`ernesto-interop.md`](ernesto-interop.md) §6.4.
+
+(The per-step *result* payload — fragua's `outputs` record vs Ernesto's
+`output` value — is **not** a tier-2 gap: both carry a node's typed result, it
+is a naming/shape alignment, §6.3.)
+
+### 6.3 Architectural choice — stays divergent (tier 3)
+
+- **Streaming granularity.** fragua keeps per-token deltas **off the log**
+  (message-level `message_appended` on-log; deltas SSE-only, ephemeral);
+  Ernesto puts `assistant_delta` / `tool_call` / `tool_result` / `thinking`
+  **on-log**. A fragua → Ernesto bridge forwards at message granularity —
+  faithful, not lossy (the core never promised token deltas). Convergence
+  would mean a side reversing a deliberate architectural call; not a target.
+- **Workflow identity on `run_started`.** fragua identifies a workflow by
+  content `workflowSha`; Ernesto by `workflow` name + `inputs`. Different
+  identity models (sha-pinned static IR vs named declaration); the identifier
+  form stays engine-specific, which is why §3's `run_started` minimum is `{}`.
+- **Result-payload naming (cosmetic, alignable).** fragua's `node_completed`
+  carries a typed `outputs` **record** — plural for symmetry with `inputs:`
+  (both are records of named, individually-addressable fields), emitted
+  atomically via one `emit_output`; it is **not** "many outputs vs one," it is
+  one typed result whose fields are named. Ernesto carries a single `output`
+  value (with optional `outputFormat` validation). The field name and the
+  cross-step read token (`steps.*.outputs.*` vs `outputs.*`) are a **cosmetic
+  alignment** ([`ernesto-interop.md`](ernesto-interop.md) open decision #3),
+  not a capability gap — listed here only so it isn't mistaken for one.
+
+### 6.4 Engine-specific lifecycle (tier 3, by nature) — §5-promotion candidates
+
+Each engine's own runtime surface, not a divergence to erase — though some are
+worth promoting into core later:
+
+- **fragua:** `run_paused` / `paused_auto`, `dispatch_started`, `node_aborted`,
+  `tool_completed`, `message_appended`, `snapshot_recorded` (git provenance),
+  `fanout_started` / `fanout_joined`, `schedule_*`, and the durable-daemon
+  family `run_quarantined` / `run_requeued_after_crash` / `daemon_takeover` /
+  `provider_retry_attempted` / `handler_timeout_leaked` — the last group a
+  candidate Ernesto may want once it runs durable cross-pod work.
+- **Ernesto:** `subagent_started` / `subagent_completed`; `fact.component`
+  (typed UI intents per-transport renderers consume — a candidate fragua may
+  want for its web UI, which today re-derives everything from raw facts).

@@ -324,11 +324,17 @@ Vocabulary-level alignment, pursued opportunistically — not shared code:
    ([`structured-outputs.md`](structured-outputs.md) §11) is the missing piece
    that makes a fragua run *composable from outside* — on the critical path,
    not a candidate.
-4. **Pause taxonomy.** Ernesto's `signal` pause kind (park on an opaque
-   `signalKey`; a durable worker resumes — the `monitor` kind rides it) is a
-   cleaner generalization than growing more `paused_*` statuses. If fragua
-   ever needs external-system waits, adopt the `human | signal` split rather
-   than inventing a third shape.
+4. **Pause taxonomy + external wait.** Ernesto's `signal` pause kind (park on
+   an opaque `signalKey`; a durable worker resumes — the `monitor` kind rides
+   it) is a cleaner generalization than growing more `paused_*` statuses.
+   **fragua intends to gain an external-wait primitive** (a workflow waiting
+   on CI, a deploy, or a remote job without an LLM step polling) — this is
+   wanted, and **needs its own design**: the resume mechanism, the durable
+   watcher, and how it folds under fragua's single-daemon model (vs Ernesto's
+   any-pod worker). It is a tier-2 convergence
+   ([`fact-taxonomy.md`](fact-taxonomy.md) §6.2): once fragua builds it, the
+   taxonomy adopts the `human | signal` split. A future fragua proposal owns
+   the design; this doc only records the intent and the convergence target.
 
 ## 7. Disposition of the embedding work
 
