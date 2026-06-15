@@ -3,9 +3,13 @@ title: Structured step outputs (MVP) — typed `outputs:` on `llm` steps
 summary: "An `llm` step declares typed `outputs:` with the same small type grammar used by `inputs:` (scalars, `choice`, records, arrays — a subset of JSON Schema sized to what provider strict-mode enforces; no recursion, no `$ref`). It emits through one force-included `emit_output` tool; any step consumes via `${{ outputs.X.f }}` interpolation (`llm` in prompt, `tool` in run, `human` in text). Reads fail closed — a reference the producer never populated halts the node (a recorded, replayable fact), never a silent \"\". The grammar compiles to TypeBox (already a dependency): TypeBox validates the emitted value and supplies the emit-tool schema, so author surface, our validation, and the provider's native strict-mode all agree. Oversized structs spill to the blob CAS via the input-spill path. Values interpolated into an `llm` prompt are wrapped in content-derived (hash-boundary) delimiters. MVP: only `llm` steps produce; `tool`/`human` consume."
 status: implemented
 maturity: shipped
-last-reviewed: 2026-06-07
+last-reviewed: 2026-06-15
 supersedes: an earlier, broader cut (tool-step production via $FRAGUA_OUTPUT, route-carried outputs) — narrowed to llm-only production
 ---
+
+<!-- §§1–10 describe the shipped per-step MVP. §11 (run-level outputs) is the
+     next increment — designed, not yet built; it carries its own callout. -->
+
 
 # Structured step outputs (MVP)
 
@@ -366,6 +370,124 @@ Each rides its own proposal/PR; the MVP's contract admits each without a rewrite
    TypeBox, and/or accepting raw JSON Schema documents.
 7. **`blob` (binary/file) outputs** and **HITL outputs** (operator-supplied typed
    values from a `human` gate).
+
+## 11. Run-level outputs (designed)
+
+> **Designed, not yet built.** §§1–10 (per-step `outputs:`) are shipped; this
+> is the next increment. Driver: a fragua run embedded as a single step in an
+> outer engine ([`ernesto-interop.md`](ernesto-interop.md)) is a black box
+> whose result the caller binds — a run exposing only thread text is a dead
+> end in the caller's DAG. The same projection is what a future `fragua runs`
+> verb would print as a run's typed result.
+
+A workflow declares a top-level `outputs:` block that **projects** step
+outputs into the run's typed result:
+
+```yaml
+outputs:
+  verdict:  { from: review.verdict }
+  findings: { from: review.findings }
+  status:   { from: scan.status, default: skipped }   # default: deferred — §11.4
+```
+
+`from:` is a `<node>.<path>` reference — the same addressing as the
+`${{ outputs.<node>.<field> }}` token, minus the wrapper. A bare `from: review`
+projects the producer's whole struct; a dotted suffix selects a leaf or
+sub-record. The run-output's **type is the referenced field's type** — the §5
+grammar, no new type surface. (This mirrors Ernesto's
+`WorkflowDeclaration.outputs` `{ from, pick }` with node and path folded into
+one ref; the exact cross-engine key alignment is
+[`ernesto-interop.md`](ernesto-interop.md) open decision #4, not settled here.)
+
+**Why a projection, not the token.** `${{ outputs.X.f }}` is an in-graph
+*consumer* read and **fails closed** (§1) — an unpopulated read halts the
+reading node. The run-output block is not a consumer; it is the run's egress
+report, and it must tolerate a declared output that the taken path never
+produced (§11.1). Reusing the fail-closed token would turn every such run into
+a halt. The two surfaces deliberately read with different semantics, so they
+are different syntax.
+
+### 11.1 The run-boundary contract — typed-partial
+
+A run can reach `fact.run_completed` on a path that never ran a declared
+producer: a `fail:` edge whose target is the `exit` sink is a sanctioned
+completion (SPEC §3.6), not a halt. So the egress envelope is **typed-partial**
+— it carries exactly the declared outputs whose producer ran; an unproduced
+one is **absent** (its key is omitted from the envelope), never `""` and never
+a halt.
+
+This does not weaken §1's fail-closed principle. Fail-closed governs an
+in-graph consumer's read; the run boundary is a different surface that reports
+what the run produced to an *external* caller, which owns its own
+absence-handling (an embedding engine's per-step fallback / skip). A
+typed-partial envelope is a faithful report, not a silent substitution.
+
+- **Absent vs. null are distinct.** Key omitted ⇒ the producer did not run on
+  the taken path. Key present with `null` ⇒ the producer ran and emitted an
+  `optional:` field as `null`. A consumer can tell the two apart. (A `from:`
+  path that reaches through an `optional:` field the producer *omitted* is
+  likewise absent — the same key-omitted shape; the per-step W016 advisory
+  carries to such a run-output ref.)
+- **Only `completed` has an envelope.** `halted` / `cancelled` carry no
+  outputs (the run reached no sanctioned terminal); a `quarantined` (held,
+  non-terminal) run has none until it resolves.
+
+### 11.2 Producer multiplicity
+
+- **A producer that ran more than once** (a goal-gate / `fail:`-edge loop, a
+  retried node) resolves to its **latest** completed emission — identical to
+  how an in-graph `${{ outputs.X.f }}` read already resolves.
+- **A static `parallel` branch terminal** is an ordinary node with its own
+  `nodeId` (SPEC §3.1.1); reference it directly, `from: scan_branch.findings`.
+  There is no whole-fan-out aggregation on `main` — when dynamic fan-out lands,
+  its `outputs.<body>[*].field` array addressing extends `from:` unchanged.
+
+### 11.3 Where it lands
+
+A read-plane projection, not a new fact or write path. The run already carries
+its workflow IR (the `outputs:` block) and the rebuildable outputs index
+(`(run_id, node_id) → struct`, §8). The read plane resolves each declared
+output by looking up `(run_id, from-node)`: a row present ⇒ project the field
+(rehydrating a `{$fragua_blob}` spill if the struct spilled); no row ⇒ the
+output is absent. The result surfaces as `RunDetail.outputs` and rides the
+export bundle for free (both inputs to the projection — the IR's `outputs:`
+block and the outputs index — are already in it). The top-level `outputs:`
+block is a new IR-core attr, so building it is an `ir_version` bump + converter
+of its own (the per-step feature established the pattern); the read-plane
+projection itself touches no schema and needs no migration.
+
+### 11.4 Validation
+
+Two checks, reusing the existing per-step machinery — one gate, one advisory:
+
+- **E046 (broken projection) — hard error.** `from:` names a node that
+  declares no `outputs:`, or a `<path>` the producer's schema doesn't declare.
+  A definite authoring bug; gated exactly as the per-step E035 (a broken
+  reference is not a reachability question).
+- **W018 (may not produce) — advisory.** The producer can reach a completing
+  terminal but is not guaranteed to on every such path — the W015 analog at
+  the run boundary, reusing its path-analysis. Consistent with §1 (totality is
+  advice, not a gate); a declared `default:` (§11.5) silences it.
+
+### 11.5 `default:` — deferred-but-sound
+
+A run-output may carry a typed `default:` — a **literal, validated against the
+output's own type at parse time** — surfaced in place of absence. It turns a
+typed-partial envelope total at the author's option and silences W018.
+
+This is **deferred**, not v1: typed-partial is the floor, and an embedding
+engine's own per-step fallback already absorbs absence downstream, so the
+default is additive convenience. The MVP contract admits it without a rewrite
+— a later `default:` only fills slots that were otherwise absent.
+
+It is deliberately **a typed literal, not a fallback expression.** Ernesto's
+step `fallback` is a runtime `${{ }}` expression that can itself read an
+unpopulated output and fail; `default:` is a parse-time-checked constant, so
+it cannot recurse or fail at runtime. Fail-closed survives: a producer-less
+output with no declared default stays **absent**, and the system never
+substitutes a value the author didn't write. (An author may write
+`default: ""` — that empty string is then their explicit, recorded choice, the
+opposite of the silent `""` §1 forbids.)
 
 ## Related
 
