@@ -112,7 +112,8 @@ Drafted (fragua-side copy): [`fact-taxonomy.md`](fact-taxonomy.md) — v0. Its
 stance is **converge, not reconcile**: where the engines encode the same event
 differently, pick one form and move both to it. The v0 instance is the
 terminal fact — one `fact.run_terminated { status }` (Ernesto already emits it;
-fragua converges, §8). Home of the canonical copy: open (§9.1).
+fragua converges, §8). **Canonical home: fragua** (this repo); Ernesto checks
+in a mirror (§9.1).
 
 ## 5. Shared contract piece 2 — `kind: 'fragua'`
 
@@ -380,9 +381,11 @@ than deleted — the file:line audit is the part worth keeping.
 
 ## 9. Open decisions
 
-1. **Taxonomy spec home.** Ernesto-lib repo with a mirrored copy in
-   `fragua/docs/`, or the reverse. Either works; pick whichever repo's review
-   loop both maintainers reliably see (Clement's call).
+1. ~~**Taxonomy spec home.**~~ **Resolved: fragua is canonical**, Ernesto
+   mirrors. The engines don't share a review loop; the contract lives where
+   the shared maintainer reviews (fragua), and Ernesto pulls the mirror.
+   ([`fact-taxonomy.md`](fact-taxonomy.md) sits in `proposals/` while v0;
+   graduates to a top-level `docs/` contract doc on freeze.)
 2. **Terminal status vocabulary.** The convergence onto one
    `fact.run_terminated { status }` forces one string set:
    `completed | failed | cancelled` (neutral, proposed),
