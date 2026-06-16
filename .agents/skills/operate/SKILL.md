@@ -188,7 +188,7 @@ fragua runs discard <id>   # drop the run's refs/fragua/{snapshots,heads}/<id> (
 
 ## 8. Schedules — recurring runs
 
-A schedule fires a workflow on a fixed interval (`30m` / `1h` / `6h` / `24h`; cron is out of scope). Each fire enqueues a normal run carrying `schedule_id` lineage. Skip-on-overlap is the default; one coalesced catch-up after downtime.
+A schedule fires a workflow on a fixed interval (`30m` / `1h` / `6h` / `24h` / `3d` / `7d`; cron is out of scope). Each fire enqueues a normal run carrying `schedule_id` lineage. Skip-on-overlap is the default; one coalesced catch-up after downtime.
 
 ```sh
 fragua schedule add <workflow> --every 1h                 # create + fire immediately

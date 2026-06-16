@@ -274,6 +274,11 @@ CREATE TABLE messages (                           -- append-mostly; never rewrit
   role TEXT GENERATED ALWAYS AS (json_extract(content, '$.role')) STORED,
   node_id TEXT,
   iteration INTEGER NOT NULL DEFAULT 0,
+  -- Goal-gate re-entry epoch. A gate retarget resets per-node retry counters,
+  -- so `(node_id, iteration)` alone collides across passes — threadless resume
+  -- hydration scopes to `(node_id, iteration, pass)` so a fresh pass starts
+  -- with a clean transcript.
+  pass INTEGER NOT NULL DEFAULT 0,
   -- sha256 of the serialised content. Backs the opt-in replay dedup path
   -- (`appendMessage(runId, row, { dedup: true })`); default OFF because
   -- agent transcripts carry per-call timestamps that legitimately differ
@@ -1088,18 +1093,29 @@ app.post("/runs", async (c) => {
     return c.json({ error: "queue full", code: "queue_full" }, 429);
   }
 
-  // Validate body.inputs against the workflow's inputs: block (400 on a
-  // missing required input or out-of-range choice) before enqueue.
-  const runId = body.runId ?? newRunId();
-  const initialRouting = { ...(body.routing ?? {}) };
-  if (body.inputs != null && initialRouting.inputs === undefined) {
-    initialRouting.inputs = body.inputs;
+  // Validate inputs, assemble routing, and enqueue through the intent plane.
+  // Adapters never call store.enqueueRun() directly — the plane is the single
+  // write surface shared by the server, CLI, and schedule dispatcher.
+  const enq = plane.buildEnqueue({
+    workflowSha: body.workflowSha,
+    ...(body.inputs != null ? { inputs: body.inputs } : {}),
+    ...(body.routing != null ? { routing: body.routing } : {}),
+    ...(body.priority !== undefined ? { priority: body.priority } : {}),
+    ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
+    ...(typeof body.projectId === "string" ? { projectId: body.projectId } : {}),
+    ...(typeof body.projectName === "string" ? { projectName: body.projectName } : {}),
+    ...(body.workflowName !== undefined ? { workflowName: body.workflowName } : {}),
+    ...(body.workflowScope !== undefined ? { workflowScope: body.workflowScope } : {}),
+    ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
+  });
+  if (!enq.ok) {
+    return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);
   }
-  store.enqueueRun({ runId, workflowSha: body.workflowSha, priority: body.priority,
-                     initialRouting, cwd: body.cwd,
-                     workflowName: body.workflowName, workflowScope: body.workflowScope,
-                     workflowPath: body.workflowPath });
-  return c.json({ runId });
+  plane.commitEnqueue(enq.params);
+  if (typeof body.title === "string" && body.title.length > 0) {
+    store.setRunTitle(enq.runId, body.title);
+  }
+  return c.json({ runId: enq.runId });
 });
 
 app.post("/runs/:id/steer",        async (c) => writeIntent(c, "intent.steering_requested"));
