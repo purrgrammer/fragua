@@ -239,9 +239,10 @@ is a naming/shape alignment, §6.3.)
   atomically via one `emit_output`; it is **not** "many outputs vs one," it is
   one typed result whose fields are named. Ernesto carries a single `output`
   value (with optional `outputFormat` validation). The field name and the
-  cross-step read token (`steps.*.outputs.*` vs `outputs.*`) are a **cosmetic
-  alignment** ([`ernesto-interop.md`](ernesto-interop.md) open decision #3),
-  not a capability gap — listed here only so it isn't mistaken for one.
+  cross-step read token (`steps.*.outputs.*` vs `outputs.*`) are cosmetic, not
+  a capability gap — and the read token is **both-aliased** by contract
+  ([`ernesto-interop.md`](ernesto-interop.md) §9.3), neither engine renaming.
+  Listed here only so it isn't mistaken for a capability difference.
 
 ### 6.4 Engine-specific lifecycle (tier 3, by nature) — §5-promotion candidates
 

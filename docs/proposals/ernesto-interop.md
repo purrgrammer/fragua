@@ -392,10 +392,11 @@ than deleted — the file:line audit is the part worth keeping.
    `completed | errored | aborted` (Ernesto's current wire, zero churn there),
    or `completed | halted | cancelled` (fragua's). The one string-level call
    convergence forces — [`fact-taxonomy.md`](fact-taxonomy.md) §3.1.
-3. **Token-shape alignment.** Whether fragua adopts `steps.*.outputs.*`
-   (Ernesto's shape) for cross-step reads, Ernesto adopts `outputs.*`, or
-   the contract blesses both as aliases. Cosmetic, but it is the single most
-   visible seam to a human authoring against both engines.
+3. ~~**Token-shape alignment.**~~ **Resolved: both aliased.** The contract
+   blesses both `steps.<id>.outputs.<path>` (Ernesto) and
+   `outputs.<producer>.<field>` (fragua) as accepted spellings of a cross-step
+   output read; neither engine has to rename. Cosmetic, and a hard rename
+   would churn authored workflows for no behavioral gain.
 4. ~~**`workflow:` resolution in the `fragua` step.**~~ **Resolved:
    file-based**, against the workdir's `.fragua/workflows/`. A fragua
    workflow with a `tool` node is arbitrary code execution in the pod, so
