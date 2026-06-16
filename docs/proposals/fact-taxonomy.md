@@ -1,6 +1,6 @@
 ---
 title: fact.* event taxonomy — the shared engine contract (v0)
-summary: "The versioned event contract that fragua and Ernesto both implement — the load-bearing half of two-engines-one-contract (ernesto-interop.md §4). Stance: CONVERGE, don't reconcile — where the engines encode the same event differently, pick one encoding and move both to it. Defines the envelope ({runId, seq, type, payload, ts, routing?}), the fact.<subject>_<event> naming grammar, a small CORE event set both engines emit with agreed payload minima (run_started, run_resumed, run_paused_human, node_completed, plus a terminal), and the v0 convergence target for the terminal: ONE fact.run_terminated { status: completed | failed | cancelled } — Ernesto already emits this; fragua converges (collapsing its three terminal facts is a losslesss discriminated-union change, a fragua-side work item). Convergence runs in three tiers: tier-1 pure-encoding (converge now — terminal fact + usage carrier, the latter converged on a sibling fact.usage as THE carrier, fragua emitting it alongside its internal node_completed cost); tier-2 converge-on-capability (gated on the laggard building it — fragua gaining an external-wait/signal pause, which it intends but needs its own design); tier-3 stays-divergent-by-design (streaming granularity, workflow-identity form). Plus the extension rule (promoting into core is a versioned change PR'd to both repos) and the forward-compat rule (consumers ignore unknown types, never throw — what lets a convergence land in one repo before the other and a tier-3 difference coexist). NOT a shared npm package — each repo checks in a copy carrying the same taxonomy_version; fragua is the canonical home (this file), Ernesto mirrors. Open sub-decision: the status string set (neutral completed|failed|cancelled vs Ernesto's errored|aborted vs fragua's halted). v0 / DRAFT."
+summary: "The versioned event contract that fragua and Ernesto both implement — the load-bearing half of two-engines-one-contract (ernesto-interop.md §4). Stance: CONVERGE, don't reconcile — where the engines encode the same event differently, pick one encoding and move both to it. Defines the envelope ({runId, seq, type, payload, ts, routing?}), the fact.<subject>_<event> naming grammar, a small CORE event set both engines emit with agreed payload minima (run_started, run_resumed, run_paused_human, node_completed, plus a terminal), and the v0 convergence target for the terminal: ONE fact.run_terminated { status: completed | errored | aborted } (status vocabulary RESOLVED to Ernesto's wire) — Ernesto already emits this; fragua converges (collapsing its three terminal facts is a losslesss discriminated-union change, a fragua-side work item). Convergence runs in three tiers: tier-1 pure-encoding (converge now — terminal fact, PAUSE fact, and usage carrier; the pause fact converges to one fact.run_paused { reason: human | signal | auto | operator } the way the terminal converges to one run_terminated { status } — fragua folds its separate run_paused_human into reason:human, Ernesto folds run_paused_human + run_paused_signal in; usage converges on a sibling fact.usage); tier-2 converge-on-capability (gated on the laggard building it — fragua gaining external-wait, i.e. emitting the already-defined reason:signal once it builds the primitive; needs its own design); tier-3 stays-divergent-by-design (streaming granularity, workflow-identity form). Plus the extension rule (promoting into core is a versioned change PR'd to both repos) and the forward-compat rule (consumers ignore unknown types, never throw — what lets a convergence land in one repo before the other and a tier-3 difference coexist). NOT a shared npm package — each repo checks in a copy carrying the same taxonomy_version; fragua is the canonical home (this file), Ernesto mirrors. Vocabulary RESOLVED: terminal status = Ernesto's completed|errored|aborted; pause reason = human|signal|auto|operator (human/signal Ernesto's, auto/operator fragua-only). v0 / DRAFT."
 status: draft
 maturity: sketch
 taxonomy_version: 0
@@ -38,11 +38,12 @@ erase. Each one falls into one of three tiers (cataloged in §6):
 
 1. **Converge now — pure encoding.** Same event, same information, different
    shape. The contract picks one form; both move. Closed in v0: the terminal
-   fact (§3.1) and the usage carrier (§4).
+   fact (§3.1), the pause fact (§3.2), and the usage carrier (§4).
 2. **Converge on capability.** One engine has a primitive the other lacks;
    convergence is wanted but waits on the laggard *building* the capability
    (its own design), after which the taxonomy adopts the shared shape.
-   Live: fragua gaining an external-wait / signal pause (§6.2).
+   Live: the `signal` pause-reason value, once fragua builds external-wait
+   (§6.2) — the pause *event* shape itself already converged in tier 1.
 3. **Architectural choice — stays divergent by design.** A deliberate
    difference (e.g. fragua keeping token deltas off-log), carried by the
    forward-compat rule (§5.2), not erased.
@@ -99,7 +100,7 @@ the emitting engine.
 | `fact.node_started` | `{ nodeId }` | A step began. *(Optional in core — fragua emits it; an engine may go straight to `node_completed`.)* |
 | `fact.node_completed` | `{ nodeId }` | A step finished. Its **result** rides as an engine-specific extension — fragua a typed `outputs` record (plural for `inputs:` symmetry, §6.3), Ernesto an `output` value; **cost does not ride here**, it rides `fact.usage` (§4). A core consumer learns *that* the node finished. |
 | `fact.usage` | `{ nodeId, inputTokens, outputTokens, costUsd }` | Cost/usage for a node that incurred it (LLM steps; a pure tool step may emit none). The converged carrier — §4. |
-| `fact.run_paused_human` | `{ nodeId, text, routes }` | The run parked for a human decision. `text` is the operator prompt; `routes` the choices. Strongly aligned already — fragua adds `routeLabels` + an embedded snapshot, Ernesto adds `promptId`. |
+| `fact.run_paused` | `{ reason }` (§3.2) | The run parked, classified by `reason` (who/what resumes). Per-reason payload follows. |
 | `fact.run_terminated` | `{ status }` (§3.1) | The run reached a terminal state, classified by `status`. |
 
 ### 3.1 The terminal fact — one `fact.run_terminated { status }`
@@ -110,8 +111,8 @@ A run ends with exactly **one** `fact.run_terminated`, carrying a terminal
 | `status` | Meaning | beyond-minimum detail |
 |---|---|---|
 | **completed** | reached a sanctioned terminal (incl. an author-sanctioned `fail`-edge-to-`exit`) | `finalNode` |
-| **failed** | ended on an unrecovered fault | `reason` / `message` |
-| **cancelled** | ended by operator/caller request | `intentSeq` |
+| **errored** | ended on an unrecovered fault | `reason` / `message` |
+| **aborted** | ended by operator/caller request | `intentSeq` |
 
 One fact, one discriminant. A consumer switches on `status` and reads the run
 as ended; everything past `status` is per-status detail (an engine-specific
@@ -132,19 +133,53 @@ preserved) is a fragua-side work item
 fragua's `run_state.status` **projection** keeps its terminal values
 regardless — the *fact* collapses; the projection it folds into needn't.
 Until the collapse lands, the migration bridge is `completed` ↔
-`run_completed`, `failed` ↔ `run_halted`, `cancelled` ↔ `run_cancelled`.
+`run_completed`, `errored` ↔ `run_halted`, `aborted` ↔ `run_cancelled`.
 
-**Open sub-decision — the status vocabulary.** Convergence forces one set of
-strings, and the three engines-in-play disagree:
+**Status vocabulary — resolved (2026-06-16):** `completed | errored | aborted`
+— Ernesto's existing wire. fragua adopts it (its `HaltReason`/`run_halted` →
+`errored` + detail, `run_cancelled` → `aborted`); zero Ernesto churn, and not
+worth a bikeshed over `failed` vs `errored`.
 
-| Option | Strings | Note |
+### 3.2 The pause fact — one `fact.run_paused { reason }`
+
+The same shape as the terminal (§3.1), one level over: a paused run emits one
+`fact.run_paused`, carrying a `reason` that classifies **who or what resumes**
+it:
+
+| `reason` | Resumed by | beyond-minimum payload |
 |---|---|---|
-| neutral *(proposed)* | `completed \| failed \| cancelled` | clearest English; both engines move |
-| Ernesto's wire | `completed \| errored \| aborted` | zero Ernesto churn; `errored`/`aborted` read worse |
-| fragua's | `completed \| halted \| cancelled` | `halted` is fragua-idiomatic, opaque cross-engine |
+| **human** | an operator answering a prompt (HITL) | `{ nodeId, text, routes }` |
+| **signal** | a durable worker, on an external state-change | `{ nodeId, signalKey }` |
+| **auto** | the engine itself, on a timer (retry backoff, rate-limit wait) | `{ resumeAt?, detail? }` |
+| **operator** | an operator explicitly resuming a hold | `{ detail? }` |
 
-This is the single string-level call the convergence forces — see
-[`ernesto-interop.md`](ernesto-interop.md) §9.
+One fact, one discriminant. Minimum is `{ reason }`; the `human` / `signal`
+variants additionally carry their resume payload (`text`+`routes` /
+`signalKey`). Engine-specific sub-reasons ride as a `detail` extension —
+fragua's `PauseReason` (`budget`, `max_retries`, `provider_error`,
+`provider_retry`, …) collapses under the coarse `auto` / `operator` core,
+exactly as `HaltReason` is failed-disposition detail (§3.1). `fact.run_resumed`
+is the matching re-entry event (core).
+
+**Convergence state.** fragua is **half-converged**: `fact.run_paused` is
+already one discriminated event (`{ reason, … }`) covering `auto` + `operator`
+(its 13-value `PauseReason`, split by `AUTO_WAKE_PAUSE_REASONS`), but **HITL is
+still a separate `fact.run_paused_human`** — it folds in as `reason: human`.
+Ernesto has **two** pause facts (`run_paused_human` + `run_paused_signal`) that
+fold into `run_paused { reason: human | signal }`. Both lossless; fragua's
+`run_state.status` (`paused` / `paused_auto` / `paused_human`) keeps its values,
+folded from `reason`, as with the terminal.
+
+**`signal` is the tier-2 value.** Ernesto emits `reason: signal` today; fragua
+emits it once it builds the external-wait primitive (§6.2). The pause *event*
+converges now (tier-1); the `signal` *reason value* arrives with the
+capability. This is the `human | signal` split generalized — the resume-by axis
+is just the `reason` discriminant, with `auto`/`operator` the engine-resumed
+ends.
+
+**Open sub-decision — the reason vocabulary.** `human | signal | auto |
+operator` (proposed) is the cross-engine core; it folds into the same naming
+call as the terminal status set ([`ernesto-interop.md`](ernesto-interop.md) §9).
 
 ## 4. Cost / usage — converge on `fact.usage` (tier 1)
 
@@ -197,8 +232,8 @@ converging, what is waiting on a build, and what stays divergent by design
 ### 6.1 Converging — pure encoding (tier 1)
 
 Same event and information, different shape; the contract picks one form and
-both engines move. **Closed in v0:** the terminal fact (§3.1) and the usage
-carrier (§4). No open tier-1 items remain.
+both engines move. **Closed in v0:** the terminal fact (§3.1), the pause fact
+(§3.2), and the usage carrier (§4). No open tier-1 items remain.
 
 ### 6.2 Converge-on-capability (tier 2)
 
@@ -206,15 +241,17 @@ One engine has a runtime primitive the other lacks. Convergence is *wanted*
 but waits on the laggard building it (its own design); the taxonomy then adopts
 the shared shape. A real capability gap, not an encoding one.
 
-- **External wait / `fact.run_paused_signal`.** Ernesto parks a run on an
-  opaque `signalKey` and a durable worker resumes it on an external
-  state-change (its `monitor` kind rides this). fragua has no external-wait
-  primitive — a fragua workflow can't wait on CI, a deploy, or a remote job
-  without an LLM step polling. **fragua intends to add one; it needs its own
-  design** (the resume mechanism, the durable watcher, how it folds — fragua's
-  single-daemon model differs from Ernesto's any-pod worker). Once it lands,
-  the pause taxonomy converges on the `human | signal` split — the clean
-  model, rather than fragua growing more `paused_*` statuses. Tracked:
+- **External wait — the `signal` pause-reason value.** The pause *event* shape
+  already converged (§3.2): one `fact.run_paused { reason }`, `reason ∈ human |
+  signal | auto | operator`. What's tier-2 is the **`signal` reason value** —
+  Ernesto emits it (park on an opaque `signalKey`, a durable worker resumes;
+  its `monitor` kind rides this); fragua has no external-wait primitive, so it
+  never emits `reason: signal` yet. A fragua workflow can't wait on CI, a
+  deploy, or a remote job without an LLM step polling. **fragua intends to add
+  one; it needs its own design** (the resume mechanism, the durable watcher,
+  how it folds — fragua's single-daemon model differs from Ernesto's any-pod
+  worker). When it lands, fragua simply starts emitting the already-defined
+  `reason: signal`; no new event type. Tracked:
   [`ernesto-interop.md`](ernesto-interop.md) §6.4.
 
 (The per-step *result* payload — fragua's `outputs` record vs Ernesto's
@@ -249,7 +286,7 @@ is a naming/shape alignment, §6.3.)
 Each engine's own runtime surface, not a divergence to erase — though some are
 worth promoting into core later:
 
-- **fragua:** `run_paused` / `paused_auto`, `dispatch_started`, `node_aborted`,
+- **fragua:** `dispatch_started`, `node_aborted`,
   `tool_completed`, `message_appended`, `snapshot_recorded` (git provenance),
   `fanout_started` / `fanout_joined`, `schedule_*`, and the durable-daemon
   family `run_quarantined` / `run_requeued_after_crash` / `daemon_takeover` /

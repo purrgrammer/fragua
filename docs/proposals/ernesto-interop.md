@@ -79,7 +79,7 @@ And the divergences that matter:
 |---|---|---|
 | Terminal facts | three (`fact.run_completed` / `_halted` / `_cancelled`) — **converging to one** | one `fact.run_terminated { status }` — the convergence target ([`fact-taxonomy.md`](fact-taxonomy.md) §3.1) |
 | Streaming facts | `fact.message_appended` (whole messages); deltas are SSE-only, off-log | `fact.assistant_delta` / `tool_call` / `tool_result` / `thinking` / `usage` / `component` on-log |
-| Pause taxonomy | `paused` / `paused_human` / `paused_auto` (statuses) | `paused` status + `ParkedPause.kind: 'human' \| 'signal'`; `fact.run_paused_signal` is new vocabulary (external-system watch) |
+| Pause facts | `fact.run_paused { reason }` (auto/operator) + separate `fact.run_paused_human` — **converging to one** | `fact.run_paused_human` + `fact.run_paused_signal` — **converging to one** `fact.run_paused { reason }` ([`fact-taxonomy.md`](fact-taxonomy.md) §3.2) |
 | Statuses | `queued running paused paused_human paused_auto completed cancelled halted quarantined` | `running paused completed errored aborted` |
 | Cancel spelling | `cancelled` | store says `aborted`; harness layer says `canceled` |
 | Run outputs | none (thread + artifacts; per-step typed outputs in the structured-outputs MVP) | `WorkflowDeclaration.outputs:` — run-level typed output bindings |
@@ -98,9 +98,11 @@ A single short markdown spec, versioned, defining:
 3. **The extension rule**: an engine may emit beyond the core set; promoting
    an extension into the core set is a versioned spec change PR'd to both
    repos. This is the channel through which good ideas flow — e.g. Ernesto's
-   `fact.run_paused_signal` (external-signal pause) and `fact.component`
-   (structured UI intents) are candidates fragua may want; fragua's
-   quarantine and schedule families are candidates Ernesto may want.
+   `fact.component` (structured UI intents) is a candidate fragua may want;
+   fragua's quarantine and schedule families are candidates Ernesto may want.
+   (Ernesto's external-wait pause isn't a separate fact to adopt — it's the
+   `reason: signal` value of the converged `fact.run_paused`, §3.2 of the
+   taxonomy.)
 
 The spec is two pages, not a package. **No shared npm module for the
 taxonomy** — a shared runtime type package would couple the engines' release
@@ -272,8 +274,8 @@ as it sees CAS tokens.
   - **Wire shape (the one fragua-side spec to pin):** `fragua ci --json`
     emits a final line `{ runId, status, outputs, usage }` after the event
     stream — `status` the terminal status per
-    [`fact-taxonomy.md`](fact-taxonomy.md) §3.1 (`completed | failed |
-    cancelled`), `outputs` the §11 typed-partial envelope (absent keys
+    [`fact-taxonomy.md`](fact-taxonomy.md) §3.1 (`completed | errored |
+    aborted`), `outputs` the §11 typed-partial envelope (absent keys
     omitted), `usage` the run-total cost. The same object lands in the
     `--export` bundle. The handler keys on `status` for `HandlerResult` and
     binds `outputs` into the DAG; it is the only new `ci` surface v1 needs.
@@ -339,17 +341,20 @@ Vocabulary-level alignment, pursued opportunistically — not shared code:
    ([`structured-outputs.md`](structured-outputs.md) §11) is the missing piece
    that makes a fragua run *composable from outside* — on the critical path,
    not a candidate.
-4. **Pause taxonomy + external wait.** Ernesto's `signal` pause kind (park on
-   an opaque `signalKey`; a durable worker resumes — the `monitor` kind rides
-   it) is a cleaner generalization than growing more `paused_*` statuses.
-   **fragua intends to gain an external-wait primitive** (a workflow waiting
-   on CI, a deploy, or a remote job without an LLM step polling) — this is
-   wanted, and **needs its own design**: the resume mechanism, the durable
-   watcher, and how it folds under fragua's single-daemon model (vs Ernesto's
-   any-pod worker). It is a tier-2 convergence
-   ([`fact-taxonomy.md`](fact-taxonomy.md) §6.2): once fragua builds it, the
-   taxonomy adopts the `human | signal` split. A future fragua proposal owns
-   the design; this doc only records the intent and the convergence target.
+4. **Pause facts → one `fact.run_paused { reason }`.** Both engines collapse
+   their pause facts into one discriminated event, `reason ∈ human | signal |
+   auto | operator` ([`fact-taxonomy.md`](fact-taxonomy.md) §3.2) — the same
+   convergence the terminal got. fragua is half-there (`run_paused { reason }`
+   already covers auto/operator; its separate `run_paused_human` folds in as
+   `reason: human`); Ernesto folds `run_paused_human` + `run_paused_signal`.
+   **External wait is the `signal` reason value:** Ernesto emits it today;
+   fragua emits it once it builds an external-wait primitive (a workflow
+   waiting on CI / a deploy / a remote job without an LLM polling) — **wanted,
+   needs its own design** (resume mechanism, durable watcher, how it folds
+   under fragua's single-daemon model vs Ernesto's any-pod worker). The pause
+   *event* converges now (tier-1); the `signal` *value* is tier-2, arriving
+   with the capability — no new event type. A future fragua proposal owns the
+   external-wait design.
 
 ## 7. Disposition of the embedding work
 
@@ -379,14 +384,16 @@ than deleted — the file:line audit is the part worth keeping.
   (same grammar + TypeBox path); ergonomics, not a hard blocker (per-value
   encoding works), but it dissolves the §5.1 input wart and is a standalone
   CLI UX win (`--input-json`, type-directed `--input` parse).
-- fragua-side work, later: the **terminal-fact convergence** — collapse
-  `run_completed`/`run_halted`/`run_cancelled` into one
-  `fact.run_terminated { status }` ([`fact-taxonomy.md`](fact-taxonomy.md)
-  §3.1; lossless discriminated union, `EVENT_CONTRACT_VERSION` bump + the
-  enum-literal sweep). **Not a v1 blocker** — the §5.4 `ci` envelope already
-  emits the converged `status` computed from whichever terminal fact fired,
-  so this is taxonomy hygiene, sequenced when fragua next touches the terminal
-  set. The HITL bridge ([`hitl-channel.md`](hitl-channel.md), upgrades §5.4
+- fragua-side work, later: the **fact convergences** (taxonomy hygiene, one
+  `EVENT_CONTRACT_VERSION` bump + enum-literal sweep, sequenced when fragua
+  next touches these facts; all lossless discriminated unions) — collapse the
+  three terminal facts into one `fact.run_terminated { status }`
+  ([`fact-taxonomy.md`](fact-taxonomy.md) §3.1), and **fold `run_paused_human`
+  into `fact.run_paused { reason: human }`** so all pauses are one event (§3.2;
+  fragua's `run_paused` already carries `reason` for auto/operator). **Neither
+  is a v1 blocker** — the §5.4 `ci` envelope emits the converged terminal
+  `status` regardless, and pause convergence is internal. The HITL bridge
+  ([`hitl-channel.md`](hitl-channel.md), upgrades §5.4
   from fail-fast to resumable); the §5.5 in-process embed surface, **only when
   subprocess is proven and its limits bite** — not speculatively; closing the
   tool-terminal-output gap (§10 #3 of structured-outputs).
@@ -404,12 +411,14 @@ than deleted — the file:line audit is the part worth keeping.
    the shared maintainer reviews (fragua), and Ernesto pulls the mirror.
    ([`fact-taxonomy.md`](fact-taxonomy.md) sits in `proposals/` while v0;
    graduates to a top-level `docs/` contract doc on freeze.)
-2. **Terminal status vocabulary.** The convergence onto one
-   `fact.run_terminated { status }` forces one string set:
-   `completed | failed | cancelled` (neutral, proposed),
-   `completed | errored | aborted` (Ernesto's current wire, zero churn there),
-   or `completed | halted | cancelled` (fragua's). The one string-level call
-   convergence forces — [`fact-taxonomy.md`](fact-taxonomy.md) §3.1.
+2. ~~**Status + pause-reason vocabulary.**~~ **Resolved (2026-06-16):**
+   - **Terminal `status`** = Ernesto's wire `completed | errored | aborted`;
+     fragua adopts it (zero Ernesto churn, not worth a bikeshed —
+     [`fact-taxonomy.md`](fact-taxonomy.md) §3.1).
+   - **Pause `reason`** = `human | signal | auto | operator` (`human`/`signal`
+     are Ernesto's; `auto`/`operator` are fragua-only with no Ernesto
+     counterpart); fragua's 13-value `PauseReason` rides under it as `detail`
+     (§3.2).
 3. ~~**Token-shape alignment.**~~ **Resolved: both aliased.** The contract
    blesses both `steps.<id>.outputs.<path>` (Ernesto) and
    `outputs.<producer>.<field>` (fragua) as accepted spellings of a cross-step
