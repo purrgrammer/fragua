@@ -7,8 +7,8 @@ last-reviewed: 2026-06-16
 supersedes: an earlier, broader cut (tool-step production via $FRAGUA_OUTPUT, route-carried outputs) — narrowed to llm-only production
 ---
 
-<!-- §§1–10 describe the shipped per-step MVP. §11 (run-level outputs) is the
-     next increment — designed, not yet built; it carries its own callout. -->
+<!-- §§1–10 describe the shipped per-step MVP. §11 (run-level outputs) is now
+     shipped too; only §11.5 (`default:`) remains deferred. -->
 
 
 # Structured step outputs (MVP)
@@ -370,14 +370,21 @@ Each rides its own proposal/PR; the MVP's contract admits each without a rewrite
 7. **`blob` (binary/file) outputs** and **HITL outputs** (operator-supplied typed
    values from a `human` gate).
 
-## 11. Run-level outputs (designed)
+## 11. Run-level outputs (implemented)
 
-> **Designed, not yet built.** §§1–10 (per-step `outputs:`) are shipped; this
-> is the next increment. Driver: a fragua run embedded as a single step in an
-> outer engine ([`ernesto-interop.md`](ernesto-interop.md)) is a black box
-> whose result the caller binds — a run exposing only thread text is a dead
-> end in the caller's DAG. The same projection is what a future `fragua runs`
-> verb would print as a run's typed result.
+> **Shipped.** §§1–10 (per-step `outputs:`) and this increment are both built;
+> only §11.5 (`default:`) remains deferred. Driver: a fragua run embedded as a
+> single step in an outer engine ([`ernesto-interop.md`](ernesto-interop.md))
+> is a black box whose result the caller binds — a run exposing only thread
+> text is a dead end in the caller's DAG. The same projection is what a future
+> `fragua runs` verb would print as a run's typed result.
+>
+> The top-level `outputs:` block is a new IR-core attr on `GraphAttrs`
+> (`ir_version` v2→v3, identity converter). The egress envelope is a read-plane
+> projection surfaced as `RunDetail.outputs` — no new fact, no write path — and
+> rides the export bundle for free (the IR's `outputs:` block and the
+> rebuildable outputs index are already in it). Validation adds E046 (broken
+> projection, hard error) and W018 (may-not-produce, advisory).
 
 A workflow declares a top-level `outputs:` block that **projects** step
 outputs into the run's typed result:

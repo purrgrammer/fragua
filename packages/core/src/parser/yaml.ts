@@ -90,7 +90,17 @@
 
 import * as YAML from "yaml";
 import { OutputsProfileError, parseOutputsDecl, parseProfileNode } from "../engine/outputs-profile.ts";
-import type { Edge, EdgeAttrs, Graph, GraphAttrs, InputDecl, Node, NodeAttrs, NodeType } from "../types/graph.ts";
+import type {
+  Edge,
+  EdgeAttrs,
+  Graph,
+  GraphAttrs,
+  InputDecl,
+  Node,
+  NodeAttrs,
+  NodeType,
+  RunOutputDecl,
+} from "../types/graph.ts";
 
 export type { InputDecl } from "../types/graph.ts";
 
@@ -159,7 +169,7 @@ export const DEFAULT_TOOL_MAX_MS = 5 * 60 * 1000;
 // Keys consumed by the parser at the step level (not stored in attrs):
 const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes", "outputs"]);
 // Keys consumed at the graph level (not stored in attrs):
-const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults"]);
+const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults", "outputs"]);
 
 // ---- Attribute coercion -----------------------------------------------
 
@@ -315,6 +325,62 @@ function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] 
   return out;
 }
 
+// ---- Run-level outputs block ------------------------------------------
+
+/** Parse the top-level `outputs:` block into `RunOutputDecl[]`. Each entry is
+ * `<name>: { from: <node>.<path> }` — `from` is split on the first `.` into the
+ * producer node id and the dotted suffix (empty for a bare `from: <node>`,
+ * which projects the producer's whole struct). `default:` (§11.5) is rejected
+ * loudly rather than silently dropped — it is deferred, and an author who
+ * writes it should know it has no effect yet. */
+function parseRunOutputs(node: unknown, lineCounter: YAML.LineCounter): RunOutputDecl[] {
+  if (node === undefined) return [];
+  if (!YAML.isMap(node)) {
+    throw new ParseError("`outputs:` must be a mapping", ...locArr(locOf(node, lineCounter)));
+  }
+  const out: RunOutputDecl[] = [];
+  for (const item of node.items) {
+    const name = (item.key as YAML.Scalar)?.value;
+    if (typeof name !== "string" || name.length === 0) {
+      throw new ParseError("run output name must be a non-empty string", ...locArr(locOf(item.key, lineCounter)));
+    }
+    const body = item.value;
+    if (!YAML.isMap(body)) {
+      throw new ParseError(`run output "${name}" must be a mapping`, ...locArr(locOf(item.value, lineCounter)));
+    }
+    if (body.get("default", true) !== undefined) {
+      throw new ParseError(
+        `run output "${name}" declares \`default:\` — run-output defaults are not yet supported (deferred)`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    const fromRaw = scalarValue(body.get("from", true));
+    if (typeof fromRaw !== "string" || fromRaw.trim().length === 0) {
+      throw new ParseError(
+        `run output "${name}" must declare a non-empty \`from: <node>.<path>\` reference`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    const segments = fromRaw.trim().split(".");
+    const producer = segments[0]!;
+    if (producer.length === 0) {
+      throw new ParseError(
+        `run output "${name}" has an empty producer node in \`from: ${fromRaw}\``,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    const path = segments.slice(1);
+    if (path.some((seg) => seg.length === 0)) {
+      throw new ParseError(
+        `run output "${name}" has an empty path segment in \`from: ${fromRaw}\``,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    out.push({ name, node: producer, path });
+  }
+  return out;
+}
+
 // ---- Defaults block ---------------------------------------------------
 
 function parseDefaults(node: unknown, lineCounter: YAML.LineCounter): Record<string, unknown> {
@@ -373,6 +439,8 @@ export function parseWorkflow(source: string): Graph {
     if (coerced !== undefined) graphAttrs[irKey] = coerced;
   }
   if (inputs.length > 0) graphAttrs["inputs"] = inputs;
+  const runOutputs = parseRunOutputs(root.get("outputs", true), lineCounter);
+  if (runOutputs.length > 0) graphAttrs["outputs"] = runOutputs;
 
   // Walk steps in declaration order. The first declared step is the entry
   // point; order is otherwise immaterial now that flow is explicit.

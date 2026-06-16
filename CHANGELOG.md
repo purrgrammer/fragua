@@ -10,6 +10,20 @@ guarantee.
 
 ### Added
 
+- Run-level (workflow) outputs. A workflow may declare a top-level `outputs:`
+  block that projects step outputs into the run's typed result, e.g.
+  `outputs: { verdict: { from: review.verdict } }`. `from:` is a
+  `<node>.<path>` reference (a bare `from: review` projects the producer's
+  whole struct; a dotted suffix selects a leaf/sub-record), and the output's
+  type is the referenced field's type. The run's egress envelope is
+  typed-partial: it carries exactly the declared outputs whose producer ran on
+  the taken path — an unproduced one is absent (key omitted), never `""` and
+  never a halt, and only a completed run carries an envelope. A producer that
+  ran more than once resolves to its latest emission. The validator hard-errors
+  on a broken projection (E046) and advises when a producer may not run on
+  every completing path (W018). Distinct from the in-graph
+  `${{ outputs.X.f }}` token, which stays fail-closed.
+
 - Object and array workflow inputs. An `inputs:` declaration may now use
   `type: object` (with `fields:`) or `type: array` (with `items:`), reusing the
   same restricted type grammar `outputs:` uses. Read a whole value as JSON with

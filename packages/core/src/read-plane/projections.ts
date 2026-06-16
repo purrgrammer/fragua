@@ -9,8 +9,10 @@ import { join } from "node:path";
 import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
 import { HALT_REASONS, type HaltReason } from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
+import { projectRunOutput } from "../engine/outputs-substitution.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
-import type { Graph } from "../types/graph.ts";
+import type { Graph, RunOutputDecl } from "../types/graph.ts";
+import type { OutputStructValue } from "../types/outputs.ts";
 import type { NodeState, RunDetail, RunFanoutTopology, RunSummary, SelectedEdge } from "./schemas.ts";
 
 export type UiStatus = RunSummary["status"];
@@ -248,6 +250,42 @@ export function runStateToDetail(
   if (requeues.length > 0) detail.crashRequeues = requeues;
 
   return detail;
+}
+
+/** Project a run's declared top-level `outputs:` block into the typed-partial
+ * egress envelope (proposal §11). Only a `completed` run carries an envelope;
+ * any other status returns `undefined` (the run reached no sanctioned
+ * terminal). When the workflow declares no run-level outputs the result is also
+ * `undefined` — there is no envelope to report.
+ *
+ * `lookupLatest(node)` returns the producer's LATEST emitted struct as a JSON
+ * string (already spill-rehydrated by the store's `getLatestOutput`), or `null`
+ * when the producer never ran on the taken path. Resolution is typed-PARTIAL,
+ * NOT fail-closed: a declared output whose producer didn't run — or whose
+ * `from:` path reaches through an `optional:` field the producer omitted — is
+ * ABSENT (its key omitted), never `""` and never a halt. A present `null` leaf
+ * is kept (distinct from absent). */
+export function projectRunOutputs(
+  runOutputs: RunOutputDecl[],
+  status: RunStatus,
+  lookupLatest: (node: string) => string | null,
+): Record<string, OutputStructValue> | undefined {
+  if (runOutputs.length === 0 || status !== "completed") return undefined;
+  const out: Record<string, OutputStructValue> = {};
+  for (const decl of runOutputs) {
+    const raw = lookupLatest(decl.node);
+    if (raw === null) continue; // producer never ran → absent
+    let struct: OutputStructValue;
+    try {
+      struct = JSON.parse(raw) as OutputStructValue;
+    } catch {
+      continue; // unreadable struct → absent, never a crash
+    }
+    const projected = projectRunOutput(struct, decl.path);
+    if (!projected.present) continue; // path through an omitted field → absent
+    out[decl.name] = projected.value;
+  }
+  return out;
 }
 
 /** Narrow a halt fact's `occContext` blob into the typed `haltContext`. Every

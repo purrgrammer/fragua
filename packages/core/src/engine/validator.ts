@@ -76,6 +76,7 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "budget_usd",
   "budget_policy",
   "inputs",
+  "outputs",
   "default_retry_policy",
 ]);
 
@@ -1137,6 +1138,108 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
               ...loc,
             });
           }
+        }
+      }
+    }
+  }
+
+  // E046 / W018: run-level `outputs:` projections (the top-level `outputs:`
+  // block, proposal §11.4). The run BOUNDARY is typed-partial — an unproduced
+  // output is absent at runtime, never a halt — so like the per-step E035/W015
+  // pair, only a broken projection is a hard error; a maybe-not-produced one is
+  // advisory:
+  //   - E046 (hard error) when `from:` names a node that doesn't exist, declares
+  //     no `outputs:`, or a `<path>` the producer's schema doesn't declare — a
+  //     definite authoring bug, gated like E035.
+  //   - W018 (advisory) when the producer is reachable but does not run-dominate
+  //     every completing terminal — the W015 analog at the run boundary, reusing
+  //     the same run-dominance oracle. A `wait_all` fan-out branch terminal is
+  //     suppressed the same way W015 suppresses a join read: the barrier
+  //     guarantees the branch ran before its join, so if the join run-dominates
+  //     the exit the branch effectively does too.
+  {
+    const runOutputs = Array.isArray(graph.attrs.outputs) ? graph.attrs.outputs : [];
+    if (runOutputs.length > 0) {
+      const dominance = buildRunDominance(graph);
+      const reachableFromStart = starts.length === 1 ? reachableSet(graph, starts[0]!.id) : new Set(nodeIds);
+      const completingTerminals = exits.filter((e) => reachableFromStart.has(e.id));
+      // Reverse the join-producer index (join → {branch nodes}) into branch
+      // node → its join, so a run-level ref to a fan-out branch terminal can be
+      // judged by its join's dominance over the exit.
+      const branchNodeToJoin = new Map<string, string>();
+      for (const [join, producers] of fanoutJoinProducers) {
+        for (const p of producers) branchNodeToJoin.set(p, join);
+      }
+      for (const decl of runOutputs) {
+        const fromToken = `from: ${decl.node}${decl.path.length > 0 ? `.${decl.path.join(".")}` : ""}`;
+        const producer = graph.nodes[decl.node];
+        if (producer === undefined) {
+          diags.push({
+            severity: "error",
+            code: "E046",
+            message: `run output "${decl.name}" (\`${fromToken}\`) references node "${decl.node}" which does not exist`,
+          });
+          continue;
+        }
+        const producerOutputs = producer.attrs.outputs;
+        if (producerOutputs === undefined) {
+          diags.push({
+            severity: "error",
+            code: "E046",
+            message: `run output "${decl.name}" (\`${fromToken}\`) references node "${decl.node}" which declares no \`outputs:\``,
+            nodeId: decl.node,
+          });
+          continue;
+        }
+        // Walk the dotted path against the producer's declared profile. A bare
+        // `from: node` (empty path) projects the whole struct — always valid once
+        // the producer declares outputs. A first segment must be a declared
+        // output field; deeper segments must each resolve into a record (dotting
+        // into a scalar/array is a dead path — E046, mirroring E035's badPath).
+        let badPath = false;
+        const [topField, ...rest] = decl.path;
+        const topProfile: OutputProfile | undefined = topField === undefined ? undefined : producerOutputs[topField];
+        if (topField !== undefined && topProfile === undefined) {
+          badPath = true;
+        } else if (topProfile !== undefined) {
+          let segProfile: OutputProfile = topProfile;
+          for (const seg of rest) {
+            if (!isOutputRecord(segProfile)) {
+              badPath = true;
+              break;
+            }
+            const next: OutputProfile | undefined = segProfile.fields[seg];
+            if (next === undefined) {
+              badPath = true;
+              break;
+            }
+            segProfile = next;
+          }
+        }
+        if (badPath) {
+          diags.push({
+            severity: "error",
+            code: "E046",
+            message: `run output "${decl.name}" (\`${fromToken}\`) references a field path node "${decl.node}" does not declare`,
+            nodeId: decl.node,
+          });
+          continue;
+        }
+        // Producer + field resolve. Advise (W018) when the producer is reachable
+        // from start but does not run-dominate every completing terminal.
+        if (!reachableFromStart.has(decl.node)) continue; // W002 already flags an unreachable node
+        if (completingTerminals.length === 0) continue;
+        const dominator = branchNodeToJoin.get(decl.node) ?? decl.node;
+        const runsOnEveryCompletingPath = completingTerminals.every((e) => dominance.dominates(dominator, e.id));
+        if (!runsOnEveryCompletingPath) {
+          diags.push({
+            severity: "warning",
+            code: "W018",
+            message:
+              `run output "${decl.name}" reads \`${fromToken}\` but "${decl.node}" does not run on every completing path — ` +
+              `it is absent from the run's outputs (typed-partial) when "${decl.node}" didn't run`,
+            nodeId: decl.node,
+          });
         }
       }
     }

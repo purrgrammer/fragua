@@ -26,8 +26,9 @@ import type {
   StoredEvent,
 } from "@fragua/store";
 import { FEED_EVENT_KINDS, isTerminal as isTerminalStatus } from "@fragua/types";
+import { deserializeGraph } from "../ir.ts";
 import { buildExplanation, type RunExplanation } from "./explain.ts";
-import { runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
+import { projectRunOutputs, runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
 import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnapshot } from "./steps.ts";
@@ -125,6 +126,22 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
       const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
       const detail = runStateToDetail(state, events, wf?.name, wf?.source);
       detail.lastEventSeq = events.at(-1)?.seq ?? 0;
+      // Typed-partial egress envelope (proposal §11): project the run-level
+      // `outputs:` block over the producer's latest emission. Reads the
+      // executable IR (carries `graph.attrs.outputs`) and the outputs index
+      // (`getLatestOutput` already rehydrates a `{$fragua_blob}` spill and
+      // resolves the latest iteration). A read-plane projection — no fact, no
+      // write path.
+      if (wf?.ir != null) {
+        let runOutputs: ReturnType<typeof deserializeGraph>["attrs"]["outputs"];
+        try {
+          runOutputs = deserializeGraph(wf.ir).attrs.outputs;
+        } catch {
+          runOutputs = undefined; // malformed IR — no envelope rather than a crash
+        }
+        const outputs = projectRunOutputs(runOutputs ?? [], state.status, (node) => store.getLatestOutput(runId, node));
+        if (outputs !== undefined) detail.outputs = outputs;
+      }
       return detail;
     },
     steps(runId) {

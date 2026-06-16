@@ -87,6 +87,31 @@ export function resolveOutputRef(
   return renderValue(resolved, escapeForShell);
 }
 
+/** Project a run-output reference against a producer's emitted struct — the
+ * run-BOUNDARY read (proposal §11.1), NOT the in-graph fail-closed consumer
+ * read. Walks `path` (empty = the whole struct) and reports presence:
+ *   - a segment genuinely missing (`undefined`) → `{ present: false }` (ABSENT;
+ *     the key is omitted from the egress envelope — a `from:` path through an
+ *     `optional:` field the producer omitted lands here);
+ *   - the leaf present, including an explicit `null` → `{ present: true, value }`
+ *     (PRESENT, possibly present-null — distinct from absent).
+ * This deliberately differs from `resolveOutputRef`, which collapses `null` to
+ * fail-closed; the run boundary preserves the absent-vs-present-null
+ * distinction the typed-partial envelope guarantees. */
+export function projectRunOutput(
+  struct: OutputStructValue,
+  path: string[],
+): { present: true; value: OutputStructValue } | { present: false } {
+  let cur: OutputStructValue = struct;
+  for (const seg of path) {
+    if (typeof cur !== "object" || cur === null || Array.isArray(cur)) return { present: false };
+    const next = (cur as Record<string, OutputStructValue>)[seg];
+    if (next === undefined) return { present: false };
+    cur = next;
+  }
+  return { present: true, value: cur };
+}
+
 function resolveSegments(val: OutputStructValue, segments: string[]): OutputStructValue | undefined {
   let cur: OutputStructValue = val;
   for (const seg of segments) {
