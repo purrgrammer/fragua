@@ -217,7 +217,7 @@ export function buildSubstitutionArgs(
   const args: SubstitutionArgs = {};
   // `${{ inputs.x }}` bindings: declared defaults overlaid by the run's
   // provided `routing.inputs` map (set at enqueue from `--input k=v`).
-  const resolved = resolveInputBindings(inputDecls, readStringMap(routing["inputs"]));
+  const resolved = resolveInputBindings(inputDecls, readInputMap(routing["inputs"]));
   if (Object.keys(resolved).length > 0) args.inputs = resolved;
   // `${{ outputs.X.f }}` bindings: pre-fetched from the outputs index.
   if (resolvedOutputs !== undefined && Object.keys(resolvedOutputs).length > 0) {
@@ -233,6 +233,20 @@ export function readStringMap(v: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
     if (typeof val === "string") out[k] = val;
+  }
+  return out;
+}
+
+/** Read `routing.inputs` preserving object / array input values (a string map
+ * would drop them). Substitution receives the materialized routing, so any
+ * `$fragua_blob` ref has already been rehydrated — skip a stray one defensively
+ * rather than feed a ref object to the substitution layer. */
+export function readInputMap(v: unknown): Record<string, unknown> {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (val !== null && typeof val === "object" && "$fragua_blob" in (val as Record<string, unknown>)) continue;
+    out[k] = val;
   }
   return out;
 }

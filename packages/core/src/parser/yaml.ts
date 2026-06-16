@@ -89,7 +89,7 @@
 // reuse the same name table.
 
 import * as YAML from "yaml";
-import { OutputsProfileError, parseOutputsDecl } from "../engine/outputs-profile.ts";
+import { OutputsProfileError, parseOutputsDecl, parseProfileNode } from "../engine/outputs-profile.ts";
 import type { Edge, EdgeAttrs, Graph, GraphAttrs, InputDecl, Node, NodeAttrs, NodeType } from "../types/graph.ts";
 
 export type { InputDecl } from "../types/graph.ts";
@@ -278,9 +278,9 @@ function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] 
     }
     const tRaw = scalarValue(body.get("type", true));
     const type = typeof tRaw === "string" ? tRaw : "string";
-    if (!["string", "boolean", "number", "choice"].includes(type)) {
+    if (!["string", "boolean", "number", "choice", "object", "array"].includes(type)) {
       throw new ParseError(
-        `input "${name}" has unknown type ${JSON.stringify(type)} (expected string / boolean / number / choice)`,
+        `input "${name}" has unknown type ${JSON.stringify(type)} (expected string / boolean / number / choice / object / array)`,
         ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
       );
     }
@@ -297,6 +297,18 @@ function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] 
     if (Array.isArray(opts)) decl.options = opts.filter((v): v is string => typeof v === "string");
     if (decl.type === "choice" && (!decl.options || decl.options.length === 0)) {
       throw new ParseError(`input "${name}" has type=choice but no options[]`, ...locArr(locOf(body, lineCounter)));
+    }
+    // Object / array inputs reuse the SAME restricted profile grammar `outputs:`
+    // uses (no fork). `parseProfileNode` parses the whole `{ type, fields/items }`
+    // body into an `OutputProfile`; we keep the record `fields` / array `items`
+    // for validation + TypeBox lowering.
+    if (decl.type === "object" || decl.type === "array") {
+      try {
+        decl.profile = parseProfileNode(body.toJSON(), name);
+      } catch (err) {
+        const msg = err instanceof OutputsProfileError ? err.message : String(err);
+        throw new ParseError(`input "${name}" ${msg}`, ...locArr(locOf(body, lineCounter)));
+      }
     }
     out.push(decl);
   }

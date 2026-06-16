@@ -18,6 +18,7 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { InputDecl } from "@fragua/core";
 import chalk from "chalk";
 import { resolveProject } from "../project.ts";
 import { followRun } from "../run-follow.ts";
@@ -54,6 +55,50 @@ export async function resolveInputArgs(raw: string | string[] | undefined): Prom
   return out;
 }
 
+/** Type-directed coercion of resolved `--input` strings + an optional whole-
+ * object `--input-json` against the workflow's `inputs:` declarations.
+ *
+ * - `--input-json` (if present) is parsed as one JSON value and seeds the map.
+ * - Each `--input name=value` overlays it: an object / array-typed input has its
+ *   string `JSON.parse`d; a scalar stays verbatim. Validation against the
+ *   declared profile happens downstream at enqueue (`validateInputBindings`).
+ * - Malformed JSON for a declared object / array input (or for `--input-json`)
+ *   throws a clean error naming the offender — never a silent coercion.
+ */
+export function coerceInputs(
+  rawStrings: Record<string, string>,
+  inputJson: string | undefined,
+  decls: readonly InputDecl[],
+): Record<string, unknown> {
+  const declByName = new Map(decls.map((d) => [d.name, d]));
+  const out: Record<string, unknown> = {};
+  if (inputJson !== undefined) {
+    let whole: unknown;
+    try {
+      whole = JSON.parse(inputJson);
+    } catch (err) {
+      throw new Error(`--input-json is not valid JSON: ${(err as Error).message}`);
+    }
+    if (whole === null || typeof whole !== "object" || Array.isArray(whole)) {
+      throw new Error("--input-json must be a JSON object mapping input names to values");
+    }
+    Object.assign(out, whole as Record<string, unknown>);
+  }
+  for (const [name, value] of Object.entries(rawStrings)) {
+    const decl = declByName.get(name);
+    if (decl !== undefined && (decl.type === "object" || decl.type === "array")) {
+      try {
+        out[name] = JSON.parse(value);
+      } catch (err) {
+        throw new Error(`input "${name}" (type ${decl.type}) is not valid JSON: ${(err as Error).message}`);
+      }
+    } else {
+      out[name] = value;
+    }
+  }
+  return out;
+}
+
 export interface RunCommandOptions {
   workflow: string;
   /** Priority tie-breaker. Higher runs first. Default 0. */
@@ -66,6 +111,9 @@ export interface RunCommandOptions {
   /** Typed run inputs (`--input name=value`). Validated against the
    * workflow's `inputs:` block and substituted as `${{ inputs.name }}`. */
   inputs?: Record<string, string>;
+  /** Whole inputs object as one JSON value (`--input-json '<json>'`). The
+   * programmatic-caller path; merged under per-`--input` overrides. */
+  inputJson?: string;
   /** Exit after the run enters a terminal state. Default true. */
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
@@ -129,9 +177,18 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     client.plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
     console.log(chalk.dim(`workflow ${name} -> ${mint.sha.slice(0, 12)}`));
 
+    const inputDecls = mint.graph.attrs.inputs ?? [];
+    let inputs: Record<string, unknown>;
+    try {
+      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson, inputDecls);
+    } catch (err) {
+      console.error(chalk.red(`run: ${(err as Error).message}`));
+      return 1;
+    }
+
     const enq = client.plane.buildEnqueue({
       workflowSha: mint.sha,
-      inputDecls: mint.graph.attrs.inputs ?? [],
+      inputDecls,
       cwd: resolve(cwd),
       projectId: project.projectId,
       projectName: project.projectName,
@@ -140,7 +197,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(scope === "global" || scope === "local" ? { workflowName: name } : {}),
       ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
       ...(opts.routing !== undefined ? { routing: opts.routing } : {}),
-      ...(opts.inputs !== undefined && Object.keys(opts.inputs).length > 0 ? { inputs: opts.inputs } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
     });
     if (!enq.ok) {
       console.error(chalk.red(`run: ${enq.error}`));

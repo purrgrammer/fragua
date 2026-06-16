@@ -129,8 +129,8 @@ Additive; breaks nothing already authored.
 - Tool-step production (`$FRAGUA_OUTPUT`); `tool` steps consume, never produce.
 - Native final-message JSON as an emit backend (`output_config.format` /
   `response_format`).
-- `object`/`array` types in `inputs:` (the grammar admits them; the MVP keeps
-  `inputs:` scalar-only).
+- ~~`object`/`array` types in `inputs:`~~ — was out of the original MVP cut;
+  **shipped as a later increment (§12).**
 - Routing on emitted values, binary/`blob` outputs, HITL (`human`-produced)
   outputs.
 
@@ -488,13 +488,15 @@ substitutes a value the author didn't write. (An author may write
 `default: ""` — that empty string is then their explicit, recorded choice, the
 opposite of the silent `""` §1 forbids.)
 
-## 12. Object / array inputs (designed)
+## 12. Object / array inputs (implemented)
 
-> **Designed, not yet built — pairs with §11.** Both touch the shared
-> inputs/outputs grammar + the TypeBox path, so they build together. The MVP
-> keeps `inputs:` scalar-only *by policy*; the grammar (§5), the substitution
-> layer, and TypeBox validation already handle records and arrays — only the
-> CLI ingestion and the declaration restriction are missing.
+> **Shipped.** A workflow may declare `type: object` (with `fields:`) and
+> `type: array` (with `items:`) inputs over the SAME restricted grammar `outputs:`
+> uses. The CLI coerces `--input name=<json>` by declared type and accepts a
+> whole-object `--input-json '<json>'`; malformed JSON for a declared
+> object/array input is a clean parse-/enqueue-time error. `${{ inputs.x }}`
+> renders the whole value as JSON; `${{ inputs.x.field }}` dot-reads into it
+> (leniently — unlike fail-closed outputs).
 
 A workflow declares a non-scalar input over the same grammar `outputs:` uses:
 

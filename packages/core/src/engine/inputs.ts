@@ -8,28 +8,38 @@
 //     pick a declared option, and unknown keys are rejected.
 
 import type { InputDecl } from "../types/graph.ts";
+import { validateValueAgainstProfile } from "../types/outputs.ts";
 
 export interface InputBindingError {
-  code: "missing_required" | "invalid_choice" | "unknown_input";
+  code: "missing_required" | "invalid_choice" | "unknown_input" | "invalid_shape";
   name: string;
   message: string;
 }
 
+/** Object / array inputs carry a parsed type profile; scalars don't. */
+function isStructuredInput(d: InputDecl): boolean {
+  return (d.type === "object" || d.type === "array") && d.profile !== undefined;
+}
+
 /** Build the resolved `${{ inputs.x }}` map: declared defaults first, then
- * run-provided values win. Everything is coerced to a string because
- * substitution is textual. Provided keys with no matching declaration are
- * ignored here (the validator rejects them separately). */
+ * run-provided values win. Scalar values are coerced to strings (substitution
+ * is textual); object / array inputs pass through as their parsed JSON value so
+ * the substitution layer can dot-read into them. Provided keys with no matching
+ * declaration are ignored here (the validator rejects them separately). */
 export function resolveInputBindings(
   decls: readonly InputDecl[] | undefined,
-  provided: Readonly<Record<string, string>> = {},
-): Record<string, string> {
-  const out: Record<string, string> = {};
+  provided: Readonly<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   for (const d of decls ?? []) {
     if (d.default !== undefined) out[d.name] = String(d.default);
   }
   for (const d of decls ?? []) {
     const v = provided[d.name];
-    if (v !== undefined) out[d.name] = v;
+    if (v === undefined) continue;
+    // Object / array inputs pass through as their parsed JSON value (the
+    // substitution layer dot-reads them); scalars stay textual.
+    out[d.name] = isStructuredInput(d) ? v : String(v);
   }
   return out;
 }
@@ -41,7 +51,7 @@ export function resolveInputBindings(
  * fail (typo guard). */
 export function validateInputBindings(
   decls: readonly InputDecl[] | undefined,
-  provided: Readonly<Record<string, string>> = {},
+  provided: Readonly<Record<string, unknown>> = {},
 ): InputBindingError[] {
   const errors: InputBindingError[] = [];
   const declByName = new Map((decls ?? []).map((d) => [d.name, d]));
@@ -58,12 +68,23 @@ export function validateInputBindings(
       }
       continue;
     }
-    if (d.type === "choice" && d.options !== undefined && !d.options.includes(v)) {
-      errors.push({
-        code: "invalid_choice",
-        name: d.name,
-        message: `input "${d.name}" = ${JSON.stringify(v)} is not one of ${d.options.map((o) => JSON.stringify(o)).join(", ")}`,
-      });
+    if (d.type === "choice" && d.options !== undefined) {
+      if (typeof v !== "string" || !d.options.includes(v)) {
+        errors.push({
+          code: "invalid_choice",
+          name: d.name,
+          message: `input "${d.name}" = ${JSON.stringify(v)} is not one of ${d.options.map((o) => JSON.stringify(o)).join(", ")}`,
+        });
+      }
+      continue;
+    }
+    // Object / array inputs validate their parsed value against the SAME profile
+    // grammar `outputs:` uses — the input analogue of a failed emit.
+    if (d.profile !== undefined) {
+      const msg = validateValueAgainstProfile(d.profile, v, d.name);
+      if (msg !== null) {
+        errors.push({ code: "invalid_shape", name: d.name, message: `input "${d.name}": ${msg}` });
+      }
     }
   }
 

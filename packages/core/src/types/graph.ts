@@ -1,7 +1,7 @@
 // Graph model: Nodes, Edges, and the Graph itself. See docs/SPEC.md §3.1.
 
 import type { RetryPresetName } from "../engine/retry-policy.ts";
-import type { OutputsDecl } from "./outputs.ts";
+import type { OutputProfile, OutputsDecl } from "./outputs.ts";
 import type { SummaryLevel } from "./summary.ts";
 
 /** Node-type discriminator. `start` and `exit` are synthesised by the
@@ -126,11 +126,15 @@ export interface EdgeAttrs {
  * `prompt:` / `text:` / `run:` strings as `${{ inputs.name }}`. */
 export interface InputDecl {
   name: string;
-  type: "string" | "boolean" | "number" | "choice";
+  type: "string" | "boolean" | "number" | "choice" | "object" | "array";
   required: boolean;
   description?: string;
   default?: string | number | boolean;
   options?: string[];
+  /** Parsed type profile when `type: object` or `type: array` — the SAME
+   * restricted grammar `outputs:` uses (record `fields:` + `required`, array
+   * `items:`, nesting to any fixed depth). Absent for scalar/choice inputs. */
+  profile?: OutputProfile;
 }
 
 export interface GraphAttrs {

@@ -53,7 +53,10 @@ export type WorkflowMint =
 export interface EnqueueInput {
   workflowSha: string;
   inputDecls?: readonly InputDecl[] | undefined;
-  inputs?: Record<string, string> | undefined;
+  /** Run-provided inputs. Scalar values are strings; object / array inputs are
+   * already-parsed JSON values (the CLI coerces by declared type; the server
+   * receives parsed JSON). Validated against `inputDecls` at enqueue. */
+  inputs?: Record<string, unknown> | undefined;
   routing?: Record<string, unknown> | undefined;
   priority?: number | undefined;
   cwd?: string | undefined;

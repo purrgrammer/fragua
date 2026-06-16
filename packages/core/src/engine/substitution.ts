@@ -22,8 +22,10 @@ import { resolveOutputRef, UnpopulatedOutputError } from "./outputs-substitution
 export { outputReferences } from "./outputs-substitution.ts";
 
 export interface SubstitutionArgs {
-  /** Resolved `${{ inputs.<name> }}` bindings (defaults ⊕ run-provided). */
-  inputs?: Record<string, string>;
+  /** Resolved `${{ inputs.<name> }}` bindings (defaults ⊕ run-provided).
+   * Scalar inputs are strings; object / array inputs are their parsed JSON
+   * value, dot-read via `${{ inputs.x.field }}`. */
+  inputs?: Record<string, unknown>;
   /** Resolved `${{ outputs.<producer>.<field> }}` bindings.
    * Keyed by producer node id; value is the node's emitted struct. */
   outputs?: Record<string, OutputsValue>;
@@ -66,7 +68,7 @@ function sha256Hex(s: string): string {
 /** Matches `${{ inputs.name }}` with surrounding whitespace tolerance.
  * Input names start with a letter and allow word chars + hyphen, matching
  * the parser's `inputs:` key grammar. */
-const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g;
+const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*)\s*\}\}/g;
 
 /** Matches EITHER token in one pattern, so both families resolve in a single
  * pass over the original template. Group 1 = input name; groups 2+3 = output
@@ -74,7 +76,7 @@ const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g;
  * not (identifier-only node ids / field keys) — same grammars as the two
  * single-family regexes. */
 const COMBINED_REF_RE =
-  /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
+  /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
   const { args = {}, escapeForShell = false, wrapOutputs = false } = opts;
@@ -92,7 +94,7 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
   const result = template.replace(
     COMBINED_REF_RE,
     (whole: string, inName: string | undefined, outProducer: string | undefined, outRest: string | undefined) => {
-      if (inName !== undefined) return fmt(inputs[inName] ?? "");
+      if (inName !== undefined) return fmt(resolveInputRef(inputs, inName.split(".")));
       const rendered = resolveOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."), escapeForShell);
       if (rendered === undefined) {
         missing.push(whole.trim());
@@ -105,13 +107,33 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
   return result;
 }
 
-/** Every `${{ inputs.X }}` reference name in a template. Used by the
- * validator (E030) to flag references to undeclared inputs. */
+/** Resolve a `${{ inputs.<name>[.<field>...] }}` reference to its rendered
+ * string. Inputs are LENIENT (unlike fail-closed outputs): an unbound input or
+ * an unresolvable dotted path collapses to "" — the validator (E030) flags refs
+ * to undeclared inputs separately. A scalar renders verbatim; a whole object /
+ * array renders as JSON; a dotted leaf renders its scalar value. */
+function resolveInputRef(inputs: Record<string, unknown>, segments: string[]): string {
+  const [name, ...rest] = segments;
+  if (name === undefined) return "";
+  let cur: unknown = inputs[name];
+  for (const seg of rest) {
+    if (cur === null || typeof cur !== "object" || Array.isArray(cur)) return "";
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  if (cur === undefined || cur === null) return "";
+  if (typeof cur === "string") return cur;
+  if (typeof cur === "number" || typeof cur === "boolean") return String(cur);
+  return JSON.stringify(cur);
+}
+
+/** Every `${{ inputs.X[.f...] }}` BASE reference name in a template. Used by the
+ * validator (E030) to flag references to undeclared inputs (the base name is
+ * what a declaration names; dotted segments address into a record/array). */
 export function inputReferences(template: string): string[] {
   const out: string[] = [];
   for (const m of template.matchAll(INPUT_REF_RE)) {
-    const name = m[1];
-    if (name !== undefined && !out.includes(name)) out.push(name);
+    const base = m[1]?.split(".")[0];
+    if (base !== undefined && !out.includes(base)) out.push(base);
   }
   return out;
 }

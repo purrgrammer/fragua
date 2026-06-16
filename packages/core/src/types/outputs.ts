@@ -185,7 +185,11 @@ export function validateOutputsValue(decl: OutputsDecl, value: unknown): string 
   return null;
 }
 
-function validateValueAgainstProfile(profile: OutputProfile, value: unknown, path: string): string | null {
+/** Validate a single runtime value against one `OutputProfile`. Returns `null`
+ * on success or an error message. Shared by `validateOutputsValue` (per emitted
+ * field) and the run-input validator (object/array inputs reuse the same
+ * profile grammar). `path` is a human-readable location for the message. */
+export function validateValueAgainstProfile(profile: OutputProfile, value: unknown, path: string): string | null {
   if (profile.kind === "string") {
     if (typeof value !== "string") return `field "${path}" must be a string, got ${typeof value}`;
     return null;

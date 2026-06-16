@@ -28,6 +28,22 @@ describe("resolveInputBindings", () => {
   test("no decls → empty map", () => {
     expect(resolveInputBindings(undefined, { stray: "x" })).toEqual({});
   });
+
+  test("object/array values pass through un-stringified; scalars stay coerced", () => {
+    const decls = [
+      decl({
+        name: "config",
+        type: "object",
+        profile: { kind: "record", fields: { env: { kind: "string" } }, required: ["env"] },
+      }),
+      decl({ name: "tags", type: "array", profile: { kind: "array", items: { kind: "string" } } }),
+      decl({ name: "count", type: "number" }),
+    ];
+    const resolved = resolveInputBindings(decls, { config: { env: "dev" }, tags: ["a", "b"], count: 5 });
+    expect(resolved["config"]).toEqual({ env: "dev" });
+    expect(resolved["tags"]).toEqual(["a", "b"]);
+    expect(resolved["count"]).toBe("5");
+  });
 });
 
 describe("validateInputBindings", () => {
@@ -67,5 +83,30 @@ describe("validateInputBindings", () => {
 
   test("no decls + no provided → ok", () => {
     expect(validateInputBindings(undefined, {})).toEqual([]);
+  });
+
+  test("object input value matching its profile → ok", () => {
+    const decls = [
+      decl({
+        name: "config",
+        type: "object",
+        profile: { kind: "record", fields: { env: { kind: "choice", options: ["dev", "prod"] } }, required: ["env"] },
+      }),
+    ];
+    expect(validateInputBindings(decls, { config: { env: "prod" } })).toEqual([]);
+  });
+
+  test("object input value violating its profile → invalid_shape", () => {
+    const decls = [
+      decl({
+        name: "config",
+        type: "object",
+        profile: { kind: "record", fields: { env: { kind: "choice", options: ["dev", "prod"] } }, required: ["env"] },
+      }),
+    ];
+    const errs = validateInputBindings(decls, { config: { env: "staging" } });
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.code).toBe("invalid_shape");
+    expect(errs[0]?.name).toBe("config");
   });
 });

@@ -267,6 +267,27 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.params.initialRouting).toEqual({ inputs: { ticket: "BUG-1" } });
   });
 
+  test("object input: parsed value validates against its profile and lands on routing", () => {
+    const WITH_OBJECT =
+      "name: cfg\ninputs:\n  config:\n    type: object\n    fields:\n      env: {type: choice, options: [dev, prod]}\nsteps:\n  work: {type: llm, prompt: 'env ${{ inputs.config.env }}', next: exit}\n";
+    const objDecls = parseWorkflow(WITH_OBJECT).attrs.inputs;
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", inputDecls: objDecls, inputs: { config: { env: "prod" } } });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.initialRouting).toEqual({ inputs: { config: { env: "prod" } } });
+  });
+
+  test("object input whose value violates its profile → { ok: false } invalid_shape", () => {
+    const WITH_OBJECT =
+      "name: cfg\ninputs:\n  config:\n    type: object\n    fields:\n      env: {type: choice, options: [dev, prod]}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";
+    const objDecls = parseWorkflow(WITH_OBJECT).attrs.inputs;
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", inputDecls: objDecls, inputs: { config: { env: "staging" } } });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.inputErrors.some((e) => e.code === "invalid_shape" && e.name === "config")).toBe(true);
+  });
+
   test("runId is always minted — no operator/client-supplied id; scheduleId passes through", () => {
     const { plane } = rig();
     const r = plane.buildEnqueue({ workflowSha: "sha1", scheduleId: "sch-1" });

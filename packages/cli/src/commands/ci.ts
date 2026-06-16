@@ -45,6 +45,7 @@ import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
+import { coerceInputs } from "./run.ts";
 
 const POLL_MS = 50;
 const BATCH = 500;
@@ -61,6 +62,8 @@ export interface CiCommandOptions {
   exportPath?: string;
   /** Typed run inputs (`--input name=value`). */
   inputs?: Record<string, string>;
+  /** Whole inputs object as one JSON value (`--input-json '<json>'`). */
+  inputJson?: string;
   /** Emit the event log as JSONL instead of the human render. */
   json?: boolean;
   /** Provider/model override (else config defaults, else env-autodetect). */
@@ -209,16 +212,24 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       return CLI_EXIT.usage;
     }
     plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
+    const inputDecls = mint.graph.attrs.inputs ?? [];
+    let inputs: Record<string, unknown>;
+    try {
+      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson, inputDecls);
+    } catch (err) {
+      console.error(chalk.red(`ci: ${(err as Error).message}`));
+      return CLI_EXIT.usage;
+    }
     const enq = plane.buildEnqueue({
       workflowSha: mint.sha,
-      inputDecls: mint.graph.attrs.inputs ?? [],
+      inputDecls,
       cwd: resolve(cwd),
       projectId: project.projectId,
       projectName: project.projectName,
       workflowScope: scope,
       workflowPath: dotPath,
       ...(scope === "global" || scope === "local" ? { workflowName: name } : {}),
-      ...(opts.inputs !== undefined && Object.keys(opts.inputs).length > 0 ? { inputs: opts.inputs } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
     });
     if (!enq.ok) {
       console.error(chalk.red(`ci: ${enq.error}`));

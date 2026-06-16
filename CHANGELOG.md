@@ -10,6 +10,16 @@ guarantee.
 
 ### Added
 
+- Object and array workflow inputs. An `inputs:` declaration may now use
+  `type: object` (with `fields:`) or `type: array` (with `items:`), reusing the
+  same restricted type grammar `outputs:` uses. Read a whole value as JSON with
+  `${{ inputs.x }}` or dot-read into it with `${{ inputs.x.field }}`. On the CLI,
+  `--input name=<json>` is JSON-parsed when the named input is declared
+  object/array (composing with `@file` / `@-` sourcing; scalar inputs stay
+  verbatim), and a new `--input-json '<json>'` passes the entire inputs object in
+  one shot — both on `fragua run` and `fragua ci`. Malformed JSON for a declared
+  object/array input is a clean enqueue-time error, never a silent coercion.
+
 - `--resume` flag on the ceiling-raiser verbs (`fragua runs budget`,
   `max-retries`, `goal-gate`, `max-loops`) raises the cap and resumes the run in
   one step, instead of leaving it paused until a separate `fragua runs resume`.

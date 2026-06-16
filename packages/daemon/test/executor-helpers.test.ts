@@ -120,6 +120,25 @@ describe("executor-helpers", () => {
     expect(buildSubstitutionArgs({}, []).inputs).toBeUndefined();
   });
 
+  test("buildSubstitutionArgs preserves object/array input values from routing", () => {
+    const decls = [
+      {
+        name: "config",
+        type: "object" as const,
+        required: false,
+        profile: { kind: "record" as const, fields: { env: { kind: "string" as const } }, required: ["env"] },
+      },
+      {
+        name: "tags",
+        type: "array" as const,
+        required: false,
+        profile: { kind: "array" as const, items: { kind: "string" as const } },
+      },
+    ];
+    const args = buildSubstitutionArgs({ inputs: { config: { env: "prod" }, tags: ["a", "b"] } }, decls);
+    expect(args.inputs).toEqual({ config: { env: "prod" }, tags: ["a", "b"] });
+  });
+
   test("resolveBackoff falls back to the 'none' preset and honours custom attrs", () => {
     const none = resolveBackoff({}, {});
     expect(none.initialDelayMs).toBe(0);
