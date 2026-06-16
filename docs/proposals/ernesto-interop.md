@@ -131,16 +131,30 @@ with fragua as the foreign runtime.
 ```yaml
 review:
   kind: fragua
-  workflow: review            # resolved against the workdir's .fragua/workflows/, or inline source
+  workflow: review            # file-based: resolved against the workdir's .fragua/workflows/ (§9.4)
   inputs:
     pr_number: "${{ inputs.pr }}"
+    config:    "${{ inputs.review_config }}"   # an object — see input passing below
 ```
 
 Registered backend-side via `runner.registerStepKind('fragua', handler)` —
 the same extension path `monitor` uses. `KindPolicy` defaults for the kind:
-`cwd: 'ephemeral'` (§5.4), `tools.native: 'disallowed'` (the embedded
-executor owns its own tools), plus whatever `timeoutMs`/`retry`/`idempotent`
-the author sets — Ernesto's middleware wraps the whole fragua run for free.
+`cwd: 'ephemeral'` (§5.4), `tools.native: 'disallowed'` (the fragua subprocess
+owns its own tools), plus whatever `timeoutMs`/`retry`/`idempotent` the author
+sets — Ernesto's middleware wraps the whole fragua run for free.
+
+**Input passing — two clean substitution passes, no namespace leak.** Ernesto
+resolves the step's `inputs:` map over *its* namespace
+(`${{ inputs.* }}` / `${{ steps.*.outputs.* }}`, `run-graph.ts:570`) to
+concrete values *before* the handler runs — exactly as it does for a
+`dynamic-workflow` step's `args`. The handler hands those values to fragua,
+which then resolves its *own* workflow's `${{ inputs.X }}` over them. Ernesto's
+`inputs`/`steps` vocabulary never reaches fragua; fragua sees only concrete
+values. Non-scalar inputs (an object/array from a whole-string Ernesto token)
+ride `fragua ci --input-json '<json>'` — the handler `JSON.stringify`s its
+resolved inputs object once, and fragua validates it against the workflow's
+typed `inputs:` schema ([`structured-outputs.md`](structured-outputs.md) §12).
+No per-value encoding, no scalar-only wart.
 
 ### 5.2 Runner spec — subprocess via `fragua ci` (v1)
 
@@ -360,7 +374,11 @@ than deleted — the file:line audit is the part worth keeping.
   §11) — the one genuine prerequisite, and buildable on its own merit
   (fragua's own `fragua runs` output wants the same projection); **(2)**
   `fragua ci` emits the typed-partial output envelope as a terminal JSON
-  object on `--json` + into the `--export` bundle. That is the whole v1 list.
+  object on `--json` + into the `--export` bundle; **(3)** object/array inputs
+  ([`structured-outputs.md`](structured-outputs.md) §12) — **pairs with (1)**
+  (same grammar + TypeBox path); ergonomics, not a hard blocker (per-value
+  encoding works), but it dissolves the §5.1 input wart and is a standalone
+  CLI UX win (`--input-json`, type-directed `--input` parse).
 - fragua-side work, later: the **terminal-fact convergence** — collapse
   `run_completed`/`run_halted`/`run_cancelled` into one
   `fact.run_terminated { status }` ([`fact-taxonomy.md`](fact-taxonomy.md)

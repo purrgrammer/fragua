@@ -3,7 +3,7 @@ title: Structured step outputs (MVP) — typed `outputs:` on `llm` steps
 summary: "An `llm` step declares typed `outputs:` with the same small type grammar used by `inputs:` (scalars, `choice`, records, arrays — a subset of JSON Schema sized to what provider strict-mode enforces; no recursion, no `$ref`). It emits through one force-included `emit_output` tool; any step consumes via `${{ outputs.X.f }}` interpolation (`llm` in prompt, `tool` in run, `human` in text). Reads fail closed — a reference the producer never populated halts the node (a recorded, replayable fact), never a silent \"\". The grammar compiles to TypeBox (already a dependency): TypeBox validates the emitted value and supplies the emit-tool schema, so author surface, our validation, and the provider's native strict-mode all agree. Oversized structs spill to the blob CAS via the input-spill path. Values interpolated into an `llm` prompt are wrapped in content-derived (hash-boundary) delimiters. MVP: only `llm` steps produce; `tool`/`human` consume."
 status: implemented
 maturity: shipped
-last-reviewed: 2026-06-15
+last-reviewed: 2026-06-16
 supersedes: an earlier, broader cut (tool-step production via $FRAGUA_OUTPUT, route-carried outputs) — narrowed to llm-only production
 ---
 
@@ -364,8 +364,7 @@ Each rides its own proposal/PR; the MVP's contract admits each without a rewrite
    `tool` emits structured evidence an `llm` judges).
 4. **Cross-cutting untrusted-content delimiting** — extend §6.4 from
    output→prompt interpolation to the shared `thread:` and tool/file/bash results.
-5. **`object`/`array` types in `inputs:`** — the shared grammar already admits
-   them; the CLI would JSON-parse a non-scalar `--input`.
+5. ~~**`object`/`array` types in `inputs:`**~~ — **promoted to §12** (designed).
 6. **Richer type vocabulary** — constraint keywords enforced at our layer via
    TypeBox, and/or accepting raw JSON Schema documents.
 7. **`blob` (binary/file) outputs** and **HITL outputs** (operator-supplied typed
@@ -488,6 +487,56 @@ output with no declared default stays **absent**, and the system never
 substitutes a value the author didn't write. (An author may write
 `default: ""` — that empty string is then their explicit, recorded choice, the
 opposite of the silent `""` §1 forbids.)
+
+## 12. Object / array inputs (designed)
+
+> **Designed, not yet built — pairs with §11.** Both touch the shared
+> inputs/outputs grammar + the TypeBox path, so they build together. The MVP
+> keeps `inputs:` scalar-only *by policy*; the grammar (§5), the substitution
+> layer, and TypeBox validation already handle records and arrays — only the
+> CLI ingestion and the declaration restriction are missing.
+
+A workflow declares a non-scalar input over the same grammar `outputs:` uses:
+
+```yaml
+inputs:
+  ticket: { type: string, required: true }
+  config:
+    type: object
+    fields:
+      env:   { type: choice, options: [dev, staging, prod] }
+      flags: { type: array, items: { type: string } }
+```
+
+read as `${{ inputs.config.env }}` (dotted into the record) or
+`${{ inputs.config }}` (the whole record as JSON) — both already resolve in
+`substitution.ts`. Three small moves:
+
+1. **Lift the scalar-only restriction** on `inputs:` declarations. The §5
+   grammar already admits `object`/`array` (it *is* the `outputs:` grammar);
+   the MVP merely gated `inputs:` to scalars.
+2. **Type-directed coercion.** The CLI resolves `--input name=value` to a
+   *string* and defers coercion to schema validation (`cli/src/commands/run.ts`
+   — "type coercion is the server's job against the `inputs:` schema"). For a
+   declared object/array input, `JSON.parse` that string before the TypeBox
+   check. So `--input tags='["a","b"]'` and `--input config=@cfg.json` work
+   with **no new flag** — composing with the existing `@<path>` / `@-`
+   sourcing. Scalar inputs are unchanged (string verbatim).
+3. **A whole-object form** — `--input-json '<json>'` (and/or `--inputs-file
+   <path>`): the entire inputs object in one shot, validated against the same
+   compiled `inputs:` schema. The ergonomic path for a **programmatic caller**
+   — the [`ernesto-interop.md`](ernesto-interop.md) `kind: 'fragua'` handler
+   holds its inputs as one object and would otherwise decompose + per-value
+   JSON-encode across N `--input` flags; with this it is one
+   `JSON.stringify`, and typed objects round-trip natively.
+
+Validation is **free**: the `inputs:` declaration already compiles to a
+TypeBox schema (§5); a parsed object flows through the same `Value.Check`. One
+new failure mode: malformed JSON for a declared object/array input is a
+**parse-time error** (the input analogue of the fail-closed emit; code
+assigned at build), surfaced at enqueue before the run starts — never a silent
+coercion. The `--input` surface gains a "scalar verbatim vs JSON-parsed-by-
+declared-type" rule the `workflows` skill documents.
 
 ## Related
 
