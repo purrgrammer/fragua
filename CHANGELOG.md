@@ -10,6 +10,16 @@ guarantee.
 
 ### Added
 
+- `fragua ci --json` emits a terminal result envelope as the final line once a
+  run reaches a terminal state: `{ kind: "fragua.run_result", runId, status,
+  outputs, usage }`. `status` is the converged `completed | errored | aborted`,
+  `outputs` the run-level typed-partial output envelope (absent keys omitted),
+  and `usage` the run-total `{ inputTokens, outputTokens, costUsd }`. The line
+  is tagged `kind` to distinguish it from the per-event JSONL lines (which
+  carry `seq`/`type`). The same object is written into the `--export` bundle as
+  `runs/<id>/result.json`. Non-terminal stop-states (paused, paused_human,
+  quarantined) emit no envelope and keep their existing exit codes.
+
 - Run-level (workflow) outputs. A workflow may declare a top-level `outputs:`
   block that projects step outputs into the run's typed result, e.g.
   `outputs: { verdict: { from: review.verdict } }`. `from:` is a

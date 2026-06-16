@@ -400,6 +400,60 @@ describe("importRunBundle", () => {
   });
 });
 
+describe("exportRunBundle - terminal result envelope", () => {
+  function resultEntry(bytes: Uint8Array, runId: string): unknown | undefined {
+    const entries = readTar(bytes);
+    const entry = entries.find((e) => e.name === `runs/${runId}/result.json`);
+    return entry === undefined ? undefined : JSON.parse(new TextDecoder().decode(entry.data));
+  }
+
+  test("ships runResult as runs/<id>/result.json when supplied", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const runResult = {
+      kind: "fragua.run_result",
+      runId,
+      status: "completed",
+      outputs: { verdict: "approve" },
+      usage: { inputTokens: 1, outputTokens: 2, costUsd: 0.5 },
+    };
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "x", runResult });
+    src.close();
+    expect(resultEntry(bytes, runId)).toEqual(runResult);
+  });
+
+  test("omits result.json when runResult is absent (backward-compatible default)", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    expect(resultEntry(bytes, runId)).toBeUndefined();
+  });
+
+  test("scrubs a live literal echoed inside runResult", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const secret = "fragua-bundle-secret-token-XYZ9876543210";
+    const runResult = {
+      kind: "fragua.run_result",
+      runId,
+      status: "completed",
+      outputs: { leaked: secret },
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+    };
+    const { bytes } = src.exportRunBundle(runId, {
+      fraguaVersion: "x",
+      labelMode: "generic",
+      extraLiterals: [{ value: secret, source: "env:TOKEN" }],
+      runResult,
+    });
+    src.close();
+    expect(Buffer.from(bytes).includes(secret)).toBe(false);
+    const projected = resultEntry(bytes, runId) as { outputs: { leaked: string } };
+    expect(projected.outputs.leaked).not.toBe(secret);
+  });
+});
+
 describe("exportRunBundle - observability event filtering", () => {
   /** Seed a terminal run and append observability events covering all denylist
    * families plus several retained types, before exporting. */

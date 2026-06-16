@@ -54,6 +54,7 @@ import {
   runArtifactsPath,
   runEventsPath,
   runMessagesPath,
+  runResultPath,
   SCRUBBER_VERSION,
   type TarEntry,
   workflowIrPath,
@@ -456,6 +457,11 @@ export interface ExportBundleOptions {
   /** Extra literal needles merged into the registry before compilation.
    * Used by the CI profile to inject captured env secrets. */
   extraLiterals?: Array<{ value: string; source: string }>;
+  /** The run's terminal result envelope (`fragua ci`'s
+   * `{ runId, status, outputs, usage }`). When supplied it is scrubbed as JSON
+   * and shipped as `runs/<id>/result.json` so an imported run carries the same
+   * object the `--json` stream emitted. Omitted for a non-terminal run. */
+  runResult?: unknown;
 }
 
 /** Return value of {@link SqliteStore.exportRunBundle}. */
@@ -1803,6 +1809,14 @@ export class SqliteStore implements IEventStore {
           })),
         ),
       },
+      ...(opts.runResult !== undefined
+        ? [
+            {
+              name: runResultPath(runId),
+              data: enc.encode(JSON.stringify(scrubJsonStrings(opts.runResult, registry, scrubOpts))),
+            },
+          ]
+        : []),
       { name: workflowSourcePath(wf.sha), data: new TextEncoder().encode(wf.source) },
       { name: workflowIrPath(wf.sha), data: new TextEncoder().encode(wf.ir) },
       ...blobEntries,

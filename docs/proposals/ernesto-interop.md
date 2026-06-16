@@ -276,8 +276,12 @@ as it sees CAS tokens.
     stream — `status` the terminal status per
     [`fact-taxonomy.md`](fact-taxonomy.md) §3.1 (`completed | errored |
     aborted`), `outputs` the §11 typed-partial envelope (absent keys
-    omitted), `usage` the run-total cost. The same object lands in the
-    `--export` bundle. The handler keys on `status` for `HandlerResult` and
+    omitted), `usage` the run-total cost (`{ inputTokens, outputTokens,
+    costUsd }`). The same object lands in the `--export` bundle
+    (`runs/<id>/result.json`). The line is tagged `kind:
+    "fragua.run_result"` so it is unambiguous against the per-event JSONL
+    lines, which carry `seq`/`type` and never `kind` (and the result line
+    carries neither). The handler keys on `status` for `HandlerResult` and
     binds `outputs` into the DAG; it is the only new `ci` surface v1 needs.
   - **Known gap (state it, don't paper over it):** run-level outputs project
     only from `llm` producers, because tool-step production is deferred

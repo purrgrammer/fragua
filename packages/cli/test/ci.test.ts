@@ -38,6 +38,46 @@ async function runCi(opts: CiCommandOptions): Promise<number> {
   }
 }
 
+/** Run the command capturing every stdout chunk, returned as the list of
+ *  non-empty lines written (the `--json` event stream + the terminal result
+ *  line). */
+async function captureCi(opts: CiCommandOptions): Promise<{ code: number; lines: string[] }> {
+  const orig = process.stdout.write.bind(process.stdout);
+  let buf = "";
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    const code = await ciCommand(opts);
+    const lines = buf.split("\n").filter((l) => l.length > 0);
+    return { code, lines };
+  } finally {
+    process.stdout.write = orig;
+  }
+}
+
+interface ResultLine {
+  kind: string;
+  runId: string;
+  status: string;
+  usage: { inputTokens: number; outputTokens: number; costUsd: number };
+  outputs?: Record<string, unknown>;
+}
+
+/** Partition captured `--json` lines into the per-event lines and the single
+ *  terminal result line, keyed on the `kind: "fragua.run_result"` tag. */
+function partition(lines: string[]): { events: Array<Record<string, unknown>>; results: ResultLine[] } {
+  const events: Array<Record<string, unknown>> = [];
+  const results: ResultLine[] = [];
+  for (const line of lines) {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    if (parsed["kind"] === "fragua.run_result") results.push(parsed as unknown as ResultLine);
+    else events.push(parsed);
+  }
+  return { events, results };
+}
+
 /** Open the pinned `--db` artifact and read the single run's raw lifecycle
  * status + event-type log. (`RunSummary.status` is the projected outcome —
  * "success"/"fail" — so the raw terminal status comes from `getState`.) */
@@ -123,5 +163,68 @@ describe("ciCommand", () => {
     }
     // The bundle was written — verify it exists.
     expect(existsSync(exportPath)).toBe(true);
+  });
+});
+
+describe("ciCommand --json terminal result envelope", () => {
+  test("emits ONE result line tagged kind=fragua.run_result, distinguishable from event lines", async () => {
+    writeFileSync(wfPath, "name: ci-result\nsteps:\n  done: {type: exit}\n");
+    const { code, lines } = await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
+    expect(code).toBe(0);
+    const { events, results } = partition(lines);
+    // Exactly one result line; it is the last line emitted.
+    expect(results.length).toBe(1);
+    expect(JSON.parse(lines.at(-1)!).kind).toBe("fragua.run_result");
+    // Every event line carries seq + type and NO kind; the result line is the
+    // inverse — unambiguous in both directions.
+    expect(events.length).toBeGreaterThan(0);
+    for (const ev of events) {
+      expect(typeof ev["seq"]).toBe("number");
+      expect(typeof ev["type"]).toBe("string");
+      expect("kind" in ev).toBe(false);
+    }
+    const result = results[0]!;
+    expect("seq" in result).toBe(false);
+    expect("type" in result).toBe(false);
+    expect(typeof result.runId).toBe("string");
+  });
+
+  test("status=completed for a sanctioned exit; usage carries the run-total rollup", async () => {
+    writeFileSync(wfPath, "name: ci-ok\nsteps:\n  done: {type: exit}\n");
+    const { results } = partition((await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).lines);
+    expect(results[0]!.status).toBe("completed");
+    const usage = results[0]!.usage;
+    expect(typeof usage.inputTokens).toBe("number");
+    expect(typeof usage.outputTokens).toBe("number");
+    expect(typeof usage.costUsd).toBe("number");
+  });
+
+  test("status=errored when a tool step halts with no fail route", async () => {
+    writeFileSync(wfPath, 'name: ci-halt\nsteps:\n  boom:\n    type: tool\n    run: "exit 1"\n    next: exit\n');
+    const { results } = partition((await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).lines);
+    expect(results.length).toBe(1);
+    expect(results[0]!.status).toBe("errored");
+  });
+
+  test("outputs omitted (typed-partial) when the workflow declares none", async () => {
+    writeFileSync(wfPath, "name: ci-no-out\nsteps:\n  done: {type: exit}\n");
+    const { results } = partition((await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).lines);
+    expect(results[0]!.outputs).toBeUndefined();
+  });
+
+  test("a non-terminal stop-state (paused_human) emits NO result line", async () => {
+    writeFileSync(
+      wfPath,
+      "name: ci-hitl\nsteps:\n  ask:\n    type: human\n    text: pick one\n    routes: {go: exit}\n",
+    );
+    const { lines } = await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
+    const { results } = partition(lines);
+    expect(results.length).toBe(0);
+  });
+
+  test("no result line when --json is off (human render)", async () => {
+    writeFileSync(wfPath, "name: ci-plain\nsteps:\n  done: {type: exit}\n");
+    const { lines } = await captureCi({ workflow: wfPath, cwd: dir, dbPath });
+    expect(lines.some((l) => l.includes("fragua.run_result"))).toBe(false);
   });
 });

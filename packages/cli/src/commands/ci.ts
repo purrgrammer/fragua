@@ -30,6 +30,7 @@ import { type IEventReader, newRunId, SqliteStore, type StoredEvent } from "@fra
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
+import { buildCiResult, type CiRunResult } from "../ci-result.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 import {
@@ -164,6 +165,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   // Captured at seed time so mid-run rotation can't desync the registry.
   let ciEnvSecrets: Array<{ name: string; value: string }> = [];
   let computedExitCode: number = CLI_EXIT.usage;
+  // The terminal result envelope (§5.4) — built once the run reaches a
+  // terminal state, emitted as the final `--json` line, and shipped into the
+  // `--export` bundle. `undefined` for a non-terminal stop-state.
+  let ciResult: CiRunResult | undefined;
 
   try {
     // Seed credentials: the global store's configured providers (what
@@ -320,6 +325,12 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
 
     const status = store.getState(rid)?.status ?? "halted";
     const code = cliExitCode(status, stopReason);
+    // Terminal-only result envelope. A non-terminal stop-state (paused /
+    // paused_human / quarantined) yields `undefined` — no line, exit code
+    // unchanged. The wire status is converged regardless of which of the three
+    // terminal facts fired (run_completed / run_halted / run_cancelled).
+    ciResult = buildCiResult(readPlane, rid, status);
+    if (opts.json && ciResult !== undefined) process.stdout.write(`${JSON.stringify(ciResult)}\n`);
     if (status === "halted") {
       console.error(chalk.red(`ci: run halted (${stopReason.halt ?? "error"}) — exit ${code}`));
     } else if (status === "paused") {
@@ -370,6 +381,9 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
           fraguaVersion: FRAGUA_VERSION,
           labelMode: "generic",
           extraLiterals,
+          // Ship the same terminal envelope the --json stream emitted so an
+          // imported run carries it too (§5.4). Omitted for a non-terminal run.
+          ...(ciResult !== undefined ? { runResult: ciResult } : {}),
         });
         writeFileSync(dest, bytes);
         console.log(chalk.dim(`bundle \u2192 ${dest}`));
