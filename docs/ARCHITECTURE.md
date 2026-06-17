@@ -53,15 +53,7 @@
 ### 1.2 Artifact key collision under loops
 **Attack.** Node `A` runs in iteration 1 of a graph cycle, calls `artifacts.put("result", ...)`. On iteration 2, same node, same user key → `UNIQUE` constraint violation.
 
-**Resolution.** `artifacts` PK becomes `(run_id, node_id, iteration, key)` explicitly — no string encoding. Handler API auto-scopes:
-
-```typescript
-ctx.artifacts.put(key, content, mime?)                          // implicit (nodeId, iteration)
-ctx.artifacts.get(key)                                          // implicit current scope
-ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cross-scope
-```
-
-`iteration` is the per-node retry counter, bumped each time a backward edge re-enters a node after a non-success outcome (0 on first entry). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
+**Resolution.** `artifacts` PK becomes `(run_id, node_id, iteration, key)` explicitly — no string encoding. The handler API auto-scopes: `put`/`get` use the implicit current `(nodeId, iteration)`, while `getFrom` takes an explicit `{ nodeId, iteration, key }` for cross-scope reads (see `packages/core/src/handler/types.ts`). `iteration` is the per-node retry counter, bumped each time a backward edge re-enters a node after a non-success outcome (0 on first entry). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
 
 ### 1.3 Unix socket IPC is net-negative
 **Attack.** `.sock` cleanup, `EADDRINUSE`, permission errors, reconnect bookkeeping — hundreds of lines for something SQLite already does in <0.1ms per query.
@@ -77,43 +69,14 @@ ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cros
 ### 1.4 Crash-recovery limbo
 **Attack.** Daemon hard-crashes while runs were `running`. On restart, those rows still say `running`; the executor only claims `queued`; runs sit dead until watchdog fires a minute later.
 
-**Resolution.** **Startup sweep** runs before the executor loop, in a single transaction:
-
-```sql
--- (a) Requeue crash-interrupted runs. current_node is preserved so the
---     executor resumes on the in-flight node instead of re-emitting
---     fact.run_started and re-running the workflow from the start node.
---     Partial-side-effect safety lives in (b) below — rerun-from-start
---     was never the intended recovery semantics.
-UPDATE run_state
-   SET status = 'queued',
-       node_started_at = NULL,
-       dispatch_started_at = NULL,
-       ready_at = :now,
-       version = version + 1,
-       updated_at = :now
- WHERE status = 'running'
- RETURNING run_id, version;
-
--- For each returned run_id, append fact.run_requeued_after_crash
-
--- (b) Quarantine orphans (see 1.1)
--- (c) paused, paused_human, and quarantined runs are NOT touched
-```
+**Resolution.** The **startup sweep** runs before the executor loop, in a single transaction: it requeues crash-interrupted `running` rows (resetting `ready_at`, bumping `version`, appending `fact.run_requeued_after_crash`) while **preserving `current_node`** so each resumes on the in-flight node rather than re-emitting `fact.run_started` and re-running from the start node; it quarantines orphan side-effects (§1.1); and it leaves `paused`, `paused_human`, and `quarantined` rows untouched. Rerun-from-start was never the intended recovery semantics — partial-side-effect safety lives in the orphan quarantine, not in re-execution. See `packages/store/src/sweep.ts`.
 
 Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immediate rather than minute-delayed.
 
 ### 1.5 `MAX(seq)` write-path contention
 **Attack.** `INSERT ... SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE run_id=?` adds a B-tree seek inside every write txn. Under load, the extra latency amplifies `SQLITE_BUSY` across both processes.
 
-**Resolution.** Per-run counter on `run_state`. Every append bumps it atomically:
-
-```sql
-UPDATE run_state SET next_seq = next_seq + 1 WHERE run_id = ?1 RETURNING next_seq - 1 AS seq;
-INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?1, ?seq, ?, ?, ?, ?);
-```
-
-No scan. Combined with `BEGIN IMMEDIATE`, concurrent appends serialize cleanly without index pressure. I10 captures this.
+**Resolution.** A per-run `next_seq` counter on `run_state` is bumped atomically inside each append (the bumped value seeds the event's `seq`) — no scan — and combined with `BEGIN IMMEDIATE`, concurrent appends serialize cleanly without index pressure. I10 captures this.
 
 ### 1.6 Zombie daemon after lock reclaim
 Unchanged from Revision 1. Daemon lock has TTL; stalled process fails OCC on every commit; loop-internal re-check of `daemon_lock` forces it to exit on takeover.
@@ -141,7 +104,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Contract drift across long pauses** — `contract_version` pinned per run (`EVENT_CONTRACT_VERSION` at enqueue), the run-resume gate. It is a SEPARATE axis from the DB-migration counter `schema_version`: it bumps only on real `FactEvent`/`IntentEvent`/reducer changes, so projection-only migrations never trip the gate. The daemon resumes any pin in `[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` and **pauses** (recoverable) an out-of-range pin with `fact.run_paused { reason: "engine_incompatible", pinnedVersion, supportedMin, supportedMax }`. The payload's window distinguishes the arms: `pinnedVersion > supportedMax` (too new — a downgraded daemon, or a newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Both project to `paused` (operator-resumable) — capability-gated auto-wake for the too-new arm is deferred. **Backward-compat invariant:** a daemon at contract version `V` folds-correctly every stream pinned in `[MIN_COMPATIBLE, V]`; only the *downgrade* direction parks (an older daemon meeting a newer pin) — a current daemon never parks on an older run, and may not delete reducer paths for any contract version ≥ `MIN_COMPATIBLE` until the floor ratchets past it. `MIN_COMPATIBLE_CONTRACT_VERSION` ratchets only by deliberate act (it strands every run below it). Parallel fan-out drove the first real bump: `EVENT_CONTRACT_VERSION = 2` (new `fact.fanout_started` / `fact.fanout_joined` + the active-set reducer fold), `MIN_COMPATIBLE_CONTRACT_VERSION = 1` — so the gate is now live but backward-compatible: a v2 daemon folds every pin in `[1, 2]` (pre-fan-out runs replay unchanged), and only a v1 daemon meeting a v2 pin parks (too-new). The v4 fact-taxonomy collapse (fact-taxonomy.md §3.1–3.2 — three terminal facts → one `fact.run_terminated { status }`, `fact.run_paused_human` → `fact.run_paused { reason: "human" }`) is the first bump that RATCHETS the floor: a clean cut (no back-compat, pre-release) drops the old fold paths, so `MIN_COMPATIBLE_CONTRACT_VERSION = 4` and runs pinned `< 4` are stranded by design (they carry the removed fact types). Two discipline tests guard it: a contract-surface hash snapshot (`packages/store/test/contract-version.test.ts`) and the `reducers.ts` touch-gate (`scripts/check-contract-bump.sh`) — both force a conscious bump-or-resnapshot. **Bump iff** a daemon at the prior contract version, folding a stream with the change, would produce a different/erroneous `run_state`: new/removed fact or intent type → yes; new field a fold path reads → yes; new pause/halt reason → yes; reducer behaviour change → yes; new observability event or projection column → no (off the fold path). Separately, the DB-migration `schema_version`: `migrate()` creates the baseline on a fresh DB and walks an existing DB forward through `SCHEMA_MIGRATIONS` (keyed by target version) up to CURRENT. The *automatic* open paths still refuse a store newer than the binary (`checkVersion`) — nothing downgrades by surprise. Each step is `{ up, down? }`: a schema downgrade is a first-class but **explicit operator action** via `fragua db migrate --to <lower>`, which walks the `down` inverses (descending), backs up first, and refuses to cross an irreversible step or to race a live daemon. It is run by the *newer* binary (the one that defines the `down` steps), after which the older binary opens the store cleanly. This is the schema axis only — orthogonal to the `contract_version` resume gate above. See `packages/store/src/pragmas.ts`, `packages/store/src/migrations.ts` (`migrateTo`/`planMigration`), and `docs/proposals/reversible-migrations.md`.
+- **Contract drift across long pauses** — `contract_version` pinned per run (`EVENT_CONTRACT_VERSION` at enqueue), the run-resume gate. It is a SEPARATE axis from the DB-migration counter `schema_version`: it bumps only on real `FactEvent`/`IntentEvent`/reducer changes, so projection-only migrations never trip the gate. The daemon resumes any pin in `[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` and **pauses** (recoverable) an out-of-range pin with `fact.run_paused { reason: "engine_incompatible", pinnedVersion, supportedMin, supportedMax }`. The payload's window distinguishes the arms: `pinnedVersion > supportedMax` (too new — a downgraded daemon, or a newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Both project to `paused` (operator-resumable) — capability-gated auto-wake for the too-new arm is deferred. **Backward-compat invariant:** a daemon at contract version `V` folds-correctly every stream pinned in `[MIN_COMPATIBLE, V]`; only the *downgrade* direction parks (an older daemon meeting a newer pin) — a current daemon never parks on an older run, and may not delete reducer paths for any contract version ≥ `MIN_COMPATIBLE` until the floor ratchets past it. `MIN_COMPATIBLE_CONTRACT_VERSION` ratchets only by deliberate act (it strands every run below it). Parallel fan-out drove the first real bump: `EVENT_CONTRACT_VERSION = 2` (new `fact.fanout_started` / `fact.fanout_joined` + the active-set reducer fold), `MIN_COMPATIBLE_CONTRACT_VERSION = 1` — so the gate is now live but backward-compatible: a v2 daemon folds every pin in `[1, 2]` (pre-fan-out runs replay unchanged), and only a v1 daemon meeting a v2 pin parks (too-new). The v4 fact-taxonomy collapse (fact-taxonomy.md §3.1–3.2 — three terminal facts → one `fact.run_terminated { status }`, `fact.run_paused_human` → `fact.run_paused { reason: "human" }`) is an **emission-only** cut: new runs emit the v4 facts, but the retired `fact.run_{completed,halted,cancelled,paused_human}` types stay read-only, never-emitted members of `FactEvent` with their fold paths intact, so `MIN_COMPATIBLE_CONTRACT_VERSION` stays `1` and runs pinned `< 4` keep folding. The floor ratchets — stranding runs below it — only when a historical format becomes genuinely un-foldable, never as an emission cleanup (bumping it in lockstep with `EVENT_CONTRACT_VERSION` bricks every in-flight run pinned lower). Two discipline tests guard it: a contract-surface hash snapshot (`packages/store/test/contract-version.test.ts`) and the `reducers.ts` touch-gate (`scripts/check-contract-bump.sh`) — both force a conscious bump-or-resnapshot. **Bump iff** a daemon at the prior contract version, folding a stream with the change, would produce a different/erroneous `run_state`: new/removed fact or intent type → yes; new field a fold path reads → yes; new pause/halt reason → yes; reducer behaviour change → yes; new observability event or projection column → no (off the fold path). Separately, the DB-migration `schema_version`: `migrate()` creates the baseline on a fresh DB and walks an existing DB forward through `SCHEMA_MIGRATIONS` (keyed by target version) up to CURRENT. The *automatic* open paths still refuse a store newer than the binary (`checkVersion`) — nothing downgrades by surprise. Each step is `{ up, down? }`: a schema downgrade is a first-class but **explicit operator action** via `fragua db migrate --to <lower>`, which walks the `down` inverses (descending), backs up first, and refuses to cross an irreversible step or to race a live daemon. It is run by the *newer* binary (the one that defines the `down` steps), after which the older binary opens the store cleanly. This is the schema axis only — orthogonal to the `contract_version` resume gate above. See `packages/store/src/pragmas.ts`, `packages/store/src/migrations.ts` (`migrateTo`/`planMigration`), and `docs/proposals/reversible-migrations.md`.
 - **Replay determinism under LLM non-determinism** — determinism is a property of the **folded event log, not of re-execution**. Reconstructing `run_state` is a pure fold over recorded `fact.*` (`deriveRunState`, `reducers.ts`), so a given log always reaches exactly one state; recorded turns rehydrate from the `messages` table as `priorMessages` (1.10) rather than re-running. Durability is **turn-grained**: a turn whose response was recorded before a crash is never re-issued, but the *un-recorded tail* — a call in flight when the process died — re-executes on resume and may return different bytes. So forward re-execution is not bit-identical; only the fold is. External-call safety across that boundary is the provider idempotency key (1.1); pure/idempotent handlers replay freely.
 
 ---
@@ -150,294 +113,25 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 
 All tables are `STRICT`. The append-mostly per-run tables (`events`, `messages`, `blobs`, `artifacts`) additionally use `WITHOUT ROWID` for compact PK-clustered storage; the lifecycle and singleton tables (`schema_version`, `workflows`, `run_state`, `daemon_lock`, `daemon_events`) use the default rowid layout (`daemon_events` in particular relies on `INTEGER PRIMARY KEY AUTOINCREMENT`, which is incompatible with `WITHOUT ROWID`). Every table is narrow — the only "big" data (artifact content) lives on the filesystem under `blobsDir`, keyed by sha256. Per-run tables cascade on run deletion.
 
-```sql
--- Pragmas applied on every connection open
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA busy_timeout = 5000;
-PRAGMA foreign_keys = ON;
-PRAGMA temp_store = MEMORY;
-PRAGMA cache_size = -65536;           -- 64MB per connection
-PRAGMA mmap_size = 268435456;         -- 256MB mmap
-PRAGMA wal_autocheckpoint = 1000;
+The authoritative DDL is `packages/store/src/schema.sql`; connection pragmas (WAL, `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `temp_store=MEMORY`, 64 MB `cache_size`, 256 MB `mmap_size`, `wal_autocheckpoint=1000`, and the creation-only `page_size=8192`) live in `packages/store/src/pragmas.ts`. Every write transaction opens `BEGIN IMMEDIATE`, grabbing the write lock up front. Per-run tables cascade on run deletion. The table rundown — load-bearing columns and the invariant each enforces:
 
--- Set at DB creation only:
--- PRAGMA page_size = 8192;
-
--- Every write transaction opens as BEGIN IMMEDIATE (grabs write lock up front)
-
-CREATE TABLE schema_version (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  version INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE workflows (
-  sha TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  source TEXT NOT NULL,
-  -- Canonical IR: the parsed Graph serialised as JSON with `loc` stripped.
-  -- `ir_version` is the IR contract version (distinct from the DB-migration
-  -- `schema_version`, a run's `contract_version`, and the workflow sha). Both
-  -- NOT NULL — every workflow is parsed once at mint.
-  ir TEXT NOT NULL,
-  ir_version INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE run_state (                          -- projection + queue + seq counter
-  run_id TEXT PRIMARY KEY,
-  version INTEGER NOT NULL,                       -- OCC token
-  status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused','paused_human','paused_auto',
-    'completed','cancelled','halted','quarantined'
-  )),                                             -- @fragua/types predicates: isTerminal = {completed,cancelled,halted} (resume/accept gate); isSettled = isTerminal ∪ {quarantined} (SSE-close + schedule overlap-skip — quarantined stopped progressing but stays resumable via unquarantine)
-  current_node TEXT,
-  workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
-  contract_version INTEGER NOT NULL,              -- EVENT_CONTRACT_VERSION pin; run-resume gate, NOT the DB counter
-  routing TEXT NOT NULL CHECK (length(routing) < 8192),
-  metrics TEXT NOT NULL,
-  next_seq INTEGER NOT NULL DEFAULT 1,            -- per-run counter; I10
-  last_applied_seq INTEGER NOT NULL DEFAULT 0,
-  priority INTEGER NOT NULL DEFAULT 0,
-  enqueued_at INTEGER NOT NULL,                   -- original enqueue, immutable
-  ready_at INTEGER NOT NULL,                      -- set on every transition INTO 'queued'
-  node_started_at INTEGER,
-  dispatch_started_at INTEGER,                    -- when the current dispatch began (activeMs accounting)
-  updated_at INTEGER NOT NULL,
-  title TEXT,                                     -- auto-titler output; NULL until generated
-  cwd TEXT,                                       -- absolute project root the run was enqueued from; NULL for ephemeral
-  -- Project identity: `project_id` is the stable id from .fragua/config.yaml (UUIDv7),
-  -- decoupled from cwd so a run attributes to the same project across clones/imports.
-  -- `project_name` is the display label captured at enqueue. Both NOT NULL.
-  project_id TEXT NOT NULL,
-  project_name TEXT NOT NULL,
-  workflow_name TEXT,                             -- resolved name when caller passed a bare name; NULL for path runs
-  workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
-  workflow_path TEXT,                             -- workflow file path at resolution time; diagnostic
-  base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
-  schedule_id TEXT,                               -- schedule that fired this run; informational, not a FK cascade target
-  total_cost_usd REAL GENERATED ALWAYS AS
-    (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
-  billed_tokens INTEGER GENERATED ALWAYS AS
-    (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED,
-  -- Worktree snapshot + inbox projection.
-  base_git_ref TEXT,                              -- symbolic-ref --short HEAD of user-cwd at provision; merge/commit target default
-  final_git_sha TEXT,                             -- worktree HEAD at last snapshot boundary; NULL pre-terminal
-  final_head_ref TEXT,                            -- worktree's HEAD branch at terminal; NULL when detached
-  diff_base_sha TEXT,                             -- honest terminal diff base; == base_git_sha unless HEAD relocated
-  change_stat TEXT CHECK (change_stat IS NULL OR length(change_stat) < 1024), -- JSON {committed, uncommitted}; NULL pre-terminal / clean
-  inbox_status TEXT CHECK (inbox_status IS NULL OR inbox_status IN ('pending','acted','discarded')), -- NULL = not an inbox candidate
-  accepted_sha TEXT                               -- projection: operator's branch tip after the last accept_run
-) STRICT;
-
--- Partial index = queue in disguise; O(log N) claim
-CREATE INDEX idx_run_state_queue
-  ON run_state(priority DESC, ready_at ASC)
-  WHERE status = 'queued';
-
-CREATE INDEX idx_run_state_status      ON run_state(status);
-CREATE INDEX idx_run_state_workflow    ON run_state(workflow_sha);
-CREATE INDEX idx_run_state_updated     ON run_state(updated_at);
-CREATE INDEX idx_run_state_cwd         ON run_state(cwd);
-CREATE INDEX idx_run_state_project_id  ON run_state(project_id);
-CREATE INDEX idx_runs_by_schedule
-  ON run_state(schedule_id) WHERE schedule_id IS NOT NULL;
-CREATE INDEX idx_run_state_inbox                 -- inbox list: pending, terminal-time desc
-  ON run_state(updated_at DESC) WHERE inbox_status = 'pending';
-
-CREATE TABLE events (
-  run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
-  seq INTEGER NOT NULL,
-  type TEXT NOT NULL,                             -- 'intent.*' | 'fact.*'
-  -- Provenance tag, deliberately UNconstrained so the value space can evolve
-  -- without a table rebuild. Convention: 'daemon' for facts; 'client' for
-  -- intents (written by the web UI or CLI). See `EventWriter` in @fragua/types.
-  writer TEXT NOT NULL,
-  payload TEXT NOT NULL CHECK (length(payload) < 4096),
-  ts INTEGER NOT NULL,
-  PRIMARY KEY (run_id, seq)
-) STRICT, WITHOUT ROWID;
-
-CREATE INDEX idx_events_type ON events(type, run_id, seq);
--- Cross-run, time-ordered scans for the global Home feed. Cursor is the
--- (ts, run_id, seq) tuple — per-run `seq` can't carry a global ordering
--- on its own.
-CREATE INDEX idx_events_ts ON events(ts, run_id, seq);
-
-CREATE TABLE messages (                           -- append-mostly; never rewritten
-  run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
-  ordinal INTEGER NOT NULL,
-  -- pi-agent-core `AgentMessage` JSON (round-trips losslessly). `role` is a
-  -- generated column extracted from the JSON so UI filters and debug queries
-  -- don't pay `json_extract` on hot paths.
-  content TEXT NOT NULL CHECK (json_valid(content) AND length(content) < 1048576),
-  role TEXT GENERATED ALWAYS AS (json_extract(content, '$.role')) STORED,
-  node_id TEXT,
-  iteration INTEGER NOT NULL DEFAULT 0,
-  -- sha256 of the serialised content. Backs the opt-in replay dedup path
-  -- (`appendMessage(runId, row, { dedup: true })`); default OFF because
-  -- agent transcripts carry per-call timestamps that legitimately differ
-  -- across attempts even when the semantic message is the same.
-  content_hash TEXT,
-  PRIMARY KEY (run_id, ordinal)
-) STRICT, WITHOUT ROWID;
-
--- Metadata only: bytes live at `<blobsDir>/<first2>/<sha256>` on disk.
-CREATE TABLE blobs (
-  sha256 TEXT PRIMARY KEY,
-  size_bytes INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE artifacts (                          -- per-(run,node,iteration) named refs
-  run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
-  node_id TEXT NOT NULL,
-  iteration INTEGER NOT NULL DEFAULT 0,
-  key TEXT NOT NULL,
-  blob_sha TEXT NOT NULL REFERENCES blobs(sha256),
-  mime TEXT,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (run_id, node_id, iteration, key)
-) STRICT, WITHOUT ROWID;
-
-CREATE INDEX idx_artifacts_blob ON artifacts(blob_sha);
-
-CREATE TABLE daemon_lock (                         -- pure liveness: one daemon per store
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  pid INTEGER NOT NULL,
-  hostname TEXT NOT NULL,
-  started_at INTEGER NOT NULL,
-  heartbeat_at INTEGER NOT NULL
-) STRICT;
-
--- Server discovery rendezvous — written by whoever binds the HTTP listener
--- (the harness's in-process server OR a standalone `fragua serve`) after
--- binding, cleared on shutdown. Separate from daemon_lock so "is the daemon
--- alive" and "where is the server" stay distinct, and the daemon's lock
--- insert/release can't clobber discovery. Replaces the old serve.json file.
-CREATE TABLE server_endpoint (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  url TEXT NOT NULL,
-  port INTEGER NOT NULL,
-  pid INTEGER NOT NULL,
-  started_at INTEGER NOT NULL,
-  harness_version TEXT                             -- harness's version; NULL for standalone `fragua serve`
-) STRICT;
-
--- Daemon-level audit log: process lifecycle, sweep activity, reaper
--- takeovers, GC, leak detection, worktree provisioning. Separate from
--- the per-run `events` table because some entries are global (no run
--- scope) and they must not interleave into the per-run `seq` space the
--- reducer projects. Same 4 KB payload cap as fact events.
-CREATE TABLE daemon_events (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL,
-  payload TEXT NOT NULL CHECK (length(payload) < 4096),
-  ts INTEGER NOT NULL,
-  run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL
-) STRICT;
-
-CREATE INDEX idx_daemon_events_ts   ON daemon_events(ts, seq);
-CREATE INDEX idx_daemon_events_type ON daemon_events(type, ts);
-CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
-
--- Local inert marker — one row per run merged in by `fragua import`, NEVER
--- carried in a bundle (the bundle has no run_state; this sidecar is local by
--- construction). Its presence holds the run permanently OUT of dispatch,
--- concurrency capacity, and the crash sweep: an imported run executed
--- elsewhere and is inspect-only here. This is the AUTHORITATIVE inert gate —
--- the run's derived `cwd` is also null, but dispatch keys on this marker, not
--- on cwd (a legitimately-enqueued run can have a null cwd).
-CREATE TABLE imported_runs (
-  run_id      TEXT PRIMARY KEY REFERENCES run_state(run_id) ON DELETE CASCADE,
-  imported_at INTEGER NOT NULL
-) STRICT;
-
--- Recurring-run primitive.
--- `(workflow_ref, cwd, interval_ms, optional title)` triple plus a
--- `next_fire_at` cursor. The daemon's `schedule-dispatcher` fiber
--- selects rows where `next_fire_at <= now AND paused_at IS NULL` once
--- per minute, fires runs by calling `enqueueRun` with `schedule_id`
--- set, then advances `next_fire_at = now + interval_ms` (anchored to
--- actual fire time). `workflow_ref` stores the workflow name or path
--- as a string — NOT a sha; resolution happens at fire time so schedules
--- survive workflow edits. If the file is missing or fails to validate,
--- the dispatcher records `fact.schedule_invalid_workflow` and
--- auto-pauses. `last_run_id` is informational (no FK), as is
--- `run_state.schedule_id` — schedule deletion is hard DELETE while runs
--- persist.
-CREATE TABLE schedules (
-  id              TEXT PRIMARY KEY,
-  workflow_ref    TEXT NOT NULL,
-  cwd             TEXT NOT NULL,
-  project_id      TEXT NOT NULL,
-  interval_ms     INTEGER NOT NULL,
-  interval_text   TEXT NOT NULL,                  -- "30m" / "1h" / "6h" / "24h" / "3d" / "7d"; display only
-  title           TEXT,                           -- optional run title stamped on fired runs
-  overlap_policy  TEXT NOT NULL DEFAULT 'skip'
-                  CHECK (overlap_policy IN ('skip','queue','concurrent')),
-  next_fire_at    INTEGER NOT NULL,               -- unix ms
-  last_fire_at    INTEGER,
-  last_run_id     TEXT,
-  paused_at       INTEGER,                        -- NULL = active; non-NULL = explicitly paused
-  created_at      INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX idx_schedules_due
-  ON schedules(next_fire_at) WHERE paused_at IS NULL;
-CREATE INDEX idx_schedules_cwd ON schedules(cwd);
-CREATE INDEX idx_schedules_project_id ON schedules(project_id);
-
--- Built-in provider credentials. One row per provider id; `payload` is
--- the full AuthCredential JSON (api_key form or OAuthCredentials).
--- `kind` denormalises `payload.type` so post-mortems can SELECT row
--- shapes without JSON-parsing. No indexes — the PK on `provider` is
--- the only access pattern (lookup by id, full table scan for `list`,
--- both <20 rows in practice). The agent layer's
--- `SqliteAuthStorageBackend` rebuilds the in-memory AuthStorageData
--- blob from these rows on read and applies a returned `next` blob by
--- full-replace (upsert + delete-missing). See proposal:
-CREATE TABLE provider_credentials (
-  provider   TEXT PRIMARY KEY,
-  kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
-  payload    TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
--- Custom-provider definitions. One row per provider id; `config` is
--- the per-provider definition blob (baseUrl, headers, compat, models,
--- modelOverrides) — the `ProviderConfigSchema` shape from
--- `@fragua/agent` minus the `apiKey` field. Credentials always come
--- from `provider_credentials`. Per-row Ajv validation lives in the
--- agent layer (`ModelRegistry.loadCustomModels`) so one corrupt
--- provider can be skipped without poisoning sibling rows. No indexes
--- — PK on `provider` is the only access pattern (lookup by id, full
--- table scan for `list`, both <20 rows in practice). No SQL CHECK on
--- `api` / `provider` shape: pi-ai's `Api` and `Provider` types are
--- extensible. See proposal:
-CREATE TABLE provider_config (
-  provider   TEXT PRIMARY KEY,
-  config     TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
--- Structured step outputs index. Rebuildable from fact.node_completed.payload.outputs.
--- Keyed by (run_id, node_id, iteration); INSERT OR REPLACE provides last-write-wins
--- semantics for re-entrant nodes. `struct` is JSON validated at write time;
--- bounded by the 4 KB event-payload cap.
--- OFF the run_state fold: the reducer never reads this table; it is a re-snapshot.
-CREATE TABLE outputs (
-  run_id    TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
-  node_id   TEXT NOT NULL,
-  iteration INTEGER NOT NULL,
-  struct    TEXT NOT NULL CHECK (json_valid(struct) AND length(struct) < 4096),
-  PRIMARY KEY (run_id, node_id, iteration)
-) STRICT, WITHOUT ROWID;
-
-CREATE INDEX idx_outputs_run ON outputs(run_id, node_id);
-```
+| Table | Purpose | Load-bearing columns / constraints |
+|---|---|---|
+| `schema_version` | DB-migration counter (singleton row). | `version`; the migration axis only — orthogonal to a run's `contract_version`. |
+| `workflows` | Workflow catalog, keyed by source `sha`. | `ir` (parsed Graph serialised with `loc` stripped) + `ir_version` (the IR contract version, distinct from `schema_version` / `contract_version` / the sha), both NOT NULL — every workflow is parsed once at mint. |
+| `run_state` | Projection + queue + seq counter (one row per run). | `version` (OCC token, I3); `status` CHECK over the nine `RunStatus` values (the `@fragua/types` predicates `isTerminal = {completed,cancelled,halted}` gate resume/accept, `isSettled = isTerminal ∪ {quarantined}` gates SSE-close + schedule overlap-skip); `current_node`; `contract_version` (the `EVENT_CONTRACT_VERSION` pin and run-resume gate, NOT the DB counter); `routing` with the 8 KB CHECK (I6); `next_seq` (per-run counter, I10); `priority` + `ready_at` (queue ordering, reset on every transition into `queued`); `enqueued_at` (immutable); `dispatch_started_at` (activeMs accounting); generated `total_cost_usd` / `billed_tokens` columns folded off `metrics`; project-identity `project_id` (stable UUIDv7 from `.fragua/config.yaml`, decoupled from `cwd`) + `project_name`, both NOT NULL; worktree-snapshot + inbox projection columns (`base_git_sha`/`base_git_ref`/`final_git_sha`/`final_head_ref`/`diff_base_sha` HEAD-relocation-honest diff base, `change_stat` < 1024 CHECK, `inbox_status` enum CHECK, `accepted_sha`). Indexes: the partial `idx_run_state_queue (priority DESC, ready_at ASC) WHERE status='queued'` is the queue in disguise (O(log N) claim); the partial `idx_run_state_inbox WHERE inbox_status='pending'`; plus status / workflow / updated / cwd / project_id / schedule indexes. |
+| `events` | Append-mostly per-run event log (`intent.*` / `fact.*`). | PK `(run_id, seq)`; `payload` 4 KB CHECK (I7); `writer` deliberately unconstrained so the provenance value space can evolve without a rebuild (convention: `daemon` for facts, `client` for intents). Two indexes: `idx_events_type (type, run_id, seq)` and `idx_events_ts (ts, run_id, seq)` for cross-run time-ordered Home-feed scans (the global cursor is the `(ts, run_id, seq)` tuple — per-run `seq` carries no global order). |
+| `messages` | Append-mostly conversation transcript; never rewritten. | PK `(run_id, ordinal)`; `content` (pi-agent-core `AgentMessage` JSON, round-trips losslessly) with the 1 MiB CHECK (I9); generated `role` column so UI filters skip `json_extract` on hot paths; `content_hash` backs the opt-in replay dedup path (default OFF — transcripts carry per-call timestamps that legitimately differ across attempts). |
+| `blobs` | Content-addressed metadata only; bytes live at `<blobsDir>/<first2>/<sha256>` on disk. | PK `sha256` + `size_bytes`. |
+| `artifacts` | Per-`(run, node, iteration, key)` named refs into `blobs` (I8). | PK `(run_id, node_id, iteration, key)` (the loop-scoping fix, §1.2); `blob_sha` FK; `idx_artifacts_blob` for GC. |
+| `daemon_lock` | Pure liveness — one daemon per store (singleton row). | `pid` + `heartbeat_at` (TTL reclaim, §1.6). |
+| `server_endpoint` | HTTP-server discovery rendezvous (singleton row). | `url`/`port`/`pid`, written by whoever binds the listener (harness in-process server or standalone `fragua serve`), cleared on shutdown; separate from `daemon_lock` so "is the daemon alive" and "where is the server" stay distinct. |
+| `daemon_events` | Daemon-level audit log (lifecycle, sweeps, reaper takeovers, GC, leak/provision). | `seq INTEGER PRIMARY KEY AUTOINCREMENT` (rowid layout, incompatible with `WITHOUT ROWID`); same 4 KB payload cap; optional `run_id` FK `ON DELETE SET NULL` (NULL for global entries). Disjoint from the per-run `seq` space so global entries never interleave into the reducer's projection. |
+| `imported_runs` | Local inert marker — one row per `fragua import`, never carried in a bundle. | PK `run_id`; its presence is the AUTHORITATIVE inert gate that holds the run permanently out of dispatch, concurrency capacity, and the crash sweep (dispatch keys on this marker, not on the also-null `cwd`). |
+| `schedules` | Recurring-run primitive. | `(workflow_ref, cwd, interval_ms)` + the `next_fire_at` cursor; the dispatcher fires rows where `next_fire_at <= now AND paused_at IS NULL` once per minute, then advances `next_fire_at` anchored to actual fire time. `workflow_ref` is a name/path string (NOT a sha) so resolution at fire time survives workflow edits; an unresolvable ref records `fact.schedule_invalid_workflow` and auto-pauses. `overlap_policy` enum CHECK; `last_run_id` / `run_state.schedule_id` are informational (no FK — schedule deletion is hard DELETE while runs persist). `idx_schedules_due WHERE paused_at IS NULL` + cwd / project_id indexes. |
+| `provider_credentials` | Built-in pi-ai provider credentials, one row per provider id. | PK `provider`; `payload` is the full `AuthCredential` JSON; `kind` denormalises `payload.type` for post-mortem SELECTs. No indexes (<20 rows; PK is the only access pattern). The agent's `SqliteAuthStorageBackend` rebuilds the in-memory blob on read and applies a returned `next` blob by full-replace. |
+| `provider_config` | Custom-provider definitions, one row per provider id. | PK `provider`; `config` is the `ProviderConfigSchema` body (`baseUrl`/`headers`/`compat`/`models`/`modelOverrides`) minus `apiKey` (credentials always come from `provider_credentials`). Per-row Ajv validation in the agent layer skips one corrupt row without poisoning siblings; no SQL CHECK on `api`/`provider` shape since pi-ai's types are extensible. |
+| `outputs` | Structured-step-outputs index, rebuildable from `fact.node_completed.payload.outputs`. | PK `(run_id, node_id, iteration)`; `INSERT OR REPLACE` gives last-write-wins for re-entrant nodes; `struct` JSON validated at write, bounded by the 4 KB cap. OFF the `run_state` fold — the reducer never reads it; it is a re-snapshot. `idx_outputs_run`. |
 
 **Size targets:**
 - `run_state` row: ~500 bytes; thousands of rows negligible.
@@ -562,107 +256,15 @@ them by surface lets a future implementation back the reader interface
 with a Postgres replica or the analytics one with DuckDB without
 disturbing the writer.
 
-```typescript
-// packages/store/src/types.ts — composite alias, preserved for back-compat.
-export type IEventStore = IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator;
-```
+The composite `IEventStore` is preserved as `IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator` in `packages/store/src/types.ts`, where every method signature is authoritative.
 
 ### 4.1 IEventWriter
 
-Every method that mutates run-level state. Single-transaction surface:
-shares the SQLite writer connection, runs under `BEGIN IMMEDIATE`.
-
-```typescript
-export interface IEventWriter {
-  // Event log
-  appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
-  appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
-  appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] };
-
-  // Run lifecycle (mutations)
-  enqueueRun(params: EnqueueRunParams): void;
-  claimNextRun(maxInFlight: number): { runId: string } | null;   // atomic; OCC-protected
-  startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult;
-  setRunTitle(runId: string, title: string): void;
-
-  // Messages (write)
-  appendMessage(
-    runId: string,
-    row: Omit<Message, "runId" | "ordinal">,
-    opts?: { dedup?: boolean },
-  ): { ordinal: number };
-
-  // Artifacts (write)
-  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
-
-  // Workflow catalog (write)
-  saveWorkflow(sha: string, name: string, source: string, ir: string, irVersion: number): void;
-
-  // Maintenance
-  vacuum(): void;
-  gcBlobs(maxRows?: number): { deleted: number };
-  close(): void;
-}
-```
+The single-transaction mutation surface (shares the SQLite writer connection, runs under `BEGIN IMMEDIATE`): event-log appends (`appendFact` OCC-checked against `run_state.version`, `appendIntent` always-appendable, observability events outside OCC), run-lifecycle mutations (`enqueueRun`, the atomic OCC-protected `claimNextRun`, `startupSweep`, `setRunTitle`), message + artifact writes (`appendMessage` with opt-in dedup, `putArtifact` scoped + replace-guarded), workflow save, and maintenance (`vacuum`, `gcBlobs`, `close`). See `packages/store/src/types.ts`.
 
 ### 4.2 IEventReader
 
-Read-only run-level reads — state, events, messages, artifacts,
-workflows, per-run aggregates. Includes the daemon's wake-pending
-sweep helpers (`getWakeCandidates`, `getNextPendingIntent`,
-`findOrphanSideEffects`) so the daemon never reaches for `db` directly.
-
-```typescript
-export interface IEventReader {
-  // Run state + enumeration
-  getState(runId: string): RunState | null;
-  listRunIds(opts?: ListRunIdsOpts): string[];
-  listRunSummaryRows(opts?: ListRunSummaryRowsOpts): RunSummaryRow[];
-  runStateCounts(): { running: number; queued: number };
-
-  // Event log
-  getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
-  getEventsByType(runId: string, type: string): StoredEvent[];
-  getSnapshotEvents(runId: string): StoredEvent[];  // snapshot.captured + fact.snapshot_recorded in seq order (scrubber feed)
-  getLatestEvents(runId: string, limit: number): StoredEvent[];
-  getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
-  getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
-  getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
-  getUnappliedIntents(runId: string): StoredEvent[];
-  getWakeCandidates(opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number }): WakeCandidateRow[];
-  getInboxActionCandidates(): WakeCandidateRow[];
-  getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[];
-  getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null;
-  findOrphanSideEffects(runId: string): OrphanSideEffectRow[];
-
-  // Messages (read)
-  getMessages(runId: string, opts?: GetMessagesOpts): Message[];
-  getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
-  listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
-
-  // Per-run aggregates
-  getStepAggregates(runId: string): StepAggregateRow[];
-  getRunCostTotals(runId: string): RunCostTotalsRow;
-
-  // Outputs index (read)
-  getOutputsForRun(runId: string): Array<{ nodeId: string; iteration: number; struct: string }>;
-  getLatestOutput(runId: string, nodeId: string): string | null;
-
-  // Blobs (raw read)
-  readBlob(sha: string): Uint8Array | null;
-
-  // Artifacts (read)
-  getArtifact(scope: ArtifactScope): Uint8Array;
-  getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
-  listArtifacts(runId: string): ArtifactListRow[];
-  findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
-
-  // Workflow catalog (read) + emergent-paths project listing
-  getWorkflow(sha: string): WorkflowRow | null;
-  listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }>;
-  listProjects(): Array<{ projectId: string; projectName: string; cwdHint: string | null; lastUpdatedAt: number; runCount: number }>;
-}
-```
+Read-only run-level reads — run state + enumeration (`getState`, `listRunIds`, `listRunSummaryRows`, `runStateCounts`), the event log (per-run, by-type, snapshot-scrubber feed, the three global-feed cursor variants, unapplied intents), messages (full + the narrow wire shape + thread listing), per-run cost/step aggregates, the outputs index, raw blob reads, scoped artifact reads, and the workflow catalog + emergent-paths project/cwd listings. Includes the daemon's wake-pending sweep helpers (`getWakeCandidates`, `getNextPendingIntent`, `findOrphanSideEffects`, `getInboxActionCandidates`, `getGcEligibleSnapshotRuns`) so the daemon never reaches for `db` directly. See `packages/store/src/types.ts`.
 
 ### 4.3 IAnalyticsReader
 
@@ -674,23 +276,7 @@ we eventually split workloads — a fat `cache_size` and consistent-read
 transactions are appropriate here in a way they aren't on the hot
 event-log path.
 
-```typescript
-export interface IAnalyticsReader {
-  getKpiTotals(window: AnalyticsWindow): KpiTotalsRow;
-  getRunsByBucket(window: BucketedWindow): RunsByBucketRow[];
-  getSpendByBucket(window: BucketedWindow): SpendByBucketRow[];
-  getTokensByBucket(window: BucketedWindow): TokensByBucketRow[];
-  getCacheByBucket(window: BucketedWindow): CacheByBucketRow[];
-  getHaltDistribution(window: AnalyticsWindow): HaltDistributionRow[];
-  getModelDistribution(window: AnalyticsWindow): ModelDistributionRow[];
-  getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[];
-  getFirstRunAt(window: AnalyticsWindow): number | null;
-  getWorkflowDirectory(opts: { cwd?: string }): WorkflowDirectoryRow[];
-  getDrilldownPage(filters: DrilldownFilters, opts: { limit: number; cursor?: string | undefined }): DrilldownPage;
-  getGlobalMetricsTotals(opts: { sinceMs: number }): GlobalMetricsTotalsRow;
-  getGlobalModelBreakdown(opts: { sinceMs: number }): GlobalModelBreakdownRow[];
-}
-```
+The methods cover KPI totals over an `enqueued_at`-anchored window, the bucketed time series (runs / spend / tokens / cache by bucket), distributions (halt-reason, model), top workflows + the workflow directory, the first-run anchor, the cursor-paginated drilldown, and the global metrics totals + model breakdown. See `packages/store/src/types.ts`.
 
 ### 4.4 IDaemonCoordinator
 
@@ -699,32 +285,7 @@ because no transaction overlaps with run state; the tables are
 independent. This is the cleanest interface to extract first if you
 ever want a separate process holding the daemon lock.
 
-```typescript
-export interface IDaemonCoordinator {
-  // daemon_events
-  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number };
-  getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
-
-  // daemon_lock
-  acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
-  forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
-  heartbeatDaemonLock(pid: number): void;
-  releaseDaemonLock(pid: number): void;
-  currentDaemonLock(): DaemonLockRow | null;
-
-  // schedules
-  createSchedule(params: CreateScheduleParams, now: number): Schedule;
-  getSchedule(id: string): Schedule | null;
-  listSchedules(opts?: { cwd?: string }): Schedule[];
-  getDueSchedules(now: number): Schedule[];
-  pauseSchedule(id: string, now: number): void;
-  resumeSchedule(id: string, now: number): void;
-  deleteSchedule(id: string): void;
-  recordScheduleFire(scheduleId: string, runId: string, now: number): void;
-  recordScheduleSkipped(scheduleId: string, now: number): void;
-  getScheduleRuns(scheduleId: string, limit: number): Array<{ runId: string; status: string; enqueuedAt: number }>;
-}
-```
+It covers the `daemon_events` append/read, the `daemon_lock` lifecycle (`acquire` / `forceAcquire` TTL-reclaim / `heartbeat` / `release` / `currentDaemonLock`), and schedule CRUD + the two daemon-side advancers (`recordScheduleFire`, `recordScheduleSkipped`). See `packages/store/src/types.ts`.
 
 Schedule methods are CRUD over the `schedules` table plus two
 daemon-side advancers (`recordScheduleFire`, `recordScheduleSkipped`)
@@ -736,27 +297,7 @@ on `daemon_events` (see §3).
 
 ### 4.5 Errors and shared types
 
-```typescript
-export type ArtifactScope = { runId: string; nodeId: string; iteration: number; key: string };
-export type ArtifactRef = ArtifactScope & { sha256: string; sizeBytes: number; mime: string | null };
-
-export class ConcurrencyError extends Error {}
-export class ArtifactCollisionError extends Error {}
-export class ArtifactTooLargeError extends Error {}
-export class SchemaDriftError extends Error {}
-export class QuarantineError extends Error {}
-```
-
-`SweepResult`, `EnqueueRunParams`, `GetEventsOpts`, `GetMessagesOpts`,
-`GetDaemonEventsOpts`, `NarrowMessage`, `StepAggregateRow`,
-`RunCostTotalsRow`, `Project`, the analytics row types, and the
-global-feed cursor option types all live in
-`packages/store/src/types.ts`. SQL strings are split per-table across
-`event-queries.ts`, `run-state-queries.ts`, `message-queries.ts`,
-`artifact-queries.ts`, `workflow-queries.ts`, `daemon-queries.ts`, and
-`analytics-queries.ts` — each file owns its table's reads + writes.
-The drift-lint asserts every method declared above appears verbatim in
-the corresponding source interface.
+`ArtifactScope` is `{ runId, nodeId, iteration, key }` and `ArtifactRef` extends it with `{ sha256, sizeBytes, mime }`. The store throws typed errors — `ConcurrencyError` (OCC conflict), `ArtifactCollisionError` (same-scope rewrite with differing content), `ArtifactTooLargeError`, `SchemaDriftError`, `QuarantineError`. These plus `SweepResult`, `EnqueueRunParams`, `GetEventsOpts`, `GetMessagesOpts`, `GetDaemonEventsOpts`, `NarrowMessage`, `StepAggregateRow`, `RunCostTotalsRow`, `Project`, the analytics row types, and the global-feed cursor option types all live in `packages/store/src/types.ts`. SQL strings are split per-table across `event-queries.ts`, `run-state-queries.ts`, `message-queries.ts`, `artifact-queries.ts`, `workflow-queries.ts`, `daemon-queries.ts`, and `analytics-queries.ts` — each file owns its table's reads + writes. A drift-lint checks the source interface files against their implementing class so the four sub-interfaces and `SqliteStore` can't disagree.
 
 **Implementation notes:**
 - All methods synchronous; `bun:sqlite` is sync.
@@ -769,104 +310,17 @@ the corresponding source interface.
 
 ## 5. Handler contract
 
-A Handler is a pure async function: given an immutable `HandlerContext`, produce a `HandlerResult`. `iteration` is the per-node retry counter and the side-effect envelope carries `idempotencyKey`.
+A Handler is a pure async function: given an immutable `HandlerContext`, produce a `HandlerResult`. `iteration` is the per-node retry counter and the side-effect envelope carries `idempotencyKey`. The authoritative shapes are `docs/handler-contract.md` (the contract) and `packages/core/src/handler/types.ts` (the types).
 
-```typescript
-export type SideEffect = "none" | "idempotent" | "external";
+A `HandlerSpec` registers a node kind with its `sideEffect` class (`none` / `idempotent` / `external`), an optional `maxMs` watchdog (llm may opt out via `max-ms: 0`), and the handler fn.
 
-export type HandlerSpec = {
-  kind: string;
-  sideEffect: SideEffect;
-  maxMs?: number;       // optional; llm may opt out via max-ms: 0
-  handler: Handler;
-};
+`HandlerContext` is the immutable per-call surface that routes **all** I/O through `ctx` — no direct fetch, filesystem, DB, or process access. It carries run/node identity, the per-node `iteration` (0 on first entry, §3.6), the `signal` (`AbortSignal.any([steer, timeout, shutdown])`), the opaque `routing` dict, pre-wired `llm` / `http` clients (signal + accounting auto-propagated), a `tools` registry already narrowed by the node's `allowed_tools` / `denied_tools`, the `messages` append/read API (pi-agent-core `AgentMessage`, round-trips losslessly), the scope-aware `artifacts` API (`put`/`get`/`ref`/`getFrom`), `externalCall` (the idempotency-keyed external-tool helper, below), `emit` for observability events, the `args` substitution inputs, and optional `humanInput` / `steering` / `env` (per-run worktree, falls back to process cwd) / `budgetSnapshot` (cumulative spend vs ceilings).
 
-export interface HandlerContext {
-  readonly runId: string;
-  readonly nodeId: string;
-  readonly iteration: number;                  // per-node retry counter (§3.6); 0 on first entry
-  readonly signal: AbortSignal;                // AbortSignal.any([steer, timeout, shutdown])
-  readonly routing: Readonly<Record<string, unknown>>;
-  readonly llm: LlmClient;                     // pre-wired with signal, accounting
-  readonly http: HttpClient;                   // pre-wired with signal, timeout
-  readonly tools: ToolRegistry;                // narrowed by node.attrs.allowed_tools / denied_tools before the handler sees it
-  readonly messages: {
-    append(message: AgentMessage): { ordinal: number };   // pi-agent-core AgentMessage; round-trips losslessly
-    recent(n: number): Message[];
-    since(ordinal: number): Message[];
-  };
-  readonly artifacts: {
-    put(key: string, content: string | Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
-    get(key: string): Uint8Array;
-    ref(key: string): ArtifactRef | null;
-    getFrom(scope: ArtifactScope): Uint8Array;
-  };
-  readonly externalCall: <T>(params: { toolName: string; args: unknown; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
-  readonly args: Readonly<{ inputs?: Record<string, string> }>;  // substitution args (${{ inputs.x }})
-  readonly emit: (type: string, payload: Record<string, unknown>) => void;  // observability events (agent.* / llm.* / tool.* / cost.recorded / summary.*)
-  readonly humanInput?: { route: string; note?: string } | string;
-  readonly steering?: string;
-  readonly env?: ExecutionEnvironment;                      // per-run worktree; falls back to process cwd when unset
-  readonly budgetSnapshot?: BudgetSnapshotInput;            // cumulative cost / tokens vs configured ceilings
-  // No direct fetch, filesystem, DB, or process access.
-}
-
-export type HandlerResult =
-  | {
-      kind: "transition";
-      nextNode?: string;                                // omit to let edge selection decide
-      outcomeStatus?: "success" | "fail" | "retry";
-      route?: string;                                   // set by llm on routing nodes
-      failureReason?: string;                           // single-line; surfaces as fact.run_terminated{errored}.detail on fail→__end__
-      tokens: number;
-      costUsd: number;
-      inputCostUsd?: number;
-      outputCostUsd?: number;
-      cacheReadCostUsd?: number;                        // cache-read / cache-write cost split; optional for back-compat
-      cacheWriteCostUsd?: number;
-      inputTokens?: number;
-      outputTokens?: number;
-      cacheReadTokens?: number;
-      cacheWriteTokens?: number;
-      modelName?: string;
-      outputs?: OutputsValue;                           // structured outputs emitted via emit_output; llm steps only
-    }
-  | {
-      kind: "yield_human";
-      text: string;
-      routes: string[];
-      routeLabels?: Record<string, string>;
-    }
-  | {
-      kind: "halt";
-      reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded"
-            | "route_not_picked" | "route_call_not_isolated" | "edge_no_match";
-      detail?: string;
-      // Stage 3 of recoverable-budget-pause.md converts the
-      // operator-recoverable halts in this union to pauses. The executor emits
-      // `fact.run_paused{reason:"max_retries"}` directly via the
-      // `retriesExhaustedPause` sentinel (no longer constructs
-      // `kind:"halt", reason:"max_retries_exceeded"` from the retry
-      // arm). `goal_gate_unsatisfied` → `fact.run_paused{reason:"goal_gate"}`
-      // and `max_loops` → `fact.run_paused{reason:"max_loops"}` still
-      // translate at result-to-facts time. `pauseContext` (optional,
-      // omitted in this excerpt) carries `currentLimit` + `attempts`
-      // so the resulting pause payload reads "exhausted N of M".
-      // Genuinely-terminal HaltReasons (`aborted_exit`, `occ_exhausted`,
-      // `timeout_exhausted`) are emitted by the executor directly;
-      // `abort_loop` and `provider_exhausted` are also executor-only and
-      // convert to `fact.run_paused` directly. A version mismatch is a
-      // recoverable `fact.run_paused{reason:"engine_incompatible"}`, not a
-      // halt.
-    }
-  | {
-      kind: "pause_provider";                            // recoverable provider transport failure
-      httpStatus: number | null;                         // null on pre-response network failures
-      provider: string;
-      errorMessage: string;
-      retryAfterMs?: number;                             // provider-supplied Retry-After (ms); honoured exactly when set, otherwise full-jitter exponential
-    };
-```
+`HandlerResult` is a discriminated union over `kind`:
+- **`transition`** — the success path: optional `nextNode` (omit to let edge selection decide), `outcomeStatus` (`success`/`fail`/`retry`), an llm-set `route` on routing nodes, a single-line `failureReason` (surfaces as `fact.run_terminated{errored}.detail` on `fail → __end__`), the token/cost metrics with the optional four-bucket cost + token splits and `modelName`, and optional `outputs` (structured values from `emit_output`, llm steps only).
+- **`yield_human`** — `text` + the declared `routes` (+ optional `routeLabels`) for a `kind=human` node.
+- **`halt`** — a `reason` over the halt union + optional `detail`. Stage 3 of recoverable-budget-pause.md converts the operator-recoverable arms to pauses: `max_retries_exceeded` is emitted by the executor as `fact.run_paused{reason:"max_retries"}` directly (via the `retriesExhaustedPause` sentinel, not via this halt arm), while `goal_gate_unsatisfied` → `goal_gate` and `max_loops` → `max_loops` still translate at result-to-facts time (an optional `pauseContext` carries `currentLimit` + `attempts` so the pause reads "exhausted N of M"). Genuinely-terminal reasons (`aborted_exit`, `occ_exhausted`, `timeout_exhausted`) and the executor-only `abort_loop` / `provider_exhausted` are emitted directly by the executor; a version mismatch is a recoverable `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
+- **`pause_provider`** — a recoverable provider transport failure carrying `httpStatus` (null on pre-response network failures), `provider`, `errorMessage`, and an optional `retryAfterMs` (provider `Retry-After`, honoured exactly when set, otherwise full-jitter exponential).
 
 `externalCall` is the canonical helper for `side_effect: "external"` tools. It:
 1. Canonicalises `params.args` via `canonicalStringify` (sorted keys, rejects non-JSON-serialisable values) and hashes the result → `argsHash`.
@@ -886,103 +340,13 @@ Handlers never compute `argsHash` themselves. The framework owns canonicalisatio
 
 ---
 
-## 6. Daemon loop (pseudocode)
+## 6. Daemon loop
 
-```typescript
-async function daemonMain() {
-  const pid = process.pid;
-  const lock = store.acquireDaemonLock(pid, os.hostname());
-  if (!lock.acquired) {
-    const current = store.currentDaemonLock()!;
-    if (Date.now() - current.heartbeat_at > LOCK_TTL_MS) {
-      store.forceAcquireDaemonLock(pid, os.hostname());
-    } else {
-      console.error(`Daemon already running: pid=${current.pid}`);
-      process.exit(1);
-    }
-  }
+The boot sequence (`daemonMain`): acquire the `daemon_lock` — if it's held but the heartbeat is older than `LOCK_TTL_MS`, TTL-reclaim it (`forceAcquireDaemonLock`), otherwise exit non-zero. Then, **before anything else**, run the startup sweep to heal crash damage (§1.4). Wire SIGTERM/SIGINT onto one shutdown `AbortController`, start the 50 ms supervisor fiber (heartbeat + intent detection + watchdog), and enter the executor loop. On exit, release the lock and close the store.
 
-  // CRITICAL: before anything else, heal any crash damage
-  const sweep = store.startupSweep();
-  log.info(`startup: requeued=${sweep.requeued.length} quarantined=${sweep.quarantined.length}`);
+The executor loop (`runExecutor`) claims the next run (`claimNextRun(MAX_CONCURRENT_RUNS)`, sleeping 50 ms when the queue is empty) and dispatches each into `runOne` concurrently.
 
-  const shutdown = new AbortController();
-  process.on("SIGTERM", () => shutdown.abort());
-  process.on("SIGINT", () => shutdown.abort());
-
-  startSupervisor(shutdown.signal);      // 50ms tick: heartbeat + intents + watchdog
-  await runExecutor(shutdown.signal);
-
-  store.releaseDaemonLock(pid);
-  store.close();
-}
-
-async function runExecutor(shutdownSignal: AbortSignal) {
-  while (!shutdownSignal.aborted) {
-    const job = store.claimNextRun(MAX_CONCURRENT_RUNS);
-    if (!job) { await sleep(50); continue; }
-    runOne(job.runId, shutdownSignal).catch(logAndQuarantine);
-  }
-}
-
-async function runOne(runId: string, shutdownSignal: AbortSignal) {
-  // Zombie detection
-  const lock = store.currentDaemonLock();
-  if (!lock || lock.pid !== process.pid) return;
-
-  while (!shutdownSignal.aborted) {
-    const state = store.getState(runId);
-    if (!state || isTerminal(state.status) || state.status === "paused" || state.status === "paused_human" || state.status === "paused_auto" || state.status === "quarantined") return;
-
-    if (state.contract_version < MIN_COMPATIBLE_CONTRACT_VERSION || state.contract_version > EVENT_CONTRACT_VERSION) {
-      store.appendFact(runId, [pausedFact("engine_incompatible", { pinnedVersion: state.contract_version, supportedMin: MIN_COMPATIBLE_CONTRACT_VERSION, supportedMax: EVENT_CONTRACT_VERSION })], state.version);
-      return;
-    }
-
-    const unapplied = store.getUnappliedIntents(runId);
-    const decision = foldIntents(unapplied, state);
-
-    if (decision.kind === "cancel") {
-      store.appendFact(runId, [cancelFact(unapplied)], state.version);
-      return;
-    }
-
-    const steerAbort = new AbortController();
-    const spec = handlerSpec(state.current_node);
-    const sigs: AbortSignal[] = [steerAbort.signal, shutdownSignal];
-    if (spec.maxMs !== undefined) sigs.push(AbortSignal.timeout(spec.maxMs));
-    const nodeSignal = AbortSignal.any(sigs);
-    registerAbort(runId, steerAbort);
-
-    const ctx = buildHandlerContext(runId, state, nodeSignal, decision.steering, decision.humanInput);
-
-    let result: HandlerResult;
-    try {
-      if (spec.maxMs !== undefined) {
-        result = await Promise.race([
-          dispatch(state.current_node, ctx),
-          timeoutRejects(spec.maxMs + LEAK_GRACE_MS),
-        ]);
-      } else {
-        // Unbounded llm — cost/token bounds and operator intents govern.
-        result = await dispatch(state.current_node, ctx);
-      }
-    } catch (err) {
-      result = mapErrorToResult(err, nodeSignal);
-    } finally {
-      unregisterAbort(runId);
-    }
-
-    const factEvents = mapResultToFacts(runId, state, result, unapplied);
-    try {
-      store.appendFact(runId, factEvents, state.version);
-    } catch (err) {
-      if (err instanceof ConcurrencyError) continue;
-      throw err;
-    }
-  }
-}
-```
+`runOne` is the per-run turn loop. It re-reads `run_state` each turn and returns on any terminal/paused/quarantined status (zombie-checking the lock on entry). It then checks the contract-version gate — an out-of-`[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` pin pauses with `engine_incompatible` and returns (§1.11). Otherwise it folds unapplied intents (`cancel` wins — commits the cancel fact and returns), builds the node's abort signal as `AbortSignal.any` of the steer controller ∪ shutdown ∪ (when `maxMs` is set) a timeout, dispatches the handler (bounded by a `maxMs + LEAK_GRACE_MS` race when applicable, unbounded for llm), maps the result (or a caught error) to facts, and appends them under OCC — retrying the turn on `ConcurrencyError`. See `packages/daemon/src/executor.ts`.
 
 ### 6.1 Executor module decomposition
 
@@ -1056,164 +420,7 @@ live in `provider_credentials` plus `authHeader: true` instead.
 
 ## 7. Web server
 
-```typescript
-app.post("/runs", async (c) => {
-  const body = await c.req.json() as {
-    workflowSha: string;
-    runId?: string;
-    priority?: number;
-    routing?: Record<string, unknown>;
-    inputs?: Record<string, string>;  // typed inputs → routing.inputs → ${{ inputs.x }}; validated against the inputs: block (400 invalid_inputs)
-    cwd?: string;            // absolute project root at enqueue time; surfaced on run_state.cwd
-    projectId?: string;      // stable project id from .fragua/config.yaml; falls back to cwd when absent
-    projectName?: string;    // project display label captured at enqueue
-    workflowName?: string;   // resolved name when the caller passed a bare name
-    workflowScope?: "global" | "local" | "path" | "ephemeral";
-    workflowPath?: string;   // filesystem path of the workflow file at resolution time
-    title?: string;          // explicit run title; stored immediately and suppresses the auto-titler
-  };
-
-  // Preflight 1: at least one provider credential must be reachable.
-  const provider = preflightProviders?.();
-  if (provider && !provider.ok) {
-    return c.json({ error: provider.detail, code: "provider_unavailable" }, 400);
-  }
-  // Preflight 2: backpressure on queued runs (running runs are bounded
-  // separately by the daemon's maxConcurrentRuns).
-  if (maxQueuedRuns != null && store.runStateCounts().queued >= maxQueuedRuns) {
-    c.header("Retry-After", "30");
-    return c.json({ error: "queue full", code: "queue_full" }, 429);
-  }
-
-  // Validate body.inputs against the workflow's inputs: block (400 on a
-  // missing required input or out-of-range choice) before enqueue.
-  const runId = body.runId ?? newRunId();
-  const initialRouting = { ...(body.routing ?? {}) };
-  if (body.inputs != null && initialRouting.inputs === undefined) {
-    initialRouting.inputs = body.inputs;
-  }
-  store.enqueueRun({ runId, workflowSha: body.workflowSha, priority: body.priority,
-                     initialRouting, cwd: body.cwd,
-                     workflowName: body.workflowName, workflowScope: body.workflowScope,
-                     workflowPath: body.workflowPath });
-  return c.json({ runId });
-});
-
-app.post("/runs/:id/steer",        async (c) => writeIntent(c, "intent.steering_requested"));
-app.post("/runs/:id/pause",        async (c) => writeIntent(c, "intent.pause_requested"));
-app.post("/runs/:id/cancel",       async (c) => writeIntent(c, "intent.cancel_requested"));
-app.post("/runs/:id/human",        async (c) => writeIntent(c, "intent.human_input"));
-app.post("/runs/:id/resume",       async (c) => writeIntent(c, "intent.resume"));
-app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
-app.post("/runs/:id/priority",     async (c) => writeIntent(c, "intent.priority_adjusted"));
-app.post("/runs/:id/budget",       async (c) => writeIntent(c, "intent.budget_adjusted"));  // {scope, metric, newLimit>0, note?}
-app.post("/runs/:id/max_retries",  async (c) => writeIntent(c, "intent.max_retries_adjusted"));  // {nodeId, newLimit>0, note?}
-app.post("/runs/:id/goal_gate",    async (c) => writeIntent(c, "intent.goal_gate_adjusted"));    // {newLimit>0, note?}
-app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops_adjusted"));    // {newLimit>0, note?}
-
-// Post-run operator primitives. Each
-// appends a post-terminal operator-action intent the daemon sweep folds
-// into a git mutation + fact. User-facing refusals are returned 4xx here
-// (404 not_found · 409 not_terminal/not_in_inbox/discarded/no_worktree ·
-// branch 409 nothing_to_branch · commit/merge 400 onto_required/into_required
-// for detached/relocated · merge 409 not_fast_forward/merge_conflict via the
-// snapshot reader's mergeability check). All return {seq} on success.
-app.post("/runs/:id/accept",       async (c) => writeIntent(c, "intent.accept_run"));    // {} — replay onto HEAD + stage tail
-app.post("/runs/:id/discard",      async (c) => writeIntent(c, "intent.discard_run"));
-
-// Schedules surface.
-// CRUD over the `schedules` table plus pause/resume verbs. Each
-// mutation lands a matching `intent.schedule_*` audit row on
-// `daemon_events`. Body of POST /schedules:
-//   { workflow, cwd, every: "30m"|"1h"|"6h"|"24h"|"3d"|"7d",
-//     title?, overlap?: "skip"|"queue"|"concurrent", fireOnCreate?: bool }
-// `every` outside the allowed-interval whitelist returns 400
-// `code:"invalid_interval"`; bad overlap returns `code:"invalid_overlap"`.
-app.post("/schedules",                async (c) => createSchedule(c));
-app.get("/schedules",                 (c) => c.json(store.listSchedules({ cwd: c.req.query("cwd") })));
-app.delete("/schedules/:id",          (c) => deleteSchedule(c));
-app.post("/schedules/:id/pause",      (c) => pauseSchedule(c));
-app.post("/schedules/:id/resume",     (c) => resumeSchedule(c));
-
-// Skills discovery surface.
-// Read-only views over the live filesystem; each request re-walks
-// `cwd ∪ store.listCwds()` (frontmatter-only, ms-scale). Identity in
-// detail / tree / file URLs is `:locId = base64url(skill_dir)` — names
-// aren't unique across projects, so the absolute path is the canonical handle.
-// `?project_cwd=<cwd>` on list endpoints filters to globals + that one
-// project's project-scope records.
-app.get("/skills",                    (c) => listSkills(c));
-app.get("/skills/:locId",             (c) => skillDetail(c));     // metadata + frontmatter + SKILL.md body
-app.get("/skills/:locId/tree",        (c) => skillTree(c));        // recursive walk under skill_dir
-app.get("/skills/:locId/file",        (c) => skillFile(c));        // ?path=<rel>; sandboxed to skill_dir
-// NOTE: /agents endpoints are not yet implemented.
-
-// Worktree snapshot read endpoints. Pure git object-database queries — no checkouts, no worktree
-// mutation. Snapshot commits are reachable via refs/fragua/snapshots/<runId>;
-// eventIdx in the URL is the event seq, resolved to a commitSha by walking
-// the run's snapshot events. All endpoints 404 on unknown run or eventIdx.
-app.get("/runs/:id/snapshots",                    (c) => { /* ordered scrubber feed: Array<{eventIdx,nodeId,label,commitSha,treeSha,committed,uncommitted}> */ });
-app.get("/runs/:id/snapshots/:eventIdx/tree",     (c) => { /* git ls-tree → {entries:[{path,mode,size,type}]} */ });
-app.get("/runs/:id/snapshots/:eventIdx/file",     (c) => { /* git show <sha>:<path> → text/plain or application/octet-stream; ?path= required */ });
-app.get("/runs/:id/snapshots/:eventIdx/diff",     (c) => { /* git diff → text/x-diff; ?against=base|previous|<eventIdx>; optional &path= */ });
-
-// JSON-batch read of a run's events; pagination via ?since / ?limit.
-app.get("/runs/:id/events", (c) => {
-  const sinceSeq = Number(c.req.query("since") ?? 0);
-  const limit = Math.min(Number(c.req.query("limit") ?? 1000), 5000);
-  return c.json(store.getEvents(c.req.param("id"), { sinceSeq, limit }));
-});
-
-// Per-run conversation transcript: pi-agent AgentMessage rows, ordered
-// by per-run `ordinal`. `nodeId` stamps which node appended each
-// message. Used by the web conversation view and post-mortem tooling.
-// Returns the narrow wire shape `{ ordinal, nodeId, iteration, content }` —
-// `?nodeId=` filters to one thread, `?sinceOrdinal=` for resume-style
-// pagination, `?limit=` caps the result set.
-app.get("/runs/:id/messages", (c) => {
-  const runId = c.req.param("id");
-  if (store.getState(runId) == null) return c.json({ error: "not_found" }, 404);
-  const opts: { nodeId?: string; sinceOrdinal?: number; limit?: number } = {};
-  const nodeId = c.req.query("nodeId"); if (nodeId) opts.nodeId = nodeId;
-  const since = Number(c.req.query("sinceOrdinal")); if (Number.isFinite(since)) opts.sinceOrdinal = since;
-  const lim = Number(c.req.query("limit"));   if (Number.isFinite(lim) && lim > 0) opts.limit = lim;
-  return c.json(store.getMessagesNarrow(runId, opts));
-});
-
-// Per-LLM-call snapshots merged with SQL-aggregated cost/token totals.
-// Two-pass projection: eventsToSteps extracts static per-step fields
-// from the event log; getStepAggregates runs a SQL window aggregation
-// for cost/token totals; attachStepAggregates merges them; then
-// fillOrphanDurations backfills durationMs for steps with no llm.done.
-app.get("/runs/:id/steps", (c) => {
-  const runId = c.req.param("id");
-  const state = store.getState(runId);
-  if (state == null) return c.json({ error: "not_found" }, 404);
-  const events = store.getEvents(runId);
-  const steps = attachStepAggregates(eventsToSteps(events), store.getStepAggregates(runId));
-  const lastEventTs = events.at(-1)?.ts;
-  return c.json(fillOrphanDurations(steps, { lastEventTs, runIsTerminal: isTerminalStatus(state.status) }));
-});
-
-// SSE stream of the same events; resumable via Last-Event-ID or ?sinceSeq.
-app.get("/runs/:id/stream", (c) => streamSSE(c, async (stream) => {
-  const runId = c.req.param("id");
-  let sinceSeq = parseSeqCursorMax(c.req.query("sinceSeq"), c.req.header("Last-Event-ID"));
-  while (!stream.aborted) {
-    const events = store.getEvents(runId, { sinceSeq, limit: 500 });
-    for (const e of events) {
-      // No `event:` field on the wire — the type lives inside the JSON
-      // payload, so the browser dispatches every frame via a single
-      // `addEventListener("message", …)` and reads `.type` from there.
-      // Avoids registering ~45 typed listeners per mount for zero gain.
-      await stream.writeSSE({ id: String(e.seq), data: JSON.stringify(e) });
-      sinceSeq = e.seq;
-    }
-    if (events.length === 0) await sleep(100);
-  }
-}));
-
-```
+The server is a Hono HTTP + SSE surface **for the Web UI only** (the CLI is a direct store-client). Enqueue is `POST /runs`: it validates the body's typed `inputs` against the workflow's `inputs:` block (400 `invalid_inputs` on a missing required input or out-of-range choice), preflights provider-credential availability (400 `provider_unavailable`) and queued-run backpressure (429 `queue_full` with `Retry-After`, running runs bounded separately by the daemon's `maxConcurrentRuns`), folds `inputs` into `routing.inputs`, and calls `enqueueRun`. The control-plane verbs are thin intent-writers — one POST per `intent.*` (`steer` / `pause` / `cancel` / `human` / `resume` / `unquarantine` / `priority` / `budget` / `max_retries` / `goal_gate` / `max_loops`), with bodies and effects tabulated in §3 and SPEC §3.5. Post-terminal `accept` / `discard` append operator-action intents the daemon folds, returning `{seq}` on success and surfacing state-gate refusals as 4xx (404 not_found · 409 not_terminal / not_in_inbox / discarded / no_worktree, etc.). Beyond that: read endpoints (`/events`, `/messages`, `/steps` as JSON, and `/stream` — the SSE that polls `events WHERE seq > cursor` and writes each frame with the type inside the JSON payload so the browser dispatches via one `message` listener), schedule CRUD (each mutation lands a `intent.schedule_*` audit row on `daemon_events`; bad interval/overlap → 400), skill discovery (read-only filesystem re-walks keyed by `base64url(skill_dir)`), and worktree-snapshot git reads (pure object-database `ls-tree` / `show` / `diff`, no checkouts). See `packages/server/src/`.
 
 No IPC. No daemon dependency for reads or intent writes. Polling is the whole story.
 
@@ -1221,11 +428,7 @@ No IPC. No daemon dependency for reads or intent writes. Polling is the whole st
 
 ## 8. Queue fairness
 
-**Rule.** Within a priority tier, FIFO on `ready_at`. `ready_at` is reset to `now()` on every transition INTO `queued` (initial enqueue, HITL wake, crash requeue, unquarantine-retry). Ties break by `run_id` (deterministic, seeded by ULID-like ordering).
-
-```sql
-ORDER BY priority DESC, ready_at ASC, run_id ASC
-```
+**Rule.** Within a priority tier, FIFO on `ready_at`. `ready_at` is reset to `now()` on every transition INTO `queued` (initial enqueue, HITL wake, crash requeue, unquarantine-retry). Ties break by `run_id` (deterministic, seeded by ULID-like ordering). The claim index orders by `priority DESC, ready_at ASC, run_id ASC`.
 
 **Why this over alternatives:**
 
@@ -1326,85 +529,7 @@ The driven crash-replay and fault-injection (OCC-storm) harnesses generate `type
 
 ## 11. Module layout
 
-```
-packages/
-  store/
-    src/
-      schema.sql
-      pragmas.ts
-      migrations.ts
-      store.ts                         ← IEventStore impl
-      reducers.ts                      ← fact fold
-      sweep.ts                         ← startup sweep (requeue + quarantine)
-      types.ts
-    test/                              ← property + unit
-  core/
-    src/
-      parser/                          ← YAML parser
-      handler/                         ← HandlerContext, HandlerSpec, Handler
-        handlers/                      ← wait-human, tool, ...
-        context.ts                     ← buildHandlerContext (per-call env)
-        external-call.ts               ← idempotency key + intent/done envelope
-      engine/
-        edge-selection.ts              ← two-case algorithm: route-case | outcome-case (SPEC §3.6)
-        retry-policy.ts                ← per-node retry counter (§3.6)
-        thread.ts                      ← thread_id resolution
-        substitution.ts                ← ${{ inputs.x }} only (SPEC §3.8)
-      types/
-        execution.ts                   ← ExecutionEnvironment interface
-        events.ts                      ← fact + intent + observability
-        summariser.ts                  ← SummariserBackend port
-        ...
-      executor/
-        types.ts                       ← LlmBackend, LlmInput
-      intent-plane/                    ← write plane (@fragua/core/intent-plane): validate/construct/commit every intent; the one write surface server + CLI share
-      read-plane/                      ← read plane (@fragua/core/read-plane): every run read — summary/detail/steps/messages/events/snapshots/diff/streaming projections
-  daemon/
-    src/
-      executor.ts                      ← executor fiber
-      supervisor.ts                    ← heartbeat + intents + watchdog tick
-      abort-registry.ts                ← runId → AbortController map
-      dispatch.ts                      ← node-kind → handler
-      auto-dispatcher.ts               ← shape → HandlerSpec fallback
-      result-to-facts.ts               ← HandlerResult → FactEvent[]
-      wake-pending.ts                  ← pending HITL + cancel + unquarantine + auto-resume sweeps
-      auto-titler.ts                   ← run.title_generated summariser
-      worktree-provisioner.ts          ← per-run WorktreeEnvironment map
-      entrypoint.ts                    ← startDaemon
-  agent/
-    src/
-      backend.ts                       ← PiLlmBackend (pi-agent-core)
-      handler-bridge.ts                ← makeLlmHandler (LlmBackend → HandlerSpec)
-      summariser.ts                    ← PiSummariserBackend
-      thread.ts                        ← buildSummarySeed (summariser-backed)
-      event-bridge.ts                  ← pi-agent AgentEvent → fragua EventType
-      tool-adapter.ts                  ← fragua Tool → pi AgentTool
-      message-store.ts                 ← in-process per-thread transcript cache
-      system-prompt.ts                 ← buildSystemPrompt (context-files + skills + runEnv)
-  server/
-    src/
-      index.ts                         ← createServer
-      adapters/run-snapshot-reader.ts  ← git ls-tree/show/diff (diff delegates to workspace gitDiff)
-      store/
-        routes.ts                      ← intents (POST) via intent plane, SSE via read plane (Web UI surface)
-        runs-routes.ts                 ← run reads via read plane
-        runs-adapter.ts                ← re-export shim → @fragua/core/read-plane
-        steps.ts                       ← re-export shim → @fragua/core/read-plane
-  workspace/
-    src/
-      local-env.ts                     ← LocalEnvironment (process cwd)
-      worktree-env.ts                  ← WorktreeEnvironment (git worktree per run)
-      run-actions.ts                   ← applyAccept / applyDiscard / gitDiff (shared git: server route + CLI)
-      tools.ts                         ← read / write / edit / bash
-      skills/                          ← SKILL.md discovery + catalog
-  web/                                 ← UI (React + Tanstack Router) — the only HTTP client
-  cli/                                 ← direct store-client (no HTTP): intent plane writes, read plane reads
-    bin/fragua.ts                      ← subcommand dispatch
-    src/
-      store-client.ts                  ← openStoreClient / withStoreClient (migrate:false + both planes)
-      route-picker.ts                  ← HITL arrow-key route menu (run follow + runs respond)
-      commands/                        ← run / runs <verb> / schedule / providers / db / ...
-```
+Dependency direction: `web → server → store ← daemon → core ← agent`. `store` is the SQLite event store (schema + pragmas + migrations + reducers + startup sweep); `core` holds the pure types, YAML parser, handler contract, engine reducers, and the shared write plane (`intent-plane`) + read plane (`read-plane`) both the server and CLI route through; `daemon` is the executor + supervisor + provisioner + recorder; `agent` is the pi-ai LLM backend and bridges; `workspace` provides the `ExecutionEnvironment` adapters, tools, and shared accept/discard/diff git; `server` is the Hono HTTP + SSE surface for the Web UI; `web` is the React dashboard (the only HTTP client); `cli` is a direct store-client (no HTTP). The authoritative per-package breakdown — entry points and what lives where — is the "Codebase map" table in [`AGENTS.md`](../AGENTS.md).
 
 
 ---
