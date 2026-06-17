@@ -374,7 +374,7 @@ describe("schedule-dispatcher", () => {
     });
     const state = f.store.getState("run_check")!;
     expect(state.routing["input"]).toBeUndefined();
-    expect((state.routing["inputs"] as Record<string, string>)["key"]).toBe("val");
+    expect((state.routing["inputs"] as Record<string, unknown>)["key"]).toBe("val");
   });
 
   test("wall-clock backwards jump leaves the schedule waiting (no double-fire)", () => {

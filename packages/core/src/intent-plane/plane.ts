@@ -13,10 +13,15 @@
 // minter land in a follow-on increment; this is the control-intent surface.
 
 import type { EnqueueRunParams, IEventWriter } from "@fragua/store";
-import type { IntentEvent } from "@fragua/types";
+import { type IntentEvent, MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
-import { coerceInputBindings, type InputBindingError, validateInputBindings } from "../engine/inputs.ts";
+import {
+  coerceInputBindings,
+  type InputBindingError,
+  isStructuredInput,
+  validateInputBindings,
+} from "../engine/inputs.ts";
 import { type Diagnostic, validate } from "../engine/validator.ts";
 import { sha256Hex } from "../handler/sha256.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
@@ -36,7 +41,7 @@ export type BuildResult<T extends IntentEvent = IntentEvent> = { ok: true; inten
  * `projectId`, `projectName`, `contractVersion`, priority, and workflow
  * identity — 300–600+ B — so this budget sits well under the 4 KiB cap rather
  * than at `cap − routing` for the bare `{ inputs }` shape. */
-const GENESIS_INPUTS_MAX_BYTES = 3072;
+const GENESIS_INPUTS_MAX_BYTES = Math.floor(MAX_EVENT_PAYLOAD_BYTES * 0.75);
 
 /** The `IntentEvent` member with a given `type` discriminant. */
 type IntentOf<K extends IntentEvent["type"]> = Extract<IntentEvent, { type: K }>;
@@ -274,17 +279,19 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       // can't spill yet, so an oversized one gets a clean validation error
       // instead of a raw `PayloadTooLargeError`. Measured in UTF-8 bytes (not
       // `String#length` / UTF-16 units) so multibyte inputs can't slip past.
-      if (effectiveInputs != null && initialRouting["inputs"] === undefined) {
-        const structured = new Set(
-          (input.inputDecls ?? []).filter((d) => d.type === "object" || d.type === "array").map((d) => d.name),
-        );
+      if (
+        effectiveInputs != null &&
+        Object.keys(effectiveInputs).length > 0 &&
+        initialRouting["inputs"] === undefined
+      ) {
+        const structured = new Set((input.inputDecls ?? []).filter((d) => isStructuredInput(d)).map((d) => d.name));
         const nonSpillable: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(effectiveInputs)) {
           if (structured.has(k)) nonSpillable[k] = v;
         }
         if (
           Object.keys(nonSpillable).length > 0 &&
-          new TextEncoder().encode(JSON.stringify({ inputs: nonSpillable })).byteLength >= GENESIS_INPUTS_MAX_BYTES
+          utf8ByteLength(JSON.stringify({ inputs: nonSpillable })) >= GENESIS_INPUTS_MAX_BYTES
         ) {
           return { ok: false, error: "input payload too large", inputErrors: [] };
         }

@@ -117,9 +117,13 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
 function resolveInputRef(inputs: Record<string, unknown>, segments: string[]): string {
   const [name, ...rest] = segments;
   if (name === undefined) return "";
+  if (!Object.hasOwn(inputs, name)) return "";
   let cur: unknown = inputs[name];
   for (const seg of rest) {
     if (cur === null || typeof cur !== "object" || Array.isArray(cur)) return "";
+    // `Object.hasOwn` (not bracket access) so `${{ inputs.config.toString }}`
+    // can't descend into a prototype method and render the built-in.
+    if (!Object.hasOwn(cur, seg)) return "";
     cur = (cur as Record<string, unknown>)[seg];
   }
   if (cur === undefined || cur === null) return "";

@@ -253,15 +253,10 @@ import {
   type ServerEndpointRow,
   type StoredEvent,
   type SweepResult,
+  utf8ByteLength,
   type WorkflowRow,
 } from "./types.ts";
 import { insertWorkflowIfAbsent, selectWorkflow, workflowExists } from "./workflow-queries.ts";
-
-/** UTF-8 byte length of a string. The event-payload cap (I2/I10) is a byte
- * cap, so the guards must measure encoded bytes — `String#length` counts
- * UTF-16 code units, undercounting CJK / emoji by up to ~3×. */
-const PAYLOAD_ENCODER = new TextEncoder();
-const utf8ByteLength = (s: string): number => PAYLOAD_ENCODER.encode(s).byteLength;
 
 /** EventRow → StoredEvent. Shared across getEvents / getGlobalEvents*
  * so the projection (column rename, payload parse, writer cast) lives

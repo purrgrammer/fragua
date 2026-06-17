@@ -157,23 +157,32 @@ describe("validate — structural", () => {
     expect(e030[0]?.message).toContain("repo");
   });
 
-  test("E030 flags a dotted sub-reference into a scalar input", () => {
-    const g = mkGraph({
-      attrs: { inputs: [{ name: "ticket", type: "string", required: true }] },
-      nodes: {
-        s: "start",
-        work: { type: "llm", attrs: { prompt: "fix ${{ inputs.ticket.field }}" } },
-        done: "exit",
-      },
-      edges: [
-        ["s", "work"],
-        ["work", "done"],
-      ],
+  // The uniform §inputs rule: a dotted sub-reference into ANY scalar type
+  // (string / number / boolean / choice) can never resolve. Parameterised so
+  // dropping a type from `scalarTypes` in the validator can't slip past.
+  for (const scalar of ["string", "number", "boolean", "choice"] as const) {
+    test(`E030 flags a dotted sub-reference into a ${scalar} input`, () => {
+      const inputDecl =
+        scalar === "choice"
+          ? { name: "ticket", type: "choice" as const, required: true, options: ["a", "b"] }
+          : { name: "ticket", type: scalar, required: true };
+      const g = mkGraph({
+        attrs: { inputs: [inputDecl] },
+        nodes: {
+          s: "start",
+          work: { type: "llm", attrs: { prompt: "fix ${{ inputs.ticket.field }}" } },
+          done: "exit",
+        },
+        edges: [
+          ["s", "work"],
+          ["work", "done"],
+        ],
+      });
+      const e030 = validate(g).filter((d) => d.code === "E030");
+      expect(e030).toHaveLength(1);
+      expect(e030[0]?.message).toContain("dotted sub-references");
     });
-    const e030 = validate(g).filter((d) => d.code === "E030");
-    expect(e030).toHaveLength(1);
-    expect(e030[0]?.message).toContain("dotted sub-references");
-  });
+  }
 
   test("E030 does NOT flag a dotted reference into an object input", () => {
     const g = mkGraph({
@@ -214,6 +223,26 @@ describe("validate — structural", () => {
       ],
     });
     expect(codesOf(g)).not.toContain("E030");
+  });
+
+  test("E046 when run-level outputs: deserializes to a non-array", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        work: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+      ],
+    });
+    // Simulate a corrupt/malformed IR where `outputs` survived as a non-array.
+    (g.attrs as Record<string, unknown>)["outputs"] = "not-an-array";
+    const diags = validate(g);
+    const e046 = diags.filter((d) => d.code === "E046" && d.severity === "error");
+    expect(e046).toHaveLength(1);
+    expect(e046[0]?.message).toContain("not an array");
   });
 
   test("E030 scans tool_command and text fields too", () => {

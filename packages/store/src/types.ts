@@ -548,7 +548,7 @@ export class MessageTooLargeError extends Error {
 // because it runs first and is stricter for non-BMP content. `MAX_BLOB_BYTES`
 // is the only honest-bytes constant — it gates `Uint8Array.byteLength`.
 
-export const MAX_EVENT_PAYLOAD_BYTES = 4096;
+export { MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
 export const MAX_ROUTING_BYTES = 8192;
 export const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 export const MAX_MESSAGE_CONTENT_BYTES = 1024 * 1024;

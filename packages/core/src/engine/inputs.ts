@@ -53,7 +53,13 @@ export function coerceNumberInput(name: string, value: string): number {
  * non-string passes through untouched (an already-parsed `--input-json` value
  * or the schedule dispatcher's typed routing). Undeclared keys pass through for
  * `validateInputBindings` to reject as `unknown_input`. Failures surface as
- * `invalid_shape` errors, never a silent coercion. */
+ * `invalid_shape` errors, never a silent coercion.
+ *
+ * The returned `values` map is ALWAYS complete — every provided key gets an
+ * entry, and a coercion failure leaves the original (uncoerced) string in place
+ * alongside its `invalid_shape` error — so a caller that doesn't gate on
+ * `errors.length` still sees the key (it would otherwise misread a failed
+ * `invalid_shape` as a `missing_required` downstream). */
 export function coerceInputBindings(
   decls: readonly InputDecl[] | undefined,
   provided: Readonly<Record<string, unknown>> = {},
@@ -62,6 +68,10 @@ export function coerceInputBindings(
   const values: Record<string, unknown> = {};
   const errors: InputBindingError[] = [];
   for (const name of Object.keys(provided)) {
+    // `JSON.parse` of an HTTP body produces `__proto__` as an own enumerable
+    // key; assigning it would invoke the prototype setter on `values`. Skip it
+    // here so the shared write surface matches the CLI ingress guard.
+    if (name === "__proto__") continue;
     const v = provided[name];
     const decl = declByName.get(name);
     if (decl === undefined || typeof v !== "string") {
@@ -72,6 +82,7 @@ export function coerceInputBindings(
       try {
         values[name] = JSON.parse(v);
       } catch (err) {
+        values[name] = v;
         errors.push({
           code: "invalid_shape",
           name,
@@ -82,10 +93,12 @@ export function coerceInputBindings(
       try {
         values[name] = coerceNumberInput(name, v);
       } catch (err) {
+        values[name] = v;
         errors.push({ code: "invalid_shape", name, message: (err as Error).message });
       }
     } else if (decl.type === "boolean") {
       if (v !== "true" && v !== "false") {
+        values[name] = v;
         errors.push({
           code: "invalid_shape",
           name,

@@ -1183,6 +1183,13 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   //     guarantees the branch ran before its join, so if the join run-dominates
   //     the exit the branch effectively does too.
   {
+    if (graph.attrs.outputs !== undefined && !Array.isArray(graph.attrs.outputs)) {
+      diags.push({
+        severity: "error",
+        code: "E046",
+        message: "run-level `outputs:` declaration is not an array",
+      });
+    }
     const runOutputs = Array.isArray(graph.attrs.outputs) ? graph.attrs.outputs : [];
     if (runOutputs.length > 0) {
       const completingTerminals = exits.filter((e) => reachableFromStart.has(e.id));

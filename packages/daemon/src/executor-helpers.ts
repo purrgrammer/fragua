@@ -237,9 +237,11 @@ export function readInputMap(v: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
     // Match the write-path dunder guard (coerceInputs / coerceInputBindings):
-    // a `__proto__` / `constructor` / `prototype` key reaching here only via a
-    // direct SQLite write to `routing.inputs` must never pollute `out`.
-    if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+    // ONLY `__proto__` is filtered — it's the sole key that pollutes the
+    // prototype on assignment. `constructor` / `toString` are legitimate own
+    // keys the write path stores verbatim, so dropping them here would silently
+    // disappear a declared input named that.
+    if (k === "__proto__") continue;
     if (val !== null && typeof val === "object" && Object.hasOwn(val as Record<string, unknown>, "$fragua_blob")) {
       continue;
     }

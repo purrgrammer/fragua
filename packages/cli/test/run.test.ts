@@ -165,6 +165,56 @@ describe("fragua run", () => {
     }
   });
 
+  test("--input config=@file.json end-to-end: parsed object lands on routing.inputs", async () => {
+    const r = rig();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "obj.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: obj\ninputs:\n  config:\n    type: object\n    fields:\n      env: {type: string}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const jsonPath = join(dir, "config.json");
+      writeFileSync(jsonPath, '{"env":"prod"}');
+      const inputs = (await resolveInputArgs([`config=@${jsonPath}`])) as Record<string, string>;
+      const code = await runCommand({ workflow: yamlPath, dbPath: r.dbPath, follow: false, inputs });
+      expect(code).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      expect(r.store.getState(runId)!.routing["inputs"]).toEqual({ config: { env: "prod" } });
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--input config=@file.json with malformed JSON fails with invalid_shape", async () => {
+    const r = rig();
+    const errs: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errs.push(args.map(String).join(" "));
+    };
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "obj.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: obj\ninputs:\n  config:\n    type: object\n    fields:\n      env: {type: string}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const jsonPath = join(dir, "config.json");
+      writeFileSync(jsonPath, "{not json");
+      const inputs = (await resolveInputArgs([`config=@${jsonPath}`])) as Record<string, string>;
+      const code = await runCommand({ workflow: yamlPath, dbPath: r.dbPath, follow: false, inputs });
+      expect(code).toBe(1);
+      expect(r.store.listRunIds()).toHaveLength(0);
+    } finally {
+      console.error = originalError;
+      await r.close();
+    }
+    expect(errs.join("\n")).toContain("is not valid JSON");
+  });
+
   test("--title is recorded on the run; no free-form input is set", async () => {
     const r = rig();
     try {

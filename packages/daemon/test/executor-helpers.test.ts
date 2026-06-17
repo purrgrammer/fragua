@@ -88,6 +88,17 @@ describe("executor-helpers", () => {
     expect(readInputMap(null)).toEqual({});
   });
 
+  test("readInputMap preserves a stored 'constructor' key but drops __proto__", () => {
+    // The write path stores `constructor` / `toString` verbatim — only
+    // `__proto__` is filtered (it pollutes the prototype on assignment).
+    const out = readInputMap({ constructor: "v", toString: "t" });
+    expect(out["constructor"]).toBe("v");
+    expect(out["toString"]).toBe("t");
+    const polluted = readInputMap(JSON.parse('{"__proto__":{"x":1},"keep":"y"}'));
+    expect(Object.hasOwn(polluted, "__proto__")).toBe(false);
+    expect(polluted["keep"]).toBe("y");
+  });
+
   test("readBudgetWarned parses the dedup tag set", () => {
     expect([...readBudgetWarned({ __budget_warned: ["run:cost", "node:tokens", 7] })].sort()).toEqual([
       "node:tokens",

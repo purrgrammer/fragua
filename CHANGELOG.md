@@ -118,13 +118,25 @@ guarantee.
 
 ### Fixed
 
+- Workflow inputs and output fields named after JavaScript prototype properties
+  (`constructor`, `toString`, `valueOf`, `__proto__`) now round-trip correctly
+  instead of reading or colliding with a built-in: input substitution
+  (`${{ inputs.x.field }}`), output-profile validation (required-presence and
+  `additionalProperties`), and the executor's input reader all key strictly on
+  an object's own properties. A declared input named `constructor` is no longer
+  silently dropped between enqueue and substitution.
+- Step ids are now required to be identifiers (`[a-zA-Z][a-zA-Z0-9_]*`); a step
+  name containing a `.` is rejected at parse time instead of producing a
+  misleading run-output diagnostic.
+- A non-array run-level `outputs:` declaration now reports a clear validation
+  error rather than silently validating as if no outputs were declared.
 - `--input name=value` now coerces a declared `type: number` (via `Number()`,
   rejecting a non-numeric value) and `type: boolean` (accepting only `"true"` /
   `"false"`) before enqueue, so a CLI workflow declaring number/boolean inputs
   no longer fails the shape guard. A non-numeric number or a non-boolean string
   is a clean enqueue-time error.
 - The event-payload 4 KiB cap is now measured in UTF-8 bytes by the store's
-  runtime write guard (via `TextEncoder`) instead of `String#length`, so
+  runtime write guard instead of `String#length`, so
   structured inputs containing CJK or emoji can no longer exceed the cap by
   counting code points instead of bytes. No schema migration: a byte-exact SQL
   CHECK can't be retroactively applied to existing rows, so the byte cap lives

@@ -465,6 +465,15 @@ export function parseWorkflow(source: string): Graph {
     if (typeof stepId !== "string") {
       throw new ParseError("step id must be a string", ...locArr(locOf(item.key, lineCounter)));
     }
+    // Step ids must match the reference grammar (`[a-zA-Z][a-zA-Z0-9_]*`, the
+    // producer segment of COMBINED_REF_RE). A `.` would let `from: a.b.c` split
+    // ambiguously between a dotted step name and a producer.path reference.
+    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(stepId)) {
+      throw new ParseError(
+        `step id ${JSON.stringify(stepId)} is not a valid identifier (must match [a-zA-Z][a-zA-Z0-9_]*)`,
+        ...locArr(locOf(item.key, lineCounter)),
+      );
+    }
     if (!YAML.isMap(item.value)) {
       throw new ParseError(`step "${stepId}" must be a mapping`, ...locArr(locOf(item.value, lineCounter)));
     }

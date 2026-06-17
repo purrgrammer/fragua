@@ -4,7 +4,7 @@
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { applyFact, emptyMetrics, MAX_EVENT_PAYLOAD_BYTES, SqliteStore } from "../src/index.ts";
-import { getLatestOutput, getOutputsForRun, insertOutput } from "../src/outputs-queries.ts";
+import { getLatestOutput, getLatestOutputBatch, getOutputsForRun, insertOutput } from "../src/outputs-queries.ts";
 import { STRUCT_INLINE_MAX_BYTES } from "../src/routing-blobs.ts";
 import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
 
@@ -72,6 +72,56 @@ describe("outputs index (direct SQL)", () => {
     const db = rawDb(store);
 
     expect(getLatestOutput(db, runId, "nonexistent")).toBeNull();
+  });
+
+  describe("getLatestOutputBatch", () => {
+    test("returns the latest struct per node for a two-node run", async () => {
+      const store = freshStore();
+      const runId = await seedRun(store);
+      const db = rawDb(store);
+
+      insertOutput(db, runId, "alpha", 0, JSON.stringify({ v: "a" }));
+      insertOutput(db, runId, "beta", 0, JSON.stringify({ v: "b" }));
+
+      const rows = getLatestOutputBatch(db, runId, ["alpha", "beta"]);
+      const byNode = new Map(rows.map((r) => [r.nodeId, JSON.parse(r.struct)]));
+      expect(byNode.get("alpha")).toEqual({ v: "a" });
+      expect(byNode.get("beta")).toEqual({ v: "b" });
+    });
+
+    test("excludes nodes that never emitted", async () => {
+      const store = freshStore();
+      const runId = await seedRun(store);
+      const db = rawDb(store);
+
+      insertOutput(db, runId, "alpha", 0, JSON.stringify({ v: "a" }));
+
+      const rows = getLatestOutputBatch(db, runId, ["alpha", "ghost"]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.nodeId).toBe("alpha");
+    });
+
+    test("resolves the latest iteration per node", async () => {
+      const store = freshStore();
+      const runId = await seedRun(store);
+      const db = rawDb(store);
+
+      insertOutput(db, runId, "alpha", 0, JSON.stringify({ v: "iter0" }));
+      insertOutput(db, runId, "alpha", 2, JSON.stringify({ v: "iter2" }));
+      insertOutput(db, runId, "alpha", 1, JSON.stringify({ v: "iter1" }));
+
+      const rows = getLatestOutputBatch(db, runId, ["alpha"]);
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(rows[0]!.struct)).toEqual({ v: "iter2" });
+    });
+
+    test("returns an empty array for an empty nodeIds list", async () => {
+      const store = freshStore();
+      const runId = await seedRun(store);
+      const db = rawDb(store);
+      insertOutput(db, runId, "alpha", 0, JSON.stringify({ v: "a" }));
+      expect(getLatestOutputBatch(db, runId, [])).toEqual([]);
+    });
   });
 
   test("getOutputsForRun returns rows ordered by (nodeId ASC, iteration ASC)", async () => {
@@ -329,6 +379,37 @@ describe("appendFact + outputs index (same-transaction write)", () => {
 
     const rows = store.getOutputsForRun(runId);
     expect(rows).toHaveLength(0);
+  });
+
+  test("getLatestOutputBatch rehydrates spilled-output blob structs and excludes absent nodes", async () => {
+    const { store, runId } = await makeStoreWithRun();
+    const state = store.getState(runId)!;
+    const big = "z".repeat(8000); // > inline budget → spills to the blob CAS
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: 1, startNode: "scope" },
+        },
+        {
+          type: "fact.node_completed",
+          payload: {
+            nodeId: "scope",
+            iteration: 0,
+            tokens: 0,
+            costUsd: 0,
+            nextNode: "exit",
+            outputs: { report: big, pr: "42" },
+          },
+        },
+      ],
+      state.version,
+    );
+
+    const batch = store.getLatestOutputBatch(runId, ["scope", "absent"]);
+    expect(batch.has("absent")).toBe(false);
+    expect(JSON.parse(batch.get("scope")!).report).toBe(big);
   });
 });
 
