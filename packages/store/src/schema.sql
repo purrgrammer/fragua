@@ -148,11 +148,11 @@ CREATE TABLE IF NOT EXISTS events (
   -- not user input. No CHECK so the set can evolve (a future direct-store CLI
   -- writer, etc.) without a table rebuild — SQLite can't ALTER a CHECK.
   writer TEXT NOT NULL,
-  -- Byte-exact 4 KiB cap (I2/I10): `length(CAST(payload AS BLOB))` counts UTF-8
-  -- bytes, where `length(payload)` on TEXT counts code points and undercounts
-  -- CJK / emoji by up to ~3×. The TS guard in store.ts is the primary
-  -- enforcement; this is the durable backstop.
-  payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) < 4096),
+  -- Coarse code-point backstop. The 4 KiB BYTE cap (I2/I10) is enforced in the
+  -- store.ts write guard (`TextEncoder().byteLength`), NOT here: a byte-exact
+  -- SQL CHECK can't be applied retroactively — historical events written under
+  -- the looser code-point cap would violate it and abort the rebuild migration.
+  payload TEXT NOT NULL CHECK (length(payload) < 4096),
   ts INTEGER NOT NULL,
   PRIMARY KEY (run_id, seq)
 ) STRICT, WITHOUT ROWID;
@@ -271,8 +271,8 @@ CREATE TABLE IF NOT EXISTS server_endpoint (
 CREATE TABLE IF NOT EXISTS daemon_events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL,
-  -- Byte-exact 4 KiB cap — see the events.payload note above.
-  payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) < 4096),
+  -- Code-point backstop; byte cap enforced in store.ts — see events.payload.
+  payload TEXT NOT NULL CHECK (length(payload) < 4096),
   ts INTEGER NOT NULL,
   -- Optional reference for run-scoped events (leak_detected,
   -- worktree_provisioned). Global events leave it NULL. ON DELETE

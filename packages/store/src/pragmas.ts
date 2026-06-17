@@ -5,8 +5,11 @@ import type { Database } from "bun:sqlite";
  * that drops free-form `routing.input`); the walk-forward step lives in
  * `migrations.ts` (SCHEMA_MIGRATIONS). Note: it does NOT gate run resume —
  * runs pin `EVENT_CONTRACT_VERSION` for that (axis split, §3.1).
- * v3 adds the `outputs` index table (structured step outputs, additive). */
-export const CURRENT_SCHEMA_VERSION = 5;
+ * v3 adds the `outputs` index table (structured step outputs, additive).
+ * v4 adds `messages.pass` (goal-gate re-entry epoch). The event-payload 4 KiB
+ * BYTE cap (I2/I10) is enforced in the store.ts write guard, NOT a SQL CHECK —
+ * a byte-exact CHECK can't be applied retroactively over historical rows. */
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
  * store (the 0.1.0 baseline) migrates to current; nothing older exists. */
