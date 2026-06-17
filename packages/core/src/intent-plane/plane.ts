@@ -251,13 +251,27 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
           return { ok: false, error: errs.map((e) => e.message).join("; "), inputErrors: errs };
         }
       }
-      // Pre-check the serialized inputs against the genesis event's 4 KiB
-      // payload cap. Structured (object / array) inputs aren't eligible for the
-      // routing-inputs spill, so an oversized one would otherwise throw a raw
-      // `PayloadTooLargeError` from `enqueueRun` with no `inputErrors` envelope.
-      // Returning a clean validation error keeps the enqueue surface uniform.
-      if (input.inputs != null && JSON.stringify({ inputs: input.inputs }).length >= GENESIS_INPUTS_MAX_BYTES) {
-        return { ok: false, error: "input payload too large", inputErrors: [] };
+      // Pre-check the genesis event's 4 KiB payload cap, but ONLY against the
+      // non-spillable inputs. String inputs spill via `spillRoutingInputs`, so
+      // size-checking them here would reject a payload the spill would shrink;
+      // only object / array inputs can't spill yet, so an oversized one gets a
+      // clean validation error instead of a raw `PayloadTooLargeError`. Measured
+      // in UTF-8 bytes (not `String#length` / UTF-16 units) so multibyte inputs
+      // can't slip past the cap.
+      if (input.inputs != null) {
+        const structured = new Set(
+          (input.inputDecls ?? []).filter((d) => d.type === "object" || d.type === "array").map((d) => d.name),
+        );
+        const nonSpillable: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(input.inputs)) {
+          if (structured.has(k)) nonSpillable[k] = v;
+        }
+        if (
+          Object.keys(nonSpillable).length > 0 &&
+          new TextEncoder().encode(JSON.stringify({ inputs: nonSpillable })).byteLength >= GENESIS_INPUTS_MAX_BYTES
+        ) {
+          return { ok: false, error: "input payload too large", inputErrors: [] };
+        }
       }
       const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
       if (input.inputs != null && initialRouting["inputs"] === undefined) {
