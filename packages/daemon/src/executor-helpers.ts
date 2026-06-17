@@ -236,6 +236,10 @@ export function readInputMap(v: unknown): Record<string, unknown> {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return {};
   const out: Record<string, unknown> = {};
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    // Match the write-path dunder guard (coerceInputs / coerceInputBindings):
+    // a `__proto__` / `constructor` / `prototype` key reaching here only via a
+    // direct SQLite write to `routing.inputs` must never pollute `out`.
+    if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
     if (val !== null && typeof val === "object" && Object.hasOwn(val as Record<string, unknown>, "$fragua_blob")) {
       continue;
     }

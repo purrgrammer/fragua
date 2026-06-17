@@ -42,11 +42,11 @@ import {
   unsafeAllowEnvNames,
 } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
+import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
-import { coerceInputs } from "./run.ts";
 
 const POLL_MS = 50;
 const BATCH = 500;
@@ -220,7 +220,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     const inputDecls = mint.graph.attrs.inputs ?? [];
     let inputs: Record<string, unknown>;
     try {
-      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson, inputDecls);
+      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson);
     } catch (err) {
       console.error(chalk.red(`ci: ${(err as Error).message}`));
       return CLI_EXIT.usage;

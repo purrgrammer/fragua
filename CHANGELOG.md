@@ -123,11 +123,13 @@ guarantee.
   `"false"`) before enqueue, so a CLI workflow declaring number/boolean inputs
   no longer fails the shape guard. A non-numeric number or a non-boolean string
   is a clean enqueue-time error.
-- The event-payload 4 KiB cap is now measured in UTF-8 bytes (both the store's
-  write-time guard and the SQLite CHECK), so structured inputs containing CJK or
-  emoji can no longer exceed the cap by counting code points instead of bytes.
-  Bumps the store schema to v5 (a forward/back migration rebuilds the
-  `events` / `daemon_events` payload constraint).
+- The event-payload 4 KiB cap is now measured in UTF-8 bytes by the store's
+  runtime write guard (via `TextEncoder`) instead of `String#length`, so
+  structured inputs containing CJK or emoji can no longer exceed the cap by
+  counting code points instead of bytes. No schema migration: a byte-exact SQL
+  CHECK can't be retroactively applied to existing rows, so the byte cap lives
+  only in the write path; the existing `events` / `daemon_events` SQL CHECK
+  remains a code-point backstop.
 - Structured-input safety. A non-scalar value handed to a `type: string` /
   `number` / `boolean` input (via `--input-json`) is now rejected at enqueue
   with a clear shape error instead of stringifying to `"[object Object]"` and

@@ -272,15 +272,24 @@ export function projectRunOutputs(
 ): Record<string, OutputStructValue> | undefined {
   if (runOutputs.length === 0 || status !== "completed") return undefined;
   const out: Record<string, OutputStructValue> = {};
+  // Parse each DISTINCT producer node once — multiple declarations projecting
+  // from the same node would otherwise re-`JSON.parse` the same struct. The
+  // `ABSENT` sentinel (producer never ran / unreadable struct) stays distinct
+  // from a present `null` struct value.
+  const ABSENT = Symbol("absent");
+  const parsedByNode = new Map<string, OutputStructValue | typeof ABSENT>();
   for (const decl of runOutputs) {
-    const raw = lookupLatest(decl.node);
-    if (raw === null) continue; // producer never ran → absent
-    let struct: OutputStructValue;
-    try {
-      struct = JSON.parse(raw) as OutputStructValue;
-    } catch {
-      continue; // unreadable struct → absent, never a crash
+    let struct = parsedByNode.get(decl.node);
+    if (struct === undefined) {
+      const raw = lookupLatest(decl.node);
+      try {
+        struct = raw === null ? ABSENT : (JSON.parse(raw) as OutputStructValue);
+      } catch {
+        struct = ABSENT; // unreadable struct → absent, never a crash
+      }
+      parsedByNode.set(decl.node, struct);
     }
+    if (struct === ABSENT) continue; // producer never ran / unreadable → absent
     const projected = projectRunOutput(struct, decl.path);
     if (!projected.present) continue; // path through an omitted field → absent
     out[decl.name] = projected.value;

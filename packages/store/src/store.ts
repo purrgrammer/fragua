@@ -108,7 +108,13 @@ import {
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
-import { getAllOutputStructs, getLatestOutput, getOutputsForRun, insertOutput } from "./outputs-queries.ts";
+import {
+  getAllOutputStructs,
+  getLatestOutput,
+  getLatestOutputBatch,
+  getOutputsForRun,
+  insertOutput,
+} from "./outputs-queries.ts";
 import {
   applyCreationPragmas,
   applyPragmas,
@@ -1058,6 +1064,22 @@ export class SqliteStore implements IEventStore {
       // fails closed rather than throwing.
       return null;
     }
+  }
+
+  getLatestOutputBatch(runId: string, nodeIds: readonly string[]): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const { nodeId, struct } of getLatestOutputBatch(this.db, runId, nodeIds)) {
+      try {
+        out.set(
+          nodeId,
+          materializeStructJson(struct, (sha) => this.blobs.get(sha)),
+        );
+      } catch {
+        // Missing/corrupt spilled blob — omit the node so the caller treats it
+        // as "no output" (fails closed), matching `getLatestOutput`.
+      }
+    }
+    return out;
   }
 
   // ─────────────── Aggregations ───────────────

@@ -118,8 +118,9 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
   // `runDetail`. The value disambiguates three states with a single `.get()`:
   // `undefined` = not yet cached, `null` = cached miss (no run-level outputs /
   // malformed IR), `RunOutputDecl[]` = cached hit. Bounded by a small
-  // insertion-order LRU so a long-running process across many workflow versions
-  // can't accumulate one entry per unique sha forever.
+  // insertion-order FIFO (oldest-sha-first eviction) so a long-running process
+  // across many workflow versions can't accumulate one entry per unique sha
+  // forever.
   const RUN_OUTPUTS_CACHE_MAX = 256;
   const runOutputsBySha = new Map<string, RunOutputDecl[] | null>();
   const cacheRunOutputs = (sha: string, decls: RunOutputDecl[] | null): void => {
@@ -147,8 +148,8 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
       // `outputs:` block over the producer's latest emission. ONLY a completed
       // run carries an envelope, so skip the IR parse + outputs read entirely
       // for queued / running / paused runs (the projection would discard them).
-      // The producer's latest struct comes from one `getLatestOutput` per
-      // DISTINCT producer node (O(M)) — not a `getOutputsForRun` batch, which
+      // The producer's latest struct comes from ONE `getLatestOutputBatch` over
+      // the DISTINCT producer nodes — not a `getOutputsForRun` batch, which
       // materialises every iteration of every node (N×M blob reads for an
       // N-iteration goal-gate run) only to keep the last per node.
       if (wf?.ir != null && state.status === "completed") {
@@ -162,10 +163,8 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
           cacheRunOutputs(state.workflowSha!, runOutputs);
         }
         if (runOutputs !== null && runOutputs.length > 0) {
-          const latestByNode = new Map<string, string | null>();
-          for (const node of new Set(runOutputs.map((d) => d.node))) {
-            latestByNode.set(node, store.getLatestOutput(runId, node));
-          }
+          const nodeIds = [...new Set(runOutputs.map((d) => d.node))];
+          const latestByNode = store.getLatestOutputBatch(runId, nodeIds);
           const outputs = projectRunOutputs(runOutputs, state.status, (node) => latestByNode.get(node) ?? null);
           if (outputs !== undefined) detail.outputs = outputs;
         }

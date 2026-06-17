@@ -60,7 +60,7 @@ import {
   providersTestCommand,
 } from "../src/commands/providers.ts";
 import type { ModelOpsFlags } from "../src/commands/providers-custom.ts";
-import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
+import { runCommand } from "../src/commands/run.ts";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 import {
   scheduleAddCommand,
@@ -74,6 +74,7 @@ import { serveCommand } from "../src/commands/serve.ts";
 import { showCommand } from "../src/commands/show.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 import { waitCommand } from "../src/commands/wait.ts";
+import { resolveInputArgs } from "../src/input-coerce.ts";
 import { FRAGUA_VERSION } from "../src/version.ts";
 
 const cli = cac("fragua");

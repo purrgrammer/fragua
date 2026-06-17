@@ -18,106 +18,12 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { type InputDecl, isStructuredInput } from "@fragua/core";
 import chalk from "chalk";
+import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
 import { followRun } from "../run-follow.ts";
 import { withStoreClient } from "../store-client.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
-
-/** Parse repeated `--input name=value` args into a resolved map. A value
- * of `@<path>` reads the file verbatim; `@-` reads stdin (once, cached for
- * reuse). Type coercion is the server's job (against the workflow's
- * `inputs:` schema) — this only resolves the string. Throws on a malformed
- * entry (missing `=` or empty name) or an unreadable `@` source. */
-export async function resolveInputArgs(raw: string | string[] | undefined): Promise<Record<string, string>> {
-  const list = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
-  const out: Record<string, string> = {};
-  let stdinCache: string | undefined;
-  for (const entry of list) {
-    const s = String(entry);
-    const eq = s.indexOf("=");
-    if (eq <= 0) throw new Error(`--input must be name=value (got ${JSON.stringify(s)})`);
-    const name = s.slice(0, eq);
-    const rawVal = s.slice(eq + 1);
-    if (rawVal.startsWith("@")) {
-      const src = rawVal.slice(1);
-      if (src === "-") {
-        stdinCache ??= await Bun.stdin.text();
-        out[name] = stdinCache;
-      } else {
-        out[name] = await readFile(src, "utf8");
-      }
-    } else {
-      out[name] = rawVal;
-    }
-  }
-  return out;
-}
-
-/** Type-directed coercion of resolved `--input` strings + an optional whole-
- * object `--input-json` against the workflow's `inputs:` declarations.
- *
- * - `--input-json` (if present) is parsed as one JSON value and seeds the map.
- * - Each `--input name=value` overlays it: an object / array-typed input has its
- *   string `JSON.parse`d (gated by `isStructuredInput`); a declared `number` is
- *   `Number()`-coerced, a `boolean` accepts only `"true"` / `"false"`; a
- *   `string` (or unknown) stays verbatim. Profile validation happens downstream
- *   at enqueue (`validateInputBindings`).
- * - Malformed JSON for a declared object / array input (or for `--input-json`),
- *   a non-numeric `number`, or a non-`true`/`false` `boolean` throws a clean
- *   error naming the offender — never a silent coercion.
- */
-export function coerceInputs(
-  rawStrings: Record<string, string>,
-  inputJson: string | undefined,
-  decls: readonly InputDecl[],
-): Record<string, unknown> {
-  const declByName = new Map(decls.map((d) => [d.name, d]));
-  const out: Record<string, unknown> = {};
-  if (inputJson !== undefined) {
-    let whole: unknown;
-    try {
-      whole = JSON.parse(inputJson);
-    } catch (err) {
-      throw new Error(`--input-json is not valid JSON: ${(err as Error).message}`);
-    }
-    if (whole === null || typeof whole !== "object" || Array.isArray(whole)) {
-      throw new Error("--input-json must be a JSON object mapping input names to values");
-    }
-    // Copy only own, non-dunder keys: `Object.assign(out, ...)` would invoke the
-    // `__proto__` setter for a `{"__proto__": ...}` payload, polluting `out`'s
-    // prototype chain so the bracket-reads in `resolveInputBindings` /
-    // `validateInputBindings` see an attacker value the own-only `unknown_input`
-    // check never reports.
-    for (const [k, v] of Object.entries(whole as Record<string, unknown>)) {
-      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
-      out[k] = v;
-    }
-  }
-  for (const [name, value] of Object.entries(rawStrings)) {
-    const decl = declByName.get(name);
-    if (decl !== undefined && isStructuredInput(decl)) {
-      try {
-        out[name] = JSON.parse(value);
-      } catch (err) {
-        throw new Error(`input "${name}" (type ${decl.type}) is not valid JSON: ${(err as Error).message}`);
-      }
-    } else if (decl !== undefined && decl.type === "number") {
-      const n = Number(value);
-      if (Number.isNaN(n)) throw new Error(`input "${name}" (type number) is not a number: ${JSON.stringify(value)}`);
-      out[name] = n;
-    } else if (decl !== undefined && decl.type === "boolean") {
-      if (value !== "true" && value !== "false") {
-        throw new Error(`input "${name}" (type boolean) must be "true" or "false", got ${JSON.stringify(value)}`);
-      }
-      out[name] = value === "true";
-    } else {
-      out[name] = value;
-    }
-  }
-  return out;
-}
 
 export interface RunCommandOptions {
   workflow: string;
@@ -200,7 +106,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     const inputDecls = mint.graph.attrs.inputs ?? [];
     let inputs: Record<string, unknown>;
     try {
-      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson, inputDecls);
+      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson);
     } catch (err) {
       console.error(chalk.red(`run: ${(err as Error).message}`));
       return 1;

@@ -306,6 +306,47 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.inputErrors).toEqual([]);
   });
 
+  test("number/boolean inputs submitted as STRINGS (the web shape) coerce, validate, and land typed", () => {
+    const WITH_SCALARS =
+      "name: cfg\ninputs:\n  count: {type: number, required: true}\n  flag: {type: boolean, required: true}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";
+    const scalarDecls = parseWorkflow(WITH_SCALARS).attrs.inputs;
+    const { plane } = rig();
+    // The web UI POSTs raw strings; buildEnqueue is the shared write surface that
+    // must coerce them to their declared scalar type before validation.
+    const r = plane.buildEnqueue({
+      workflowSha: "sha1",
+      inputDecls: scalarDecls,
+      inputs: { count: "42", flag: "true" },
+    });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.initialRouting).toEqual({ inputs: { count: 42, flag: true } });
+  });
+
+  test("number parser is decimal-only and finite: blank / Infinity / 0x reject; constructor is an own input", () => {
+    const WITH_NUM =
+      "name: cfg\ninputs:\n  count: {type: number}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";
+    const numDecls = parseWorkflow(WITH_NUM).attrs.inputs;
+    const { plane } = rig();
+    for (const bad of ["", "   ", "Infinity", "-Infinity", "NaN", "0x10", "0o7", "0b10"]) {
+      const r = plane.buildEnqueue({ workflowSha: "sha1", inputDecls: numDecls, inputs: { count: bad } });
+      expect(r.ok).toBe(false);
+    }
+    // Valid decimals (incl. scientific / fractional) coerce and land typed.
+    const ok = plane.buildEnqueue({ workflowSha: "sha1", inputDecls: numDecls, inputs: { count: "1e3" } });
+    if (!ok.ok) throw new Error(ok.error);
+    expect(ok.params.initialRouting).toEqual({ inputs: { count: 1000 } });
+
+    // An input literally named `constructor` reads its OWN value, not the
+    // built-in off the prototype (Object.hasOwn guard).
+    const WITH_CTOR =
+      "name: cfg\ninputs:\n  constructor: {type: string, required: true}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";
+    const ctorDecls = parseWorkflow(WITH_CTOR).attrs.inputs;
+    const missing = plane.buildEnqueue({ workflowSha: "sha1", inputDecls: ctorDecls, inputs: {} });
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error("expected failure");
+    expect(missing.inputErrors.some((e) => e.code === "missing_required" && e.name === "constructor")).toBe(true);
+  });
+
   test("runId is always minted — no operator/client-supplied id; scheduleId passes through", () => {
     const { plane } = rig();
     const r = plane.buildEnqueue({ workflowSha: "sha1", scheduleId: "sch-1" });

@@ -944,6 +944,10 @@ export interface IEventReader {
   getOutputsForRun(runId: string): Array<{ nodeId: string; iteration: number; struct: string }>;
   /** Latest-iteration output struct for a specific node, or null. */
   getLatestOutput(runId: string, nodeId: string): string | null;
+  /** Latest-iteration struct for each of `nodeIds` in ONE query, keyed by
+   * node id. Nodes that never emitted are absent from the map. Collapses the
+   * per-node N+1 in `runDetail`'s typed-partial projection. */
+  getLatestOutputBatch(runId: string, nodeIds: readonly string[]): Map<string, string>;
 
   // ─── Blobs (raw read)
   /** Read a blob by sha256. Returns `null` when the file is absent (not yet

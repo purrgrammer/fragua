@@ -6,11 +6,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InputDecl } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@fragua/daemon";
 import { SqliteStore } from "@fragua/store";
-import { coerceInputs, resolveInputArgs, runCommand } from "../src/commands/run.ts";
+import { runCommand } from "../src/commands/run.ts";
+import { coerceInputs, resolveInputArgs } from "../src/input-coerce.ts";
 
 interface Rig {
   dbPath: string;
@@ -214,65 +214,48 @@ describe("resolveInputArgs", () => {
   });
 });
 
-describe("coerceInputs", () => {
-  const decl = (over: Partial<InputDecl> & { name: string }): InputDecl => ({
-    type: "string",
-    required: false,
-    ...over,
-  });
-  const arrayDecl = decl({ name: "tags", type: "array", profile: { kind: "array", items: { kind: "string" } } });
-  const objDecl = decl({
-    name: "config",
-    type: "object",
-    profile: { kind: "record", fields: { env: { kind: "string" } }, required: ["env"] },
-  });
-
-  test("--input tags=<json> JSON-parses an array-typed input", () => {
-    expect(coerceInputs({ tags: '["a","b"]' }, undefined, [arrayDecl])).toEqual({ tags: ["a", "b"] });
-  });
-
-  test("--input config=<json> JSON-parses an object-typed input", () => {
-    expect(coerceInputs({ config: '{"env":"prod"}' }, undefined, [objDecl])).toEqual({ config: { env: "prod" } });
-  });
-
-  test("scalar --input name=value stays a verbatim string", () => {
-    expect(coerceInputs({ ticket: "BUG-1" }, undefined, [decl({ name: "ticket" })])).toEqual({ ticket: "BUG-1" });
-  });
-
-  test("--input count=<n> coerces a declared number to a JS number", () => {
-    expect(coerceInputs({ count: "3" }, undefined, [decl({ name: "count", type: "number" })])).toEqual({ count: 3 });
-  });
-
-  test("--input flag=<bool> coerces a declared boolean", () => {
-    expect(coerceInputs({ flag: "true" }, undefined, [decl({ name: "flag", type: "boolean" })])).toEqual({
-      flag: true,
+describe("coerceInputs (merge-only; type coercion lives in buildEnqueue)", () => {
+  test("per-input strings pass through verbatim — no per-type coercion here", () => {
+    expect(coerceInputs({ tags: '["a","b"]', count: "3", flag: "true", ticket: "BUG-1" }, undefined)).toEqual({
+      tags: '["a","b"]',
+      count: "3",
+      flag: "true",
+      ticket: "BUG-1",
     });
   });
 
-  test("--input-json supplies the whole inputs object; per-input flags override", () => {
-    const out = coerceInputs({ tags: '["x"]' }, '{"ticket":"BUG-1","tags":["old"]}', [
-      arrayDecl,
-      decl({ name: "ticket" }),
-    ]);
-    expect(out).toEqual({ ticket: "BUG-1", tags: ["x"] });
+  test("--input-json supplies the whole inputs object; per-input flags override (as strings)", () => {
+    const out = coerceInputs({ tags: '["x"]' }, '{"ticket":"BUG-1","tags":["old"]}');
+    expect(out).toEqual({ ticket: "BUG-1", tags: '["x"]' });
   });
 
-  test("malformed JSON for a declared object/array input throws a clear error naming it", () => {
-    expect(() => coerceInputs({ tags: "[not json" }, undefined, [arrayDecl])).toThrow(/input "tags".*not valid JSON/);
+  test("--input-json values pass through pre-parsed when not overridden", () => {
+    expect(coerceInputs({}, '{"count":3,"flag":true,"cfg":{"env":"prod"}}')).toEqual({
+      count: 3,
+      flag: true,
+      cfg: { env: "prod" },
+    });
   });
 
   test("malformed --input-json throws a clear error", () => {
-    expect(() => coerceInputs({}, "{not json", [])).toThrow(/--input-json is not valid JSON/);
+    expect(() => coerceInputs({}, "{not json")).toThrow(/--input-json is not valid JSON/);
   });
 
   test("--input-json must be a JSON object, not an array/scalar", () => {
-    expect(() => coerceInputs({}, "[1,2]", [])).toThrow(/must be a JSON object/);
+    expect(() => coerceInputs({}, "[1,2]")).toThrow(/must be a JSON object/);
   });
 
   test("--input-json with a __proto__ key does not pollute the result or Object.prototype", () => {
-    const out = coerceInputs({}, '{"__proto__":{"polluted":"yes"},"ticket":"BUG-1"}', [decl({ name: "ticket" })]);
+    const out = coerceInputs({}, '{"__proto__":{"polluted":"yes"},"ticket":"BUG-1"}');
     expect(out).toEqual({ ticket: "BUG-1" });
     expect((out as Record<string, unknown>)["polluted"]).toBeUndefined();
     expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+  });
+
+  test("--input-json keeps own constructor / prototype keys (symmetric with k=v)", () => {
+    const out = coerceInputs({}, '{"constructor":"a","prototype":"b"}');
+    expect(Object.hasOwn(out, "constructor")).toBe(true);
+    expect(Object.hasOwn(out, "prototype")).toBe(true);
+    expect(out["constructor"]).toBe("a");
   });
 });
