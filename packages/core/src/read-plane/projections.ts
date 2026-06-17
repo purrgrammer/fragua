@@ -191,7 +191,10 @@ export function runStateToDetail(
   if (state.status === "halted") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_terminated" && (ev.payload as { status?: unknown }).status === "errored") {
+      // Fold both the v4 terminal fact and the LEGACY (≤v3) `fact.run_halted`.
+      const isErroredTerminal =
+        ev.type === "fact.run_terminated" && (ev.payload as { status?: unknown }).status === "errored";
+      if (isErroredTerminal || ev.type === "fact.run_halted") {
         const p = ev.payload as { reason?: unknown; detail?: unknown; occContext?: unknown } | null | undefined;
         if (typeof p?.reason === "string" && (HALT_REASONS as readonly string[]).includes(p.reason)) {
           detail.haltReason = p.reason as HaltReason;
@@ -207,7 +210,12 @@ export function runStateToDetail(
   if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") {
+      // Fold both the v4 `fact.run_paused{reason:human}` and the LEGACY (≤v3)
+      // `fact.run_paused_human` (same HITL prompt/routes payload shape).
+      const isHumanPause =
+        (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") ||
+        ev.type === "fact.run_paused_human";
+      if (isHumanPause) {
         const p = ev.payload as { nodeId?: unknown; text?: unknown; routes?: unknown; routeLabels?: unknown };
         if (typeof p.nodeId === "string") detail.hitlNodeId = p.nodeId;
         if (typeof p.text === "string") detail.hitlLabel = p.text;
@@ -396,7 +404,10 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
   let gateNode: string | null = null;
   let decisions: Record<string, { route: string; note?: string }> | undefined;
   for (const ev of events) {
-    if (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") {
+    const isHumanPause =
+      (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") ||
+      ev.type === "fact.run_paused_human";
+    if (isHumanPause) {
       const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
       gateNode = typeof nodeId === "string" ? nodeId : null;
     } else if (ev.type === "intent.human_input" && gateNode != null) {
@@ -510,7 +521,7 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   // that never received its own completion/abort.
   let haltSeq: number | undefined;
   for (const ev of events) {
-    if (ev.type === "fact.run_terminated" || ev.type === "fact.run_quarantined") {
+    if (TERMINAL_RUN_FACT_TYPES.has(ev.type)) {
       haltSeq = ev.seq;
       break;
     }
@@ -553,6 +564,22 @@ const RUN_STATE_FACT_TYPES = new Set<string>([
   "fact.run_resumed",
   "fact.run_terminated",
   "fact.run_quarantined",
+  // LEGACY (≤v3) read-only fold paths — superseded in emission by the v4 facts
+  // above, but still fold for runs pinned below contract v4.
+  "fact.run_paused_human",
+  "fact.run_completed",
+  "fact.run_halted",
+  "fact.run_cancelled",
+]);
+
+/** Terminal run facts, v4 + LEGACY (≤v3). A run ends on exactly one of these;
+ *  the node-state fold uses its seq to downgrade still-`running` nodes. */
+const TERMINAL_RUN_FACT_TYPES = new Set<string>([
+  "fact.run_terminated",
+  "fact.run_quarantined",
+  "fact.run_completed",
+  "fact.run_halted",
+  "fact.run_cancelled",
 ]);
 
 /** The currently-active `fact.run_paused` node + seq, or `null` when the
@@ -563,9 +590,11 @@ function latestRunPaused(events: StoredEvent[]): { nodeId: string; seq: number }
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i]!;
     if (!RUN_STATE_FACT_TYPES.has(ev.type)) continue;
-    if (ev.type !== "fact.run_paused") return null;
     // A human-reason pause is a workflow question, not an aborted node to
-    // reset — treat it like the former `fact.run_paused_human` (no reset).
+    // reset — both the v4 `fact.run_paused{reason:human}` and the LEGACY
+    // `fact.run_paused_human` skip the reset.
+    if (ev.type === "fact.run_paused_human") return null;
+    if (ev.type !== "fact.run_paused") return null;
     if ((ev.payload as { reason?: unknown }).reason === "human") return null;
     const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
     return typeof nodeId === "string" ? { nodeId, seq: ev.seq } : null;

@@ -280,13 +280,14 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
-    if (ev.type === "fact.run_paused") {
+    if (ev.type === "fact.run_paused" || ev.type === "fact.run_paused_human") {
       // Pauses (operator / HITL / provider_error / payment_required /
       // budget / provider_retry / handler_retry) do NOT emit
       // `fact.node_completed`, so the node window stays open across
       // the pause. The resume re-emits `fact.node_started` for the
       // same nodeId; we want both halves to fold into a single
-      // Cost-breakdown row.
+      // Cost-breakdown row. The LEGACY (≤v3) `fact.run_paused_human`
+      // folds identically to the v4 `fact.run_paused{reason:human}`.
       const pausedNodeId = stringField(data, "nodeId");
       if (pausedNodeId) pausedOpenNodes.add(pausedNodeId);
       continue;

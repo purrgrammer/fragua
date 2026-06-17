@@ -898,6 +898,70 @@ export type FactEvent =
           };
     }
   | {
+      /** LEGACY (≤ contract v3). NEVER EMITTED; retained so the reducer/
+       * read-plane can fold pre-v4 runs. New runs emit
+       * `fact.run_terminated { status: "completed" }`. */
+      type: "fact.run_completed";
+      payload: { finalNode: string };
+    }
+  | {
+      /** LEGACY (≤ contract v3). NEVER EMITTED; retained so the reducer/
+       * read-plane can fold pre-v4 runs. New runs emit
+       * `fact.run_terminated { status: "errored" }`. */
+      type: "fact.run_halted";
+      payload: {
+        reason: HaltReason;
+        detail?: string;
+        nodeId?: string;
+        partialTokens?: number;
+        partialCostUsd?: number;
+        partialInputTokens?: number;
+        partialOutputTokens?: number;
+        partialCacheReadTokens?: number;
+        partialCacheWriteTokens?: number;
+        partialInputCostUsd?: number;
+        partialOutputCostUsd?: number;
+        partialCacheReadCostUsd?: number;
+        partialCacheWriteCostUsd?: number;
+        occContext?: {
+          count: number;
+          nodeId: string;
+          iteration: number;
+          lastVersion: number;
+          attemptedFactType: string;
+        };
+      };
+    }
+  | {
+      /** LEGACY (≤ contract v3). NEVER EMITTED; retained so the reducer/
+       * read-plane can fold pre-v4 runs. New runs emit
+       * `fact.run_terminated { status: "aborted" }`. */
+      type: "fact.run_cancelled";
+      payload: { intentSeq: number };
+    }
+  | {
+      /** LEGACY (≤ contract v3). NEVER EMITTED; retained so the reducer/
+       * read-plane can fold pre-v4 runs. New runs emit
+       * `fact.run_paused { reason: "human" }`. */
+      type: "fact.run_paused_human";
+      payload: {
+        nodeId: string;
+        text: string;
+        routes: string[];
+        routeLabels?: Record<string, string>;
+        snapshot?: {
+          treeSha: string;
+          commitSha: string;
+          headSha: string | null;
+          headRef: string | null;
+          baseGitSha: string;
+          diffBaseSha: string;
+          committed: SnapshotStat | null;
+          uncommitted: SnapshotStat | null;
+        };
+      };
+    }
+  | {
       /** Terminal worktree snapshot. Fires once per run, after the terminal
        * status fact, only for worktree-backed runs. The reducer projects
        * `change_stat` / `inbox_status` / `final_*` from this payload in the

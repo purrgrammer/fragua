@@ -454,6 +454,14 @@ const NON_MUTATOR_BUILDERS: {
   "fact.daemon_takeover": () => ({ type: "fact.daemon_takeover", payload: { reclaimedFrom: 1, at: 1_500 } }),
   "fact.run_accepted": () => ({ type: "fact.run_accepted", payload: { sha: "s", replayed: 1, tailStaged: false } }),
   "fact.run_discarded": () => ({ type: "fact.run_discarded", payload: { refs: [] } }),
+  // LEGACY (≤v3) read-only fold paths — never touch the frontier.
+  "fact.run_completed": (n) => ({ type: "fact.run_completed", payload: { finalNode: n } }),
+  "fact.run_halted": () => ({ type: "fact.run_halted", payload: { reason: "error" } }),
+  "fact.run_cancelled": () => ({ type: "fact.run_cancelled", payload: { intentSeq: 1 } }),
+  "fact.run_paused_human": (n) => ({
+    type: "fact.run_paused_human",
+    payload: { nodeId: n, text: "Approve?", routes: ["yes", "no"] },
+  }),
 };
 
 const NON_MUTATOR_FACTS: ReadonlyArray<(nodeId: string) => FactEvent> = Object.values(NON_MUTATOR_BUILDERS);

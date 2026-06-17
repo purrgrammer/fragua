@@ -256,6 +256,66 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       }
       return next;
     }
+    // ─── LEGACY (≤ contract v3) fold paths. NEVER EMITTED; the daemon writes
+    // only fact.run_terminated / fact.run_paused. Retained so the reducer
+    // folds pre-v4 runs to the SAME run_state the v4 facts produce (write-new,
+    // read-all; the immutable log is folded across [MIN_COMPATIBLE, CURRENT]).
+    // contract: no-bump — READ-surface restoration, not an emission change. v4
+    // still emits only run_terminated / run_paused; these arms fold pre-v4
+    // runs that EVENT_CONTRACT_VERSION 1–3 already produced, so the emission
+    // contract is unchanged and MIN_COMPATIBLE stays 1.
+    case "fact.run_completed": {
+      // Parity with fact.run_terminated{status:"completed"}.
+      closeDispatchInterval(next, now);
+      next.nodeStartedAt = null;
+      next.status = "completed";
+      next.currentNode = fact.payload.finalNode;
+      return next;
+    }
+    case "fact.run_cancelled": {
+      // Parity with fact.run_terminated{status:"aborted"}.
+      closeDispatchInterval(next, now);
+      next.nodeStartedAt = null;
+      next.status = "cancelled";
+      return next;
+    }
+    case "fact.run_halted": {
+      // Parity with fact.run_terminated{status:"errored"}: status + the
+      // partial-turn spend fold (mirrors fact.node_aborted).
+      closeDispatchInterval(next, now);
+      next.nodeStartedAt = null;
+      next.status = "halted";
+      const p = fact.payload;
+      if (p.partialTokens != null || p.partialCostUsd != null) {
+        next.metrics.billedTokens += p.partialTokens ?? 0;
+        next.metrics.totalCostUsd += p.partialCostUsd ?? 0;
+        next.metrics.totalInputCostUsd += p.partialInputCostUsd ?? 0;
+        next.metrics.totalOutputCostUsd += p.partialOutputCostUsd ?? 0;
+        next.metrics.totalCacheReadCostUsd += p.partialCacheReadCostUsd ?? 0;
+        next.metrics.totalCacheWriteCostUsd += p.partialCacheWriteCostUsd ?? 0;
+        next.metrics.totalInputTokens += p.partialInputTokens ?? 0;
+        next.metrics.totalOutputTokens += p.partialOutputTokens ?? 0;
+        next.metrics.totalCacheReadTokens += p.partialCacheReadTokens ?? 0;
+        next.metrics.totalCacheWriteTokens += p.partialCacheWriteTokens ?? 0;
+        if (p.nodeId != null) {
+          const haltBucket = next.metrics.nodeCosts[p.nodeId] ?? { tokens: 0, costUsd: 0 };
+          next.metrics.nodeCosts[p.nodeId] = {
+            tokens: haltBucket.tokens + (p.partialInputTokens ?? 0) + (p.partialOutputTokens ?? 0),
+            costUsd: haltBucket.costUsd + (p.partialCostUsd ?? 0),
+          };
+        }
+      }
+      return next;
+    }
+    case "fact.run_paused_human": {
+      // Parity with fact.run_paused{reason:"human"}: the HITL prompt/routes
+      // live on the payload; the reducer only projects status (the read-plane
+      // surfaces text/routes).
+      closeDispatchInterval(next, now);
+      next.status = "paused_human";
+      next.nodeStartedAt = null;
+      return next;
+    }
     case "fact.run_quarantined": {
       closeDispatchInterval(next, now);
       next.status = "quarantined";

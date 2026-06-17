@@ -278,6 +278,26 @@ function deriveOutcome(events: StoredEvent[]): ExplainOutcome {
           reason: typeof p.reason === "string" ? p.reason : "unknown",
         };
       }
+      // LEGACY (≤v3) read-only fold paths — parity with the v4 facts above.
+      case "fact.run_completed":
+        return { kind: "completed" };
+      case "fact.run_cancelled":
+        return { kind: "cancelled" };
+      case "fact.run_halted": {
+        const p = ev.payload as { reason?: unknown; detail?: unknown };
+        return {
+          kind: "halted",
+          reason: typeof p.reason === "string" ? p.reason : "unknown",
+          ...(typeof p.detail === "string" ? { detail: p.detail } : {}),
+        };
+      }
+      case "fact.run_paused_human": {
+        const p = ev.payload as { text?: unknown };
+        return {
+          kind: "paused_human",
+          ...(typeof p.text === "string" ? { label: p.text } : {}),
+        };
+      }
       default:
         break;
     }

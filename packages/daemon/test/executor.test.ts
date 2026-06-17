@@ -857,6 +857,20 @@ describe("executor — version mismatch", () => {
     expect(p.pinnedVersion).toBeLessThan(p.supportedMin);
     r.store.close();
   });
+
+  test("pin at v3 (a LEGACY-taxonomy run) is ADMITTED, not gated — MIN_COMPATIBLE=1 (write-new, read-all)", async () => {
+    const r = await driveVersionMismatch("run7", 3);
+    // A run pinned at contract v3 carries the legacy fact taxonomy but the
+    // reducer/read-plane still fold it, so the executor must NOT trip the
+    // compat gate. The run runs to its sanctioned terminal instead.
+    const state = r.store.getState("run7")!;
+    expect(state.status).toBe("completed");
+    const gated = r.store
+      .getEvents("run7")
+      .some((e) => e.type === "fact.run_paused" && (e.payload as { reason?: string }).reason === "engine_incompatible");
+    expect(gated).toBe(false);
+    r.store.close();
+  });
 });
 
 describe("executor — provider pause and resume", () => {

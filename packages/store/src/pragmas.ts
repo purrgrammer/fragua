@@ -37,20 +37,22 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * terminal facts (`run_completed` / `run_halted` / `run_cancelled`) become
  * one `fact.run_terminated { status: completed | errored | aborted }`, and
  * the separate `fact.run_paused_human` folds into `fact.run_paused` as
- * `reason: "human"`. The reducer no longer folds the old taxonomy — a clean
- * cut (no back-compat, pre-release), so `MIN_COMPATIBLE` ratchets to 4:
- * a run pinned < 4 carries the dropped fact types and can no longer be
- * folded, so its reducer paths are gone. */
+ * `reason: "human"`. This is an EMISSION cut only — new runs emit the v4
+ * facts — but the reducer/read-plane STILL fold the pre-v4 taxonomy (the
+ * legacy fact types live on as read-only members of `FactEvent`), so v1–v3
+ * runs keep folding and `MIN_COMPATIBLE` stays 1. */
 export const EVENT_CONTRACT_VERSION = 4;
 
-/** Lowest contract version the daemon folds. Ratchets ONLY by deliberate act
- * (§3.4): advancing it strands every run pinned below it, so it moves only in
- * a dedicated commit that names the dropped versions and removes their reducer
- * paths. A snapshot test pins this value.
- * Ratcheted 1 → 4 with the v4 fact-taxonomy collapse: v1–v3 runs carry the
- * removed `fact.run_{completed,halted,cancelled,paused_human}` types, whose
- * fold paths the reducer dropped in the same change. */
-export const MIN_COMPATIBLE_CONTRACT_VERSION = 4;
+/** Lowest contract version the daemon folds. THE RULE: write the newest
+ * version, READ ALL versions. Events are an immutable, append-only log, so the
+ * reducer/read-plane fold the WHOLE range [MIN_COMPATIBLE, EVENT_CONTRACT_VERSION]
+ * forever; only EMISSION is version-current. Dropping a fact type from emission
+ * (e.g. the v4 taxonomy collapse) does NOT move this floor — the type is
+ * retained as legacy/read-only in the union+fold. MIN_COMPATIBLE rises ONLY
+ * when a historical format becomes genuinely un-foldable (its reducer path can
+ * no longer reconstruct `run_state`), a rare deliberate act that strands every
+ * run pinned below it. A snapshot test pins this value. */
+export const MIN_COMPATIBLE_CONTRACT_VERSION = 1;
 
 /** A `daemon_lock` row whose `heartbeat_at` is older than this is treated as
  * dead — the window the daemon's reaper uses to reclaim a stale lock, and the
