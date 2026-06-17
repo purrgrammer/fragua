@@ -99,7 +99,9 @@ describe("executor — halt paths that bypass node_completed/node_aborted surfac
     await drive(r, "halt-cost-1");
 
     const events = r.store.getEvents("halt-cost-1");
-    const halted = events.find((e) => e.type === "fact.run_halted");
+    const halted = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halted).toBeDefined();
     const p = halted!.payload as HaltPayload;
     expect(p.reason).toBe("route_not_picked");
@@ -143,7 +145,9 @@ describe("executor — halt paths that bypass node_completed/node_aborted surfac
 
     await drive(r, "halt-cost-2");
 
-    const halted = r.store.getEvents("halt-cost-2").find((e) => e.type === "fact.run_halted");
+    const halted = r.store
+      .getEvents("halt-cost-2")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect(halted).toBeDefined();
     const p = halted!.payload as HaltPayload;
     expect(p.reason).toBe("route_call_not_isolated");
@@ -183,7 +187,9 @@ describe("executor — halt paths that bypass node_completed/node_aborted surfac
 
     await drive(r, "halt-cost-3");
 
-    const halted = r.store.getEvents("halt-cost-3").find((e) => e.type === "fact.run_halted");
+    const halted = r.store
+      .getEvents("halt-cost-3")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect(halted).toBeDefined();
     const p = halted!.payload as HaltPayload;
     expect(p.reason).toBe("edge_no_match");

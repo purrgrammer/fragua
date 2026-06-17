@@ -27,8 +27,8 @@ describe("metaForEvent", () => {
 
   test("static verbs pass through unchanged", () => {
     expect(meta("fact.run_started").verb).toBe("started");
-    expect(meta("fact.run_completed").verb).toBe("completed");
-    expect(meta("fact.run_paused_human").verb).toBe("needs input");
+    expect(meta("fact.run_terminated", { status: "completed" }).verb).toBe("completed");
+    expect(meta("fact.run_paused", { reason: "human" }).verb).toBe("needs input");
   });
 
   test("unknown event types return null so FeedRow skips render", () => {
@@ -59,12 +59,12 @@ describe("metaForEvent", () => {
     expect(budgetMeta.iconClass).toBe("text-sw-accent-pause");
 
     // workflow-asks → hitl (orange)
-    const hitlMeta = meta("fact.run_paused_human", { nodeId: "n", label: "?", options: [] });
+    const hitlMeta = meta("fact.run_paused", { reason: "human", nodeId: "n", label: "?", options: [] });
     expect(hitlMeta.iconClass).toBe("text-sw-accent-pause-hitl");
     expect(hitlMeta.borderVar).toBe("var(--sw-accent-pause-hitl)");
 
     // terminal halt → destructive (red), strip + icon
-    const haltedMeta = meta("fact.run_halted", { reason: "error" });
+    const haltedMeta = meta("fact.run_terminated", { status: "errored", reason: "error" });
     expect(haltedMeta.iconClass).toBe("text-sw-accent-error");
     expect(haltedMeta.borderVar).toBe("var(--sw-accent-error)");
     expect(haltedMeta.attention).toBe(true);
@@ -109,10 +109,9 @@ describe("FEED_HIDDEN_KINDS", () => {
   });
 
   test("common lifecycle facts are NOT in FEED_HIDDEN_KINDS — they must render as Activity rows", () => {
-    expect(FEED_HIDDEN_KINDS.has("fact.run_completed")).toBe(false);
+    expect(FEED_HIDDEN_KINDS.has("fact.run_terminated")).toBe(false);
     expect(FEED_HIDDEN_KINDS.has("fact.run_started")).toBe(false);
-    expect(FEED_HIDDEN_KINDS.has("fact.run_halted")).toBe(false);
-    expect(FEED_HIDDEN_KINDS.has("fact.run_paused_human")).toBe(false);
+    expect(FEED_HIDDEN_KINDS.has("fact.run_paused")).toBe(false);
   });
 });
 

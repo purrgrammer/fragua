@@ -764,7 +764,7 @@ export function toFlowGraph(
   // A node is "reached" if it received a `fact.node_*` event OR if some
   // selected edge points at it. Terminal nodes (exit) never emit their
   // own node_started/node_completed — the executor goes straight to
-  // run_halted/run_completed — so without the edge fallback they'd render
+  // run_terminated — so without the edge fallback they'd render
   // as never-reached even when the run actually terminated on them.
   //
   // Exception: a `type: parallel` JOIN. Each branch terminal fires an

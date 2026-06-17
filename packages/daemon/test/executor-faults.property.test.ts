@@ -180,9 +180,12 @@ async function driveFaulted(graph: Graph, opts: FaultOpts = {}): Promise<Faulted
 }
 
 const haltReason = (events: StoredEvent[]): string | undefined =>
-  (events.find((e) => e.type === "fact.run_halted")?.payload as { reason?: string } | undefined)?.reason;
+  (
+    events.find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored")
+      ?.payload as { reason?: string } | undefined
+  )?.reason;
 
-const TERMINAL_FACT_TYPES = new Set(["fact.run_completed", "fact.run_halted", "fact.run_cancelled"]);
+const TERMINAL_FACT_TYPES = new Set(["fact.run_terminated"]);
 /** A *resolvable* transient OCC models the supervisor racing the executor on a
  * mid-run commit; the executor re-reads + re-commits. A conflict on the
  * TERMINAL commit is the zombie/lost-race case (the reclaimed daemon must lose,
@@ -208,7 +211,11 @@ describe("executor faults — OCC conflict at the commit seam", () => {
           // appends an `occ_conflict_resolved` observability trail after it —
           // no version bump, so terminal-absorbing for facts still holds).
           expect(status).toBe("completed");
-          expect(events.some((e) => e.type === "fact.run_completed")).toBe(true);
+          expect(
+            events.some(
+              (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed",
+            ),
+          ).toBe(true);
           checkRunInvariants(events, state);
           expect(faultsInjected).toBeLessThanOrEqual(1);
         },
@@ -392,7 +399,9 @@ describe("executor faults — provision + store failure", () => {
         expect(status).toBe("halted");
         // Halted with a clear provision-failure reason (in the fact log;
         // daemon.worktree_provisioned is a daemon-stream event, not here).
-        const halt = events.find((e) => e.type === "fact.run_halted");
+        const halt = events.find(
+          (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+        );
         expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("worktree_error");
         expect((halt?.payload as { detail?: string } | undefined)?.detail ?? "").toContain("worktree_provision_failed");
         checkRunInvariants(events, state);

@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { ConcurrencyError } from "@fragua/store";
 import { CommittingRecorder } from "../src/recorder.ts";
 import { enqueue, rig } from "./helpers.ts";
+import { dispositionType } from "./invariants.ts";
 
 function startedRun(r: ReturnType<typeof rig>, runId: string): number {
   enqueue(r, runId, "start");
@@ -58,13 +59,17 @@ describe("CommittingRecorder OCC retry", () => {
       initialVersion: v,
     });
     // The run halts while the (zombie) handler is still executing.
-    r.store.appendFact("rec2", [{ type: "fact.run_halted", payload: { reason: "error", detail: "leak" } }], v);
+    r.store.appendFact(
+      "rec2",
+      [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "leak" } }],
+      v,
+    );
 
     expect(() =>
       recorder.recordIntent({ toolName: "charge", argsHash: "h", attempt: 1, idempotencyKey: "ik-2" }),
     ).toThrow(ConcurrencyError);
     // The event log gains nothing after the terminal fact.
-    const types = r.store.getEvents("rec2").map((e) => e.type);
+    const types = r.store.getEvents("rec2").map(dispositionType);
     expect(types).not.toContain("fact.side_effect_intent");
     expect(types.at(-1)).toBe("fact.run_halted");
     r.store.close();

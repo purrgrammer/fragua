@@ -226,8 +226,8 @@ describe("Control Center live updates", () => {
     emit(es, {
       runId: "01rinbox001",
       seq: 13,
-      type: "fact.run_paused_human",
-      payload: { nodeId: "review", label: "Approve?", options: [] },
+      type: "fact.run_paused",
+      payload: { reason: "human", nodeId: "review", label: "Approve?", options: [] },
     });
 
     await waitFor(() => {
@@ -260,7 +260,12 @@ describe("Control Center live updates", () => {
     });
 
     state.runs = [];
-    emit(es, { runId: "01rcomp001", seq: 18, type: "fact.run_completed", payload: { finalNode: "done" } });
+    emit(es, {
+      runId: "01rcomp001",
+      seq: 18,
+      type: "fact.run_terminated",
+      payload: { status: "completed", finalNode: "done" },
+    });
 
     await waitFor(() => {
       expect(container.textContent).toContain("Nothing running");
@@ -293,7 +298,12 @@ describe("Control Center live updates", () => {
 
     // fact.run_completed fires first — run leaves Running, no inbox_status yet.
     state.runs = [baseRun({ runId: "01rsnap001", status: "success", runStatus: "completed", title: "Build widget" })];
-    emit(es, { runId: "01rsnap001", seq: 18, type: "fact.run_completed", payload: { finalNode: "done" } });
+    emit(es, {
+      runId: "01rsnap001",
+      seq: 18,
+      type: "fact.run_terminated",
+      payload: { status: "completed", finalNode: "done" },
+    });
     await waitFor(() => {
       expect(container.textContent).toContain("Nothing running");
     });
@@ -411,7 +421,12 @@ describe("Control Center live updates", () => {
     });
 
     state.runs = [];
-    emit(es, { runId: "01rstale01", seq: 18, type: "fact.run_completed", payload: { finalNode: "done" } });
+    emit(es, {
+      runId: "01rstale01",
+      seq: 18,
+      type: "fact.run_terminated",
+      payload: { status: "completed", finalNode: "done" },
+    });
 
     // Return to Home. The runs query was invalidated while unmounted;
     // on remount it re-runs and reflects the new (empty) state. The
@@ -475,10 +490,15 @@ describe("Control Center live updates", () => {
     emit(es, {
       runId: "01rburst003",
       seq: 13,
-      type: "fact.run_paused_human",
-      payload: { nodeId: "review", label: "Approve?", options: [] },
+      type: "fact.run_paused",
+      payload: { reason: "human", nodeId: "review", label: "Approve?", options: [] },
     });
-    emit(es, { runId: "01rburst001", seq: 18, type: "fact.run_completed", payload: { finalNode: "done" } });
+    emit(es, {
+      runId: "01rburst001",
+      seq: 18,
+      type: "fact.run_terminated",
+      payload: { status: "completed", finalNode: "done" },
+    });
 
     await waitFor(() => {
       // 002 is in Running; 003 is in Inbox; 001 has drained.

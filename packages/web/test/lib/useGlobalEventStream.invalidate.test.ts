@@ -18,12 +18,9 @@ describe("useGlobalEventStream — RUN_INVALIDATE_KINDS membership", () => {
   // Core lifecycle kinds (already present before this PR)
   test("includes core run lifecycle facts", () => {
     expect(__invalidateKinds.has("fact.run_started")).toBe(true);
-    expect(__invalidateKinds.has("fact.run_completed")).toBe(true);
-    expect(__invalidateKinds.has("fact.run_paused_human")).toBe(true);
+    expect(__invalidateKinds.has("fact.run_terminated")).toBe(true);
     expect(__invalidateKinds.has("fact.run_paused")).toBe(true);
     expect(__invalidateKinds.has("fact.run_resumed")).toBe(true);
-    expect(__invalidateKinds.has("fact.run_cancelled")).toBe(true);
-    expect(__invalidateKinds.has("fact.run_halted")).toBe(true);
     expect(__invalidateKinds.has("fact.run_quarantined")).toBe(true);
     expect(__invalidateKinds.has("fact.run_requeued_after_crash")).toBe(true);
     expect(__invalidateKinds.has("intent.run_enqueued")).toBe(true);

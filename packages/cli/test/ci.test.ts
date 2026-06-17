@@ -102,7 +102,7 @@ describe("ciCommand", () => {
     expect(code).toBe(0);
     const { status, types } = readArtifact();
     expect(status).toBe("completed");
-    expect(types).toContain("fact.run_completed");
+    expect(types).toContain("fact.run_terminated");
   });
 
   test("a tool step that fails with no fail route halts (aborted_exit) → exit 11", async () => {
@@ -111,7 +111,7 @@ describe("ciCommand", () => {
     expect(code).toBe(11); // HALT_EXIT.aborted_exit
     const { status, types } = readArtifact();
     expect(status).toBe("halted");
-    expect(types).toContain("fact.run_halted");
+    expect(types).toContain("fact.run_terminated");
   });
 
   test("a tool step that fails but routes fail→exit lands gracefully → exit 0", async () => {

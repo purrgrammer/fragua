@@ -325,7 +325,7 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
   // for in-flight runs to reach terminal within `drainMs`. The shutdown
   // signal has already been observed by handlers via their AbortSignal,
   // so they should wrap up quickly. On timeout we return anyway —
-  // leaked handlers will land `fact.run_halted` via their own catch
+  // leaked handlers will land `fact.run_terminated{errored}` via their own catch
   // blocks, or the next startup sweep will requeue stuck runs.
   if (inflight.size > 0) {
     let drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -348,7 +348,7 @@ async function runOneSafe(runId: string, opts: ExecutorOpts, leakBudget: LeakBud
   try {
     await runOne(runId, opts, leakBudget);
   } catch (err) {
-    // runOne appends `fact.run_halted` before rethrowing on crash; this
+    // runOne appends `fact.run_terminated{errored}` before rethrowing on crash; this
     // catch just prevents an unhandled promise rejection from crashing
     // the daemon. Once shutdown is in progress, errors are expected
     // unwind noise (handlers that ignored their abort hitting a torn-
@@ -367,7 +367,7 @@ export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: Lea
     await runOneInner(runId, opts, budget);
   } catch (err) {
     // Outer safety net: if the main body escaped without terminalising
-    // the run, append `fact.run_halted` so the `running` capacity slot
+    // the run, append `fact.run_terminated{errored}` so the `running` capacity slot
     // doesn't leak. Covers throws outside the existing inner try/catch
     // that wraps only `spec.handler(ctx)` — e.g. foldIntents / graphFor
     // / selectEdge / tryAppendFact failures. Belt-and-suspenders: the
@@ -377,8 +377,9 @@ export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: Lea
     if (state != null && state.status === "running") {
       await tryAppendFact(opts.store, runId, state.version, [
         {
-          type: "fact.run_halted",
+          type: "fact.run_terminated",
           payload: {
+            status: "errored",
             reason: "error",
             detail: `executor crashed at ${state.currentNode ?? "<no-node>"}: ${errorMessage(err)}`,
           },
@@ -533,8 +534,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (workflowUnparseable) {
         await tryAppendFact(opts.store, runId, state.version, [
           {
-            type: "fact.run_halted",
-            payload: { reason: "error", detail: workflowParseFailedDetail(workflowParseError) },
+            type: "fact.run_terminated",
+            payload: { status: "errored", reason: "error", detail: workflowParseFailedDetail(workflowParseError) },
           },
         ]);
         return { kind: "terminal" };
@@ -564,7 +565,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // stranded the run as `running`).
       if (!ok) {
         const { halted } = await onOccConflict(
-          "fact.run_cancelled",
+          "fact.run_terminated",
           state.currentNode ?? "",
           nodeRetryCount(state.routing, state.currentNode ?? ""),
           state.version,
@@ -664,8 +665,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         );
         await tryAppendFact(opts.store, runId, state.version, [
           {
-            type: "fact.run_halted",
+            type: "fact.run_terminated",
             payload: {
+              status: "errored",
               reason: "worktree_error",
               detail: `worktree_provision_failed: ${detail}`,
             },
@@ -850,7 +852,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const usage = makeUsageAccumulator();
     // Reactive budget halt: when a `cost.recorded` event mid-handler
     // pushes cumulative spend over a `budget_policy="stop"` ceiling,
-    // we abort the in-flight handler and emit fact.run_halted{
+    // we abort the in-flight handler and emit fact.run_terminated{errored,
     // reason:"budget"} alongside fact.node_aborted (which captures
     // partial spend). Without this bound, a handler that streams many
     // `cost.recorded` events in a single turn can overshoot the cap
@@ -1033,8 +1035,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           payload: { nodeId: currentNode, leakedAt: clock() },
         },
         {
-          type: "fact.run_halted",
-          payload: { reason: "error", detail: "handler_leaked" },
+          type: "fact.run_terminated",
+          payload: { status: "errored", reason: "error", detail: "handler_leaked" },
         },
       ]);
       // Bound the blast radius of misbehaving handlers across the
@@ -1400,7 +1402,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (join === undefined || branches.length === 0) {
       await tryAppendFact(opts.store, runId, state.version, [
-        { type: "fact.run_halted", payload: { reason: "error", detail: "fanout_malformed" } },
+        { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "fanout_malformed" } },
       ]);
       return { kind: "terminal" };
     }
@@ -1506,9 +1508,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         for (const t of budget.newlyWarned) pendingWarnTags.add(t);
       }
       if (budget.shouldHalt) {
-        const payload: { reason: "budget"; detail?: string } = { reason: "budget" };
+        const payload: { status: "errored"; reason: "budget"; detail?: string } = {
+          status: "errored",
+          reason: "budget",
+        };
         if (budget.haltReason !== undefined && budget.haltReason.length > 0) payload.detail = budget.haltReason;
-        return { type: "fact.run_halted", payload };
+        return { type: "fact.run_terminated", payload };
       }
       if (budget.pauseBreach !== undefined) {
         const b = budget.pauseBreach;
@@ -1665,14 +1670,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // by two paths made precedence depend on which path saw the breach.)
     let disposition: FactEvent | undefined;
     const noteDisposition = (f: FactEvent): void => {
-      if (f.type === "fact.run_halted") {
-        if (disposition?.type !== "fact.run_halted") disposition = f;
+      // `fact.run_terminated` here is always the errored (halt) disposition —
+      // terminal beats a resumable pause, first terminal wins.
+      if (f.type === "fact.run_terminated") {
+        if (disposition?.type !== "fact.run_terminated") disposition = f;
       } else if (disposition === undefined) {
         disposition = f;
       }
     };
     const captureDisposition = (): void => {
-      if (disposition?.type === "fact.run_halted") return;
+      if (disposition?.type === "fact.run_terminated") return;
       const disp = fanoutBudgetDisposition();
       if (disp !== undefined) noteDisposition(disp);
     };
@@ -1755,7 +1762,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           await drainInflightPool();
           return commitParkOrTerminal([
             { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
-            { type: "fact.run_halted", payload: { reason: "error", detail: "handler_leaked" } },
+            { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "handler_leaked" } },
           ]);
         }
 
@@ -1800,15 +1807,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const branchFacts: FactEvent[] = [];
         let branchTerminal = false;
         for (const f of outcome.facts) {
-          if (f.type === "fact.run_halted" || f.type === "fact.run_paused") {
-            noteDisposition(f);
-          } else if (f.type === "fact.run_completed") {
+          if (f.type === "fact.run_terminated" && f.payload.status === "completed") {
             // A branch resolving to a run terminal (`next: exit`, or a fail-only
             // edge succeeding into `__end__`) is a structural defect: the
             // validator rejects the shape (E032/E039/E041), but an unvalidated
             // save still reaches the executor. Completing the run mid-fan-out
             // would strand the in-flight siblings — fail closed instead.
             branchTerminal = true;
+          } else if (f.type === "fact.run_terminated" || f.type === "fact.run_paused") {
+            noteDisposition(f);
           } else if (f.type !== "fact.node_started") {
             branchFacts.push(f);
           }
@@ -1825,8 +1832,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           // so the missing-node guard alone wouldn't stop its dispatch_started.
           successor = undefined;
           noteDisposition({
-            type: "fact.run_halted",
-            payload: { reason: "error", detail: `fanout_branch_terminal:${outcome.nodeId}` },
+            type: "fact.run_terminated",
+            payload: { status: "errored", reason: "error", detail: `fanout_branch_terminal:${outcome.nodeId}` },
           });
         }
         if (successor !== undefined) {

@@ -539,7 +539,7 @@ export type FactEvent =
         nextNode: string;
         /** Outcome status the handler (or edge selector) decided — lets the
          * UI distinguish "completed OK" from "completed with outcome=fail"
-         * without walking `edge.selected` / `fact.run_halted`. */
+         * without walking `edge.selected` / `fact.run_terminated{errored}`. */
         outcomeStatus?: "success" | "fail" | "retry";
         /** Present iff the source node declared `routes=` and the llm
          * agent exited via the synthesised `route` tool. The chosen route
@@ -629,40 +629,9 @@ export type FactEvent =
       };
     }
   | {
-      type: "fact.run_paused_human";
-      payload: {
-        nodeId: string;
-        /** Operator-facing prompt rendered above the route buttons.
-         * Sourced from the human node's `text=` attribute. */
-        text: string;
-        /** Declared route names, in declared order. Each becomes one button;
-         * button label resolves via the matching outgoing edge's
-         * `label=` override (see `routeLabels`), falling back to
-         * `humanize(route)`. */
-        routes: string[];
-        /** Sparse route-name → button-text map carrying each outgoing edge's
-         * `label=` override (D6). Only routes with an explicit label appear;
-         * absent entirely when no edge declared one. Pure UX — never
-         * participates in resume-route selection. */
-        routeLabels?: Record<string, string>;
-        /** Worktree snapshot at this pause, embedded for the operator's first
-         * paint without a server roundtrip.
-         * Absent for bare-cwd runs (no provisioner). */
-        snapshot?: {
-          treeSha: string;
-          commitSha: string;
-          headSha: string | null;
-          headRef: string | null;
-          baseGitSha: string;
-          diffBaseSha: string;
-          committed: SnapshotStat | null;
-          uncommitted: SnapshotStat | null;
-        };
-      };
-    }
-  | {
       /** Unified pause fact, reason-discriminated. The reducer projects
-       * `run_state.status` from `payload.reason`: reasons in
+       * `run_state.status` from `payload.reason`: `human` → `paused_human`
+       * (a workflow question, answered via `intent.human_input`), reasons in
        * {@link AUTO_WAKE_PAUSE_REASONS} → `paused_auto` (daemon timer),
        * everything else → `paused` (operator must act).
        *
@@ -671,9 +640,45 @@ export type FactEvent =
        * auto-retryable transport (408/429/5xx/529/network) →
        * `provider_retry`. Local budget overruns route here when
        * `budget_policy="pause"` (default); `budget_policy="stop"`
-       * keeps terminal halt semantics. */
+       * keeps terminal halt semantics.
+       *
+       * `reason:"human"` is the HITL pause (a workflow `human` node asked a
+       * question). It carries the operator-facing prompt + declared routes;
+       * the matching re-entry is `intent.human_input`. The cross-engine
+       * `signal` reason value (external wait) is NOT emitted yet — it arrives
+       * with the external-wait primitive (fact-taxonomy.md §6.2). */
       type: "fact.run_paused";
       payload:
+        | {
+            reason: "human";
+            nodeId: string;
+            /** Operator-facing prompt rendered above the route buttons.
+             * Sourced from the human node's `text=` attribute. */
+            text: string;
+            /** Declared route names, in declared order. Each becomes one
+             * button; button label resolves via the matching outgoing edge's
+             * `label=` override (see `routeLabels`), falling back to
+             * `humanize(route)`. */
+            routes: string[];
+            /** Sparse route-name → button-text map carrying each outgoing
+             * edge's `label=` override (D6). Only routes with an explicit
+             * label appear; absent entirely when no edge declared one. Pure
+             * UX — never participates in resume-route selection. */
+            routeLabels?: Record<string, string>;
+            /** Worktree snapshot at this pause, embedded for the operator's
+             * first paint without a server roundtrip.
+             * Absent for bare-cwd runs (no provisioner). */
+            snapshot?: {
+              treeSha: string;
+              commitSha: string;
+              headSha: string | null;
+              headRef: string | null;
+              baseGitSha: string;
+              diffBaseSha: string;
+              committed: SnapshotStat | null;
+              uncommitted: SnapshotStat | null;
+            };
+          }
         | { reason: "operator"; nodeId: string }
         | {
             reason: "provider_error";
@@ -728,7 +733,7 @@ export type FactEvent =
              * resume re-dispatches with it intact. Bounded by
              * `routing.internal.timeout_retries.<nodeId>` — past the
              * cap (default 3) the run halts with
-             * `fact.run_halted{reason:"timeout_exhausted"}`. */
+             * `fact.run_terminated{errored,reason:"timeout_exhausted"}`. */
             reason: "timeout_retry";
             nodeId: string;
             attempt: number;
@@ -827,51 +832,71 @@ export type FactEvent =
         inputIntentSeq?: number;
       };
     }
-  | { type: "fact.run_completed"; payload: { finalNode: string } }
   | {
-      type: "fact.run_halted";
-      payload: {
-        reason: HaltReason;
-        detail?: string;
-        /** Set alongside the `partial*` fields when the halt terminated a
-         * turn whose spend never reached `fact.node_completed` /
-         * `fact.node_aborted` (structural halts: `route_not_picked`,
-         * `route_call_not_isolated`, `edge_no_match`, handler-returned
-         * `error`/`budget`). Names the node whose `nodeCosts` bucket the
-         * reducer credits. Absent when the halt rides alongside a
-         * `fact.node_completed` that already carries the turn's spend
-         * (budget halt, aborted_exit). */
-        nodeId?: string;
-        /** Partial turn spend accrued before the halt — mirrors the
-         * `partial*` fields on `fact.node_aborted` so the reducer folds
-         * the halted turn into `run_state.metrics` and analytics keep
-         * bucket sums ≈ total_cost_usd. Only present when non-zero. */
-        partialTokens?: number;
-        partialCostUsd?: number;
-        partialInputTokens?: number;
-        partialOutputTokens?: number;
-        partialCacheReadTokens?: number;
-        partialCacheWriteTokens?: number;
-        partialInputCostUsd?: number;
-        partialOutputCostUsd?: number;
-        partialCacheReadCostUsd?: number;
-        partialCacheWriteCostUsd?: number;
-        /** Set when `reason="occ_exhausted"`. Carries the OCC retry
-         * context — count of consecutive `ConcurrencyError` failures,
-         * the node + iteration where the storm hit, the last observed
-         * `run_state.version`, and the type of fact whose append
-         * couldn't land. Operators read this for post-mortem instead
-         * of grepping the string detail. */
-        occContext?: {
-          count: number;
-          nodeId: string;
-          iteration: number;
-          lastVersion: number;
-          attemptedFactType: string;
-        };
-      };
+      /** Unified terminal fact, status-discriminated (fact-taxonomy.md §3.1).
+       * One fact ends a run; the reducer projects `run_state.status` from
+       * `payload.status`: `completed` → `completed`, `errored` → `halted`,
+       * `aborted` → `cancelled`. Lossless discriminated union — each arm
+       * carries the per-disposition detail the three former terminal facts
+       * (`run_completed` / `run_halted` / `run_cancelled`) did. */
+      type: "fact.run_terminated";
+      payload:
+        | {
+            /** Reached a sanctioned terminal (incl. an author-sanctioned
+             * `fail`-edge-to-`exit`). */
+            status: "completed";
+            finalNode: string;
+          }
+        | {
+            /** Ended on an unrecovered fault. `reason` is the {@link HaltReason}
+             * disposition; `detail` the human-readable string. */
+            status: "errored";
+            reason: HaltReason;
+            detail?: string;
+            /** Set alongside the `partial*` fields when the halt terminated a
+             * turn whose spend never reached `fact.node_completed` /
+             * `fact.node_aborted` (structural halts: `route_not_picked`,
+             * `route_call_not_isolated`, `edge_no_match`, handler-returned
+             * `error`/`budget`). Names the node whose `nodeCosts` bucket the
+             * reducer credits. Absent when the halt rides alongside a
+             * `fact.node_completed` that already carries the turn's spend
+             * (budget halt, aborted_exit). */
+            nodeId?: string;
+            /** Partial turn spend accrued before the halt — mirrors the
+             * `partial*` fields on `fact.node_aborted` so the reducer folds
+             * the halted turn into `run_state.metrics` and analytics keep
+             * bucket sums ≈ total_cost_usd. Only present when non-zero. */
+            partialTokens?: number;
+            partialCostUsd?: number;
+            partialInputTokens?: number;
+            partialOutputTokens?: number;
+            partialCacheReadTokens?: number;
+            partialCacheWriteTokens?: number;
+            partialInputCostUsd?: number;
+            partialOutputCostUsd?: number;
+            partialCacheReadCostUsd?: number;
+            partialCacheWriteCostUsd?: number;
+            /** Set when `reason="occ_exhausted"`. Carries the OCC retry
+             * context — count of consecutive `ConcurrencyError` failures,
+             * the node + iteration where the storm hit, the last observed
+             * `run_state.version`, and the type of fact whose append
+             * couldn't land. Operators read this for post-mortem instead
+             * of grepping the string detail. */
+            occContext?: {
+              count: number;
+              nodeId: string;
+              iteration: number;
+              lastVersion: number;
+              attemptedFactType: string;
+            };
+          }
+        | {
+            /** Ended by operator/caller request (`intent.cancel_requested` /
+             * an unquarantine `cancel`). `intentSeq` is the applied intent. */
+            status: "aborted";
+            intentSeq: number;
+          };
     }
-  | { type: "fact.run_cancelled"; payload: { intentSeq: number } }
   | {
       /** Terminal worktree snapshot. Fires once per run, after the terminal
        * status fact, only for worktree-backed runs. The reducer projects
@@ -1125,7 +1150,7 @@ export interface EventEnvelope {
  * the payload. Consumers narrow on `type` to access typed `payload`:
  *
  * ```ts
- * if (e.type === "fact.run_halted") e.payload.reason; // HaltReason
+ * if (e.type === "fact.run_terminated" && e.payload.status === "errored") e.payload.reason; // HaltReason
  * ```
  *
  * The discriminated union excludes observability events (`agent.*`,
@@ -1170,13 +1195,10 @@ export interface RawEvent extends EventEnvelope {
 export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // Run lifecycle facts — every transition that flips status.
   "fact.run_started",
-  "fact.run_completed",
-  "fact.run_paused_human",
+  "fact.run_terminated",
   "fact.run_paused",
   "fact.provider_retry_attempted",
   "fact.run_resumed",
-  "fact.run_cancelled",
-  "fact.run_halted",
   "fact.run_quarantined",
   "fact.run_requeued_after_crash",
   // System health
@@ -1185,7 +1207,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // Post-terminal operator actions (accept / discard)
   "fact.run_discarded",
   "fact.run_accepted",
-  // Terminal worktree snapshot: written AFTER fact.run_completed in the
+  // Terminal worktree snapshot: written AFTER fact.run_terminated in the
   // executor's finally-block dispose path. It sets inbox_status=pending on
   // run_state, so the client's inbox=pending list query must refetch when
   // this fact arrives. Without this entry the server silently drops the

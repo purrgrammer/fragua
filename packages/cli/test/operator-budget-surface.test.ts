@@ -169,13 +169,13 @@ describe("renderEvent — budget.warn highlighting", () => {
     const ev: StoredEvent = {
       seq: 1,
       ts: 1000,
-      type: "fact.run_completed",
-      payload: { finalNode: "n1" },
+      type: "fact.run_terminated",
+      payload: { status: "completed", finalNode: "n1" },
       runId: "r1",
       writer: "daemon",
     };
     renderEvent(ev);
     expect(out()).not.toContain("⚠");
-    expect(out()).toContain("fact.run_completed");
+    expect(out()).toContain("fact.run_terminated");
   });
 });

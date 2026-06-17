@@ -191,7 +191,7 @@ export function runStateToDetail(
   if (state.status === "halted") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_halted") {
+      if (ev.type === "fact.run_terminated" && (ev.payload as { status?: unknown }).status === "errored") {
         const p = ev.payload as { reason?: unknown; detail?: unknown; occContext?: unknown } | null | undefined;
         if (typeof p?.reason === "string" && (HALT_REASONS as readonly string[]).includes(p.reason)) {
           detail.haltReason = p.reason as HaltReason;
@@ -207,7 +207,7 @@ export function runStateToDetail(
   if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_paused_human") {
+      if (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") {
         const p = ev.payload as { nodeId?: unknown; text?: unknown; routes?: unknown; routeLabels?: unknown };
         if (typeof p.nodeId === "string") detail.hitlNodeId = p.nodeId;
         if (typeof p.text === "string") detail.hitlLabel = p.text;
@@ -239,7 +239,7 @@ export function runStateToDetail(
   }
 
   // HITL decision history: pair each `intent.human_input` with the gate
-  // it answered (the most recent preceding `fact.run_paused_human`). Built
+  // it answered (the most recent preceding `fact.run_paused{reason:"human"}`). Built
   // for every run, not just paused ones, so a resumed/terminal run still
   // shows what the operator chose. Latest write per node wins, so a loop
   // that revisits the same human gate keeps only its final answer.
@@ -396,7 +396,7 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
   let gateNode: string | null = null;
   let decisions: Record<string, { route: string; note?: string }> | undefined;
   for (const ev of events) {
-    if (ev.type === "fact.run_paused_human") {
+    if (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") {
       const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
       gateNode = typeof nodeId === "string" ? nodeId : null;
     } else if (ev.type === "intent.human_input" && gateNode != null) {
@@ -427,15 +427,15 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
  * UI groups by `nodeId` and renders the latest iteration's state; non-loop
  * runs see iteration=0 only and behave identically to pre-loop output.
  *
- * Terminal-halt patch: if the run ended via `fact.run_halted`,
- * `fact.run_cancelled`, or `fact.run_quarantined` and any entry is still
+ * Terminal-halt patch: if the run ended via `fact.run_terminated`
+ * (errored / aborted) or `fact.run_quarantined` and any entry is still
  * marked `running`, we downgrade to `failed` so the UI doesn't show a
  * stale "in progress" spinner on a halted run.
  *
  * Active-pause patch: a node aborted because the run paused (budget /
  * operator / provider_error / …) lands as `failed` from its `node_aborted`,
  * but it re-dispatches on resume — it's suspended, not failed. When the
- * latest run-state fact is `fact.run_paused`, reset that pause's node back
+ * latest run-state fact is a non-human `fact.run_paused`, reset that pause's node back
  * to `running` (the UI renders running + paused as "paused"). Mirrors the
  * live overlay's `fact.run_paused` handling.
  */
@@ -510,7 +510,7 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   // that never received its own completion/abort.
   let haltSeq: number | undefined;
   for (const ev of events) {
-    if (ev.type === "fact.run_halted" || ev.type === "fact.run_cancelled" || ev.type === "fact.run_quarantined") {
+    if (ev.type === "fact.run_terminated" || ev.type === "fact.run_quarantined") {
       haltSeq = ev.seq;
       break;
     }
@@ -550,11 +550,8 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
  *  human-pause supersedes it. */
 const RUN_STATE_FACT_TYPES = new Set<string>([
   "fact.run_paused",
-  "fact.run_paused_human",
   "fact.run_resumed",
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_cancelled",
+  "fact.run_terminated",
   "fact.run_quarantined",
 ]);
 
@@ -567,6 +564,9 @@ function latestRunPaused(events: StoredEvent[]): { nodeId: string; seq: number }
     const ev = events[i]!;
     if (!RUN_STATE_FACT_TYPES.has(ev.type)) continue;
     if (ev.type !== "fact.run_paused") return null;
+    // A human-reason pause is a workflow question, not an aborted node to
+    // reset — treat it like the former `fact.run_paused_human` (no reset).
+    if ((ev.payload as { reason?: unknown }).reason === "human") return null;
     const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
     return typeof nodeId === "string" ? { nodeId, seq: ev.seq } : null;
   }

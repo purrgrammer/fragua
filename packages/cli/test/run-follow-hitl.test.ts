@@ -27,7 +27,10 @@ function fakeClient(events: StoredEvent[]) {
       commit: (_runId: string, intent: unknown) => {
         commits.push(intent);
         // Mimic the daemon waking + finishing once the input lands.
-        events.push(ev(events.length + 1, "fact.run_resumed", {}), ev(events.length + 2, "fact.run_completed", {}));
+        events.push(
+          ev(events.length + 1, "fact.run_resumed", {}),
+          ev(events.length + 2, "fact.run_terminated", { status: "completed" }),
+        );
       },
     },
   };
@@ -40,7 +43,7 @@ describe("followRun — startCursor", () => {
       ev(1, "fact.run_started", {}),
       ev(2, "llm.start", {}),
       ev(3, "llm.done", {}),
-      ev(4, "fact.run_completed", {}),
+      ev(4, "fact.run_terminated", { status: "completed" }),
     ];
     const cursors: number[] = [];
     const client = {
@@ -62,7 +65,7 @@ describe("followRun — startCursor", () => {
 describe("followRun — idle hint (no daemon)", () => {
   test("emits the daemon hint exactly once on a silent tail, then keeps following", async () => {
     let polls = 0;
-    const completed = ev(1, "fact.run_completed", {});
+    const completed = ev(1, "fact.run_terminated", { status: "completed" });
     const client = {
       readPlane: {
         // Stays silent for several polls (so the idle window elapses), then the
@@ -107,7 +110,7 @@ describe("followRun — non-human pause", () => {
       ev(1, "fact.run_started", {}),
       ev(2, "fact.run_paused", { reason: "timeout_retry", nodeId: "n", resumeAt: Date.now() + 1000, attempt: 1 }),
       ev(3, "fact.run_resumed", {}),
-      ev(4, "fact.run_completed", {}),
+      ev(4, "fact.run_terminated", { status: "completed" }),
     ]);
 
     const code = await followRun(client, RUN_ID);
@@ -129,9 +132,9 @@ describe("followRun — HITL gate answered elsewhere (#33)", () => {
   test("resolves without freezing when the gate is answered in the web UI", async () => {
     const { client, commits } = fakeClient([
       ev(1, "fact.run_started", {}),
-      ev(2, "fact.run_paused_human", { text: "ok?", routes: ["A"], routeLabels: {} }),
+      ev(2, "fact.run_paused", { reason: "human", text: "ok?", routes: ["A"], routeLabels: {} }),
       ev(3, "fact.run_resumed", { fromStatus: "paused_human" }),
-      ev(4, "fact.run_completed", {}),
+      ev(4, "fact.run_terminated", { status: "completed" }),
     ]);
     // The operator never picks in the terminal; the menu only cancels on abort.
     const stuckPicker = (_r: string[], _l: Record<string, string>, _m: string, signal?: AbortSignal) =>
@@ -146,7 +149,7 @@ describe("followRun — HITL gate answered elsewhere (#33)", () => {
   test("still commits exactly once when answered inline in the terminal", async () => {
     const { client, commits } = fakeClient([
       ev(1, "fact.run_started", {}),
-      ev(2, "fact.run_paused_human", { text: "ok?", routes: ["A"], routeLabels: {} }),
+      ev(2, "fact.run_paused", { reason: "human", text: "ok?", routes: ["A"], routeLabels: {} }),
     ]);
     const inlinePicker = async () => "A";
 

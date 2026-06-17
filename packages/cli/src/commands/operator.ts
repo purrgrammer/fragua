@@ -373,7 +373,7 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
       console.log(`  paused:   ${chalk.yellow(reason ?? "?")} ${chalk.dim(JSON.stringify(rest))}`);
       break;
     }
-    if (e.type === "fact.run_halted") {
+    if (e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored") {
       const p = e.payload as { reason?: string; detail?: string };
       console.log(`  halted:   ${chalk.red(p.reason ?? "?")}${p.detail != null ? chalk.dim(` — ${p.detail}`) : ""}`);
       break;
@@ -642,14 +642,15 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
       return 1;
     }
     // The gate's routes + prompt + label overrides live on the last
-    // fact.run_paused_human.
+    // fact.run_paused{reason:"human"}.
     let routes: string[] = [];
     let routeLabels: Record<string, string> = {};
     let label = "Choose how to proceed";
     const events = store.getEvents(opts.runId);
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i]!.type === "fact.run_paused_human") {
-        const p = events[i]!.payload as { text?: string; routes?: string[]; routeLabels?: Record<string, string> };
+      const ev = events[i]!;
+      if (ev.type === "fact.run_paused" && (ev.payload as { reason?: string }).reason === "human") {
+        const p = ev.payload as { text?: string; routes?: string[]; routeLabels?: Record<string, string> };
         routes = p.routes ?? [];
         routeLabels = p.routeLabels ?? {};
         label = p.text ?? label;
@@ -674,7 +675,7 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
       // can be traced back when the daemon later halts the run on resume.
       console.warn(
         chalk.yellow(
-          `respond: human input accepted without route validation — no declared routes on the latest fact.run_paused_human (run=${opts.runId} route="${route}")`,
+          `respond: human input accepted without route validation — no declared routes on the latest fact.run_paused{reason:"human"} (run=${opts.runId} route="${route}")`,
         ),
       );
     }

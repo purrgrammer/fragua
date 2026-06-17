@@ -104,6 +104,17 @@ guarantee.
 
 ### Changed
 
+- Terminal and HITL-pause facts converged onto a smaller taxonomy. The three
+  terminal facts (`fact.run_completed` / `fact.run_halted` / `fact.run_cancelled`)
+  collapse into one `fact.run_terminated { status }` with
+  `status: completed | errored | aborted` (completed carries `finalNode`,
+  errored the halt `reason` + `detail`, aborted the `intentSeq`), and the
+  separate HITL pause fact folds into `fact.run_paused` as a new
+  `reason: "human"` variant. The `run_state.status` projection is unchanged
+  (`completed` / `halted` / `cancelled` / `paused_human` / `paused_auto` /
+  `paused` / …). The event-contract version bumps to 4; this is a clean cut
+  (no back-compat), so the fold floor also moves to 4 and runs pinned below it
+  no longer resume.
 - Worktree-provisioning failures now halt with a distinct `worktree_error`
   reason instead of the catch-all `error`, so operators can filter and triage
   provision failures separately from generic exceptions and parse failures. It

@@ -121,19 +121,14 @@ what lets the `kind: 'fragua'` handler
 ([`ernesto-interop.md`](ernesto-interop.md) §5) map a fragua run's terminal to
 an Ernesto `HandlerResult` with one switch.
 
-**Convergence state.** Ernesto already emits exactly this shape
-(`fact.run_terminated { status }`). **fragua does not yet** — it emits three
-separate terminal facts (`run_completed { finalNode }` / `run_halted { reason }`
-/ `run_cancelled { intentSeq }`), a pre-convergence artifact. Collapsing them
-into one `run_terminated { status, … }` (the per-status detail becomes a
-union discriminated on `status` — **lossless**, every field above is
-preserved) is a fragua-side work item
-([`ernesto-interop.md`](ernesto-interop.md) §8): a discriminated payload, an
-`EVENT_CONTRACT_VERSION` bump, and the enum-literal sweep across consumers.
-fragua's `run_state.status` **projection** keeps its terminal values
-regardless — the *fact* collapses; the projection it folds into needn't.
-Until the collapse lands, the migration bridge is `completed` ↔
-`run_completed`, `errored` ↔ `run_halted`, `aborted` ↔ `run_cancelled`.
+**Convergence state — DONE (both engines).** Both engines emit this shape.
+fragua converged at `EVENT_CONTRACT_VERSION = 4`: its three former terminal
+facts (`run_completed { finalNode }` / `run_halted { reason }` /
+`run_cancelled { intentSeq }`) collapsed into one `run_terminated { status, … }`,
+the per-status detail a union discriminated on `status` (**lossless** — every
+field above is preserved). fragua's `run_state.status` **projection** keeps its
+terminal values (the *fact* collapsed; the projection it folds into did not):
+`completed` → `completed`, `errored` → `halted`, `aborted` → `cancelled`.
 
 **Status vocabulary — resolved (2026-06-16):** `completed | errored | aborted`
 — Ernesto's existing wire. fragua adopts it (its `HaltReason`/`run_halted` →
@@ -161,14 +156,17 @@ fragua's `PauseReason` (`budget`, `max_retries`, `provider_error`,
 exactly as `HaltReason` is failed-disposition detail (§3.1). `fact.run_resumed`
 is the matching re-entry event (core).
 
-**Convergence state.** fragua is **half-converged**: `fact.run_paused` is
-already one discriminated event (`{ reason, … }`) covering `auto` + `operator`
-(its 13-value `PauseReason`, split by `AUTO_WAKE_PAUSE_REASONS`), but **HITL is
-still a separate `fact.run_paused_human`** — it folds in as `reason: human`.
-Ernesto has **two** pause facts (`run_paused_human` + `run_paused_signal`) that
-fold into `run_paused { reason: human | signal }`. Both lossless; fragua's
-`run_state.status` (`paused` / `paused_auto` / `paused_human`) keeps its values,
-folded from `reason`, as with the terminal.
+**Convergence state — fragua DONE (HITL fold); `signal` is tier-2.** fragua's
+`fact.run_paused` is one discriminated event (`{ reason, … }`); at
+`EVENT_CONTRACT_VERSION = 4` its separate HITL pause fact folded in as
+`reason: human` (carrying `{ nodeId, text, routes, routeLabels?, snapshot? }`),
+joining `auto` + `operator` (its 13-value `PauseReason`, split by
+`AUTO_WAKE_PAUSE_REASONS`). Ernesto has **two** pause facts (`run_paused_human`
++ `run_paused_signal`) that fold into `run_paused { reason: human | signal }`.
+Both lossless; fragua's `run_state.status` (`paused` / `paused_auto` /
+`paused_human`) keeps its values, folded from `reason`, as with the terminal.
+fragua does **not** emit `reason: signal` yet — that arrives with the
+external-wait primitive (§6.2).
 
 **`signal` is the tier-2 value.** Ernesto emits `reason: signal` today; fragua
 emits it once it builds the external-wait primitive (§6.2). The pause *event*

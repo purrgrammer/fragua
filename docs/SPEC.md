@@ -132,7 +132,7 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
 
 - **`queued`** — enqueued; ready to be claimed.
 - **`running`** — a daemon has claimed it and is dispatching handlers.
-- **`paused_human`** — a `human` node yielded. `fact.run_paused_human` carries `text` + `routes: string[]`; awaits `intent.human_input { route, note? }` or `intent.resume`.
+- **`paused_human`** — a `human` node yielded. `fact.run_paused{reason:"human"}` carries `text` + `routes: string[]`; awaits `intent.human_input { route, note? }` or `intent.resume`.
 - **`paused`** — operator-resumable pause. `fact.run_paused.payload.reason` discriminates the action shape. All wake on `intent.resume`; some pauses pair `intent.resume` with a cap-adjustment intent. The full reason set:
 
   | Reason | Trigger | Operator action |
@@ -157,8 +157,8 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
 
   The concurrency slot is released during the wait so other queued runs can claim. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_auto" }` once `now >= resumeAt`; the run goes back to `queued` and re-dispatches.
 
-- **`completed`** / **`halted`** / **`cancelled`** — terminal.
-  - `fact.run_halted.payload.reason` is one of: `budget` (when `budget_policy="stop"`), `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`. (A version mismatch is recoverable — `fact.run_paused{reason:"engine_incompatible"}` — not a halt; see §282.)
+- **`completed`** / **`halted`** / **`cancelled`** — terminal. A single `fact.run_terminated { status }` ends the run (fact-taxonomy.md §3.1); the reducer projects its `status` to the lifecycle value: `completed` → `completed` (payload `finalNode`), `errored` → `halted` (payload `reason` + `detail?`), `aborted` → `cancelled` (payload `intentSeq`).
+  - `fact.run_terminated{status:"errored"}.payload.reason` is one of: `budget` (when `budget_policy="stop"`), `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`. (A version mismatch is recoverable — `fact.run_paused{reason:"engine_incompatible"}` — not a halt; see §282.)
 - **`quarantined`** — startup sweep found an orphan `fact.side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel" }`.
 
 Adding a new operator-fixable failure mode is a new `PauseReason` literal — no new status, no schema migration.
@@ -172,7 +172,7 @@ All operator actions are intent writes. Every endpoint validates its body and re
 | `POST /runs/:id/steer` | `{ text: string }` (length > 0) | Injects steering text; aborts the current handler so the next dispatch sees it. |
 | `POST /runs/:id/pause` | `{}` | Abort + transition to `paused{reason:"operator"}`. |
 | `POST /runs/:id/cancel` | `{ reason?: string }` | Abort + transition to `cancelled`. |
-| `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be one of the node's declared `routes=` names (surfaced on `fact.run_paused_human`). |
+| `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be one of the node's declared `routes=` names (surfaced on `fact.run_paused{reason:"human"}`). |
 | `POST /runs/:id/resume` | `{ note?: string }` | Generic wake for any `paused_*` run. |
 | `POST /runs/:id/unquarantine` | `{ resolution: "treat_as_done" \| "retry" \| "cancel", note?: string }` | Operator decision on a quarantined run. |
 | `POST /runs/:id/priority` | `{ newPriority: number, note?: string }` | Appends `intent.priority_adjusted`; bumps queue priority. |
@@ -191,7 +191,7 @@ After a node completes, the executor picks the next edge using a two-case algori
 
 **Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 
-Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal — a node that fails with no fail route halts the run with `aborted_exit`. A fail-edge whose target is the `exit` sink is the one graceful exception: it is a sanctioned failure landing the author opted into, so the run reaches the terminal and emits `fact.run_completed` rather than halting. Per-node `retry_target` serves goal-gate retargeting (§3.7), not per-node failure.
+Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal — a node that fails with no fail route halts the run with `aborted_exit`. A fail-edge whose target is the `exit` sink is the one graceful exception: it is a sanctioned failure landing the author opted into, so the run reaches the terminal and emits `fact.run_terminated{status:"completed"}` rather than halting. Per-node `retry_target` serves goal-gate retargeting (§3.7), not per-node failure.
 
 **Outcome shape.** Every handler returns an `Outcome` (defined in `packages/core/src/types/outcome.ts`):
 
@@ -199,7 +199,7 @@ Fail recovery is authored explicitly: add an `outcome=fail` edge from the node t
 |---|---|---|
 | `status` | `"success" \| "fail" \| "retry"` | Terminal disposition. `retry` re-enters the same node with backoff. |
 | `notes` | string | Free-form diagnostic. |
-| `failure_reason` | string? | Human-readable failure detail, surfaced as `fact.run_halted.detail`. |
+| `failure_reason` | string? | Human-readable failure detail, surfaced as `fact.run_terminated{errored}.detail`. |
 | `non_retryable` | boolean? | When true, suppresses goal-gate retry even on fail. |
 | `provider_error` | object? | Set by the llm boundary on transport errors. |
 | `route` | string? | Chosen route name (routing nodes only). |
@@ -223,7 +223,7 @@ Per-node override attrs (`retry-initial-delay-ms`, `retry-backoff-factor`, `retr
 
 Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcome — the reducer treats the outcome as terminal regardless of status, so retry presets don't accidentally hammer a permanent failure.
 
-**Goal gates.** A node with `goal_gate=true` must reach `success` before the run can exit. When the run reaches the `exit` node and would emit `fact.run_completed`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to the failing gate's `retry_target`. If that's unset, or once the failing gate's `max_retries` retargets are exhausted, the run pauses `fact.run_paused{reason:"goal_gate"}` (operator-resumable; raise the cap via `intent.goal_gate_adjusted` → `routing.max_goal_gate_retries_override`). Single-step retarget — there is no graph-level retarget and no fallback chain.
+**Goal gates.** A node with `goal_gate=true` must reach `success` before the run can exit. When the run reaches the `exit` node and would emit `fact.run_terminated{status:"completed"}`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to the failing gate's `retry_target`. If that's unset, or once the failing gate's `max_retries` retargets are exhausted, the run pauses `fact.run_paused{reason:"goal_gate"}` (operator-resumable; raise the cap via `intent.goal_gate_adjusted` → `routing.max_goal_gate_retries_override`). Single-step retarget — there is no graph-level retarget and no fallback chain.
 
 The gate's `max_retries` bounds the loop so a perpetually-failing `retry_target` can't burn the run forever; it is required on every step authored via `retry:` (E031).
 
@@ -254,7 +254,7 @@ Tool nodes (`type: tool`, §3.1) are side-effect-only: exit 0 → `outcome=succe
 | `budget_tokens` | graph | Cumulative input+output+cache token ceiling across the run. |
 | `max_cost_usd` | node | Cumulative USD ceiling for all iterations of one node. |
 | `max_tokens` | node | Same for tokens. |
-| `budget_policy` | graph | `"pause"` (default) → `fact.run_paused{reason:"budget"}`; `"stop"` → `fact.run_halted{reason:"budget"}`; `"warn"` → emit `budget.warn` / `budget.stop` events without pausing/halting. |
+| `budget_policy` | graph | `"pause"` (default) → `fact.run_paused{reason:"budget"}`; `"stop"` → `fact.run_terminated{status:"errored",reason:"budget"}`; `"warn"` → emit `budget.warn` / `budget.stop` events without pausing/halting. |
 
 Soft `budget.warn` fires once per run at 80% of the ceiling. The ceiling check runs at every turn boundary; on `pause`, the operator raises the cap via `intent.budget_adjusted` and pairs it with `intent.resume`. On a `parallel` node, `max_cost_usd` / `max_tokens` bound the **whole branch closure** — the sum of every sub-node's spend — since branch costs commit under sub-node ids, not the parent; the same warn / stop / pause policy applies.
 

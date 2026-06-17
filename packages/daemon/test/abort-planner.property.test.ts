@@ -76,6 +76,10 @@ const arbAbortInput: fc.Arbitrary<AbortPlanInput> = fc
 
 const reasonOf = (f: { payload: unknown }): string | undefined => (f.payload as { reason?: string }).reason;
 const has = (facts: { type: string }[], type: string): boolean => facts.some((f) => f.type === type);
+/** Presence of a `fact.run_terminated` carrying a given status (the collapsed
+ *  terminal — fact-taxonomy.md §3.1). */
+const hasStatus = (facts: { type: string; payload: unknown }[], status: string): boolean =>
+  facts.some((f) => f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === status);
 
 describe("planAbort — properties", () => {
   test("A: pure — same input ⇒ equal plan, input never mutated", () => {
@@ -109,11 +113,14 @@ describe("planAbort — properties", () => {
       fc.property(arbAbortInput, (input) => {
         const { facts } = planAbort(input);
         const extra = facts.filter(
-          (f) => f.type === "fact.run_halted" || f.type === "fact.run_paused" || f.type === "fact.run_completed",
+          (f) =>
+            (f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "errored") ||
+            f.type === "fact.run_paused" ||
+            (f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "completed"),
         );
         expect(extra.length).toBeLessThanOrEqual(1);
         // Never a terminal-completed on the abort path.
-        expect(has(facts, "fact.run_completed")).toBe(false);
+        expect(hasStatus(facts, "completed")).toBe(false);
       }),
       { numRuns: pbtFaultRuns(1000) },
     );
@@ -125,12 +132,12 @@ describe("planAbort — properties", () => {
         const plan = planAbort(input);
         switch (plan.outcome) {
           case "halt":
-            expect(has(plan.facts, "fact.run_halted")).toBe(true);
+            expect(hasStatus(plan.facts, "errored")).toBe(true);
             expect(has(plan.facts, "fact.run_paused")).toBe(false);
             break;
           case "pause":
             expect(has(plan.facts, "fact.run_paused")).toBe(true);
-            expect(has(plan.facts, "fact.run_halted")).toBe(false);
+            expect(hasStatus(plan.facts, "errored")).toBe(false);
             break;
           case "timeout_retry": {
             const paused = plan.facts.find((f) => f.type === "fact.run_paused");
@@ -157,7 +164,9 @@ describe("planAbort — properties", () => {
         const plan = planAbort(input);
         if (input.reactiveBudgetHaltDetail !== undefined) {
           expect(plan.outcome).toBe("halt");
-          const halted = plan.facts.find((f) => f.type === "fact.run_halted");
+          const halted = plan.facts.find(
+            (f) => f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "errored",
+          );
           expect(reasonOf(halted!)).toBe("budget");
         } else if (input.reactiveBudgetPauseBreach !== undefined) {
           expect(plan.outcome).toBe("pause");
@@ -192,7 +201,9 @@ describe("planAbort — properties", () => {
         } else {
           // Exhausted → terminal halt with the operator-readable reason.
           expect(plan.outcome).toBe("halt");
-          const halted = plan.facts.find((f) => f.type === "fact.run_halted");
+          const halted = plan.facts.find(
+            (f) => f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "errored",
+          );
           expect(reasonOf(halted!)).toBe("timeout_exhausted");
         }
       }),

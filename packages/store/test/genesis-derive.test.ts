@@ -82,7 +82,7 @@ describe("genesis derivation", () => {
       ],
       v,
     ).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "a" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "a" } }], v);
 
     const live = store.getState(runId)!;
     const derived = deriveFromLog(runId, store.getEvents(runId));

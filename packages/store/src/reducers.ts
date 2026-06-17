@@ -189,18 +189,15 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.nodeStartedAt = now;
       return next;
     }
-    case "fact.run_paused_human": {
-      closeDispatchInterval(next, now);
-      next.status = "paused_human";
-      next.nodeStartedAt = null;
-      return next;
-    }
     case "fact.run_paused": {
       closeDispatchInterval(next, now);
-      // Status follows reason 1:1: AUTO_WAKE_PAUSE_REASONS → paused_auto
-      // (daemon timer; wake-pending sweeps `auto_resume_at`); everything
-      // else → paused (operator must `intent.resume`).
-      next.status = AUTO_WAKE_PAUSE_REASONS.has(fact.payload.reason) ? "paused_auto" : "paused";
+      // Status follows reason 1:1: `human` → paused_human (a workflow
+      // question, answered via intent.human_input); AUTO_WAKE_PAUSE_REASONS
+      // → paused_auto (daemon timer; wake-pending sweeps `auto_resume_at`);
+      // everything else → paused (operator must `intent.resume`).
+      const reason = fact.payload.reason;
+      next.status =
+        reason === "human" ? "paused_human" : AUTO_WAKE_PAUSE_REASONS.has(reason) ? "paused_auto" : "paused";
       next.nodeStartedAt = null;
       return next;
     }
@@ -217,24 +214,27 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.readyAt = now;
       return next;
     }
-    case "fact.run_completed": {
+    case "fact.run_terminated": {
       closeDispatchInterval(next, now);
-      next.status = "completed";
-      next.currentNode = fact.payload.finalNode;
       next.nodeStartedAt = null;
-      return next;
-    }
-    case "fact.run_halted": {
-      closeDispatchInterval(next, now);
+      const p = fact.payload;
+      if (p.status === "completed") {
+        next.status = "completed";
+        next.currentNode = p.finalNode;
+        return next;
+      }
+      if (p.status === "aborted") {
+        next.status = "cancelled";
+        return next;
+      }
+      // status === "errored" (former fact.run_halted).
       next.status = "halted";
-      next.nodeStartedAt = null;
       // Structural halts (route_not_picked / route_call_not_isolated /
       // edge_no_match, handler-returned error/budget) bypass both
       // fact.node_completed and fact.node_aborted; their partial* fields
       // carry the dropped turn's spend. Fold mirrors fact.node_aborted.
       // Halts that ride alongside a node_completed (budget sentinel,
       // aborted_exit) never carry these fields, so no double count.
-      const p = fact.payload;
       if (p.partialTokens != null || p.partialCostUsd != null) {
         next.metrics.billedTokens += p.partialTokens ?? 0;
         next.metrics.totalCostUsd += p.partialCostUsd ?? 0;
@@ -254,12 +254,6 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
           };
         }
       }
-      return next;
-    }
-    case "fact.run_cancelled": {
-      closeDispatchInterval(next, now);
-      next.status = "cancelled";
-      next.nodeStartedAt = null;
       return next;
     }
     case "fact.run_quarantined": {

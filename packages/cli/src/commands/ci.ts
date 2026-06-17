@@ -288,9 +288,16 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     const emit = (ev: StoredEvent) => {
       const r = (ev.payload as { reason?: string } | null)?.reason;
       if (r !== undefined) {
-        if (ev.type === "fact.run_halted") stopReason.halt = r as HaltReason;
-        else if (ev.type === "fact.run_paused") stopReason.pause = r as PauseReason;
-        else if (ev.type === "fact.run_quarantined") stopReason.quarantine = r as QuarantineReason;
+        // The errored terminal carries the HaltReason on `reason`; a non-human
+        // pause carries the PauseReason. (`fact.run_terminated{errored}` is the
+        // former `fact.run_halted`.)
+        if (ev.type === "fact.run_terminated" && (ev.payload as { status?: string }).status === "errored") {
+          stopReason.halt = r as HaltReason;
+        } else if (ev.type === "fact.run_paused" && r !== "human") {
+          stopReason.pause = r as PauseReason;
+        } else if (ev.type === "fact.run_quarantined") {
+          stopReason.quarantine = r as QuarantineReason;
+        }
       }
       if (opts.json) process.stdout.write(`${JSON.stringify(ev)}\n`);
       else renderEvent(ev);
@@ -327,8 +334,8 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     const code = cliExitCode(status, stopReason);
     // Terminal-only result envelope. A non-terminal stop-state (paused /
     // paused_human / quarantined) yields `undefined` — no line, exit code
-    // unchanged. The wire status is converged regardless of which of the three
-    // terminal facts fired (run_completed / run_halted / run_cancelled).
+    // unchanged. The wire status mirrors the single `fact.run_terminated`
+    // status (completed / errored / aborted) the run ended on.
     ciResult = buildCiResult(readPlane, rid, status);
     if (opts.json && ciResult !== undefined) process.stdout.write(`${JSON.stringify(ciResult)}\n`);
     if (status === "halted") {

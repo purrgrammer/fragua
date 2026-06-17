@@ -284,7 +284,7 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "x", iteration: 0 }), seq: 1 },
       { ...ev("edge.selected", { from: "x", to: "y", iteration: 0, pass: 0 }), seq: 2 },
-      { ...ev("fact.run_halted", { reason: "error" }), seq: 3 },
+      { ...ev("fact.run_terminated", { status: "errored", reason: "error" }), seq: 3 },
     ];
     expect(deriveSelectedEdges(events)).toEqual([{ from: "x", to: "y", iteration: 0, pass: 0 }]);
   });
@@ -359,7 +359,7 @@ describe("deriveNodeStates — run-halt terminal patching", () => {
   test("a node left in 'running' state when a fact.run_halted follows is marked 'failed'", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "implement", iteration: 0 }), seq: 1 },
-      { ...ev("fact.run_halted", { reason: "error" }), seq: 2 },
+      { ...ev("fact.run_terminated", { status: "errored", reason: "error" }), seq: 2 },
     ];
     const nodes = deriveNodeStates(events);
     expect(nodes).toHaveLength(1);
@@ -371,7 +371,7 @@ describe("deriveNodeStates — run-halt terminal patching", () => {
   test("a node left in 'running' state when fact.run_cancelled follows is marked 'failed'", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "verify", iteration: 0 }), seq: 3 },
-      { ...ev("fact.run_cancelled", { intentSeq: 7 }), seq: 4 },
+      { ...ev("fact.run_terminated", { status: "aborted", intentSeq: 7 }), seq: 4 },
     ];
     const nodes = deriveNodeStates(events);
     expect(nodes[0]?.state).toBe("failed");
@@ -395,7 +395,7 @@ describe("deriveNodeStates — run-halt terminal patching", () => {
         ...ev("fact.node_completed", { nodeId: "lint", iteration: 0, outcomeStatus: "success", nextNode: "done" }),
         seq: 2,
       },
-      { ...ev("fact.run_halted", { reason: "error" }), seq: 3 },
+      { ...ev("fact.run_terminated", { status: "errored", reason: "error" }), seq: 3 },
     ];
     const nodes = deriveNodeStates(events);
     expect(nodes[0]?.nodeId).toBe("lint");
@@ -408,7 +408,7 @@ describe("deriveNodeStates — run-halt terminal patching", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "x", iteration: 0 }), seq: 1 },
       { ...ev("fact.node_aborted", { nodeId: "x", iteration: 0, cause: "timeout" }), seq: 2 },
-      { ...ev("fact.run_halted", { reason: "aborted_exit" }), seq: 3 },
+      { ...ev("fact.run_terminated", { status: "errored", reason: "aborted_exit" }), seq: 3 },
     ];
     const nodes = deriveNodeStates(events);
     expect(nodes[0]?.state).toBe("failed");
@@ -479,7 +479,8 @@ describe("runStateToDetail — HITL projection", () => {
     const events: StoredEvent[] = [
       evWithSeq(1, "fact.run_started", { startNode: "start" }),
       evWithSeq(2, "fact.node_started", { nodeId: "review" }),
-      evWithSeq(3, "fact.run_paused_human", {
+      evWithSeq(3, "fact.run_paused", {
+        reason: "human",
         nodeId: "review",
         text: "Review the draft",
         routes: ["approve", "revise"],
@@ -497,7 +498,8 @@ describe("runStateToDetail — HITL projection", () => {
   test("paused_human projects edge label= overrides into hitlOptionLabels", () => {
     const state = makeState({ status: "paused_human", currentNode: "review" });
     const events: StoredEvent[] = [
-      evWithSeq(3, "fact.run_paused_human", {
+      evWithSeq(3, "fact.run_paused", {
+        reason: "human",
         nodeId: "review",
         text: "Review the draft",
         routes: ["approve", "revise"],
@@ -512,7 +514,8 @@ describe("runStateToDetail — HITL projection", () => {
   test("paused_human drops non-string label entries and omits an empty labels map", () => {
     const state = makeState({ status: "paused_human", currentNode: "review" });
     const events: StoredEvent[] = [
-      evWithSeq(3, "fact.run_paused_human", {
+      evWithSeq(3, "fact.run_paused", {
+        reason: "human",
         nodeId: "review",
         text: "Review the draft",
         routes: ["approve", "revise"],
@@ -526,13 +529,9 @@ describe("runStateToDetail — HITL projection", () => {
   test("paused_human with multiple paused events picks the latest one (re-yield after revise)", () => {
     const state = makeState({ status: "paused_human", currentNode: "review" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "first", routes: [] }),
+      evWithSeq(1, "fact.run_paused", { reason: "human", nodeId: "review", text: "first", routes: [] }),
       evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_human" }),
-      evWithSeq(3, "fact.run_paused_human", {
-        nodeId: "review",
-        text: "second iteration",
-        routes: ["X"],
-      }),
+      evWithSeq(3, "fact.run_paused", { reason: "human", nodeId: "review", text: "second iteration", routes: ["X"] }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.hitlLabel).toBe("second iteration");
@@ -544,7 +543,7 @@ describe("runStateToDetail — HITL projection", () => {
     const events: StoredEvent[] = [
       // A stale paused_human from earlier in the run shouldn't leak through
       // when the run has since resumed and is now running again.
-      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "stale", routes: [] }),
+      evWithSeq(1, "fact.run_paused", { reason: "human", nodeId: "review", text: "stale", routes: [] }),
       evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_human" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
@@ -557,7 +556,7 @@ describe("runStateToDetail — HITL projection", () => {
   test("paused_human tolerates malformed payload (missing fields stay undefined)", () => {
     const state = makeState({ status: "paused_human" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_human", { nodeId: 42, text: null, routes: "not an array" }),
+      evWithSeq(1, "fact.run_paused", { reason: "human", nodeId: 42, text: null, routes: "not an array" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.hitlNodeId).toBeUndefined();
@@ -568,10 +567,15 @@ describe("runStateToDetail — HITL projection", () => {
   test("derives hitlDecisions by pairing intent.human_input with the open gate (incl. note)", () => {
     const state = makeState({ status: "completed" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "Approve?", routes: ["approve", "revise"] }),
+      evWithSeq(1, "fact.run_paused", {
+        reason: "human",
+        nodeId: "review",
+        text: "Approve?",
+        routes: ["approve", "revise"],
+      }),
       evWithSeq(2, "intent.human_input", { route: "approve", note: "ship it" }),
       evWithSeq(3, "fact.run_resumed", { fromStatus: "paused_human" }),
-      evWithSeq(4, "fact.run_completed", {}),
+      evWithSeq(4, "fact.run_terminated", { status: "completed" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.hitlDecisions).toEqual({ review: { route: "approve", note: "ship it" } });
@@ -580,10 +584,10 @@ describe("runStateToDetail — HITL projection", () => {
   test("records each answered gate and omits an absent note", () => {
     const state = makeState({ status: "running" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_human", { nodeId: "gateA", text: "?", routes: ["yes", "no"] }),
+      evWithSeq(1, "fact.run_paused", { reason: "human", nodeId: "gateA", text: "?", routes: ["yes", "no"] }),
       evWithSeq(2, "intent.human_input", { route: "yes" }),
       evWithSeq(3, "fact.run_resumed", { fromStatus: "paused_human" }),
-      evWithSeq(4, "fact.run_paused_human", { nodeId: "gateB", text: "?", routes: ["a", "b"] }),
+      evWithSeq(4, "fact.run_paused", { reason: "human", nodeId: "gateB", text: "?", routes: ["a", "b"] }),
       evWithSeq(5, "intent.human_input", { route: "b", note: "because" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
@@ -593,10 +597,10 @@ describe("runStateToDetail — HITL projection", () => {
   test("loop revisiting the same gate keeps the latest answer", () => {
     const state = makeState({ status: "completed" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "?", routes: ["approve", "revise"] }),
+      evWithSeq(1, "fact.run_paused", { reason: "human", nodeId: "review", text: "?", routes: ["approve", "revise"] }),
       evWithSeq(2, "intent.human_input", { route: "revise", note: "first pass" }),
       evWithSeq(3, "fact.run_resumed", { fromStatus: "paused_human" }),
-      evWithSeq(4, "fact.run_paused_human", { nodeId: "review", text: "?", routes: ["approve", "revise"] }),
+      evWithSeq(4, "fact.run_paused", { reason: "human", nodeId: "review", text: "?", routes: ["approve", "revise"] }),
       evWithSeq(5, "intent.human_input", { route: "approve" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
@@ -609,7 +613,7 @@ describe("runStateToDetail — HITL projection", () => {
       evWithSeq(1, "fact.run_started", { startNode: "a" }),
       // A human_input with no preceding open gate is ignored (defensive).
       evWithSeq(2, "intent.human_input", { route: "stray" }),
-      evWithSeq(3, "fact.run_completed", {}),
+      evWithSeq(3, "fact.run_terminated", { status: "completed" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.hitlDecisions).toBeUndefined();
@@ -627,7 +631,7 @@ describe("runStateToDetail — halt projection", () => {
       evWithSeq(1, "fact.run_started", { startNode: "start" }),
       evWithSeq(2, "fact.node_started", { nodeId: "implement" }),
       evWithSeq(3, "fact.node_aborted", { nodeId: "implement", cause: "error" }),
-      evWithSeq(4, "fact.run_halted", { reason: "error", detail: "handler threw: boom" }),
+      evWithSeq(4, "fact.run_terminated", { status: "errored", reason: "error", detail: "handler threw: boom" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.runStatus).toBe("halted");
@@ -638,7 +642,8 @@ describe("runStateToDetail — halt projection", () => {
   test("occ_exhausted halt projects haltContext from occContext", () => {
     const state = makeState({ status: "halted" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_halted", {
+      evWithSeq(1, "fact.run_terminated", {
+        status: "errored",
         reason: "occ_exhausted",
         detail: "8 consecutive OCC conflicts on fact.node_completed for node implement",
         occContext: {
@@ -663,21 +668,23 @@ describe("runStateToDetail — halt projection", () => {
 
   test("halt without occContext leaves haltContext undefined", () => {
     const state = makeState({ status: "halted" });
-    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted" })];
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_terminated", { status: "errored", reason: "occ_exhausted" })];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.haltContext).toBeUndefined();
   });
 
   test("halt tolerates malformed occContext (haltContext stays undefined)", () => {
     const state = makeState({ status: "halted" });
-    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted", occContext: "garbage" })];
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_terminated", { status: "errored", reason: "occ_exhausted", occContext: "garbage" }),
+    ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.haltContext).toBeUndefined();
   });
 
   test("halted without a detail string leaves haltDetail undefined", () => {
     const state = makeState({ status: "halted" });
-    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: "occ_exhausted" })];
+    const events: StoredEvent[] = [evWithSeq(1, "fact.run_terminated", { status: "errored", reason: "occ_exhausted" })];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.haltReason).toBe("occ_exhausted");
     expect(detail.haltDetail).toBeUndefined();
@@ -693,7 +700,9 @@ describe("runStateToDetail — halt projection", () => {
 
   test("halted tolerates malformed payload (fields stay undefined)", () => {
     const state = makeState({ status: "halted" });
-    const events: StoredEvent[] = [evWithSeq(1, "fact.run_halted", { reason: 42, detail: { nested: true } })];
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_terminated", { status: "errored", reason: 42, detail: { nested: true } }),
+    ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.haltReason).toBeUndefined();
     expect(detail.haltDetail).toBeUndefined();
@@ -718,7 +727,7 @@ describe("runStateToDetail \u2014 lastEventSeq", () => {
       evWithSeq(3, "edge.selected", { from: "start", to: "collect", iteration: 0, pass: 0 }),
       evWithSeq(69, "edge.selected", { from: "collect", to: "analyze", iteration: 0, pass: 0 }),
       evWithSeq(626, "edge.selected", { from: "analyze", to: "done", iteration: 0, pass: 0 }),
-      evWithSeq(628, "fact.run_completed", { finalNode: "done" }),
+      evWithSeq(628, "fact.run_terminated", { status: "completed", finalNode: "done" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.lastEventSeq).toBe(628);
@@ -824,7 +833,7 @@ describe("runStateToDetail — crash-requeue projection", () => {
     const state = makeState({ status: "completed" });
     const events: StoredEvent[] = [
       evWithSeq(1, "fact.run_started", { startNode: "start" }),
-      evWithSeq(2, "fact.run_completed", {}),
+      evWithSeq(2, "fact.run_terminated", { status: "completed" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.crashRequeues).toBeUndefined();

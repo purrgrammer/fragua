@@ -242,35 +242,33 @@ function deriveOutcome(events: StoredEvent[]): ExplainOutcome {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i]!;
     switch (ev.type) {
-      case "fact.run_completed":
-        return { kind: "completed" };
-      case "fact.run_halted": {
-        const p = ev.payload as { reason?: unknown; detail?: unknown };
+      case "fact.run_terminated": {
+        const p = ev.payload as { status?: unknown; reason?: unknown; detail?: unknown };
+        if (p.status === "completed") return { kind: "completed" };
+        if (p.status === "aborted") {
+          return {
+            kind: "cancelled",
+            ...(typeof p.reason === "string" ? { reason: p.reason } : {}),
+          };
+        }
+        // status === "errored"
         return {
           kind: "halted",
           reason: typeof p.reason === "string" ? p.reason : "unknown",
           ...(typeof p.detail === "string" ? { detail: p.detail } : {}),
         };
       }
-      case "fact.run_cancelled": {
-        const p = ev.payload as { reason?: unknown };
-        return {
-          kind: "cancelled",
-          ...(typeof p.reason === "string" ? { reason: p.reason } : {}),
-        };
-      }
       case "fact.run_paused": {
-        const p = ev.payload as { reason?: unknown };
+        const p = ev.payload as { reason?: unknown; text?: unknown };
+        if (p.reason === "human") {
+          return {
+            kind: "paused_human",
+            ...(typeof p.text === "string" ? { label: p.text } : {}),
+          };
+        }
         return {
           kind: "paused",
           reason: typeof p.reason === "string" ? p.reason : "unknown",
-        };
-      }
-      case "fact.run_paused_human": {
-        const p = ev.payload as { text?: unknown };
-        return {
-          kind: "paused_human",
-          ...(typeof p.text === "string" ? { label: p.text } : {}),
         };
       }
       case "fact.run_quarantined": {

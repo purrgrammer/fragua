@@ -20,7 +20,7 @@ export interface ResultContext {
    * `fact.node_completed` and `fact.node_aborted` (route_not_picked /
    * route_call_not_isolated / edge_no_match, handler-returned error or
    * budget halts). The halt arm surfaces it as `partial*` fields on
-   * `fact.run_halted` — mirroring `abortResultToFacts` — so the reducer
+   * `fact.run_terminated{status:errored}` — mirroring `abortResultToFacts` — so the reducer
    * folds the halted turn into `run_state.metrics` instead of dropping
    * it. The pause translations and non-halt arms ignore it (their fact
    * lists either carry a spend-bearing `fact.node_completed` already or
@@ -143,13 +143,13 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
               ? result.failureReason
               : `node ${ctx.state.currentNode ?? "?"} failed with no fail route`;
           facts.push({
-            type: "fact.run_halted",
-            payload: { reason: "aborted_exit", detail },
+            type: "fact.run_terminated",
+            payload: { status: "errored", reason: "aborted_exit", detail },
           });
         } else {
           facts.push({
-            type: "fact.run_completed",
-            payload: { finalNode: nextNode },
+            type: "fact.run_terminated",
+            payload: { status: "completed", finalNode: nextNode },
           });
         }
       } else {
@@ -164,8 +164,9 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
     }
     case "yield_human": {
       facts.push({
-        type: "fact.run_paused_human",
+        type: "fact.run_paused",
         payload: {
+          reason: "human",
           nodeId: ctx.state.currentNode ?? "",
           text: result.text,
           routes: result.routes,
@@ -184,7 +185,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       // reaches this branch from the executor; the translation below
       // is retained as a safety net for any future caller that still
       // constructs the handler-contract halt shape. Other halts pass
-      // through to fact.run_halted unchanged.
+      // through to fact.run_terminated{errored} unchanged.
       const reason = result.reason;
       const nodeId = ctx.state.currentNode ?? "";
       const ctxCurrentLimit = result.pauseContext?.currentLimit ?? 0;
@@ -214,7 +215,10 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
         });
         return facts;
       }
-      const payload: Extract<FactEvent, { type: "fact.run_halted" }>["payload"] = { reason };
+      const payload: Extract<Extract<FactEvent, { type: "fact.run_terminated" }>["payload"], { status: "errored" }> = {
+        status: "errored",
+        reason,
+      };
       if (result.detail != null) payload.detail = result.detail;
       // Halts reaching this point bypass fact.node_completed AND
       // fact.node_aborted, so the turn's spend would otherwise vanish
@@ -241,7 +245,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
         if (cacheReadCostUsd > 0) payload.partialCacheReadCostUsd = cacheReadCostUsd;
         if (cacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = cacheWriteCostUsd;
       }
-      facts.push({ type: "fact.run_halted", payload });
+      facts.push({ type: "fact.run_terminated", payload });
       return facts;
     }
     case "pause_provider": {
@@ -307,7 +311,7 @@ export function abortResultToFacts(
 }
 
 export function cancelToFacts(intentSeq: number): FactEvent[] {
-  return [{ type: "fact.run_cancelled", payload: { intentSeq } }];
+  return [{ type: "fact.run_terminated", payload: { status: "aborted", intentSeq } }];
 }
 
 /** Per-node retry counter — bumped each time a

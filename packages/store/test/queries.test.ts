@@ -218,7 +218,7 @@ describe("getGlobalEventsForward", () => {
   // Use FEED_EVENT_KINDS-shaped allow-list so the query engine sees the
   // realistic set. `intent.run_enqueued` is the most convenient seed —
   // enqueueRun emits one per run.
-  const KINDS = ["intent.run_enqueued", "fact.run_started", "fact.run_completed"] as const;
+  const KINDS = ["intent.run_enqueued", "fact.run_started", "fact.run_terminated"] as const;
 
   test("empty store → empty result", () => {
     const store = freshStore();

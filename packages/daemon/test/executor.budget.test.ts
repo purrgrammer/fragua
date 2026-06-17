@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
+import { dispositionType } from "./invariants.ts";
 
 describe("executor — budget enforcement", () => {
   test("graph budget_usd=1.0 (default policy=pause); breach mid-run → paused, reason=budget", async () => {
@@ -66,7 +67,7 @@ steps:
     expect(state.status).toBe("paused");
 
     const events = r.store.getEvents("rb1");
-    const types = events.map((e) => e.type);
+    const types = events.map(dispositionType);
     const stopIdx = types.indexOf("budget.stop");
     const pauseIdx = types.indexOf("fact.run_paused");
     expect(stopIdx).toBeGreaterThanOrEqual(0);
@@ -135,7 +136,7 @@ steps:
     const state = r.store.getState("rb-term")!;
     expect(state.status).toBe("completed");
 
-    const types = r.store.getEvents("rb-term").map((e) => e.type);
+    const types = r.store.getEvents("rb-term").map(dispositionType);
     expect(types).toContain("budget.stop"); // budget signal still fires
     expect(types).toContain("fact.run_completed");
     expect(types).not.toContain("fact.run_paused"); // suppressed by the terminal-transition guard
@@ -192,7 +193,7 @@ steps:
     expect(state.status).toBe("halted");
 
     const events = r.store.getEvents("rb-stop");
-    const types = events.map((e) => e.type);
+    const types = events.map(dispositionType);
     const stopIdx = types.indexOf("budget.stop");
     const haltIdx = types.indexOf("fact.run_halted");
     expect(stopIdx).toBeGreaterThanOrEqual(0);
@@ -266,7 +267,7 @@ steps:
 
     const state = r.store.getState("rb2")!;
     expect(state.status).toBe("completed");
-    const types = r.store.getEvents("rb2").map((e) => e.type);
+    const types = r.store.getEvents("rb2").map(dispositionType);
     expect(types).toContain("budget.stop");
     expect(types).toContain("fact.run_completed");
     expect(types).not.toContain("fact.run_halted");
@@ -321,7 +322,7 @@ steps:
       maxTurnsForTesting: 10,
       shutdownSignal: new AbortController().signal,
     });
-    const types = r.store.getEvents("rb3").map((e) => e.type);
+    const types = r.store.getEvents("rb3").map(dispositionType);
     const warns = types.filter((t) => t === "budget.warn");
     expect(warns).toHaveLength(1);
     expect(r.store.getState("rb3")!.status).toBe("completed");
@@ -419,7 +420,7 @@ steps:
     expect(state.status).toBe("halted");
 
     const events = r.store.getEvents("rb-reactive");
-    const types = events.map((e) => e.type);
+    const types = events.map(dispositionType);
     expect(types).toContain("budget.stop");
     expect(types).toContain("fact.node_aborted");
     expect(types).toContain("fact.run_halted");
@@ -429,7 +430,9 @@ steps:
     expect(types.indexOf("budget.stop")).toBeLessThan(types.indexOf("fact.node_aborted"));
     expect(types.indexOf("fact.node_aborted")).toBeLessThan(types.indexOf("fact.run_halted"));
 
-    const halt = events.find((e) => e.type === "fact.run_halted")!;
+    const halt = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    )!;
     expect((halt.payload as { reason: string }).reason).toBe("budget");
 
     // Partial cost on the abort fact captures every cost.recorded the

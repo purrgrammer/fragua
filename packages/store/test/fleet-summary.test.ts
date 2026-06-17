@@ -35,18 +35,18 @@ function driveRun(
     case "running":
       return;
     case "completed":
-      store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "a" } }], v);
+      store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "a" } }], v);
       return;
     case "halted":
-      store.appendFact(runId, [{ type: "fact.run_halted", payload: { reason: "error" } }], v);
+      store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error" } }], v);
       return;
     case "cancelled":
-      store.appendFact(runId, [{ type: "fact.run_cancelled", payload: { intentSeq: 2 } }], v);
+      store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "aborted", intentSeq: 2 } }], v);
       return;
     case "paused_human":
       store.appendFact(
         runId,
-        [{ type: "fact.run_paused_human", payload: { nodeId: "a", text: "choose", routes: ["ok"] } }],
+        [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "a", text: "choose", routes: ["ok"] } }],
         v,
       );
       return;

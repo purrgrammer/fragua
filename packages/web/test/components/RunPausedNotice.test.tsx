@@ -76,7 +76,7 @@ describe("RunPausedNotice", () => {
         json([
           ...PROVIDER_ERROR_EVENTS,
           { seq: 4, type: "fact.run_resumed", payload: { fromStatus: "paused" } },
-          { seq: 5, type: "fact.run_cancelled", payload: { intentSeq: 4 } },
+          { seq: 5, type: "fact.run_terminated", payload: { status: "aborted", intentSeq: 4 } },
         ]),
     });
     try {
@@ -94,7 +94,7 @@ describe("RunPausedNotice", () => {
       [EVENTS_URL]: () =>
         json([
           { seq: 1, type: "fact.run_started", payload: {} },
-          { seq: 2, type: "fact.run_paused_human", payload: { nodeId: "n", prompt: "approve?" } },
+          { seq: 2, type: "fact.run_paused", payload: { reason: "human", nodeId: "n", prompt: "approve?" } },
         ]),
     });
     try {

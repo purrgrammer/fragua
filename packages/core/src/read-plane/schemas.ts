@@ -182,12 +182,12 @@ export const RunDetail = Type.Object({
   cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
-  /** Terminal halt diagnosis from the run's `fact.run_halted` payload
+  /** Terminal halt diagnosis from the run's `fact.run_terminated{errored}` payload
    *  (when `runStatus === 'halted'`). Mirrors the HITL pause-field
    *  extraction so the UI can explain the failure inline. */
   haltReason: Type.Optional(HaltReasonSchema),
   haltDetail: Type.Optional(Type.String()),
-  /** Structured diagnostic context from the `fact.run_halted` payload's
+  /** Structured diagnostic context from the `fact.run_terminated{errored}` payload's
    *  `occContext` — recorded on an OCC-exhaustion halt. Only populated for
    *  halts that carried it; spares the operator hand-parsing raw events. */
   haltContext: Type.Optional(HaltContext),

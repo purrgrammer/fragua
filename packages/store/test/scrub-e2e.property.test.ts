@@ -159,12 +159,8 @@ async function seedRunWithBothSecrets(
     runId,
     [
       {
-        type: "fact.run_paused_human",
-        payload: {
-          nodeId: "work",
-          text: `approve? ${combined}`,
-          routes: ["approve", "reject"],
-        },
+        type: "fact.run_paused",
+        payload: { reason: "human", nodeId: "work", text: `approve? ${combined}`, routes: ["approve", "reject"] },
       } as FactEvent,
     ],
     v,
@@ -211,8 +207,8 @@ async function seedRunWithBothSecrets(
     runId,
     [
       {
-        type: "fact.run_halted",
-        payload: { reason: "error", detail: `halted: ${combined}` },
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "error", detail: `halted: ${combined}` },
       } as FactEvent,
     ],
     v,

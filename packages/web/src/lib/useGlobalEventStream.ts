@@ -27,21 +27,18 @@ import { useEventSource } from "./useEventSource.ts";
 const RUN_INVALIDATE_KINDS = new Set<string>([
   "intent.run_enqueued",
   "fact.run_started",
-  "fact.run_completed",
-  "fact.run_paused_human",
+  "fact.run_terminated",
   "fact.run_paused",
   "fact.run_resumed",
-  "fact.run_cancelled",
-  "fact.run_halted",
   "fact.run_quarantined",
   "fact.run_requeued_after_crash",
   // Post-terminal operator actions: inbox_status transitions (pending → acted/discarded)
   // must clear the WorktreeInbox row in any open tab, not just the tab that fired the action.
   "fact.run_accepted",
   "fact.run_discarded",
-  // Terminal worktree snapshot: written AFTER fact.run_completed in the executor's
+  // Terminal worktree snapshot: written AFTER fact.run_terminated in the executor's
   // finally-block dispose path. It sets inbox_status=pending on run_state, so the
-  // inbox=pending list query must refetch when this fact arrives — fact.run_completed
+  // inbox=pending list query must refetch when this fact arrives — fact.run_terminated
   // alone races the snapshot write and the list may return before inbox_status is set.
   "fact.snapshot_recorded",
   // Auto-titler: run card title stays stale after enqueue until the title lands.
@@ -51,7 +48,7 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
 /** Event kinds that add or update a snapshot row in the scrubber feed.
  * `snapshot.captured` fires per step/HITL during the run; `fact.snapshot_recorded`
  * fires once after the terminal status (in the executor's finally-block dispose
- * path). The terminal one races run_completed by design — RunDetail's local
+ * path). The terminal one races run_terminated by design — RunDetail's local
  * effect invalidates on overlay status flips, but that runs BEFORE the snapshot
  * write lands. We invalidate the snapshots + snapshot-diff caches here when the
  * snapshot event itself arrives, so the Diff tab refreshes for any open tab. */

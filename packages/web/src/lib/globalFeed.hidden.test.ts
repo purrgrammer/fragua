@@ -20,14 +20,14 @@ describe("appendFeedEventsAtom — FEED_HIDDEN_KINDS filter", () => {
 
   test("non-hidden kind IS added to feedAtom", () => {
     const store = createStore();
-    store.set(appendFeedEventsAtom, [makeEvent("fact.run_completed", 1)]);
+    store.set(appendFeedEventsAtom, [makeEvent("fact.run_terminated", 1)]);
     expect(store.get(feedAtom)).toHaveLength(1);
   });
 
   test("mixed batch: hidden kind dropped, non-hidden kind kept", () => {
     const store = createStore();
     store.set(appendFeedEventsAtom, [
-      makeEvent("fact.run_completed", 1),
+      makeEvent("fact.run_terminated", 1),
       makeEvent("fact.snapshot_recorded", 2),
       makeEvent("fact.run_started", 3),
     ]);

@@ -56,7 +56,7 @@ export function feedEventKey(e: Pick<FeedEvent, "runId" | "seq">): string {
  * must NOT appear as rendered rows in the Activity feed.
  *
  * `fact.snapshot_recorded` is the terminal-snapshot fact written after
- * `fact.run_completed` that sets `inbox_status=pending`. It must remain
+ * `fact.run_terminated{completed}` that sets `inbox_status=pending`. It must remain
  * in both `FEED_EVENT_KINDS` (SSE delivery) and `RUN_INVALIDATE_KINDS`
  * (inbox live-update) but is noise in the Activity timeline — the Inbox
  * section already surfaces the run as landable.

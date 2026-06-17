@@ -280,7 +280,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
-    if (ev.type === "fact.run_paused" || ev.type === "fact.run_paused_human") {
+    if (ev.type === "fact.run_paused") {
       // Pauses (operator / HITL / provider_error / payment_required /
       // budget / provider_retry / handler_retry) do NOT emit
       // `fact.node_completed`, so the node window stays open across

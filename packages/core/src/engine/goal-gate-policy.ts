@@ -99,7 +99,7 @@ export function resolveFailRetarget(graph: Graph, sourceNodeId: string): string 
 }
 
 export type GoalGateAction =
-  /** All gates satisfied — let the terminal exit emit `fact.run_completed`. */
+  /** All gates satisfied — let the terminal exit emit `fact.run_terminated{completed}`. */
   | { kind: "exit" }
   /** A gate is unsatisfied; redirect to this node id and bump the counter. */
   | { kind: "retarget"; gate: string; target: string; nextRetries: number }

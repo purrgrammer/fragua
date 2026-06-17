@@ -78,7 +78,10 @@ describe("executor — pause mid-dispatch routes through abort-throw + next-fold
     const pauseFacts = events.filter((e) => e.type === "fact.run_paused");
     expect(pauseFacts.length).toBe(1);
     expect((pauseFacts[0]!.payload as { reason: string }).reason).toBe("operator");
-    expect(events.filter((e) => e.type === "fact.run_halted").length).toBe(0);
+    expect(
+      events.filter((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored")
+        .length,
+    ).toBe(0);
     expect(r.store.getState("mid-pause")?.status).toBe("paused");
   });
 });

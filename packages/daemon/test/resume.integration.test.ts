@@ -355,7 +355,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     const s1 = r.store.getState("pr-1")!;
     r.store.appendFact(
       "pr-1",
-      [{ type: "fact.run_paused_human", payload: { nodeId: "start", text: "wait", routes: [] } }],
+      [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "start", text: "wait", routes: [] } }],
       s1.version,
     );
     expect(r.store.getState("pr-1")!.status).toBe("paused_human");

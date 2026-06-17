@@ -842,7 +842,13 @@ steps:
         await waitFor(() => expect(fakeEs.getEs()).toBeTruthy());
         expect(q.queryByTestId("run-halted-notice")).toBeNull();
         await act(async () => {
-          fakeEs.getEs()!.dispatch("fact.run_halted", { reason: "budget", detail: "run cost cap reached" }, 6);
+          fakeEs
+            .getEs()!
+            .dispatch(
+              "fact.run_terminated",
+              { status: "errored", reason: "budget", detail: "run cost cap reached" },
+              6,
+            );
         });
         await waitFor(() => {
           expect(q.getByTestId("run-halted-notice")).toBeTruthy();
@@ -1176,7 +1182,7 @@ steps:
         await waitFor(() => expect(fakeEs.getEs()).toBeTruthy());
         const callsBefore = mock.calls.filter((c) => c.url.includes("/snapshots")).length;
         await act(async () => {
-          fakeEs.getEs()!.dispatch("fact.run_completed", { runId: "run-diff-run-inv" }, 6);
+          fakeEs.getEs()!.dispatch("fact.run_terminated", { status: "completed", runId: "run-diff-run-inv" }, 6);
         });
         await waitFor(() => {
           const snapshotCalls = mock.calls.filter((c) => c.url.includes("/snapshots"));

@@ -60,7 +60,11 @@ function seedCompleted(store: IEventStore, runId: string, cwd = "/tmp/repo"): vo
     s0.version,
   );
   const s1 = store.getState(runId)!;
-  store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
+  store.appendFact(
+    runId,
+    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+    s1.version,
+  );
 }
 
 function seedPausedHuman(store: IEventStore, runId: string, cwd = "/tmp/repo"): void {
@@ -79,7 +83,12 @@ function seedPausedHuman(store: IEventStore, runId: string, cwd = "/tmp/repo"): 
   const s1 = store.getState(runId)!;
   store.appendFact(
     runId,
-    [{ type: "fact.run_paused_human", payload: { nodeId: "n1", text: "approve?", routes: ["approve", "reject"] } }],
+    [
+      {
+        type: "fact.run_paused",
+        payload: { reason: "human", nodeId: "n1", text: "approve?", routes: ["approve", "reject"] },
+      },
+    ],
     s1.version,
   );
 }

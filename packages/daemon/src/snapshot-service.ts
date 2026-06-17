@@ -37,7 +37,7 @@ export async function captureBoundarySnapshot(
   nodeId: string,
 ): Promise<void> {
   if (deps.provisioner == null) return;
-  const isHitl = facts.some((f) => f.type === "fact.run_paused_human");
+  const isHitl = facts.some((f) => f.type === "fact.run_paused" && f.payload.reason === "human");
   const isStep = facts.some((f) => f.type === "fact.node_completed");
   if (!isHitl && !isStep) return;
   const post = deps.store.getState(runId);

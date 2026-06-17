@@ -36,11 +36,9 @@ describe("isDetailEvent", () => {
     expect(isDetailEvent("fact.node_completed")).toBe(true);
     expect(isDetailEvent("fact.node_aborted")).toBe(true);
     expect(isDetailEvent("fact.run_started")).toBe(true);
-    expect(isDetailEvent("fact.run_completed")).toBe(true);
-    expect(isDetailEvent("fact.run_halted")).toBe(true);
-    expect(isDetailEvent("fact.run_cancelled")).toBe(true);
+    expect(isDetailEvent("fact.run_terminated")).toBe(true);
     expect(isDetailEvent("fact.run_quarantined")).toBe(true);
-    expect(isDetailEvent("fact.run_paused_human")).toBe(true);
+    expect(isDetailEvent("fact.run_paused")).toBe(true);
     expect(isDetailEvent("fact.run_resumed")).toBe(true);
     expect(isDetailEvent("edge.selected")).toBe(true);
   });
@@ -136,25 +134,30 @@ describe("foldDetailFrame", () => {
   });
 
   test("fact.run_completed updates status", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 50);
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "completed" }, 50);
     expect(out.status).toBe("success");
   });
 
   test("fact.run_halted records haltSeq for the terminal-halt patch", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", null, 42);
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "errored" }, 42);
     expect(out.status).toBe("fail");
     expect(out.runStatus).toBe("halted");
     expect(out.haltSeq).toBe(42);
   });
 
   test("fact.run_halted captures haltReason + haltDetail from the payload", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "error", detail: "handler threw: boom" }, 42);
+    const out = fold(
+      EMPTY_DETAIL_OVERLAY,
+      "fact.run_terminated",
+      { status: "errored", reason: "error", detail: "handler threw: boom" },
+      42,
+    );
     expect(out.haltReason).toBe("error");
     expect(out.haltDetail).toBe("handler threw: boom");
   });
 
   test("fact.run_halted with an unknown reason leaves haltReason null", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "not_a_reason" }, 42);
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "errored", reason: "not_a_reason" }, 42);
     expect(out.haltReason).toBeNull();
     expect(out.haltDetail).toBeNull();
   });
@@ -180,8 +183,8 @@ describe("foldDetailFrame", () => {
     test("fact.run_paused_human populates structured fields and flips status", () => {
       const out = fold(
         EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_human",
-        { nodeId: "review", text: "Approve?", routes },
+        "fact.run_paused",
+        { reason: "human", nodeId: "review", text: "Approve?", routes },
         12,
       );
       expect(out.status).toBe("paused");
@@ -196,8 +199,8 @@ describe("foldDetailFrame", () => {
     test("fact.run_paused_human captures routeLabels and drops non-string entries", () => {
       const out = fold(
         EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_human",
-        { nodeId: "review", text: "Approve?", routes, routeLabels: { approve: "Ship it", revise: 7 } },
+        "fact.run_paused",
+        { reason: "human", nodeId: "review", text: "Approve?", routes, routeLabels: { approve: "Ship it", revise: 7 } },
         12,
       );
       expect(out.hitlOptionLabels).toEqual({ approve: "Ship it" });
@@ -239,8 +242,8 @@ describe("foldDetailFrame", () => {
     test("fact.run_resumed clears HITL fields and re-flips status to running", () => {
       let s = fold(
         EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_human",
-        { nodeId: "review", text: "Approve?", routes, routeLabels: { approve: "Ship it" } },
+        "fact.run_paused",
+        { reason: "human", nodeId: "review", text: "Approve?", routes, routeLabels: { approve: "Ship it" } },
         12,
       );
       s = fold(s, "fact.run_resumed", { fromStatus: "paused_human" }, 13);
@@ -253,7 +256,12 @@ describe("foldDetailFrame", () => {
     });
 
     test("intent.human_input records the decision against the open gate and survives resume", () => {
-      let s = fold(EMPTY_DETAIL_OVERLAY, "fact.run_paused_human", { nodeId: "review", text: "Approve?", routes }, 12);
+      let s = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused",
+        { reason: "human", nodeId: "review", text: "Approve?", routes },
+        12,
+      );
       s = fold(s, "intent.human_input", { route: "approve", note: "ship it" }, 13);
       expect(s.hitlDecisions).toEqual({ review: { route: "approve", note: "ship it" } });
       // The gate closes on resume, but the recorded decision persists.
@@ -270,8 +278,8 @@ describe("foldDetailFrame", () => {
     test("malformed paused_human (missing routes array) → hitlOptions stays null", () => {
       const out = fold(
         EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_human",
-        { nodeId: "review", text: "x" /* routes omitted */ },
+        "fact.run_paused",
+        { reason: "human", nodeId: "review", text: "x" /* routes omitted */ },
         7,
       );
       expect(out.runStatus).toBe("paused_human");
@@ -326,7 +334,7 @@ describe("mergeDetail", () => {
         { nodeId: "done-node", iteration: 0, state: "completed", lastEventSeq: 8 },
       ],
     });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", null, 142);
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "errored" }, 142);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes.find((n) => n.nodeId === "running-node")?.state).toBe("failed");
     expect(merged.nodes.find((n) => n.nodeId === "done-node")?.state).toBe("completed");
@@ -335,7 +343,12 @@ describe("mergeDetail", () => {
 
   test("live halt surfaces haltReason/haltDetail + runStatus halted on the merged detail", () => {
     const snap = snapshot({ status: "running", runStatus: "running", lastEventSeq: 100 });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "budget", detail: "run cost cap" }, 142);
+    const overlay = fold(
+      EMPTY_DETAIL_OVERLAY,
+      "fact.run_terminated",
+      { status: "errored", reason: "budget", detail: "run cost cap" },
+      142,
+    );
     const merged = mergeDetail(snap, overlay);
     expect(merged.runStatus).toBe("halted");
     expect(merged.haltReason).toBe("budget");
@@ -344,7 +357,7 @@ describe("mergeDetail", () => {
 
   test("a stale overlay halt (seq ≤ snapshot frontier) defers to the snapshot's halt fields", () => {
     const snap = snapshot({ status: "fail", runStatus: "halted", lastEventSeq: 200, haltReason: "error" });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", { reason: "budget" }, 142);
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "errored", reason: "budget" }, 142);
     const merged = mergeDetail(snap, overlay);
     expect(merged.haltReason).toBe("error");
   });
@@ -395,7 +408,7 @@ describe("mergeDetail", () => {
     // Overlay event (seq 150) is newer than the snapshot frontier (100), so
     // the overlay's run-level view wins.
     const snap = snapshot({ status: "running" });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 150);
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "completed" }, 150);
     const merged = mergeDetail(snap, overlay);
     expect(merged.status).toBe("success");
   });
@@ -408,8 +421,8 @@ describe("mergeDetail", () => {
     const snap = snapshot({ status: "success", runStatus: "completed", lastEventSeq: 100 });
     const overlay = fold(
       EMPTY_DETAIL_OVERLAY,
-      "fact.run_paused_human",
-      { nodeId: "signoff", text: "Approve?", routes: ["apply"] },
+      "fact.run_paused",
+      { reason: "human", nodeId: "signoff", text: "Approve?", routes: ["apply"] },
       60,
     );
     const merged = mergeDetail(snap, overlay);
@@ -432,7 +445,7 @@ describe("mergeDetail", () => {
         { nodeId: "n2", iteration: 0, state: "completed", lastEventSeq: 20 },
       ],
     });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 150);
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "completed" }, 150);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toBe(snap.nodes);
     expect(merged.status).toBe("success");
@@ -464,8 +477,8 @@ describe("mergeDetail", () => {
       const snap = snapshot({ status: "running", runStatus: "running" });
       const overlay = fold(
         EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_human",
-        { nodeId: "review", text: "Approve?", routes: opts },
+        "fact.run_paused",
+        { reason: "human", nodeId: "review", text: "Approve?", routes: opts },
         112,
       );
       const merged = mergeDetail(snap, overlay);
@@ -517,8 +530,8 @@ describe("mergeDetail", () => {
       const snap = snapshot({ status: "running", hitlDecisions: { gateA: { route: "yes" } } });
       let overlay = fold(
         EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_human",
-        { nodeId: "gateB", text: "?", routes: opts },
+        "fact.run_paused",
+        { reason: "human", nodeId: "gateB", text: "?", routes: opts },
         30,
       );
       overlay = fold(overlay, "intent.human_input", { route: "no", note: "later" }, 31);

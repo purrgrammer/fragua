@@ -11,9 +11,11 @@
 import type { ReadPlane } from "@fragua/core/read-plane";
 import type { RunStatus } from "@fragua/types";
 
-/** The converged terminal status (fact-taxonomy.md §3.1). fragua's three
- *  terminal facts map onto it: `run_completed` → `completed`, `run_halted` →
- *  `errored`, `run_cancelled` → `aborted`. */
+/** The converged terminal status (fact-taxonomy.md §3.1) — now native to
+ *  `fact.run_terminated.payload.status`. The `run_state.status` projection it
+ *  is derived from here keeps fragua's own vocabulary (`completed` / `halted` /
+ *  `cancelled`), which {@link terminalStatus} maps back onto the wire status
+ *  1:1 (the fact→projection and projection→wire maps compose to identity). */
 export type CiTerminalStatus = "completed" | "errored" | "aborted";
 
 /** Run-total cost — the same totals `fragua runs status` reports. */
@@ -35,9 +37,10 @@ export interface CiRunResult {
   usage: CiUsage;
 }
 
-/** Map a fragua terminal `RunStatus` to the converged wire status. Returns
- *  `undefined` for the non-terminal statuses (paused / halted-mid-retry never
- *  reach here; the only terminals are completed / cancelled / halted). */
+/** Map a fragua terminal `RunStatus` projection to the converged wire status
+ *  (identical to `fact.run_terminated.payload.status`). Returns `undefined` for
+ *  the non-terminal statuses (paused / halted-mid-retry never reach here; the
+ *  only terminals are completed / cancelled / halted). */
 function terminalStatus(status: RunStatus): CiTerminalStatus | undefined {
   switch (status) {
     case "completed":

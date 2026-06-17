@@ -279,7 +279,9 @@ describe("executor — concurrency", () => {
     // Restore and verify the outer catch wrote a halt fact.
     r.store.getState = origGetState;
     const events = r.store.getEvents("boom");
-    const halt = events.find((e) => e.type === "fact.run_halted");
+    const halt = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halt).not.toBeUndefined();
     const payload = halt!.payload as { reason: string; detail: string };
     expect(payload.reason).toBe("error");
@@ -319,7 +321,9 @@ describe("executor — concurrency", () => {
 
     r.dispatcher.get = origGet;
     const events = r.store.getEvents("boom");
-    const halt = events.find((e) => e.type === "fact.run_halted");
+    const halt = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halt).not.toBeUndefined();
     const payload = halt!.payload as { reason: string; detail: string };
     expect(payload.reason).toBe("error");

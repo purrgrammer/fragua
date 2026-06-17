@@ -345,8 +345,8 @@ describe("SqliteStore — appendFact", () => {
         runId,
         [
           {
-            type: "fact.run_halted",
-            payload: { reason: "error", detail: big },
+            type: "fact.run_terminated",
+            payload: { status: "errored", reason: "error", detail: big },
           },
         ],
         s.version,
@@ -364,7 +364,11 @@ describe("SqliteStore — appendFact", () => {
     const cjk = "字".repeat(2000);
     expect(cjk.length).toBeLessThan(MAX_EVENT_PAYLOAD_BYTES);
     expect(() =>
-      store.appendFact(runId, [{ type: "fact.run_halted", payload: { reason: "error", detail: cjk } }], s.version),
+      store.appendFact(
+        runId,
+        [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: cjk } }],
+        s.version,
+      ),
     ).toThrow(PayloadTooLargeError);
     store.close();
   });
@@ -842,7 +846,11 @@ describe("SqliteStore — listThreadsWithMessages", () => {
       s.version,
     );
     const s1 = store.getState(done)!;
-    store.appendFact(done, [{ type: "fact.run_completed", payload: { finalNode: "a" } }], s1.version);
+    store.appendFact(
+      done,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "a" } }],
+      s1.version,
+    );
 
     const rows = store.listThreadsWithMessages();
     const runIds = new Set(rows.map((r) => r.runId));
@@ -877,7 +885,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
     const s1 = store.getState(runId)!;
     store.appendFact(
       runId,
-      [{ type: "fact.run_paused_human", payload: { nodeId: "a", text: "p", routes: [] } }],
+      [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "a", text: "p", routes: [] } }],
       s1.version,
     );
     expect(store.getState(runId)!.status).toBe("paused_human");

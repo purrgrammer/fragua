@@ -84,7 +84,11 @@ function nodeCompleted(runId: string, nodeId: string, iteration: number, outputs
 
 function complete(runId: string): void {
   const s = store.getState(runId)!;
-  store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "review" } }], s.version);
+  store.appendFact(
+    runId,
+    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "review" } }],
+    s.version,
+  );
 }
 
 describe("RunDetail.outputs projection", () => {
@@ -117,7 +121,11 @@ describe("RunDetail.outputs projection", () => {
     startRun(runId);
     nodeCompleted(runId, "review", 0, { verdict: "PASS", findings: [], scores: { total: 1 } });
     const s = store.getState(runId)!;
-    store.appendFact(runId, [{ type: "fact.run_halted", payload: { reason: "aborted_exit" } }], s.version);
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "errored", reason: "aborted_exit" } }],
+      s.version,
+    );
 
     const detail = makeReadPlane({ store }).runDetail(runId)!;
     expect(detail.outputs).toBeUndefined();
@@ -199,7 +207,11 @@ describe("RunDetail.outputs projection", () => {
     nodeCompleted(runId, "scan_a", 0, { findings: ["a1"] });
     nodeCompleted(runId, "scan_b", 0, { findings: ["b1"] });
     const sc = store.getState(runId)!;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "join" } }], sc.version);
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "join" } }],
+      sc.version,
+    );
 
     const detail = makeReadPlane({ store }).runDetail(runId)!;
     expect(detail.outputs).toEqual({ a: ["a1"], b: ["b1"] });

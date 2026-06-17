@@ -493,7 +493,9 @@ steps:
     expect(proposeAttempts).toBe(3);
 
     const events = r.store.getEvents("ng1");
-    const haltEvent = events.find((e) => e.type === "fact.run_halted");
+    const haltEvent = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(haltEvent).toBeDefined();
     // Halt reason is the standard non-gate-fail terminal landing — NOT
     // goal_gate_unsatisfied.
@@ -648,7 +650,9 @@ steps:
 
     const state = r.store.getState("pin1")!;
     expect(state.status).toBe("halted");
-    const halt = r.store.getEvents("pin1").find((e) => e.type === "fact.run_halted");
+    const halt = r.store
+      .getEvents("pin1")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect((halt?.payload as { reason: string }).reason).toBe("aborted_exit");
     r.store.close();
   });

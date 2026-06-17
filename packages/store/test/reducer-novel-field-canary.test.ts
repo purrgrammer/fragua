@@ -78,7 +78,12 @@ const TIMELINE: { seq: number; type: string; payload: unknown; ts: number }[] = 
   },
   { seq: 3, type: "fact.node_started", payload: { nodeId: "b", iteration: 0 }, ts: 350 },
   { seq: 4, type: "fact.message_appended", payload: { role: "assistant", idx: 0 }, ts: 360 },
-  { seq: 5, type: "fact.run_paused_human", payload: { nodeId: "b", text: "pick", routes: ["x", "y"] }, ts: 400 },
+  {
+    seq: 5,
+    type: "fact.run_paused",
+    payload: { reason: "human", nodeId: "b", text: "pick", routes: ["x", "y"] },
+    ts: 400,
+  },
   { seq: 6, type: "fact.run_resumed", payload: { fromStatus: "paused_human" }, ts: 900 },
   { seq: 7, type: "fact.dispatch_started", payload: { nodeId: "b", iteration: 0, resumeOf: "paused_human" }, ts: 950 },
   {
@@ -132,7 +137,7 @@ const TIMELINE: { seq: number; type: string; payload: unknown; ts: number }[] = 
     ts: 1800,
   },
   { seq: 18, type: "fact.run_accepted", payload: { sha: "tip", replayed: 1, tailStaged: true }, ts: 1900 },
-  { seq: 19, type: "fact.run_completed", payload: { finalNode: "j" }, ts: 2000 },
+  { seq: 19, type: "fact.run_terminated", payload: { status: "completed", finalNode: "j" }, ts: 2000 },
 ];
 
 /** Inject `NOVEL_FIELD` as a new TOP-LEVEL sibling key in each payload — exactly

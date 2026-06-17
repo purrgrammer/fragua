@@ -4,7 +4,7 @@
 //
 // First call (no `ctx.humanInput`): the executor's first dispatch of a
 // `kind=human` node returns `yield_human { text, routes }`. The
-// daemon's result-to-facts emits `fact.run_paused_human { nodeId,
+// daemon's result-to-facts emits `fact.run_paused { reason:"human", nodeId,
 // text, routes }`; the reducer projects `run_state.status` to
 // `paused_human`; the executor frees the slot.
 //
@@ -30,7 +30,7 @@ export interface HumanHandlerEdge {
   /** Target node id for validation/error reporting. */
   to: string;
   /** Per-edge `label=` override — pure-UX button text (D6). Surfaced to
-   * the operator UI via `fact.run_paused_human.payload.routeLabels`;
+   * the operator UI via `fact.run_paused{reason:"human"}.payload.routeLabels`;
    * never participates in selection. */
   label?: string;
 }

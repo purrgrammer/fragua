@@ -111,7 +111,9 @@ function settledExitCode(readPlane: ReadPlane, runId: string, status: RunStatus)
   };
   switch (status) {
     case "halted": {
-      const r = reasonOf("fact.run_halted");
+      // The errored terminal is `fact.run_terminated{status:errored}`, carrying
+      // the HaltReason on `reason`.
+      const r = reasonOf("fact.run_terminated");
       return cliExitCode("halted", r ? { halt: r as HaltReason } : {});
     }
     case "quarantined": {

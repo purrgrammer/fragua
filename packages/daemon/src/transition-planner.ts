@@ -65,7 +65,7 @@ export interface TurnAccounting {
   totalCacheWriteTokens: number;
   /** Per-bucket cost splits from the `cost.recorded` mirror. Optional —
    * the `ctx.llm.call` accounting lane has no bucket-cost source. Carried
-   * onto `fact.run_halted.partial*CostUsd` when a structural halt drops
+   * onto `fact.run_terminated{errored}.partial*CostUsd` when a structural halt drops
    * the turn (see ResultContext.usage in result-to-facts). */
   totalInputCostUsd?: number;
   totalOutputCostUsd?: number;
@@ -184,7 +184,7 @@ export function planTransition(input: TransitionInput): TransitionPlan {
           // matched (runtime backstop for `edge_no_match`). Convert
           // into a halt so the existing `case "halt"` arm in
           // result-to-facts emits
-          // `fact.run_halted{reason:"edge_no_match"}` with a
+          // `fact.run_terminated{errored,reason:"edge_no_match"}` with a
           // diagnostic detail; validator should make this
           // unreachable for a pinned graph.
           convertedTransitionUsage = {
@@ -558,8 +558,9 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // R3 — pause defers when paired with steer/hitl: keep the
   // node_completed accounting, then pause instead of advancing to
   // the next node. wakePending will rouse the run on the next
-  // intent.human_input. Terminal halts (run_halted) beat pause; we
-  // only swap the success continuations (node_started / run_completed).
+  // intent.human_input. Terminal halts (run_terminated{errored}) beat pause;
+  // we only swap the success continuations (node_started /
+  // run_terminated{completed}).
   // Mid-dispatch pause races (intent arrives AFTER the fold but
   // BEFORE the handler returned) flow through the abort-throw path:
   // the llm agent rethrows on signal-tripped + aborted-stream
@@ -567,10 +568,11 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // the run running, and the next dispatch's fold consumes the
   // pause intent normally.
   if (result.kind === "transition" && decision.shouldPauseAfterDispatch) {
-    const swapTypes = new Set(["fact.node_started", "fact.run_completed"]);
-    const swapped = facts.some((f) => swapTypes.has(f.type));
+    const isSuccessContinuation = (f: FactEvent): boolean =>
+      f.type === "fact.node_started" || (f.type === "fact.run_terminated" && f.payload.status === "completed");
+    const swapped = facts.some(isSuccessContinuation);
     if (swapped) {
-      facts = facts.filter((f) => !swapTypes.has(f.type));
+      facts = facts.filter((f) => !isSuccessContinuation(f));
       facts.push({
         type: "fact.run_paused",
         payload: {
@@ -686,10 +688,10 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // so the run releases its slot and waits for `intent.budget_adjusted`
   // + `intent.resume`. node_completed is preserved (metrics + the
   // nextNode routing fact). Workflow-declared terminal exits
-  // (fact.run_completed / fact.run_halted) are preserved — the run is
+  // (fact.run_terminated) are preserved — the run is
   // finished and budget enforcement on a clean exit is moot.
   if (budgetPause !== undefined) {
-    const alreadyTerminal = facts.some((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
+    const alreadyTerminal = facts.some((f) => f.type === "fact.run_terminated");
     if (!alreadyTerminal) {
       facts = facts.filter((f) => f.type !== "fact.node_started");
       facts.push({
@@ -708,18 +710,19 @@ export function planTransition(input: TransitionInput): TransitionPlan {
 
   // Budget halt: preserve fact.node_completed (so projection +
   // per-node cost rollup land), then replace whatever transition fact
-  // came (fact.run_completed for terminal-success, fact.run_halted{
-  // aborted_exit} for terminal-fail, fact.node_started for non-
-  // terminal) with fact.run_halted{reason:"budget"}. Mirrors the
-  // budgetPause shape immediately above — same fact-list mutation,
+  // came (fact.run_terminated{completed} for terminal-success,
+  // {errored,aborted_exit} for terminal-fail, fact.node_started for non-
+  // terminal) with fact.run_terminated{errored,reason:"budget"}. Mirrors
+  // the budgetPause shape immediately above — same fact-list mutation,
   // halt instead of pause.
   if (budgetHaltDetail !== undefined) {
-    facts = facts.filter(
-      (f) => f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
-    );
-    const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
+    facts = facts.filter((f) => f.type !== "fact.run_terminated" && f.type !== "fact.node_started");
+    const haltPayload: { status: "errored"; reason: "budget"; detail?: string } = {
+      status: "errored",
+      reason: "budget",
+    };
     if (budgetHaltDetail.length > 0) haltPayload.detail = budgetHaltDetail;
-    facts.push({ type: "fact.run_halted", payload: haltPayload });
+    facts.push({ type: "fact.run_terminated", payload: haltPayload });
   }
 
   let routingPatch = mergeRoutingPatches(decision.routingDelta, result);

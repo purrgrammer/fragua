@@ -57,13 +57,17 @@ function started(store: IEventStore, runId: string, workflowSha = "wfa"): void {
 function complete(store: IEventStore, runId: string, workflowSha = "wfa"): void {
   started(store, runId, workflowSha);
   const s = store.getState(runId)!;
-  store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s.version);
+  store.appendFact(
+    runId,
+    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+    s.version,
+  );
 }
 
 function halt(store: IEventStore, runId: string, reason: HaltReason = "error", workflowSha = "wfa"): void {
   started(store, runId, workflowSha);
   const s = store.getState(runId)!;
-  store.appendFact(runId, [{ type: "fact.run_halted", payload: { reason } }], s.version);
+  store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "errored", reason } }], s.version);
 }
 
 function quarantine(store: IEventStore, runId: string): void {
@@ -77,7 +81,7 @@ function pausedHuman(store: IEventStore, runId: string): void {
   const s = store.getState(runId)!;
   store.appendFact(
     runId,
-    [{ type: "fact.run_paused_human", payload: { nodeId: "n1", text: "ok?", routes: ["yes", "no"] } }],
+    [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "n1", text: "ok?", routes: ["yes", "no"] } }],
     s.version,
   );
 }
@@ -136,7 +140,11 @@ describe("runs wait", () => {
       const s = r.store.getState("r1")!;
       r.store.appendFact("r1", [{ type: "fact.run_resumed", payload: { fromStatus: "paused" } }], s.version);
       const s2 = r.store.getState("r1")!;
-      r.store.appendFact("r1", [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s2.version);
+      r.store.appendFact(
+        "r1",
+        [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+        s2.version,
+      );
     }, 25);
     const code = await waitCommand({ ids: ["r1"], dbPath: r.dbPath, settle: "terminal", pollMs: 5 });
     clearTimeout(t);
@@ -152,7 +160,11 @@ describe("runs wait", () => {
     const p = waitCommand({ ids: ["r1"], dbPath: r.dbPath, pollMs: 5 });
     const t = setTimeout(() => {
       const s = r.store.getState("r1")!;
-      r.store.appendFact("r1", [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s.version);
+      r.store.appendFact(
+        "r1",
+        [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+        s.version,
+      );
     }, 25);
     const code = await p;
     clearTimeout(t);
@@ -176,7 +188,11 @@ describe("runs wait", () => {
     // Flip the one selected alpha run to halted mid-wait.
     const t = setTimeout(() => {
       const s = r.store.getState("live-a")!;
-      r.store.appendFact("live-a", [{ type: "fact.run_halted", payload: { reason: "budget" } }], s.version);
+      r.store.appendFact(
+        "live-a",
+        [{ type: "fact.run_terminated", payload: { status: "errored", reason: "budget" } }],
+        s.version,
+      );
     }, 25);
     const code = await waitCommand({ workflow: "alpha", cwd: CWD, dbPath: r.dbPath, pollMs: 5 });
     clearTimeout(t);
@@ -188,7 +204,11 @@ describe("runs wait", () => {
     started(r.store, "live"); // active → selected
     const t = setTimeout(() => {
       const s = r.store.getState("live")!;
-      r.store.appendFact("live", [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s.version);
+      r.store.appendFact(
+        "live",
+        [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+        s.version,
+      );
     }, 25);
     const code = await waitCommand({ allRunning: true, cwd: CWD, dbPath: r.dbPath, pollMs: 5 });
     clearTimeout(t);

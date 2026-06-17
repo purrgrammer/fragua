@@ -125,7 +125,10 @@ describe("event-contract version discipline", () => {
   test("MIN_COMPATIBLE_CONTRACT_VERSION is pinned — a ratchet strands runs (§3.4)", () => {
     // Advancing the floor permanently strands every run pinned below it, so it
     // must be a conscious, reviewed diff — never a refactor side effect. Moving
-    // the constant forces this test to move too.
-    expect(MIN_COMPATIBLE_CONTRACT_VERSION).toBe(1);
+    // the constant forces this test to move too. Ratcheted 1 → 4 with the v4
+    // fact-taxonomy collapse: v1–v3 runs carry the removed
+    // fact.run_{completed,halted,cancelled,paused_human} types whose fold paths
+    // the reducer dropped.
+    expect(MIN_COMPATIBLE_CONTRACT_VERSION).toBe(4);
   });
 });

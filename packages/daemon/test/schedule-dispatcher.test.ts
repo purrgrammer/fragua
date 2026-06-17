@@ -418,7 +418,11 @@ function appendTerminalFailure(store: IEventStore, runId: string): void {
   } catch (err) {
     if (!(err instanceof ConcurrencyError)) throw err;
   }
-  store.appendFact(runId, [{ type: "fact.run_halted", payload: { reason: "error", detail: "test" } } as FactEvent], v);
+  store.appendFact(
+    runId,
+    [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "test" } } as FactEvent],
+    v,
+  );
 }
 
 /** Walk a run to a quarantined state (settled-but-resumable) so the next

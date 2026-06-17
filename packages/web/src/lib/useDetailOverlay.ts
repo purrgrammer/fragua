@@ -42,7 +42,7 @@ export interface DetailOverlay {
   status: UiStatus | null;
   /** Raw run status, for distinguishing paused_human vs paused. */
   runStatus: RunDetail["runStatus"] | null;
-  /** Node id of the active human-node gate (from fact.run_paused_human). */
+  /** Node id of the active human-node gate (from fact.run_paused{reason:"human"}). */
   hitlNodeId: string | null;
   /** Operator-facing question text from the paused human node's `text=` attr. */
   hitlLabel: string | null;
@@ -52,7 +52,7 @@ export interface DetailOverlay {
    *  names per the §D6 payload shape. */
   hitlOptions: string[] | null;
   /** Sparse route-name → button-text map from the paused human node's edge
-   *  `label=` overrides (D6). Null until a `fact.run_paused_human` carrying
+   *  `label=` overrides (D6). Null until a `fact.run_paused{reason:"human"}` carrying
    *  `routeLabels` arrives; routes absent from the map fall back to
    *  `humanizeRouteName`. */
   hitlOptionLabels: Record<string, string> | null;
@@ -65,7 +65,7 @@ export interface DetailOverlay {
    * Used to downgrade still-"running" nodes to "failed" on merge,
    * matching the server's terminal-halt patch. */
   haltSeq: number | undefined;
-  /** Terminal diagnosis from a live `fact.run_halted` — mirrors the
+  /** Terminal diagnosis from a live `fact.run_terminated{errored}` — mirrors the
    * read-plane's `haltReason` / `haltDetail` projection so the halted
    * banner appears without a refetch. Null until a halt fact arrives. */
   haltReason: HaltReason | null;
@@ -112,11 +112,8 @@ const DETAIL_TYPES = new Set<string>([
   "fact.node_aborted",
   "edge.selected",
   "fact.run_started",
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_cancelled",
+  "fact.run_terminated",
   "fact.run_quarantined",
-  "fact.run_paused_human",
   "fact.run_paused",
   "fact.run_resumed",
   "intent.human_input",
@@ -128,12 +125,9 @@ const DETAIL_TYPES = new Set<string>([
  * than a refetched snapshot. */
 const RUN_STATUS_FACTS = new Set<string>([
   "fact.run_started",
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_cancelled",
+  "fact.run_terminated",
   "fact.run_quarantined",
   "fact.run_paused",
-  "fact.run_paused_human",
   "fact.run_resumed",
 ]);
 
@@ -198,9 +192,12 @@ function foldDetailFrameInner(
     }
     case "fact.run_started":
       return { ...prev, status: "running" };
-    case "fact.run_completed":
-      return { ...prev, status: "success" };
-    case "fact.run_halted": {
+    case "fact.run_terminated": {
+      // Status-discriminated terminal (fact-taxonomy.md §3.1):
+      // completed → success, aborted → canceled, errored → fail (+halt diag).
+      const status = stringField(payload, "status");
+      if (status === "completed") return { ...prev, status: "success" };
+      if (status === "aborted") return { ...prev, status: "canceled", haltSeq: prev.haltSeq ?? seq };
       const reason = stringField(payload, "reason");
       const haltReason =
         reason !== undefined && (HALT_REASONS as readonly string[]).includes(reason) ? (reason as HaltReason) : null;
@@ -213,49 +210,12 @@ function foldDetailFrameInner(
         haltDetail: stringField(payload, "detail") ?? null,
       };
     }
-    case "fact.run_cancelled":
-      return { ...prev, status: "canceled", haltSeq: prev.haltSeq ?? seq };
     case "fact.run_quarantined":
       return { ...prev, status: "fail", haltSeq: prev.haltSeq ?? seq };
-    case "fact.run_paused_human": {
-      // Payload shape: human nodes yield `{ text, routes }` (operator
-      // question + declared routes).
-      // The route names drive the per-button enum that the operator
-      // POSTs back via /runs/:id/human { route, note? }.
-      const nodeId = stringField(payload, "nodeId");
-      const text = stringField(payload, "text");
-      const rawRoutes = payload?.["routes"];
-      const routes =
-        Array.isArray(rawRoutes) && rawRoutes.every((r) => typeof r === "string") ? (rawRoutes as string[]) : null;
-      const rawLabels = payload?.["routeLabels"];
-      let routeLabels: Record<string, string> | null = null;
-      if (rawLabels != null && typeof rawLabels === "object" && !Array.isArray(rawLabels)) {
-        const labels: Record<string, string> = {};
-        for (const [route, label] of Object.entries(rawLabels as Record<string, unknown>)) {
-          if (typeof label === "string") labels[route] = label;
-        }
-        if (Object.keys(labels).length > 0) routeLabels = labels;
-      }
-      // Reset the paused node back to "running" — the prior fact.node_aborted
-      // (in the operator-pause path) optimistically flipped it to "failed",
-      // but a paused node will re-dispatch on resume. Workflow-driven
-      // human nodes don't emit a preceding node_aborted but a running-set
-      // is harmless.
-      const nextOverlay = nodeId != null ? setNodeState(prev, { nodeId }, "running", seq) : prev;
-      return {
-        ...nextOverlay,
-        status: "paused",
-        runStatus: "paused_human",
-        hitlNodeId: nodeId ?? null,
-        hitlLabel: text ?? null,
-        hitlOptions: routes,
-        hitlOptionLabels: routeLabels,
-      };
-    }
     case "intent.human_input": {
       // The operator's answer to the currently-open gate. The intent
       // carries `{ route, note? }` but not the node id — the gate it
-      // answers is whichever `fact.run_paused_human` is open, i.e.
+      // answers is whichever `fact.run_paused{reason:"human"}` is open, i.e.
       // `prev.hitlNodeId`. Record it per-node; never cleared on resume so
       // the decision banner outlives the gate.
       const route = stringField(payload, "route");
@@ -266,20 +226,49 @@ function foldDetailFrameInner(
       return { ...prev, hitlDecisions: { ...(prev.hitlDecisions ?? {}), [gateNode]: decision } };
     }
     case "fact.run_paused": {
-      // Reason carries on the payload; the reducer projects status to
-      // `paused_auto` for AUTO_WAKE_PAUSE_REASONS (provider_retry /
-      // handler_retry), `paused` otherwise. The auto-wake projection
-      // doesn't ride this overlay path — it goes through the
-      // auto-resume sweep — so the reasons we can see here are
-      // operator-resumable: operator / provider_error / payment_required
-      // / budget. Set runStatus to `paused`; banner reads the reason
-      // from the latest fact payload.
-      //
+      // Reason carries on the payload (fact-taxonomy.md §3.2):
+      //  - `human` → the HITL gate (status `paused_human`); carries
+      //    `{ text, routes, routeLabels? }` for the operator's per-button enum,
+      //    POSTed back via /runs/:id/human { route, note? }.
+      //  - AUTO_WAKE_PAUSE_REASONS (provider_retry / handler_retry) →
+      //    `paused_auto`, but that projection rides the auto-resume sweep, not
+      //    this overlay path.
+      //  - everything else (operator / provider_error / payment_required /
+      //    budget / …) → `paused`; the banner reads the reason from the payload.
+      const reason = stringField(payload, "reason");
+      const nodeId = stringField(payload, "nodeId");
+      if (reason === "human") {
+        const text = stringField(payload, "text");
+        const rawRoutes = payload?.["routes"];
+        const routes =
+          Array.isArray(rawRoutes) && rawRoutes.every((r) => typeof r === "string") ? (rawRoutes as string[]) : null;
+        const rawLabels = payload?.["routeLabels"];
+        let routeLabels: Record<string, string> | null = null;
+        if (rawLabels != null && typeof rawLabels === "object" && !Array.isArray(rawLabels)) {
+          const labels: Record<string, string> = {};
+          for (const [route, label] of Object.entries(rawLabels as Record<string, unknown>)) {
+            if (typeof label === "string") labels[route] = label;
+          }
+          if (Object.keys(labels).length > 0) routeLabels = labels;
+        }
+        // Workflow-driven human nodes don't emit a preceding node_aborted, but
+        // resetting the node to "running" is harmless and mirrors the
+        // operator-pause path below.
+        const nextHitl = nodeId != null ? setNodeState(prev, { nodeId }, "running", seq) : prev;
+        return {
+          ...nextHitl,
+          status: "paused",
+          runStatus: "paused_human",
+          hitlNodeId: nodeId ?? null,
+          hitlLabel: text ?? null,
+          hitlOptions: routes,
+          hitlOptionLabels: routeLabels,
+        };
+      }
       // The pause's node was flipped to "failed" by the preceding
       // fact.node_aborted, but a paused node re-dispatches on resume — it's
       // suspended, not failed. Reset it to "running" (the UI renders
-      // running + paused as "paused"), mirroring the human-pause path above.
-      const nodeId = stringField(payload, "nodeId");
+      // running + paused as "paused").
       const nextOverlay = nodeId != null ? setNodeState(prev, { nodeId }, "running", seq) : prev;
       return { ...nextOverlay, status: "paused", runStatus: "paused" };
     }
@@ -355,7 +344,7 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
   }
 
   // Build the merged node list lazily: on overlays that only carry a
-  // status flip (e.g. fact.run_completed with no node fact in the same
+  // status flip (e.g. fact.run_terminated{completed} with no node fact in the same
   // batch) every node in `snapshot.nodes` re-emerges unchanged, but the
   // old code still produced a fresh array via `.map`. Downstream
   // consumers (RunConversation, GraphView) keyed memoisation off

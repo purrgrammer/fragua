@@ -199,9 +199,14 @@ steps:
     // One transient OCC conflict on the cancel commit (a concurrent
     // writer advanced the version). The executor must retry against fresh
     // state rather than swallow the conflict and leave the run `running`.
-    const { restore } = failAppendWhen(r.store, (facts) => facts.some((f) => f.type === "fact.run_cancelled"), {
-      times: 1,
-    });
+    const { restore } = failAppendWhen(
+      r.store,
+      (facts) =>
+        facts.some((f) => f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "aborted"),
+      {
+        times: 1,
+      },
+    );
     try {
       await runOne("cancel-occ", runOpts(r));
     } finally {
@@ -209,7 +214,11 @@ steps:
     }
 
     expect(r.store.getState("cancel-occ")?.status).toBe("cancelled");
-    expect(r.store.getEvents("cancel-occ").some((e) => e.type === "fact.run_cancelled")).toBe(true);
+    expect(
+      r.store
+        .getEvents("cancel-occ")
+        .some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "aborted"),
+    ).toBe(true);
   });
 
   test("terminal snapshot OCC conflict retains worktree instead of disposing without fact.snapshot_recorded", async () => {
@@ -353,7 +362,9 @@ steps:
     r.store.claimNextRun(1);
     await runOne("budget-abort-reason", runOpts(r));
 
-    const halt = r.store.getEvents("budget-abort-reason").find((e) => e.type === "fact.run_halted");
+    const halt = r.store
+      .getEvents("budget-abort-reason")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("budget");
   });
 
@@ -476,7 +487,12 @@ steps:
     // four conflict, the fifth passes.
     const { restore } = failAppendWhen(
       r.store,
-      (facts) => facts.some((f) => f.type === "fact.run_started" || f.type === "fact.run_halted"),
+      (facts) =>
+        facts.some(
+          (f) =>
+            f.type === "fact.run_started" ||
+            (f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "errored"),
+        ),
       { times: 4 },
     );
     try {
@@ -486,7 +502,9 @@ steps:
     }
 
     expect(r.store.getState("occ-halt-conflict")?.status).toBe("halted");
-    const halt = r.store.getEvents("occ-halt-conflict").find((e) => e.type === "fact.run_halted");
+    const halt = r.store
+      .getEvents("occ-halt-conflict")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect((halt?.payload as { reason?: string } | undefined)?.reason).toBe("occ_exhausted");
   });
 
@@ -504,7 +522,11 @@ steps:
     await runOne("bad-graph", runOpts(r));
 
     expect(r.store.getState("bad-graph")?.status).toBe("halted");
-    expect(r.store.getEvents("bad-graph").some((e) => e.type === "fact.run_completed")).toBe(false);
+    expect(
+      r.store
+        .getEvents("bad-graph")
+        .some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed"),
+    ).toBe(false);
   });
 
   test("workflow_parse_failed halt detail carries the underlying parse error", async () => {
@@ -513,7 +535,9 @@ steps:
     r.store.claimNextRun(1);
     await runOne("bad-graph-detail", runOpts(r));
 
-    const halt = r.store.getEvents("bad-graph-detail").find((e) => e.type === "fact.run_halted");
+    const halt = r.store
+      .getEvents("bad-graph-detail")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     const detail = (halt?.payload as { detail?: string } | undefined)?.detail;
     expect(detail?.startsWith("workflow_parse_failed: ")).toBe(true);
     expect(detail).toMatch(/JSON/i);
@@ -532,7 +556,9 @@ steps:
     r.store.claimNextRun(1);
     await runOne("future-ir", runOpts(r));
 
-    const halt = r.store.getEvents("future-ir").find((e) => e.type === "fact.run_halted");
+    const halt = r.store
+      .getEvents("future-ir")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     const detail = (halt?.payload as { detail?: string } | undefined)?.detail;
     expect(detail?.startsWith("workflow_parse_failed: ")).toBe(true);
     expect(detail).toContain(`ir_version ${CURRENT_IR_VERSION + 1} > supported ${CURRENT_IR_VERSION}`);

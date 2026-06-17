@@ -36,7 +36,7 @@ import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { type ArbGraphOptions, makeArbGraph, stubOutputsFor } from "./arbitraries/graph.ts";
-import { checkRunInvariants } from "./invariants.ts";
+import { checkRunInvariants, dispositionType } from "./invariants.ts";
 
 const TERMINAL_STATUS = new Set(["completed", "halted", "cancelled"]);
 const AUTO_PAUSE_REASONS = new Set(["provider_retry", "handler_retry", "timeout_retry"]);
@@ -201,7 +201,9 @@ async function drive(
         // Answer the operator gate: pick the node's first declared route (r0,
         // which the generator always points at the forward spine) so the run
         // progresses, then wake — the genuine pause→answer→resume HITL loop.
-        const pause = [...store.getEvents(runId)].reverse().find((e) => e.type === "fact.run_paused_human");
+        const pause = [...store.getEvents(runId)]
+          .reverse()
+          .find((e) => e.type === "fact.run_paused" && (e.payload as { reason?: string }).reason === "human");
         const routes = (pause?.payload as { routes?: string[] } | undefined)?.routes ?? [];
         if (routes.length === 0) break;
         store.appendIntent(runId, { type: "intent.human_input", payload: { route: routes[0]! } });
@@ -240,7 +242,7 @@ describe("driven executor — tier-2", () => {
       fc.asyncProperty(makeArbGraph(["llm", "tool", "routing"], DRIVEABLE), async (graph) => {
         const { events, state, status, clockSpanMs, jumpedMs } = await drive(graph, successSpec);
         expect(status).toBe("completed");
-        expect(events.at(-1)?.type).toBe("fact.run_completed");
+        expect(dispositionType(events.at(-1)!)).toBe("fact.run_completed");
         checkRunInvariants(events, state);
         // A completed run dispatched ≥1 node, so activeMs accumulated; and it
         // never exceeds the non-paused elapsed time.
@@ -249,7 +251,6 @@ describe("driven executor — tier-2", () => {
         const types = new Set(events.map((e) => e.type));
         expect(types.has("fact.node_aborted")).toBe(false);
         expect(types.has("fact.run_paused")).toBe(false);
-        expect(types.has("fact.run_paused_human")).toBe(false);
       }),
       { numRuns: pbtRuns(150) },
     );
@@ -327,10 +328,12 @@ describe("driven executor — tier-2", () => {
         // forward route (r0). The run threads every pause and reaches exit.
         const { events, state, status } = await drive(graph, successSpec);
         expect(status).toBe("completed");
-        expect(events.at(-1)?.type).toBe("fact.run_completed");
+        expect(dispositionType(events.at(-1)!)).toBe("fact.run_completed");
         checkRunInvariants(events, state);
         // Every human pause was answered and resumed.
-        const humanPauses = events.filter((e) => e.type === "fact.run_paused_human").length;
+        const humanPauses = events.filter(
+          (e) => e.type === "fact.run_paused" && (e.payload as { reason?: string }).reason === "human",
+        ).length;
         const resumes = events.filter((e) => e.type === "fact.run_resumed").length;
         expect(resumes).toBeGreaterThanOrEqual(humanPauses);
       }),
@@ -357,7 +360,10 @@ describe("driven executor — tier-2", () => {
     };
     const { events, state, status } = await drive(graph, successSpec);
     expect(status).toBe("completed");
-    expect(events.filter((e) => e.type === "fact.run_paused_human").length).toBe(1);
+    expect(
+      events.filter((e) => e.type === "fact.run_paused" && (e.payload as { reason?: string }).reason === "human")
+        .length,
+    ).toBe(1);
     expect(events.filter((e) => e.type === "fact.run_resumed").length).toBeGreaterThanOrEqual(1);
     checkRunInvariants(events, state);
   });
@@ -376,7 +382,7 @@ describe("driven executor — tier-2", () => {
           // Recovery converges: the run still reaches a clean completion after
           // the simulated crash + requeue.
           expect(status).toBe("completed");
-          expect(events.at(-1)?.type).toBe("fact.run_completed");
+          expect(dispositionType(events.at(-1)!)).toBe("fact.run_completed");
           checkRunInvariants(events, state);
           assertActiveMsBounded(state, clockSpanMs, jumpedMs);
           // When the crash actually fired (run was mid-flight), the sweep

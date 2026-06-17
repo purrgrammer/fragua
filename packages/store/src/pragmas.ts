@@ -32,14 +32,25 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * route_call_not_isolated / edge_no_match) now carry the halted turn's
  * accrued cost so the reducer folds it into run metrics — a v2 daemon
  * would drop that spend from run totals. `MIN_COMPATIBLE` stays 1 — the
- * fields are optional and pre-v3 halts simply carry none. */
-export const EVENT_CONTRACT_VERSION = 3;
+ * fields are optional and pre-v3 halts simply carry none.
+ * v4 collapses the fact taxonomy (fact-taxonomy.md §3.1–3.2): the three
+ * terminal facts (`run_completed` / `run_halted` / `run_cancelled`) become
+ * one `fact.run_terminated { status: completed | errored | aborted }`, and
+ * the separate `fact.run_paused_human` folds into `fact.run_paused` as
+ * `reason: "human"`. The reducer no longer folds the old taxonomy — a clean
+ * cut (no back-compat, pre-release), so `MIN_COMPATIBLE` ratchets to 4:
+ * a run pinned < 4 carries the dropped fact types and can no longer be
+ * folded, so its reducer paths are gone. */
+export const EVENT_CONTRACT_VERSION = 4;
 
 /** Lowest contract version the daemon folds. Ratchets ONLY by deliberate act
  * (§3.4): advancing it strands every run pinned below it, so it moves only in
  * a dedicated commit that names the dropped versions and removes their reducer
- * paths. A snapshot test pins this value. */
-export const MIN_COMPATIBLE_CONTRACT_VERSION = 1;
+ * paths. A snapshot test pins this value.
+ * Ratcheted 1 → 4 with the v4 fact-taxonomy collapse: v1–v3 runs carry the
+ * removed `fact.run_{completed,halted,cancelled,paused_human}` types, whose
+ * fold paths the reducer dropped in the same change. */
+export const MIN_COMPATIBLE_CONTRACT_VERSION = 4;
 
 /** A `daemon_lock` row whose `heartbeat_at` is older than this is treated as
  * dead — the window the daemon's reaper uses to reclaim a stale lock, and the

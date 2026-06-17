@@ -133,7 +133,11 @@ function seedCommitted(store: IEventStore, runId: string): void {
     s0.version,
   );
   const s1 = store.getState(runId)!;
-  store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
+  store.appendFact(
+    runId,
+    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+    s1.version,
+  );
   const s2 = store.getState(runId)!;
   store.appendFact(
     runId,
@@ -174,7 +178,12 @@ function seedPausedHuman(store: IEventStore, runId: string): void {
   const s1 = store.getState(runId)!;
   store.appendFact(
     runId,
-    [{ type: "fact.run_paused_human", payload: { nodeId: "n1", text: "approve?", routes: ["approve", "reject"] } }],
+    [
+      {
+        type: "fact.run_paused",
+        payload: { reason: "human", nodeId: "n1", text: "approve?", routes: ["approve", "reject"] },
+      },
+    ],
     s1.version,
   );
 }
@@ -519,7 +528,7 @@ describe("fragua operator verbs", () => {
     const s1 = r.store.getState("rh4")!;
     r.store.appendFact(
       "rh4",
-      [{ type: "fact.run_paused_human", payload: { nodeId: "n1", text: "approve?", routes: [] } }],
+      [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "n1", text: "approve?", routes: [] } }],
       s1.version,
     );
 
@@ -585,14 +594,14 @@ describe("fragua forensics verbs", () => {
     seedCommitted(r.store, "ev1");
     const code = await eventsCommand({ runId: "ev1", dbPath: r.dbPath });
     expect(code).toBe(0);
-    expect(out()).toContain("fact.run_completed");
+    expect(out()).toContain("fact.run_terminated");
   });
 
   test("events: --type filters to the matching prefix", async () => {
     seedCommitted(r.store, "ev2");
-    const code = await eventsCommand({ runId: "ev2", type: "fact.run_completed", dbPath: r.dbPath });
+    const code = await eventsCommand({ runId: "ev2", type: "fact.run_terminated", dbPath: r.dbPath });
     expect(code).toBe(0);
-    expect(out()).toContain("fact.run_completed");
+    expect(out()).toContain("fact.run_terminated");
     expect(out()).not.toContain("fact.run_started");
   });
 
@@ -601,7 +610,7 @@ describe("fragua forensics verbs", () => {
     const started = r.store.getEventsByType("ev5", "fact.run_started")[0]!;
     const code = await eventsCommand({ runId: "ev5", since: started.seq, dbPath: r.dbPath });
     expect(code).toBe(0);
-    expect(out()).toContain("fact.run_completed");
+    expect(out()).toContain("fact.run_terminated");
     expect(out()).not.toContain("fact.run_started");
     expect(out()).not.toContain("intent.run_enqueued");
   });
@@ -611,7 +620,7 @@ describe("fragua forensics verbs", () => {
     const code = await eventsCommand({ runId: "ev6", limit: 2, dbPath: r.dbPath });
     expect(code).toBe(0);
     expect(logs).toHaveLength(2);
-    expect(logs[0]).toContain("fact.run_completed");
+    expect(logs[0]).toContain("fact.run_terminated");
     expect(logs[1]).toContain("fact.snapshot_recorded");
     expect(out()).not.toContain("fact.run_started");
   });
@@ -620,8 +629,10 @@ describe("fragua forensics verbs", () => {
     seedCommitted(r.store, "ev3");
     const code = await eventsCommand({ runId: "ev3", json: true, dbPath: r.dbPath });
     expect(code).toBe(0);
-    const parsed = JSON.parse(out()) as Array<{ type: string }>;
-    expect(parsed.some((e) => e.type === "fact.run_completed")).toBe(true);
+    const parsed = JSON.parse(out()) as Array<{ type: string; payload?: unknown }>;
+    expect(
+      parsed.some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed"),
+    ).toBe(true);
   });
 
   test("events: unknown run → exit 1", async () => {
@@ -653,7 +664,11 @@ describe("fragua forensics verbs", () => {
       r.store.appendObservabilityEvents(runId, [{ type: "llm.start", payload: { nodeId: "n1", iteration: i } }]);
     }
     const s1 = r.store.getState(runId)!;
-    r.store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
+    r.store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+      s1.version,
+    );
     const total = r.store.getEvents(runId).length; // 253: enqueue + started + 250 obs + completed
 
     const errs: string[] = [];
