@@ -157,6 +157,49 @@ describe("validate — structural", () => {
     expect(e030[0]?.message).toContain("repo");
   });
 
+  test("E030 flags a dotted sub-reference into a scalar input", () => {
+    const g = mkGraph({
+      attrs: { inputs: [{ name: "ticket", type: "string", required: true }] },
+      nodes: {
+        s: "start",
+        work: { type: "llm", attrs: { prompt: "fix ${{ inputs.ticket.field }}" } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+      ],
+    });
+    const e030 = validate(g).filter((d) => d.code === "E030");
+    expect(e030).toHaveLength(1);
+    expect(e030[0]?.message).toContain("dotted sub-references");
+  });
+
+  test("E030 does NOT flag a dotted reference into an object input", () => {
+    const g = mkGraph({
+      attrs: {
+        inputs: [
+          {
+            name: "config",
+            type: "object",
+            required: true,
+            profile: { kind: "record", fields: { env: { kind: "string" } }, required: ["env"] },
+          },
+        ],
+      },
+      nodes: {
+        s: "start",
+        work: { type: "llm", attrs: { prompt: "use ${{ inputs.config.env }}" } },
+        done: "exit",
+      },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E030");
+  });
+
   test("E030 not raised when every input reference is declared", () => {
     const g = mkGraph({
       attrs: { inputs: [{ name: "ticket", type: "string", required: true }] },

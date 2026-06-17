@@ -8,6 +8,33 @@ import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
 import { inputReferences, outputReferences } from "./substitution.ts";
 
+/** Walk a dotted output path against a producer's declared output profile,
+ * shared by E035 (in-graph `${{ outputs.X.f }}` refs) and E046 (run-level
+ * `outputs:` projections). An empty path (a bare `from: node`) projects the
+ * whole struct — always valid once the producer declares `outputs:`. A first
+ * segment must be a declared output field; deeper segments must each resolve
+ * into a record (dotting into a scalar / array is a dead path). Returns the
+ * first optional segment crossed (E035 surfaces it as W016). */
+function walkOutputPath(
+  producerOutputs: Record<string, OutputProfile>,
+  path: readonly string[],
+): { badPath: true } | { badPath: false; optionalSeg: string | undefined } {
+  const topField = path[0];
+  if (topField === undefined) return { badPath: false, optionalSeg: undefined };
+  const topProfile = producerOutputs[topField];
+  if (topProfile === undefined) return { badPath: true };
+  let segProfile: OutputProfile = topProfile;
+  let optionalSeg: string | undefined;
+  for (const seg of path.slice(1)) {
+    if (!isOutputRecord(segProfile)) return { badPath: true };
+    const next = segProfile.fields[seg];
+    if (next === undefined) return { badPath: true };
+    if (optionalSeg === undefined && !segProfile.required.includes(seg)) optionalSeg = seg;
+    segProfile = next;
+  }
+  return { badPath: false, optionalSeg };
+}
+
 /** Whitelist of known node attribute names — the IR (snake_case) field set
  * the validator runs against, *after* the parser has lowered authoring keys
  * (`thread:` → `thread_id`, `context-files:` →
@@ -293,22 +320,42 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // at validate-time. Scans the substituted-string attrs (prompt / text /
   // tool_command) on every node.
   {
-    const declared = new Set((graph.attrs.inputs ?? []).map((d) => d.name));
+    const declByName = new Map((graph.attrs.inputs ?? []).map((d) => [d.name, d]));
+    const scalarTypes = new Set(["string", "number", "boolean", "choice"]);
     for (const n of nodes) {
       const fields = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
       const seen = new Set<string>();
       for (const f of fields) {
         if (typeof f !== "string") continue;
-        for (const ref of inputReferences(f)) {
-          if (declared.has(ref) || seen.has(ref)) continue;
-          seen.add(ref);
-          diags.push({
-            severity: "error",
-            code: "E030",
-            message: `node "${n.id}" references undeclared input \`${ref}\` — add it to the inputs: block`,
-            nodeId: n.id,
-            ...(n.loc !== undefined ? { loc: n.loc } : {}),
-          });
+        for (const { base, dotted } of inputReferences(f)) {
+          const decl = declByName.get(base);
+          if (decl === undefined) {
+            if (seen.has(base)) continue;
+            seen.add(base);
+            diags.push({
+              severity: "error",
+              code: "E030",
+              message: `node "${n.id}" references undeclared input \`${base}\` — add it to the inputs: block`,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+            continue;
+          }
+          // A dotted sub-reference into a scalar input can never resolve (the
+          // segment collapses to "" at runtime) — only object / array inputs
+          // carry record fields to dot into.
+          if (dotted && scalarTypes.has(decl.type)) {
+            const key = `${base}|dotted`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            diags.push({
+              severity: "error",
+              code: "E030",
+              message: `node "${n.id}" dot-references input \`${base}\` but it is a ${decl.type} — dotted sub-references are only valid on object / array inputs`,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+          }
         }
       }
     }
@@ -550,43 +597,15 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             });
             continue;
           }
-          const topField = ref.path[0];
-          const topProfile = topField === undefined ? undefined : producerOutputs[topField];
-          if (topProfile === undefined) {
-            diags.push({
-              severity: "error",
-              code: "E035",
-              message: `node "${n.id}" references \`${refToken}\` but node "${ref.producer}" does not declare output field "${topField ?? "?"}"`,
-              nodeId: n.id,
-              ...(n.loc !== undefined ? { loc: n.loc } : {}),
-            });
-            continue;
-          }
-          // Validate the deeper dotted segments against the field's profile: a
-          // record must declare each next segment; dotting into a scalar or array
+          // Walk the dotted path against the producer's declared profile. A
+          // record must declare each segment; dotting into a scalar or array
           // can never resolve (resolveSegments returns undefined → fails closed),
-          // so it's a dead reference — E035, not just a top-field check.
-          let segProfile: OutputProfile = topProfile;
-          let badPath = false;
-          // Top-level fields are always required (top-level `optional:` is
-          // rejected at parse time), so only deeper segments can be optional. A
-          // ref reaching through an optional field the producer may omit fails
-          // closed at runtime — remember the first such segment for W016.
-          let optionalSeg: string | undefined;
-          for (const seg of ref.path.slice(1)) {
-            if (!isOutputRecord(segProfile)) {
-              badPath = true;
-              break;
-            }
-            const next = segProfile.fields[seg];
-            if (next === undefined) {
-              badPath = true;
-              break;
-            }
-            if (optionalSeg === undefined && !segProfile.required.includes(seg)) optionalSeg = seg;
-            segProfile = next;
-          }
-          if (badPath) {
+          // so it's a dead reference — E035, not just a top-field check. Top-level
+          // fields are always required (top-level `optional:` is rejected at
+          // parse time), so only deeper segments can be optional; `optionalSeg`
+          // is the first such segment, which W016 covers.
+          const walk = walkOutputPath(producerOutputs, ref.path);
+          if (walk.badPath) {
             diags.push({
               severity: "error",
               code: "E035",
@@ -596,6 +615,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             });
             continue;
           }
+          const optionalSeg = walk.optionalSeg;
           // Producer exists and declares the field. Decide error-vs-warn:
           // can't reach the consumer at all → dead ref (E035); reachable but
           // not run-dominating → advisory (W015), fail-closed at runtime.
@@ -1196,26 +1216,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         // the producer declares outputs. A first segment must be a declared
         // output field; deeper segments must each resolve into a record (dotting
         // into a scalar/array is a dead path — E046, mirroring E035's badPath).
-        let badPath = false;
-        const [topField, ...rest] = decl.path;
-        const topProfile: OutputProfile | undefined = topField === undefined ? undefined : producerOutputs[topField];
-        if (topField !== undefined && topProfile === undefined) {
-          badPath = true;
-        } else if (topProfile !== undefined) {
-          let segProfile: OutputProfile = topProfile;
-          for (const seg of rest) {
-            if (!isOutputRecord(segProfile)) {
-              badPath = true;
-              break;
-            }
-            const next: OutputProfile | undefined = segProfile.fields[seg];
-            if (next === undefined) {
-              badPath = true;
-              break;
-            }
-            segProfile = next;
-          }
-        }
+        const badPath = walkOutputPath(producerOutputs, decl.path).badPath;
         if (badPath) {
           diags.push({
             severity: "error",

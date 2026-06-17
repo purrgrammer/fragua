@@ -266,8 +266,9 @@ export function createRoutes(deps: ServerDeps): Hono {
       routing?: Record<string, unknown>;
       /** Typed run inputs (`--input name=value`) — validated against the
        * workflow's `inputs:` block, then stored on `routing.inputs` for
-       * `${{ inputs.name }}` substitution at dispatch. */
-      inputs?: Record<string, string>;
+       * `${{ inputs.name }}` substitution at dispatch. Object / array inputs
+       * arrive as their parsed JSON value, so the field is `unknown`-valued. */
+      inputs?: Record<string, unknown>;
       /** Absolute project root the run was enqueued from. Surfaced on
        * `run_state.cwd`; the only project identifier in the
        * harness-by-default model. Required when `workflowSha` is

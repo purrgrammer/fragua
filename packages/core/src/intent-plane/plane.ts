@@ -26,6 +26,14 @@ import * as S from "./schemas.ts";
 
 export type BuildResult<T extends IntentEvent = IntentEvent> = { ok: true; intent: T } | { ok: false; error: string };
 
+/** Genesis-event payload budget for the serialized run `inputs`. The store caps
+ * the whole `intent.run_enqueued` payload at 4 KiB (`MAX_EVENT_PAYLOAD_BYTES`);
+ * leave headroom for the other genesis fields (workflowSha, project identity,
+ * routing scaffolding) so a clean enqueue-time error fires before the raw
+ * `PayloadTooLargeError`. Spillable string inputs never reach this; only
+ * non-spillable structured inputs can. */
+const GENESIS_INPUTS_MAX_BYTES = 3584;
+
 /** The `IntentEvent` member with a given `type` discriminant. */
 type IntentOf<K extends IntentEvent["type"]> = Extract<IntentEvent, { type: K }>;
 
@@ -242,6 +250,14 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         if (errs.length > 0) {
           return { ok: false, error: errs.map((e) => e.message).join("; "), inputErrors: errs };
         }
+      }
+      // Pre-check the serialized inputs against the genesis event's 4 KiB
+      // payload cap. Structured (object / array) inputs aren't eligible for the
+      // routing-inputs spill, so an oversized one would otherwise throw a raw
+      // `PayloadTooLargeError` from `enqueueRun` with no `inputErrors` envelope.
+      // Returning a clean validation error keeps the enqueue surface uniform.
+      if (input.inputs != null && JSON.stringify({ inputs: input.inputs }).length >= GENESIS_INPUTS_MAX_BYTES) {
+        return { ok: false, error: "input payload too large", inputErrors: [] };
       }
       const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
       if (input.inputs != null && initialRouting["inputs"] === undefined) {

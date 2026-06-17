@@ -52,6 +52,12 @@ describe("run-level outputs: block", () => {
     expect(g.attrs.outputs).toEqual([{ name: "total", node: "review", path: ["scores", "total"] }]);
   });
 
+  test("from: splits on the FIRST dot only — deep paths keep every later segment", () => {
+    const src = ["name: wf", "outputs:", "  deep: { from: review.a.b.c }", "steps:", producer()].join("\n");
+    const g = parseWorkflow(src);
+    expect(g.attrs.outputs).toEqual([{ name: "deep", node: "review", path: ["a", "b", "c"] }]);
+  });
+
   test("missing/empty from is a parse error", () => {
     const src = ["name: wf", "outputs:", "  v: { description: nope }", "steps:", producer()].join("\n");
     expect(() => parseWorkflow(src)).toThrow(/must declare a non-empty `from/);

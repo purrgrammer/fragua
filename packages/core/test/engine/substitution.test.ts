@@ -65,15 +65,26 @@ describe("substitute — object/array inputs", () => {
   test("an unresolvable dotted path collapses to '' (inputs are lenient)", () => {
     expect(substitute("a=${{ inputs.config.missing }}b", { args: { inputs: { config: { env: "x" } } } })).toBe("a=b");
   });
+
+  test("resolves a hyphenated structured sub-field (regression)", () => {
+    expect(substitute("${{ inputs.config.my-field }}", { args: { inputs: { config: { "my-field": "ok" } } } })).toBe(
+      "ok",
+    );
+  });
 });
 
 describe("inputReferences", () => {
   test("extracts every reference name, deduped", () => {
-    expect(inputReferences("a=${{ inputs.foo }} b=${{ inputs.bar }} c=${{ inputs.foo }}")).toEqual(["foo", "bar"]);
+    expect(inputReferences("a=${{ inputs.foo }} b=${{ inputs.bar }} c=${{ inputs.foo }}")).toEqual([
+      { base: "foo", dotted: false },
+      { base: "bar", dotted: false },
+    ]);
   });
 
-  test("a dotted object-input ref yields only the base name (the declared input)", () => {
-    expect(inputReferences("${{ inputs.config.env }} ${{ inputs.config.region }}")).toEqual(["config"]);
+  test("a dotted object-input ref yields the base name flagged dotted (for scalar diagnostics)", () => {
+    expect(inputReferences("${{ inputs.config.env }} ${{ inputs.config.region }}")).toEqual([
+      { base: "config", dotted: true },
+    ]);
   });
 
   test("empty for templates with no input refs", () => {

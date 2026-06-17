@@ -82,7 +82,15 @@ export function coerceInputs(
     if (whole === null || typeof whole !== "object" || Array.isArray(whole)) {
       throw new Error("--input-json must be a JSON object mapping input names to values");
     }
-    Object.assign(out, whole as Record<string, unknown>);
+    // Copy only own, non-dunder keys: `Object.assign(out, ...)` would invoke the
+    // `__proto__` setter for a `{"__proto__": ...}` payload, polluting `out`'s
+    // prototype chain so the bracket-reads in `resolveInputBindings` /
+    // `validateInputBindings` see an attacker value the own-only `unknown_input`
+    // check never reports.
+    for (const [k, v] of Object.entries(whole as Record<string, unknown>)) {
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+      out[k] = v;
+    }
   }
   for (const [name, value] of Object.entries(rawStrings)) {
     const decl = declByName.get(name);

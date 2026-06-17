@@ -288,6 +288,24 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.inputErrors.some((e) => e.code === "invalid_shape" && e.name === "config")).toBe(true);
   });
 
+  test("oversized structured inputs → clean { ok: false } validation error, not a raw throw", () => {
+    const WITH_OBJECT =
+      "name: cfg\ninputs:\n  config:\n    type: object\n    fields:\n      blob: {type: string}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";
+    const objDecls = parseWorkflow(WITH_OBJECT).attrs.inputs;
+    const { plane } = rig();
+    // A structured input isn't eligible for the routing-inputs string spill, so a
+    // huge one must be rejected at build time rather than throwing PayloadTooLarge.
+    const r = plane.buildEnqueue({
+      workflowSha: "sha1",
+      inputDecls: objDecls,
+      inputs: { config: { blob: "x".repeat(8000) } },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.error).toMatch(/too large/);
+    expect(r.inputErrors).toEqual([]);
+  });
+
   test("runId is always minted — no operator/client-supplied id; scheduleId passes through", () => {
     const { plane } = rig();
     const r = plane.buildEnqueue({ workflowSha: "sha1", scheduleId: "sch-1" });

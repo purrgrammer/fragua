@@ -119,8 +119,8 @@ inputs:
 - `required: true` with no value → enqueue rejected (`400 invalid_inputs`).
 - Provide scalars at run time: `fragua run my-thing --input ticket=BUG-1 --input env=prod` (repeatable, gh-style).
 - **Object/array inputs:** `--input <name>=<value>` is JSON-parsed when the named input is declared `object`/`array` (`--input flags='["a","b"]'`, or `--input config=@cfg.json` to source from a file); scalar inputs stay verbatim. Pass the whole inputs object at once with `--input-json '{"config":{"region":"eu"}}'` (the programmatic-caller path). Malformed JSON for a declared object/array input is a clean enqueue-time error, never a silent coercion.
-- Read an object/array input as JSON with `${{ inputs.config }}`, or dot-read into it with `${{ inputs.config.region }}` (lenient — an unresolvable path collapses to `""`, unlike fail-closed `outputs`).
-- **E030** flags `${{ inputs.x }}` referencing an input not declared in `inputs:`.
+- Read an object/array input as JSON with `${{ inputs.config }}`, or dot-read into it with `${{ inputs.config.region }}` (lenient — an unresolvable path collapses to `""`, unlike fail-closed `outputs`; field segments may contain hyphens).
+- **E030** flags `${{ inputs.x }}` referencing an input not declared in `inputs:`, and also a dotted sub-reference into a *scalar* input (`${{ inputs.ticket.field }}` where `ticket` is a `string`) — it can never resolve.
 
 Reference inputs in prompts as if the value is present: `Plan ticket ${{ inputs.ticket }}.` Don't narrate the substitution mechanism.
 

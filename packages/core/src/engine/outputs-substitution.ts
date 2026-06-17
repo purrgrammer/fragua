@@ -102,17 +102,16 @@ export function projectRunOutput(
   struct: OutputStructValue,
   path: string[],
 ): { present: true; value: OutputStructValue } | { present: false } {
-  let cur: OutputStructValue = struct;
-  for (const seg of path) {
-    if (typeof cur !== "object" || cur === null || Array.isArray(cur)) return { present: false };
-    const next = (cur as Record<string, OutputStructValue>)[seg];
-    if (next === undefined) return { present: false };
-    cur = next;
-  }
-  return { present: true, value: cur };
+  const val = resolveSegments(struct, path);
+  return val !== undefined ? { present: true, value: val } : { present: false };
 }
 
-function resolveSegments(val: OutputStructValue, segments: string[]): OutputStructValue | undefined {
+/** Walk `segments` into a struct, returning the leaf or `undefined` when any
+ * segment misses (a non-record container, or an absent key). A genuine `null`
+ * leaf is returned as-is — callers decide whether present-null counts as a
+ * value (`projectRunOutput`: yes, run boundary) or fails closed
+ * (`resolveOutputRef`: no, in-graph read). */
+export function resolveSegments(val: OutputStructValue, segments: string[]): OutputStructValue | undefined {
   let cur: OutputStructValue = val;
   for (const seg of segments) {
     if (typeof cur !== "object" || cur === null || Array.isArray(cur)) return undefined;

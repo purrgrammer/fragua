@@ -465,6 +465,30 @@ steps:
     expect(state!.routing["inputs"]).toEqual({ ticket: "BUG-1", env: "prod" });
   });
 
+  test("input validation: structured object input is accepted and persisted on routing.inputs", async () => {
+    const src = `name: deploy
+inputs:
+  config:
+    type: object
+    required: true
+    fields:
+      env: {type: choice, options: [dev, prod]}
+steps:
+  work: {type: llm, prompt: "deploy \${{ inputs.config.env }}", next: exit}
+`;
+    workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "deploy",
+      workflowScope: "local",
+      inputs: { config: { env: "prod" } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { runId: string };
+    const state = store.getState(body.runId);
+    expect(state!.routing["inputs"]).toEqual({ config: { env: "prod" } });
+  });
+
   test("simple flow: workflow_not_found when the named workflow isn't on disk", async () => {
     const res = await req("POST", "/runs", {
       cwd: "/projects/alpha",

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { outputReferences, substituteOutputs, UnpopulatedOutputError } from "../../src/engine/outputs-substitution.ts";
+import {
+  outputReferences,
+  projectRunOutput,
+  resolveSegments,
+  substituteOutputs,
+  UnpopulatedOutputError,
+} from "../../src/engine/outputs-substitution.ts";
 import { substitute, wrapOutputValue } from "../../src/engine/substitution.ts";
 
 describe("substituteOutputs", () => {
@@ -133,6 +139,31 @@ describe("outputReferences()", () => {
     expect(refs).toHaveLength(1);
     expect(refs[0]!.producer).toBe("update");
     expect(refs[0]!.path).toEqual(["meta", "pkg"]);
+  });
+});
+
+describe("resolveSegments() / projectRunOutput() shared walk", () => {
+  test("resolveSegments returns the leaf for a present path", () => {
+    expect(resolveSegments({ a: { b: "v" } }, ["a", "b"])).toBe("v");
+  });
+
+  test("resolveSegments returns undefined for an absent path", () => {
+    expect(resolveSegments({ a: { b: "v" } }, ["a", "c"])).toBeUndefined();
+  });
+
+  test("projectRunOutput keeps a present null leaf (distinct from absent)", () => {
+    expect(projectRunOutput({ a: null }, ["a"])).toEqual({ present: true, value: null });
+    expect(projectRunOutput({ a: null }, ["a", "b"])).toEqual({ present: false });
+  });
+
+  test("projectRunOutput agrees with resolveSegments on presence", () => {
+    const struct = { x: { y: 0, z: "" } };
+    for (const path of [[], ["x"], ["x", "y"], ["x", "z"], ["x", "missing"]]) {
+      const val = resolveSegments(struct, path);
+      const proj = projectRunOutput(struct, path);
+      expect(proj.present).toBe(val !== undefined);
+      if (proj.present) expect(proj.value).toEqual(val!);
+    }
   });
 });
 

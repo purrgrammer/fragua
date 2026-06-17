@@ -47,8 +47,8 @@ import {
   passField,
   readBudgetOverrides,
   readBudgetWarned,
+  readInputMap,
   readNumber,
-  readStringMap,
   routingString,
   sleep,
 } from "./executor-helpers.ts";
@@ -725,10 +725,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const graph = graphFor(workflowSha);
         const goal = graph?.attrs.goal;
         // Use effectiveRouting (already materialized) so spilled inputs appear
-        // in the title seed as their full string values.
-        const structuredInputs = readStringMap(effectiveRouting["inputs"]);
-        const inputLines = Object.entries(structuredInputs)
-          .map(([k, v]) => `${k}=${v}`)
+        // in the title seed as their full string values. `readInputMap` keeps
+        // object / array leaves (a string map would drop them), so a workflow
+        // whose identity lives in a structured input still seeds a real title.
+        const inputLines = Object.entries(readInputMap(effectiveRouting["inputs"]))
+          .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
           .join("\n");
         const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
         const workflowName = wf?.name;

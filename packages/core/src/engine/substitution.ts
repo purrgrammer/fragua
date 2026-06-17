@@ -67,8 +67,10 @@ function sha256Hex(s: string): string {
 
 /** Matches `${{ inputs.name }}` with surrounding whitespace tolerance.
  * Input names start with a letter and allow word chars + hyphen, matching
- * the parser's `inputs:` key grammar. */
-const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*)\s*\}\}/g;
+ * the parser's `inputs:` key grammar. Subsequent dotted segments (into a
+ * structured input's record fields) allow hyphens too, so `inputs.config.my-field`
+ * resolves rather than silently falling through as literal text. */
+const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_-]*)*)\s*\}\}/g;
 
 /** Matches EITHER token in one pattern, so both families resolve in a single
  * pass over the original template. Group 1 = input name; groups 2+3 = output
@@ -76,7 +78,7 @@ const INPUT_REF_RE = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA
  * not (identifier-only node ids / field keys) — same grammars as the two
  * single-family regexes. */
 const COMBINED_REF_RE =
-  /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
+  /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_-]*)*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
   const { args = {}, escapeForShell = false, wrapOutputs = false } = opts;
@@ -126,14 +128,25 @@ function resolveInputRef(inputs: Record<string, unknown>, segments: string[]): s
   return JSON.stringify(cur);
 }
 
-/** Every `${{ inputs.X[.f...] }}` BASE reference name in a template. Used by the
- * validator (E030) to flag references to undeclared inputs (the base name is
- * what a declaration names; dotted segments address into a record/array). */
-export function inputReferences(template: string): string[] {
-  const out: string[] = [];
+/** Every `${{ inputs.X[.f...] }}` reference in a template, as its BASE name and
+ * whether the token carried a dotted sub-path. Used by the validator (E030) to
+ * flag references to undeclared inputs (the base name is what a declaration
+ * names; dotted segments address into a record/array) and to reject a dotted
+ * sub-reference into a scalar input (which can never resolve). De-duplicated by
+ * `base|dotted` so a scalar with both a bare and a dotted ref reports each. */
+export function inputReferences(template: string): Array<{ base: string; dotted: boolean }> {
+  const out: Array<{ base: string; dotted: boolean }> = [];
+  const seen = new Set<string>();
   for (const m of template.matchAll(INPUT_REF_RE)) {
-    const base = m[1]?.split(".")[0];
-    if (base !== undefined && !out.includes(base)) out.push(base);
+    const full = m[1];
+    if (full === undefined) continue;
+    const dotIdx = full.indexOf(".");
+    const base = dotIdx === -1 ? full : full.slice(0, dotIdx);
+    const dotted = dotIdx !== -1;
+    const key = `${base}|${dotted}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ base, dotted });
   }
   return out;
 }

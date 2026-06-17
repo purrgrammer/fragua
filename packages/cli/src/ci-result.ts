@@ -9,7 +9,7 @@
 // result line carries neither and is tagged `kind: "fragua.run_result"`.
 
 import type { ReadPlane } from "@fragua/core/read-plane";
-import { isTerminal, type RunStatus } from "@fragua/types";
+import type { RunStatus } from "@fragua/types";
 
 /** The converged terminal status (fact-taxonomy.md §3.1). fragua's three
  *  terminal facts map onto it: `run_completed` → `completed`, `run_halted` →
@@ -58,7 +58,6 @@ function terminalStatus(status: RunStatus): CiTerminalStatus | undefined {
  *  (`RunDetail.outputs` / `projectRunOutputs`); `usage` reuses the same SQL
  *  cost rollup `runs status` reads off `RunDetail`. */
 export function buildCiResult(readPlane: ReadPlane, runId: string, status: RunStatus): CiRunResult | undefined {
-  if (!isTerminal(status)) return undefined;
   const wire = terminalStatus(status);
   if (wire === undefined) return undefined;
   const detail = readPlane.runDetail(runId);

@@ -17,7 +17,7 @@ export interface InputBindingError {
 }
 
 /** Object / array inputs carry a parsed type profile; scalars don't. */
-function isStructuredInput(d: InputDecl): boolean {
+export function isStructuredInput(d: InputDecl): boolean {
   return (d.type === "object" || d.type === "array") && d.profile !== undefined;
 }
 
@@ -32,7 +32,7 @@ export function resolveInputBindings(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const d of decls ?? []) {
-    if (d.default !== undefined) out[d.name] = String(d.default);
+    if (d.default !== undefined) out[d.name] = isStructuredInput(d) ? d.default : String(d.default);
   }
   for (const d of decls ?? []) {
     const v = provided[d.name];
@@ -58,7 +58,7 @@ export function validateInputBindings(
 
   for (const d of decls ?? []) {
     const v = provided[d.name];
-    if (v === undefined) {
+    if (v === undefined || v === null) {
       if (d.required && d.default === undefined) {
         errors.push({
           code: "missing_required",
@@ -76,6 +76,21 @@ export function validateInputBindings(
           message: `input "${d.name}" = ${JSON.stringify(v)} is not one of ${d.options.map((o) => JSON.stringify(o)).join(", ")}`,
         });
       }
+      continue;
+    }
+    // Scalar inputs reject a non-scalar value handed in via `--input-json`:
+    // `resolveInputBindings` would otherwise `String(v)` an object into
+    // "[object Object]" and feed it to the prompt unannounced.
+    if (
+      (d.type === "string" && typeof v !== "string") ||
+      (d.type === "number" && typeof v !== "number") ||
+      (d.type === "boolean" && typeof v !== "boolean")
+    ) {
+      errors.push({
+        code: "invalid_shape",
+        name: d.name,
+        message: `input "${d.name}" expects a ${d.type} but got ${JSON.stringify(v)}`,
+      });
       continue;
     }
     // Object / array inputs validate their parsed value against the SAME profile

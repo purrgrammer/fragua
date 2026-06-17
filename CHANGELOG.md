@@ -115,6 +115,25 @@ guarantee.
 
 ### Fixed
 
+- Structured-input safety. A non-scalar value handed to a `type: string` /
+  `number` / `boolean` input (via `--input-json`) is now rejected at enqueue
+  with a clear shape error instead of stringifying to `"[object Object]"` and
+  flowing into a prompt; a `null` for a required input counts as not-provided
+  (a clean `missing_required`) rather than the literal `"null"`; a `default:`
+  on an `object` / `array` input is a parse error (structured defaults are
+  unsupported); and a structured input too large for the genesis-event cap
+  fails enqueue with a clean validation error instead of a raw
+  `PayloadTooLarge`. Dotted reads into structured inputs now resolve fields
+  containing hyphens (e.g. `${{ inputs.config.my-field }}`), and the validator
+  (E030) rejects a dotted sub-reference into a scalar input, which can never
+  resolve.
+- Run-level output envelope. A completed run whose declared `outputs:`
+  producers all skipped now omits the `outputs` field entirely (rather than
+  reporting an empty `{}`), keeping "no outputs declared" and "all producers
+  skipped" distinguishable on `fragua ci --json` and the run detail. The
+  auto-generated run title now seeds from object / array inputs too (a
+  workflow whose identity lives in a structured input no longer gets a generic
+  title).
 - A handler that honors a late-delivered abort is no longer falsely declared
   leaked. The leak grace is now measured from when the abort actually reached
   the handler, not as an absolute deadline from dispatch — previously, system

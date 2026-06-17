@@ -294,13 +294,26 @@ function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] 
         ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
       );
     }
+    const requiredNode = body.get("required", true);
+    if (YAML.isSeq(requiredNode)) {
+      throw new ParseError(
+        `input "${name}" \`required:\` must be a boolean; use \`optional: true\` on individual fields inside \`fields:\``,
+        ...locArr(locOf(requiredNode, lineCounter)),
+      );
+    }
     const decl: InputDecl = {
       name,
       type: type as InputDecl["type"],
-      required: scalarValue(body.get("required", true)) === true,
+      required: scalarValue(requiredNode) === true,
     };
     const desc = scalarValue(body.get("description", true));
     if (typeof desc === "string" && desc.length > 0) decl.description = desc;
+    if ((type === "object" || type === "array") && body.get("default", true) !== undefined) {
+      throw new ParseError(
+        `input "${name}" declares \`default:\` on a ${type} input — structured-input defaults are not supported`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
     const def = scalarValue(body.get("default", true));
     if (def !== undefined && def !== null) decl.default = def as string | number | boolean;
     const opts = scalarValue(body.get("options", true));
@@ -361,15 +374,16 @@ function parseRunOutputs(node: unknown, lineCounter: YAML.LineCounter): RunOutpu
         ...locArr(locOf(body, lineCounter)),
       );
     }
-    const segments = fromRaw.trim().split(".");
-    const producer = segments[0]!;
+    const trimmed = fromRaw.trim();
+    const firstDot = trimmed.indexOf(".");
+    const producer = firstDot === -1 ? trimmed : trimmed.slice(0, firstDot);
     if (producer.length === 0) {
       throw new ParseError(
         `run output "${name}" has an empty producer node in \`from: ${fromRaw}\``,
         ...locArr(locOf(body, lineCounter)),
       );
     }
-    const path = segments.slice(1);
+    const path = firstDot === -1 ? [] : trimmed.slice(firstDot + 1).split(".");
     if (path.some((seg) => seg.length === 0)) {
       throw new ParseError(
         `run output "${name}" has an empty path segment in \`from: ${fromRaw}\``,

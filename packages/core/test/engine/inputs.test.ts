@@ -29,6 +29,18 @@ describe("resolveInputBindings", () => {
     expect(resolveInputBindings(undefined, { stray: "x" })).toEqual({});
   });
 
+  test("a structured default passes through un-stringified (not String(d.default))", () => {
+    const decls = [
+      decl({
+        name: "config",
+        type: "object",
+        profile: { kind: "record", fields: { env: { kind: "string" } }, required: ["env"] },
+        default: { env: "dev" } as unknown as string,
+      }),
+    ];
+    expect(resolveInputBindings(decls, {})["config"]).toEqual({ env: "dev" });
+  });
+
   test("object/array values pass through un-stringified; scalars stay coerced", () => {
     const decls = [
       decl({
@@ -83,6 +95,29 @@ describe("validateInputBindings", () => {
 
   test("no decls + no provided → ok", () => {
     expect(validateInputBindings(undefined, {})).toEqual([]);
+  });
+
+  test("a non-scalar value for a scalar input → invalid_shape", () => {
+    const errs = validateInputBindings([decl({ name: "name", type: "string" })], {
+      name: { nested: true } as unknown as string,
+    });
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.code).toBe("invalid_shape");
+    expect(errs[0]?.name).toBe("name");
+  });
+
+  test("a number input handed a string → invalid_shape", () => {
+    const errs = validateInputBindings([decl({ name: "n", type: "number" })], { n: "7" as unknown as number });
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.code).toBe("invalid_shape");
+  });
+
+  test("null for a required input is treated as not-provided → missing_required", () => {
+    const errs = validateInputBindings([decl({ name: "ticket", required: true })], {
+      ticket: null as unknown as string,
+    });
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.code).toBe("missing_required");
   });
 
   test("object input value matching its profile → ok", () => {

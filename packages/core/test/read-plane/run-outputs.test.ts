@@ -8,6 +8,12 @@ import { CURRENT_IR_VERSION, serializeGraph } from "../../src/ir.ts";
 import { parseWorkflow } from "../../src/parser/yaml.ts";
 import { makeReadPlane } from "../../src/read-plane/plane.ts";
 
+// A validator-clean workflow that still produces a SKIPPED run-level producer:
+// `gate` (route-discriminated, no outputs) sends one branch straight to
+// `review` and the other through `scan` first. Both paths reach `review` (so
+// its outputs always project), but `scan` only runs on the deep branch — the
+// realistic W018 "producer existed but wasn't on the taken path" shape, which
+// E046 accepts (it's a warning, not an error).
 const WF_SOURCE = [
   "name: rl-outputs",
   "outputs:",
@@ -16,6 +22,18 @@ const WF_SOURCE = [
   "  total: { from: review.scores.total }",
   "  scan: { from: scan.status }",
   "steps:",
+  "  gate:",
+  "    type: llm",
+  "    prompt: Decide.",
+  "    routes:",
+  "      skip: review",
+  "      deep: scan",
+  "  scan:",
+  "    type: llm",
+  "    prompt: Scan.",
+  "    outputs:",
+  "      status: { type: string }",
+  "    next: review",
   "  review:",
   "    type: llm",
   "    prompt: Review.",
@@ -82,15 +100,16 @@ describe("RunDetail.outputs projection", () => {
     expect(detail.outputs).not.toHaveProperty("scan");
   });
 
-  test("absent: a declared output whose producer never ran is omitted", () => {
+  test("absent: a completed run whose producers all skipped reports no envelope (undefined, not {})", () => {
     const runId = "r-absent";
     startRun(runId);
-    // review never completes; the run still reaches a completing terminal.
+    // No node emitted; the run still reaches a completing terminal.
     complete(runId);
 
     const detail = makeReadPlane({ store }).runDetail(runId)!;
-    // Completed run → envelope present, but every producer absent → empty.
-    expect(detail.outputs).toEqual({});
+    // Every producer absent → no envelope, so the field is omitted entirely
+    // (distinct from a declared-but-empty `{}`).
+    expect(detail.outputs).toBeUndefined();
   });
 
   test("only completed runs carry an envelope; a halted run has no outputs", () => {

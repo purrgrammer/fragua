@@ -410,6 +410,53 @@ steps:
 `),
     ).toThrow(/disallowed JSON-Schema key "pattern"/);
   });
+
+  test("default: on an object input is a parse error (structured defaults unsupported)", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+inputs:
+  config:
+    type: object
+    default: {env: dev}
+    fields:
+      env: {type: string}
+steps:
+  work: {type: llm, prompt: hi}
+`),
+    ).toThrow(/structured-input defaults are not supported/);
+  });
+
+  test("default: on an array input is a parse error", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+inputs:
+  tags:
+    type: array
+    default: [a, b]
+    items: {type: string}
+steps:
+  work: {type: llm, prompt: hi}
+`),
+    ).toThrow(/structured-input defaults are not supported/);
+  });
+
+  test("required: as a sequence is a parse error (must be a boolean)", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+inputs:
+  config:
+    type: object
+    required: [env]
+    fields:
+      env: {type: string}
+steps:
+  work: {type: llm, prompt: hi}
+`),
+    ).toThrow(/`required:` must be a boolean/);
+  });
 });
 
 describe("parseWorkflow — error paths", () => {

@@ -393,7 +393,7 @@ outputs into the run's typed result:
 outputs:
   verdict:  { from: review.verdict }
   findings: { from: review.findings }
-  status:   { from: scan.status, default: skipped }   # default: deferred — §11.4
+  status:   { from: scan.status }   # default: not accepted — see §11.5
 ```
 
 `from:` is a `<node>.<path>` reference — the same addressing as the
@@ -473,18 +473,22 @@ Two checks, reusing the existing per-step machinery — one gate, one advisory:
 - **W018 (may not produce) — advisory.** The producer can reach a completing
   terminal but is not guaranteed to on every such path — the W015 analog at
   the run boundary, reusing its path-analysis. Consistent with §1 (totality is
-  advice, not a gate); a declared `default:` (§11.5) silences it.
+  advice, not a gate). A `default:` would silence it once it ships, but
+  `default:` is not yet accepted (§11.5).
 
-### 11.5 `default:` — deferred-but-sound
+### 11.5 `default:` — deferred and rejected loudly
 
-A run-output may carry a typed `default:` — a **literal, validated against the
-output's own type at parse time** — surfaced in place of absence. It turns a
-typed-partial envelope total at the author's option and silences W018.
+A run-output `default:` — a **literal, validated against the output's own type
+at parse time** — would surface in place of absence, turning a typed-partial
+envelope total at the author's option and silencing W018. It is **deferred**,
+and the parser **rejects it loudly** (a `ParseError`) rather than silently
+dropping it: an author who writes `default:` on a run output should know it has
+no effect yet, not discover later that their fallback never fired.
 
-This is **deferred**, not v1: typed-partial is the floor, and an embedding
-engine's own per-step fallback already absorbs absence downstream, so the
-default is additive convenience. The MVP contract admits it without a rewrite
-— a later `default:` only fills slots that were otherwise absent.
+The design stays sound for the eventual lift: typed-partial is the floor, and
+an embedding engine's own per-step fallback already absorbs absence downstream,
+so the default is additive convenience. The MVP contract admits it without a
+rewrite — a later `default:` only fills slots that were otherwise absent.
 
 It is deliberately **a typed literal, not a fallback expression.** Ernesto's
 step `fallback` is a runtime `${{ }}` expression that can itself read an
@@ -503,7 +507,9 @@ opposite of the silent `""` §1 forbids.)
 > whole-object `--input-json '<json>'`; malformed JSON for a declared
 > object/array input is a clean parse-/enqueue-time error. `${{ inputs.x }}`
 > renders the whole value as JSON; `${{ inputs.x.field }}` dot-reads into it
-> (leniently — unlike fail-closed outputs).
+> (leniently — unlike fail-closed outputs), and field segments may contain
+> hyphens. A dotted sub-reference into a *scalar* input is an E030 error (it
+> can never resolve).
 
 A workflow declares a non-scalar input over the same grammar `outputs:` uses:
 

@@ -285,7 +285,11 @@ export function projectRunOutputs(
     if (!projected.present) continue; // path through an omitted field → absent
     out[decl.name] = projected.value;
   }
-  return out;
+  // A completed run whose declared producers ALL skipped has no envelope to
+  // report — return `undefined` (not `{}`) so "no outputs declared" and "all
+  // producers skipped" stay distinguishable downstream (`detail.outputs` /
+  // `buildCiResult` omit the field rather than emit an empty object).
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Narrow a halt fact's `occContext` blob into the typed `haltContext`. Every

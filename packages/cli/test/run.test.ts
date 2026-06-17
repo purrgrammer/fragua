@@ -210,4 +210,11 @@ describe("coerceInputs", () => {
   test("--input-json must be a JSON object, not an array/scalar", () => {
     expect(() => coerceInputs({}, "[1,2]", [])).toThrow(/must be a JSON object/);
   });
+
+  test("--input-json with a __proto__ key does not pollute the result or Object.prototype", () => {
+    const out = coerceInputs({}, '{"__proto__":{"polluted":"yes"},"ticket":"BUG-1"}', [decl({ name: "ticket" })]);
+    expect(out).toEqual({ ticket: "BUG-1" });
+    expect((out as Record<string, unknown>)["polluted"]).toBeUndefined();
+    expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+  });
 });
