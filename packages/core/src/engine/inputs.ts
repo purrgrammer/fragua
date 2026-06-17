@@ -36,7 +36,10 @@ export function resolveInputBindings(
   }
   for (const d of decls ?? []) {
     const v = provided[d.name];
-    if (v === undefined) continue;
+    // `null` (reachable via `--input-json`) is "not provided" — mirror the
+    // validator so an optional scalar keeps its default / collapses to "",
+    // never renders the literal "null".
+    if (v === undefined || v === null) continue;
     // Object / array inputs pass through as their parsed JSON value (the
     // substitution layer dot-reads them); scalars stay textual.
     out[d.name] = isStructuredInput(d) ? v : String(v);

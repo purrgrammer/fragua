@@ -117,6 +117,54 @@ describe("fragua run", () => {
     }
   });
 
+  test("--input-json end-to-end: enqueued routing.inputs carries the parsed shape", async () => {
+    const r = rig();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "typed.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: typed\ninputs:\n  ticket: {type: string}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const code = await runCommand({
+        workflow: yamlPath,
+        dbPath: r.dbPath,
+        follow: false,
+        inputJson: '{"ticket":"BUG-1"}',
+      });
+      expect(code).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      expect(r.store.getState(runId)!.routing["inputs"]).toEqual({ ticket: "BUG-1" });
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--input end-to-end: number/boolean inputs are coerced into routing.inputs", async () => {
+    const r = rig();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "nb.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: nb\ninputs:\n  count: {type: number}\n  flag: {type: boolean}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const code = await runCommand({
+        workflow: yamlPath,
+        dbPath: r.dbPath,
+        follow: false,
+        inputs: { count: "3", flag: "true" },
+      });
+      expect(code).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      expect(r.store.getState(runId)!.routing["inputs"]).toEqual({ count: 3, flag: true });
+    } finally {
+      await r.close();
+    }
+  });
+
   test("--title is recorded on the run; no free-form input is set", async () => {
     const r = rig();
     try {
@@ -189,6 +237,16 @@ describe("coerceInputs", () => {
 
   test("scalar --input name=value stays a verbatim string", () => {
     expect(coerceInputs({ ticket: "BUG-1" }, undefined, [decl({ name: "ticket" })])).toEqual({ ticket: "BUG-1" });
+  });
+
+  test("--input count=<n> coerces a declared number to a JS number", () => {
+    expect(coerceInputs({ count: "3" }, undefined, [decl({ name: "count", type: "number" })])).toEqual({ count: 3 });
+  });
+
+  test("--input flag=<bool> coerces a declared boolean", () => {
+    expect(coerceInputs({ flag: "true" }, undefined, [decl({ name: "flag", type: "boolean" })])).toEqual({
+      flag: true,
+    });
   });
 
   test("--input-json supplies the whole inputs object; per-input flags override", () => {

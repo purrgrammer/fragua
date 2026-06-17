@@ -251,6 +251,12 @@ import {
 } from "./types.ts";
 import { insertWorkflowIfAbsent, selectWorkflow, workflowExists } from "./workflow-queries.ts";
 
+/** UTF-8 byte length of a string. The event-payload cap (I2/I10) is a byte
+ * cap, so the guards must measure encoded bytes — `String#length` counts
+ * UTF-16 code units, undercounting CJK / emoji by up to ~3×. */
+const PAYLOAD_ENCODER = new TextEncoder();
+const utf8ByteLength = (s: string): number => PAYLOAD_ENCODER.encode(s).byteLength;
+
 /** EventRow → StoredEvent. Shared across getEvents / getGlobalEvents*
  * so the projection (column rename, payload parse, writer cast) lives
  * in one place. */
@@ -764,8 +770,9 @@ export class SqliteStore implements IEventStore {
       ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
       ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
     } satisfies RunEnqueuedPayload);
-    if (genesisPayload.length >= MAX_EVENT_PAYLOAD_BYTES) {
-      throw new PayloadTooLargeError(genesisPayload.length, MAX_EVENT_PAYLOAD_BYTES);
+    const genesisBytes = utf8ByteLength(genesisPayload);
+    if (genesisBytes >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(genesisBytes, MAX_EVENT_PAYLOAD_BYTES);
     }
 
     this.writeTxn(() => {
@@ -2281,8 +2288,9 @@ export class SqliteStore implements IEventStore {
 
   private validatePayload(payload: unknown): string {
     const s = JSON.stringify(payload ?? {});
-    if (s.length >= MAX_EVENT_PAYLOAD_BYTES) {
-      throw new PayloadTooLargeError(s.length, MAX_EVENT_PAYLOAD_BYTES);
+    const bytes = utf8ByteLength(s);
+    if (bytes >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(bytes, MAX_EVENT_PAYLOAD_BYTES);
     }
     return s;
   }

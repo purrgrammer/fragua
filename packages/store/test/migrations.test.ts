@@ -32,6 +32,24 @@ describe("migrate — schema version handling", () => {
     db.close();
   });
 
+  test("v5 daemon_events payload CHECK is byte-aware (rejects CJK over 4 KiB bytes, under 4 KiB chars)", () => {
+    // `events` and `daemon_events` carry the identical byte-aware CHECK; assert
+    // it on `daemon_events` since its `run_id` is nullable (no run_state FK row
+    // needed). 2000 CJK chars = 2000 code points (< 4096), 6000 UTF-8 bytes.
+    const db = freshDb();
+    migrate(db);
+    const cjk = "字".repeat(2000);
+    expect(cjk.length).toBeLessThan(4096);
+    expect(() => db.query("INSERT INTO daemon_events (type, payload, ts) VALUES ('t', ?, 0)").run(cjk)).toThrow(
+      /CHECK/i,
+    );
+    // An ASCII payload of the same code-point length is well under the byte cap.
+    expect(() =>
+      db.query("INSERT INTO daemon_events (type, payload, ts) VALUES ('t', ?, 0)").run("x".repeat(2000)),
+    ).not.toThrow();
+    db.close();
+  });
+
   test("idempotent: re-running migrate on a fresh DB is a no-op", () => {
     const db = freshDb();
     migrate(db);

@@ -18,7 +18,7 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { InputDecl } from "@fragua/core";
+import { type InputDecl, isStructuredInput } from "@fragua/core";
 import chalk from "chalk";
 import { resolveProject } from "../project.ts";
 import { followRun } from "../run-follow.ts";
@@ -60,10 +60,13 @@ export async function resolveInputArgs(raw: string | string[] | undefined): Prom
  *
  * - `--input-json` (if present) is parsed as one JSON value and seeds the map.
  * - Each `--input name=value` overlays it: an object / array-typed input has its
- *   string `JSON.parse`d; a scalar stays verbatim. Validation against the
- *   declared profile happens downstream at enqueue (`validateInputBindings`).
- * - Malformed JSON for a declared object / array input (or for `--input-json`)
- *   throws a clean error naming the offender — never a silent coercion.
+ *   string `JSON.parse`d (gated by `isStructuredInput`); a declared `number` is
+ *   `Number()`-coerced, a `boolean` accepts only `"true"` / `"false"`; a
+ *   `string` (or unknown) stays verbatim. Profile validation happens downstream
+ *   at enqueue (`validateInputBindings`).
+ * - Malformed JSON for a declared object / array input (or for `--input-json`),
+ *   a non-numeric `number`, or a non-`true`/`false` `boolean` throws a clean
+ *   error naming the offender — never a silent coercion.
  */
 export function coerceInputs(
   rawStrings: Record<string, string>,
@@ -94,12 +97,21 @@ export function coerceInputs(
   }
   for (const [name, value] of Object.entries(rawStrings)) {
     const decl = declByName.get(name);
-    if (decl !== undefined && (decl.type === "object" || decl.type === "array")) {
+    if (decl !== undefined && isStructuredInput(decl)) {
       try {
         out[name] = JSON.parse(value);
       } catch (err) {
         throw new Error(`input "${name}" (type ${decl.type}) is not valid JSON: ${(err as Error).message}`);
       }
+    } else if (decl !== undefined && decl.type === "number") {
+      const n = Number(value);
+      if (Number.isNaN(n)) throw new Error(`input "${name}" (type number) is not a number: ${JSON.stringify(value)}`);
+      out[name] = n;
+    } else if (decl !== undefined && decl.type === "boolean") {
+      if (value !== "true" && value !== "false") {
+        throw new Error(`input "${name}" (type boolean) must be "true" or "false", got ${JSON.stringify(value)}`);
+      }
+      out[name] = value === "true";
     } else {
       out[name] = value;
     }

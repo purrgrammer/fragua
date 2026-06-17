@@ -124,6 +124,35 @@ describe("ciCommand", () => {
     expect(readArtifact().status).toBe("completed");
   });
 
+  test("--input-json end-to-end: enqueued routing.inputs carries the parsed shape", async () => {
+    writeFileSync(wfPath, "name: ci-inputs\ninputs:\n  ticket: {type: string}\nsteps:\n  done: {type: exit}\n");
+    const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true, inputJson: '{"ticket":"BUG-1"}' });
+    expect(code).toBe(0);
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      const runId = makeReadPlane({ store }).runSummaries()[0]!.runId;
+      expect(store.getState(runId)!.routing["inputs"]).toEqual({ ticket: "BUG-1" });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("--input end-to-end: number/boolean inputs are coerced into routing.inputs", async () => {
+    writeFileSync(
+      wfPath,
+      "name: ci-nb\ninputs:\n  count: {type: number}\n  flag: {type: boolean}\nsteps:\n  done: {type: exit}\n",
+    );
+    const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true, inputs: { count: "3", flag: "true" } });
+    expect(code).toBe(0);
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      const runId = makeReadPlane({ store }).runSummaries()[0]!.runId;
+      expect(store.getState(runId)!.routing["inputs"]).toEqual({ count: 3, flag: true });
+    } finally {
+      store.close();
+    }
+  });
+
   test("missing workflow → exit 1", async () => {
     const code = await runCi({ workflow: join(dir, "does-not-exist.yaml"), cwd: dir, dbPath, json: true });
     expect(code).toBe(1);

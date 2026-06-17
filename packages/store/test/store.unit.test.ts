@@ -354,6 +354,20 @@ describe("SqliteStore — appendFact", () => {
     ).toThrow(PayloadTooLargeError);
     store.close();
   });
+
+  test("appendFact measures the cap in UTF-8 bytes, not code points (CJK can't slip past)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s = store.getState(runId)!;
+    // 2000 CJK chars = 2000 UTF-16 code units but 6000 UTF-8 bytes — over the
+    // 4 KiB cap by bytes, under it by `String#length`.
+    const cjk = "字".repeat(2000);
+    expect(cjk.length).toBeLessThan(MAX_EVENT_PAYLOAD_BYTES);
+    expect(() =>
+      store.appendFact(runId, [{ type: "fact.run_halted", payload: { reason: "error", detail: cjk } }], s.version),
+    ).toThrow(PayloadTooLargeError);
+    store.close();
+  });
 });
 
 describe("SqliteStore — intents", () => {

@@ -74,7 +74,56 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
     down: (db) => db.exec("ALTER TABLE messages DROP COLUMN pass"),
     lossy: true,
   },
+  // v4 → v5: the event-payload cap (I2/I10) is a 4 KiB BYTE cap, but the
+  // `events`/`daemon_events` CHECKs measured `length(payload)` — code points,
+  // which undercount CJK / emoji by up to ~3×, letting an oversized structured
+  // input commit. Rebuild both tables with `length(CAST(payload AS BLOB))`
+  // (UTF-8 bytes). SQLite can't ALTER a CHECK, so each is a table rebuild.
+  // Non-lossy: data is copied verbatim, only the constraint expression changes.
+  5: {
+    up: (db) => {
+      rebuildEventsPayloadCheck(db, "length(CAST(payload AS BLOB)) < 4096");
+    },
+    down: (db) => {
+      rebuildEventsPayloadCheck(db, "length(payload) < 4096");
+    },
+  },
 };
+
+/** Rebuild `events` + `daemon_events` with a given `payload` CHECK expression.
+ * SQLite has no `ALTER … ALTER CONSTRAINT`, so the only way to change a CHECK
+ * is the create-copy-drop-rename dance. Nothing references either table by
+ * foreign key, so the drop is safe with `foreign_keys` enforcement on. */
+function rebuildEventsPayloadCheck(db: Database, payloadCheck: string): void {
+  db.exec(`CREATE TABLE events_rebuild (
+  run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  writer TEXT NOT NULL,
+  payload TEXT NOT NULL CHECK (${payloadCheck}),
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (run_id, seq)
+) STRICT, WITHOUT ROWID`);
+  db.exec("INSERT INTO events_rebuild SELECT run_id, seq, type, writer, payload, ts FROM events");
+  db.exec("DROP TABLE events");
+  db.exec("ALTER TABLE events_rebuild RENAME TO events");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, run_id, seq)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts, run_id, seq)");
+
+  db.exec(`CREATE TABLE daemon_events_rebuild (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL CHECK (${payloadCheck}),
+  ts INTEGER NOT NULL,
+  run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL
+) STRICT`);
+  db.exec("INSERT INTO daemon_events_rebuild SELECT seq, type, payload, ts, run_id FROM daemon_events");
+  db.exec("DROP TABLE daemon_events");
+  db.exec("ALTER TABLE daemon_events_rebuild RENAME TO daemon_events");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_daemon_events_ts ON daemon_events(ts, seq)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_daemon_events_type ON daemon_events(type, ts)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_daemon_events_run ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL");
+}
 
 /** Steps that deliberately ship without a `down`, each with the reason a
  * downgrade past it is unsupported. A step appears here XOR declares a `down`

@@ -226,26 +226,19 @@ export function buildSubstitutionArgs(
   return args;
 }
 
-/** Coerce an unknown `routing.inputs` value into a string→string map,
- * dropping non-string entries. */
-export function readStringMap(v: unknown): Record<string, string> {
-  if (v === null || typeof v !== "object") return {};
-  const out: Record<string, string> = {};
-  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (typeof val === "string") out[k] = val;
-  }
-  return out;
-}
-
 /** Read `routing.inputs` preserving object / array input values (a string map
  * would drop them). Substitution receives the materialized routing, so any
  * `$fragua_blob` ref has already been rehydrated — skip a stray one defensively
- * rather than feed a ref object to the substitution layer. */
+ * rather than feed a ref object to the substitution layer. The blob-ref probe
+ * uses `Object.hasOwn` (not `in`) so a polluted `Object.prototype.$fragua_blob`
+ * can't make every structured input look like a ref and get silently dropped. */
 export function readInputMap(v: unknown): Record<string, unknown> {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return {};
   const out: Record<string, unknown> = {};
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (val !== null && typeof val === "object" && "$fragua_blob" in (val as Record<string, unknown>)) continue;
+    if (val !== null && typeof val === "object" && Object.hasOwn(val as Record<string, unknown>, "$fragua_blob")) {
+      continue;
+    }
     out[k] = val;
   }
   return out;

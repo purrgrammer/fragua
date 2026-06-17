@@ -139,6 +139,12 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   const starts = nodes.filter((n) => n.type === "start");
   const exits = nodes.filter((n) => n.type === "exit");
 
+  // Computed once and shared across W002, E035/W015, and E046/W018 so a future
+  // graph-normalisation step can't leave one block reading a different graph
+  // state than another (which would produce divergent E035 vs E046 results).
+  const dominance = buildRunDominance(graph);
+  const reachableFromStart = starts.length === 1 ? reachableSet(graph, starts[0]!.id) : new Set(nodeIds);
+
   // E001: start node required
   if (starts.length === 0) {
     diags.push({ severity: "error", code: "E001", message: "graph has no start node (start)" });
@@ -199,7 +205,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 
   // W002: unreachable from start
   if (starts.length === 1) {
-    const reachable = reachableSet(graph, starts[0]!.id);
+    const reachable = reachableFromStart;
     for (const n of nodes) {
       if (!reachable.has(n.id)) {
         diags.push({
@@ -558,7 +564,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // Run-dominance is computed only to SUPPRESS the warning; it never blocks.
   // The runtime guarantee is fail-closed reads, not this analysis.
   {
-    const dominance = buildRunDominance(graph);
     const reachableCache = new Map<string, Set<string>>();
     const producerReaches = (producerId: string, consumerId: string): boolean => {
       let set = reachableCache.get(producerId);
@@ -1180,8 +1185,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   {
     const runOutputs = Array.isArray(graph.attrs.outputs) ? graph.attrs.outputs : [];
     if (runOutputs.length > 0) {
-      const dominance = buildRunDominance(graph);
-      const reachableFromStart = starts.length === 1 ? reachableSet(graph, starts[0]!.id) : new Set(nodeIds);
       const completingTerminals = exits.filter((e) => reachableFromStart.has(e.id));
       // Reverse the join-producer index (join → {branch nodes}) into branch
       // node → its join, so a run-level ref to a fan-out branch terminal can be

@@ -15,8 +15,8 @@ import {
   passField,
   readBudgetOverrides,
   readBudgetWarned,
+  readInputMap,
   readNumber,
-  readStringMap,
   recordEdgeSelected,
   resolveBackoff,
   resolveMaxRetries,
@@ -77,14 +77,15 @@ describe("executor-helpers", () => {
     expect(errorMessage(42)).toBe("42");
   });
 
-  test("routingString / readNumber / readStringMap coerce defensively", () => {
+  test("routingString / readNumber / readInputMap coerce defensively", () => {
     expect(routingString({ a: "x" }, "a")).toBe("x");
     expect(routingString({ a: 3 }, "a")).toBeUndefined();
     expect(readNumber(5)).toBe(5);
     expect(readNumber(Number.POSITIVE_INFINITY)).toBe(0);
     expect(readNumber("5")).toBe(0);
-    expect(readStringMap({ a: "x", b: 2, c: "y" })).toEqual({ a: "x", c: "y" });
-    expect(readStringMap(null)).toEqual({});
+    // readInputMap keeps non-string scalar/object values; only $fragua_blob refs drop.
+    expect(readInputMap({ a: "x", b: 2, c: { env: "prod" } })).toEqual({ a: "x", b: 2, c: { env: "prod" } });
+    expect(readInputMap(null)).toEqual({});
   });
 
   test("readBudgetWarned parses the dedup tag set", () => {

@@ -112,9 +112,22 @@ guarantee.
   bundled offline registry; a model absent from it downgrades to a warning
   (enqueue remains the authoritative gate). Validate now works with no
   store present.
+- The `@fragua/core` `inputReferences` helper now returns
+  `Array<{ base: string; dotted: boolean }>` (was `string[]`), carrying whether
+  each `${{ inputs.… }}` reference was dot-addressed.
 
 ### Fixed
 
+- `--input name=value` now coerces a declared `type: number` (via `Number()`,
+  rejecting a non-numeric value) and `type: boolean` (accepting only `"true"` /
+  `"false"`) before enqueue, so a CLI workflow declaring number/boolean inputs
+  no longer fails the shape guard. A non-numeric number or a non-boolean string
+  is a clean enqueue-time error.
+- The event-payload 4 KiB cap is now measured in UTF-8 bytes (both the store's
+  write-time guard and the SQLite CHECK), so structured inputs containing CJK or
+  emoji can no longer exceed the cap by counting code points instead of bytes.
+  Bumps the store schema to v5 (a forward/back migration rebuilds the
+  `events` / `daemon_events` payload constraint).
 - Structured-input safety. A non-scalar value handed to a `type: string` /
   `number` / `boolean` input (via `--input-json`) is now rejected at enqueue
   with a clear shape error instead of stringifying to `"[object Object]"` and

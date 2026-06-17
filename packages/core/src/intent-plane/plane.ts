@@ -251,14 +251,17 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
           return { ok: false, error: errs.map((e) => e.message).join("; "), inputErrors: errs };
         }
       }
+      const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
       // Pre-check the genesis event's 4 KiB payload cap, but ONLY against the
-      // non-spillable inputs. String inputs spill via `spillRoutingInputs`, so
-      // size-checking them here would reject a payload the spill would shrink;
-      // only object / array inputs can't spill yet, so an oversized one gets a
-      // clean validation error instead of a raw `PayloadTooLargeError`. Measured
-      // in UTF-8 bytes (not `String#length` / UTF-16 units) so multibyte inputs
-      // can't slip past the cap.
-      if (input.inputs != null) {
+      // non-spillable inputs — and only when `input.inputs` actually reaches the
+      // genesis payload (an explicit `routing.inputs` wins the merge below, so a
+      // discarded `input.inputs` must not trip a false-positive rejection).
+      // String inputs spill via `spillRoutingInputs`, so size-checking them here
+      // would reject a payload the spill would shrink; only object / array inputs
+      // can't spill yet, so an oversized one gets a clean validation error
+      // instead of a raw `PayloadTooLargeError`. Measured in UTF-8 bytes (not
+      // `String#length` / UTF-16 units) so multibyte inputs can't slip past.
+      if (input.inputs != null && initialRouting["inputs"] === undefined) {
         const structured = new Set(
           (input.inputDecls ?? []).filter((d) => d.type === "object" || d.type === "array").map((d) => d.name),
         );
@@ -272,9 +275,6 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         ) {
           return { ok: false, error: "input payload too large", inputErrors: [] };
         }
-      }
-      const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
-      if (input.inputs != null && initialRouting["inputs"] === undefined) {
         initialRouting["inputs"] = input.inputs;
       }
       const runId = deps.newRunId(); // always minted — no operator/client-supplied ids

@@ -115,8 +115,20 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
   const { store } = deps;
   // Per-sha cache of a workflow's run-level `outputs:` declarations, so repeated
   // polls of a completed run don't re-`deserializeGraph(wf.ir)` on every
-  // `runDetail`. `undefined` is a cached "no run-level outputs / malformed IR".
-  const runOutputsBySha = new Map<string, RunOutputDecl[] | undefined>();
+  // `runDetail`. The value disambiguates three states with a single `.get()`:
+  // `undefined` = not yet cached, `null` = cached miss (no run-level outputs /
+  // malformed IR), `RunOutputDecl[]` = cached hit. Bounded by a small
+  // insertion-order LRU so a long-running process across many workflow versions
+  // can't accumulate one entry per unique sha forever.
+  const RUN_OUTPUTS_CACHE_MAX = 256;
+  const runOutputsBySha = new Map<string, RunOutputDecl[] | null>();
+  const cacheRunOutputs = (sha: string, decls: RunOutputDecl[] | null): void => {
+    runOutputsBySha.set(sha, decls);
+    if (runOutputsBySha.size > RUN_OUTPUTS_CACHE_MAX) {
+      const oldest = runOutputsBySha.keys().next().value;
+      if (oldest !== undefined) runOutputsBySha.delete(oldest);
+    }
+  };
   return {
     runSummaries(opts = {}) {
       return store.listRunSummaryRows(opts).map(runSummaryRowToSummary);
@@ -135,22 +147,25 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
       // `outputs:` block over the producer's latest emission. ONLY a completed
       // run carries an envelope, so skip the IR parse + outputs read entirely
       // for queued / running / paused runs (the projection would discard them).
-      // The producer's latest struct comes from a single `getOutputsForRun`
-      // batch (already spill-rehydrated, ordered iteration ASC so the last per
-      // node wins) rather than one `getLatestOutput` per declared output.
+      // The producer's latest struct comes from one `getLatestOutput` per
+      // DISTINCT producer node (O(M)) — not a `getOutputsForRun` batch, which
+      // materialises every iteration of every node (N×M blob reads for an
+      // N-iteration goal-gate run) only to keep the last per node.
       if (wf?.ir != null && state.status === "completed") {
         let runOutputs = runOutputsBySha.get(state.workflowSha!);
-        if (runOutputs === undefined && !runOutputsBySha.has(state.workflowSha!)) {
+        if (runOutputs === undefined) {
           try {
-            runOutputs = deserializeGraph(wf.ir).attrs.outputs;
+            runOutputs = deserializeGraph(wf.ir).attrs.outputs ?? null;
           } catch {
-            runOutputs = undefined; // malformed IR — no envelope rather than a crash
+            runOutputs = null; // malformed IR — no envelope rather than a crash
           }
-          runOutputsBySha.set(state.workflowSha!, runOutputs);
+          cacheRunOutputs(state.workflowSha!, runOutputs);
         }
-        if (runOutputs !== undefined && runOutputs.length > 0) {
-          const latestByNode = new Map<string, string>();
-          for (const row of store.getOutputsForRun(runId)) latestByNode.set(row.nodeId, row.struct);
+        if (runOutputs !== null && runOutputs.length > 0) {
+          const latestByNode = new Map<string, string | null>();
+          for (const node of new Set(runOutputs.map((d) => d.node))) {
+            latestByNode.set(node, store.getLatestOutput(runId, node));
+          }
           const outputs = projectRunOutputs(runOutputs, state.status, (node) => latestByNode.get(node) ?? null);
           if (outputs !== undefined) detail.outputs = outputs;
         }
