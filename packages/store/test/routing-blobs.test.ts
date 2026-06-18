@@ -139,6 +139,30 @@ describe("spillRoutingInputs — margin-driven spill", () => {
     expect(result.spilled.length).toBeGreaterThan(0);
   });
 
+  test("(regression) many small MULTIBYTE inputs spill — the margin is UTF-8 BYTES, not UTF-16 length", () => {
+    // Each value is 341 code points of a 3-byte char = 341 UTF-16 units / 1023
+    // bytes. None individually exceeds PER_VALUE_SPILL_BYTES, and their summed
+    // UTF-16 length stays under ROUTING_SPILL_MARGIN_BYTES — so a length-based
+    // margin (the old bug) would never fire, they would all land inline, and the
+    // ~8 KiB byte payload would bust the 4 KiB genesis cap with a raw
+    // PayloadTooLargeError. The byte-honest margin must spill them instead.
+    const inputs: Record<string, string> = {};
+    for (let i = 0; i < 8; i++) inputs[`k${i}`] = "一".repeat(341);
+    const routing = { inputs };
+
+    // Precondition (the bug shape): UTF-16 length is UNDER the margin, but the
+    // byte size is well OVER the 4 KiB genesis cap.
+    expect(JSON.stringify(routing).length).toBeLessThan(ROUTING_SPILL_MARGIN_BYTES);
+    expect(enc.encode(JSON.stringify(routing)).length).toBeGreaterThan(4096);
+
+    const blobs: string[] = [];
+    const result = spillRoutingInputs(routing, (sha) => blobs.push(sha));
+
+    // They spill, and the resulting routing is under the margin IN BYTES.
+    expect(result.spilled.length).toBeGreaterThan(0);
+    expect(enc.encode(JSON.stringify(result.routing)).length).toBeLessThan(ROUTING_SPILL_MARGIN_BYTES);
+  });
+
   test("spill order is by byte-length desc then key asc (deterministic)", () => {
     const bigVal = "x".repeat(PER_VALUE_SPILL_BYTES + 100);
     const medVal = "y".repeat(PER_VALUE_SPILL_BYTES + 50);

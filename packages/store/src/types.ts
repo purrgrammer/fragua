@@ -536,17 +536,20 @@ export class MessageTooLargeError extends Error {
 
 // ─────────────── Size bounds ───────────────
 //
-// Limit semantics: pre-flight checks reject when `s.length >= MAX_*`, and
-// the schema CHECK clauses reject when `length(col) >= MAX_*`. So the
-// largest value that lands successfully is `MAX_* - 1`. Treat the constant
-// as the *first rejected size*, not the largest accepted.
+// Limit semantics: pre-flight checks reject at `size >= MAX_*` (size measured
+// per the unit caveat below), and the schema CHECK clauses reject when
+// `length(col) >= MAX_*`. So the largest value that lands successfully is
+// `MAX_* - 1`. Treat the constant as the *first rejected size*, not the largest
+// accepted.
 //
-// Unit caveat: JS `string.length` is UTF-16 code units; SQLite `length()`
-// on TEXT is Unicode code-point count. They agree on BMP characters and
-// diverge by up to 2x on surrogate-pair-heavy content (emoji, supplementary
-// planes). The pre-flight check is the binding constraint in practice
-// because it runs first and is stricter for non-BMP content. `MAX_BLOB_BYTES`
-// is the only honest-bytes constant — it gates `Uint8Array.byteLength`.
+// Unit caveat: the byte caps `MAX_EVENT_PAYLOAD_BYTES` and `MAX_ROUTING_BYTES`
+// are enforced pre-flight in honest UTF-8 BYTES (`utf8ByteLength`), while their
+// schema CHECK clauses count Unicode code points (SQLite `length()` on TEXT).
+// Because UTF-8 bytes >= code points, anything that passes the byte pre-flight
+// also passes the looser code-point CHECK — so the pre-flight is the binding,
+// retroactively-safe guard and the CHECK is a backstop (it can't be tightened
+// to bytes without rejecting historical rows that are sub-cap in code points
+// but over in bytes). `MAX_BLOB_BYTES` gates `Uint8Array.byteLength` directly.
 
 export { MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
 export const MAX_ROUTING_BYTES = 8192;

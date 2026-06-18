@@ -279,7 +279,11 @@ export function projectRunOutputs(
   lookupLatest: (node: string) => string | null,
 ): Record<string, OutputStructValue> | undefined {
   if (runOutputs.length === 0 || status !== "completed") return undefined;
-  const out: Record<string, OutputStructValue> = {};
+  // Null-prototype accumulator: a declared output named `__proto__` (or another
+  // prototype property) must land as an OWN key, not silently vanish through the
+  // prototype setter / collide with a builtin. Consistent with inputs/outputs
+  // round-tripping prototype-property names.
+  const out: Record<string, OutputStructValue> = Object.create(null);
   // Parse each DISTINCT producer node once — multiple declarations projecting
   // from the same node would otherwise re-`JSON.parse` the same struct. The
   // `ABSENT` sentinel (producer never ran / unreadable struct) stays distinct
@@ -521,6 +525,13 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   // that never received its own completion/abort.
   let haltSeq: number | undefined;
   for (const ev of events) {
+    // A COMPLETED run never downgrades a lingering node — only an errored /
+    // aborted terminal or a quarantine does (mirrors the live overlay). Skip
+    // both the v4 `fact.run_terminated{status:"completed"}` and the legacy
+    // `fact.run_completed`; in practice a completed run leaves no node still
+    // `running`, but keying the downgrade off "completed" would diverge.
+    if (ev.type === "fact.run_completed") continue;
+    if (ev.type === "fact.run_terminated" && (ev.payload as { status?: unknown }).status === "completed") continue;
     if (TERMINAL_RUN_FACT_TYPES.has(ev.type)) {
       haltSeq = ev.seq;
       break;

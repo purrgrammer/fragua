@@ -7,6 +7,8 @@ import { newRunId, SqliteStore } from "@fragua/store";
 import { CURRENT_IR_VERSION, serializeGraph } from "../../src/ir.ts";
 import { parseWorkflow } from "../../src/parser/yaml.ts";
 import { makeReadPlane } from "../../src/read-plane/plane.ts";
+import { projectRunOutputs } from "../../src/read-plane/projections.ts";
+import type { RunOutputDecl } from "../../src/types/graph.ts";
 
 // A validator-clean workflow that still produces a SKIPPED run-level producer:
 // `gate` (route-discriminated, no outputs) sends one branch straight to
@@ -251,5 +253,30 @@ describe("RunDetail.outputs projection", () => {
     } finally {
       target.close();
     }
+  });
+});
+
+describe("projectRunOutputs — prototype-property output names round-trip (no silent drop)", () => {
+  test("an output named `__proto__` lands as an OWN key, not through the prototype setter", () => {
+    const decls: RunOutputDecl[] = [
+      { name: "__proto__", node: "review", path: ["verdict"] },
+      { name: "constructor", node: "review", path: ["findings"] },
+      { name: "ok", node: "review", path: ["verdict"] },
+    ];
+    const lookupLatest = (node: string) =>
+      node === "review" ? JSON.stringify({ verdict: "PASS", findings: ["a"] }) : null;
+
+    const out = projectRunOutputs(decls, "completed", lookupLatest);
+
+    // The envelope must NOT collapse to empty — a normal `{}` accumulator would
+    // route `out["__proto__"] = …` through the prototype setter and drop it
+    // (and the no-keys guard would then return `undefined` for the whole run).
+    expect(out).toBeDefined();
+    expect(Object.hasOwn(out!, "__proto__")).toBe(true);
+    expect(Object.hasOwn(out!, "constructor")).toBe(true);
+    expect(out!["__proto__"]).toBe("PASS");
+    expect(out!["ok"]).toBe("PASS");
+    // No pollution: a fresh object's real prototype is untouched.
+    expect(({} as Record<string, unknown>)["verdict"]).toBeUndefined();
   });
 });

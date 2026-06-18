@@ -740,8 +740,9 @@ export class SqliteStore implements IEventStore {
     }
 
     const routing = JSON.stringify(effectiveRouting);
-    if (routing.length >= MAX_ROUTING_BYTES) {
-      throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
+    const routingBytes = utf8ByteLength(routing);
+    if (routingBytes >= MAX_ROUTING_BYTES) {
+      throw new PayloadTooLargeError(routingBytes, MAX_ROUTING_BYTES);
     }
     const metrics = JSON.stringify(emptyMetrics());
 
@@ -2269,8 +2270,9 @@ export class SqliteStore implements IEventStore {
 
   private writeProjection(state: RunState, expectedVersion: number): void {
     const routing = JSON.stringify(state.routing);
-    if (routing.length >= MAX_ROUTING_BYTES) {
-      throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
+    const routingBytes = utf8ByteLength(routing);
+    if (routingBytes >= MAX_ROUTING_BYTES) {
+      throw new PayloadTooLargeError(routingBytes, MAX_ROUTING_BYTES);
     }
     const metrics = JSON.stringify(state.metrics);
     const changeStatJson = state.changeStat != null ? JSON.stringify(state.changeStat) : null;

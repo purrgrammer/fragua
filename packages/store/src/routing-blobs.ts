@@ -15,6 +15,7 @@
 // the decoded utf-8 blob bytes. The helper is pure — it accepts a `getBlob`
 // callback so it can be unit-tested without a real BlobFS.
 
+import { utf8ByteLength } from "@fragua/types";
 import { sha256Hex } from "./sha256.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,19 +109,22 @@ export function spillRoutingInputs(
   const newInputs: Record<string, unknown> = { ...inputs };
   const spilled: SpillResult["spilled"] = [];
 
-  // Track serialised routing size incrementally: start with the full routing
-  // JSON length, then on each spill subtract the spilled value's JSON bytes
-  // and add the blob-ref JSON bytes. This avoids re-serialising the whole
-  // routing object on every iteration (O(n) total vs O(n²) before).
-  // The blob-ref shape is { "$fragua_blob": "<64-char sha>", "bytes": <n> },
-  // whose JSON length is constant at PER_VALUE_SPILL_BYTES or less in practice
-  // but we compute it exactly once here to stay precise.
-  const BLOB_REF_JSON_LEN = JSON.stringify(makeBlobRef("0".repeat(64), 0)).length;
-  let currentJsonLen = JSON.stringify({ ...routing, inputs: newInputs }).length;
+  // Track serialised routing size incrementally in UTF-8 BYTES (the unit the
+  // margin and the downstream genesis/routing caps are measured in): start with
+  // the full routing JSON byte length, then on each spill subtract the spilled
+  // value's JSON bytes and add the blob-ref JSON bytes. This avoids
+  // re-serialising the whole routing object on every iteration (O(n) total vs
+  // O(n²) before). Measuring in bytes (not UTF-16 `String#length`) is
+  // load-bearing: many small multibyte string inputs have far fewer UTF-16
+  // units than bytes, so a length-based margin would never fire and they would
+  // land inline and bust the 4 KiB genesis cap with a raw PayloadTooLargeError.
+  // The blob-ref shape is { "$fragua_blob": "<64-char sha>", "bytes": <n> }.
+  const BLOB_REF_JSON_BYTES = utf8ByteLength(JSON.stringify(makeBlobRef("0".repeat(64), 0)));
+  let currentJsonBytes = utf8ByteLength(JSON.stringify({ ...routing, inputs: newInputs }));
 
   for (const { key, value, encoded } of candidates) {
     const alreadySmall = encoded.length <= PER_VALUE_SPILL_BYTES;
-    const underMargin = currentJsonLen < ROUTING_SPILL_MARGIN_BYTES;
+    const underMargin = currentJsonBytes < ROUTING_SPILL_MARGIN_BYTES;
 
     if (alreadySmall && underMargin) break; // remaining candidates are also small and we're under margin
 
@@ -129,9 +133,9 @@ export function spillRoutingInputs(
     newInputs[key] = makeBlobRef(sha, encoded.length);
     spilled.push({ key, sha, bytes: encoded.length });
     // Adjust size: remove the old JSON-encoded value, add the blob-ref JSON.
-    // JSON.stringify(value) is the exact contribution of this string to the JSON.
-    currentJsonLen -= JSON.stringify(value).length;
-    currentJsonLen += BLOB_REF_JSON_LEN;
+    // utf8ByteLength(JSON.stringify(value)) is the value's exact byte contribution.
+    currentJsonBytes -= utf8ByteLength(JSON.stringify(value));
+    currentJsonBytes += BLOB_REF_JSON_BYTES;
   }
 
   if (spilled.length === 0) return { routing, spilled: [] };
