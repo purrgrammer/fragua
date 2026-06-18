@@ -131,7 +131,7 @@ return {
   detail?: string,
 };
 // Additional `fact.run_halted` reasons emitted directly by the executor (not constructible by handlers):
-// `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`.
+// `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`, `"worktree_error"` (provision failure).
 // `"abort_loop"` and `"provider_exhausted"` are executor-only and convert to
 // `fact.run_paused` (not halts). A version mismatch is likewise a recoverable
 // `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
