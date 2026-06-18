@@ -112,9 +112,12 @@ guarantee.
   separate HITL pause fact folds into `fact.run_paused` as a new
   `reason: "human"` variant. The `run_state.status` projection is unchanged
   (`completed` / `halted` / `cancelled` / `paused_human` / `paused_auto` /
-  `paused` / …). The event-contract version bumps to 4; this is a clean cut
-  (no back-compat), so the fold floor also moves to 4 and runs pinned below it
-  no longer resume.
+  `paused` / …). The event-contract version bumps to 4, but the engine follows
+  write-new/read-all: it emits only the v4 facts while the reducer + read-plane
+  fold the full contract range, so runs pinned to an older version (v1–v3) keep
+  resuming and reading correctly — their status, HITL gate, and run detail
+  project identically to a v4 run. The retired fact types live on as read-only,
+  never-emitted members of the event union.
 - Worktree-provisioning failures now halt with a distinct `worktree_error`
   reason instead of the catch-all `error`, so operators can filter and triage
   provision failures separately from generic exceptions and parse failures. It
@@ -128,16 +131,6 @@ guarantee.
   each `${{ inputs.… }}` reference was dot-addressed.
 
 ### Fixed
-
-- Runs pinned to an older event-contract version (v1–v3) again resume and read
-  correctly on a current engine. The recent fact-taxonomy collapse (the three
-  terminal facts → `fact.run_terminated`; the HITL pause folded into
-  `fact.run_paused{reason:human}`) was an emission cleanup, but it also dropped
-  the reducer's ability to fold the retired fact types and raised the
-  compatibility floor in lockstep — which gated every older run as
-  `engine_incompatible`. The engine now follows write-new/read-all: it emits
-  only the current (v4) facts but folds the full contract range, so an older
-  run's status, HITL gate, and run detail project identically to a new one.
 
 - Workflow inputs and output fields named after JavaScript prototype properties
   (`constructor`, `toString`, `valueOf`, `__proto__`) now round-trip correctly
