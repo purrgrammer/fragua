@@ -980,13 +980,26 @@ export const ANTHROPIC_OVERLOADED_STATUS = 529;
  * returned 200 (so `onResponse` captures `lastHttpStatus = 200`) and the
  * overload then surfaces as an `error` event in the stream body whose
  * envelope is `{"type":"error","error":{"type":"overloaded_error",...}}`.
- * The `error.type` is the signal — the captured status (200) is not. The
- * envelope may be prefixed by a bare HTTP status (the
- * `extractHttpStatusFromErrorMessage` shape), so we scan rather than
- * require a clean JSON-leading string. */
+ * The `error.type` is the signal — the captured status (200) is not.
+ *
+ * Anchored on the envelope STRUCTURE, not a bare substring: a coincidental
+ * `"type":"overloaded_error"` embedded in some other error body (an echoed
+ * prior error, an upstream log) must not upgrade a manual-class failure to
+ * auto-retry and burn the retry budget. So we parse and require top-level
+ * `type:"error"` AND inner `error.type:"overloaded_error"`. The envelope may
+ * be prefixed by a bare HTTP status (the `extractHttpStatusFromErrorMessage`
+ * shape), so we parse from the first brace; a non-JSON / mismatched body
+ * fails closed to `false` (manual classification, the conservative default). */
 export function isOverloadedErrorMessage(message: string | undefined | null): boolean {
   if (typeof message !== "string" || message.length === 0) return false;
-  return /"type"\s*:\s*"overloaded_error"/.test(message);
+  const brace = message.indexOf("{");
+  if (brace === -1) return false;
+  try {
+    const parsed = JSON.parse(message.slice(brace)) as { type?: unknown; error?: { type?: unknown } };
+    return parsed?.type === "error" && parsed?.error?.type === "overloaded_error";
+  } catch {
+    return false;
+  }
 }
 
 /** Effective HTTP status for the `pause_provider` outcome. An
