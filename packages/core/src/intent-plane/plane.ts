@@ -293,7 +293,20 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
           Object.keys(nonSpillable).length > 0 &&
           utf8ByteLength(JSON.stringify({ inputs: nonSpillable })) >= GENESIS_INPUTS_MAX_BYTES
         ) {
-          return { ok: false, error: "input payload too large", inputErrors: [] };
+          const sized = Object.entries(nonSpillable)
+            .map(([name, value]) => ({ name, bytes: utf8ByteLength(JSON.stringify(value)) }))
+            .sort((a, b) => b.bytes - a.bytes);
+          const overLimit = sized.filter((f) => f.bytes >= GENESIS_INPUTS_MAX_BYTES);
+          const offenders = overLimit.length > 0 ? overLimit : sized;
+          const fieldList = offenders.map((f) => `"${f.name}" (${f.bytes} bytes)`).join(", ");
+          const noun = offenders.length === 1 ? "field" : "fields";
+          return {
+            ok: false,
+            error:
+              `input payload too large: ${noun} ${fieldList} exceed the ${GENESIS_INPUTS_MAX_BYTES}-byte ` +
+              `genesis inputs limit. Trim the field, or pass the large value as a file reference instead of inlining it.`,
+            inputErrors: [],
+          };
         }
         initialRouting["inputs"] = effectiveInputs;
       }

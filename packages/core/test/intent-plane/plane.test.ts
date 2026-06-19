@@ -303,6 +303,12 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error("expected failure");
     expect(r.error).toMatch(/too large/);
+    // The message must name the offending field, its measured byte size, the
+    // limit, and a remedy so the caller can fix the input.
+    expect(r.error).toContain('"config"');
+    expect(r.error).toMatch(/\d+ bytes/);
+    expect(r.error).toMatch(/3072-byte/);
+    expect(r.error).toMatch(/file reference|[Tt]rim/);
     expect(r.inputErrors).toEqual([]);
   });
 
