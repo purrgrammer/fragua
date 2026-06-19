@@ -50,7 +50,7 @@ const PAUSE_HINTS: Record<Exclude<PauseReason, "provider_retry" | "handler_retry
   max_retries: "grant retries with `fragua runs max-retries <run> ...`, then `fragua runs resume <run>`",
   goal_gate: "grant cycles with `fragua runs goal-gate <run> ...`, then `fragua runs resume <run>`",
   max_loops: "raise the ceiling with `fragua runs max-loops <run> ...`, then `fragua runs resume <run>`",
-  abort_loop: "investigate, then `fragua runs resume <run>`",
+  abort_loop: "inspect node `<node>` with `fragua runs events <run>`, then `fragua runs resume <run>`",
 };
 
 /** A terminal (or unanswered-HITL) event → process exit code, through the
@@ -241,7 +241,10 @@ export function renderEvent(ev: StoredEvent): void {
       );
       return;
     }
-    const hint = PAUSE_HINTS[reason as keyof typeof PAUSE_HINTS] ?? "`fragua runs resume <run>`";
+    const hint = (PAUSE_HINTS[reason as keyof typeof PAUSE_HINTS] ?? "`fragua runs resume <run>`").replace(
+      "<node>",
+      p.nodeId ?? "the looping node",
+    );
     console.log(
       `${chalk.dim(`[${ev.seq}]`)} ${chalk.red(`⏸ ${ev.type}`)} ` +
         chalk.red(`paused: ${reason}${p.nodeId ? ` @ ${p.nodeId}` : ""}`) +
