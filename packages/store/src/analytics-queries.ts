@@ -213,7 +213,7 @@ void _runStatusCoversRunsByBucketColumns;
  *  and the Outcomes donut), so the Runs chart can stack a single
  *  layer per status without the client having to re-derive what
  *  belongs in "fail" / "paused" / etc. — the chart picks colour and
- *  label from `humanizeHaltReason` / `haltReasonAccentVar`. */
+ *  label from `humanizeHaltReason`. */
 export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
   const pred = windowPredicate(w, "cwd");

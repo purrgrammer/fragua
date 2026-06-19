@@ -175,29 +175,6 @@ export function categoryLabel(c: RunCategory): string {
   return CATEGORY_LABELS[c];
 }
 
-/** Map a halt-reason key to a Fragua CSS-var name (without the `--` prefix)
- *  so chart segments and donut slices share colour with the rest of the
- *  UI. Reads off `theme.css` accents — defined per the design skill. */
-export function haltReasonAccentVar(status: string): string {
-  switch (status) {
-    case "completed":
-      return "--sw-accent-success";
-    case "halted":
-    case "quarantined":
-      return "--sw-accent-error";
-    case "paused_human":
-    case "paused":
-      return "--sw-accent-human";
-    case "paused_auto":
-    case "cancelled":
-      return "--sw-accent-warn";
-    case "running":
-      return "--sw-accent-thinking";
-    default:
-      return "--sw-accent-idle";
-  }
-}
-
 // ── Models ─────────────────────────────────────────────────────────────
 
 /** Pretty model labels. Source of truth for the major families;
