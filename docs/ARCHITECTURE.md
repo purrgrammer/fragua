@@ -1118,27 +1118,30 @@ app.post("/runs", async (c) => {
   return c.json({ runId: enq.runId });
 });
 
-app.post("/runs/:id/steer",        async (c) => writeIntent(c, "intent.steering_requested"));
-app.post("/runs/:id/pause",        async (c) => writeIntent(c, "intent.pause_requested"));
-app.post("/runs/:id/cancel",       async (c) => writeIntent(c, "intent.cancel_requested"));
-app.post("/runs/:id/human",        async (c) => writeIntent(c, "intent.human_input"));
-app.post("/runs/:id/resume",       async (c) => writeIntent(c, "intent.resume"));
-app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
-app.post("/runs/:id/priority",     async (c) => writeIntent(c, "intent.priority_adjusted"));
-app.post("/runs/:id/budget",       async (c) => writeIntent(c, "intent.budget_adjusted"));  // {scope, metric, newLimit>0, note?}
-app.post("/runs/:id/max_retries",  async (c) => writeIntent(c, "intent.max_retries_adjusted"));  // {nodeId, newLimit>0, note?}
-app.post("/runs/:id/goal_gate",    async (c) => writeIntent(c, "intent.goal_gate_adjusted"));    // {newLimit>0, note?}
-app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops_adjusted"));    // {newLimit>0, note?}
+// All simple operator intents route through the intent plane:
+// commitBuilt validates the body shape, builds the typed IntentEvent via
+// plane.buildXxx, and calls plane.commit — returns {seq} on success.
+app.post("/runs/:id/steer",        async (c) => commitBuilt(c, c.req.param("id"), plane.buildSteer(await readJson(c))));
+app.post("/runs/:id/pause",        (c) =>        commitBuilt(c, c.req.param("id"), plane.buildPause({})));
+app.post("/runs/:id/cancel",       async (c) => commitBuilt(c, c.req.param("id"), plane.buildCancel((await readJson(c)) ?? {})));
+app.post("/runs/:id/human",        async (c) => { /* validates route against fact.run_paused_human.payload.routes (409 off-list), then appendIntentOr413 */ });
+app.post("/runs/:id/resume",       async (c) => commitBuilt(c, c.req.param("id"), plane.buildResume((await readJson(c)) ?? {})));
+app.post("/runs/:id/unquarantine", async (c) => commitBuilt(c, c.req.param("id"), plane.buildUnquarantine(await readJson(c))));
+app.post("/runs/:id/priority",     async (c) => commitBuilt(c, c.req.param("id"), plane.buildPriority(await readJson(c))));
+app.post("/runs/:id/budget",       async (c) => commitBuilt(c, c.req.param("id"), plane.buildBudget(await readJson(c))));        // {scope, metric, newLimit>0, note?}
+app.post("/runs/:id/max_retries",  async (c) => commitBuilt(c, c.req.param("id"), plane.buildMaxRetries(await readJson(c))));    // {nodeId, newLimit>0, note?}
+app.post("/runs/:id/goal_gate",    async (c) => commitBuilt(c, c.req.param("id"), plane.buildGoalGate(await readJson(c))));      // {newLimit>0, note?}
+app.post("/runs/:id/max_loops",    async (c) => commitBuilt(c, c.req.param("id"), plane.buildMaxLoops(await readJson(c))));      // {newLimit>0, note?}
 
-// Post-run operator primitives. Each
-// appends a post-terminal operator-action intent the daemon sweep folds
-// into a git mutation + fact. User-facing refusals are returned 4xx here
-// (404 not_found · 409 not_terminal/not_in_inbox/discarded/no_worktree ·
-// branch 409 nothing_to_branch · commit/merge 400 onto_required/into_required
-// for detached/relocated · merge 409 not_fast_forward/merge_conflict via the
-// snapshot reader's mergeability check). All return {seq} on success.
-app.post("/runs/:id/accept",       async (c) => writeIntent(c, "intent.accept_run"));    // {} — replay onto HEAD + stage tail
-app.post("/runs/:id/discard",      async (c) => writeIntent(c, "intent.discard_run"));
+// Post-run operator primitives. Accept/discard execute the git mutation
+// SYNCHRONOUSLY in the request path (runActions.accept / runActions.discard
+// from @fragua/workspace), then commit the result through the intent plane so
+// the daemon's processOperatorActions sweep can project it into
+// fact.run_accepted / fact.run_discarded (inbox update only — git already ran).
+// User-facing refusals (state preconditions + git errors) are synchronous 4xx.
+// All return {seq} on success.
+app.post("/runs/:id/accept",  async (c) => { const res = await runActions.accept(gate); plane.commit(runId, plane.buildAcceptRun(res)); });
+app.post("/runs/:id/discard", async (c) => { const res = await runActions.discard(gate); plane.commit(runId, plane.buildDiscardRun(res)); });
 
 // Schedules surface.
 // CRUD over the `schedules` table plus pause/resume verbs. Each

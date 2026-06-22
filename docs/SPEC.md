@@ -153,12 +153,12 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
   |---|---|---|---|
   | `provider_retry` | Auto-retryable transport error (408/429/5xx/529/network) | `httpStatus`, `provider`, `attempt`, `resumeAt` | wake-pending sweeper at `resumeAt`; operator may short-circuit via `intent.resume` |
   | `handler_retry` | Node returned `outcomeStatus="retry"`; backoff scheduled | `attempt`, `delayMs`, `resumeAt`, `maxRetries` | same |
-  | `timeout_retry` | Handler watchdog tripped (`max_ms` / `timeout`); retry budget remains | `attempt`, `resumeAt`, `maxRetries` | same |
+  | `timeout_retry` | Handler watchdog tripped (`max_ms` / `timeout`); retry budget remains | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs` | same |
 
   The concurrency slot is released during the wait so other queued runs can claim. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_auto" }` once `now >= resumeAt`; the run goes back to `queued` and re-dispatches.
 
 - **`completed`** / **`halted`** / **`cancelled`** — terminal.
-  - `fact.run_halted.payload.reason` is one of: `budget` (when `budget_policy="stop"`), `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`. (A version mismatch is recoverable — `fact.run_paused{reason:"engine_incompatible"}` — not a halt; see §282.)
+  - `fact.run_halted.payload.reason` is one of: `budget` (when `budget_policy="stop"`), `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`, `route_not_picked`, `route_call_not_isolated`, `edge_no_match`, `worktree_error`. (A version mismatch is recoverable — `fact.run_paused{reason:"engine_incompatible"}` — not a halt; see §282.)
 - **`quarantined`** — startup sweep found an orphan `fact.side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel" }`.
 
 Adding a new operator-fixable failure mode is a new `PauseReason` literal — no new status, no schema migration.

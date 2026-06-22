@@ -94,6 +94,8 @@ return {
 
 `failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When a fail outcome has no fail-edge to claim it, the executor routes to `__end__` and halts (`aborted_exit`); the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in the failure-mode playbook (the `operate` skill's `references/forensics.md`). (A fail that follows an explicit author-declared edge to the `exit` sink is a graceful landing instead — `fact.run_completed`, no halt, so `failureReason` is not consulted there.) A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
+`outcomeStatus="retry"` has distinct executor semantics: no edge is selected and no `fact.node_completed` is committed. Instead the executor consults the retry-policy (`packages/core/src/engine/retry-policy.ts`) and emits `fact.run_paused{reason:"handler_retry"}` → `paused_auto`. The wake-pending sweeper re-queues the run at `resumeAt`; the same `(nodeId, iteration)` re-dispatches with the prior transcript intact. The per-node retry counter is bounded by the node's `max_retries` attr; exhaustion emits `fact.run_paused{reason:"max_retries"}` → `paused` (operator-resumable via `intent.max_retries_adjusted { nodeId, newLimit }`). Source: `packages/daemon/src/transition-planner.ts`.
+
 ### `yield_human`
 Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. A human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
 
@@ -133,8 +135,11 @@ return {
 // Additional `fact.run_halted` reasons emitted directly by the executor (not constructible by handlers):
 // `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`, `"worktree_error"` (provision failure).
 // `"abort_loop"` and `"provider_exhausted"` are executor-only and convert to
-// `fact.run_paused` (not halts). A version mismatch is likewise a recoverable
-// `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
+// `fact.run_paused` (not halts). `"max_loops"`, `"goal_gate_unsatisfied"`, and
+// `"max_retries_exceeded"` are handler-constructible but are likewise translated
+// by result-to-facts into `fact.run_paused{reason:"max_loops"|"goal_gate"|"max_retries"}`
+// respectively — they never produce `fact.run_halted`. A version mismatch is likewise a
+// recoverable `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
 ```
 
 When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/fragua-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.

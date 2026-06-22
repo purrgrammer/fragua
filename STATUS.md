@@ -27,6 +27,8 @@ see `docs/ARCHITECTURE.md` and `docs/SPEC.md`.
 - Run-scoped file tree + git-aware diff on every run (`/runs/:id/tree`, `/runs/:id/blob`, `/runs/:id/changes`) — survives worktree disposal by reading the run's `refs/fragua/snapshots/<id>` snapshot ref
 - Workflow listing aggregates `~/.fragua/workflows/` (global) with every project cwd's `.fragua/workflows/`; cross-source name collisions disambiguate by `cwd`
 - Steering, pause, cancel, HITL input, resume, unquarantine, priority bump — all via intents
+- Fleet wait primitive — `fragua runs wait <id...> | --workflow <name> | --all-running [--timeout <dur>] [--settle terminal|blocked]` blocks until a set of runs settles; exits 0 on all-completed, banded on halt/quarantine, 60 on blocked-for-input, 75 on timeout
+- Fleet status rollup — `fragua runs ls --summary` swaps the per-run list for a one-line fleet summary: status counts, aggregate cost, and total token spend
 - Bare-name workflow resolution — global then local: `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything path-shaped resolves verbatim
 - Per-node + per-run cost/token budgets with `warn` / `stop` / `pause` policies (default `pause`); Recoverable pause unification collapses the operator-resumable family to a single non-terminal `paused` status with reason-discriminated `fact.run_paused` (`operator` | `provider_error` | `payment_required` | `budget`); on a budget hit the operator raises the cap via `intent.budget_adjusted` (`POST /runs/:id/budget`, stored at `routing.budget_override.<scope>.<metric>`) and resumes, instead of losing upstream work to a terminal halt
 - Automatic retries inside workflows via backward conditional edges + `max_retries`
