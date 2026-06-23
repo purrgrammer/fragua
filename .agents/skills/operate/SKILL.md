@@ -71,7 +71,7 @@ fragua run <workflow>  \
 ## 3. Watch a run
 
 ```sh
-fragua runs ls [--status queued,running,…] [--limit N]   # one line per run: id · status · title
+fragua runs ls [--status queued,running,…] [--limit N] [--summary]   # one line per run: id · status · title; --summary: fleet status rollup
 fragua runs inbox                                        # runs awaiting an operator decision (2 sections)
 fragua runs status <id>                                  # one run: lifecycle + outcome + the why (pause/halt reason, quarantine orphans, HITL gate)
 fragua runs tail <id> [--full]                           # follow an existing run's event log to terminal (live; backfills the last 200 events, --full for the whole log)
