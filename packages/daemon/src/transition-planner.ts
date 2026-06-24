@@ -105,8 +105,57 @@ export interface TransitionPlan {
   observability: PlannedObservability[];
 }
 
-export function planTransition(input: TransitionInput): TransitionPlan {
-  const { state, decision, effectiveRouting, currentNode, iteration, now, random } = input;
+/** The proceed-only intent fold variant the planner operates on. */
+export type ProceedDecision = Extract<IntentDecision, { kind: "proceed" }>;
+
+/** A budget-gate breach that the executor turns into an operator-resumable
+ * pause (deferred until after `resultToFacts`). */
+export interface BudgetPause {
+  scope: "node" | "run";
+  metric: "cost" | "tokens";
+  limit: number;
+  actual: number;
+}
+
+/** A handler-retry backoff pause: the run sleeps without a slot until
+ * `resumeAt`, then wake-pending re-dispatches the same node. */
+export interface RetryPause {
+  nodeId: string;
+  attempt: number;
+  delayMs: number;
+  resumeAt: number;
+  maxRetries: number;
+}
+
+/** A retry-counter exhaustion turned into an operator-resumable pause. */
+export interface RetriesExhaustedPause {
+  nodeId: string;
+  currentLimit: number;
+  attempts: number;
+}
+
+/** Stage 1 output: the resolved handler result (with accounting backfilled
+ * and edge selection applied) plus the held edge selection / converted
+ * usage the later stages and fact builder consume. */
+export interface EdgeSelectionOutcome {
+  result: HandlerResult;
+  /** Held for `edge.selected`, emitted only if no goal-gate retarget fires. */
+  pendingEdgeSelection?: EdgeSelection;
+  /** Spend carried onto the halt fact when edge_no_match converts a
+   * cost-bearing transition into a halt. */
+  convertedTransitionUsage?: TurnAccounting;
+}
+
+/** Stage 1 — accounting backfill + edge selection (SPEC §3.6). Clones the
+ * transition variant so the caller's handler result is never mutated; other
+ * kinds flow through unchanged. Pure: `input data -> output data`. */
+export function selectTransitionEdge(args: {
+  handlerResult: HandlerResult;
+  graph: Graph | null;
+  currentNode: string;
+  accounting: TurnAccounting;
+}): EdgeSelectionOutcome {
+  const { graph, currentNode, accounting } = args;
   const {
     turnBilled,
     totalCostUsd,
@@ -115,28 +164,11 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     totalCacheReadTokens,
     totalCacheWriteTokens,
     lastModel,
-  } = input.accounting;
-  const observability: PlannedObservability[] = [];
+  } = accounting;
 
-  // Clone the transition variant so the caller's handler result is never
-  // mutated (referential transparency); other kinds flow through unchanged.
-  let result: HandlerResult =
-    input.handlerResult.kind === "transition" ? { ...input.handlerResult } : input.handlerResult;
+  let result: HandlerResult = args.handlerResult.kind === "transition" ? { ...args.handlerResult } : args.handlerResult;
 
-  // Edge selection is recorded with `edge.selected` AFTER the
-  // goal-gate retarget check, not at selection time. Goal-gate
-  // retarget can override `result.nextNode` to a different target
-  // (the retry_target), in which case the originally-selected edge
-  // is never actually traversed and `edge.selected` would lie. We
-  // hold the selection here, then emit it only if no retarget fired.
   let pendingEdgeSelection: EdgeSelection | undefined;
-
-  // When the edge_no_match backstop converts a cost-bearing transition
-  // into a halt, the handler-reported spend on that transition (already
-  // backfilled from accounting above) must survive onto the halt fact —
-  // captured here and preferred over the raw accounting mirror, which is
-  // empty for handlers that report usage on the result without emitting
-  // cost.recorded.
   let convertedTransitionUsage: TurnAccounting | undefined;
 
   // Attach LLM accounting into the node_completed fact if the handler
@@ -163,7 +195,6 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     // the current node's outgoing edges via the two-case selector
     // (SPEC §3.6). With it set, the handler is bypassing routing on purpose.
     if (result.nextNode == null) {
-      const graph = input.graph;
       const srcNode = graph?.nodes[currentNode];
       if (graph != null && srcNode != null) {
         const selectorOutcome: Parameters<typeof selectEdge>[0]["outcome"] = {
@@ -230,21 +261,43 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     }
   }
 
-  // Budget enforcement at the post-handler boundary. The check sees
-  // cumulative spend INCLUDING this turn (state.metrics doesn't have
-  // the new fact applied yet, so we add result.{tokens,costUsd} in).
-  // On halt, defer the halt until after resultToFacts so
-  // fact.node_completed lands first — without that, the breaching
-  // turn's spend is visible to the gate but never folds into
-  // run_state.total_cost_usd or nodeCosts[currentNode]; the projection
-  // would lag the gate's `actual` by the breaching-turn cost.
-  // On warn-only, prepend the warn event(s) to observability and let
-  // the transition continue.
+  const out: EdgeSelectionOutcome = { result };
+  if (pendingEdgeSelection !== undefined) out.pendingEdgeSelection = pendingEdgeSelection;
+  if (convertedTransitionUsage !== undefined) out.convertedTransitionUsage = convertedTransitionUsage;
+  return out;
+}
+
+/** Stage 2 output: the budget-gate events and the (deferred) pause / halt
+ * sentinels the executor applies after `resultToFacts`. */
+export interface BudgetGateOutcome {
+  observability: PlannedObservability[];
+  budgetWarnedTags: readonly string[];
+  budgetPause?: BudgetPause;
+  budgetHaltDetail?: string;
+}
+
+/** Stage 2 — budget enforcement at the post-handler boundary. The check sees
+ * cumulative spend INCLUDING this turn (state.metrics doesn't have the new
+ * fact applied yet, so we add result.{tokens,costUsd} in). On halt, the halt
+ * is deferred until after resultToFacts so fact.node_completed lands first —
+ * without that, the breaching turn's spend is visible to the gate but never
+ * folds into run_state.total_cost_usd or nodeCosts[currentNode]; the
+ * projection would lag the gate's `actual` by the breaching-turn cost. On
+ * warn-only, the warn event(s) are returned and the transition continues. */
+export function applyBudgetGate(args: {
+  result: HandlerResult;
+  graph: Graph | null;
+  state: RunState;
+  currentNode: string;
+  iteration: number;
+  effectiveRouting: Readonly<Record<string, unknown>>;
+}): BudgetGateOutcome {
+  const { result, graph, state, currentNode, iteration, effectiveRouting } = args;
+  const observability: PlannedObservability[] = [];
   let budgetWarnedTags: readonly string[] = [];
-  let budgetPause: { scope: "node" | "run"; metric: "cost" | "tokens"; limit: number; actual: number } | undefined;
+  let budgetPause: BudgetPause | undefined;
   let budgetHaltDetail: string | undefined;
   if (result.kind === "transition") {
-    const graph = input.graph;
     const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
     const turnFresh = (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
     const turnCost = result.costUsd ?? 0;
@@ -273,41 +326,66 @@ export function planTransition(input: TransitionInput): TransitionPlan {
       budgetPause = decisionBudget.pauseBreach;
     }
   }
+  const budgetOut: BudgetGateOutcome = { observability, budgetWarnedTags };
+  if (budgetPause !== undefined) budgetOut.budgetPause = budgetPause;
+  if (budgetHaltDetail !== undefined) budgetOut.budgetHaltDetail = budgetHaltDetail;
+  return budgetOut;
+}
 
-  // Goal-gate enforcement (attractor §3.4). Two responsibilities:
-  //   1. Record this node's outcome under `goal_gates.<id>` whenever it
-  //      has goal_gate=true, so terminal-arrival can read the fold.
-  //   2. When the resolved transition leads to a terminal, check every
-  //      visited gate: if any unsatisfied, redirect to the failed gate's
-  //      `retry_target` (bounded by max_goal_gate_retries).
-  //   3. Counter exhaust or unset `retry_target` → halt with
-  //      `goal_gate_unsatisfied`.
-  //
-  // The current-turn outcome is folded into a synthetic snapshot before
-  // checking gates, so a final-stage gate that just completed can be
-  // evaluated without waiting for the next turn's projection refresh.
-  //
-  // Carve-out: a *non-gate* node's own `outcome=fail` (abort, or any
-  // unrecovered failure) is the node's own decision to terminate the
-  // run — the §3.4 chain must not intercept it. Without this skip, an
-  // earlier gate's persisted `fail` in routing state would steal every
-  // downstream terminal: a propose-step abort after a paused/resumed
-  // gate would silently retarget the gate's `retry_target` (often the
-  // proposer itself), looping until the operator-raised cap exhausts.
-  // The intent at `agent/backend.ts:findAbortToolCall` is explicit —
-  // "an ordinary node with no fail-edge then halts (`aborted_exit`)";
-  // gate-driven retargeting is reserved for the gate node's *own* fail.
-  // The same carve-out also rescues an explicit `on: {fail: <target>}`
-  // route: the edge selector picked the target above, but without the
-  // skip the §3.4 check would rewrite `result.nextNode` back to the
-  // gate's `retry_target`, silently overriding the author's sanctioned
-  // fail-landing (SKILL: "an explicit edge to the `exit` sink on
-  // failure is a sanctioned landing — the run *completes*"). One
-  // condition, both cases.
+/** Stage 3 output: the (possibly halt-rewritten) result plus the retarget
+ * target / bumped retry counter when goalGateStep redirected. */
+export interface GoalGateOutcome {
+  result: HandlerResult;
+  observability: PlannedObservability[];
+  goalGateRetargetTarget?: string;
+  goalGateRetriesPatch?: number;
+}
+
+// Goal-gate enforcement (attractor §3.4). Two responsibilities:
+//   1. Record this node's outcome under `goal_gates.<id>` whenever it
+//      has goal_gate=true, so terminal-arrival can read the fold.
+//   2. When the resolved transition leads to a terminal, check every
+//      visited gate: if any unsatisfied, redirect to the failed gate's
+//      `retry_target` (bounded by max_goal_gate_retries).
+//   3. Counter exhaust or unset `retry_target` → halt with
+//      `goal_gate_unsatisfied`.
+//
+// The current-turn outcome is folded into a synthetic snapshot before
+// checking gates, so a final-stage gate that just completed can be
+// evaluated without waiting for the next turn's projection refresh.
+//
+// Carve-out: a *non-gate* node's own `outcome=fail` (abort, or any
+// unrecovered failure) is the node's own decision to terminate the
+// run — the §3.4 chain must not intercept it. Without this skip, an
+// earlier gate's persisted `fail` in routing state would steal every
+// downstream terminal: a propose-step abort after a paused/resumed
+// gate would silently retarget the gate's `retry_target` (often the
+// proposer itself), looping until the operator-raised cap exhausts.
+// The intent at `agent/backend.ts:findAbortToolCall` is explicit —
+// "an ordinary node with no fail-edge then halts (`aborted_exit`)";
+// gate-driven retargeting is reserved for the gate node's *own* fail.
+// The same carve-out also rescues an explicit `on: {fail: <target>}`
+// route: the edge selector picked the target above, but without the
+// skip the §3.4 check would rewrite `result.nextNode` back to the
+// gate's `retry_target`, silently overriding the author's sanctioned
+// fail-landing (SKILL: "an explicit edge to the `exit` sink on
+// failure is a sanctioned landing — the run *completes*"). One
+// condition, both cases.
+/** Stage 3 — goal-gate retarget / halt. May mutate `result.nextNode` to the
+ * retry target, or replace `result` with a `goal_gate_unsatisfied` halt. */
+export function applyGoalGate(args: {
+  result: HandlerResult;
+  graph: Graph | null;
+  state: RunState;
+  currentNode: string;
+  effectiveRouting: Readonly<Record<string, unknown>>;
+}): GoalGateOutcome {
+  const { graph, state, currentNode, effectiveRouting } = args;
+  let result = args.result;
+  const observability: PlannedObservability[] = [];
   let goalGateRetargetTarget: string | undefined;
   let goalGateRetriesPatch: number | undefined;
   if (result.kind === "transition") {
-    const graph = input.graph;
     const completedNode = graph?.nodes[currentNode];
     if (graph != null && completedNode != null) {
       const isTerminalNext =
@@ -363,34 +441,48 @@ export function planTransition(input: TransitionInput): TransitionPlan {
       }
     }
   }
+  const goalGateOut: GoalGateOutcome = { result, observability };
+  if (goalGateRetargetTarget !== undefined) goalGateOut.goalGateRetargetTarget = goalGateRetargetTarget;
+  if (goalGateRetriesPatch !== undefined) goalGateOut.goalGateRetriesPatch = goalGateRetriesPatch;
+  return goalGateOut;
+}
 
-  // Goal-gate retarget (or unsatisfied-halt) overrides the selected
-  // edge — the originally-picked edge was never actually traversed,
-  // so suppress its `edge.selected`. Otherwise emit it now, before
-  // node_completed lands, preserving the conventional ordering.
-  if (pendingEdgeSelection !== undefined && goalGateRetargetTarget === undefined && result.kind === "transition") {
-    recordEdgeSelected(
-      observability,
-      currentNode,
-      iteration,
-      pendingEdgeSelection,
-      readGoalGateRetries(effectiveRouting),
-    );
-  }
+/** Stage 4 output: the (possibly retry-rewritten) result plus the counter
+ * patch / pause sentinels the executor applies after `resultToFacts`. */
+export interface RetryGateOutcome {
+  result: HandlerResult;
+  observability: PlannedObservability[];
+  retryCounterPatch?: Record<string, number>;
+  retryPause?: RetryPause;
+  retriesExhaustedPause?: RetriesExhaustedPause;
+}
 
-  // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
-  // returns outcomeStatus="retry", consult retryStep to decide:
-  //   - retry → emit fact.run_paused{reason:"handler_retry"}
-  //     (transitions to paused_auto, freeing the slot);
-  //     wake-pending re-queues the run after delayMs
-  //   - halt → run halts with `max_retries_exceeded`
-  //   - advance_partial → rewrite outcomeStatus to "success"
-  //     and let edge selection advance (allow_partial branch, §3.5)
-  //
-  // For the retry path we DO emit fact.node_completed first (metrics
-  // are real spend), THEN swap fact.node_started for fact.run_paused{reason:"handler_retry"}
-  // — the run sleeps without a slot held, and resume re-dispatches the
-  // same node since state.currentNode points back at the retrying id.
+// Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
+// returns outcomeStatus="retry", consult retryStep to decide:
+//   - retry → emit fact.run_paused{reason:"handler_retry"}
+//     (transitions to paused_auto, freeing the slot);
+//     wake-pending re-queues the run after delayMs
+//   - halt → run halts with `max_retries_exceeded`
+//   - advance_partial → rewrite outcomeStatus to "success"
+//     and let edge selection advance (allow_partial branch, §3.5)
+//
+// For the retry path we DO emit fact.node_completed first (metrics
+// are real spend), THEN swap fact.node_started for fact.run_paused{reason:"handler_retry"}
+// — the run sleeps without a slot held, and resume re-dispatches the
+// same node since state.currentNode points back at the retrying id.
+/** Stage 4 — retry gate (pause / exhaust / partial). */
+export function applyRetryGate(args: {
+  result: HandlerResult;
+  graph: Graph | null;
+  state: RunState;
+  currentNode: string;
+  effectiveRouting: Readonly<Record<string, unknown>>;
+  now: number;
+  random: () => number;
+}): RetryGateOutcome {
+  const { graph, state, currentNode, effectiveRouting, now, random } = args;
+  const result = args.result;
+  const observability: PlannedObservability[] = [];
   let retryCounterPatch: Record<string, number> | undefined;
   // Per attractor §3.5: reset the counter when this node succeeds so
   // a re-entry via goal-gate retarget (§3.4) or a fail-edge loop
@@ -401,24 +493,15 @@ export function planTransition(input: TransitionInput): TransitionPlan {
       retryCounterPatch = { [counterKey]: 0 };
     }
   }
-  let retryPause:
-    | {
-        nodeId: string;
-        attempt: number;
-        delayMs: number;
-        resumeAt: number;
-        maxRetries: number;
-      }
-    | undefined;
+  let retryPause: RetryPause | undefined;
   // Stage 3: retry-counter exhaustion becomes an operator-resumable
   // pause instead of a terminal halt. Sentinel mirrors `budgetPause`
   // / `retryPause` —
   // populated in the action.kind === "halt" branch below, consumed
   // in the post-resultToFacts pass that swaps fact.node_started for
   // fact.run_paused{reason:"max_retries"}.
-  let retriesExhaustedPause: { nodeId: string; currentLimit: number; attempts: number } | undefined;
+  let retriesExhaustedPause: RetriesExhaustedPause | undefined;
   if (result.kind === "transition" && result.outcomeStatus === "retry") {
-    const graph = input.graph;
     const completedNode = graph?.nodes[currentNode];
     if (graph != null && completedNode != null) {
       const backoff = resolveBackoff(completedNode.attrs, graph.attrs);
@@ -503,16 +586,35 @@ export function planTransition(input: TransitionInput): TransitionPlan {
       }
     }
   }
+  const retryOut: RetryGateOutcome = { result, observability };
+  if (retryCounterPatch !== undefined) retryOut.retryCounterPatch = retryCounterPatch;
+  if (retryPause !== undefined) retryOut.retryPause = retryPause;
+  if (retriesExhaustedPause !== undefined) retryOut.retriesExhaustedPause = retriesExhaustedPause;
+  return retryOut;
+}
 
-  // Provider auto-retry: when a llm turn returns pause_provider,
-  // consult the policy module to decide whether this is auto-retry
-  // (transient transport error, schedule a backoff), manual (operator
-  // must intervene — auth/billing/schema), or halt-exhausted (chain
-  // cap exceeded). The decision drives fact mutation + routing patches
-  // below; manual is the existing behaviour and needs no further work.
-  // The exhausted branch emits a `provider_exhausted` halt fact
-  // directly — that reason is executor-only (not in the handler-side
-  // HaltReason union) so we don't go through resultToFacts.
+/** Stage 5 output: the provider auto-retry decision (or the exhausted
+ * sentinel) the fact-rewrite pipeline consumes. */
+export interface ProviderRetryOutcome {
+  providerRetryDecision?: ProviderRetryDecision;
+  providerExhausted?: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" };
+}
+
+/** Stage 5 — provider auto-retry. When a llm turn returns pause_provider,
+ * consult the policy module to decide whether this is auto-retry (transient
+ * transport error, schedule a backoff), manual (operator must intervene —
+ * auth/billing/schema), or halt-exhausted (chain cap exceeded). The decision
+ * drives fact mutation + routing patches downstream; manual is the existing
+ * behaviour and needs no further work. The exhausted branch yields a
+ * `provider_exhausted` sentinel — that reason is executor-only (not in the
+ * handler-side HaltReason union) so it doesn't go through resultToFacts. */
+export function applyProviderRetry(args: {
+  result: HandlerResult;
+  state: RunState;
+  now: number;
+  random: () => number;
+}): ProviderRetryOutcome {
+  const { result, state, now, random } = args;
   let providerRetryDecision: ProviderRetryDecision | undefined;
   let providerExhausted: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" } | undefined;
   if (result.kind === "pause_provider") {
@@ -532,15 +634,43 @@ export function planTransition(input: TransitionInput): TransitionPlan {
       providerRetryDecision = providerDecision;
     }
   }
+  const providerOut: ProviderRetryOutcome = {};
+  if (providerRetryDecision !== undefined) providerOut.providerRetryDecision = providerRetryDecision;
+  if (providerExhausted !== undefined) providerOut.providerExhausted = providerExhausted;
+  return providerOut;
+}
 
-  // Side-effect facts are already durable via the pre-commit recorder;
-  // resultToFacts only emits the terminal node_* / run_* facts.
-  const factsCtx = {
+/** Stage 6 — the terminal fact-rewrite pipeline. Takes the `resultToFacts`
+ * batch and applies the halt / pause / complete rewrites in their fixed
+ * order. Pure: returns a fresh fact list. */
+export function rewriteTerminalFacts(args: {
+  facts: FactEvent[];
+  result: HandlerResult;
+  state: RunState;
+  decision: ProceedDecision;
+  goalGateRetargetTarget?: string;
+  goalGateRetriesPatch?: number;
+  retryPause?: RetryPause;
+  retriesExhaustedPause?: RetriesExhaustedPause;
+  providerExhausted?: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" };
+  providerRetryDecision?: ProviderRetryDecision;
+  budgetPause?: BudgetPause;
+  budgetHaltDetail?: string;
+}): FactEvent[] {
+  const {
+    result,
     state,
-    appliedIntentSeqs: decision.appliedSeqs,
-    usage: convertedTransitionUsage ?? input.accounting,
-  };
-  let facts = resultToFacts(result, factsCtx);
+    decision,
+    goalGateRetargetTarget,
+    goalGateRetriesPatch,
+    retryPause,
+    retriesExhaustedPause,
+    providerExhausted,
+    providerRetryDecision,
+    budgetPause,
+    budgetHaltDetail,
+  } = args;
+  let facts = args.facts;
 
   // A goal-gate retarget's node_started opens the NEXT pass: the epoch bump
   // (`goal_gates.__retries`) rides this same commit's routingPatch, but
@@ -725,6 +855,40 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     facts.push({ type: "fact.run_terminated", payload: haltPayload });
   }
 
+  return facts;
+}
+
+/** Stage 7 — the routing patch. Merges the intent fold delta + result with
+ * every per-turn override patch (budget-warned tags, retry counter / wake
+ * timestamp, provider-retry chain counter, goal-gate outcome + epoch). */
+export function buildRoutingPatch(args: {
+  result: HandlerResult;
+  decision: ProceedDecision;
+  state: RunState;
+  currentNode: string;
+  graph: Graph | null;
+  effectiveRouting: Readonly<Record<string, unknown>>;
+  budgetWarnedTags: readonly string[];
+  retryCounterPatch?: Record<string, number>;
+  retryPause?: RetryPause;
+  providerRetryDecision?: ProviderRetryDecision;
+  goalGateRetargetTarget?: string;
+  goalGateRetriesPatch?: number;
+}): Record<string, unknown> | undefined {
+  const {
+    result,
+    decision,
+    state,
+    currentNode,
+    graph,
+    effectiveRouting,
+    budgetWarnedTags,
+    retryCounterPatch,
+    retryPause,
+    providerRetryDecision,
+    goalGateRetargetTarget,
+    goalGateRetriesPatch,
+  } = args;
   let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
   if (budgetWarnedTags.length > 0) {
     const prior = readBudgetWarned(effectiveRouting);
@@ -766,7 +930,6 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // power the §3.4 fold across turns — readGateOutcomes /
   // readGoalGateRetries pick them up next turn.
   if (result.kind === "transition") {
-    const graph = input.graph;
     const completedNode = graph?.nodes[currentNode];
     if (completedNode?.attrs.goal_gate === true && result.outcomeStatus != null) {
       routingPatch = {
@@ -781,7 +944,135 @@ export function planTransition(input: TransitionInput): TransitionPlan {
       };
     }
   }
-  const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
+  return routingPatch;
+}
+
+/** Stage 8 — the applied-seq watermark advance: the high-water mark of the
+ * intent seqs this turn folded, or undefined when nothing was applied. */
+export function computeAdvanceAppliedTo(appliedSeqs: readonly number[]): number | undefined {
+  return appliedSeqs.length > 0 ? Math.max(...appliedSeqs) : undefined;
+}
+
+/** Given a successful (non-abort) handler turn's inputs, decide what comes
+ * out: the facts to commit, the routing patch, the applied-seq advance, and
+ * the observability trail. The explicit composition of the eight pure
+ * stages — no store reads, no clock, no RNG, no I/O. */
+export function planTransition(input: TransitionInput): TransitionPlan {
+  const { state, decision, graph, effectiveRouting, currentNode, iteration, now, random } = input;
+
+  // Stage 1 — edge selection (clones the handler result internally).
+  const edge = selectTransitionEdge({
+    handlerResult: input.handlerResult,
+    graph,
+    currentNode,
+    accounting: input.accounting,
+  });
+  const { pendingEdgeSelection, convertedTransitionUsage } = edge;
+
+  const observability: PlannedObservability[] = [];
+
+  // Stage 2 — budget gate (reads the post-edge-selection result, before
+  // goal-gate can rewrite it).
+  const budget = applyBudgetGate({
+    result: edge.result,
+    graph,
+    state,
+    currentNode,
+    iteration,
+    effectiveRouting,
+  });
+  observability.push(...budget.observability);
+
+  // Stage 3 — goal-gate retarget / halt.
+  const goalGate = applyGoalGate({
+    result: edge.result,
+    graph,
+    state,
+    currentNode,
+    effectiveRouting,
+  });
+  observability.push(...goalGate.observability);
+
+  // edge.selected lands AFTER the goal-gate check: a retarget overrides the
+  // selected edge (the originally-picked edge was never traversed), so we
+  // suppress its `edge.selected`. Otherwise emit it now, before
+  // node_completed lands, preserving the conventional ordering.
+  if (
+    pendingEdgeSelection !== undefined &&
+    goalGate.goalGateRetargetTarget === undefined &&
+    goalGate.result.kind === "transition"
+  ) {
+    recordEdgeSelected(
+      observability,
+      currentNode,
+      iteration,
+      pendingEdgeSelection,
+      readGoalGateRetries(effectiveRouting),
+    );
+  }
+
+  // Stage 4 — retry gate (pause / exhaust / partial).
+  const retry = applyRetryGate({
+    result: goalGate.result,
+    graph,
+    state,
+    currentNode,
+    effectiveRouting,
+    now,
+    random,
+  });
+  observability.push(...retry.observability);
+  const result = retry.result;
+
+  // Stage 5 — provider auto-retry.
+  const provider = applyProviderRetry({ result, state, now, random });
+
+  // Side-effect facts are already durable via the pre-commit recorder;
+  // resultToFacts only emits the terminal node_* / run_* facts.
+  const factsCtx = {
+    state,
+    appliedIntentSeqs: decision.appliedSeqs,
+    usage: convertedTransitionUsage ?? input.accounting,
+  };
+
+  // Stage 6 — the terminal fact-rewrite pipeline.
+  const facts = rewriteTerminalFacts({
+    facts: resultToFacts(result, factsCtx),
+    result,
+    state,
+    decision,
+    ...(goalGate.goalGateRetargetTarget !== undefined
+      ? { goalGateRetargetTarget: goalGate.goalGateRetargetTarget }
+      : {}),
+    ...(goalGate.goalGateRetriesPatch !== undefined ? { goalGateRetriesPatch: goalGate.goalGateRetriesPatch } : {}),
+    ...(retry.retryPause !== undefined ? { retryPause: retry.retryPause } : {}),
+    ...(retry.retriesExhaustedPause !== undefined ? { retriesExhaustedPause: retry.retriesExhaustedPause } : {}),
+    ...(provider.providerExhausted !== undefined ? { providerExhausted: provider.providerExhausted } : {}),
+    ...(provider.providerRetryDecision !== undefined ? { providerRetryDecision: provider.providerRetryDecision } : {}),
+    ...(budget.budgetPause !== undefined ? { budgetPause: budget.budgetPause } : {}),
+    ...(budget.budgetHaltDetail !== undefined ? { budgetHaltDetail: budget.budgetHaltDetail } : {}),
+  });
+
+  // Stage 7 — the routing patch.
+  const routingPatch = buildRoutingPatch({
+    result,
+    decision,
+    state,
+    currentNode,
+    graph,
+    effectiveRouting,
+    budgetWarnedTags: budget.budgetWarnedTags,
+    ...(retry.retryCounterPatch !== undefined ? { retryCounterPatch: retry.retryCounterPatch } : {}),
+    ...(retry.retryPause !== undefined ? { retryPause: retry.retryPause } : {}),
+    ...(provider.providerRetryDecision !== undefined ? { providerRetryDecision: provider.providerRetryDecision } : {}),
+    ...(goalGate.goalGateRetargetTarget !== undefined
+      ? { goalGateRetargetTarget: goalGate.goalGateRetargetTarget }
+      : {}),
+    ...(goalGate.goalGateRetriesPatch !== undefined ? { goalGateRetriesPatch: goalGate.goalGateRetriesPatch } : {}),
+  });
+
+  // Stage 8 — the applied-seq watermark advance.
+  const advanceAppliedTo = computeAdvanceAppliedTo(decision.appliedSeqs);
 
   const plan: TransitionPlan = { facts, observability };
   if (routingPatch !== undefined) plan.routingPatch = routingPatch;
