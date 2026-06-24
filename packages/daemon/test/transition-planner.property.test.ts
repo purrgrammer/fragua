@@ -13,7 +13,7 @@
 //   F  yield_human → run_paused_human (the HITL pause)
 
 import { describe, expect, test } from "bun:test";
-import { type Edge, type Graph, type Node, type NodeAttrs, validate } from "@fragua/core";
+import { type Edge, type Graph, type Node, type NodeAttrs, retryCountKey, validate } from "@fragua/core";
 import type { HandlerResult } from "@fragua/core/handler";
 import type { RunState } from "@fragua/store";
 import fc from "fast-check";
@@ -159,6 +159,148 @@ const arbBudgetCase = fc
     return { graph, policy, costUsd: budgetUsd * overspend };
   });
 
+// Shared zero-spend fixtures for the directly-constructed swap inputs below.
+const ZERO_ACCOUNTING: TransitionInput["accounting"] = {
+  turnBilled: 0,
+  totalCostUsd: 0,
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  totalCacheReadTokens: 0,
+  totalCacheWriteTokens: 0,
+  lastModel: undefined,
+};
+const PROCEED_NOOP = {
+  kind: "proceed",
+  routingDelta: {},
+  shouldPause: false,
+  shouldPauseAfterDispatch: false,
+  appliedSeqs: [],
+  dropped: [],
+} as TransitionInput["decision"];
+
+/** A run-level budget spine (n1 → n2 → exit) under a declared ceiling/policy —
+ * the same shape arbBudgetCase builds, factored so the budget-swap properties
+ * can pick the policy. */
+function budgetGraph(budgetUsd: number, policy: "stop" | "pause"): Graph {
+  return {
+    id: "g",
+    directed: true,
+    attrs: { budget_usd: budgetUsd, budget_policy: policy },
+    nodes: {
+      start: { id: "start", type: "start", attrs: { label: "start" } },
+      n1: { id: "n1", type: "llm", attrs: { label: "n1" } },
+      n2: { id: "n2", type: "llm", attrs: { label: "n2" } },
+      exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
+    },
+    edges: [
+      { from: "start", to: "n1", attrs: {} },
+      { from: "n1", to: "n2", attrs: {} },
+      { from: "n2", to: "exit", attrs: {} },
+    ],
+  };
+}
+
+/** A breaching success transition on n1 of a budget spine. */
+function mkBudgetInput(graph: Graph, node: string, costUsd: number): TransitionInput {
+  return {
+    state: mkState(node),
+    decision: PROCEED_NOOP,
+    graph,
+    handlerResult: { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd },
+    accounting: ZERO_ACCOUNTING,
+    effectiveRouting: {},
+    currentNode: node,
+    iteration: 0,
+    now: 0,
+    random: () => 0.5,
+  };
+}
+
+/** A `outcomeStatus:"retry"` transition on a `max_retries`-bearing node, with
+ * the per-node retry counter pre-seeded in routing — so the retry-policy block
+ * lands on either the retry-pause (prior < max) or the retries-exhausted
+ * (prior ≥ max) swap. Both keep node_completed. */
+function mkRetryInput(node: string, maxRetries: number, priorRetries: number): TransitionInput {
+  const graph: Graph = {
+    id: "g",
+    directed: true,
+    attrs: {},
+    nodes: {
+      start: { id: "start", type: "start", attrs: { label: "start" } },
+      [node]: { id: node, type: "llm", attrs: { label: node, max_retries: maxRetries } },
+      exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
+    },
+    edges: [
+      { from: "start", to: node, attrs: {} },
+      { from: node, to: "exit", attrs: {} },
+    ],
+  };
+  const routing = { [retryCountKey(node)]: priorRetries };
+  const state = { ...mkState(node), routing } as RunState;
+  return {
+    state,
+    decision: PROCEED_NOOP,
+    graph,
+    handlerResult: { kind: "transition", outcomeStatus: "retry", tokens: 100, costUsd: 0.5 },
+    accounting: ZERO_ACCOUNTING,
+    effectiveRouting: routing,
+    currentNode: node,
+    iteration: 0,
+    now: 0,
+    random: () => 0.5,
+  };
+}
+
+// SPEND-PRESERVATION input space: each arm constructs a transition whose
+// node_completed (real spend) is at risk of being dropped by a fact-list swap,
+// tagged with the swap fact the planner must emit. The four arms are the four
+// swaps: retry-pause, retries-exhausted, budget-pause, budget-halt.
+interface SwapCase {
+  input: TransitionInput;
+  swap: { type: string; reason: string };
+}
+const arbRetryPauseSwap: fc.Arbitrary<SwapCase> = fc
+  .record({ maxRetries: fc.integer({ min: 1, max: 4 }), prior: fc.nat({ max: 3 }) })
+  .map(({ maxRetries, prior }) => ({
+    input: mkRetryInput("impl", maxRetries, prior % maxRetries),
+    swap: { type: "fact.run_paused", reason: "handler_retry" },
+  }));
+const arbRetriesExhaustedSwap: fc.Arbitrary<SwapCase> = fc
+  .record({ maxRetries: fc.nat({ max: 3 }), extra: fc.nat({ max: 3 }) })
+  .map(({ maxRetries, extra }) => ({
+    input: mkRetryInput("impl", maxRetries, maxRetries + extra),
+    swap: { type: "fact.run_paused", reason: "max_retries" },
+  }));
+const arbBudgetSwap = (policy: "stop" | "pause"): fc.Arbitrary<SwapCase> =>
+  fc
+    .record({
+      budgetUsd: fc.double({ min: 0.01, max: 1, noNaN: true }),
+      overspend: fc.double({ min: 1.01, max: 10, noNaN: true }),
+    })
+    .map(({ budgetUsd, overspend }) => ({
+      input: mkBudgetInput(budgetGraph(budgetUsd, policy), "n1", budgetUsd * overspend),
+      swap:
+        policy === "stop"
+          ? { type: "fact.run_terminated", reason: "budget" }
+          : { type: "fact.run_paused", reason: "budget" },
+    }));
+const arbSwapCase: fc.Arbitrary<SwapCase> = fc.oneof(
+  arbRetryPauseSwap,
+  arbRetriesExhaustedSwap,
+  arbBudgetSwap("pause"),
+  arbBudgetSwap("stop"),
+);
+
+// Stop-policy budget breach: `evaluateBudget` reports shouldHalt = true (a
+// breach over a declared run ceiling with budget_policy="stop"), so the plan
+// must NOT advance — no node_started rides.
+const arbBudgetHaltCase = fc
+  .record({
+    budgetUsd: fc.double({ min: 0.01, max: 1, noNaN: true }),
+    overspend: fc.double({ min: 1.01, max: 10, noNaN: true }),
+  })
+  .map(({ budgetUsd, overspend }) => mkBudgetInput(budgetGraph(budgetUsd, "stop"), "n1", budgetUsd * overspend));
+
 describe("planTransition — properties", () => {
   test("A: pure — same input ⇒ equal plan, and handlerResult is never mutated", () => {
     fc.assert(
@@ -301,6 +443,48 @@ describe("planTransition — properties", () => {
         expect(payload.route).toBe(route);
       }),
       { numRuns: pbtRuns(500) },
+    );
+  });
+
+  test("EXACTLY-ONE-TERMINAL: facts carry at most one fact.run_terminated (any status)", () => {
+    fc.assert(
+      fc.property(arbInput, (input) => {
+        const terminals = planTransition(input).facts.filter((f) => f.type === "fact.run_terminated");
+        expect(terminals.length).toBeLessThanOrEqual(1);
+      }),
+      { numRuns: pbtRuns(1000) },
+    );
+  });
+
+  test("NO-ADVANCE-PAST-BUDGET: a budget breach with shouldHalt=true emits no fact.node_started", () => {
+    fc.assert(
+      fc.property(arbBudgetHaltCase, (input) => {
+        const plan = planTransition(input);
+        // Precondition: the stop-policy breach did halt (shouldHalt was true).
+        const halted = plan.facts.some(
+          (f) => f.type === "fact.run_terminated" && (f.payload as { reason?: string }).reason === "budget",
+        );
+        expect(halted).toBe(true);
+        // Invariant: a halt never advances — no node_started.
+        expect(plan.facts.some((f) => f.type === "fact.node_started")).toBe(false);
+      }),
+      { numRuns: pbtRuns(300) },
+    );
+  });
+
+  test("SPEND-PRESERVATION: every halt/pause swap keeps fact.node_completed (spend never dropped)", () => {
+    fc.assert(
+      fc.property(arbSwapCase, ({ input, swap }) => {
+        const plan = planTransition(input);
+        // The swap actually fired (the property would be vacuous otherwise).
+        const swapFired = plan.facts.some(
+          (f) => f.type === swap.type && (f.payload as { reason?: string }).reason === swap.reason,
+        );
+        expect(swapFired).toBe(true);
+        // The retrying/breaching node's spend survives the fact-list rewrite.
+        expect(plan.facts.some((f) => f.type === "fact.node_completed")).toBe(true);
+      }),
+      { numRuns: pbtRuns(400) },
     );
   });
 

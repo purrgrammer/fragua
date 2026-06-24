@@ -1,12 +1,15 @@
 // Provider auto-retry policy unit tests.
 
 import { describe, expect, test } from "bun:test";
+import fc from "fast-check";
+import { pbtRuns } from "../../../test/pbt-runs.ts";
 import {
   computeBackoffMs,
   decideProviderRetry,
   isAutoRetryableStatus,
   PROVIDER_RETRY_BASE_BACKOFF_MS,
   PROVIDER_RETRY_MAX_ATTEMPTS,
+  PROVIDER_RETRY_MAX_CUMULATIVE_MS,
   PROVIDER_RETRY_MAX_EXPONENTIAL_MS,
 } from "../src/provider-retry-policy.ts";
 
@@ -143,6 +146,46 @@ describe("decideProviderRetry — exhaustion", () => {
       cumulativeDelayMs: 5 * 60 * 1000, // would otherwise exhaust
     });
     expect(d.kind).toBe("auto-retry");
+  });
+});
+
+describe("decideProviderRetry — termination property", () => {
+  // PROVIDER-RETRY-TERMINATION: over arbitrary auto-retryable transport
+  // errors, the chain partitions deterministically — exhausted once the next
+  // attempt exceeds the attempt cap, or once cumulative+next delay exceeds the
+  // ms cap (no Retry-After); auto-retry strictly within both caps.
+  test("PROVIDER-RETRY-TERMINATION: exhausts past the attempt cap or the cumulative-ms cap", () => {
+    const random = () => 0.5;
+    fc.assert(
+      fc.property(
+        fc.record({
+          httpStatus: fc.constantFrom<number | null>(408, 429, 500, 502, 503, 504, 529, null),
+          priorAttempt: fc.nat({ max: 20 }),
+          now: fc.nat({ max: 2_000_000_000_000 }),
+          cumulativeDelayMs: fc.nat({ max: 10 * 60 * 1000 }),
+        }),
+        ({ httpStatus, priorAttempt, now, cumulativeDelayMs }) => {
+          const d = decideProviderRetry({ httpStatus, priorAttempt, now, cumulativeDelayMs, random });
+          const nextAttempt = priorAttempt + 1;
+          if (nextAttempt > PROVIDER_RETRY_MAX_ATTEMPTS) {
+            expect(d.kind).toBe("exhausted");
+            if (d.kind !== "exhausted") throw new Error();
+            expect(d.reason).toBe("max_attempts");
+            return;
+          }
+          // Same random ⇒ same per-attempt delay as the policy computed.
+          const delayMs = computeBackoffMs({ attempt: nextAttempt, random });
+          if (cumulativeDelayMs + delayMs > PROVIDER_RETRY_MAX_CUMULATIVE_MS) {
+            expect(d.kind).toBe("exhausted");
+            if (d.kind !== "exhausted") throw new Error();
+            expect(d.reason).toBe("max_cumulative_ms");
+          } else {
+            expect(d.kind).toBe("auto-retry");
+          }
+        },
+      ),
+      { numRuns: pbtRuns(1000) },
+    );
   });
 });
 

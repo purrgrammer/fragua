@@ -158,6 +158,16 @@ describe("planAbort — properties", () => {
     );
   });
 
+  test("ABORT-OUTCOME-PARTITION: outcome is exactly one of halt|pause|timeout_retry|abort_step", () => {
+    fc.assert(
+      fc.property(arbAbortInput, (input) => {
+        const { outcome } = planAbort(input);
+        expect(["halt", "pause", "timeout_retry", "abort_step"]).toContain(outcome);
+      }),
+      { numRuns: pbtFaultRuns(1000) },
+    );
+  });
+
   test("E: reactive-budget precedence — halt beats pause beats everything else", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
