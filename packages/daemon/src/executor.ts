@@ -52,6 +52,7 @@ import {
   routingString,
   sleep,
 } from "./executor-helpers.ts";
+import { type FanoutPlan, planFanoutStep } from "./fanout-planner.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 
 // Compatibility re-exports: these helpers moved to executor-helpers.ts but
@@ -1400,7 +1401,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const branchTimeoutMs =
       typeof node?.attrs.max_ms === "number" && node.attrs.max_ms > 0 ? node.attrs.max_ms : fanoutBranchTimeoutMs;
 
-    if (join === undefined || branches.length === 0) {
+    // PURE frontier decision (fanout-planner.ts) — read the active set from
+    // routing and the aborted subset from the lifecycle log (a live frontier
+    // only), then classify the transition. The caller below APPLIES the plan.
+    const active = readActiveNodes(effectiveRouting as Record<string, unknown>);
+    const plan: FanoutPlan = planFanoutStep({
+      active,
+      branches,
+      join,
+      redispatch: active !== null && active.length > 0 ? abortedActiveBranches(opts.store, runId, active) : [],
+    });
+
+    if (plan.kind === "malformed") {
       await tryAppendFact(opts.store, runId, state.version, [
         { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "fanout_malformed" } },
       ]);
@@ -1532,14 +1544,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return undefined;
     };
 
-    const active = readActiveNodes(effectiveRouting as Record<string, unknown>);
-
     // Seed the frontier with the branch entries (fresh entry). Through
     // `commitFanoutFact` (not a bare append) so the SAME OCC-vs-status split as
     // the join barrier holds: an operator pause/cancel landing between this
     // turn's state read and the seed append is a `status` stop (yield the turn),
     // not an OCC conflict to feed the controller.
-    if (active == null) {
+    if (plan.kind === "seed") {
       const res = await commitFanoutFact(
         [
           {
@@ -1561,7 +1571,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // first — a breach folded by the LAST branch commit (or a disposition
     // lost to an OCC-continue last turn) must park the run here, not ride
     // through the join into the successor's dispatch.
-    if (active.length === 0) {
+    if (plan.kind === "join") {
       const drainedBarrier = fanoutBudgetDisposition({ fresh: true });
       if (drainedBarrier !== undefined) return commitParkOrTerminal([drainedBarrier]);
       const res = await commitFanoutFact(
@@ -1572,8 +1582,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               nodeId: parallelNode,
               iteration,
               ...passField(pass),
-              nextNode: join,
-              branchesCompleted: branches.length,
+              nextNode: plan.nextNode,
+              branchesCompleted: plan.branchesCompleted,
             },
           },
         ],
@@ -1599,7 +1609,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // so the failed→running transition is a durable fact (ground rule #5) the
     // projection already consumes. Safe: the reducer only ADDS to the active set
     // when absent — the branch is already there, so this is a no-op on the frontier.
-    const reDispatched = abortedActiveBranches(opts.store, runId, active);
+    const reDispatched = plan.redispatch;
     if (reDispatched.length > 0) {
       const facts: FactEvent[] = reDispatched.map((n) => ({
         type: "fact.dispatch_started",
@@ -1721,7 +1731,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         })(),
       );
     };
-    for (const f of active) dispatch(f);
+    for (const f of plan.active) dispatch(f);
 
     // Early-terminal bail: signal every still-in-flight branch so it stops
     // burning LLM cost (a settled branch already disposed its registration, so
