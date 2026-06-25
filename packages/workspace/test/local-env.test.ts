@@ -88,6 +88,27 @@ describe("LocalEnvironment", () => {
       expect(reaped).toBe(true);
     }, 10_000);
 
+    test("timeout escalates to SIGKILL for a SIGTERM-ignoring child (keepAlive backstop holds the loop)", async () => {
+      const pidFile = join(scratch, "trap.pid");
+      // The shell ignores SIGTERM, so the reap's SIGTERM is a no-op and only
+      // the 2s SIGKILL backstop can kill it. On the kill/timeout path that
+      // backstop is NOT `.unref()`'d — it holds the loop until escalation so
+      // a short-lived executor can't exit the window and orphan the child.
+      const r = await env.exec(`echo $$ > ${pidFile}; trap '' TERM; sleep 30`, { timeoutMs: 200 });
+      expect(r.exitCode).toBe(124);
+
+      const pid = Number((await env.readFile("trap.pid")).trim());
+      const reaped = await waitForDeath(pid, 4_000);
+      if (isAlive(pid)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // ignore
+        }
+      }
+      expect(reaped).toBe(true);
+    }, 10_000);
+
     test("a normal foreground call still returns its exit code and stdout", async () => {
       const r = await env.exec("echo hi; exit 7");
       expect(r.stdout).toContain("hi");

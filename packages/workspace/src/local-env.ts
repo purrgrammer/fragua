@@ -276,7 +276,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
       // error, timeout, abort) without double-killing. Reaping on normal
       // close is what stops a shell that exits leaving background children
       // (`server >/dev/null 2>&1 &`) from stranding them as orphans (#34).
-      const reapGroup = () => {
+      const reapGroup = (keepAlive?: boolean) => {
         if (reaped) return;
         reaped = true;
         if (child.pid !== undefined) {
@@ -291,11 +291,14 @@ export class LocalEnvironment implements ExecutionEnvironment {
             }
           }
           // Escalate to SIGKILL after a short grace window. If the
-          // process already exited the second kill is harmless. `.unref()`
-          // so this backstop — now scheduled on EVERY exec via the close
-          // path — never holds an otherwise-idle event loop open for 2s
-          // (a long-lived daemon stays alive on its own and still escalates).
-          setTimeout(() => {
+          // process already exited the second kill is harmless. On the
+          // kill/timeout path (`keepAlive`) we HOLD the event loop until
+          // escalation: a short-lived executor (`fragua ci`) must not exit
+          // inside the 2s window and orphan a SIGTERM-ignoring child. The
+          // normal close-path reap `.unref()`s it — a long-lived daemon
+          // stays alive on its own and still escalates, and an idle loop
+          // need not be held open for 2s after a clean exit.
+          const backstop = setTimeout(() => {
             if (child.pid !== undefined) {
               try {
                 process.kill(-child.pid, "SIGKILL");
@@ -307,13 +310,14 @@ export class LocalEnvironment implements ExecutionEnvironment {
                 }
               }
             }
-          }, 2_000).unref();
+          }, 2_000);
+          if (!keepAlive) backstop.unref();
         }
       };
 
       const killTree = (reason: "timeout" | "abort") => {
         killReason = reason;
-        reapGroup();
+        reapGroup(true);
       };
 
       const timer = setTimeout(() => {
@@ -347,7 +351,9 @@ export class LocalEnvironment implements ExecutionEnvironment {
         if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
         // Reap the process group on normal completion too: a shell that
         // exits leaving backgrounded children (closed pipes → immediate
-        // close) must not strand them past this call's return (#34).
+        // close) must not strand them past this call's return (#34). The
+        // close path keeps the `.unref()`'d backstop — it must not hold an
+        // otherwise-idle loop open for 2s after the shell itself exited.
         reapGroup();
         if (killReason === "timeout") {
           resolvePromise({
