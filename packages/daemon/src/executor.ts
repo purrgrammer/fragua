@@ -66,7 +66,7 @@ import { processOperatorActions } from "./operator-actions.ts";
 import { CommittingRecorder } from "./recorder.ts";
 import { abortResultToFacts, cancelToFacts } from "./result-to-facts.ts";
 import { captureBoundarySnapshot, disposeTerminalWorktree } from "./snapshot-service.ts";
-import { planTransition } from "./transition-planner.ts";
+import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
 import { wakePending } from "./wake-pending.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
 
@@ -713,7 +713,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // tokens=0), causing a spurious re-dispatch. Fold's `applied`
       // already includes the run_enqueued seq; we just need to actually
       // persist it.
-      const startAdvanceTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
+      const startAdvanceTo = computeAdvanceAppliedTo(decision.appliedSeqs);
       const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
       if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
       if (startAdvanceTo !== undefined) startAppendOpts.advanceAppliedTo = startAdvanceTo;

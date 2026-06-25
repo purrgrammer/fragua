@@ -14,6 +14,7 @@ import { AUTO_RESUME_AT_KEY, readGoalGateRetries } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import { readNumber, type UsageTotals } from "./executor-helpers.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
+import { computeAdvanceAppliedTo } from "./transition-planner.ts";
 
 // Watchdog timeout-retry policy (system-initiated, NOT workflow-initiated — so
 // it doesn't bump `consecutiveAborts`). Per-node attempt counter lives at
@@ -85,7 +86,7 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
 
   // Carry this turn's fold (routing delta + applied seqs) onto the commit so a
   // queued operator intent isn't left unapplied for the next dispatch to re-fold.
-  const baseAdvance = appliedSeqs.length > 0 ? Math.max(...appliedSeqs) : undefined;
+  const baseAdvance = computeAdvanceAppliedTo(appliedSeqs);
   const baseRoutingPatch = Object.keys(routingDelta).length > 0 ? routingDelta : undefined;
   const withBase = (outcome: AbortOutcome): AbortPlan => ({
     facts,

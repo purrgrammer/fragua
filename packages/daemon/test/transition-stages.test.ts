@@ -6,7 +6,7 @@
 // the success arm, halt, pause, retarget, provider-retry, and graph=null.
 
 import { describe, expect, test } from "bun:test";
-import { type Edge, type Graph, type Node, retryCountKey } from "@fragua/core";
+import { type Edge, GOAL_GATE_RETRIES_KEY, type Graph, type Node, retryCountKey } from "@fragua/core";
 import type { HandlerResult } from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 import { PROVIDER_RETRY_ATTEMPT_KEY } from "../src/provider-retry-policy.ts";
@@ -18,8 +18,10 @@ import {
   buildRoutingPatch,
   computeAdvanceAppliedTo,
   type ProceedDecision,
+  planTransition,
   rewriteTerminalFacts,
   selectTransitionEdge,
+  type TransitionInput,
   type TurnAccounting,
 } from "../src/transition-planner.ts";
 
@@ -280,9 +282,25 @@ describe("applyGoalGate", () => {
       currentNode: "g0",
       effectiveRouting: {},
     });
-    expect(out.result).toBe(result);
+    // Clone (never the caller's object), but value-identical — no retarget.
+    expect(out.result).toEqual(result);
     expect(out.goalGateRetargetTarget).toBeUndefined();
     expect(out.observability).toEqual([]);
+  });
+
+  test("retarget — does not mutate the caller's args.result", () => {
+    const result = transition({ nextNode: "__end__", outcomeStatus: "fail" });
+    const out = applyGoalGate({
+      result,
+      graph: gateGraph({ retryTarget: "fix", maxRetries: 2 }),
+      state: mkState("g0"),
+      currentNode: "g0",
+      effectiveRouting: {},
+    });
+    // The retarget lands on the returned clone, never the caller's object.
+    expect((out.result as { nextNode?: string }).nextNode).toBe("fix");
+    expect(out.result).not.toBe(result);
+    expect((result as { nextNode?: string }).nextNode).toBe("__end__");
   });
 });
 
@@ -345,9 +363,27 @@ describe("applyRetryGate", () => {
       now: 1000,
       random: () => 0.5,
     });
-    expect(out.result).toBe(result);
+    // Clone (never the caller's object), but value-identical — no pause.
+    expect(out.result).toEqual(result);
     expect(out.retryPause).toBeUndefined();
     expect(out.retriesExhaustedPause).toBeUndefined();
+  });
+
+  test("retry — does not mutate the caller's args.result", () => {
+    const result = transition({ nextNode: "__end__", outcomeStatus: "retry" });
+    const out = applyRetryGate({
+      result,
+      graph: spine({ n1Attrs: { max_retries: 2 } }),
+      state: mkState("n1"),
+      currentNode: "n1",
+      effectiveRouting: {},
+      now: 1000,
+      random: () => 0.5,
+    });
+    // The nextNode=currentNode rewrite lands on the clone, not the input.
+    expect((out.result as { nextNode?: string }).nextNode).toBe("n1");
+    expect(out.result).not.toBe(result);
+    expect((result as { nextNode?: string }).nextNode).toBe("__end__");
   });
 });
 
@@ -435,8 +471,9 @@ describe("rewriteTerminalFacts", () => {
       type: "fact.run_paused",
       payload: { reason: "provider_error", nodeId: "n1", httpStatus: 429, provider: "p", errorMessage: "e" },
     } as FactEvent;
+    const input = [completed, providerPause];
     const facts = rewriteTerminalFacts({
-      facts: [completed, providerPause],
+      facts: input,
       result: { kind: "pause_provider", httpStatus: 429, provider: "p", errorMessage: "e" },
       state: mkState("n1"),
       decision: emptyDecision,
@@ -445,6 +482,9 @@ describe("rewriteTerminalFacts", () => {
     const paused = facts.find((f) => f.type === "fact.run_paused");
     expect((paused?.payload as { reason?: string }).reason).toBe("provider_retry");
     expect(facts.some((f) => f.type === "fact.provider_retry_attempted")).toBe(true);
+    // Pure: the caller's array is left untouched (no in-place facts[i]/push).
+    expect(input).toEqual([completed, providerPause]);
+    expect(input).toHaveLength(2);
   });
 
   test("operator pause — shouldPauseAfterDispatch swaps the success continuation", () => {
@@ -459,7 +499,7 @@ describe("rewriteTerminalFacts", () => {
     expect((paused?.payload as { reason?: string }).reason).toBe("operator");
   });
 
-  test("no sentinels — facts pass through unchanged", () => {
+  test("no sentinels — facts pass through unchanged, input array untouched", () => {
     const input = [completed, started];
     const facts = rewriteTerminalFacts({
       facts: input,
@@ -468,6 +508,9 @@ describe("rewriteTerminalFacts", () => {
       decision: emptyDecision,
     });
     expect(facts).toEqual(input);
+    // Pure: returns a fresh list, never the caller's array.
+    expect(facts).not.toBe(input);
+    expect(input).toEqual([completed, started]);
   });
 });
 
@@ -521,5 +564,40 @@ describe("computeAdvanceAppliedTo", () => {
 
   test("non-empty — the high-water mark", () => {
     expect(computeAdvanceAppliedTo([3, 7, 5])).toBe(7);
+  });
+});
+
+describe("planTransition — goal-gate / retry interaction", () => {
+  // A goal_gate node that returns outcomeStatus="retry" with NO retry edge:
+  // edge selection lands terminal, the goal gate elects to retarget to its
+  // retry_target, and the retry gate converts the turn into a handler_retry
+  // pause (nextNode rewritten back to the node). The retry pause wins; the
+  // goal-gate retarget is spurious, so its retry slot must NOT be consumed.
+  function mkInput(): TransitionInput {
+    const state = mkState("g0");
+    return {
+      state,
+      decision: emptyDecision,
+      graph: gateGraph({ retryTarget: "fix", maxRetries: 2 }),
+      handlerResult: transition({ outcomeStatus: "retry" }),
+      accounting: zeroAccounting,
+      effectiveRouting: {},
+      currentNode: "g0",
+      iteration: 0,
+      now: 1000,
+      random: () => 0.5,
+    } satisfies TransitionInput;
+  }
+
+  test("retry pause wins — produces handler_retry, does not consume a goal-gate slot", () => {
+    const plan = planTransition(mkInput());
+    const paused = plan.facts.find((f) => f.type === "fact.run_paused");
+    expect((paused?.payload as { reason?: string }).reason).toBe("handler_retry");
+    // No node_started for the spurious retarget target was emitted.
+    expect(plan.facts.some((f) => f.type === "fact.node_started")).toBe(false);
+    // The goal-gate retry slot must NOT be consumed. (GOAL_GATE_RETRIES_KEY
+    // is a dotted literal key, so check membership directly rather than via
+    // toHaveProperty, which would read the dots as a nested path.)
+    expect(Object.keys(plan.routingPatch ?? {})).not.toContain(GOAL_GATE_RETRIES_KEY);
   });
 });

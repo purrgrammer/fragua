@@ -371,8 +371,10 @@ export interface GoalGateOutcome {
 // fail-landing (SKILL: "an explicit edge to the `exit` sink on
 // failure is a sanctioned landing — the run *completes*"). One
 // condition, both cases.
-/** Stage 3 — goal-gate retarget / halt. May mutate `result.nextNode` to the
- * retry target, or replace `result` with a `goal_gate_unsatisfied` halt. */
+/** Stage 3 — goal-gate retarget / halt. Operates on a clone: returns a result
+ * whose `nextNode` may be the retry target, or a `goal_gate_unsatisfied` halt.
+ * Whether the retarget is actually consumed is decided from the FINAL result
+ * in planTransition (the retry gate may override it). */
 export function applyGoalGate(args: {
   result: HandlerResult;
   graph: Graph | null;
@@ -381,7 +383,10 @@ export function applyGoalGate(args: {
   effectiveRouting: Readonly<Record<string, unknown>>;
 }): GoalGateOutcome {
   const { graph, state, currentNode, effectiveRouting } = args;
-  let result = args.result;
+  // Operate on a clone so this stage never mutates the caller's result —
+  // the later retry gate may overwrite `nextNode`, and the slot/epoch
+  // consumption is decided from the FINAL result back in planTransition.
+  let result = args.result.kind === "transition" ? { ...args.result } : args.result;
   const observability: PlannedObservability[] = [];
   let goalGateRetargetTarget: string | undefined;
   let goalGateRetriesPatch: number | undefined;
@@ -470,7 +475,8 @@ export interface RetryGateOutcome {
 // are real spend), THEN swap fact.node_started for fact.run_paused{reason:"handler_retry"}
 // — the run sleeps without a slot held, and resume re-dispatches the
 // same node since state.currentNode points back at the retrying id.
-/** Stage 4 — retry gate (pause / exhaust / partial). */
+/** Stage 4 — retry gate (pause / exhaust / partial). Operates on a clone; the
+ * caller's `args.result` is never mutated. */
 export function applyRetryGate(args: {
   result: HandlerResult;
   graph: Graph | null;
@@ -481,7 +487,9 @@ export function applyRetryGate(args: {
   random: () => number;
 }): RetryGateOutcome {
   const { graph, state, currentNode, effectiveRouting, now, random } = args;
-  const result = args.result;
+  // Clone so the `nextNode = currentNode` / `outcomeStatus` rewrites land on
+  // our copy, never the caller's object (shared with the goal-gate stage).
+  const result = args.result.kind === "transition" ? { ...args.result } : args.result;
   const observability: PlannedObservability[] = [];
   let retryCounterPatch: Record<string, number> | undefined;
   // Per attractor §3.5: reset the counter when this node succeeds so
@@ -670,7 +678,9 @@ export function rewriteTerminalFacts(args: {
     budgetPause,
     budgetHaltDetail,
   } = args;
-  let facts = args.facts;
+  // Copy up front so every rewrite below (including the provider-auto-retry
+  // branch's in-place facts[i]/push) operates on our list, never the caller's.
+  let facts = [...args.facts];
 
   // A goal-gate retarget's node_started opens the NEXT pass: the epoch bump
   // (`goal_gates.__retries`) rides this same commit's routingPatch, but
@@ -1024,6 +1034,15 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   observability.push(...retry.observability);
   const result = retry.result;
 
+  // A goal-gate retarget only counts when it SURVIVES the retry gate: a
+  // node converting to a handler_retry pause overwrites `nextNode` back to
+  // itself, so the gate's retarget was spurious — don't consume its retry
+  // slot or stamp the target's epoch (no node_started for it is emitted).
+  const retargetApplied =
+    goalGate.goalGateRetargetTarget !== undefined &&
+    result.kind === "transition" &&
+    result.nextNode === goalGate.goalGateRetargetTarget;
+
   // Stage 5 — provider auto-retry.
   const provider = applyProviderRetry({ result, state, now, random });
 
@@ -1041,10 +1060,12 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     result,
     state,
     decision,
-    ...(goalGate.goalGateRetargetTarget !== undefined
+    ...(retargetApplied && goalGate.goalGateRetargetTarget !== undefined
       ? { goalGateRetargetTarget: goalGate.goalGateRetargetTarget }
       : {}),
-    ...(goalGate.goalGateRetriesPatch !== undefined ? { goalGateRetriesPatch: goalGate.goalGateRetriesPatch } : {}),
+    ...(retargetApplied && goalGate.goalGateRetriesPatch !== undefined
+      ? { goalGateRetriesPatch: goalGate.goalGateRetriesPatch }
+      : {}),
     ...(retry.retryPause !== undefined ? { retryPause: retry.retryPause } : {}),
     ...(retry.retriesExhaustedPause !== undefined ? { retriesExhaustedPause: retry.retriesExhaustedPause } : {}),
     ...(provider.providerExhausted !== undefined ? { providerExhausted: provider.providerExhausted } : {}),
@@ -1065,10 +1086,12 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     ...(retry.retryCounterPatch !== undefined ? { retryCounterPatch: retry.retryCounterPatch } : {}),
     ...(retry.retryPause !== undefined ? { retryPause: retry.retryPause } : {}),
     ...(provider.providerRetryDecision !== undefined ? { providerRetryDecision: provider.providerRetryDecision } : {}),
-    ...(goalGate.goalGateRetargetTarget !== undefined
+    ...(retargetApplied && goalGate.goalGateRetargetTarget !== undefined
       ? { goalGateRetargetTarget: goalGate.goalGateRetargetTarget }
       : {}),
-    ...(goalGate.goalGateRetriesPatch !== undefined ? { goalGateRetriesPatch: goalGate.goalGateRetriesPatch } : {}),
+    ...(retargetApplied && goalGate.goalGateRetriesPatch !== undefined
+      ? { goalGateRetriesPatch: goalGate.goalGateRetriesPatch }
+      : {}),
   });
 
   // Stage 8 — the applied-seq watermark advance.
