@@ -310,7 +310,7 @@ The decision core may order only a fixed **plan vocabulary** — the shape of `T
 | **I3** | Intents always-appendable; facts OCC-checked. |
 | **I4** | Handlers receive `AbortSignal`; respecting it is contract. |
 | **I5** | External side effects carry a provider idempotency key; orphan `INTENT` quarantines the run on crash-replay. |
-| **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts. |
+| **I6** | `run_state.routing` ≤ 8KB — a defense-in-depth **tripwire**, not a functional budget: payload lives in messages/artifacts, and reads go through bounded, typed accessors (`packages/core/src/routing.ts`) over the flat dotted bytes, so the CHECK should never fire in correct operation. Kept as a backstop that catches a payload leaking into a variable-length namespace. |
 | **I7** | Event payloads ≤ 4KB. |
 | **I8** | Raw tool output addressed by sha256 in `blobs`; artifacts are named refs scoped by `(run, node, iteration, key)`. |
 | **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`). |

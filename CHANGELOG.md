@@ -8,6 +8,15 @@ guarantee.
 
 ## [Unreleased]
 
+### Changed
+
+- Per-run dispatch state in `run_state.routing` is now read through a typed,
+  validate-and-degrade accessor layer. A mis-folded or tampered routing key
+  degrades to its conservative authored default (a lost budget override falls
+  back to the lower cap, a corrupt fan-out frontier to no fan-out, retry
+  counters to zero) instead of feeding a wrong dispatch decision. On-disk
+  routing bytes are unchanged and runs in flight are unaffected.
+
 ### Fixed
 
 - Mid-stream provider-retry classification no longer auto-retries permanent
