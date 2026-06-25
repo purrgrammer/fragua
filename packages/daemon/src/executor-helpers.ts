@@ -7,15 +7,23 @@
 // (classifyAbortCause, buildSubstitutionArgs, resolveBackoff) for compatibility.
 
 import {
+  BUDGET_WARNED_KEY,
   type EdgeSelection,
   type GraphAttrs,
+  getBudget,
+  getInputs,
+  getRetry,
+  INPUTS_KEY,
   type InputDecl,
   isRetryPresetName,
+  MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY,
+  MAX_LOOPS_OVERRIDE_KEY,
+  maxRetriesOverrideKey,
   type NodeAttrs,
   type OutputsValue,
   RETRY_PRESETS,
   resolveInputBindings,
-  retryCountKey,
+  routingString,
   type SubstitutionArgs,
 } from "@fragua/core";
 import type * as core from "@fragua/core/handler";
@@ -28,23 +36,18 @@ import { SETTLED_STATUSES } from "@fragua/store";
  * survives across HITL pauses for reuse on resume). */
 export const TERMINAL_STATUSES = new Set<string>(SETTLED_STATUSES);
 
-/** Reserved routing key for budget-warn dedup. Holds the set of
- * `(scope:metric)` tags that have already fired their once-per-run
- * `budget.warn` event. The budget policy reads + extends it; the
- * executor merges new tags into the routing patch on commit. */
-export const BUDGET_WARNED_KEY = "__budget_warned";
-
-/** Routing keys that operators write via cap-adjustment intents to
- * raise the per-run ceiling for one of the sibling-halt-converted
- * pause reasons. Stage 3 of recoverable-budget-pause.md. The executor
- * reads these BEFORE consulting the static graph/node attrs. */
-export const MAX_LOOPS_OVERRIDE_KEY = "max_loops_override";
-export const MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY = "max_goal_gate_retries_override";
-
-/** Per-node max_retries override; key is `max_retries_override.<nodeId>`. */
-export function maxRetriesOverrideKey(nodeId: string): string {
-  return `max_retries_override.${nodeId}`;
-}
+// The routing-key vocabulary (`BUDGET_WARNED_KEY`, `MAX_LOOPS_OVERRIDE_KEY`,
+// `MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY`, `maxRetriesOverrideKey`, …) is the typed
+// -routing accessor module's single source of truth (`@fragua/core`). Re-export
+// the ones daemon-internal callers import from here, so their import source is
+// stable.
+export {
+  BUDGET_WARNED_KEY,
+  MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY,
+  MAX_LOOPS_OVERRIDE_KEY,
+  maxRetriesOverrideKey,
+  routingString,
+};
 
 export function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -97,19 +100,14 @@ export function errorMessage(err: unknown): string {
   return String(err);
 }
 
-export function routingString(routing: Record<string, unknown>, key: string): string | undefined {
-  const v = routing[key];
-  return typeof v === "string" ? v : undefined;
-}
-
 /** Read the per-node retry counter from routing, bumped each time a backward edge re-enters a node after a
  * non-success outcome. Stored at `internal.retry_count.<nodeId>`
  * (retryCountKey) — the same key the retry-policy block writes; the
  * dispatch iteration reads it so a re-entered node carries the right
- * iteration through node_started / dispatch_started / node_completed. */
+ * iteration through node_started / dispatch_started / node_completed.
+ * Typed read via the `getRetry` accessor. */
 export function nodeRetryCount(routing: Record<string, unknown>, nodeId: string): number {
-  const v = routing[retryCountKey(nodeId)];
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  return getRetry(routing).count(nodeId);
 }
 
 export type ResumeOf = "fresh" | "crash" | "paused" | "paused_human" | "paused_auto" | "quarantined";
@@ -148,38 +146,42 @@ export function deriveResumeOf(
   return "fresh";
 }
 
+/** The once-per-run `budget.warn` dedup tag set. Typed read via `getBudget`. */
 export function readBudgetWarned(routing: Record<string, unknown>): ReadonlySet<string> {
-  const v = routing[BUDGET_WARNED_KEY];
-  if (!Array.isArray(v)) return new Set();
-  const out = new Set<string>();
-  for (const item of v) if (typeof item === "string") out.add(item);
-  return out;
+  return getBudget(routing).warned;
 }
 
 /** Read operator-supplied budget overrides from `routing.budget_override.<scope>.<metric>`
  * (folded by intent-fold from `intent.budget_adjusted`). Returns undefined when
- * no overrides are set; the budget policy falls back to graph/node attrs. */
+ * no overrides are set; the budget policy falls back to graph/node attrs.
+ * Typed read via `getBudget`. */
 export function readBudgetOverrides(routing: Record<string, unknown>):
   | {
       run?: { cost?: number; tokens?: number };
       node?: { cost?: number; tokens?: number };
     }
   | undefined {
-  const run: { cost?: number; tokens?: number } = {};
-  const node: { cost?: number; tokens?: number } = {};
-  for (const [k, v] of Object.entries(routing)) {
-    if (typeof v !== "number") continue;
-    if (k === "budget_override.run.cost") run.cost = v;
-    else if (k === "budget_override.run.tokens") run.tokens = v;
-    else if (k === "budget_override.node.cost") node.cost = v;
-    else if (k === "budget_override.node.tokens") node.tokens = v;
-  }
-  const hasRun = run.cost !== undefined || run.tokens !== undefined;
-  const hasNode = node.cost !== undefined || node.tokens !== undefined;
+  const b = getBudget(routing);
+  const runCost = b.override("run", "cost");
+  const runTokens = b.override("run", "tokens");
+  const nodeCost = b.override("node", "cost");
+  const nodeTokens = b.override("node", "tokens");
+  const hasRun = runCost !== undefined || runTokens !== undefined;
+  const hasNode = nodeCost !== undefined || nodeTokens !== undefined;
   if (!hasRun && !hasNode) return undefined;
   const out: { run?: { cost?: number; tokens?: number }; node?: { cost?: number; tokens?: number } } = {};
-  if (hasRun) out.run = run;
-  if (hasNode) out.node = node;
+  if (hasRun) {
+    const run: { cost?: number; tokens?: number } = {};
+    if (runCost !== undefined) run.cost = runCost;
+    if (runTokens !== undefined) run.tokens = runTokens;
+    out.run = run;
+  }
+  if (hasNode) {
+    const node: { cost?: number; tokens?: number } = {};
+    if (nodeCost !== undefined) node.cost = nodeCost;
+    if (nodeTokens !== undefined) node.tokens = nodeTokens;
+    out.node = node;
+  }
   return out;
 }
 
@@ -217,7 +219,7 @@ export function buildSubstitutionArgs(
   const args: SubstitutionArgs = {};
   // `${{ inputs.x }}` bindings: declared defaults overlaid by the run's
   // provided `routing.inputs` map (set at enqueue from `--input k=v`).
-  const resolved = resolveInputBindings(inputDecls, readInputMap(routing["inputs"]));
+  const resolved = resolveInputBindings(inputDecls, getInputs(routing));
   if (Object.keys(resolved).length > 0) args.inputs = resolved;
   // `${{ outputs.X.f }}` bindings: pre-fetched from the outputs index.
   if (resolvedOutputs !== undefined && Object.keys(resolvedOutputs).length > 0) {
@@ -226,28 +228,13 @@ export function buildSubstitutionArgs(
   return args;
 }
 
-/** Read `routing.inputs` preserving object / array input values (a string map
- * would drop them). Substitution receives the materialized routing, so any
- * `$fragua_blob` ref has already been rehydrated — skip a stray one defensively
- * rather than feed a ref object to the substitution layer. The blob-ref probe
- * uses `Object.hasOwn` (not `in`) so a polluted `Object.prototype.$fragua_blob`
- * can't make every structured input look like a ref and get silently dropped. */
+/** Read a `routing.inputs` VALUE map preserving object / array input values.
+ * Thin wrapper over the `getInputs` accessor (which owns the three guards: the
+ * `__proto__` key filter, the un-materialized `$fragua_blob` ref drop, and
+ * object-or-`{}`) for callers that hold the inputs value rather than the whole
+ * routing object. */
 export function readInputMap(v: unknown): Record<string, unknown> {
-  if (v === null || typeof v !== "object" || Array.isArray(v)) return {};
-  const out: Record<string, unknown> = {};
-  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    // Match the write-path dunder guard (coerceInputs / coerceInputBindings):
-    // ONLY `__proto__` is filtered — it's the sole key that pollutes the
-    // prototype on assignment. `constructor` / `toString` are legitimate own
-    // keys the write path stores verbatim, so dropping them here would silently
-    // disappear a declared input named that.
-    if (k === "__proto__") continue;
-    if (val !== null && typeof val === "object" && Object.hasOwn(val as Record<string, unknown>, "$fragua_blob")) {
-      continue;
-    }
-    out[k] = val;
-  }
-  return out;
+  return getInputs({ [INPUTS_KEY]: v });
 }
 
 /** The canonical spread for stamping the goal-gate re-entry epoch on a fact

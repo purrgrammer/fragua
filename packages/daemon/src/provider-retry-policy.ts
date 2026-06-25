@@ -21,16 +21,18 @@
 // that invariant breaks; this comment exists so the next reader
 // notices before it ships.
 
-import { isAutoRetryableStatus } from "@fragua/core";
+import { isAutoRetryableStatus, PROVIDER_RETRY_ATTEMPT_KEY } from "@fragua/core";
 
 /** Re-exported from `@fragua/core` — the single source of truth for which
  * provider statuses auto-retry, shared with the agent backend's mid-stream
  * reclassification guard so the two can never silently diverge. */
 export { isAutoRetryableStatus };
 
-/** Routing key for the persisted attempt counter. Survives manual
- * resume so the chain cap still bounds the run. */
-export const PROVIDER_RETRY_ATTEMPT_KEY = "internal.provider_retry.attempt";
+/** Routing key for the persisted attempt counter (survives manual resume so the
+ * chain cap still bounds the run). Sourced from the typed-routing accessor
+ * module (`@fragua/core`); re-exported so daemon-internal callers' import source
+ * is stable. */
+export { PROVIDER_RETRY_ATTEMPT_KEY };
 
 export const PROVIDER_RETRY_MAX_ATTEMPTS = 5;
 export const PROVIDER_RETRY_MAX_CUMULATIVE_MS = 5 * 60 * 1000;

@@ -5,7 +5,7 @@
 // stop resumes by re-dispatching only the unfinished sub-nodes.
 
 import { describe, expect, test } from "bun:test";
-import { ConcurrencyError, deriveRunState, readActiveNodes } from "@fragua/store";
+import { ConcurrencyError, deriveRunState, getFrontier } from "@fragua/store";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
@@ -206,7 +206,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
 
     // The frontier drained (active set cleared) and current_node landed past
     // the join.
-    expect(readActiveNodes(state.routing)).toBeNull();
+    expect(getFrontier(state.routing)).toBeNull();
 
     // Replay equivalence: deriving the state from the log alone reproduces the
     // live projection's terminal pointer + status (the frontier folds from the
@@ -214,7 +214,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     const replayed = deriveRunState("fo1", events);
     expect(replayed.status).toBe("completed");
     expect(replayed.currentNode).toBe(state.currentNode);
-    expect(readActiveNodes(replayed.routing)).toBeNull();
+    expect(getFrontier(replayed.routing)).toBeNull();
 
     r.store.close();
   });
@@ -975,7 +975,7 @@ steps:
     expect(a0Committed()).toBe(true);
     expect(r.store.getEvents("asym1").some((e) => e.type === "fact.fanout_joined")).toBe(false);
     // The frontier is asymmetric: A sits at a1 (one deeper than its entry), B at b0.
-    expect([...(readActiveNodes(crashState.routing) ?? [])].sort()).toEqual(["a1", "b0"]);
+    expect([...(getFrontier(crashState.routing) ?? [])].sort()).toEqual(["a1", "b0"]);
     // Both in-flight sub-nodes aborted WITHOUT committing a completion. Scope to the
     // fan-out region's sub-nodes (the linear `begin` completes ahead of the region).
     const region = new Set(["a0", "a1", "b0", "synth"]);
@@ -1008,7 +1008,7 @@ steps:
     expect(seen["b0"]).toBe(2);
     //  - the join ran once and the run completed.
     expect(seen["synth"]).toBe(1);
-    expect(readActiveNodes(r.store.getState("asym1")!.routing)).toBeNull(); // frontier drained
+    expect(getFrontier(r.store.getState("asym1")!.routing)).toBeNull(); // frontier drained
     // Every region sub-node + the join committed exactly one completion across the
     // crash (a0 once — NOT twice; a1 + b0 once each, on the recovery pass; synth once).
     expect(regionCompleted().sort()).toEqual(["a0", "a1", "b0", "synth"]);
@@ -1021,7 +1021,7 @@ steps:
     const replayed = deriveRunState("asym1", r.store.getEvents("asym1"));
     expect(replayed.status).toBe("completed");
     expect(replayed.currentNode).toBe(live.currentNode);
-    expect(readActiveNodes(replayed.routing)).toBeNull();
+    expect(getFrontier(replayed.routing)).toBeNull();
     r.store.close();
   });
 
@@ -1079,7 +1079,7 @@ steps:
           const replayed = deriveRunState("s", r.store.getEvents("s"));
           expect(replayed.status).toBe(live.status);
           expect(replayed.currentNode).toBe(live.currentNode);
-          expect(readActiveNodes(replayed.routing)).toBeNull();
+          expect(getFrontier(replayed.routing)).toBeNull();
           r.store.close();
         },
       ),
@@ -1189,11 +1189,11 @@ steps:
     expect(state.metrics.nodeCosts["b"]?.costUsd).toBeCloseTo(0.02, 6);
 
     // Frontier drained; the log alone replays to the same terminal pointer.
-    expect(readActiveNodes(state.routing)).toBeNull();
+    expect(getFrontier(state.routing)).toBeNull();
     const replayed = deriveRunState("re1", events);
     expect(replayed.status).toBe("completed");
     expect(replayed.currentNode).toBe(state.currentNode);
-    expect(readActiveNodes(replayed.routing)).toBeNull();
+    expect(getFrontier(replayed.routing)).toBeNull();
 
     r.store.close();
   });

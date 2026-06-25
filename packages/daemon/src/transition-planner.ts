@@ -15,6 +15,8 @@ import {
   evaluateBudget,
   GOAL_GATE_RETRIES_KEY,
   type Graph,
+  getLimits,
+  getRetry,
   goalGateOutcomeKey,
   goalGateStep,
   readGateOutcomes,
@@ -28,8 +30,6 @@ import type { HandlerResult, IntentDecision } from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 import {
   BUDGET_WARNED_KEY,
-  MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY,
-  maxRetriesOverrideKey,
   mergeRoutingPatches,
   readBudgetOverrides,
   readBudgetWarned,
@@ -409,7 +409,7 @@ export function applyGoalGate(args: {
         // Read override from effectiveRouting (state.routing merged with
         // this turn's routingDelta) so intent.goal_gate_adjusted applied
         // in the same dispatch cycle is immediately visible.
-        const goalGateOverride = readNumber(effectiveRouting[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]);
+        const goalGateOverride = getLimits(effectiveRouting).maxGoalGateRetries ?? 0;
         // Pre-check to discover the failing gate so we can read its cap.
         const gateCheck = checkGoalGates(graph, synthOutcomes);
         const gateCap = gateCheck.satisfied ? 0 : readNumber(graph.nodes[gateCheck.failedGate]?.attrs.max_retries);
@@ -434,7 +434,7 @@ export function applyGoalGate(args: {
             payload: { gate: action.gate },
           });
           const goalGateLimit =
-            readNumber(effectiveRouting[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]) ||
+            (getLimits(effectiveRouting).maxGoalGateRetries ?? 0) ||
             readNumber(graph.nodes[action.gate]?.attrs.max_retries);
           result = {
             kind: "halt",
@@ -497,7 +497,7 @@ export function applyRetryGate(args: {
   // starts at zero instead of inheriting the prior pass's count.
   if (result.kind === "transition" && result.outcomeStatus === "success") {
     const counterKey = retryCountKey(currentNode);
-    if (readNumber(state.routing[counterKey]) > 0) {
+    if (getRetry(state.routing).count(currentNode) > 0) {
       retryCounterPatch = { [counterKey]: 0 };
     }
   }
@@ -522,13 +522,13 @@ export function applyRetryGate(args: {
       // the same turn as the resume is honoured immediately —
       // mirrors the budget-override reader, and matches the comment
       // on `effectiveRouting`.
-      const maxRetriesOverride = readNumber(effectiveRouting[maxRetriesOverrideKey(currentNode)]);
+      const maxRetriesOverride = getLimits(effectiveRouting).maxRetries(currentNode) ?? 0;
       const maxRetries =
         maxRetriesOverride > 0 ? maxRetriesOverride : resolveMaxRetries(completedNode.attrs, graph.attrs);
       // allow_partial was a legacy retry-policy escape hatch; dropped.
       const allowPartial = false;
       const counterKey = retryCountKey(currentNode);
-      const priorRetries = readNumber(state.routing[counterKey]);
+      const priorRetries = getRetry(state.routing).count(currentNode);
       const action = retryStep({
         state: { retries: priorRetries, maxRetries },
         status: "retry",
@@ -629,7 +629,7 @@ export function applyProviderRetry(args: {
     const providerDecision = decideProviderRetry({
       httpStatus: result.httpStatus,
       ...(result.retryAfterMs !== undefined ? { retryAfterMs: result.retryAfterMs } : {}),
-      priorAttempt: readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]),
+      priorAttempt: getRetry(state.routing).providerAttempt,
       now,
       cumulativeDelayMs: 0,
       random,
@@ -932,7 +932,7 @@ export function buildRoutingPatch(args: {
   // counter on `transition` outcomes regardless of outcomeStatus —
   // a `fail` outcome from the agent (not a transport error) means
   // the call landed; the chain-counter doesn't apply.
-  if (result.kind === "transition" && readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]) > 0) {
+  if (result.kind === "transition" && getRetry(state.routing).providerAttempt > 0) {
     routingPatch = { ...(routingPatch ?? {}), [PROVIDER_RETRY_ATTEMPT_KEY]: 0 };
   }
   // Goal-gate routing keys: record the completed gate's outcome and

@@ -3,7 +3,7 @@
 // (intent / done / failed) are NOT included — they're already durable via
 // the pre-commit recorder before this function runs.
 
-import { readGoalGateRetries, retryCountKey } from "@fragua/core";
+import { getRetry, readGoalGateRetries } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 import { passField, type UsageTotals } from "./executor-helpers.ts";
@@ -318,10 +318,9 @@ export function cancelToFacts(intentSeq: number): FactEvent[] {
  * backward edge re-enters a node after a non-success outcome. Stored
  * per node at `internal.retry_count.<nodeId>` (retryCountKey); the
  * executor writes it and reads it for the dispatch iteration, so the
- * two stay in sync. */
+ * two stay in sync. Typed read via the `getRetry` accessor. */
 function nodeRetryCount(routing: Record<string, unknown>, nodeId: string): number {
-  const v = routing[retryCountKey(nodeId)];
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  return getRetry(routing).count(nodeId);
 }
 
 /** Sentinel convention: a transition with nextNode === "__end__" terminates the run.

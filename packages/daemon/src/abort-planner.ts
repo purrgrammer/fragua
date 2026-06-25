@@ -10,9 +10,9 @@
 // the timeout-retry commit re-drives on an OCC conflict. So `planAbort`
 // returns an `outcome` tag the executor switches on, rather than committing.
 
-import { AUTO_RESUME_AT_KEY, readGoalGateRetries } from "@fragua/core";
+import { AUTO_RESUME_AT_KEY, getRetry, readGoalGateRetries, timeoutRetriesKey } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
-import { readNumber, type UsageTotals } from "./executor-helpers.ts";
+import type { UsageTotals } from "./executor-helpers.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
 import { computeAdvanceAppliedTo } from "./transition-planner.ts";
 
@@ -22,8 +22,6 @@ import { computeAdvanceAppliedTo } from "./transition-planner.ts";
 const TIMEOUT_RETRY_BACKOFF_MS_BASE = 5_000;
 const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
 const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
-
-const timeoutRetryKey = (nodeId: string): string => `internal.timeout_retries.${nodeId}`;
 
 export interface AbortPlanInput {
   currentNode: string;
@@ -127,8 +125,8 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
   // 3. Watchdog timeout → system-initiated retry (or exhaustion). NOT an
   //    abort-loop bump. Bounded per node by the routing counter.
   if (abortCause === "timeout") {
-    const counterKey = timeoutRetryKey(currentNode);
-    const priorAttempts = readNumber(input.effectiveRouting[counterKey]);
+    const counterKey = timeoutRetriesKey(currentNode);
+    const priorAttempts = getRetry(input.effectiveRouting).timeoutRetries(currentNode);
     const nextAttempt = priorAttempts + 1;
     if (nextAttempt < TIMEOUT_RETRY_MAX_ATTEMPTS) {
       const delayMs = Math.min(TIMEOUT_RETRY_BACKOFF_MS_CEILING, TIMEOUT_RETRY_BACKOFF_MS_BASE * 2 ** priorAttempts);

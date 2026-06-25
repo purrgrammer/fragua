@@ -12,7 +12,11 @@ import {
   type ExecutionEnvironment,
   evaluateBudget,
   fanoutClosureUnion,
+  GRAPH_GOAL_KEY,
   type Graph,
+  getFrontier,
+  getInputs,
+  getLimits,
   type OutputsValue,
   readGoalGateRetries,
   retryCountKey,
@@ -28,7 +32,6 @@ import {
   MIN_COMPATIBLE_CONTRACT_VERSION,
   materializeRouting,
   type RunState,
-  readActiveNodes,
 } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
@@ -41,14 +44,11 @@ import {
   composeAbortSignals,
   deriveResumeOf,
   errorMessage,
-  MAX_LOOPS_OVERRIDE_KEY,
   makeUsageAccumulator,
   nodeRetryCount,
   passField,
   readBudgetOverrides,
   readBudgetWarned,
-  readInputMap,
-  readNumber,
   routingString,
   sleep,
 } from "./executor-helpers.ts";
@@ -700,7 +700,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       const startGraph = graphFor(state.workflowSha);
       const startRoutingPatch: Record<string, unknown> = {};
       if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
-        startRoutingPatch["graph.goal"] = startGraph.attrs.goal;
+        startRoutingPatch[GRAPH_GOAL_KEY] = startGraph.attrs.goal;
       }
       if (typeof startGraph?.attrs.label === "string" && startGraph.attrs.label !== "") {
         startRoutingPatch["graph.label"] = startGraph.attrs.label;
@@ -728,10 +728,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const graph = graphFor(workflowSha);
         const goal = graph?.attrs.goal;
         // Use effectiveRouting (already materialized) so spilled inputs appear
-        // in the title seed as their full string values. `readInputMap` keeps
+        // in the title seed as their full string values. `getInputs` keeps
         // object / array leaves (a string map would drop them), so a workflow
         // whose identity lives in a structured input still seeds a real title.
-        const inputLines = Object.entries(readInputMap(effectiveRouting["inputs"]))
+        const inputLines = Object.entries(getInputs(effectiveRouting))
           .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
           .join("\n");
         const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
@@ -806,7 +806,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // a JS-local counter that resets on every runOne entry, so the
     // resume after a pause already starts at 0; the override raises
     // the ceiling for *this* dispatch loop's pass.
-    const effectiveMaxLoops = readNumber(effectiveRouting[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
+    const effectiveMaxLoops = getLimits(effectiveRouting).maxLoops || maxLoops;
     if (dispatches >= effectiveMaxLoops) {
       await tryAppendFact(opts.store, runId, state.version, [
         {
@@ -1404,7 +1404,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // PURE frontier decision (fanout-planner.ts) — read the active set from
     // routing and the aborted subset from the lifecycle log (a live frontier
     // only), then classify the transition. The caller below APPLIES the plan.
-    const active = readActiveNodes(effectiveRouting as Record<string, unknown>);
+    const active = getFrontier(effectiveRouting as Record<string, unknown>);
     const plan: FanoutPlan = planFanoutStep({
       active,
       branches,
@@ -1698,7 +1698,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // dispatch (fan-out-nodes.md § semantics digest) — without this a
     // branch-closure cycle (W017) was bounded by nothing but wall-clock and an
     // opt-in budget.
-    const effectiveMaxLoops = readNumber(effectiveRouting[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
+    const effectiveMaxLoops = getLimits(effectiveRouting).maxLoops || maxLoops;
 
     // Set on any early bail. A branch still queued on the semaphore at bail time
     // has no registry entry for `abortInflightPool` to signal, so it re-checks

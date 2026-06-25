@@ -8,6 +8,7 @@
 
 import {
   type EventType,
+  getContext,
   type LlmBackend,
   type Node,
   type Outcome,
@@ -90,7 +91,7 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       }
       throw err;
     }
-    const graphGoal = typeof ctx.routing["graph.goal"] === "string" ? (ctx.routing["graph.goal"] as string) : undefined;
+    const graphGoal = getContext(ctx.routing).goal;
 
     let tokens = 0;
     let costUsd = 0;
