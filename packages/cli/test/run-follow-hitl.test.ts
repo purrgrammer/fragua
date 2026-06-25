@@ -128,6 +128,28 @@ describe("followRun — non-human pause", () => {
     expect(hint).toContain("fragua runs resume");
   }, 3000);
 
+  test("abort_loop pause hint falls back to a placeholder when nodeId is absent", async () => {
+    const { client } = fakeClient([
+      ev(1, "fact.run_started", {}),
+      ev(2, "fact.run_paused", { reason: "abort_loop", consecutiveAborts: 3 }),
+    ]);
+
+    const lines: string[] = [];
+    const orig = console.log;
+    console.log = (msg?: unknown) => lines.push(String(msg ?? ""));
+    let code: number;
+    try {
+      code = await followRun(client, RUN_ID);
+    } finally {
+      console.log = orig;
+    }
+
+    expect(code).toBe(cliExitCode("paused", { pause: "abort_loop" }));
+    const hint = lines.find((l) => l.includes("abort_loop"));
+    expect(hint).toContain("the looping node");
+    expect(hint).not.toContain("<node>");
+  }, 3000);
+
   test("continues following on an auto-wake pause (timeout_retry) until the run resolves", async () => {
     const { client } = fakeClient([
       ev(1, "fact.run_started", {}),

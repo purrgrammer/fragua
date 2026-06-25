@@ -241,10 +241,8 @@ export function renderEvent(ev: StoredEvent): void {
       );
       return;
     }
-    const hint = (PAUSE_HINTS[reason as keyof typeof PAUSE_HINTS] ?? "`fragua runs resume <run>`").replace(
-      "<node>",
-      p.nodeId ?? "the looping node",
-    );
+    const rawHint = PAUSE_HINTS[reason as keyof typeof PAUSE_HINTS] ?? "`fragua runs resume <run>`";
+    const hint = reason === "abort_loop" ? rawHint.replace("<node>", p.nodeId ?? "the looping node") : rawHint;
     console.log(
       `${chalk.dim(`[${ev.seq}]`)} ${chalk.red(`⏸ ${ev.type}`)} ` +
         chalk.red(`paused: ${reason}${p.nodeId ? ` @ ${p.nodeId}` : ""}`) +
