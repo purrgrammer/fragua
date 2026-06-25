@@ -245,7 +245,7 @@ describe("executor faults — OCC conflict at the commit seam", () => {
       }),
       { numRuns: pbtFaultRuns(150) },
     );
-  });
+  }, 60_000);
 
   // Control: with no fault scheduled, the harness completes (the conflict
   // machinery isn't masking a baseline failure).

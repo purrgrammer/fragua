@@ -95,7 +95,9 @@ describe("GlobalFeed — backfill failure indicator", () => {
     });
 
     // Live-only mode still works: the SSE stream was opened despite the failure.
-    expect(FakeEventSource.instances.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBeGreaterThan(0);
+    });
     act(() => FakeEventSource.instances[0]?._open());
 
     // Retry affordance: re-runs the backfill; on success the indicator clears.

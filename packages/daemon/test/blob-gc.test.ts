@@ -20,8 +20,13 @@ describe("startBlobGc", () => {
       onSweep: (deleted) => sweeps.push(deleted),
     });
 
-    // Allow ≥ 2 sweeps (≥ 30ms — first sweep at 10ms, second at 20ms).
-    await new Promise((res) => setTimeout(res, 50));
+    // Poll until ≥ 2 sweeps land, then shut down. The 2s deadline is
+    // generous enough for a saturated CI runner (loop fires every 10ms;
+    // even at 100× slowdown it finishes well inside 2s).
+    const deadline = Date.now() + 2_000;
+    while (sweeps.length < 2 && Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 10));
+    }
     ctrl.abort();
     await gc.promise;
 

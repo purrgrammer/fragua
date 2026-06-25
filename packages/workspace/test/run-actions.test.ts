@@ -1,11 +1,16 @@
 // applyAccept / applyDiscard against real temp git repos.
 // Matrix: dirt-only / commits-only / both × target-at-base / moved /
 // conflict, plus author + message preservation and "untouched on conflict".
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAccept, applyDiscard, defaultGitExec, type GitExec, type RunActionGate } from "../src/run-actions.ts";
+
+// Each test spawns multiple real git subprocesses (worktree add/remove,
+// commits, stash, cherry-pick). In bun's test runner the overhead is 3–5×
+// higher than a standalone bun script, so a 30 s window is needed.
+setDefaultTimeout(30_000);
 
 const git: GitExec = defaultGitExec;
 const RUN = "run";
@@ -31,6 +36,7 @@ async function setupRepo(): Promise<{ cwd: string; base: string }> {
   await must(cwd, ["init", "-q", "-b", "main"]);
   await must(cwd, ["config", "user.name", "Operator"]);
   await must(cwd, ["config", "user.email", "op@ex"]);
+  await must(cwd, ["config", "commit.gpgsign", "false"]);
   writeFileSync(join(cwd, "f.txt"), lines());
   await must(cwd, ["add", "-A"]);
   await must(cwd, ["commit", "-qm", "base"]);
