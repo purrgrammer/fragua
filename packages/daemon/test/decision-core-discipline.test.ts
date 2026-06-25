@@ -76,10 +76,17 @@ function scan(source: string): { rule: string; line: number }[] {
     const line = lines[i]!;
     const trimmed = line.trimStart();
     if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
-    if (line.includes(ALLOW_MARKER)) continue;
-    if (i > 0 && lines[i - 1]!.includes(ALLOW_MARKER)) continue;
+    // Split off a trailing line-comment: a banned token named in an inline
+    // comment (a rationale) must not false-positive, and the allow-marker is
+    // honoured only inside a comment token, never a string literal.
+    const commentIdx = line.indexOf("//");
+    const code = commentIdx >= 0 ? line.slice(0, commentIdx) : line;
+    const comment = commentIdx >= 0 ? line.slice(commentIdx) : "";
+    if (comment.includes(ALLOW_MARKER)) continue;
+    const prevTrimmed = i > 0 ? lines[i - 1]!.trimStart() : "";
+    if (prevTrimmed.startsWith("//") && prevTrimmed.includes(ALLOW_MARKER)) continue;
     for (const banned of BANNED) {
-      if (banned.pattern.test(line)) offenders.push({ rule: banned.id, line: i + 1 });
+      if (banned.pattern.test(code)) offenders.push({ rule: banned.id, line: i + 1 });
     }
   }
   return offenders;
