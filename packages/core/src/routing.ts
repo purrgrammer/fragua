@@ -1,0 +1,306 @@
+// Typed accessor layer over `run_state.routing` — docs/proposals/typed-routing-struct.md §6.
+//
+// `run_state.routing` is a single flat, dotted JSON dict (`schema.sql`,
+// `routing TEXT NOT NULL CHECK (length(routing) < 8192)`) carrying load-bearing
+// per-run dispatch state across heterogeneous keys. This module is the typed
+// READ surface over those unchanged on-disk bytes: it gathers the dotted-key
+// vocabulary as named constants (one source of truth for both writers and
+// readers) and exposes validate-and-degrade accessors that present a typed
+// view per subsystem namespace.
+//
+// On-disk bytes are UNCHANGED — namespaces are a typed view, not a reshape.
+// Writes keep going through the existing key-wise `routingPatch` spread; no
+// validation runs in the write txn (I1). Reads degrade to the conservative
+// authored default everywhere (never pause): a mis-folded key or a tampered
+// import bundle yields a safe default, never a wrong dispatch decision. The
+// 8 KB column CHECK stays as a defense-in-depth tripwire (I6), not a budget the
+// accessors are designed against.
+//
+// `getFrontier` is the relocated `readActiveNodes` (the validate-and-degrade
+// prototype the whole layer generalises); the reducer's fold imports it for the
+// fan-out frontier read. The fold behaviour is byte-identical — it still only
+// touches `internal.active_nodes` — so relocating it is a no-bump contract change.
+
+import { type Static, Type } from "@sinclair/typebox";
+import type { OutcomeStatus } from "./types/outcome.ts";
+
+// ── Key constants / builders ────────────────────────────────────────────────
+// The dotted-key vocabulary. Gathered here so writers (patch construction) and
+// readers (the accessors) route through the same literals.
+
+/** Genesis-seeded run inputs (may hold `$fragua_blob` refs); blob-spill-eligible. */
+export const INPUTS_KEY = "inputs";
+
+/** Fan-out frontier: the sub-node ids currently in flight. Fold output. */
+export const ACTIVE_NODES_KEY = "internal.active_nodes";
+
+/** Wall-clock ms at which an auto-paused run becomes wake-eligible. */
+export const AUTO_RESUME_AT_KEY = "internal.auto_resume_at";
+
+/** Per-node retry counter — bumped each time a backward edge re-enters a node. */
+export function retryCountKey(nodeId: string): string {
+  return `internal.retry_count.${nodeId}`;
+}
+
+/** Per-node watchdog timeout-retry attempt counter. */
+export function timeoutRetriesKey(nodeId: string): string {
+  return `internal.timeout_retries.${nodeId}`;
+}
+
+/** Provider auto-retry chain attempt counter (survives manual resume). */
+export const PROVIDER_RETRY_ATTEMPT_KEY = "internal.provider_retry.attempt";
+
+/** Operator-supplied budget ceiling override, folded from `intent.budget_adjusted`. */
+export function budgetOverrideKey(scope: "run" | "node", metric: "cost" | "tokens"): string {
+  return `budget_override.${scope}.${metric}`;
+}
+
+/** Once-per-run `budget.warn` dedup tag set (`(scope:metric)` strings). */
+export const BUDGET_WARNED_KEY = "__budget_warned";
+
+/** Per-node `max_retries` override, folded from `intent.max_retries_adjusted`. */
+export function maxRetriesOverrideKey(nodeId: string): string {
+  return `max_retries_override.${nodeId}`;
+}
+
+/** Operator override for the per-run loop ceiling. */
+export const MAX_LOOPS_OVERRIDE_KEY = "max_loops_override";
+
+/** Operator override for the per-gate goal-gate retarget ceiling. */
+export const MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY = "max_goal_gate_retries_override";
+
+/** Key prefix for per-gate outcome records (`goal_gates.<nodeId>`). */
+export const GOAL_GATE_OUTCOME_KEY_PREFIX = "goal_gates.";
+
+/** Build the routing key for a given gate node id. */
+export function goalGateOutcomeKey(nodeId: string): string {
+  return `${GOAL_GATE_OUTCOME_KEY_PREFIX}${nodeId}`;
+}
+
+/** Cumulative goal-gate retarget count for the run. */
+export const GOAL_GATE_RETRIES_KEY = "goal_gates.__retries";
+
+/** Workflow-level goal (`graph.attrs.goal`), surfaced to the agent context. */
+export const GRAPH_GOAL_KEY = "graph.goal";
+
+/** The run id, surfaced to the agent context. */
+export const GRAPH_RUN_ID_KEY = "graph.run_id";
+
+// ── Value-checked union + documentary schema ─────────────────────────────────
+
+/** The goal-gate outcome union. A value-checked TypeBox union exercised by
+ * `getGoalGate` (per-gate outcome records validate against it). */
+export const OUTCOME_STATUS = Type.Union([Type.Literal("success"), Type.Literal("fail"), Type.Literal("retry")]);
+
+const OUTCOME_VALUES = new Set<OutcomeStatus>(["success", "fail", "retry"]);
+function isOutcomeStatus(v: unknown): v is OutcomeStatus {
+  return typeof v === "string" && OUTCOME_VALUES.has(v as OutcomeStatus);
+}
+
+/** Documentary TypeBox schema describing the LOGICAL namespaces the accessors
+ * present. It is the single place the typed view's shape is written down — it
+ * is NOT the on-disk serialization (which stays flat + dotted) and is never
+ * `Value.Check`'d against the whole routing object. Per ruling 3 the `inputs`
+ * slot is `Record(String, Unknown)`: `getInputs` is annotation-only and never
+ * validates a deep input tree, so there is no recursive `InputValue` tower. */
+export const RoutingStruct = Type.Object({
+  inputs: Type.Record(Type.String(), Type.Unknown()),
+  frontier: Type.Union([Type.Array(Type.String()), Type.Null()]),
+  budget: Type.Object({
+    overrides: Type.Record(Type.String(), Type.Number()),
+    warned: Type.Array(Type.String()),
+  }),
+  retry: Type.Object({
+    count: Type.Record(Type.String(), Type.Number()),
+    timeoutRetries: Type.Record(Type.String(), Type.Number()),
+    providerAttempt: Type.Number(),
+  }),
+  goalGate: Type.Object({
+    outcomes: Type.Record(Type.String(), OUTCOME_STATUS),
+    retries: Type.Number(),
+  }),
+  limits: Type.Object({
+    maxLoops: Type.Optional(Type.Number()),
+    maxGoalGateRetries: Type.Optional(Type.Number()),
+    maxRetries: Type.Record(Type.String(), Type.Number()),
+  }),
+  timer: Type.Object({ autoResumeAt: Type.Optional(Type.Number()) }),
+  context: Type.Object({ goal: Type.Optional(Type.String()), runId: Type.Optional(Type.String()) }),
+});
+export type RoutingStruct = Static<typeof RoutingStruct>;
+
+// ── Accessors (validate-and-degrade) ─────────────────────────────────────────
+
+/** Read a string-valued routing key, degrading non-strings to undefined. The
+ * generic primitive `getContext` is built on, kept here so the only raw routing
+ * index for an arbitrary key lives inside the accessor module. */
+export function routingString(routing: Record<string, unknown>, key: string): string | undefined {
+  const v = routing[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+function finiteNumber(routing: Record<string, unknown>, key: string): number {
+  const v = routing[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** Read `routing.inputs` preserving object / array input values. Degrades a
+ * non-object to `{}`. Preserves the three write-path guards verbatim: the
+ * `__proto__` key filter (the sole prototype-polluting key — `constructor` /
+ * `toString` are legitimate own keys the write path stores verbatim), the
+ * per-entry un-materialized `$fragua_blob` ref drop (probed with `Object.hasOwn`
+ * so a polluted `Object.prototype.$fragua_blob` can't disappear every structured
+ * input), and object-or-`{}`. */
+export function getInputs(routing: Record<string, unknown>): Record<string, unknown> {
+  const v = routing[INPUTS_KEY];
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (k === "__proto__") continue;
+    if (val !== null && typeof val === "object" && Object.hasOwn(val as Record<string, unknown>, "$fragua_blob")) {
+      continue;
+    }
+    out[k] = val;
+  }
+  return out;
+}
+
+/** Read the RAW `routing.inputs` object (un-materialized: `$fragua_blob` refs
+ * preserved) for the blob-spill WRITE path, which must see refs to spill string
+ * values and skip already-spilled ones — `getInputs` drops refs and so is wrong
+ * here. Returns undefined for a non-object. Keeps the spill's raw `inputs` index
+ * inside the accessor seam (ruling 4). */
+export function readRawInputs(routing: Record<string, unknown>): Record<string, unknown> | undefined {
+  const v = routing[INPUTS_KEY];
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return undefined;
+  return v as Record<string, unknown>;
+}
+
+/** Read the fan-out frontier. Element-validated: the only non-typed write path
+ * is a tampered bundle fed through `fragua import` — degrade to `null` ("no
+ * fan-out", self-heals on re-derive) instead of propagating junk. This is the
+ * relocated `readActiveNodes`. */
+export function getFrontier(routing: Record<string, unknown>): string[] | null {
+  const v = routing[ACTIVE_NODES_KEY];
+  return Array.isArray(v) && v.every((e) => typeof e === "string") ? (v as string[]) : null;
+}
+
+export interface BudgetView {
+  /** Operator-supplied ceiling override for a (scope, metric); undefined when
+   * unset — the caller falls back to the lower authored cap (a lost override
+   * only makes a run pause sooner, never overspend). */
+  override(scope: "run" | "node", metric: "cost" | "tokens"): number | undefined;
+  /** Once-per-run `budget.warn` dedup tags; non-array degrades to ∅. */
+  warned: ReadonlySet<string>;
+}
+
+export function getBudget(routing: Record<string, unknown>): BudgetView {
+  const warnedRaw = routing[BUDGET_WARNED_KEY];
+  const warned = new Set<string>();
+  if (Array.isArray(warnedRaw)) {
+    for (const item of warnedRaw) if (typeof item === "string") warned.add(item);
+  }
+  return {
+    override(scope, metric) {
+      const v = routing[budgetOverrideKey(scope, metric)];
+      return typeof v === "number" ? v : undefined;
+    },
+    warned,
+  };
+}
+
+export interface RetryView {
+  /** Per-node retry counter; non-finite degrades to 0. */
+  count(nodeId: string): number;
+  /** Per-node watchdog timeout-retry counter; non-finite degrades to 0. */
+  timeoutRetries(nodeId: string): number;
+  /** Provider auto-retry chain attempt; non-finite degrades to 0. */
+  providerAttempt: number;
+}
+
+export function getRetry(routing: Record<string, unknown>): RetryView {
+  return {
+    count: (nodeId) => finiteNumber(routing, retryCountKey(nodeId)),
+    timeoutRetries: (nodeId) => finiteNumber(routing, timeoutRetriesKey(nodeId)),
+    providerAttempt: finiteNumber(routing, PROVIDER_RETRY_ATTEMPT_KEY),
+  };
+}
+
+/** Per-gate outcome captured as the run executes. */
+export type GateOutcomes = ReadonlyMap<string, OutcomeStatus>;
+
+export interface GoalGateView {
+  /** This gate's recorded outcome, or undefined (treated unsatisfied → re-runs). */
+  outcome(nodeId: string): OutcomeStatus | undefined;
+  /** All per-gate outcomes (value-checked against `OUTCOME_STATUS`). */
+  outcomes: GateOutcomes;
+  /** Cumulative retarget count; non-finite degrades to 0. */
+  retries: number;
+}
+
+export function getGoalGate(routing: Record<string, unknown>): GoalGateView {
+  const outcomes = new Map<string, OutcomeStatus>();
+  for (const [k, v] of Object.entries(routing)) {
+    if (!k.startsWith(GOAL_GATE_OUTCOME_KEY_PREFIX)) continue;
+    if (k === GOAL_GATE_RETRIES_KEY) continue;
+    if (isOutcomeStatus(v)) outcomes.set(k.slice(GOAL_GATE_OUTCOME_KEY_PREFIX.length), v);
+  }
+  return {
+    outcome: (nodeId) => outcomes.get(nodeId),
+    outcomes,
+    retries: finiteNumber(routing, GOAL_GATE_RETRIES_KEY),
+  };
+}
+
+/** Read all per-gate outcomes. Thin alias over `getGoalGate`, kept as a named
+ * reader for the goal-gate policy + planner. */
+export function readGateOutcomes(routing: Record<string, unknown>): GateOutcomes {
+  return getGoalGate(routing).outcomes;
+}
+
+/** Read the cumulative goal-gate retarget count. Defaults to 0. */
+export function readGoalGateRetries(routing: Record<string, unknown>): number {
+  return getGoalGate(routing).retries;
+}
+
+export interface LimitsView {
+  /** `max_loops_override`; undefined → authored `max_loops` applies. */
+  maxLoops: number | undefined;
+  /** `max_goal_gate_retries_override`; undefined → authored gate cap applies. */
+  maxGoalGateRetries: number | undefined;
+  /** Per-node `max_retries_override`; undefined → authored node/graph attr applies. */
+  maxRetries(nodeId: string): number | undefined;
+}
+
+export function getLimits(routing: Record<string, unknown>): LimitsView {
+  const finiteOrUndef = (key: string): number | undefined => {
+    const v = routing[key];
+    return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  };
+  return {
+    maxLoops: finiteOrUndef(MAX_LOOPS_OVERRIDE_KEY),
+    maxGoalGateRetries: finiteOrUndef(MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY),
+    maxRetries: (nodeId) => finiteOrUndef(maxRetriesOverrideKey(nodeId)),
+  };
+}
+
+/** Wall-clock ms at which an auto-paused run becomes wake-eligible; non-number
+ * degrades to undefined. */
+export function getTimer(routing: Record<string, unknown>): number | undefined {
+  const v = routing[AUTO_RESUME_AT_KEY];
+  return typeof v === "number" ? v : undefined;
+}
+
+export interface ContextView {
+  /** Workflow-level goal; non-string degrades to undefined. */
+  goal: string | undefined;
+  /** The run id; non-string degrades to undefined. */
+  runId: string | undefined;
+}
+
+export function getContext(routing: Record<string, unknown>): ContextView {
+  return {
+    goal: routingString(routing, GRAPH_GOAL_KEY),
+    runId: routingString(routing, GRAPH_RUN_ID_KEY),
+  };
+}

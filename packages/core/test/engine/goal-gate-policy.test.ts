@@ -13,13 +13,11 @@ import { describe, expect, test } from "bun:test";
 import {
   checkGoalGates,
   type GateOutcomes,
-  goalGateOutcomeKey,
   goalGateStep,
-  readGateOutcomes,
-  readGoalGateRetries,
   resolveFailRetarget,
   resolveRetargetChain,
 } from "../../src/engine/goal-gate-policy.ts";
+import { goalGateOutcomeKey, readGateOutcomes, readGoalGateRetries } from "../../src/routing.ts";
 import type { Graph, Node, NodeAttrs } from "../../src/types/graph.ts";
 
 function node(id: string, attrs: NodeAttrs = {}): Node {

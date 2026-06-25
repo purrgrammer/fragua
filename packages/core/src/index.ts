@@ -6,6 +6,7 @@ export * from "./executor/index.ts";
 export * from "./ir.ts";
 export * from "./parser/index.ts";
 export * from "./provider-classification.ts";
+export * from "./routing.ts";
 export * from "./types/index.ts";
 export * from "./uuid.ts";
 

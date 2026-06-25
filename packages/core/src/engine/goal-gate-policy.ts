@@ -15,47 +15,15 @@
 // This module is the pure reducer the executor consults. Property tests
 // exercise the chain without spinning the executor.
 
+import type { GateOutcomes } from "../routing.ts";
 import type { Graph } from "../types/graph.ts";
-import type { OutcomeStatus } from "../types/outcome.ts";
 
-/** Routing-key prefix for per-gate outcome records. Folded across the run
- * by appending `goal_gates.<nodeId>: <outcomeStatus>` to the routing patch
- * whenever a goal_gate=true node completes. */
-export const GOAL_GATE_OUTCOME_KEY_PREFIX = "goal_gates.";
-
-/** Routing key holding the cumulative count of goal-gate retargets in the
- * current run. Bumped each time `goalGateStep` returns a `retarget` action. */
-export const GOAL_GATE_RETRIES_KEY = "goal_gates.__retries";
-
-/** Build the routing key for a given gate node id. */
-export function goalGateOutcomeKey(nodeId: string): string {
-  return `${GOAL_GATE_OUTCOME_KEY_PREFIX}${nodeId}`;
-}
-
-/** Read the cumulative retarget count from a routing snapshot. Defaults to 0
- * for a never-retargeted run. */
-export function readGoalGateRetries(routing: Record<string, unknown>): number {
-  const v = routing[GOAL_GATE_RETRIES_KEY];
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
-}
-
-/** Read all per-gate outcomes from a routing snapshot. Keys outside the
- * `goal_gates.*` namespace (or the reserved `__retries` slot) are ignored. */
-export function readGateOutcomes(routing: Record<string, unknown>): GateOutcomes {
-  const out = new Map<string, OutcomeStatus>();
-  for (const [k, v] of Object.entries(routing)) {
-    if (!k.startsWith(GOAL_GATE_OUTCOME_KEY_PREFIX)) continue;
-    if (k === GOAL_GATE_RETRIES_KEY) continue;
-    if (typeof v !== "string") continue;
-    if (v === "success" || v === "fail" || v === "retry") {
-      out.set(k.slice(GOAL_GATE_OUTCOME_KEY_PREFIX.length), v);
-    }
-  }
-  return out;
-}
-
-/** Per-gate outcome captured as the run executes. */
-export type GateOutcomes = ReadonlyMap<string, OutcomeStatus>;
+// The per-gate routing keys (`goal_gates.*`) and their validate-and-degrade
+// readers (`goalGateOutcomeKey`, `readGateOutcomes`, `readGoalGateRetries`,
+// `GOAL_GATE_RETRIES_KEY`, `GOAL_GATE_OUTCOME_KEY_PREFIX`) live in
+// `../routing.ts`, the typed-routing accessor module. `GateOutcomes` is
+// re-exported there too; this module keeps the pure graph logic.
+export type { GateOutcomes };
 
 export type GateCheck = { satisfied: true } | { satisfied: false; failedGate: string };
 

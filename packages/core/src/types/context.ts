@@ -14,16 +14,6 @@ export const ENGINE_CONTEXT_KEYS = {
   goal: "graph.goal",
 } as const;
 
-export function retryCountKey(nodeId: string): string {
-  return `internal.retry_count.${nodeId}`;
-}
-
-/** Routing key holding the wall-clock ms timestamp at which a paused
- * run with auto-resume becomes wake-eligible. Used by both reasons
- * that project to `paused_auto`: `handler_retry` (set when emitting
- * `fact.run_paused{reason:"handler_retry"}`) and `provider_retry`
- * (set when emitting `fact.run_paused{reason:"provider_retry"}`).
- * Read by `wakeAutoResume` (daemon wake-pending). Cleared implicitly
- * when the run leaves an auto-paused state — the routing key persists
- * but is ignored once status moves on. */
-export const AUTO_RESUME_AT_KEY = "internal.auto_resume_at";
+// `retryCountKey` and `AUTO_RESUME_AT_KEY` are part of the dotted-key routing
+// vocabulary and live in `../routing.ts` (the typed-routing accessor module,
+// the single source of truth for routing keys). Imported from `@fragua/core`.

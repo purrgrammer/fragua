@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@fragua/types";
-import { readGoalGateRetries } from "../engine/goal-gate-policy.ts";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
+import { readGoalGateRetries } from "../routing.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
