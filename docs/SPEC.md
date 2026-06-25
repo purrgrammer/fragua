@@ -278,6 +278,27 @@ Daemon-emitted facts on a schedule fire:
 - `fact.schedule_late { scheduleId, missedIntervals, lastTargetAt }` — emitted before a catch-up fire when ≥1 interval was missed.
 - `fact.schedule_invalid_workflow { scheduleId, error }` — the schedule's workflow ref no longer resolves.
 
+### 3.11 Executor decision/effect boundary
+
+The daemon's executor is split into a **pure decision core** and an **effectful driver**, and the seam between them is a rule, not an accident.
+
+- **Decision core** — `planTransition` (`packages/daemon/src/transition-planner.ts`) for a successful turn, `planAbort` (`packages/daemon/src/abort-planner.ts`) for the abort arm. Each takes a plain input record and returns a plan. It performs **no I/O**: no store reads or writes, no clock (`now` is a parameter, not a `Date.now()` call), no randomness (`random` is an injected `() => number`), no subprocess, no network.
+- **Driver** — `runOne` / `runFanout` and their helpers in `packages/daemon/src/executor.ts`. The driver owns **all** effects: it applies the plan to the store under the OCC discipline (I3), runs the worktree / subprocess / provider effects, and handles timers and the run's `AbortSignal`.
+
+The decision core may order only a fixed **plan vocabulary** — the shape of `TransitionPlan` / `AbortPlan`:
+
+| Plan field | Meaning |
+|---|---|
+| `facts: FactEvent[]` | The `fact.*` events to append (the driver commits them under OCC). |
+| `routingPatch?: Record<string, unknown>` | An optional routing patch (key → value) merged into `run_state.routing`. |
+| `advanceAppliedTo?: number` | The applied-intent watermark advance — how far the intent fold has been consumed. |
+| `observability: PlannedObservability[]` | Observability events drained into the run's buffer before the facts commit. |
+| `outcome` *(abort arm only)* | A commit-strategy tag — `halt \| pause \| timeout_retry \| abort_step` — the driver switches on to pick the commit sequence. |
+
+`TransitionPlan` carries the first four; `AbortPlan` carries `facts`, `routingPatch`, `advanceAppliedTo`, and `outcome`.
+
+**Why it matters.** Keeping the decision core pure makes the control plane deterministic and replayable: the same input always yields the same plan, so every fact-list-rewrite rule (exactly-one-terminal, `node_completed` preserved under a budget halt, a retry pause swapping `node_started`, …) becomes a property over generated input (ARCH §10). And because the core only ever emits facts + a routing patch + a watermark + observability, an alternative executor implementation could be substituted behind the same store ABI — as long as it emits the same facts, the rest of the system (reducer, read plane, UI) can't tell the difference.
+
 ---
 
 ## 4. Invariants
@@ -295,6 +316,7 @@ Daemon-emitted facts on a schedule fire:
 | **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`). |
 | **I10** | Seq assignment is O(1) via per-run counter; never scanned. |
 | **I11** | A `parallel` region is single-entry/single-exit: `wait_all` is its only join, pause is run-global (one shared `AbortSignal` aborts every branch), and the per-branch active set is a log-derived **diagnostic** — the scalar `run_state.status` stays the sole lifecycle authority. Branches commit through the one daemon writer (the commit unit is the branch-step, not a synchronised superstep). |
+| **I12** | The executor's decision core (`planTransition` → `TransitionPlan`, `planAbort` → `AbortPlan`) is pure: no store I/O, no clock (`now` is a parameter), no RNG (`random` is injected), no subprocess/network. It may order only the fixed plan vocabulary — `fact.*` events, an optional routing patch, an `advanceAppliedTo` watermark advance, observability events, and (abort arm only) a commit-strategy `outcome` tag. The driver (`runOne` / `runFanout`) owns every effect: OCC commit, worktree/subprocess/provider work, timers, and `AbortSignal`. See §3.11. |
 
 Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core/test/handler/discipline.test.ts`) and the property-test matrix ([`ARCHITECTURE.md`](./ARCHITECTURE.md) §10).
 

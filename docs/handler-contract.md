@@ -399,6 +399,8 @@ Under replay, a handler must:
 
 If your handler can't be made replay-safe (rare), declare `sideEffect: "external"` and rely on `ctx.externalCall`'s quarantine behavior.
 
+Replay determinism rests on the executor's own decision/effect split (SPEC §3.11, invariant I12): the pure decision core (`planTransition` / `planAbort`) turns a handler's `HandlerResult` into a plan — `fact.*` events, a routing patch, a watermark advance, observability — with no clock or RNG, and the driver applies that plan under OCC. A handler is the one place where non-determinism legitimately enters the loop, which is why the rules above exist: keep the handler replay-safe and the surrounding control plane stays a pure fold.
+
 ---
 
 ## Accounting
