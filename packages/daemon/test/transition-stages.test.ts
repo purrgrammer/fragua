@@ -9,7 +9,11 @@ import { describe, expect, test } from "bun:test";
 import { type Edge, GOAL_GATE_RETRIES_KEY, type Graph, type Node, retryCountKey } from "@fragua/core";
 import type { HandlerResult } from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
-import { PROVIDER_RETRY_ATTEMPT_KEY } from "../src/provider-retry-policy.ts";
+import {
+  PROVIDER_RETRY_ATTEMPT_KEY,
+  PROVIDER_RETRY_CUMULATIVE_MS_KEY,
+  PROVIDER_RETRY_MAX_CUMULATIVE_MS,
+} from "../src/provider-retry-policy.ts";
 import {
   applyBudgetGate,
   applyGoalGate,
@@ -411,6 +415,17 @@ describe("applyProviderRetry", () => {
     expect(out.providerRetryDecision).toBeUndefined();
   });
 
+  test("threads the persisted cumulative — near the cap yields max_cumulative_ms", () => {
+    const out = applyProviderRetry({
+      result: { kind: "pause_provider", httpStatus: 429, provider: "p", errorMessage: "e" },
+      state: mkState("n1", { [PROVIDER_RETRY_CUMULATIVE_MS_KEY]: PROVIDER_RETRY_MAX_CUMULATIVE_MS - 100 }),
+      now: 1000,
+      random: () => 0.5,
+    });
+    expect(out.providerExhausted?.reason).toBe("max_cumulative_ms");
+    expect(out.providerRetryDecision).toBeUndefined();
+  });
+
   test("manual — a non-auto-retryable status is carried as a manual decision", () => {
     const out = applyProviderRetry({
       result: { kind: "pause_provider", httpStatus: 401, provider: "p", errorMessage: "e" },
@@ -497,6 +512,20 @@ describe("rewriteTerminalFacts", () => {
     expect(facts.some((f) => f.type === "fact.node_started")).toBe(false);
     const paused = facts.find((f) => f.type === "fact.run_paused");
     expect((paused?.payload as { reason?: string }).reason).toBe("operator");
+  });
+
+  test("operator pause beats a same-turn retry pause — stays reason=operator, no handler_retry", () => {
+    const facts = rewriteTerminalFacts({
+      facts: [completed, started],
+      result: transition({ nextNode: "n1" }),
+      state: mkState("n1"),
+      decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+      retryPause: { nodeId: "n1", attempt: 1, delayMs: 100, resumeAt: 1100, maxRetries: 2 },
+    });
+    const paused = facts.filter((f) => f.type === "fact.run_paused");
+    expect(paused).toHaveLength(1);
+    expect((paused[0]?.payload as { reason?: string }).reason).toBe("operator");
+    expect(paused.some((f) => (f.payload as { reason?: string }).reason === "handler_retry")).toBe(false);
   });
 
   test("no sentinels — facts pass through unchanged, input array untouched", () => {
@@ -598,6 +627,50 @@ describe("planTransition — goal-gate / retry interaction", () => {
     // The goal-gate retry slot must NOT be consumed. (GOAL_GATE_RETRIES_KEY
     // is a dotted literal key, so check membership directly rather than via
     // toHaveProperty, which would read the dots as a nested path.)
+    expect(Object.keys(plan.routingPatch ?? {})).not.toContain(GOAL_GATE_RETRIES_KEY);
+  });
+
+  test("budget pause wins — does not consume a goal-gate slot", () => {
+    // A goal_gate node fails (heads terminal → retarget to `fix`) AND its
+    // turn breaches a pause-policy budget. rewriteTerminalFacts strips the
+    // retarget target's node_started and pauses at the gate, so the bump
+    // must be suppressed or the gate re-executes with an inflated counter.
+    const gateAttrs: Record<string, unknown> = { goal_gate: true, retry_target: "fix", max_retries: 2 };
+    const nodes: Record<string, Node> = {
+      start: node("start", "start"),
+      g0: node("g0", "llm", gateAttrs),
+      fix: node("fix", "llm"),
+      exit: node("exit", "exit"),
+    };
+    const edges: Edge[] = [
+      { from: "start", to: "g0", attrs: {} },
+      { from: "g0", to: "exit", attrs: {} },
+      { from: "fix", to: "g0", attrs: {} },
+    ];
+    const graph: Graph = {
+      id: "g",
+      directed: true,
+      attrs: { budget_usd: 1, budget_policy: "pause" },
+      nodes,
+      edges,
+    };
+    const plan = planTransition({
+      state: mkState("g0"),
+      decision: emptyDecision,
+      graph,
+      handlerResult: transition({ outcomeStatus: "fail", costUsd: 5 }),
+      accounting: zeroAccounting,
+      effectiveRouting: {},
+      currentNode: "g0",
+      iteration: 0,
+      now: 1000,
+      random: () => 0.5,
+    } satisfies TransitionInput);
+    const paused = plan.facts.find((f) => f.type === "fact.run_paused");
+    expect((paused?.payload as { reason?: string }).reason).toBe("budget");
+    // No node_started for the stripped retarget target.
+    expect(plan.facts.some((f) => f.type === "fact.node_started")).toBe(false);
+    // The goal-gate retry slot must NOT be consumed under a budget pause.
     expect(Object.keys(plan.routingPatch ?? {})).not.toContain(GOAL_GATE_RETRIES_KEY);
   });
 });

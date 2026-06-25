@@ -50,6 +50,11 @@ export function timeoutRetriesKey(nodeId: string): string {
 /** Provider auto-retry chain attempt counter (survives manual resume). */
 export const PROVIDER_RETRY_ATTEMPT_KEY = "internal.provider_retry.attempt";
 
+/** Cumulative auto-retry backoff (ms) accrued across the chain. Summed beside
+ * the attempt counter so the cumulative-ms cap can bound the chain across
+ * manual resumes; cleared on a successful turn. */
+export const PROVIDER_RETRY_CUMULATIVE_MS_KEY = "internal.provider_retry.cumulative_ms";
+
 /** Operator-supplied budget ceiling override, folded from `intent.budget_adjusted`. */
 export function budgetOverrideKey(scope: "run" | "node", metric: "cost" | "tokens"): string {
   return `budget_override.${scope}.${metric}`;
@@ -114,6 +119,7 @@ export const RoutingStruct = Type.Object({
     count: Type.Record(Type.String(), Type.Number()),
     timeoutRetries: Type.Record(Type.String(), Type.Number()),
     providerAttempt: Type.Number(),
+    providerCumulativeMs: Type.Number(),
   }),
   goalGate: Type.Object({
     outcomes: Type.Record(Type.String(), OUTCOME_STATUS),
@@ -216,6 +222,8 @@ export interface RetryView {
   timeoutRetries(nodeId: string): number;
   /** Provider auto-retry chain attempt; non-finite degrades to 0. */
   providerAttempt: number;
+  /** Cumulative auto-retry backoff (ms) accrued in this chain; non-finite degrades to 0. */
+  providerCumulativeMs: number;
 }
 
 export function getRetry(routing: Record<string, unknown>): RetryView {
@@ -223,6 +231,7 @@ export function getRetry(routing: Record<string, unknown>): RetryView {
     count: (nodeId) => finiteNumber(routing, retryCountKey(nodeId)),
     timeoutRetries: (nodeId) => finiteNumber(routing, timeoutRetriesKey(nodeId)),
     providerAttempt: finiteNumber(routing, PROVIDER_RETRY_ATTEMPT_KEY),
+    providerCumulativeMs: finiteNumber(routing, PROVIDER_RETRY_CUMULATIVE_MS_KEY),
   };
 }
 

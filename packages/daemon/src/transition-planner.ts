@@ -41,6 +41,7 @@ import {
 import {
   decideProviderRetry,
   PROVIDER_RETRY_ATTEMPT_KEY,
+  PROVIDER_RETRY_CUMULATIVE_MS_KEY,
   type ProviderRetryDecision,
 } from "./provider-retry-policy.ts";
 import { resultToFacts } from "./result-to-facts.ts";
@@ -368,9 +369,8 @@ export interface GoalGateOutcome {
 // route: the edge selector picked the target above, but without the
 // skip the §3.4 check would rewrite `result.nextNode` back to the
 // gate's `retry_target`, silently overriding the author's sanctioned
-// fail-landing (SKILL: "an explicit edge to the `exit` sink on
-// failure is a sanctioned landing — the run *completes*"). One
-// condition, both cases.
+// fail-landing: an explicit edge to the `exit` sink on failure is a
+// sanctioned landing — the run *completes*. One condition, both cases.
 /** Stage 3 — goal-gate retarget / halt. Operates on a clone: returns a result
  * whose `nextNode` may be the retry target, or a `goal_gate_unsatisfied` halt.
  * Whether the retarget is actually consumed is decided from the FINAL result
@@ -631,7 +631,7 @@ export function applyProviderRetry(args: {
       ...(result.retryAfterMs !== undefined ? { retryAfterMs: result.retryAfterMs } : {}),
       priorAttempt: getRetry(state.routing).providerAttempt,
       now,
-      cumulativeDelayMs: 0,
+      cumulativeDelayMs: getRetry(state.routing).providerCumulativeMs,
       random,
     });
     if (providerDecision.kind === "exhausted") {
@@ -728,7 +728,12 @@ export function rewriteTerminalFacts(args: {
   // concurrency slot during the backoff window. node_completed is
   // preserved (metrics + the nextNode=currentNode routing fact).
   // wake-pending re-queues the run once `resumeAt` has elapsed.
-  if (retryPause !== undefined) {
+  // An operator pause (shouldPauseAfterDispatch) takes precedence over
+  // backoff: skip the retry-pause arm so we don't append a second
+  // fact.run_paused{reason:"handler_retry"} — that reason is in
+  // AUTO_WAKE_PAUSE_REASONS and would let wake-pending auto-resume,
+  // silently cancelling the operator's manual pause.
+  if (retryPause !== undefined && !decision.shouldPauseAfterDispatch) {
     facts = facts.filter((f) => f.type !== "fact.node_started");
     facts.push({
       type: "fact.run_paused",
@@ -925,15 +930,20 @@ export function buildRoutingPatch(args: {
       ...(routingPatch ?? {}),
       [AUTO_RESUME_AT_KEY]: providerRetryDecision.resumeAt,
       [PROVIDER_RETRY_ATTEMPT_KEY]: providerRetryDecision.attempt,
+      [PROVIDER_RETRY_CUMULATIVE_MS_KEY]: getRetry(state.routing).providerCumulativeMs + providerRetryDecision.delayMs,
     };
   }
-  // Clear the provider-retry chain counter on any successful turn
-  // so future failures in this run start a fresh chain. Keep the
-  // counter on `transition` outcomes regardless of outcomeStatus —
-  // a `fail` outcome from the agent (not a transport error) means
-  // the call landed; the chain-counter doesn't apply.
+  // Clear the provider-retry chain counter + cumulative on any successful
+  // turn so future failures in this run start a fresh chain. Keep them
+  // on `transition` outcomes regardless of outcomeStatus — a `fail`
+  // outcome from the agent (not a transport error) means the call
+  // landed; the chain-counter doesn't apply.
   if (result.kind === "transition" && getRetry(state.routing).providerAttempt > 0) {
-    routingPatch = { ...(routingPatch ?? {}), [PROVIDER_RETRY_ATTEMPT_KEY]: 0 };
+    routingPatch = {
+      ...(routingPatch ?? {}),
+      [PROVIDER_RETRY_ATTEMPT_KEY]: 0,
+      [PROVIDER_RETRY_CUMULATIVE_MS_KEY]: 0,
+    };
   }
   // Goal-gate routing keys: record the completed gate's outcome and
   // (when goalGateStep retargeted) the bumped retry counter. These keys
@@ -1038,10 +1048,15 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   // node converting to a handler_retry pause overwrites `nextNode` back to
   // itself, so the gate's retarget was spurious — don't consume its retry
   // slot or stamp the target's epoch (no node_started for it is emitted).
+  // A budget pause is the same story: rewriteTerminalFacts strips the
+  // target's fact.node_started and leaves current_node at the gate, so on
+  // resume the gate re-executes — bumping GOAL_GATE_RETRIES_KEY here would
+  // double-count and prematurely exhaust the cap under repeated budget pauses.
   const retargetApplied =
     goalGate.goalGateRetargetTarget !== undefined &&
     result.kind === "transition" &&
-    result.nextNode === goalGate.goalGateRetargetTarget;
+    result.nextNode === goalGate.goalGateRetargetTarget &&
+    budget.budgetPause === undefined;
 
   // Stage 5 — provider auto-retry.
   const provider = applyProviderRetry({ result, state, now, random });

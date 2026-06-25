@@ -1554,7 +1554,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         [
           {
             type: "fact.fanout_started",
-            payload: { nodeId: parallelNode, iteration, ...passField(pass), branches },
+            payload: { nodeId: parallelNode, iteration, ...passField(pass), branches: [...plan.branches] },
           },
         ],
         takeFold(),

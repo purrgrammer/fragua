@@ -21,7 +21,7 @@
 // that invariant breaks; this comment exists so the next reader
 // notices before it ships.
 
-import { isAutoRetryableStatus, PROVIDER_RETRY_ATTEMPT_KEY } from "@fragua/core";
+import { isAutoRetryableStatus, PROVIDER_RETRY_ATTEMPT_KEY, PROVIDER_RETRY_CUMULATIVE_MS_KEY } from "@fragua/core";
 
 /** Re-exported from `@fragua/core` — the single source of truth for which
  * provider statuses auto-retry, shared with the agent backend's mid-stream
@@ -33,6 +33,12 @@ export { isAutoRetryableStatus };
  * module (`@fragua/core`); re-exported so daemon-internal callers' import source
  * is stable. */
 export { PROVIDER_RETRY_ATTEMPT_KEY };
+
+/** Routing key for the persisted cumulative auto-retry backoff (ms). Summed
+ * beside the attempt counter so the cumulative-ms cap bounds the chain across
+ * manual resumes. Sourced from `@fragua/core`; re-exported for a stable
+ * daemon-internal import source. */
+export { PROVIDER_RETRY_CUMULATIVE_MS_KEY };
 
 export const PROVIDER_RETRY_MAX_ATTEMPTS = 5;
 export const PROVIDER_RETRY_MAX_CUMULATIVE_MS = 5 * 60 * 1000;
@@ -71,10 +77,9 @@ export interface DecideProviderRetryOpts {
   /** Wall-clock reference for `resumeAt`. */
   now: number;
   /** Cumulative delay already accrued in this chain. Used to bound to
-   * `PROVIDER_RETRY_MAX_CUMULATIVE_MS`. The caller sums prior delays from
-   * `fact.provider_retry_attempted` events (or carries the running
-   * total in routing — TBD). For now the executor passes 0 and the
-   * cap acts only on the per-attempt budget × max attempts. */
+   * `PROVIDER_RETRY_MAX_CUMULATIVE_MS`. The executor carries the running
+   * total in routing (`internal.provider_retry.cumulative_ms`), accrued
+   * beside the attempt counter and cleared on a successful turn. */
   cumulativeDelayMs: number;
   /** PRNG for full jitter — injectable for deterministic tests. */
   random?: () => number;

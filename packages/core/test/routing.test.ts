@@ -27,6 +27,7 @@ import {
   MAX_LOOPS_OVERRIDE_KEY,
   maxRetriesOverrideKey,
   PROVIDER_RETRY_ATTEMPT_KEY,
+  PROVIDER_RETRY_CUMULATIVE_MS_KEY,
   retryCountKey,
   timeoutRetriesKey,
 } from "../src/routing.ts";
@@ -96,11 +97,13 @@ describe("routing accessors", () => {
       [retryCountKey("work")]: 3,
       [timeoutRetriesKey("work")]: Number.NaN,
       [PROVIDER_RETRY_ATTEMPT_KEY]: 2,
+      [PROVIDER_RETRY_CUMULATIVE_MS_KEY]: 1500,
     });
     expect(retry.count("work")).toBe(3);
     expect(retry.count("other")).toBe(0);
     expect(retry.timeoutRetries("work")).toBe(0); // NaN → 0
     expect(retry.providerAttempt).toBe(2);
+    expect(retry.providerCumulativeMs).toBe(1500);
 
     expect(getTimer({ [AUTO_RESUME_AT_KEY]: 1234 })).toBe(1234);
     expect(getTimer({ [AUTO_RESUME_AT_KEY]: "soon" })).toBeUndefined();
