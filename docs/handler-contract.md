@@ -69,7 +69,7 @@ interface BudgetSnapshotInput {
 ## The four return kinds
 
 ### `transition`
-Handler finished; the executor commits a `fact.node_completed` + a `fact.node_started` (or `fact.run_completed` if `nextNode === "__end__"`), then moves on.
+Handler finished; the executor commits a `fact.node_completed` + a `fact.node_started` (or `fact.run_terminated{status:"completed"}` if `nextNode === "__end__"`), then moves on.
 
 ```typescript
 return {
@@ -77,7 +77,7 @@ return {
   nextNode?: "next",                    // omit to let edge selection decide; set to "__end__" to terminate
   outcomeStatus?: "success",            // matched against edge `outcome=` attrs; defaults to "success". Unannotated edges default to outcome=success.
   route?: "feature",                    // set by the llm backend when the agent exited via the synthesised `route` tool; the engine's route-case edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
-  failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
+  failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_terminated{status:"errored"}.detail on fail→__end__
   tokens: 0,                            // total tokens charged to this node
   costUsd: 0,                           // total dollars charged
   inputCostUsd?: 0,                     // USD split (pi-ai usage.cost.input / .output); optional for back-compat
@@ -92,7 +92,7 @@ return {
 };
 ```
 
-`failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When a fail outcome has no fail-edge to claim it, the executor routes to `__end__` and halts (`aborted_exit`); the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in the failure-mode playbook (the `operate` skill's `references/forensics.md`). (A fail that follows an explicit author-declared edge to the `exit` sink is a graceful landing instead — `fact.run_completed`, no halt, so `failureReason` is not consulted there.) A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
+`failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When a fail outcome has no fail-edge to claim it, the executor routes to `__end__` and halts (`aborted_exit`); the string surfaces verbatim as `fact.run_terminated{status:"errored"}.detail` — which is what operators read in the failure-mode playbook (the `operate` skill's `references/forensics.md`). (A fail that follows an explicit author-declared edge to the `exit` sink is a graceful landing instead — `fact.run_terminated{status:"completed"}`, no halt, so `failureReason` is not consulted there.) A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
 `outcomeStatus="retry"` has distinct executor semantics: no edge is selected and no `fact.node_completed` is committed. Instead the executor consults the retry-policy (`packages/core/src/engine/retry-policy.ts`) and emits `fact.run_paused{reason:"handler_retry"}` → `paused_auto`. The wake-pending sweeper re-queues the run at `resumeAt`; the same `(nodeId, iteration)` re-dispatches with the prior transcript intact. The per-node retry counter is bounded by the node's `max_retries` attr; exhaustion emits `fact.run_paused{reason:"max_retries"}` → `paused` (operator-resumable via `intent.max_retries_adjusted { nodeId, newLimit }`). Source: `packages/daemon/src/transition-planner.ts`.
 
@@ -123,7 +123,7 @@ interface HumanInput {
 Server-side enum validation: `POST /runs/:id/human` reads the latest `fact.run_paused_human` payload's `routes` and rejects off-list routes with 400 before any intent is written. The handler re-validates as defense-in-depth (a hand-crafted intent could bypass the server check) and halts with `reason: "error"` + a descriptive `detail` if an unknown route reaches it.
 
 ### `halt`
-Terminal failure. Emits `fact.run_halted`.
+Terminal failure. Emits `fact.run_terminated{status:"errored"}`.
 
 ```typescript
 return {
@@ -132,17 +132,17 @@ return {
         | "route_not_picked" | "route_call_not_isolated" | "edge_no_match",
   detail?: string,
 };
-// Additional `fact.run_halted` reasons emitted directly by the executor (not constructible by handlers):
+// Additional `fact.run_terminated{status:"errored"}` reasons emitted directly by the executor (not constructible by handlers):
 // `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`, `"worktree_error"` (provision failure).
 // `"abort_loop"` and `"provider_exhausted"` are executor-only and convert to
 // `fact.run_paused` (not halts). `"max_loops"`, `"goal_gate_unsatisfied"`, and
 // `"max_retries_exceeded"` are handler-constructible but are likewise translated
 // by result-to-facts into `fact.run_paused{reason:"max_loops"|"goal_gate"|"max_retries"}`
-// respectively — they never produce `fact.run_halted`. A version mismatch is likewise a
+// respectively — they never produce a terminal `fact.run_terminated{status:"errored"}`. A version mismatch is likewise a
 // recoverable `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
 ```
 
-When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/fragua-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
+When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_terminated{status:"errored"}.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/events.ts` (`fact.run_terminated` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
 
 ### `pause_provider`
 Recoverable provider transport failure (HTTP 402/408/429/5xx, network reset). The executor commits `fact.run_paused` with a reason-discriminated payload: `payment_required` (402; manual top-up) → `paused`; `provider_error` (manual class — 400/401/403/404/413/422) → `paused`; `provider_retry` (transient transport class — 408/429/5xx/529/network; carries `attempt`, `resumeAt`) → `paused_auto`. The process is free in every case. An operator `intent.resume` wakes the run — or the wake-pending sweeper does it automatically when status is `paused_auto` and `now >= resumeAt` — and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the llm agent boundary detects provider transport errors and returns this kind on the handler's behalf.

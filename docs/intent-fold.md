@@ -75,10 +75,10 @@ The fold runs only while the executor is dispatching a queued / running run. Sta
 
 `wakePending` runs three sweeps in order:
 
-1. **cancel** — any `paused_human` / `quarantined` run with an unapplied `intent.cancel_requested` → `fact.run_cancelled`. First, so cancel always wins (matches fold rule R1).
+1. **cancel** — any `paused_human` / `quarantined` run with an unapplied `intent.cancel_requested` → `fact.run_terminated{status:"aborted"}`. First, so cancel always wins (matches fold rule R1).
 2. **human** — any `paused_human` run with an unapplied `intent.human_input` → `fact.run_resumed`. Intent stays unapplied so the next dispatch's fold consumes it as `decision.humanInput`.
 3. **unquarantine** — quarantined runs with `intent.unquarantine`:
-   - `cancel` → `fact.run_cancelled`
+   - `cancel` → `fact.run_terminated{status:"aborted"}`
    - `retry` → `fact.run_resumed` (handler re-dispatches at the same iteration; provider dedups on the stable `idempotencyKey`)
    - `treat_as_done` → synthesise `fact.side_effect_done` for each orphan + `fact.run_resumed`. The synthetic dones match the orphans by `idempotencyKey`, so subsequent startup sweeps no longer flag them. This is the operator's safe escape hatch for providers without idempotency support.
 

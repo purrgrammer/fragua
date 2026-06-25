@@ -415,7 +415,7 @@ are different syntax.
 
 ### 11.1 The run-boundary contract — typed-partial
 
-A run can reach `fact.run_completed` on a path that never ran a declared
+A run can reach `fact.run_terminated{status:"completed"}` on a path that never ran a declared
 producer: a `fail:` edge whose target is the `exit` sink is a sanctioned
 completion (SPEC §3.6), not a halt. So the egress envelope is **typed-partial**
 — it carries exactly the declared outputs whose producer ran; an unproduced
