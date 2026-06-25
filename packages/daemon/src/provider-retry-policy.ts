@@ -21,6 +21,13 @@
 // that invariant breaks; this comment exists so the next reader
 // notices before it ships.
 
+import { isAutoRetryableStatus } from "@fragua/core";
+
+/** Re-exported from `@fragua/core` — the single source of truth for which
+ * provider statuses auto-retry, shared with the agent backend's mid-stream
+ * reclassification guard so the two can never silently diverge. */
+export { isAutoRetryableStatus };
+
 /** Routing key for the persisted attempt counter. Survives manual
  * resume so the chain cap still bounds the run. */
 export const PROVIDER_RETRY_ATTEMPT_KEY = "internal.provider_retry.attempt";
@@ -29,26 +36,6 @@ export const PROVIDER_RETRY_MAX_ATTEMPTS = 5;
 export const PROVIDER_RETRY_MAX_CUMULATIVE_MS = 5 * 60 * 1000;
 export const PROVIDER_RETRY_BASE_BACKOFF_MS = 1_000;
 export const PROVIDER_RETRY_MAX_EXPONENTIAL_MS = 32 * 1000;
-
-/**
- * Classify an HTTP status (or `null` for pre-response failures like
- * DNS/TCP) into auto-retry vs manual. The unknown classes default to
- * manual — better to surface a new failure mode to the operator than
- * silently retry on a status we haven't analysed.
- *
- * Auto-retryable: 408, 429, 500–504, 529 (Anthropic "overloaded"),
- * pre-response network failures (`httpStatus === null`).
- *
- * Manual: 400, 401, 402, 403, 404, 413, 422 — none of these are
- * fixable by retrying without operator intervention (auth rotated,
- * model gone, payload too large, billing failure, schema mismatch).
- */
-export function isAutoRetryableStatus(httpStatus: number | null): boolean {
-  if (httpStatus === null) return true;
-  if (httpStatus === 408 || httpStatus === 429 || httpStatus === 529) return true;
-  if (httpStatus >= 500 && httpStatus <= 504) return true;
-  return false;
-}
 
 export interface RetryDecision {
   kind: "auto-retry";
