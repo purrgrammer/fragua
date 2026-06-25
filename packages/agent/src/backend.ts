@@ -1040,7 +1040,11 @@ const TRANSIENT_TRANSPORT_SIGNATURES = [
   "econnreset",
   "epipe",
   "network error",
-  "connection error",
+  // A bare "connection error" is dropped: it matches PERMANENT failures
+  // arriving mid-stream — "SSL connection error", "Proxy connection error:
+  // 407", and the Anthropic SDK's APIConnectionError wrapper "Connection
+  // error." over ECONNREFUSED (which must NOT auto-retry). The specific
+  // "connection reset" phrase below covers the genuinely-transient drop.
   "connection reset",
 ] as const;
 
@@ -1083,8 +1087,10 @@ export function effectiveProviderHttpStatus(
   // covers explicit 4xx AND the non-auto-retryable 5xx codes (505–528,
   // 530–599), matching the daemon's manual-pause classification. The
   // transient path only rescues the MID-STREAM shape (captured 2xx/3xx)
-  // where the transport died after the response began.
-  if (httpStatus !== null && httpStatus >= 400 && !isAutoRetryableStatus(httpStatus)) return httpStatus;
+  // where the transport died after the response began. Auto-retryable
+  // statuses already returned at the guard above, so a bare `>= 400`
+  // here is necessarily non-auto-retryable.
+  if (httpStatus !== null && httpStatus >= 400) return httpStatus;
   if (isTransientTransportErrorMessage(errorMessage)) return TRANSIENT_TRANSPORT_STATUS;
   return httpStatus;
 }

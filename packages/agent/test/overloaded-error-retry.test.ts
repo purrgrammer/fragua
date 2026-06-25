@@ -19,7 +19,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@earendil-works/pi-ai";
-import type { Outcome } from "@fragua/core";
+import { isAutoRetryableStatus, type Outcome } from "@fragua/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import {
   ANTHROPIC_OVERLOADED_STATUS,
@@ -33,6 +33,16 @@ import {
 // Verbatim shape from a real run that paused with provider_error.
 const OVERLOADED_ENVELOPE =
   '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011..."}';
+
+describe("cross-package invariant — the normalised transient status auto-retries", () => {
+  // effectiveProviderHttpStatus normalises a mid-stream transient transport
+  // failure to TRANSIENT_TRANSPORT_STATUS; the daemon's status-only
+  // classifier (`isAutoRetryableStatus`, in @fragua/core) must then
+  // auto-retry it. Mirrors the `[529, true]` row for ANTHROPIC_OVERLOADED_STATUS.
+  test("isAutoRetryableStatus(TRANSIENT_TRANSPORT_STATUS) === true", () => {
+    expect(isAutoRetryableStatus(TRANSIENT_TRANSPORT_STATUS)).toBe(true);
+  });
+});
 
 describe("isOverloadedErrorMessage / effectiveProviderHttpStatus — the AGENT half (envelope → 529)", () => {
   test("recognises the overloaded_error envelope (incl. a leading HTTP-status prefix)", () => {
@@ -97,7 +107,6 @@ describe("isTransientTransportErrorMessage — the conservative transient set", 
       "read ECONNRESET",
       "write EPIPE",
       "network error",
-      "Connection error.",
       "connection reset by peer",
     ]) {
       expect(isTransientTransportErrorMessage(msg)).toBe(true);
@@ -114,6 +123,11 @@ describe("isTransientTransportErrorMessage — the conservative transient set", 
     expect(isTransientTransportErrorMessage("network access blocked")).toBe(false);
     expect(isTransientTransportErrorMessage("TLS handshake timeout")).toBe(false);
     expect(isTransientTransportErrorMessage("connect ECONNREFUSED 127.0.0.1:443")).toBe(false);
+    // A bare "connection error" matched permanent failures arriving
+    // mid-stream; these must NOT auto-retry (they'd burn the budget).
+    expect(isTransientTransportErrorMessage("SSL connection error: handshake failed")).toBe(false);
+    expect(isTransientTransportErrorMessage("Proxy connection error: 407")).toBe(false);
+    expect(isTransientTransportErrorMessage("Connection error.")).toBe(false);
     expect(isTransientTransportErrorMessage(undefined)).toBe(false);
     expect(isTransientTransportErrorMessage(null)).toBe(false);
     expect(isTransientTransportErrorMessage("")).toBe(false);
