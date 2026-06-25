@@ -18,7 +18,16 @@ import type {
   OutputsValue,
   SummariserBackend,
 } from "@fragua/core";
-import { compileOutputsToTypeBox, fail, failHalt, failProvider, ok, validateOutputsValue } from "@fragua/core";
+import {
+  ANTHROPIC_OVERLOADED_STATUS,
+  compileOutputsToTypeBox,
+  fail,
+  failHalt,
+  failProvider,
+  isAutoRetryableStatus,
+  ok,
+  validateOutputsValue,
+} from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
 import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
 import {
@@ -969,10 +978,9 @@ export function extractHttpStatusFromErrorMessage(message: string): number | nul
   return status;
 }
 
-/** Canonical HTTP status Anthropic uses for a discrete "overloaded"
- * rejection (529). The provider-retry classifier treats it as
- * auto-retryable. */
-export const ANTHROPIC_OVERLOADED_STATUS = 529;
+/** Re-exported from `@fragua/core` so existing `@fragua/agent` importers
+ * keep their import site. The single source of truth is core. */
+export { ANTHROPIC_OVERLOADED_STATUS };
 
 /** Detect an Anthropic `overloaded_error` envelope.
  *
@@ -1016,17 +1024,22 @@ export const TRANSIENT_TRANSPORT_STATUS = 408;
  * manual, resumable pause). Grounded in what the Anthropic/OpenAI SDKs and
  * the underlying node networking stack surface. */
 const TRANSIENT_TRANSPORT_SIGNATURES = [
-  // request / operation timeouts
+  // request / operation timeouts. Specific phrases only — a bare
+  // "timeout" matches permanent failures ("TLS handshake timeout",
+  // "auth token timeout expired") and would burn the retry budget.
   "operation timed out",
   "request timed out",
   "etimedout",
-  "timeout",
-  // connection drops / resets
+  // connection drops / resets. A bare "network" matched permanent
+  // failures ("network access blocked", "invalid network credentials")
+  // — keep the specific "network error" phrase. ECONNREFUSED is dropped:
+  // a refused connection is typically a permanent wrong-port / removed-
+  // service / ACL condition, and the null-status pre-stream case is
+  // already covered by `isAutoRetryableStatus(null)`.
   "socket hang up",
   "econnreset",
-  "econnrefused",
   "epipe",
-  "network",
+  "network error",
   "connection error",
   "connection reset",
 ] as const;
@@ -1062,28 +1075,18 @@ export function effectiveProviderHttpStatus(
   errorMessage: string | undefined | null,
 ): number | null {
   if (isOverloadedErrorMessage(errorMessage)) return ANTHROPIC_OVERLOADED_STATUS;
-  // Already auto-retryable (null / 408 / 429 / 5xx / 529) — leave as-is.
-  if (isAlreadyAutoRetryableStatus(httpStatus)) return httpStatus;
-  // An explicit 4xx is a definitive provider rejection carrying its own
-  // error envelope — keep its manual classification even if the message
-  // coincidentally contains a transient-looking word. The transient path
-  // only rescues the MID-STREAM shape (captured 2xx/3xx) where the
-  // transport died after the response began.
-  if (httpStatus !== null && httpStatus >= 400 && httpStatus <= 499) return httpStatus;
+  // Already auto-retryable (null / 408 / 429 / 500–504 / 529) — leave as-is.
+  if (isAutoRetryableStatus(httpStatus)) return httpStatus;
+  // Any non-auto-retryable status ≥ 400 is a definitive provider rejection
+  // carrying its own error envelope — keep its manual classification even
+  // if the message coincidentally contains a transient-looking word. This
+  // covers explicit 4xx AND the non-auto-retryable 5xx codes (505–528,
+  // 530–599), matching the daemon's manual-pause classification. The
+  // transient path only rescues the MID-STREAM shape (captured 2xx/3xx)
+  // where the transport died after the response began.
+  if (httpStatus !== null && httpStatus >= 400 && !isAutoRetryableStatus(httpStatus)) return httpStatus;
   if (isTransientTransportErrorMessage(errorMessage)) return TRANSIENT_TRANSPORT_STATUS;
   return httpStatus;
-}
-
-/** Mirror of the daemon's `isAutoRetryableStatus` auto-retry set, kept
- * local because `@fragua/agent` is a leaf package (the daemon depends on
- * it, not the reverse). Used only to avoid overriding an already
- * auto-retryable captured status when normalising a transient transport
- * message. The daemon's classifier remains the single source of truth for
- * the actual retry decision. */
-function isAlreadyAutoRetryableStatus(httpStatus: number | null): boolean {
-  if (httpStatus === null) return true;
-  if (httpStatus === 408 || httpStatus === 429 || httpStatus === ANTHROPIC_OVERLOADED_STATUS) return true;
-  return httpStatus >= 500 && httpStatus <= 504;
 }
 
 /** Derive a `RunEnvironment` from the execution env. Always returns a

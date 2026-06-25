@@ -78,6 +78,12 @@ describe("isOverloadedErrorMessage / effectiveProviderHttpStatus — the AGENT h
     expect(effectiveProviderHttpStatus(200, OVERLOADED_ENVELOPE)).toBe(ANTHROPIC_OVERLOADED_STATUS);
     // A manual 4xx with a transient-looking word is NOT flipped to 408.
     expect(effectiveProviderHttpStatus(400, "400 invalid timeout config")).toBe(400);
+    // A non-auto-retryable 5xx (505–528, 530–599) with a transient-looking
+    // word is NOT flipped to 408 — it stays manual, matching the daemon's
+    // classification. Only 500–504 / 529 are auto-retryable 5xx codes.
+    expect(effectiveProviderHttpStatus(507, "507 connection reset mid-body")).toBe(507);
+    expect(effectiveProviderHttpStatus(511, "511 network error")).toBe(511);
+    expect(effectiveProviderHttpStatus(530, "530 socket hang up")).toBe(530);
   });
 });
 
@@ -87,10 +93,8 @@ describe("isTransientTransportErrorMessage — the conservative transient set", 
       "The operation timed out.",
       "Request timed out",
       "connect ETIMEDOUT 1.2.3.4:443",
-      "Request timeout",
       "socket hang up",
       "read ECONNRESET",
-      "connect ECONNREFUSED 127.0.0.1:443",
       "write EPIPE",
       "network error",
       "Connection error.",
@@ -104,6 +108,12 @@ describe("isTransientTransportErrorMessage — the conservative transient set", 
     expect(isTransientTransportErrorMessage("An unknown error occurred")).toBe(false);
     expect(isTransientTransportErrorMessage("invalid_request_error: bad model")).toBe(false);
     expect(isTransientTransportErrorMessage("401 unauthorized")).toBe(false);
+    // Permanent failures whose body coincidentally embeds a transient word
+    // must NOT match — they'd otherwise burn the 5-attempt retry budget.
+    expect(isTransientTransportErrorMessage("invalid network configuration")).toBe(false);
+    expect(isTransientTransportErrorMessage("network access blocked")).toBe(false);
+    expect(isTransientTransportErrorMessage("TLS handshake timeout")).toBe(false);
+    expect(isTransientTransportErrorMessage("connect ECONNREFUSED 127.0.0.1:443")).toBe(false);
     expect(isTransientTransportErrorMessage(undefined)).toBe(false);
     expect(isTransientTransportErrorMessage(null)).toBe(false);
     expect(isTransientTransportErrorMessage("")).toBe(false);
