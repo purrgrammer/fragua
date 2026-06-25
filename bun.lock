@@ -111,6 +111,7 @@
       "name": "@fragua/store",
       "version": "0.8.0",
       "dependencies": {
+        "@fragua/core": "workspace:*",
         "@fragua/types": "workspace:*",
       },
       "devDependencies": {

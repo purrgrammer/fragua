@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fragua/core": "workspace:*",
     "@fragua/types": "workspace:*"
   },
   "devDependencies": {

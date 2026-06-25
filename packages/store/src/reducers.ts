@@ -1,23 +1,13 @@
+// contract: no-bump — relocate frontier reader, fold unchanged
+// `getFrontier` (the relocated `readActiveNodes`) and `ACTIVE_NODES_KEY` live in
+// the typed-routing accessor module (`@fragua/core`). The fold behaviour is
+// byte-identical — it still only reads/writes `internal.active_nodes` — so this
+// import is a read-side retype of the same bytes, not a fold-semantics change.
+// `@fragua/core`'s main entry is store-free at runtime (its store imports live
+// only in the `./read-plane` sub-entry), so this edge is acyclic.
+import { ACTIVE_NODES_KEY, getFrontier } from "@fragua/core";
 import type { RunEnqueuedPayload } from "@fragua/types";
 import { AUTO_WAKE_PAUSE_REASONS, type FactEvent, type RunMetrics, type RunState } from "./types.ts";
-
-/** The active-set frontier of an in-flight `type: parallel` fan-out (Model A,
- * docs/proposals/fan-out-nodes.md). The set of sub-node ids currently in flight
- * across all branches. Stored in `run_state.routing` (an `internal.*`
- * projection key, like `internal.auto_resume_at`) rather than a dedicated
- * column — foldable from the log, riding the already-plumbed routing
- * serialization, so no schema migration. Seeded by `fact.fanout_started` (the
- * branch entries), advanced atomically per sub-node (a `fact.node_completed`
- * removes the done node, a bundled `fact.dispatch_started` adds its successor),
- * cleared by `fact.fanout_joined`. `null` ⇒ no fan-out in flight. */
-export const ACTIVE_NODES_ROUTING_KEY = "internal.active_nodes";
-
-export function readActiveNodes(routing: Record<string, unknown>): string[] | null {
-  const v = routing[ACTIVE_NODES_ROUTING_KEY];
-  // Element-validated: the only non-typed write path is a tampered bundle fed
-  // through `fragua import` — fail to "no fan-out" instead of propagating junk.
-  return Array.isArray(v) && v.every((e) => typeof e === "string") ? (v as string[]) : null;
-}
 
 export function emptyMetrics(): RunMetrics {
   return {
@@ -84,9 +74,9 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // `node_completed` in one commit, so the frontier never loses a
       // successor across a crash — I1). The parallel node's own dispatch fires
       // before `fanout_started`, when the set is null, so it is unaffected.
-      const active = readActiveNodes(next.routing);
+      const active = getFrontier(next.routing);
       if (active !== null && !active.includes(fact.payload.nodeId)) {
-        next.routing[ACTIVE_NODES_ROUTING_KEY] = [...active, fact.payload.nodeId];
+        next.routing[ACTIVE_NODES_KEY] = [...active, fact.payload.nodeId]; // routing-index-allow: reducer frontier write
       }
       return next;
     }
@@ -103,7 +93,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // the anchor, every concurrent sibling's close would then no-op, and
       // activeMs accrued only fan-entry → first completion. The region's
       // interval closes at `fact.fanout_joined` (or a pause/halt) instead.
-      if (!readActiveNodes(next.routing)?.includes(p.nodeId)) {
+      if (!getFrontier(next.routing)?.includes(p.nodeId)) {
         closeDispatchInterval(next, now);
       }
       next.metrics.billedTokens += p.tokens;
@@ -137,9 +127,9 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // Its successor — if any — was dispatched in this same commit (a bundled
       // `dispatch_started` re-added it above). A linear completion advances the
       // run pointer as usual.
-      const activeOnComplete = readActiveNodes(next.routing);
+      const activeOnComplete = getFrontier(next.routing);
       if (activeOnComplete?.includes(p.nodeId)) {
-        next.routing[ACTIVE_NODES_ROUTING_KEY] = activeOnComplete.filter((n) => n !== p.nodeId);
+        next.routing[ACTIVE_NODES_KEY] = activeOnComplete.filter((n) => n !== p.nodeId); // routing-index-allow: reducer frontier write
       } else {
         next.currentNode = p.nextNode;
         next.nodeStartedAt = now;
@@ -150,7 +140,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       const p = fact.payload;
       // Same linear-only close as node_completed: an aborted fan-out branch
       // stays in the active set while its siblings keep running.
-      if (!readActiveNodes(next.routing)?.includes(p.nodeId)) {
+      if (!getFrontier(next.routing)?.includes(p.nodeId)) {
         closeDispatchInterval(next, now);
       }
       next.metrics.billedTokens += p.partialTokens;
@@ -176,7 +166,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // Seed the frontier with the branch entries. `current_node` stays pinned
       // to the parallel node (`fact.payload.nodeId`); the frontier is the truth
       // for "what is running" until the barrier.
-      next.routing[ACTIVE_NODES_ROUTING_KEY] = [...fact.payload.branches];
+      next.routing[ACTIVE_NODES_KEY] = [...fact.payload.branches]; // routing-index-allow: reducer frontier write
       next.status = "running";
       return next;
     }
@@ -184,7 +174,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // Barrier: the frontier drained. Clear it and advance `current_node` to
       // the join in this same commit (I1).
       closeDispatchInterval(next, now);
-      delete next.routing[ACTIVE_NODES_ROUTING_KEY];
+      delete next.routing[ACTIVE_NODES_KEY]; // routing-index-allow: reducer frontier write
       next.currentNode = fact.payload.nextNode;
       next.nodeStartedAt = now;
       return next;

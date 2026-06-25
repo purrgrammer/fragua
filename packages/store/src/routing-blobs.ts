@@ -15,6 +15,7 @@
 // the decoded utf-8 blob bytes. The helper is pure — it accepts a `getBlob`
 // callback so it can be unit-tested without a real BlobFS.
 
+import { readRawInputs } from "@fragua/core";
 import { utf8ByteLength } from "@fragua/types";
 import { sha256Hex } from "./sha256.ts";
 
@@ -85,12 +86,10 @@ export function spillRoutingInputs(
   putBlob: (sha: string, bytes: Uint8Array) => void,
 ): SpillResult {
   const enc = new TextEncoder();
-  const rawInputs = routing["inputs"];
-  if (rawInputs === null || typeof rawInputs !== "object" || Array.isArray(rawInputs)) {
+  const inputs = readRawInputs(routing);
+  if (inputs === undefined) {
     return { routing, spilled: [] };
   }
-
-  const inputs = rawInputs as Record<string, unknown>;
 
   // Identify eligible string entries
   type Candidate = { key: string; value: string; encoded: Uint8Array };

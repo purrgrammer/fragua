@@ -19,16 +19,16 @@ import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import {
-  ACTIVE_NODES_ROUTING_KEY,
+  ACTIVE_NODES_KEY,
   applyFact,
   emptyMetrics,
   type FactEvent,
   foldFacts,
   genesisToInitialState,
+  getFrontier,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_ROUTING_BYTES,
   type RunState,
-  readActiveNodes,
 } from "../src/index.ts";
 import { freshStore, nextId, seedRun, seedWorkflow } from "./helpers.ts";
 
@@ -497,7 +497,7 @@ function fanOutState(frontier: readonly string[]): RunState {
   state.status = "running";
   state.currentNode = "par";
   state.dispatchStartedAt = 1_000;
-  state.routing[ACTIVE_NODES_ROUTING_KEY] = [...frontier];
+  state.routing[ACTIVE_NODES_KEY] = [...frontier];
   return state;
 }
 
@@ -513,7 +513,7 @@ describe("P32 — fan-out frontier isolation", () => {
           const nodeId = useFrontierNode ? frontier[pick % frontier.length]! : "outsider";
           const state = fanOutState(frontier);
           const next = applyFact(state, NON_MUTATOR_FACTS[factIdx]!(nodeId), 2_000);
-          expect(readActiveNodes(next.routing)).toEqual([...frontier]);
+          expect(getFrontier(next.routing)).toEqual([...frontier]);
         },
       ),
       { numRuns: pbtRuns(250) },
@@ -530,7 +530,7 @@ describe("P32 — fan-out frontier isolation", () => {
           payload: { nodeId: "outsider", iteration: 0, tokens: 1, costUsd: 0.01, nextNode: "m" },
         };
         const afterLinear = applyFact(fanOutState(frontier), linearDone, 2_000);
-        expect(readActiveNodes(afterLinear.routing)).toEqual([...frontier]);
+        expect(getFrontier(afterLinear.routing)).toEqual([...frontier]);
         expect(afterLinear.currentNode).toBe("m");
 
         // Re-dispatch of a node already in the frontier: no duplicate entry.
@@ -540,7 +540,7 @@ describe("P32 — fan-out frontier isolation", () => {
           payload: { nodeId: member, iteration: 0, resumeOf: "crash" },
         };
         const afterRedispatch = applyFact(fanOutState(frontier), redispatch, 2_000);
-        expect(readActiveNodes(afterRedispatch.routing)).toEqual([...frontier]);
+        expect(getFrontier(afterRedispatch.routing)).toEqual([...frontier]);
       }),
       { numRuns: pbtRuns(100) },
     );
@@ -551,13 +551,13 @@ describe("P32 — fan-out frontier isolation", () => {
       fc.property(arbFrontier, fc.nat(5), (frontier, pick) => {
         // Seed: fanout_started over a frontier-less state.
         const preFan = fanOutState([]);
-        delete preFan.routing[ACTIVE_NODES_ROUTING_KEY];
+        delete preFan.routing[ACTIVE_NODES_KEY];
         const seeded = applyFact(
           preFan,
           { type: "fact.fanout_started", payload: { nodeId: "par", iteration: 0, branches: [...frontier] } },
           2_000,
         );
-        expect(readActiveNodes(seeded.routing)).toEqual([...frontier]);
+        expect(getFrontier(seeded.routing)).toEqual([...frontier]);
 
         // Advance: a fresh sub-node dispatch joins the active set.
         const advanced = applyFact(
@@ -565,7 +565,7 @@ describe("P32 — fan-out frontier isolation", () => {
           { type: "fact.dispatch_started", payload: { nodeId: "fresh", iteration: 0, resumeOf: "fresh" } },
           2_000,
         );
-        expect(readActiveNodes(advanced.routing)).toEqual([...frontier, "fresh"]);
+        expect(getFrontier(advanced.routing)).toEqual([...frontier, "fresh"]);
 
         // Drain: a frontier member's completion removes it and keeps
         // current_node pinned to the parallel node.
@@ -578,7 +578,7 @@ describe("P32 — fan-out frontier isolation", () => {
           },
           2_000,
         );
-        expect(readActiveNodes(drained.routing)).toEqual(frontier.filter((n) => n !== member));
+        expect(getFrontier(drained.routing)).toEqual(frontier.filter((n) => n !== member));
         expect(drained.currentNode).toBe("par");
 
         // Clear: the join barrier deletes the key (not just empties it) and
@@ -591,7 +591,7 @@ describe("P32 — fan-out frontier isolation", () => {
           },
           2_000,
         );
-        expect(ACTIVE_NODES_ROUTING_KEY in joined.routing).toBe(false);
+        expect(ACTIVE_NODES_KEY in joined.routing).toBe(false);
         expect(joined.currentNode).toBe("join");
       }),
       { numRuns: pbtRuns(100) },

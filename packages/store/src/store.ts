@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { INPUTS_KEY } from "@fragua/core";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
 import { NODE_LIFECYCLE_FACT_TYPES, VALID_WRITERS } from "@fragua/types";
 import {
@@ -731,7 +732,7 @@ export class SqliteStore implements IEventStore {
     // is safer than the inverse. The rows are inserted inside writeTxn below.
     let effectiveRouting = params.initialRouting ?? {};
     let spilledBlobs: Array<{ key: string; sha: string; bytes: number }> = [];
-    if (effectiveRouting["inputs"] != null) {
+    if (effectiveRouting[INPUTS_KEY] != null) {
       const result = spillRoutingInputs(effectiveRouting, (sha, bytes) => {
         this.blobs.put(sha, bytes);
       });
