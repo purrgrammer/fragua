@@ -4,7 +4,7 @@
 // validator-only metadata that must NOT survive into the persisted IR.
 
 import { describe, expect, test } from "bun:test";
-import { CURRENT_IR_VERSION, deserializeGraph, serializeGraph, stripLoc } from "../src/ir.ts";
+import { CURRENT_IR_VERSION, convertIr, deserializeGraph, serializeGraph, stripLoc } from "../src/ir.ts";
 import { parseWorkflow } from "../src/parser/yaml.ts";
 
 const FIXTURES: Record<string, string> = {
@@ -80,7 +80,41 @@ describe("IR codec — round-trip modulo loc", () => {
     expect(JSON.stringify(parsed)).toBe(before);
   });
 
-  test("CURRENT_IR_VERSION is 2 (structured-outputs bump)", () => {
-    expect(CURRENT_IR_VERSION).toBe(2);
+  test("CURRENT_IR_VERSION is 3 (run-level outputs bump)", () => {
+    expect(CURRENT_IR_VERSION).toBe(3);
+  });
+});
+
+describe("ir_version v2 → v3 (run-level outputs)", () => {
+  test("convertIr lifts a v2 IR (no run-level outputs) to v3 unchanged", () => {
+    const v2 = JSON.parse(serializeGraph(parseWorkflow(FIXTURES["single llm step"]!)));
+    const { json, version } = convertIr(v2, 2);
+    expect(version).toBe(3);
+    expect(json).toEqual(v2); // additive: the v2→v3 converter is identity
+  });
+
+  test("convertIr walks the whole chain v1 → v3", () => {
+    const v1 = JSON.parse(serializeGraph(parseWorkflow(FIXTURES["single llm step"]!)));
+    const { json, version } = convertIr(v1, 1);
+    expect(version).toBe(3);
+    expect(json).toEqual(v1);
+  });
+
+  test("a v3 IR round-trips graph.attrs.outputs through serialize/deserialize", () => {
+    const src = [
+      "name: wf",
+      "outputs:",
+      "  verdict: { from: review.verdict }",
+      "steps:",
+      "  review:",
+      "    type: llm",
+      "    prompt: Review.",
+      "    outputs:",
+      "      verdict: { type: string }",
+      "    next: exit",
+    ].join("\n");
+    const parsed = parseWorkflow(src);
+    const roundTripped = deserializeGraph(serializeGraph(parsed));
+    expect(roundTripped.attrs.outputs).toEqual([{ name: "verdict", node: "review", path: ["verdict"] }]);
   });
 });

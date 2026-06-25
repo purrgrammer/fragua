@@ -659,7 +659,9 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     await drive(r, "leak1", { fanoutBranchTimeoutMs: 40, leakGraceMs: 20 });
     const final = r.store.getState("leak1")!;
     expect(final.status).toBe("halted"); // reclaimed, not hung
-    const halted = r.store.getEvents("leak1").find((e) => e.type === "fact.run_halted");
+    const halted = r.store
+      .getEvents("leak1")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect((halted?.payload as { detail?: string }).detail).toBe("handler_leaked");
     r.store.close();
   });
@@ -720,7 +722,9 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     await drive(r, "leakabort1", { fanoutBranchTimeoutMs: 5000, leakGraceMs: 20 });
     const final = r.store.getState("leakabort1")!;
     expect(final.status).toBe("halted");
-    const halted = r.store.getEvents("leakabort1").find((e) => e.type === "fact.run_halted");
+    const halted = r.store
+      .getEvents("leakabort1")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect((halted?.payload as { detail?: string }).detail).toBe("handler_leaked");
     // The healthy sibling OBSERVED its abort — it was signalled, not abandoned.
     expect(okSawAbort).toBe(true);
@@ -1229,8 +1233,12 @@ steps:
     // still reach the executor: the branch terminal must never complete the run.
     expect(final.status).toBe("halted");
     const events = r.store.getEvents("bterm1");
-    expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
-    const halted = events.find((e) => e.type === "fact.run_halted");
+    expect(
+      events.some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed"),
+    ).toBe(false);
+    const halted = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect((halted?.payload as { detail?: string }).detail).toBe("fanout_branch_terminal:bad");
     // The branch's own work is still durable; only the run terminal was refused.
     expect(
@@ -1276,7 +1284,7 @@ steps:
     const origAppend = r.store.appendFact.bind(r.store);
     let haltConflicts = 0;
     r.store.appendFact = (runId, facts, version, appendOpts) => {
-      if (facts[0]?.type === "fact.run_halted" && haltConflicts < 8) {
+      if (facts[0]?.type === "fact.run_terminated" && haltConflicts < 8) {
         haltConflicts++;
         throw new ConcurrencyError(version, version + 1);
       }
@@ -1289,9 +1297,13 @@ steps:
     expect(haltConflicts).toBe(8); // the storm actually exhausted one commit round
     expect(final.status).toBe("halted");
     const events = r.store.getEvents("btermocc1");
-    expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
+    expect(
+      events.some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed"),
+    ).toBe(false);
     expect(events.some((e) => e.type === "fact.fanout_joined")).toBe(false);
-    const halted = events.find((e) => e.type === "fact.run_halted");
+    const halted = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect((halted?.payload as { detail?: string }).detail).toBe("fanout_branch_terminal:bad");
     expect(seen["synth"]).toBeUndefined();
     r.store.close();
@@ -1542,7 +1554,9 @@ steps:
     // Pre-fix: first-breach-wins froze the pause and the run parked resumable
     // despite a hard stop breach. Halt overrides pause, at every capture site.
     expect(final.status).toBe("halted");
-    const halted = r.store.getEvents("up1").find((e) => e.type === "fact.run_halted");
+    const halted = r.store
+      .getEvents("up1")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect((halted?.payload as { reason?: string }).reason).toBe("budget");
     expect(r.store.getEvents("up1").some((e) => e.type === "fact.run_paused")).toBe(false);
     r.store.close();
@@ -1598,7 +1612,9 @@ steps:
     // Pre-fix the arm dropped the commit reason and re-entered forever (the
     // run stayed `running` until maxTurns); now the conflict controller parks it.
     expect(final.status).toBe("halted");
-    const halted = r.store.getEvents("occ1").find((e) => e.type === "fact.run_halted");
+    const halted = r.store
+      .getEvents("occ1")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     const hp = halted?.payload as { reason?: string; detail?: string };
     expect(hp.reason).toBe("occ_exhausted");
     expect(hp.detail).toContain("fact.dispatch_started");

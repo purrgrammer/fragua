@@ -89,8 +89,18 @@
 // reuse the same name table.
 
 import * as YAML from "yaml";
-import { OutputsProfileError, parseOutputsDecl } from "../engine/outputs-profile.ts";
-import type { Edge, EdgeAttrs, Graph, GraphAttrs, InputDecl, Node, NodeAttrs, NodeType } from "../types/graph.ts";
+import { OutputsProfileError, parseOutputsDecl, parseProfileNode } from "../engine/outputs-profile.ts";
+import type {
+  Edge,
+  EdgeAttrs,
+  Graph,
+  GraphAttrs,
+  InputDecl,
+  Node,
+  NodeAttrs,
+  NodeType,
+  RunOutputDecl,
+} from "../types/graph.ts";
 
 export type { InputDecl } from "../types/graph.ts";
 
@@ -159,7 +169,7 @@ export const DEFAULT_TOOL_MAX_MS = 5 * 60 * 1000;
 // Keys consumed by the parser at the step level (not stored in attrs):
 const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes", "outputs"]);
 // Keys consumed at the graph level (not stored in attrs):
-const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults"]);
+const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults", "outputs"]);
 
 // ---- Attribute coercion -----------------------------------------------
 
@@ -278,19 +288,32 @@ function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] 
     }
     const tRaw = scalarValue(body.get("type", true));
     const type = typeof tRaw === "string" ? tRaw : "string";
-    if (!["string", "boolean", "number", "choice"].includes(type)) {
+    if (!["string", "boolean", "number", "choice", "object", "array"].includes(type)) {
       throw new ParseError(
-        `input "${name}" has unknown type ${JSON.stringify(type)} (expected string / boolean / number / choice)`,
+        `input "${name}" has unknown type ${JSON.stringify(type)} (expected string / boolean / number / choice / object / array)`,
         ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
+      );
+    }
+    const requiredNode = body.get("required", true);
+    if (YAML.isSeq(requiredNode)) {
+      throw new ParseError(
+        `input "${name}" \`required:\` must be a boolean; use \`optional: true\` on individual fields inside \`fields:\``,
+        ...locArr(locOf(requiredNode, lineCounter)),
       );
     }
     const decl: InputDecl = {
       name,
       type: type as InputDecl["type"],
-      required: scalarValue(body.get("required", true)) === true,
+      required: scalarValue(requiredNode) === true,
     };
     const desc = scalarValue(body.get("description", true));
     if (typeof desc === "string" && desc.length > 0) decl.description = desc;
+    if ((type === "object" || type === "array") && body.get("default", true) !== undefined) {
+      throw new ParseError(
+        `input "${name}" declares \`default:\` on a ${type} input — structured-input defaults are not supported`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
     const def = scalarValue(body.get("default", true));
     if (def !== undefined && def !== null) decl.default = def as string | number | boolean;
     const opts = scalarValue(body.get("options", true));
@@ -298,7 +321,76 @@ function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] 
     if (decl.type === "choice" && (!decl.options || decl.options.length === 0)) {
       throw new ParseError(`input "${name}" has type=choice but no options[]`, ...locArr(locOf(body, lineCounter)));
     }
+    // Object / array inputs reuse the SAME restricted profile grammar `outputs:`
+    // uses (no fork). `parseProfileNode` parses the whole `{ type, fields/items }`
+    // body into an `OutputProfile`; we keep the record `fields` / array `items`
+    // for validation + TypeBox lowering.
+    if (decl.type === "object" || decl.type === "array") {
+      try {
+        decl.profile = parseProfileNode(body.toJSON(), name);
+      } catch (err) {
+        const msg = err instanceof OutputsProfileError ? err.message : String(err);
+        throw new ParseError(`input "${name}" ${msg}`, ...locArr(locOf(body, lineCounter)));
+      }
+    }
     out.push(decl);
+  }
+  return out;
+}
+
+// ---- Run-level outputs block ------------------------------------------
+
+/** Parse the top-level `outputs:` block into `RunOutputDecl[]`. Each entry is
+ * `<name>: { from: <node>.<path> }` — `from` is split on the first `.` into the
+ * producer node id and the dotted suffix (empty for a bare `from: <node>`,
+ * which projects the producer's whole struct). `default:` (§11.5) is rejected
+ * loudly rather than silently dropped — it is deferred, and an author who
+ * writes it should know it has no effect yet. */
+function parseRunOutputs(node: unknown, lineCounter: YAML.LineCounter): RunOutputDecl[] {
+  if (node === undefined) return [];
+  if (!YAML.isMap(node)) {
+    throw new ParseError("`outputs:` must be a mapping", ...locArr(locOf(node, lineCounter)));
+  }
+  const out: RunOutputDecl[] = [];
+  for (const item of node.items) {
+    const name = (item.key as YAML.Scalar)?.value;
+    if (typeof name !== "string" || name.length === 0) {
+      throw new ParseError("run output name must be a non-empty string", ...locArr(locOf(item.key, lineCounter)));
+    }
+    const body = item.value;
+    if (!YAML.isMap(body)) {
+      throw new ParseError(`run output "${name}" must be a mapping`, ...locArr(locOf(item.value, lineCounter)));
+    }
+    if (body.get("default", true) !== undefined) {
+      throw new ParseError(
+        `run output "${name}" declares \`default:\` — run-output defaults are not yet supported (deferred)`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    const fromRaw = scalarValue(body.get("from", true));
+    if (typeof fromRaw !== "string" || fromRaw.trim().length === 0) {
+      throw new ParseError(
+        `run output "${name}" must declare a non-empty \`from: <node>.<path>\` reference`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    const trimmed = fromRaw.trim();
+    const firstDot = trimmed.indexOf(".");
+    const producer = firstDot === -1 ? trimmed : trimmed.slice(0, firstDot);
+    if (producer.length === 0) {
+      throw new ParseError(
+        `run output "${name}" has an empty producer node in \`from: ${fromRaw}\``,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    const path = firstDot === -1 ? [] : trimmed.slice(firstDot + 1).split(".");
+    if (path.some((seg) => seg.length === 0)) {
+      throw new ParseError(
+        `run output "${name}" has an empty path segment in \`from: ${fromRaw}\``,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    out.push({ name, node: producer, path });
   }
   return out;
 }
@@ -361,6 +453,8 @@ export function parseWorkflow(source: string): Graph {
     if (coerced !== undefined) graphAttrs[irKey] = coerced;
   }
   if (inputs.length > 0) graphAttrs["inputs"] = inputs;
+  const runOutputs = parseRunOutputs(root.get("outputs", true), lineCounter);
+  if (runOutputs.length > 0) graphAttrs["outputs"] = runOutputs;
 
   // Walk steps in declaration order. The first declared step is the entry
   // point; order is otherwise immaterial now that flow is explicit.
@@ -370,6 +464,15 @@ export function parseWorkflow(source: string): Graph {
     const stepId = (item.key as YAML.Scalar)?.value;
     if (typeof stepId !== "string") {
       throw new ParseError("step id must be a string", ...locArr(locOf(item.key, lineCounter)));
+    }
+    // Step ids must match the reference grammar (`[a-zA-Z][a-zA-Z0-9_]*`, the
+    // producer segment of COMBINED_REF_RE). A `.` would let `from: a.b.c` split
+    // ambiguously between a dotted step name and a producer.path reference.
+    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(stepId)) {
+      throw new ParseError(
+        `step id ${JSON.stringify(stepId)} is not a valid identifier (must match [a-zA-Z][a-zA-Z0-9_]*)`,
+        ...locArr(locOf(item.key, lineCounter)),
+      );
     }
     if (!YAML.isMap(item.value)) {
       throw new ParseError(`step "${stepId}" must be a mapping`, ...locArr(locOf(item.value, lineCounter)));

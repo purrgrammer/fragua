@@ -266,8 +266,9 @@ export function createRoutes(deps: ServerDeps): Hono {
       routing?: Record<string, unknown>;
       /** Typed run inputs (`--input name=value`) — validated against the
        * workflow's `inputs:` block, then stored on `routing.inputs` for
-       * `${{ inputs.name }}` substitution at dispatch. */
-      inputs?: Record<string, string>;
+       * `${{ inputs.name }}` substitution at dispatch. Object / array inputs
+       * arrive as their parsed JSON value, so the field is `unknown`-valued. */
+      inputs?: Record<string, unknown>;
       /** Absolute project root the run was enqueued from. Surfaced on
        * `run_state.cwd`; the only project identifier in the
        * harness-by-default model. Required when `workflowSha` is
@@ -476,7 +477,7 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!built.ok) return c.json({ error: built.error }, 400);
     const route = built.intent.payload.route;
     // Stateful route-enum check: read the paused-node descriptor from the
-    // latest fact.run_paused_human and reject off-list routes with 400. This
+    // latest fact.run_paused{reason:"human"} and reject off-list routes with 400. This
     // is I/O (reads run state), so it stays adapter-side (intent-plane §3.6) —
     // the plane only validated the body shape. The handler re-validates the
     // same enum (defense-in-depth — a hand-crafted intent could bypass this);
@@ -491,7 +492,7 @@ export function createRoutes(deps: ServerDeps): Hono {
     let declaredRoutes: string[] = [];
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_paused_human") {
+      if (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") {
         const p = ev.payload as { routes?: unknown };
         if (Array.isArray(p.routes)) {
           declaredRoutes = p.routes.filter((r): r is string => typeof r === "string");
@@ -507,7 +508,7 @@ export function createRoutes(deps: ServerDeps): Hono {
       // but the skip must be observable so an off-list route accepted here
       // can be traced back when the daemon later halts the run on resume.
       console.warn(
-        `[server] human input accepted without route validation: no declared routes on the latest fact.run_paused_human (run=${runId} route="${route}")`,
+        `[server] human input accepted without route validation: no declared routes on the latest fact.run_paused{reason:"human"} (run=${runId} route="${route}")`,
       );
     }
     return appendIntentOr413(c, runId, built.intent);

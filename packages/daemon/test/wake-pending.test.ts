@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
+import { dispositionType } from "./invariants.ts";
 
 function startRun(r: ReturnType<typeof rig>, runId: string): void {
   enqueue(r, runId, "start");
@@ -24,7 +25,7 @@ function pause(r: ReturnType<typeof rig>, runId: string): void {
   const s = r.store.getState(runId)!;
   r.store.appendFact(
     runId,
-    [{ type: "fact.run_paused_human", payload: { nodeId: "start", text: "wait", routes: [] } }],
+    [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "start", text: "wait", routes: [] } }],
     s.version,
   );
 }
@@ -55,7 +56,7 @@ describe("wakePending — cancel on non-dispatching runs", () => {
     const result = wakePending(r.store);
     expect(result.cancelled).toContain("rwc1");
     expect(r.store.getState("rwc1")!.status).toBe("cancelled");
-    const types = r.store.getEvents("rwc1").map((e) => e.type);
+    const types = r.store.getEvents("rwc1").map(dispositionType);
     expect(types).toContain("fact.run_cancelled");
     r.store.close();
   });

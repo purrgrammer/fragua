@@ -80,7 +80,20 @@ function inputArb(resultArb: fc.Arbitrary<HandlerResult>): fc.Arbitrary<Transiti
 
 const arbInput = inputArb(arbHandlerResult());
 
-const factTypes = (plan: { facts: { type: string }[] }): Set<string> => new Set(plan.facts.map((f) => f.type));
+/** Map a fact to its pre-collapse disposition string (fact-taxonomy.md §3.1–3.2)
+ *  so the type-string assertions below keep distinguishing
+ *  completed/errored/aborted and human-pause faithfully. */
+const legacyFactType = (f: { type: string; payload: unknown }): string => {
+  if (f.type === "fact.run_terminated") {
+    const s = (f.payload as { status?: string }).status;
+    return s === "completed" ? "fact.run_completed" : s === "aborted" ? "fact.run_cancelled" : "fact.run_halted";
+  }
+  if (f.type === "fact.run_paused" && (f.payload as { reason?: string }).reason === "human")
+    return "fact.run_paused_human";
+  return f.type;
+};
+const factTypes = (plan: { facts: { type: string; payload: unknown }[] }): Set<string> =>
+  new Set(plan.facts.map(legacyFactType));
 
 // HITL answer / route-case: a routing-llm or human node `r` whose route
 // `r{chosen}` the re-dispatched handler picks (simulating the operator's
@@ -164,7 +177,11 @@ describe("planTransition — properties", () => {
     fc.assert(
       fc.property(arbInput, (input) => {
         const plan = planTransition(input);
-        const terminals = plan.facts.filter((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
+        const terminals = plan.facts.filter(
+          (f) =>
+            (f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "completed") ||
+            (f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "errored"),
+        );
         expect(terminals.length).toBeLessThanOrEqual(1);
       }),
       { numRuns: pbtRuns(1000) },
@@ -324,7 +341,7 @@ describe("planTransition — properties", () => {
         expect(t.has("fact.node_completed")).toBe(true);
         expect(t.has("fact.node_started")).toBe(false);
         const breached = (type: string): boolean =>
-          plan.facts.some((f) => f.type === type && (f.payload as { reason?: string }).reason === "budget");
+          plan.facts.some((f) => legacyFactType(f) === type && (f.payload as { reason?: string }).reason === "budget");
         if (policy === "stop") expect(breached("fact.run_halted")).toBe(true);
         else expect(breached("fact.run_paused")).toBe(true);
       }),

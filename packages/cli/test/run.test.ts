@@ -9,7 +9,8 @@ import { join } from "node:path";
 import * as handler from "@fragua/core/handler";
 import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@fragua/daemon";
 import { SqliteStore } from "@fragua/store";
-import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
+import { runCommand } from "../src/commands/run.ts";
+import { coerceInputs, resolveInputArgs } from "../src/input-coerce.ts";
 
 interface Rig {
   dbPath: string;
@@ -116,6 +117,104 @@ describe("fragua run", () => {
     }
   });
 
+  test("--input-json end-to-end: enqueued routing.inputs carries the parsed shape", async () => {
+    const r = rig();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "typed.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: typed\ninputs:\n  ticket: {type: string}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const code = await runCommand({
+        workflow: yamlPath,
+        dbPath: r.dbPath,
+        follow: false,
+        inputJson: '{"ticket":"BUG-1"}',
+      });
+      expect(code).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      expect(r.store.getState(runId)!.routing["inputs"]).toEqual({ ticket: "BUG-1" });
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--input end-to-end: number/boolean inputs are coerced into routing.inputs", async () => {
+    const r = rig();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "nb.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: nb\ninputs:\n  count: {type: number}\n  flag: {type: boolean}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const code = await runCommand({
+        workflow: yamlPath,
+        dbPath: r.dbPath,
+        follow: false,
+        inputs: { count: "3", flag: "true" },
+      });
+      expect(code).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      expect(r.store.getState(runId)!.routing["inputs"]).toEqual({ count: 3, flag: true });
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--input config=@file.json end-to-end: parsed object lands on routing.inputs", async () => {
+    const r = rig();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "obj.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: obj\ninputs:\n  config:\n    type: object\n    fields:\n      env: {type: string}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const jsonPath = join(dir, "config.json");
+      writeFileSync(jsonPath, '{"env":"prod"}');
+      const inputs = (await resolveInputArgs([`config=@${jsonPath}`])) as Record<string, string>;
+      const code = await runCommand({ workflow: yamlPath, dbPath: r.dbPath, follow: false, inputs });
+      expect(code).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      expect(r.store.getState(runId)!.routing["inputs"]).toEqual({ config: { env: "prod" } });
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--input config=@file.json with malformed JSON fails with invalid_shape", async () => {
+    const r = rig();
+    const errs: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errs.push(args.map(String).join(" "));
+    };
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "fragua-wf-"));
+      tmps.push(dir);
+      const yamlPath = join(dir, "obj.yaml");
+      writeFileSync(
+        yamlPath,
+        "name: obj\ninputs:\n  config:\n    type: object\n    fields:\n      env: {type: string}\nsteps:\n  work: {type: llm, prompt: hi, next: exit}\n",
+      );
+      const jsonPath = join(dir, "config.json");
+      writeFileSync(jsonPath, "{not json");
+      const inputs = (await resolveInputArgs([`config=@${jsonPath}`])) as Record<string, string>;
+      const code = await runCommand({ workflow: yamlPath, dbPath: r.dbPath, follow: false, inputs });
+      expect(code).toBe(1);
+      expect(r.store.listRunIds()).toHaveLength(0);
+    } finally {
+      console.error = originalError;
+      await r.close();
+    }
+    expect(errs.join("\n")).toContain("is not valid JSON");
+  });
+
   test("--title is recorded on the run; no free-form input is set", async () => {
     const r = rig();
     try {
@@ -162,5 +261,51 @@ describe("resolveInputArgs", () => {
   test("malformed entry (no '=' / empty name) throws", async () => {
     await expect(resolveInputArgs(["nokey"])).rejects.toThrow(/name=value/);
     await expect(resolveInputArgs(["=value"])).rejects.toThrow(/name=value/);
+  });
+});
+
+describe("coerceInputs (merge-only; type coercion lives in buildEnqueue)", () => {
+  test("per-input strings pass through verbatim — no per-type coercion here", () => {
+    expect(coerceInputs({ tags: '["a","b"]', count: "3", flag: "true", ticket: "BUG-1" }, undefined)).toEqual({
+      tags: '["a","b"]',
+      count: "3",
+      flag: "true",
+      ticket: "BUG-1",
+    });
+  });
+
+  test("--input-json supplies the whole inputs object; per-input flags override (as strings)", () => {
+    const out = coerceInputs({ tags: '["x"]' }, '{"ticket":"BUG-1","tags":["old"]}');
+    expect(out).toEqual({ ticket: "BUG-1", tags: '["x"]' });
+  });
+
+  test("--input-json values pass through pre-parsed when not overridden", () => {
+    expect(coerceInputs({}, '{"count":3,"flag":true,"cfg":{"env":"prod"}}')).toEqual({
+      count: 3,
+      flag: true,
+      cfg: { env: "prod" },
+    });
+  });
+
+  test("malformed --input-json throws a clear error", () => {
+    expect(() => coerceInputs({}, "{not json")).toThrow(/--input-json is not valid JSON/);
+  });
+
+  test("--input-json must be a JSON object, not an array/scalar", () => {
+    expect(() => coerceInputs({}, "[1,2]")).toThrow(/must be a JSON object/);
+  });
+
+  test("--input-json with a __proto__ key does not pollute the result or Object.prototype", () => {
+    const out = coerceInputs({}, '{"__proto__":{"polluted":"yes"},"ticket":"BUG-1"}');
+    expect(out).toEqual({ ticket: "BUG-1" });
+    expect((out as Record<string, unknown>)["polluted"]).toBeUndefined();
+    expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+  });
+
+  test("--input-json keeps own constructor / prototype keys (symmetric with k=v)", () => {
+    const out = coerceInputs({}, '{"constructor":"a","prototype":"b"}');
+    expect(Object.hasOwn(out, "constructor")).toBe(true);
+    expect(Object.hasOwn(out, "prototype")).toBe(true);
+    expect(out["constructor"]).toBe("a");
   });
 });

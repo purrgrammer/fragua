@@ -483,12 +483,18 @@ steps:
 
       Merge: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set — you see the whole change; the lenses each saw a slice. Where a quality finding and a defect share a root cause, say so (the fix that resolves both leads).
 
+      TWO FILTERS — apply to every item BEFORE it enters Defects/Improvements:
+        1. CAUSED BY THIS CHANGE. Keep it only if THIS diff introduced the problem or made it reachable. A pre-existing issue the change merely sits beside is out of scope — at most one line each under `## Pre-existing (not introduced here)`, never a Defect.
+        2. WORTH BLOCKING ON. Keep it in Defects/Improvements only if you'd hold a PR on it: reachable by a realistic actor (NOT requiring the workflow's own author to sabotage their own input names/values) AND non-negligible in cost/impact. Demote defense-in-depth hardening, micro-optimizations, and test-nice-to-haves to a flat `## Follow-ups (non-blocking)` list, one line each. A change whose every remaining item is below this bar is LANDABLE — say so in Scope; do not manufacture Defects to look thorough.
+
       File shape, headings exactly:
         `# Code Review`
         `## Scope` — one paragraph: the touched packages/areas (`${{ outputs.resolve.paths }}`), change type, which lenses found anything and which came back clean.
         `## Defects` — subsections `### Critical` / `### High` / `### Medium` / `### Low` (omit empty ones) for correctness/integration/security/performance findings. Per finding: **path:line** — one-line claim. `Why:` one sentence. `Fix:` one sentence or short snippet.
-        `## Improvements` — the quality/coherence findings, same per-finding shape, ordered by severity. These are debt, not defects — keep them separate so neither dilutes the other.
-        If every array is empty: replace both sections with `## All clear` (one paragraph: what was reviewed, what you couldn't see, confidence).
+        `## Improvements` — quality/coherence findings that clear BOTH filters, same per-finding shape, ordered by severity. Debt worth doing, kept separate from defects.
+        `## Follow-ups (non-blocking)` — OPTIONAL flat bullet list of below-the-bar items (defense-in-depth, micro-perf, extra tests). One line each. Never blocks; exists so the bar stays high without losing the observation.
+        `## Pre-existing (not introduced here)` — OPTIONAL one-line list of issues the change merely sits beside. Out of scope.
+        If nothing cleared the filters: lead `## Scope` with "Landable" and put any residue under Follow-ups; use `## All clear` only when there is genuinely nothing to note.
         `## Next steps` — at most 3 ordered actions, or `No follow-up required.`
 
       Emit only `WROTE`.
@@ -504,7 +510,8 @@ steps:
       Read `review.md` (cwd-relative) — the review under gate. Judge on its own merits.
         1. Every finding's path:line is verifiable — spot-check 3 by reading the cited path.
         2. Severity calibration sane (no `low` for a data-loss claim, no `critical` nitpicks; quality/coherence items live under Improvements, never inflated into Defects).
-        3. Schema followed — Scope present and names the lens coverage; Defects/Improvements sections (or All clear); Next steps present.
+        3. Schema followed — Scope present and names the lens coverage; Defects/Improvements (or All clear); optional Follow-ups / Pre-existing sections allowed; Next steps present.
+        4. A TIGHT, blocker-focused review is CORRECT. An item demoted to `## Follow-ups (non-blocking)` or `## Pre-existing` is the value bar working, not an omission. NEVER REJECT for brevity, a short Defects section, or for relegating defense-in-depth / micro-perf / extra-test items. Only 1–3 gate.
       All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>`.
 
   signoff:                             # human gate after skip / quick / full

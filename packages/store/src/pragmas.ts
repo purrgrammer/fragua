@@ -5,7 +5,10 @@ import type { Database } from "bun:sqlite";
  * that drops free-form `routing.input`); the walk-forward step lives in
  * `migrations.ts` (SCHEMA_MIGRATIONS). Note: it does NOT gate run resume —
  * runs pin `EVENT_CONTRACT_VERSION` for that (axis split, §3.1).
- * v3 adds the `outputs` index table (structured step outputs, additive). */
+ * v3 adds the `outputs` index table (structured step outputs, additive).
+ * v4 adds `messages.pass` (goal-gate re-entry epoch). The event-payload 4 KiB
+ * BYTE cap (I2/I10) is enforced in the store.ts write guard, NOT a SQL CHECK —
+ * a byte-exact CHECK can't be applied retroactively over historical rows. */
 export const CURRENT_SCHEMA_VERSION = 4;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
@@ -29,13 +32,26 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * route_call_not_isolated / edge_no_match) now carry the halted turn's
  * accrued cost so the reducer folds it into run metrics — a v2 daemon
  * would drop that spend from run totals. `MIN_COMPATIBLE` stays 1 — the
- * fields are optional and pre-v3 halts simply carry none. */
-export const EVENT_CONTRACT_VERSION = 3;
+ * fields are optional and pre-v3 halts simply carry none.
+ * v4 collapses the fact taxonomy (fact-taxonomy.md §3.1–3.2): the three
+ * terminal facts (`run_completed` / `run_halted` / `run_cancelled`) become
+ * one `fact.run_terminated { status: completed | errored | aborted }`, and
+ * the separate `fact.run_paused_human` folds into `fact.run_paused` as
+ * `reason: "human"`. This is an EMISSION cut only — new runs emit the v4
+ * facts — but the reducer/read-plane STILL fold the pre-v4 taxonomy (the
+ * legacy fact types live on as read-only members of `FactEvent`), so v1–v3
+ * runs keep folding and `MIN_COMPATIBLE` stays 1. */
+export const EVENT_CONTRACT_VERSION = 4;
 
-/** Lowest contract version the daemon folds. Ratchets ONLY by deliberate act
- * (§3.4): advancing it strands every run pinned below it, so it moves only in
- * a dedicated commit that names the dropped versions and removes their reducer
- * paths. A snapshot test pins this value. */
+/** Lowest contract version the daemon folds. THE RULE: write the newest
+ * version, READ ALL versions. Events are an immutable, append-only log, so the
+ * reducer/read-plane fold the WHOLE range [MIN_COMPATIBLE, EVENT_CONTRACT_VERSION]
+ * forever; only EMISSION is version-current. Dropping a fact type from emission
+ * (e.g. the v4 taxonomy collapse) does NOT move this floor — the type is
+ * retained as legacy/read-only in the union+fold. MIN_COMPATIBLE rises ONLY
+ * when a historical format becomes genuinely un-foldable (its reducer path can
+ * no longer reconstruct `run_state`), a rare deliberate act that strands every
+ * run pinned below it. A snapshot test pins this value. */
 export const MIN_COMPATIBLE_CONTRACT_VERSION = 1;
 
 /** A `daemon_lock` row whose `heartbeat_at` is older than this is treated as

@@ -159,7 +159,11 @@ function rejectBannedKeys(obj: Record<string, unknown>, path: string): void {
   }
 }
 
-function parseProfileNode(raw: unknown, path: string): OutputProfile {
+/** Parse a single type-declaration node into an `OutputProfile` (scalar /
+ * choice / record / array), rejecting any construct outside the restricted
+ * profile. Exported so `inputs:` declarations reuse the SAME grammar `outputs:`
+ * uses (no fork). `path` is a human-readable location for error messages. */
+export function parseProfileNode(raw: unknown, path: string): OutputProfile {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new OutputsProfileError(
       `outputs type at "${path}" must be a mapping (got ${Array.isArray(raw) ? "array" : typeof raw})`,

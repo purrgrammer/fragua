@@ -15,7 +15,20 @@ import {
   type StoredEvent,
 } from "@fragua/store";
 
-const TERMINAL_FACTS = new Set(["fact.run_completed", "fact.run_halted", "fact.run_cancelled", "fact.run_quarantined"]);
+const TERMINAL_FACTS = new Set(["fact.run_terminated", "fact.run_quarantined"]);
+
+/** Translate the collapsed `fact.run_terminated` (fact-taxonomy.md §3.1) back
+ *  to its pre-collapse disposition string for tests that assert over a list of
+ *  bare `event.type` strings (where the `status` discriminant is otherwise
+ *  lost). Non-terminal types pass through unchanged. Keeps disposition-
+ *  distinguishing assertions (completed vs errored vs aborted) faithful. */
+export function dispositionType(e: { type: string; payload: unknown }): string {
+  if (e.type !== "fact.run_terminated") return e.type;
+  const status = (e.payload as { status?: string }).status;
+  if (status === "completed") return "fact.run_completed";
+  if (status === "aborted") return "fact.run_cancelled";
+  return "fact.run_halted";
+}
 
 const autoWake: ReadonlySet<string> = AUTO_WAKE_PAUSE_REASONS as ReadonlySet<string>;
 

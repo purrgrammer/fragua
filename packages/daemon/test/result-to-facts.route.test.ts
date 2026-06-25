@@ -82,10 +82,10 @@ describe("resultToFacts — routing-node halt reasons", () => {
       detail: "agent ended turn without calling route()",
     };
     const facts = resultToFacts(result, { state: minimalRunState("triage"), appliedIntentSeqs: [] });
-    const halted = findFact(facts, "fact.run_halted");
+    const halted = findFact(facts, "fact.run_terminated");
     expect(halted).toBeDefined();
-    expect(halted!.payload.reason).toBe("route_not_picked");
-    expect(halted!.payload.detail).toBe("agent ended turn without calling route()");
+    expect((halted!.payload as { reason?: string }).reason).toBe("route_not_picked");
+    expect((halted!.payload as { detail?: string }).detail).toBe("agent ended turn without calling route()");
   });
 
   test("halt.reason=route_call_not_isolated surfaces on fact.run_halted", () => {
@@ -95,8 +95,8 @@ describe("resultToFacts — routing-node halt reasons", () => {
       detail: "route() shared an assistant response with other tool calls",
     };
     const facts = resultToFacts(result, { state: minimalRunState("triage"), appliedIntentSeqs: [] });
-    const halted = findFact(facts, "fact.run_halted");
-    expect(halted?.payload.reason).toBe("route_call_not_isolated");
+    const halted = findFact(facts, "fact.run_terminated");
+    expect((halted?.payload as { reason?: string } | undefined)?.reason).toBe("route_call_not_isolated");
   });
 
   test("halt.reason=edge_no_match surfaces on fact.run_halted", () => {
@@ -106,9 +106,9 @@ describe("resultToFacts — routing-node halt reasons", () => {
       detail: 'no edge keyed route="hard" from triage',
     };
     const facts = resultToFacts(result, { state: minimalRunState("triage"), appliedIntentSeqs: [] });
-    const halted = findFact(facts, "fact.run_halted");
-    expect(halted?.payload.reason).toBe("edge_no_match");
-    expect(halted?.payload.detail).toContain("hard");
+    const halted = findFact(facts, "fact.run_terminated");
+    expect((halted?.payload as { reason?: string } | undefined)?.reason).toBe("edge_no_match");
+    expect((halted?.payload as { detail?: string } | undefined)?.detail).toContain("hard");
   });
 });
 
@@ -143,6 +143,6 @@ describe("resultToFacts — structured outputs", () => {
     const completed = findFact(facts, "fact.node_completed");
     expect(completed!.payload.outcomeStatus).toBe("success");
     expect((completed!.payload.outputs as { blob: string }).blob.length).toBe(8000);
-    expect(findFact(facts, "fact.run_halted")).toBeUndefined();
+    expect(findFact(facts, "fact.run_terminated")).toBeUndefined();
   });
 });

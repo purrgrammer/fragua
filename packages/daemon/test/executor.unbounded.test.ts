@@ -65,7 +65,9 @@ describe("unbounded llm — no AbortSignal.timeout fires", () => {
     expect(capturedSignal!.aborted).toBe(false);
     const events = r.store.getEvents("ub-1");
     expect(events.find((e) => e.type === "fact.handler_timeout_leaked")).toBeUndefined();
-    expect(events.find((e) => e.type === "fact.run_halted")).toBeUndefined();
+    expect(
+      events.find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored"),
+    ).toBeUndefined();
     const aborted = events.find((e) => e.type === "fact.node_aborted");
     expect(aborted).toBeUndefined();
     const completed = events.find(

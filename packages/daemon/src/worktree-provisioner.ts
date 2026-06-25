@@ -18,7 +18,7 @@
 //     the comment there) — re-initialising reuses an existing worktree
 //     rather than failing on `git worktree add`.
 //   - Failure mode: `ensure` throws when `init()` rejects. The executor
-//     catches and emits a `fact.run_halted` with `reason=error`,
+//     catches and emits a `fact.run_terminated{errored}` with `reason=error`,
 //     `detail=worktree_provision_failed: ...`. The run can be
 //     inspected via intent.unquarantine or manually cleaned up.
 //   - Dispose uses `WorktreeEnvironment.dispose()` which is a best-
@@ -235,7 +235,7 @@ export class WorktreeProvisioner implements Provisioner {
     if (repoRoot == null) {
       // A run with no cwd has no project to provision against. Never fall back
       // to the daemon's own dir — that would execute the run in the operator's
-      // checkout. Fail; the executor turns this into a clean fact.run_halted.
+      // checkout. Fail; the executor turns this into a clean fact.run_terminated{errored}.
       throw new Error("worktree provision: run has no cwd (imported / ephemeral runs must carry a cwd)");
     }
 

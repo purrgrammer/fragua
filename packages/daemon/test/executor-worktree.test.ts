@@ -174,7 +174,9 @@ describe("executor + worktree provisioner", () => {
     const state = r.store.getState("run-fail");
     expect(state?.status).toBe("halted");
     const events = r.store.getEvents("run-fail");
-    const halt = events.find((e) => e.type === "fact.run_halted");
+    const halt = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halt).toBeDefined();
     const payload = halt!.payload as { reason: string; detail?: string };
     expect(payload.reason).toBe("worktree_error");

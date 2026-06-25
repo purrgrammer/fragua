@@ -43,6 +43,12 @@ const SURFACE_DECLS = [
   "QuarantineReason",
   "RunEnqueuedPayload",
   "IntentEvent",
+  // contract: no-bump — re-added the LEGACY (≤v3) terminal/pause fact types
+  // (run_completed / run_halted / run_cancelled / run_paused_human) as
+  // read-only union members so the reducer/read-plane fold pre-v4 runs. This is
+  // a READ-surface restoration, not an emission change: v4 still emits only
+  // run_terminated / run_paused, so EVENT_CONTRACT_VERSION stays 4 and
+  // MIN_COMPATIBLE stays 1 (write-new, read-all).
   "FactEvent",
 ] as const;
 
@@ -125,7 +131,11 @@ describe("event-contract version discipline", () => {
   test("MIN_COMPATIBLE_CONTRACT_VERSION is pinned — a ratchet strands runs (§3.4)", () => {
     // Advancing the floor permanently strands every run pinned below it, so it
     // must be a conscious, reviewed diff — never a refactor side effect. Moving
-    // the constant forces this test to move too.
+    // the constant forces this test to move too. THE RULE: write the newest
+    // version, READ ALL versions. An emission cut (e.g. the v4 fact-taxonomy
+    // collapse) does NOT move this floor — the retired fact types stay
+    // legacy/read-only in the union+fold, so v1–v3 runs keep folding. The floor
+    // rises only when a format is genuinely un-foldable.
     expect(MIN_COMPATIBLE_CONTRACT_VERSION).toBe(1);
   });
 });

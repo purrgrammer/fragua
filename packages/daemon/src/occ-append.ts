@@ -82,8 +82,9 @@ export function makeOccController(deps: {
           if (fresh == null || fresh.status !== "running") return { halted: true };
           const ok = await tryAppendFact(store, runId, fresh.version, [
             {
-              type: "fact.run_halted",
+              type: "fact.run_terminated",
               payload: {
+                status: "errored",
                 reason: "occ_exhausted",
                 detail: `${occCount} consecutive OCC conflicts on ${attemptedFactType} for node ${nodeId}`,
                 occContext: { count: occCount, nodeId, iteration, lastVersion, attemptedFactType },

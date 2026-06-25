@@ -93,7 +93,7 @@ describe("POST /workflows — upload", () => {
     expect(wf?.name).toBe("hello");
     // (A): the upload persists the canonical IR (loc-stripped Graph JSON) +
     // its version, so the dispatch loader deserializes instead of re-parsing.
-    expect(wf?.irVersion).toBe(2);
+    expect(wf?.irVersion).toBe(3);
     expect(wf?.ir).toBeTruthy();
     const ir = JSON.parse(wf!.ir!) as { nodes: Record<string, unknown>; edges: unknown[] };
     expect(Object.keys(ir.nodes)).toContain("work");
@@ -465,6 +465,30 @@ steps:
     expect(state!.routing["inputs"]).toEqual({ ticket: "BUG-1", env: "prod" });
   });
 
+  test("input validation: structured object input is accepted and persisted on routing.inputs", async () => {
+    const src = `name: deploy
+inputs:
+  config:
+    type: object
+    required: true
+    fields:
+      env: {type: choice, options: [dev, prod]}
+steps:
+  work: {type: llm, prompt: "deploy \${{ inputs.config.env }}", next: exit}
+`;
+    workflowReader.set("deploy", src, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "deploy",
+      workflowScope: "local",
+      inputs: { config: { env: "prod" } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { runId: string };
+    const state = store.getState(body.runId);
+    expect(state!.routing["inputs"]).toEqual({ config: { env: "prod" } });
+  });
+
   test("simple flow: workflow_not_found when the named workflow isn't on disk", async () => {
     const res = await req("POST", "/runs", {
       cwd: "/projects/alpha",
@@ -701,7 +725,11 @@ describe("GET /runs/:id/steps", () => {
     store.appendFact("steps-one", [{ type: "fact.node_started", payload: { nodeId: "n1", iteration: 0 } }], s1.version);
     store.appendObservabilityEvents("steps-one", [{ type: "llm.start", payload: { nodeId: "n1", model: "stub" } }]);
     const s2 = store.getState("steps-one")!;
-    store.appendFact("steps-one", [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s2.version);
+    store.appendFact(
+      "steps-one",
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+      s2.version,
+    );
 
     const res = await app.request("/runs/steps-one/steps");
     expect(res.status).toBe(200);
@@ -787,7 +815,10 @@ describe("GET /runs?status= filter", () => {
     start("st-paused");
     fact("st-paused", { type: "fact.run_paused", payload: { reason: "operator", nodeId: "n1" } });
     start("st-paused_human");
-    fact("st-paused_human", { type: "fact.run_paused_human", payload: { nodeId: "n1", text: "?", routes: ["a"] } });
+    fact("st-paused_human", {
+      type: "fact.run_paused",
+      payload: { reason: "human", nodeId: "n1", text: "?", routes: ["a"] },
+    });
     start("st-paused_auto");
     fact("st-paused_auto", {
       type: "fact.run_paused",
@@ -802,11 +833,11 @@ describe("GET /runs?status= filter", () => {
       },
     });
     start("st-completed");
-    fact("st-completed", { type: "fact.run_completed", payload: { finalNode: "n1" } });
+    fact("st-completed", { type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } });
     start("st-cancelled");
-    fact("st-cancelled", { type: "fact.run_cancelled", payload: { intentSeq: 1 } });
+    fact("st-cancelled", { type: "fact.run_terminated", payload: { status: "aborted", intentSeq: 1 } });
     start("st-halted");
-    fact("st-halted", { type: "fact.run_halted", payload: { reason: "error" } });
+    fact("st-halted", { type: "fact.run_terminated", payload: { status: "errored", reason: "error" } });
     start("st-quarantined");
     fact("st-quarantined", { type: "fact.run_quarantined", payload: { reason: "other" } });
 
@@ -914,7 +945,7 @@ describe("intent-write routes", () => {
     const state = store.getState("rh")!;
     store.appendFact(
       "rh",
-      [{ type: "fact.run_paused_human", payload: { nodeId: "ask", text: "?", routes: ["A", "B"] } }],
+      [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "ask", text: "?", routes: ["A", "B"] } }],
       state.version,
     );
 
@@ -929,7 +960,12 @@ describe("intent-write routes", () => {
     const state = store.getState("rh2")!;
     store.appendFact(
       "rh2",
-      [{ type: "fact.run_paused_human", payload: { nodeId: "ask", text: "?", routes: ["approve", "reject"] } }],
+      [
+        {
+          type: "fact.run_paused",
+          payload: { reason: "human", nodeId: "ask", text: "?", routes: ["approve", "reject"] },
+        },
+      ],
       state.version,
     );
 
@@ -948,7 +984,7 @@ describe("intent-write routes", () => {
     const state = store.getState("rh4")!;
     store.appendFact(
       "rh4",
-      [{ type: "fact.run_paused_human", payload: { nodeId: "ask", text: "?", routes: [] } }],
+      [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "ask", text: "?", routes: [] } }],
       state.version,
     );
 
@@ -1041,7 +1077,7 @@ describe("GET /metrics/global", () => {
             nextNode: "__end__",
           },
         },
-        { type: "fact.run_completed", payload: { finalNode: "__end__" } },
+        { type: "fact.run_terminated", payload: { status: "completed", finalNode: "__end__" } },
       ],
       s1.version,
     );
@@ -1209,7 +1245,11 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     }));
     store.appendObservabilityEvents("long", obs);
     const s1 = store.getState("long")!;
-    store.appendFact("long", [{ type: "fact.run_completed", payload: { finalNode: "a" } }], s1.version);
+    store.appendFact(
+      "long",
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "a" } }],
+      s1.version,
+    );
 
     const routes = createRoutes({ store, ssePollMs: 10, sseBatchSize: 3 });
     const res = await routes.fetch(new Request("http://test/runs/long/stream"));
@@ -1236,7 +1276,7 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     const costMatches = chunks.match(/"type":"cost\.recorded"/g) ?? [];
     expect(costMatches.length).toBe(12);
     // Terminal fact made it through too.
-    expect(chunks).toContain("fact.run_completed");
+    expect(chunks).toContain("fact.run_terminated");
   });
 
   test("/runs/:id/stream closes on its own once the run reaches a terminal status", async () => {
@@ -1257,7 +1297,11 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
       s0.version,
     );
     const s1 = store.getState("term")!;
-    store.appendFact("term", [{ type: "fact.run_completed", payload: { finalNode: "a" } }], s1.version);
+    store.appendFact(
+      "term",
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "a" } }],
+      s1.version,
+    );
 
     const routes = createRoutes({ store, ssePollMs: 10 });
     const res = await routes.fetch(new Request("http://test/runs/term/stream"));
@@ -1282,7 +1326,7 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     await reader.cancel().catch(() => {});
 
     expect(closed).toBe(true);
-    expect(chunks).toContain("fact.run_completed");
+    expect(chunks).toContain("fact.run_terminated");
   });
 
   test("/runs/:id/stream closes once the run reaches the quarantined status", async () => {
@@ -1386,7 +1430,11 @@ describe("global event feed (cross-run)", () => {
       ],
       b0.version,
     );
-    store.appendFact("b", [{ type: "fact.run_completed", payload: { finalNode: "n" } }], b1.newVersion);
+    store.appendFact(
+      "b",
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n" } }],
+      b1.newVersion,
+    );
   }
 
   test("GET /events returns allow-listed events oldest-first, excluding node + observability", async () => {
@@ -1399,7 +1447,7 @@ describe("global event feed (cross-run)", () => {
     const types = events.map((e) => e.type);
     // Allow-listed kinds present
     expect(types).toContain("fact.run_started");
-    expect(types).toContain("fact.run_completed");
+    expect(types).toContain("fact.run_terminated");
     // Excluded kinds absent — node-level facts, observability, and the
     // seq-1 enqueue intent are filtered out (facts-only feed).
     expect(types).not.toContain("intent.run_enqueued");
@@ -1452,7 +1500,11 @@ describe("global event feed (cross-run)", () => {
     // Now append a halt on `a` (allow-listed) and a node_aborted on `a`
     // (excluded). The stream should see only the halt.
     const aState = store.getState("a")!;
-    store.appendFact("a", [{ type: "fact.run_halted", payload: { reason: "error" } }], aState.version);
+    store.appendFact(
+      "a",
+      [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error" } }],
+      aState.version,
+    );
     const aState2 = store.getState("a")!;
     // node_aborted on a non-running run would fail OCC; use cost.recorded
     // (observability, doesn't bump version) to inject an excluded kind.
@@ -1467,7 +1519,7 @@ describe("global event feed (cross-run)", () => {
 
     const chunks = await drainSSE(streamRes, "fact.run_quarantined");
 
-    expect(chunks).toContain("fact.run_halted");
+    expect(chunks).toContain("fact.run_terminated");
     expect(chunks).toContain("fact.run_quarantined");
     // Excluded kinds must not appear, even though they share the same
     // events table.
@@ -1670,7 +1722,11 @@ describe("global event feed (cross-run)", () => {
       ],
       s0.version,
     );
-    store.appendFact("done", [{ type: "fact.run_completed", payload: { finalNode: "n" } }], s1.newVersion);
+    store.appendFact(
+      "done",
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n" } }],
+      s1.newVersion,
+    );
 
     const routes = createRoutes({ store, ssePollMs: 10 });
     const res = await routes.fetch(new Request("http://test/events/stream"));
@@ -1678,9 +1734,9 @@ describe("global event feed (cross-run)", () => {
     // Drain until both lifecycle events arrive, then cancel. The stream
     // must NOT close on its own (per-run terminality doesn't apply); the
     // post-cancel state is the assertion.
-    const chunks = await drainSSE(res, "fact.run_completed");
+    const chunks = await drainSSE(res, "fact.run_terminated");
     expect(chunks).toContain("fact.run_started");
-    expect(chunks).toContain("fact.run_completed");
+    expect(chunks).toContain("fact.run_terminated");
     // If `shouldClose` had fired the way per-run streams do, drainSSE
     // would have hit `done: true` before its 500ms deadline. The fact
     // that we reached the marker means the loop kept running past

@@ -62,7 +62,7 @@ async function seedTerminalRun(store: ReturnType<typeof freshStore>): Promise<st
     payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
   };
   v = store.appendFact(runId, [started], v).newVersion;
-  store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+  store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
   return runId;
 }
 
@@ -400,6 +400,60 @@ describe("importRunBundle", () => {
   });
 });
 
+describe("exportRunBundle - terminal result envelope", () => {
+  function resultEntry(bytes: Uint8Array, runId: string): unknown | undefined {
+    const entries = readTar(bytes);
+    const entry = entries.find((e) => e.name === `runs/${runId}/result.json`);
+    return entry === undefined ? undefined : JSON.parse(new TextDecoder().decode(entry.data));
+  }
+
+  test("ships runResult as runs/<id>/result.json when supplied", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const runResult = {
+      kind: "fragua.run_result",
+      runId,
+      status: "completed",
+      outputs: { verdict: "approve" },
+      usage: { inputTokens: 1, outputTokens: 2, costUsd: 0.5 },
+    };
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "x", runResult });
+    src.close();
+    expect(resultEntry(bytes, runId)).toEqual(runResult);
+  });
+
+  test("omits result.json when runResult is absent (backward-compatible default)", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    expect(resultEntry(bytes, runId)).toBeUndefined();
+  });
+
+  test("scrubs a live literal echoed inside runResult", async () => {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const secret = "fragua-bundle-secret-token-XYZ9876543210";
+    const runResult = {
+      kind: "fragua.run_result",
+      runId,
+      status: "completed",
+      outputs: { leaked: secret },
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+    };
+    const { bytes } = src.exportRunBundle(runId, {
+      fraguaVersion: "x",
+      labelMode: "generic",
+      extraLiterals: [{ value: secret, source: "env:TOKEN" }],
+      runResult,
+    });
+    src.close();
+    expect(Buffer.from(bytes).includes(secret)).toBe(false);
+    const projected = resultEntry(bytes, runId) as { outputs: { leaked: string } };
+    expect(projected.outputs.leaked).not.toBe(secret);
+  });
+});
+
 describe("exportRunBundle - observability event filtering", () => {
   /** Seed a terminal run and append observability events covering all denylist
    * families plus several retained types, before exporting. */
@@ -621,7 +675,11 @@ describe("exportRunBundle - retained read-plane anchors", () => {
         payload: { title: "Fix the bug" },
       },
     ]);
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "llm-node" } }], v);
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "llm-node" } }],
+      v,
+    );
     return runId;
   }
 
@@ -739,7 +797,7 @@ describe("exportRunBundle - retained read-plane anchors", () => {
       v,
     ).newVersion;
     src.appendObservabilityEvents(runId, [{ type: "run.title_generated", payload: { title: `Key is ${SECRET}` } }]);
-    src.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n" } }], v);
+    src.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n" } }], v);
 
     const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     src.close();
@@ -868,7 +926,7 @@ describe("exportRunBundle - message transcript scrubbing", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
     return runId;
   }
 
@@ -964,7 +1022,7 @@ describe("exportRunBundle - message transcript scrubbing", () => {
       payload: { workflowSha: sha3, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store2.appendFact(runId, [started], v).newVersion;
-    store2.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store2.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { bytes } = store2.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store2.close();
@@ -1116,7 +1174,12 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
     // Terminal: fact.run_halted with detail — surface 5 (detail key).
     store.appendFact(
       runId,
-      [{ type: "fact.run_halted", payload: { reason: "error", detail: `halted: ${AKIA_SECRET}` } } as FactEvent],
+      [
+        {
+          type: "fact.run_terminated",
+          payload: { status: "errored", reason: "error", detail: `halted: ${AKIA_SECRET}` },
+        } as FactEvent,
+      ],
       v,
     );
 
@@ -1217,7 +1280,9 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
     store.close();
 
     const events = extractEvents(bytes, runId);
-    const ev = events.find((e) => e.type === "fact.run_halted");
+    const ev = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(ev).toBeDefined();
     expect(typeof ev!.payload["detail"]).toBe("string");
     expect(ev!.payload["detail"] as string).toContain("[REDACTED");
@@ -1356,7 +1421,7 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     return { runId, origTextSha: textRef.sha256, origBinSha: binRef.sha256 };
   }
@@ -1509,7 +1574,7 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store.close();
@@ -1548,7 +1613,7 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store.close();
@@ -1618,7 +1683,7 @@ describe("exportRunBundle — spilled routing.inputs blob scrub + travel", () =>
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     // Capture the original spilled blob sha from the stored genesis event.
     const events = store.getEvents(runId);
@@ -1762,7 +1827,7 @@ describe("exportRunBundle — spilled routing.inputs blob scrub + travel", () =>
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store.close();
@@ -1831,7 +1896,7 @@ describe("exportRunBundle - ci profile", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
     return runId;
   }
 
@@ -1881,7 +1946,7 @@ describe("exportRunBundle - ci profile", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
     const { liveLiteralHit } = store.exportRunBundle(runId, {
       fraguaVersion: "0.0.0-test",
       labelMode: "generic",
@@ -1929,7 +1994,7 @@ describe("exportRunBundle - ci profile", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { liveLiteralHit } = store.exportRunBundle(runId, {
       fraguaVersion: "0.0.0-test",
@@ -1985,7 +2050,7 @@ describe("exportRunBundle - ci profile", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { liveLiteralHit } = store.exportRunBundle(runId, {
       fraguaVersion: "0.0.0-test",
@@ -2030,7 +2095,7 @@ describe("exportRunBundle - export profile (default)", () => {
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "base", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
     return runId;
   }
 
@@ -2106,7 +2171,7 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
 
     store.appendFact(
       runId,
-      [{ type: "fact.run_halted", payload: { reason: "error", detail: "done" } } as FactEvent],
+      [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "done" } } as FactEvent],
       v,
     );
     return runId;
@@ -2162,7 +2227,9 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store.close();
     const events = extractEvents(bytes, runId);
-    const halted = events.find((e) => e.type === "fact.run_halted");
+    const halted = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halted).toBeDefined();
     // "error" is an enum value, not a secret — it must survive.
     expect(halted!.payload["reason"]).toBe("error");
@@ -2186,7 +2253,7 @@ describe("(bug-4) scrubEventPayload: reason only scrubbed on intent.cancel_reque
     // Bug: 'reason' is in FREE_TEXT_KEYS so it is scrubbed on any event type.
     // Fix: remove 'reason' from FREE_TEXT_KEYS; only scrub on intent.cancel_requested.
     const payload = { reason: NEEDLE, detail: "done" };
-    const result = scrubEventPayload("fact.run_halted", payload, registry) as Record<string, unknown>;
+    const result = scrubEventPayload("fact.run_terminated", payload, registry) as Record<string, unknown>;
     expect(result["reason"]).toBe(NEEDLE);
   });
 
@@ -2258,7 +2325,7 @@ describe("(bug-7) application/json artifact scrubs values, keeps keys and valid 
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "b", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store.close();
@@ -2338,7 +2405,7 @@ describe("(bug-7) application/json artifact scrubs values, keeps keys and valid 
       payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "b", baseGitRef: "main" },
     };
     v = store.appendFact(runId, [started], v).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
 
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
     store.close();
@@ -2407,7 +2474,7 @@ describe("structured outputs ↔ bundle", () => {
       ],
       v,
     ).newVersion;
-    store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "exit" } }], v);
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "exit" } }], v);
     return runId;
   }
 

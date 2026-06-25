@@ -76,7 +76,11 @@ function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?:
     s0.version,
   );
   const s1 = store.getState(opts.runId)!;
-  store.appendFact(opts.runId, [{ type: "fact.run_completed", payload: { finalNode: "work" } }], s1.version);
+  store.appendFact(
+    opts.runId,
+    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }],
+    s1.version,
+  );
   if (opts.pending === true) {
     const s2 = store.getState(opts.runId)!;
     store.appendFact(

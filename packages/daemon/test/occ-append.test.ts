@@ -16,16 +16,22 @@ describe("tryAppendFact", () => {
     expect(await tryAppendFact(stubStore({}), "r", 0, [])).toBe(true); // empty batch short-circuits
 
     const ok = stubStore({ appendFact: (() => ({}) as never) as unknown as IEventStore["appendFact"] });
-    expect(await tryAppendFact(ok, "r", 0, [{ type: "fact.run_halted", payload: { reason: "error" } }])).toBe(true);
+    expect(
+      await tryAppendFact(ok, "r", 0, [
+        { type: "fact.run_terminated", payload: { status: "errored", reason: "error" } },
+      ]),
+    ).toBe(true);
 
     const conflict = stubStore({
       appendFact: (() => {
         throw new ConcurrencyError(1, 2);
       }) as unknown as IEventStore["appendFact"],
     });
-    expect(await tryAppendFact(conflict, "r", 0, [{ type: "fact.run_halted", payload: { reason: "error" } }])).toBe(
-      false,
-    );
+    expect(
+      await tryAppendFact(conflict, "r", 0, [
+        { type: "fact.run_terminated", payload: { status: "errored", reason: "error" } },
+      ]),
+    ).toBe(false);
 
     const boom = stubStore({
       appendFact: (() => {
@@ -33,7 +39,7 @@ describe("tryAppendFact", () => {
       }) as unknown as IEventStore["appendFact"],
     });
     await expect(
-      tryAppendFact(boom, "r", 0, [{ type: "fact.run_halted", payload: { reason: "error" } }]),
+      tryAppendFact(boom, "r", 0, [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error" } }]),
     ).rejects.toThrow("disk full");
   });
 });

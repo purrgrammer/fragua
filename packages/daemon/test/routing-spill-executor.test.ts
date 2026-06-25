@@ -12,7 +12,7 @@ import {
   PER_VALUE_SPILL_BYTES,
   SqliteStore,
 } from "@fragua/store";
-import { buildSubstitutionArgs, readStringMap } from "../src/executor-helpers.ts";
+import { buildSubstitutionArgs, readInputMap } from "../src/executor-helpers.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -111,11 +111,13 @@ describe("spilled routing.inputs — executor substitution", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildSubstitutionArgs — un-materialized BlobRef is not a string", () => {
-  test("readStringMap drops non-string values (documents why caller must materialize)", () => {
+  test("readInputMap drops un-materialized $fragua_blob refs (documents why caller must materialize)", () => {
     const sha = "a".repeat(64);
     const ref = makeBlobRef(sha, 42);
-    // BlobRef is an object, not a string — readStringMap must drop it
-    expect(readStringMap({ task: ref })).toEqual({});
+    // A still-spilled value is a `$fragua_blob` ref object — readInputMap must
+    // drop it rather than feed a ref into substitution. A sibling plain string
+    // survives, proving only the unrehydrated ref is lost.
+    expect(readInputMap({ task: ref, env: "prod" })).toEqual({ env: "prod" });
     // This proves that without materializeRouting, the spilled value is lost
     // and callers MUST materialize before building substitution args.
   });

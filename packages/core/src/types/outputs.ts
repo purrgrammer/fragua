@@ -185,7 +185,11 @@ export function validateOutputsValue(decl: OutputsDecl, value: unknown): string 
   return null;
 }
 
-function validateValueAgainstProfile(profile: OutputProfile, value: unknown, path: string): string | null {
+/** Validate a single runtime value against one `OutputProfile`. Returns `null`
+ * on success or an error message. Shared by `validateOutputsValue` (per emitted
+ * field) and the run-input validator (object/array inputs reuse the same
+ * profile grammar). `path` is a human-readable location for the message. */
+export function validateValueAgainstProfile(profile: OutputProfile, value: unknown, path: string): string | null {
   if (profile.kind === "string") {
     if (typeof value !== "string") return `field "${path}" must be a string, got ${typeof value}`;
     return null;
@@ -220,10 +224,13 @@ function validateValueAgainstProfile(profile: OutputProfile, value: unknown, pat
     const obj = value as Record<string, unknown>;
     const requiredSet = new Set(profile.required);
     for (const req of profile.required) {
-      if (obj[req] === undefined) return `field "${path}.${req}" is required but missing`;
+      if (!Object.hasOwn(obj, req)) return `field "${path}.${req}" is required but missing`;
     }
     for (const [k, v] of Object.entries(profile.fields)) {
-      const fieldVal = obj[k];
+      // `Object.hasOwn` (not bracket access) so a declared field named
+      // `toString` / `constructor` doesn't read the inherited built-in off an
+      // object that omits it.
+      const fieldVal = Object.hasOwn(obj, k) ? obj[k] : undefined;
       // Optional field (absent from `required`): may be omitted OR explicitly
       // null — both mean "no value". Only validate the type when a non-null
       // value is actually present.
@@ -234,7 +241,7 @@ function validateValueAgainstProfile(profile: OutputProfile, value: unknown, pat
     }
     // Nested records are `additionalProperties: false` too.
     for (const k of Object.keys(obj)) {
-      if (!(k in profile.fields)) return `field "${path}.${k}" is not a declared field`;
+      if (!Object.hasOwn(profile.fields, k)) return `field "${path}.${k}" is not a declared field`;
     }
     return null;
   }

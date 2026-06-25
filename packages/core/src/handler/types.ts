@@ -234,7 +234,7 @@ export type HandlerResult =
        * `fact.node_completed.payload.route`. */
       route?: string;
       /** Single-line reason emitted by the handler when `outcomeStatus="fail"`.
-       * Surfaces verbatim as `fact.run_halted.detail` when the fail outcome
+       * Surfaces verbatim as `fact.run_terminated{errored}.detail` when the fail outcome
        * routes to a terminal node (executor's `aborted_exit` path). Optional
        * — handlers that fail without a quotable reason (e.g. retry-policy
        * exhaustion) leave it unset and the executor falls back to a generic
@@ -275,21 +275,21 @@ export type HandlerResult =
       /** Operator-facing prompt; sourced from the human node's `text=`. */
       text: string;
       /** Declared route names. The daemon emits these verbatim into
-       * `fact.run_paused_human.payload.routes`; the server-side
+       * `fact.run_paused{reason:"human"}.payload.routes`; the server-side
        * `/runs/:id/human` endpoint enforces the enum on inbound
        * intents. */
       routes: string[];
       /** Sparse route-name → button-text map, sourced from each outgoing
        * edge's `label=` override (D6). Only routes carrying an explicit
        * label appear; the UI falls back to `humanize(route)` otherwise.
-       * Emitted into `fact.run_paused_human.payload.routeLabels`. */
+       * Emitted into `fact.run_paused{reason:"human"}.payload.routeLabels`. */
       routeLabels?: Record<string, string>;
     }
   | {
       kind: "halt";
       // Executor-only HaltReason literals (drift-lint coverage):
       // `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"` are
-      // valid `fact.run_halted` reasons that the executor emits directly
+      // valid `fact.run_terminated{errored}` reasons that the executor emits directly
       // — not constructible by handlers. (Version mismatch is no longer
       // here: it is the recoverable `engine_incompatible` pause.)
       // The reasons in this union below (`"max_retries_exceeded"`,
@@ -308,7 +308,7 @@ export type HandlerResult =
       // never as halts.
       // Routing-node halts emitted by the llm agent boundary
       // flow through verbatim — result-to-facts does not translate them, they land as
-      // `fact.run_halted` with the matching `HaltReason`.
+      // `fact.run_terminated{errored}` with the matching `HaltReason`.
       // `edge_no_match` is set by the executor's edge-selection path
       // when a routing-node outcome carries a route the graph doesn't
       // handle.

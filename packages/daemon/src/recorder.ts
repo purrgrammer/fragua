@@ -100,7 +100,7 @@ export class CommittingRecorder implements SideEffectRecorder {
         // pause/cancel, a leak-halt). Only the first may retry: the OCC throw is
         // the fence that stops a zombie handler — one that ignored its abort and
         // outlived a terminal — from landing side-effect facts AFTER
-        // fact.run_halted. Same status-vs-OCC split as commitFanoutFact.
+        // fact.run_terminated. Same status-vs-OCC split as commitFanoutFact.
         //
         // ACCEPTED TRADE: status is the ONLY fence — there is no dispatch-
         // identity token, so an ORPHANED handler whose run is still `running`

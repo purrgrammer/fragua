@@ -182,12 +182,12 @@ export const RunDetail = Type.Object({
   cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
-  /** Terminal halt diagnosis from the run's `fact.run_halted` payload
+  /** Terminal halt diagnosis from the run's `fact.run_terminated{errored}` payload
    *  (when `runStatus === 'halted'`). Mirrors the HITL pause-field
    *  extraction so the UI can explain the failure inline. */
   haltReason: Type.Optional(HaltReasonSchema),
   haltDetail: Type.Optional(Type.String()),
-  /** Structured diagnostic context from the `fact.run_halted` payload's
+  /** Structured diagnostic context from the `fact.run_terminated{errored}` payload's
    *  `occContext` — recorded on an OCC-exhaustion halt. Only populated for
    *  halts that carried it; spares the operator hand-parsing raw events. */
   haltContext: Type.Optional(HaltContext),
@@ -241,5 +241,13 @@ export const RunDetail = Type.Object({
    * (pause/resume/cancel) should be suppressed. Derived from `cwd == null`
    * combined with the `imported_runs` marker semantics. */
   imported: Type.Optional(Type.Boolean()),
+  /** Typed-partial egress envelope (proposal §11): the run's declared
+   * top-level `outputs:` projected from each producer's latest emission.
+   * Present only on a `completed` run (and only when the workflow declares an
+   * `outputs:` block). A declared output whose producer didn't run is ABSENT
+   * (its key omitted) — distinct from present-`null`. A read-plane projection
+   * over the workflow IR + the rebuildable outputs index; never a stored
+   * fact. */
+  outputs: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 export type RunDetail = Static<typeof RunDetail>;

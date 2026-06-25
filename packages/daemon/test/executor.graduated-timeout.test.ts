@@ -128,9 +128,15 @@ async function drive(yaml: string, specs: Record<string, handler.HandlerSpec | u
 }
 
 const haltDetail = (events: StoredEvent[]): string | undefined =>
-  (events.find((e) => e.type === "fact.run_halted")?.payload as { detail?: string } | undefined)?.detail;
+  (
+    events.find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored")
+      ?.payload as { detail?: string } | undefined
+  )?.detail;
 const haltReason = (events: StoredEvent[]): string | undefined =>
-  (events.find((e) => e.type === "fact.run_halted")?.payload as { reason?: string } | undefined)?.reason;
+  (
+    events.find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored")
+      ?.payload as { reason?: string } | undefined
+  )?.reason;
 
 /** The contract under test, shared by every dispatch shape. */
 function expectGraduated(r: DriveResult, wedgedNode: string): void {

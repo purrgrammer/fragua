@@ -3,9 +3,13 @@ title: Structured step outputs (MVP) — typed `outputs:` on `llm` steps
 summary: "An `llm` step declares typed `outputs:` with the same small type grammar used by `inputs:` (scalars, `choice`, records, arrays — a subset of JSON Schema sized to what provider strict-mode enforces; no recursion, no `$ref`). It emits through one force-included `emit_output` tool; any step consumes via `${{ outputs.X.f }}` interpolation (`llm` in prompt, `tool` in run, `human` in text). Reads fail closed — a reference the producer never populated halts the node (a recorded, replayable fact), never a silent \"\". The grammar compiles to TypeBox (already a dependency): TypeBox validates the emitted value and supplies the emit-tool schema, so author surface, our validation, and the provider's native strict-mode all agree. Oversized structs spill to the blob CAS via the input-spill path. Values interpolated into an `llm` prompt are wrapped in content-derived (hash-boundary) delimiters. MVP: only `llm` steps produce; `tool`/`human` consume."
 status: implemented
 maturity: shipped
-last-reviewed: 2026-06-07
+last-reviewed: 2026-06-16
 supersedes: an earlier, broader cut (tool-step production via $FRAGUA_OUTPUT, route-carried outputs) — narrowed to llm-only production
 ---
+
+<!-- §§1–10 describe the shipped per-step MVP. §11 (run-level outputs) is now
+     shipped too; only §11.5 (`default:`) remains deferred. -->
+
 
 # Structured step outputs (MVP)
 
@@ -125,8 +129,8 @@ Additive; breaks nothing already authored.
 - Tool-step production (`$FRAGUA_OUTPUT`); `tool` steps consume, never produce.
 - Native final-message JSON as an emit backend (`output_config.format` /
   `response_format`).
-- `object`/`array` types in `inputs:` (the grammar admits them; the MVP keeps
-  `inputs:` scalar-only).
+- ~~`object`/`array` types in `inputs:`~~ — was out of the original MVP cut;
+  **shipped as a later increment (§12).**
 - Routing on emitted values, binary/`blob` outputs, HITL (`human`-produced)
   outputs.
 
@@ -360,12 +364,194 @@ Each rides its own proposal/PR; the MVP's contract admits each without a rewrite
    `tool` emits structured evidence an `llm` judges).
 4. **Cross-cutting untrusted-content delimiting** — extend §6.4 from
    output→prompt interpolation to the shared `thread:` and tool/file/bash results.
-5. **`object`/`array` types in `inputs:`** — the shared grammar already admits
-   them; the CLI would JSON-parse a non-scalar `--input`.
+5. ~~**`object`/`array` types in `inputs:`**~~ — **promoted to §12** (designed).
 6. **Richer type vocabulary** — constraint keywords enforced at our layer via
    TypeBox, and/or accepting raw JSON Schema documents.
 7. **`blob` (binary/file) outputs** and **HITL outputs** (operator-supplied typed
    values from a `human` gate).
+
+## 11. Run-level outputs (implemented)
+
+> **Shipped.** §§1–10 (per-step `outputs:`) and this increment are both built;
+> only §11.5 (`default:`) remains deferred. Driver: a fragua run embedded as a
+> single step in an outer engine ([`ernesto-interop.md`](ernesto-interop.md))
+> is a black box whose result the caller binds — a run exposing only thread
+> text is a dead end in the caller's DAG. The same projection is what a future
+> `fragua runs` verb would print as a run's typed result.
+>
+> The top-level `outputs:` block is a new IR-core attr on `GraphAttrs`
+> (`ir_version` v2→v3, identity converter). The egress envelope is a read-plane
+> projection surfaced as `RunDetail.outputs` — no new fact, no write path — and
+> rides the export bundle for free (the IR's `outputs:` block and the
+> rebuildable outputs index are already in it). Validation adds E046 (broken
+> projection, hard error) and W018 (may-not-produce, advisory).
+
+A workflow declares a top-level `outputs:` block that **projects** step
+outputs into the run's typed result:
+
+```yaml
+outputs:
+  verdict:  { from: review.verdict }
+  findings: { from: review.findings }
+  status:   { from: scan.status }   # default: not accepted — see §11.5
+```
+
+`from:` is a `<node>.<path>` reference — the same addressing as the
+`${{ outputs.<node>.<field> }}` token, minus the wrapper. A bare `from: review`
+projects the producer's whole struct; a dotted suffix selects a leaf or
+sub-record. The run-output's **type is the referenced field's type** — the §5
+grammar, no new type surface. (This mirrors Ernesto's
+`WorkflowDeclaration.outputs` `{ from, pick }` with node and path folded into
+one ref; the exact cross-engine key alignment is
+[`ernesto-interop.md`](ernesto-interop.md) open decision #4, not settled here.)
+
+**Why a projection, not the token.** `${{ outputs.X.f }}` is an in-graph
+*consumer* read and **fails closed** (§1) — an unpopulated read halts the
+reading node. The run-output block is not a consumer; it is the run's egress
+report, and it must tolerate a declared output that the taken path never
+produced (§11.1). Reusing the fail-closed token would turn every such run into
+a halt. The two surfaces deliberately read with different semantics, so they
+are different syntax.
+
+### 11.1 The run-boundary contract — typed-partial
+
+A run can reach `fact.run_completed` on a path that never ran a declared
+producer: a `fail:` edge whose target is the `exit` sink is a sanctioned
+completion (SPEC §3.6), not a halt. So the egress envelope is **typed-partial**
+— it carries exactly the declared outputs whose producer ran; an unproduced
+one is **absent** (its key is omitted from the envelope), never `""` and never
+a halt.
+
+This does not weaken §1's fail-closed principle. Fail-closed governs an
+in-graph consumer's read; the run boundary is a different surface that reports
+what the run produced to an *external* caller, which owns its own
+absence-handling (an embedding engine's per-step fallback / skip). A
+typed-partial envelope is a faithful report, not a silent substitution.
+
+- **Absent vs. null are distinct.** Key omitted ⇒ the producer did not run on
+  the taken path. Key present with `null` ⇒ the producer ran and emitted an
+  `optional:` field as `null`. A consumer can tell the two apart. (A `from:`
+  path that reaches through an `optional:` field the producer *omitted* is
+  likewise absent — the same key-omitted shape; the per-step W016 advisory
+  carries to such a run-output ref.)
+- **Only `completed` has an envelope.** `halted` / `cancelled` carry no
+  outputs (the run reached no sanctioned terminal); a `quarantined` (held,
+  non-terminal) run has none until it resolves.
+
+### 11.2 Producer multiplicity
+
+- **A producer that ran more than once** (a goal-gate / `fail:`-edge loop, a
+  retried node) resolves to its **latest** completed emission — identical to
+  how an in-graph `${{ outputs.X.f }}` read already resolves.
+- **A static `parallel` branch terminal** is an ordinary node with its own
+  `nodeId` (SPEC §3.1.1); reference it directly, `from: scan_branch.findings`.
+  There is no whole-fan-out aggregation on `main` — when dynamic fan-out lands,
+  its `outputs.<body>[*].field` array addressing extends `from:` unchanged.
+
+### 11.3 Where it lands
+
+A read-plane projection, not a new fact or write path. The run already carries
+its workflow IR (the `outputs:` block) and the rebuildable outputs index
+(`(run_id, node_id) → struct`, §8). The read plane resolves each declared
+output by looking up `(run_id, from-node)`: a row present ⇒ project the field
+(rehydrating a `{$fragua_blob}` spill if the struct spilled); no row ⇒ the
+output is absent. The result surfaces as `RunDetail.outputs` and rides the
+export bundle for free (both inputs to the projection — the IR's `outputs:`
+block and the outputs index — are already in it). The top-level `outputs:`
+block is a new IR-core attr, so building it is an `ir_version` bump + converter
+of its own (the per-step feature established the pattern); the read-plane
+projection itself touches no schema and needs no migration.
+
+### 11.4 Validation
+
+Two checks, reusing the existing per-step machinery — one gate, one advisory:
+
+- **E046 (broken projection) — hard error.** `from:` names a node that
+  declares no `outputs:`, or a `<path>` the producer's schema doesn't declare.
+  A definite authoring bug; gated exactly as the per-step E035 (a broken
+  reference is not a reachability question).
+- **W018 (may not produce) — advisory.** The producer can reach a completing
+  terminal but is not guaranteed to on every such path — the W015 analog at
+  the run boundary, reusing its path-analysis. Consistent with §1 (totality is
+  advice, not a gate). A `default:` would silence it once it ships, but
+  `default:` is not yet accepted (§11.5).
+
+### 11.5 `default:` — deferred and rejected loudly
+
+A run-output `default:` — a **literal, validated against the output's own type
+at parse time** — would surface in place of absence, turning a typed-partial
+envelope total at the author's option and silencing W018. It is **deferred**,
+and the parser **rejects it loudly** (a `ParseError`) rather than silently
+dropping it: an author who writes `default:` on a run output should know it has
+no effect yet, not discover later that their fallback never fired.
+
+The design stays sound for the eventual lift: typed-partial is the floor, and
+an embedding engine's own per-step fallback already absorbs absence downstream,
+so the default is additive convenience. The MVP contract admits it without a
+rewrite — a later `default:` only fills slots that were otherwise absent.
+
+It is deliberately **a typed literal, not a fallback expression.** Ernesto's
+step `fallback` is a runtime `${{ }}` expression that can itself read an
+unpopulated output and fail; `default:` is a parse-time-checked constant, so
+it cannot recurse or fail at runtime. Fail-closed survives: a producer-less
+output with no declared default stays **absent**, and the system never
+substitutes a value the author didn't write. (An author may write
+`default: ""` — that empty string is then their explicit, recorded choice, the
+opposite of the silent `""` §1 forbids.)
+
+## 12. Object / array inputs (implemented)
+
+> **Shipped.** A workflow may declare `type: object` (with `fields:`) and
+> `type: array` (with `items:`) inputs over the SAME restricted grammar `outputs:`
+> uses. The CLI coerces `--input name=<json>` by declared type and accepts a
+> whole-object `--input-json '<json>'`; malformed JSON for a declared
+> object/array input is a clean parse-/enqueue-time error. `${{ inputs.x }}`
+> renders the whole value as JSON; `${{ inputs.x.field }}` dot-reads into it
+> (leniently — unlike fail-closed outputs), and field segments may contain
+> hyphens. A dotted sub-reference into a *scalar* input is an E030 error (it
+> can never resolve).
+
+A workflow declares a non-scalar input over the same grammar `outputs:` uses:
+
+```yaml
+inputs:
+  ticket: { type: string, required: true }
+  config:
+    type: object
+    fields:
+      env:   { type: choice, options: [dev, staging, prod] }
+      flags: { type: array, items: { type: string } }
+```
+
+read as `${{ inputs.config.env }}` (dotted into the record) or
+`${{ inputs.config }}` (the whole record as JSON) — both already resolve in
+`substitution.ts`. Three small moves:
+
+1. **Lift the scalar-only restriction** on `inputs:` declarations. The §5
+   grammar already admits `object`/`array` (it *is* the `outputs:` grammar);
+   the MVP merely gated `inputs:` to scalars.
+2. **Type-directed coercion.** The CLI resolves `--input name=value` to a
+   *string* and defers coercion to schema validation (`cli/src/commands/run.ts`
+   — "type coercion is the server's job against the `inputs:` schema"). For a
+   declared object/array input, `JSON.parse` that string before the TypeBox
+   check. So `--input tags='["a","b"]'` and `--input config=@cfg.json` work
+   with **no new flag** — composing with the existing `@<path>` / `@-`
+   sourcing. Scalar inputs are unchanged (string verbatim).
+3. **A whole-object form** — `--input-json '<json>'` (and/or `--inputs-file
+   <path>`): the entire inputs object in one shot, validated against the same
+   compiled `inputs:` schema. The ergonomic path for a **programmatic caller**
+   — the [`ernesto-interop.md`](ernesto-interop.md) `kind: 'fragua'` handler
+   holds its inputs as one object and would otherwise decompose + per-value
+   JSON-encode across N `--input` flags; with this it is one
+   `JSON.stringify`, and typed objects round-trip natively.
+
+Validation is **free**: the `inputs:` declaration already compiles to a
+TypeBox schema (§5); a parsed object flows through the same `Value.Check`. One
+new failure mode: malformed JSON for a declared object/array input is a
+**parse-time error** (the input analogue of the fail-closed emit; code
+assigned at build), surfaced at enqueue before the run starts — never a silent
+coercion. The `--input` surface gains a "scalar verbatim vs JSON-parsed-by-
+declared-type" rule the `workflows` skill documents.
 
 ## Related
 

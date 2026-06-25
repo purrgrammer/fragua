@@ -57,7 +57,7 @@ export interface BudgetDecision {
   /** Halt the run with reason="budget" when true. Set only when
    * `budget_policy="stop"` and a breach fired. */
   shouldHalt: boolean;
-  /** Populates `fact.run_halted.detail`. */
+  /** Populates `fact.run_terminated{errored}.detail`. */
   haltReason?: string;
   /** Pause the run with `fact.run_paused{reason:"budget"}` when set.
    * Mutually exclusive with `shouldHalt` — `budget_policy="pause"` (the

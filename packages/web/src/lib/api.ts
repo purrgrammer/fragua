@@ -175,7 +175,7 @@ export interface RunDetail {
   cacheWriteTokens?: number;
   durationMs?: number;
   title?: string;
-  /** Terminal halt diagnosis from the run's `fact.run_halted` payload
+  /** Terminal halt diagnosis from the run's `fact.run_terminated{errored}` payload
    *  (when `runStatus === 'halted'`). Projected by the read plane — the
    *  web never re-derives these from raw events. Optional because older
    *  server builds may omit them. */

@@ -354,6 +354,109 @@ steps:
 `),
     ).toThrow(/no options/);
   });
+
+  test("type: object with fields: parses to a record profile (same grammar as outputs:)", () => {
+    const g = parseWorkflow(`
+name: t
+inputs:
+  config:
+    type: object
+    required: true
+    fields:
+      env: {type: choice, options: [dev, prod]}
+      flags: {type: array, items: {type: string}}
+steps:
+  work: {type: llm, prompt: hi}
+`);
+    const inputs = g.attrs["inputs"] as unknown as Array<{ name: string; type: string; profile?: unknown }>;
+    const config = inputs.find((i) => i.name === "config");
+    expect(config?.type).toBe("object");
+    expect(config?.profile).toMatchObject({
+      kind: "record",
+      fields: {
+        env: { kind: "choice", options: ["dev", "prod"] },
+        flags: { kind: "array", items: { kind: "string" } },
+      },
+    });
+  });
+
+  test("type: array with items: parses to an array profile", () => {
+    const g = parseWorkflow(`
+name: t
+inputs:
+  tags:
+    type: array
+    items: {type: string}
+steps:
+  work: {type: llm, prompt: hi}
+`);
+    const inputs = g.attrs["inputs"] as unknown as Array<{ name: string; type: string; profile?: unknown }>;
+    const tags = inputs.find((i) => i.name === "tags");
+    expect(tags?.type).toBe("array");
+    expect(tags?.profile).toMatchObject({ kind: "array", items: { kind: "string" } });
+  });
+
+  test("object input using a banned JSON-Schema key is a parse error (grammar reused, not forked)", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+inputs:
+  config:
+    type: object
+    fields:
+      name: {type: string, pattern: "^x"}
+steps:
+  work: {type: llm, prompt: hi}
+`),
+    ).toThrow(/disallowed JSON-Schema key "pattern"/);
+  });
+
+  test("default: on an object input is a parse error (structured defaults unsupported)", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+inputs:
+  config:
+    type: object
+    default: {env: dev}
+    fields:
+      env: {type: string}
+steps:
+  work: {type: llm, prompt: hi}
+`),
+    ).toThrow(/structured-input defaults are not supported/);
+  });
+
+  test("default: on an array input is a parse error", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+inputs:
+  tags:
+    type: array
+    default: [a, b]
+    items: {type: string}
+steps:
+  work: {type: llm, prompt: hi}
+`),
+    ).toThrow(/structured-input defaults are not supported/);
+  });
+
+  test("required: as a sequence is a parse error (must be a boolean)", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+inputs:
+  config:
+    type: object
+    required: [env]
+    fields:
+      env: {type: string}
+steps:
+  work: {type: llm, prompt: hi}
+`),
+    ).toThrow(/`required:` must be a boolean/);
+  });
 });
 
 describe("parseWorkflow — error paths", () => {

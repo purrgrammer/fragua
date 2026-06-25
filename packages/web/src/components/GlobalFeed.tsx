@@ -99,14 +99,12 @@ interface FeedKindMeta {
 // as "this run died" without needing the verb.
 const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
-  "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
-  "fact.run_paused_human": {
-    Icon: Pause,
-    verb: "needs input",
-    iconClass: "text-sw-accent-pause-hitl",
-    borderVar: "var(--sw-accent-pause-hitl)",
-    attention: true,
-  },
+  // Single terminal fact; verb/icon/tone resolve dynamically in metaForEvent
+  // by `payload.status` (completed → green, errored → red, aborted → neutral).
+  // The static base is the completed-success styling.
+  "fact.run_terminated": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
+  // Verb/tone resolve dynamically in metaForEvent by `payload.reason`
+  // (human → HITL pink, auto-wake → blue, else operator yellow).
   "fact.run_paused": {
     Icon: AlertTriangle,
     verb: "paused",
@@ -124,14 +122,6 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
     iconClass: "text-sw-accent-pause-auto",
   },
   "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
-  "fact.run_cancelled": { Icon: X, verb: "cancelled" },
-  "fact.run_halted": {
-    Icon: AlertOctagon,
-    verb: "halted",
-    iconClass: "text-sw-accent-error",
-    borderVar: "var(--sw-accent-error)",
-    attention: true,
-  },
   "fact.run_quarantined": {
     Icon: ShieldAlert,
     verb: "quarantined",
@@ -172,8 +162,34 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
 export function metaForEvent(event: FeedEvent): FeedKindMeta | null {
   const base = KIND_META[event.type];
   if (base == null) return null;
+  if (event.type === "fact.run_terminated") {
+    const status = (event.payload as { status?: unknown } | null)?.status;
+    if (status === "errored") {
+      return {
+        ...base,
+        Icon: AlertOctagon,
+        verb: "halted",
+        iconClass: "text-sw-accent-error",
+        borderVar: "var(--sw-accent-error)",
+        attention: true,
+      };
+    }
+    if (status === "aborted") {
+      return { Icon: X, verb: "cancelled" };
+    }
+  }
   if (event.type === "fact.run_paused") {
     const reason = (event.payload as { reason?: unknown } | null)?.reason;
+    if (reason === "human") {
+      return {
+        ...base,
+        Icon: Pause,
+        verb: "needs input",
+        iconClass: "text-sw-accent-pause-hitl",
+        borderVar: "var(--sw-accent-pause-hitl)",
+        attention: true,
+      };
+    }
     if (typeof reason === "string" && AUTO_WAKE_PAUSE_REASONS.has(reason as PauseReason)) {
       return {
         ...base,

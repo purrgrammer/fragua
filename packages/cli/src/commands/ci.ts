@@ -30,6 +30,7 @@ import { type IEventReader, newRunId, SqliteStore, type StoredEvent } from "@fra
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
 import { driveCiRun } from "../ci-drive.ts";
+import { buildCiResult, type CiRunResult } from "../ci-result.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 import {
@@ -41,6 +42,7 @@ import {
   unsafeAllowEnvNames,
 } from "../env-creds.ts";
 import { buildExecutorDeps } from "../executor-deps.ts";
+import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
 import { renderEvent } from "../run-follow.ts";
 import { FRAGUA_VERSION } from "../version.ts";
@@ -61,6 +63,8 @@ export interface CiCommandOptions {
   exportPath?: string;
   /** Typed run inputs (`--input name=value`). */
   inputs?: Record<string, string>;
+  /** Whole inputs object as one JSON value (`--input-json '<json>'`). */
+  inputJson?: string;
   /** Emit the event log as JSONL instead of the human render. */
   json?: boolean;
   /** Provider/model override (else config defaults, else env-autodetect). */
@@ -161,6 +165,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   // Captured at seed time so mid-run rotation can't desync the registry.
   let ciEnvSecrets: Array<{ name: string; value: string }> = [];
   let computedExitCode: number = CLI_EXIT.usage;
+  // The terminal result envelope (§5.4) — built once the run reaches a
+  // terminal state, emitted as the final `--json` line, and shipped into the
+  // `--export` bundle. `undefined` for a non-terminal stop-state.
+  let ciResult: CiRunResult | undefined;
 
   try {
     // Seed credentials: the global store's configured providers (what
@@ -209,16 +217,24 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       return CLI_EXIT.usage;
     }
     plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
+    const inputDecls = mint.graph.attrs.inputs ?? [];
+    let inputs: Record<string, unknown>;
+    try {
+      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson);
+    } catch (err) {
+      console.error(chalk.red(`ci: ${(err as Error).message}`));
+      return CLI_EXIT.usage;
+    }
     const enq = plane.buildEnqueue({
       workflowSha: mint.sha,
-      inputDecls: mint.graph.attrs.inputs ?? [],
+      inputDecls,
       cwd: resolve(cwd),
       projectId: project.projectId,
       projectName: project.projectName,
       workflowScope: scope,
       workflowPath: dotPath,
       ...(scope === "global" || scope === "local" ? { workflowName: name } : {}),
-      ...(opts.inputs !== undefined && Object.keys(opts.inputs).length > 0 ? { inputs: opts.inputs } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
     });
     if (!enq.ok) {
       console.error(chalk.red(`ci: ${enq.error}`));
@@ -272,9 +288,16 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     const emit = (ev: StoredEvent) => {
       const r = (ev.payload as { reason?: string } | null)?.reason;
       if (r !== undefined) {
-        if (ev.type === "fact.run_halted") stopReason.halt = r as HaltReason;
-        else if (ev.type === "fact.run_paused") stopReason.pause = r as PauseReason;
-        else if (ev.type === "fact.run_quarantined") stopReason.quarantine = r as QuarantineReason;
+        // The errored terminal carries the HaltReason on `reason`; a non-human
+        // pause carries the PauseReason. (`fact.run_terminated{errored}` is the
+        // former `fact.run_halted`.)
+        if (ev.type === "fact.run_terminated" && (ev.payload as { status?: string }).status === "errored") {
+          stopReason.halt = r as HaltReason;
+        } else if (ev.type === "fact.run_paused" && r !== "human") {
+          stopReason.pause = r as PauseReason;
+        } else if (ev.type === "fact.run_quarantined") {
+          stopReason.quarantine = r as QuarantineReason;
+        }
       }
       if (opts.json) process.stdout.write(`${JSON.stringify(ev)}\n`);
       else renderEvent(ev);
@@ -309,6 +332,12 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
 
     const status = store.getState(rid)?.status ?? "halted";
     const code = cliExitCode(status, stopReason);
+    // Terminal-only result envelope. A non-terminal stop-state (paused /
+    // paused_human / quarantined) yields `undefined` — no line, exit code
+    // unchanged. The wire status mirrors the single `fact.run_terminated`
+    // status (completed / errored / aborted) the run ended on.
+    ciResult = buildCiResult(readPlane, rid, status);
+    if (opts.json && ciResult !== undefined) process.stdout.write(`${JSON.stringify(ciResult)}\n`);
     if (status === "halted") {
       console.error(chalk.red(`ci: run halted (${stopReason.halt ?? "error"}) — exit ${code}`));
     } else if (status === "paused") {
@@ -359,6 +388,9 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
           fraguaVersion: FRAGUA_VERSION,
           labelMode: "generic",
           extraLiterals,
+          // Ship the same terminal envelope the --json stream emitted so an
+          // imported run carries it too (§5.4). Omitted for a non-terminal run.
+          ...(ciResult !== undefined ? { runResult: ciResult } : {}),
         });
         writeFileSync(dest, bytes);
         console.log(chalk.dim(`bundle \u2192 ${dest}`));

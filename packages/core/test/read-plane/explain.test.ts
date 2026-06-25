@@ -87,8 +87,8 @@ describe("read-plane explain", () => {
       {
         seq: 3,
         ts: 3000,
-        type: "fact.run_completed",
-        payload: {},
+        type: "fact.run_terminated",
+        payload: { status: "completed" },
         runId: "r1",
         writer: "daemon" as const,
       },
@@ -201,8 +201,8 @@ describe("read-plane explain", () => {
       {
         seq: 1,
         ts: 1000,
-        type: "fact.run_halted",
-        payload: { reason: "budget", detail: "run cost budget exhausted" },
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "budget", detail: "run cost budget exhausted" },
         runId: "r1",
         writer: "daemon" as const,
       },
@@ -220,8 +220,8 @@ describe("read-plane explain", () => {
       {
         seq: 1,
         ts: 1000,
-        type: "fact.run_cancelled",
-        payload: { reason: "operator" },
+        type: "fact.run_terminated",
+        payload: { status: "aborted", reason: "operator" },
         runId: "r1",
         writer: "daemon" as const,
       },
@@ -238,8 +238,8 @@ describe("read-plane explain", () => {
       {
         seq: 1,
         ts: 1000,
-        type: "fact.run_paused_human",
-        payload: { nodeId: "review", text: "Approve the changes?" },
+        type: "fact.run_paused",
+        payload: { reason: "human", nodeId: "review", text: "Approve the changes?" },
         runId: "r1",
         writer: "daemon" as const,
       },

@@ -24,6 +24,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { CommittingRecorder } from "../src/recorder.ts";
 import { enqueue, rig } from "./helpers.ts";
+import { dispositionType } from "./invariants.ts";
 
 // ─────────────── P6 ───────────────
 // invariant: I5, P6 — side effects carry an idempotency key; an orphaned
@@ -551,7 +552,11 @@ describe("P17 — version-mismatch refusal on resume", () => {
     const after = r.store.getState("rp17")!;
     // Recoverable park, NOT a terminal halt — the defect this fixes.
     expect(after.status).toBe("paused");
-    expect(r.store.getEvents("rp17").some((e) => e.type === "fact.run_halted")).toBe(false);
+    expect(
+      r.store
+        .getEvents("rp17")
+        .some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored"),
+    ).toBe(false);
     const pause = r.store.getEvents("rp17").find((e) => e.type === "fact.run_paused")!;
     const p = pause.payload as { reason: string; pinnedVersion: number; supportedMax: number };
     expect(p.reason).toBe("engine_incompatible");
@@ -595,7 +600,7 @@ describe("P17 — version-mismatch refusal on resume", () => {
     const after = r.store.getState("rp17b")!;
     // No version-mismatch refusal: run progressed normally to the terminal node.
     expect(after.status).toBe("completed");
-    const types = r.store.getEvents("rp17b").map((e) => e.type);
+    const types = r.store.getEvents("rp17b").map(dispositionType);
     expect(types).not.toContain("fact.run_halted");
     r.store.close();
   });

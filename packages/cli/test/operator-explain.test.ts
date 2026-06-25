@@ -59,7 +59,11 @@ function seedCompleted(store: IEventStore, runId: string): void {
     s0.version,
   );
   const s1 = store.getState(runId)!;
-  store.appendFact(runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
+  store.appendFact(
+    runId,
+    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+    s1.version,
+  );
 }
 
 function seedCompletedWithCachedCost(store: IEventStore, runId: string): void {
@@ -130,7 +134,7 @@ function seedCompletedWithCachedCost(store: IEventStore, runId: string): void {
           outcomeStatus: "success",
         },
       },
-      { type: "fact.run_completed", payload: { finalNode: "n1" } },
+      { type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } },
     ],
     s1.version,
   );
@@ -158,7 +162,12 @@ function seedHalted(store: IEventStore, runId: string): void {
   const s1 = store.getState(runId)!;
   store.appendFact(
     runId,
-    [{ type: "fact.run_halted", payload: { reason: "budget", detail: "run cost budget exhausted" } }],
+    [
+      {
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "budget", detail: "run cost budget exhausted" },
+      },
+    ],
     s1.version,
   );
 }

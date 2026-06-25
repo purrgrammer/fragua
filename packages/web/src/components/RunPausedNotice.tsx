@@ -6,7 +6,8 @@
 // forces a TypeScript compile error here — the design's exhaustiveness
 // anchor.
 //
-// Hidden on `paused_human`-only pauses (no fact.run_paused in the trail).
+// Hidden on `paused_human` pauses (the `reason:"human"` arm of fact.run_paused
+// is owned by the dedicated HITL surface, not this notice).
 
 import type { PauseReason } from "@fragua/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -123,19 +124,10 @@ interface FactRow {
 
 /** A run is "still paused" only if the latest run-state-changing fact in
  * the trail is `fact.run_paused`. Subsequent facts (run_resumed,
- * run_cancelled, run_completed, run_halted) mean the pause is no longer
- * the live state — even if the original paused fact is still in the
- * event log. Gate the notice on the latest fact, not the existence of
- * any paused fact. */
-const RUN_STATE_FACTS = new Set([
-  "fact.run_paused",
-  "fact.run_paused_human",
-  "fact.run_resumed",
-  "fact.run_cancelled",
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_quarantined",
-]);
+ * run_terminated) mean the pause is no longer the live state — even if the
+ * original paused fact is still in the event log. Gate the notice on the
+ * latest fact, not the existence of any paused fact. */
+const RUN_STATE_FACTS = new Set(["fact.run_paused", "fact.run_resumed", "fact.run_terminated", "fact.run_quarantined"]);
 
 function findActivePause(events: readonly unknown[]): PausePayload | null {
   for (let i = events.length - 1; i >= 0; i--) {
@@ -145,6 +137,9 @@ function findActivePause(events: readonly unknown[]): PausePayload | null {
     if (ev.type !== "fact.run_paused") return null;
     const p = ev.payload;
     if (p == null || typeof p !== "object") return null;
+    // A human-reason pause is a HITL gate (status `paused_human`), rendered by
+    // the dedicated HITL surface — not this operator/auto notice.
+    if ((p as { reason?: unknown }).reason === "human") return null;
     return p as PausePayload;
   }
   return null;

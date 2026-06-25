@@ -273,7 +273,9 @@ describe("executor — watchdog timeout pause-retry", () => {
     expect(finalState?.status).toBe("halted");
 
     const events = r.store.getEvents("wd-3");
-    const halt = events.find((e) => e.type === "fact.run_halted");
+    const halt = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halt).toBeDefined();
     const hp = halt!.payload as { reason: string; detail?: string };
     expect(hp.reason).toBe("timeout_exhausted");
@@ -322,7 +324,9 @@ describe("executor — watchdog timeout pause-retry", () => {
       r.store.appendFact("wd-2", [{ type: "fact.run_resumed", payload: { fromStatus: "paused_auto" } }], s!.version);
     }
 
-    const halts = r.store.getEvents("wd-2").filter((e) => e.type === "fact.run_halted");
+    const halts = r.store
+      .getEvents("wd-2")
+      .filter((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect(halts.length).toBe(1);
     expect((halts[0]!.payload as { reason: string }).reason).toBe("timeout_exhausted");
     r.store.close();

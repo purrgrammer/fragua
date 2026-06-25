@@ -70,7 +70,9 @@ describe("OCC ceiling — fact.run_started storm", () => {
     }
 
     const events = r.store.getEvents("occ-3");
-    const halt = events.find((e) => e.type === "fact.run_halted");
+    const halt = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halt).not.toBeUndefined();
     const haltPayload = halt!.payload as {
       reason: string;
@@ -119,7 +121,9 @@ describe("OCC ceiling — fact.run_started storm", () => {
     expect(warnings.length).toBe(1);
     const resolved = events.filter((e) => e.type === "occ_conflict_resolved");
     expect(resolved.length).toBeGreaterThanOrEqual(1);
-    const halts = events.filter((e) => e.type === "fact.run_halted");
+    const halts = events.filter(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     const occHalts = halts.filter((e) => (e.payload as { reason: string }).reason === "occ_exhausted");
     expect(occHalts.length).toBe(0);
   });

@@ -60,7 +60,11 @@ function seed(store: IEventStore, o: SeedOpts): void {
   );
   if (o.terminal === false) return; // leave it running
   const s1 = store.getState(o.runId)!;
-  store.appendFact(o.runId, [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s1.version);
+  store.appendFact(
+    o.runId,
+    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+    s1.version,
+  );
   const s2 = store.getState(o.runId)!;
   store.appendFact(
     o.runId,

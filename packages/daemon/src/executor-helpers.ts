@@ -217,7 +217,7 @@ export function buildSubstitutionArgs(
   const args: SubstitutionArgs = {};
   // `${{ inputs.x }}` bindings: declared defaults overlaid by the run's
   // provided `routing.inputs` map (set at enqueue from `--input k=v`).
-  const resolved = resolveInputBindings(inputDecls, readStringMap(routing["inputs"]));
+  const resolved = resolveInputBindings(inputDecls, readInputMap(routing["inputs"]));
   if (Object.keys(resolved).length > 0) args.inputs = resolved;
   // `${{ outputs.X.f }}` bindings: pre-fetched from the outputs index.
   if (resolvedOutputs !== undefined && Object.keys(resolvedOutputs).length > 0) {
@@ -226,13 +226,26 @@ export function buildSubstitutionArgs(
   return args;
 }
 
-/** Coerce an unknown `routing.inputs` value into a string→string map,
- * dropping non-string entries. */
-export function readStringMap(v: unknown): Record<string, string> {
-  if (v === null || typeof v !== "object") return {};
-  const out: Record<string, string> = {};
+/** Read `routing.inputs` preserving object / array input values (a string map
+ * would drop them). Substitution receives the materialized routing, so any
+ * `$fragua_blob` ref has already been rehydrated — skip a stray one defensively
+ * rather than feed a ref object to the substitution layer. The blob-ref probe
+ * uses `Object.hasOwn` (not `in`) so a polluted `Object.prototype.$fragua_blob`
+ * can't make every structured input look like a ref and get silently dropped. */
+export function readInputMap(v: unknown): Record<string, unknown> {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, unknown> = {};
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (typeof val === "string") out[k] = val;
+    // Match the write-path dunder guard (coerceInputs / coerceInputBindings):
+    // ONLY `__proto__` is filtered — it's the sole key that pollutes the
+    // prototype on assignment. `constructor` / `toString` are legitimate own
+    // keys the write path stores verbatim, so dropping them here would silently
+    // disappear a declared input named that.
+    if (k === "__proto__") continue;
+    if (val !== null && typeof val === "object" && Object.hasOwn(val as Record<string, unknown>, "$fragua_blob")) {
+      continue;
+    }
+    out[k] = val;
   }
   return out;
 }

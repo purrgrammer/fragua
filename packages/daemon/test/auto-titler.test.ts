@@ -379,6 +379,48 @@ describe("AutoTitler — executor integration", () => {
     r.store.close();
   });
 
+  test("structured (object/array) input leaves are JSON-stringified into the seed, not dropped", async () => {
+    const yaml = `name: deploy\nsteps:\n  work: {type: llm, prompt: hi}\n`;
+    const r = rig({ yaml, name: "deploy" });
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+
+    const backend = new StubBackend((input) => okOut(`titled:${input.input}`));
+    const ctrl = new AbortController();
+    const titler = new AutoTitler({ backend, store: r.store, shutdownSignal: ctrl.signal });
+    const registry = new AbortRegistry();
+
+    // A workflow whose identity lives in a structured input: `readStringMap`
+    // would have dropped `config`, leaving a generic title.
+    r.store.enqueueRun({
+      runId: "r1",
+      workflowSha: r.workflowSha,
+      initialRouting: { start_node: "start", inputs: { config: { env: "production" }, tags: ["a", "b"] } },
+    });
+
+    const executorOpts: Parameters<typeof runOne>[1] = {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry,
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 10,
+      autoTitler: titler,
+    };
+    r.store.claimNextRun(4);
+    await runOne("r1", executorOpts);
+    await titler.drain();
+
+    expect(backend.calls).toHaveLength(1);
+    const seed = backend.calls[0]!.input;
+    expect(seed).toContain('config={"env":"production"}');
+    expect(seed).toContain('tags=["a","b"]');
+
+    ctrl.abort();
+    r.store.close();
+  });
+
   test("no routing.inputs (bare/scheduled run): titler fires with workflow name as seed", async () => {
     const yaml = `name: health-check\nsteps:\n  work: {type: llm, prompt: hi}\n`;
     const r = rig({ yaml, name: "health-check" });

@@ -13,10 +13,15 @@
 // minter land in a follow-on increment; this is the control-intent surface.
 
 import type { EnqueueRunParams, IEventWriter } from "@fragua/store";
-import type { IntentEvent } from "@fragua/types";
+import { type IntentEvent, MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
-import { type InputBindingError, validateInputBindings } from "../engine/inputs.ts";
+import {
+  coerceInputBindings,
+  type InputBindingError,
+  isStructuredInput,
+  validateInputBindings,
+} from "../engine/inputs.ts";
 import { type Diagnostic, validate } from "../engine/validator.ts";
 import { sha256Hex } from "../handler/sha256.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
@@ -25,6 +30,18 @@ import type { Graph, InputDecl } from "../types/graph.ts";
 import * as S from "./schemas.ts";
 
 export type BuildResult<T extends IntentEvent = IntentEvent> = { ok: true; intent: T } | { ok: false; error: string };
+
+/** Genesis-event payload budget for the serialized run `inputs`. The store caps
+ * the whole `intent.run_enqueued` payload at 4 KiB (`MAX_EVENT_PAYLOAD_BYTES`);
+ * leave headroom for the other genesis fields (workflowSha, project identity,
+ * routing scaffolding) so a clean enqueue-time error fires before the raw
+ * `PayloadTooLargeError`. Spillable string inputs never reach this; only
+ * non-spillable structured inputs can. The real genesis payload (store's
+ * `enqueueRun`) wraps `inputs` in `routing:` and adds `workflowSha`,
+ * `projectId`, `projectName`, `contractVersion`, priority, and workflow
+ * identity — 300–600+ B — so this budget sits well under the 4 KiB cap rather
+ * than at `cap − routing` for the bare `{ inputs }` shape. */
+const GENESIS_INPUTS_MAX_BYTES = Math.floor(MAX_EVENT_PAYLOAD_BYTES * 0.75);
 
 /** The `IntentEvent` member with a given `type` discriminant. */
 type IntentOf<K extends IntentEvent["type"]> = Extract<IntentEvent, { type: K }>;
@@ -53,7 +70,10 @@ export type WorkflowMint =
 export interface EnqueueInput {
   workflowSha: string;
   inputDecls?: readonly InputDecl[] | undefined;
-  inputs?: Record<string, string> | undefined;
+  /** Run-provided inputs. Scalar values are strings; object / array inputs are
+   * already-parsed JSON values (the CLI coerces by declared type; the server
+   * receives parsed JSON). Validated against `inputDecls` at enqueue. */
+  inputs?: Record<string, unknown> | undefined;
   routing?: Record<string, unknown> | undefined;
   priority?: number | undefined;
   cwd?: string | undefined;
@@ -234,15 +254,48 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       return { ok: true, sha: sha256Hex(source), ir: serializeGraph(graph), irVersion: CURRENT_IR_VERSION, graph };
     },
     buildEnqueue(input) {
+      // Coerce string-typed inputs to their declared scalar / structured type
+      // BEFORE validating — the single shared step both clients route through, so
+      // the web UI (raw strings) and the CLI agree without per-client coercion.
+      let effectiveInputs = input.inputs;
       if (input.inputDecls !== undefined) {
-        const errs = validateInputBindings(input.inputDecls, input.inputs ?? {});
+        const coerced = coerceInputBindings(input.inputDecls, input.inputs ?? {});
+        if (coerced.errors.length > 0) {
+          return { ok: false, error: coerced.errors.map((e) => e.message).join("; "), inputErrors: coerced.errors };
+        }
+        effectiveInputs = coerced.values;
+        const errs = validateInputBindings(input.inputDecls, effectiveInputs);
         if (errs.length > 0) {
           return { ok: false, error: errs.map((e) => e.message).join("; "), inputErrors: errs };
         }
       }
       const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
-      if (input.inputs != null && initialRouting["inputs"] === undefined) {
-        initialRouting["inputs"] = input.inputs;
+      // Pre-check the genesis event's 4 KiB payload cap, but ONLY against the
+      // non-spillable inputs — and only when `input.inputs` actually reaches the
+      // genesis payload (an explicit `routing.inputs` wins the merge below, so a
+      // discarded `input.inputs` must not trip a false-positive rejection).
+      // String inputs spill via `spillRoutingInputs`, so size-checking them here
+      // would reject a payload the spill would shrink; only object / array inputs
+      // can't spill yet, so an oversized one gets a clean validation error
+      // instead of a raw `PayloadTooLargeError`. Measured in UTF-8 bytes (not
+      // `String#length` / UTF-16 units) so multibyte inputs can't slip past.
+      if (
+        effectiveInputs != null &&
+        Object.keys(effectiveInputs).length > 0 &&
+        initialRouting["inputs"] === undefined
+      ) {
+        const structured = new Set((input.inputDecls ?? []).filter((d) => isStructuredInput(d)).map((d) => d.name));
+        const nonSpillable: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(effectiveInputs)) {
+          if (structured.has(k)) nonSpillable[k] = v;
+        }
+        if (
+          Object.keys(nonSpillable).length > 0 &&
+          utf8ByteLength(JSON.stringify({ inputs: nonSpillable })) >= GENESIS_INPUTS_MAX_BYTES
+        ) {
+          return { ok: false, error: "input payload too large", inputErrors: [] };
+        }
+        initialRouting["inputs"] = effectiveInputs;
       }
       const runId = deps.newRunId(); // always minted — no operator/client-supplied ids
       const params: EnqueueRunParams = {

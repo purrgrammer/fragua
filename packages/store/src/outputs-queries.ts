@@ -49,6 +49,33 @@ export function getLatestOutput(db: Database, runId: string, nodeId: string): st
   return row?.struct ?? null;
 }
 
+/** Latest-iteration struct for each of `nodeIds` in ONE query (collapses the
+ * per-node N+1 in `runDetail`). Returns rows only for nodes that emitted; a
+ * node with no output is simply absent from the result. The correlated
+ * subquery keeps the latest iteration per node without a `GROUP BY` over the
+ * blob-bearing `struct` column. */
+const GET_LATEST_OUTPUT_BATCH_SQL = `
+  SELECT node_id AS nodeId, struct
+  FROM outputs o
+  WHERE run_id = ?1
+    AND node_id IN (SELECT value FROM json_each(?2))
+    AND iteration = (
+      SELECT MAX(iteration) FROM outputs
+      WHERE run_id = o.run_id AND node_id = o.node_id
+    )
+`;
+
+export function getLatestOutputBatch(
+  db: Database,
+  runId: string,
+  nodeIds: readonly string[],
+): Array<{ nodeId: string; struct: string }> {
+  if (nodeIds.length === 0) return [];
+  return db
+    .query<{ nodeId: string; struct: string }, [string, string]>(GET_LATEST_OUTPUT_BATCH_SQL)
+    .all(runId, JSON.stringify(nodeIds));
+}
+
 const ALL_OUTPUT_STRUCTS_SQL = `SELECT struct FROM outputs`;
 
 /** Every stored output struct across all runs — used by blob GC to protect

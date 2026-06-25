@@ -32,14 +32,9 @@ type RoutePicker = typeof pickRoute;
 // Typed as the FactEvent union so the compiler rejects a stale literal — the
 // unguarded `Set<string>` here is exactly the enum-consumer footgun (AGENTS.md).
 // `fact.run_paused` is conditionally terminal (operator reasons stop; auto-wake
-// reasons continue), so it's handled explicitly in the loop, not via this set.
-const TERMINAL_TYPES = new Set<FactEvent["type"]>([
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_cancelled",
-  "fact.run_paused_human",
-  "fact.run_quarantined",
-]);
+// reasons continue; `human` prompts), so it's handled explicitly in the loop,
+// not via this set.
+const TERMINAL_TYPES = new Set<FactEvent["type"]>(["fact.run_terminated", "fact.run_quarantined"]);
 
 const isTerminalType = (type: string): boolean => TERMINAL_TYPES.has(type as FactEvent["type"]);
 
@@ -61,20 +56,21 @@ const PAUSE_HINTS: Record<Exclude<PauseReason, "provider_retry" | "handler_retry
 /** A terminal (or unanswered-HITL) event → process exit code, through the
  * shared `cliExitCode` map. The reason rides on the fact's payload. */
 function followExitCode(ev: StoredEvent): number {
-  const reason = (ev.payload as { reason?: string }).reason;
+  const payload = ev.payload as { reason?: string; status?: string };
+  const reason = payload.reason;
   switch (ev.type) {
-    case "fact.run_halted":
-      return cliExitCode("halted", reason ? { halt: reason as HaltReason } : {});
-    case "fact.run_cancelled":
-      return cliExitCode("cancelled");
+    case "fact.run_terminated":
+      // status-discriminated terminal: completed | errored | aborted.
+      if (payload.status === "aborted") return cliExitCode("cancelled");
+      if (payload.status === "errored") return cliExitCode("halted", reason ? { halt: reason as HaltReason } : {});
+      return cliExitCode("completed"); // status === "completed"
     case "fact.run_quarantined":
       return cliExitCode("quarantined", reason ? { quarantine: reason as QuarantineReason } : {});
-    case "fact.run_paused_human":
-      return cliExitCode("paused_human");
     case "fact.run_paused":
+      if (reason === "human") return cliExitCode("paused_human");
       return cliExitCode("paused", reason ? { pause: reason as PauseReason } : {});
     default:
-      return cliExitCode("completed"); // fact.run_completed
+      return cliExitCode("completed");
   }
 }
 
@@ -99,17 +95,17 @@ export async function followRun(
       renderEvent(ev);
       cursor = ev.seq;
       lastProgressAt = Date.now();
-      if (ev.type === "fact.run_paused_human") {
-        // Answer the gate inline (TTY) and keep following — the daemon folds
-        // the human_input and the run resumes. Off a TTY, exit so scripts
-        // don't block on a prompt.
-        if (await promptHumanGate(client, runId, ev, pick)) continue;
-        // Unanswered (off a TTY / no choice): the run still needs a human —
-        // exit `needsHuman`, not 0, so a script doesn't read it as success.
-        return followExitCode(ev);
-      }
       if (ev.type === "fact.run_paused") {
-        const reason = (ev.payload as { reason?: PauseReason }).reason;
+        const reason = (ev.payload as { reason?: PauseReason | "human" }).reason;
+        if (reason === "human") {
+          // Answer the gate inline (TTY) and keep following — the daemon folds
+          // the human_input and the run resumes. Off a TTY, exit so scripts
+          // don't block on a prompt.
+          if (await promptHumanGate(client, runId, ev, pick)) continue;
+          // Unanswered (off a TTY / no choice): the run still needs a human —
+          // exit `needsHuman`, not 0, so a script doesn't read it as success.
+          return followExitCode(ev);
+        }
         // Auto-wake reasons: the daemon owes a clock tick and will resume on
         // its own — keep following the retry rather than exiting.
         if (reason && AUTO_WAKE_PAUSE_REASONS.has(reason)) continue;
@@ -145,7 +141,7 @@ async function pollUntilResumed(
 ): Promise<void> {
   while (!signal.aborted) {
     for (const ev of client.readPlane.eventsSince(runId, sinceSeq, BATCH)) {
-      if (ev.type === "fact.run_resumed" || (isTerminalType(ev.type) && ev.type !== "fact.run_paused_human")) {
+      if (ev.type === "fact.run_resumed" || isTerminalType(ev.type)) {
         return;
       }
     }
@@ -220,8 +216,21 @@ export function renderEvent(ev: StoredEvent): void {
     return;
   }
   if (ev.type === "fact.run_paused") {
-    const p = ev.payload as { reason?: PauseReason; nodeId?: string; resumeAt?: number; attempt?: number };
+    const p = ev.payload as {
+      reason?: PauseReason | "human";
+      nodeId?: string;
+      text?: string;
+      resumeAt?: number;
+      attempt?: number;
+    };
     const reason = p.reason ?? "operator";
+    if (reason === "human") {
+      console.log(
+        `${chalk.dim(`[${ev.seq}]`)} ${chalk.cyan(`⏸ ${ev.type}`)} ` +
+          chalk.cyan(`needs human${p.nodeId ? ` @ ${p.nodeId}` : ""}${p.text ? `: ${p.text}` : ""}`),
+      );
+      return;
+    }
     if (AUTO_WAKE_PAUSE_REASONS.has(reason)) {
       const secs = typeof p.resumeAt === "number" ? Math.max(0, Math.round((p.resumeAt - Date.now()) / 1000)) : null;
       const when = secs === null ? "shortly" : `in ~${secs}s`;
@@ -240,13 +249,15 @@ export function renderEvent(ev: StoredEvent): void {
     );
     return;
   }
-  const color = ev.type.startsWith("fact.run_completed")
-    ? chalk.green
-    : ev.type.startsWith("fact.run_halted") || ev.type.startsWith("fact.run_cancelled")
-      ? chalk.red
-      : ev.type.startsWith("intent.")
-        ? chalk.blue
-        : chalk.dim;
+  const terminalStatus = ev.type === "fact.run_terminated" ? (ev.payload as { status?: string }).status : undefined;
+  const color =
+    terminalStatus === "completed"
+      ? chalk.green
+      : terminalStatus === "errored" || terminalStatus === "aborted"
+        ? chalk.red
+        : ev.type.startsWith("intent.")
+          ? chalk.blue
+          : chalk.dim;
   console.log(`${chalk.dim(`[${ev.seq}]`)} ${color(ev.type)} ${JSON.stringify(ev.payload ?? {})}`);
 }
 

@@ -4,6 +4,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { buildSubstitutionArgs, runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
+import { dispositionType } from "./invariants.ts";
 
 describe("buildSubstitutionArgs", () => {
   test("resolves ${{ inputs.x }} bindings: declared defaults overlaid by routing.inputs", () => {
@@ -195,14 +196,18 @@ steps:
     const state = r.store.getState("halt-1")!;
     expect(state.status).toBe("halted");
     const events = r.store.getEvents("halt-1");
-    const halted = events.find((e) => e.type === "fact.run_halted");
+    const halted = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halted).not.toBeUndefined();
     const payload = halted!.payload as { reason: string; detail?: string };
     expect(payload.reason).toBe("aborted_exit");
     // Handler returned no failureReason — falls back to the generic detail.
     expect(payload.detail).toBe("node implement failed with no fail route");
     // No run_completed event should have fired — the run didn't succeed.
-    expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
+    expect(
+      events.some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed"),
+    ).toBe(false);
     r.store.close();
   });
 
@@ -246,8 +251,12 @@ steps:
     const state = r.store.getState("graceful-1")!;
     expect(state.status).toBe("completed");
     const events = r.store.getEvents("graceful-1");
-    expect(events.some((e) => e.type === "fact.run_completed")).toBe(true);
-    expect(events.some((e) => e.type === "fact.run_halted")).toBe(false);
+    expect(
+      events.some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed"),
+    ).toBe(true);
+    expect(
+      events.some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored"),
+    ).toBe(false);
     r.store.close();
   });
 
@@ -296,7 +305,9 @@ steps:
       shutdownSignal: new AbortController().signal,
     });
     const events = r.store.getEvents("halt-with-reason");
-    const halted = events.find((e) => e.type === "fact.run_halted");
+    const halted = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored",
+    );
     expect(halted).not.toBeUndefined();
     const payload = halted!.payload as { reason: string; detail?: string };
     expect(payload.reason).toBe("aborted_exit");
@@ -568,7 +579,7 @@ describe("executor — happy path", () => {
 
     const state = r.store.getState("run1")!;
     expect(state.status).toBe("completed");
-    const events = r.store.getEvents("run1").map((e) => e.type);
+    const events = r.store.getEvents("run1").map(dispositionType);
     expect(events).toContain("fact.run_started");
     expect(events).toContain("fact.node_completed");
     expect(events).toContain("fact.run_completed");
@@ -774,7 +785,9 @@ steps:
 
     const state = r.store.getState("rat")!;
     expect(state.status).toBe("halted");
-    const halt = r.store.getEvents("rat").find((e) => e.type === "fact.run_halted")!;
+    const halt = r.store
+      .getEvents("rat")
+      .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored")!;
     const payload = halt.payload as { reason: string; detail?: string };
     expect(payload.reason).toBe("error");
     expect(payload.detail).toMatch(/unknown tool: bash/);
@@ -821,7 +834,11 @@ describe("executor — version mismatch", () => {
     const state = r.store.getState("run5")!;
     // Recoverable, NOT terminal — the run can resume once a capable daemon runs.
     expect(state.status).toBe("paused");
-    expect(r.store.getEvents("run5").some((e) => e.type === "fact.run_halted")).toBe(false);
+    expect(
+      r.store
+        .getEvents("run5")
+        .some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored"),
+    ).toBe(false);
     const pause = r.store.getEvents("run5").find((e) => e.type === "fact.run_paused")!;
     const p = pause.payload as { reason: string; pinnedVersion: number; supportedMax: number };
     expect(p.reason).toBe("engine_incompatible");
@@ -838,6 +855,20 @@ describe("executor — version mismatch", () => {
     const p = pause.payload as { reason: string; pinnedVersion: number; supportedMin: number };
     expect(p.reason).toBe("engine_incompatible");
     expect(p.pinnedVersion).toBeLessThan(p.supportedMin);
+    r.store.close();
+  });
+
+  test("pin at v3 (a LEGACY-taxonomy run) is ADMITTED, not gated — MIN_COMPATIBLE=1 (write-new, read-all)", async () => {
+    const r = await driveVersionMismatch("run7", 3);
+    // A run pinned at contract v3 carries the legacy fact taxonomy but the
+    // reducer/read-plane still fold it, so the executor must NOT trip the
+    // compat gate. The run runs to its sanctioned terminal instead.
+    const state = r.store.getState("run7")!;
+    expect(state.status).toBe("completed");
+    const gated = r.store
+      .getEvents("run7")
+      .some((e) => e.type === "fact.run_paused" && (e.payload as { reason?: string }).reason === "engine_incompatible");
+    expect(gated).toBe(false);
     r.store.close();
   });
 });

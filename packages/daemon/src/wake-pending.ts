@@ -55,7 +55,7 @@ export function wakePending(store: IEventWriter & IEventReader, now: () => numbe
 
 /**
  * Cancel any paused_* / quarantined run with an unapplied
- * `intent.cancel_requested`. Emits `fact.run_cancelled { intentSeq }`.
+ * `intent.cancel_requested`. Emits `fact.run_terminated { status: "aborted", intentSeq }`.
  */
 function wakeCancel(store: IEventWriter & IEventReader): string[] {
   const out: string[] = [];
@@ -66,9 +66,12 @@ function wakeCancel(store: IEventWriter & IEventReader): string[] {
     const cancel = store.getNextPendingIntent(row.runId, "intent.cancel_requested", row.lastAppliedSeq);
     if (cancel == null) continue;
     try {
-      store.appendFact(row.runId, [{ type: "fact.run_cancelled", payload: { intentSeq: cancel.seq } }], row.version, {
-        advanceAppliedTo: cancel.seq,
-      });
+      store.appendFact(
+        row.runId,
+        [{ type: "fact.run_terminated", payload: { status: "aborted", intentSeq: cancel.seq } }],
+        row.version,
+        { advanceAppliedTo: cancel.seq },
+      );
       out.push(row.runId);
     } catch (err) {
       if (!(err instanceof ConcurrencyError)) throw err;
@@ -203,7 +206,7 @@ function wakeAutoResume(store: IEventWriter & IEventReader, now: () => number): 
 /**
  * Drive `intent.unquarantine` resolutions on quarantined runs.
  *
- *   - `cancel`         → `fact.run_cancelled`
+ *   - `cancel`         → `fact.run_terminated{status:"aborted"}`
  *   - `retry`          → `fact.run_resumed` (run goes back to queued; the
  *                        handler re-dispatches at the same iteration; the
  *                        provider dedups via the stable idempotencyKey)
@@ -233,7 +236,7 @@ function wakeUnquarantine(store: IEventWriter & IEventReader): string[] {
 
     const facts: FactEvent[] = [];
     if (resolution === "cancel") {
-      facts.push({ type: "fact.run_cancelled", payload: { intentSeq: intent.seq } });
+      facts.push({ type: "fact.run_terminated", payload: { status: "aborted", intentSeq: intent.seq } });
     } else {
       if (resolution === "treat_as_done") {
         facts.push(...synthesisedDoneFacts(store.findOrphanSideEffects(row.runId)));

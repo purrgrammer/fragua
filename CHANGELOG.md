@@ -10,6 +10,40 @@ guarantee.
 
 ### Added
 
+- `fragua ci --json` emits a terminal result envelope as the final line once a
+  run reaches a terminal state: `{ kind: "fragua.run_result", runId, status,
+  outputs, usage }`. `status` is the converged `completed | errored | aborted`,
+  `outputs` the run-level typed-partial output envelope (absent keys omitted),
+  and `usage` the run-total `{ inputTokens, outputTokens, costUsd }`. The line
+  is tagged `kind` to distinguish it from the per-event JSONL lines (which
+  carry `seq`/`type`). The same object is written into the `--export` bundle as
+  `runs/<id>/result.json`. Non-terminal stop-states (paused, paused_human,
+  quarantined) emit no envelope and keep their existing exit codes.
+
+- Run-level (workflow) outputs. A workflow may declare a top-level `outputs:`
+  block that projects step outputs into the run's typed result, e.g.
+  `outputs: { verdict: { from: review.verdict } }`. `from:` is a
+  `<node>.<path>` reference (a bare `from: review` projects the producer's
+  whole struct; a dotted suffix selects a leaf/sub-record), and the output's
+  type is the referenced field's type. The run's egress envelope is
+  typed-partial: it carries exactly the declared outputs whose producer ran on
+  the taken path — an unproduced one is absent (key omitted), never `""` and
+  never a halt, and only a completed run carries an envelope. A producer that
+  ran more than once resolves to its latest emission. The validator hard-errors
+  on a broken projection (E046) and advises when a producer may not run on
+  every completing path (W018). Distinct from the in-graph
+  `${{ outputs.X.f }}` token, which stays fail-closed.
+
+- Object and array workflow inputs. An `inputs:` declaration may now use
+  `type: object` (with `fields:`) or `type: array` (with `items:`), reusing the
+  same restricted type grammar `outputs:` uses. Read a whole value as JSON with
+  `${{ inputs.x }}` or dot-read into it with `${{ inputs.x.field }}`. On the CLI,
+  `--input name=<json>` is JSON-parsed when the named input is declared
+  object/array (composing with `@file` / `@-` sourcing; scalar inputs stay
+  verbatim), and a new `--input-json '<json>'` passes the entire inputs object in
+  one shot — both on `fragua run` and `fragua ci`. Malformed JSON for a declared
+  object/array input is a clean enqueue-time error, never a silent coercion.
+
 - `--resume` flag on the ceiling-raiser verbs (`fragua runs budget`,
   `max-retries`, `goal-gate`, `max-loops`) raises the cap and resumes the run in
   one step, instead of leaving it paused until a separate `fragua runs resume`.
@@ -70,6 +104,20 @@ guarantee.
 
 ### Changed
 
+- Terminal and HITL-pause facts converged onto a smaller taxonomy. The three
+  terminal facts (`fact.run_completed` / `fact.run_halted` / `fact.run_cancelled`)
+  collapse into one `fact.run_terminated { status }` with
+  `status: completed | errored | aborted` (completed carries `finalNode`,
+  errored the halt `reason` + `detail`, aborted the `intentSeq`), and the
+  separate HITL pause fact folds into `fact.run_paused` as a new
+  `reason: "human"` variant. The `run_state.status` projection is unchanged
+  (`completed` / `halted` / `cancelled` / `paused_human` / `paused_auto` /
+  `paused` / …). The event-contract version bumps to 4, but the engine follows
+  write-new/read-all: it emits only the v4 facts while the reducer + read-plane
+  fold the full contract range, so runs pinned to an older version (v1–v3) keep
+  resuming and reading correctly — their status, HITL gate, and run detail
+  project identically to a v4 run. The retired fact types live on as read-only,
+  never-emitted members of the event union.
 - Worktree-provisioning failures now halt with a distinct `worktree_error`
   reason instead of the catch-all `error`, so operators can filter and triage
   provision failures separately from generic exceptions and parse failures. It
@@ -78,9 +126,55 @@ guarantee.
   bundled offline registry; a model absent from it downgrades to a warning
   (enqueue remains the authoritative gate). Validate now works with no
   store present.
+- The `@fragua/core` `inputReferences` helper now returns
+  `Array<{ base: string; dotted: boolean }>` (was `string[]`), carrying whether
+  each `${{ inputs.… }}` reference was dot-addressed.
 
 ### Fixed
 
+- Workflow inputs and output fields named after JavaScript prototype properties
+  (`constructor`, `toString`, `valueOf`, `__proto__`) now round-trip correctly
+  instead of reading or colliding with a built-in: input substitution
+  (`${{ inputs.x.field }}`), output-profile validation (required-presence and
+  `additionalProperties`), and the executor's input reader all key strictly on
+  an object's own properties. A declared input named `constructor` is no longer
+  silently dropped between enqueue and substitution.
+- Step ids are now required to be identifiers (`[a-zA-Z][a-zA-Z0-9_]*`); a step
+  name containing a `.` is rejected at parse time instead of producing a
+  misleading run-output diagnostic.
+- A non-array run-level `outputs:` declaration now reports a clear validation
+  error rather than silently validating as if no outputs were declared.
+- `--input name=value` now coerces a declared `type: number` (via `Number()`,
+  rejecting a non-numeric value) and `type: boolean` (accepting only `"true"` /
+  `"false"`) before enqueue, so a CLI workflow declaring number/boolean inputs
+  no longer fails the shape guard. A non-numeric number or a non-boolean string
+  is a clean enqueue-time error.
+- The event-payload 4 KiB cap is now measured in UTF-8 bytes by the store's
+  runtime write guard instead of `String#length`, so
+  structured inputs containing CJK or emoji can no longer exceed the cap by
+  counting code points instead of bytes. No schema migration: a byte-exact SQL
+  CHECK can't be retroactively applied to existing rows, so the byte cap lives
+  only in the write path; the existing `events` / `daemon_events` SQL CHECK
+  remains a code-point backstop.
+- Structured-input safety. A non-scalar value handed to a `type: string` /
+  `number` / `boolean` input (via `--input-json`) is now rejected at enqueue
+  with a clear shape error instead of stringifying to `"[object Object]"` and
+  flowing into a prompt; a `null` for a required input counts as not-provided
+  (a clean `missing_required`) rather than the literal `"null"`; a `default:`
+  on an `object` / `array` input is a parse error (structured defaults are
+  unsupported); and a structured input too large for the genesis-event cap
+  fails enqueue with a clean validation error instead of a raw
+  `PayloadTooLarge`. Dotted reads into structured inputs now resolve fields
+  containing hyphens (e.g. `${{ inputs.config.my-field }}`), and the validator
+  (E030) rejects a dotted sub-reference into a scalar input, which can never
+  resolve.
+- Run-level output envelope. A completed run whose declared `outputs:`
+  producers all skipped now omits the `outputs` field entirely (rather than
+  reporting an empty `{}`), keeping "no outputs declared" and "all producers
+  skipped" distinguishable on `fragua ci --json` and the run detail. The
+  auto-generated run title now seeds from object / array inputs too (a
+  workflow whose identity lives in a structured input no longer gets a generic
+  title).
 - A handler that honors a late-delivered abort is no longer falsely declared
   leaked. The leak grace is now measured from when the abort actually reached
   the handler, not as an absolute deadline from dispatch — previously, system

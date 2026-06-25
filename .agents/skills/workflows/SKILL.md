@@ -108,12 +108,19 @@ inputs:
     type: choice
     options: [dev, staging, prod]
     default: dev
+  config:                                  # object/array reuse the outputs: grammar
+    type: object
+    fields:
+      region: { type: choice, options: [us, eu] }
+      flags:  { type: array, items: { type: string } }
 ```
 
-- Types: `string` | `boolean` | `number` | `choice` (choice requires `options`).
+- Types: `string` | `boolean` | `number` | `choice` (choice requires `options`) | `object` (+`fields`) | `array` (+`items`) — the same restricted grammar `outputs:` uses (§6.5), nesting to any fixed depth.
 - `required: true` with no value → enqueue rejected (`400 invalid_inputs`).
-- Provide at run time: `fragua run my-thing --input ticket=BUG-1 --input env=prod` (repeatable, gh-style).
-- **E030** flags `${{ inputs.x }}` referencing an input not declared in `inputs:`.
+- Provide scalars at run time: `fragua run my-thing --input ticket=BUG-1 --input env=prod` (repeatable, gh-style).
+- **Object/array inputs:** `--input <name>=<value>` is JSON-parsed when the named input is declared `object`/`array` (`--input flags='["a","b"]'`, or `--input config=@cfg.json` to source from a file); scalar inputs stay verbatim. Pass the whole inputs object at once with `--input-json '{"config":{"region":"eu"}}'` (the programmatic-caller path). Malformed JSON for a declared object/array input is a clean enqueue-time error, never a silent coercion.
+- Read an object/array input as JSON with `${{ inputs.config }}`, or dot-read into it with `${{ inputs.config.region }}` (lenient — an unresolvable path collapses to `""`, unlike fail-closed `outputs`; field segments may contain hyphens).
+- **E030** flags `${{ inputs.x }}` referencing an input not declared in `inputs:`, and also a dotted sub-reference into a *scalar* input (`${{ inputs.ticket.field }}` where `ticket` is a `string`) — it can never resolve.
 
 Reference inputs in prompts as if the value is present: `Plan ticket ${{ inputs.ticket }}.` Don't narrate the substitution mechanism.
 
@@ -250,6 +257,24 @@ The type grammar is the same one `inputs:` uses — `type:` of `string` / `numbe
 - a **synthesizer aggregates several producers** — multiple `llm` steps each emit structured results and a downstream step combines them (review lenses → `synthesize`). This `llm → llm` hand-off is legitimate: typed outputs give the consumer clean per-source access where a shared thread would interleave the sources as prose.
 
 **Don't** reach for `outputs:` when another channel already serves: steps that *converse* → the thread (the data is already there); state *already in git / on disk* → re-derive; a *large prose body a tool consumes* (a review for `gh --body-file`) → a file; a *single producer with no consumer* → nothing to hand off. The smell is typing data the thread already carries between two steps that share it.
+
+### Run-level outputs (the run's typed result)
+
+A **top-level** `outputs:` block projects step outputs into the run's typed result — what an embedding caller binds, or a `fragua runs` verb prints. Each entry is `<name>: { from: <node>.<path> }`:
+
+```yaml
+outputs:
+  verdict:  { from: review.verdict }      # a declared field of review's outputs
+  findings: { from: review.findings }
+  whole:    { from: review }              # bare node → the producer's whole struct
+  total:    { from: review.scores.total } # dotted → a leaf/sub-record
+```
+
+`from:` uses the **same addressing** as the `${{ outputs.<node>.<field> }}` token, minus the wrapper. The output's type is the referenced field's type (no new type surface).
+
+**It reads with different semantics than the in-graph token — on purpose.** The run boundary is **typed-partial, not fail-closed**: it carries exactly the declared outputs whose producer ran on the taken path; a declared output whose producer didn't run is **absent** (its key omitted from the result), never `""` and never a halt. Absent (producer didn't run) is distinct from present-`null` (an `optional:` field emitted as `null`). Only a `completed` run carries a result; a halted/cancelled run carries none. A producer that ran more than once (a goal-gate / `fail:`-edge loop, a retry) resolves to its **latest** emission; a static `parallel` branch terminal is an ordinary node — reference it directly (`from: scan_a.findings`).
+
+This is **not** the place to put `default:` — run-output defaults are deferred; an absent output stays absent.
 
 ---
 
@@ -389,6 +414,8 @@ Don't apply maximum machinery uniformly. A four-lens review of a typo is the sam
 - **E035** — `${{ outputs.X.f }}` references a field the producer doesn't declare, or a producer that can never reach the consumer (dead reference).
 - **W015** — a referenced `outputs:` producer may not run on every path to the consumer; the read fails closed at runtime if it didn't.
 - **W016** — a `${{ outputs.X.f }}` read reaches through an `optional:` field the producer may omit; fails closed at runtime. Model it as a required field + sentinel, or read the enclosing record/array whole.
+- **E046** — a top-level `outputs:` projection (`from: <node>.<path>`) names a node with no `outputs:`, or a path the producer's schema doesn't declare (the run-level analog of E035).
+- **W018** — a top-level `outputs:` producer may not run on every completing path; the output is then absent from the run's result (typed-partial), not a failure (the run-level analog of W015).
 - **E031** — a `retry:` gate has no `max-retries:` (the per-gate retarget cap is required).
 - **E032** — a step declares no success successor — add `next:` / `on: {success: …}` / `routes:` (`next: exit` to finish). There is no linear fall-through.
 - **W007** — `goal_gate` (`retry:`) with no `retry_target`.

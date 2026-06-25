@@ -114,3 +114,18 @@ declare module "@earendil-works/pi-agent-core" {
     tool_node: ToolNodeMessage;
   }
 }
+
+/** Per-event payload cap (invariants I2 / I10). A byte cap, not a code-unit
+ * cap — guards must measure UTF-8 bytes (`utf8ByteLength`), because
+ * `String#length` counts UTF-16 code units and undercounts CJK / emoji by up
+ * to ~3×. Owned here so both the store's `validatePayload` and core's genesis
+ * pre-check (`@fragua/core`, which can't import from `@fragua/store`) share one
+ * source of truth. */
+export const MAX_EVENT_PAYLOAD_BYTES = 4096;
+
+/** UTF-8 byte length of a string, zero-allocation. `Buffer.byteLength` is a
+ * Node/Bun built-in that computes the encoded size without materialising a
+ * `Uint8Array` — the hot write path runs this per event. */
+export function utf8ByteLength(s: string): number {
+  return Buffer.byteLength(s, "utf8");
+}

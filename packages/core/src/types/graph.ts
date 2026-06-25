@@ -1,7 +1,7 @@
 // Graph model: Nodes, Edges, and the Graph itself. See docs/SPEC.md §3.1.
 
 import type { RetryPresetName } from "../engine/retry-policy.ts";
-import type { OutputsDecl } from "./outputs.ts";
+import type { OutputProfile, OutputsDecl } from "./outputs.ts";
 import type { SummaryLevel } from "./summary.ts";
 
 /** Node-type discriminator. `start` and `exit` are synthesised by the
@@ -126,11 +126,32 @@ export interface EdgeAttrs {
  * `prompt:` / `text:` / `run:` strings as `${{ inputs.name }}`. */
 export interface InputDecl {
   name: string;
-  type: "string" | "boolean" | "number" | "choice";
+  type: "string" | "boolean" | "number" | "choice" | "object" | "array";
   required: boolean;
   description?: string;
   default?: string | number | boolean;
   options?: string[];
+  /** Parsed type profile when `type: object` or `type: array` — the SAME
+   * restricted grammar `outputs:` uses (record `fields:` + `required`, array
+   * `items:`, nesting to any fixed depth). Absent for scalar/choice inputs. */
+  profile?: OutputProfile;
+}
+
+/** A run-level output declaration from the workflow's top-level `outputs:`
+ * block. PROJECTS a step output into the run's typed result. `node` is the
+ * producer step id and `path` the dotted suffix (empty = the producer's whole
+ * struct); together they mirror the `${{ outputs.<node>.<field> }}` token's
+ * addressing, MINUS the wrapper and MINUS fail-closed — the run boundary is
+ * typed-partial (an unproduced output is absent, never a halt). The projected
+ * type is the referenced field's type (the §5 grammar; no new type surface).
+ * See docs/proposals/structured-outputs.md §11. */
+export interface RunOutputDecl {
+  name: string;
+  /** Producer step id (the `<node>` of `from: <node>.<path>`). */
+  node: string;
+  /** Dotted suffix selecting a leaf/sub-record; empty for a bare
+   * `from: <node>` (the producer's whole struct). */
+  path: string[];
 }
 
 export interface GraphAttrs {
@@ -144,6 +165,10 @@ export interface GraphAttrs {
   /** Declared run inputs (the `inputs:` block). Substituted as
    * `${{ inputs.name }}`; validated against `--input` bindings at enqueue. */
   inputs?: InputDecl[];
+  /** Declared run-level outputs (the top-level `outputs:` block). Each entry
+   * projects a step output into the run's typed result; surfaced as
+   * `RunDetail.outputs` (a read-plane projection, typed-partial). */
+  outputs?: RunOutputDecl[];
   /** Graph-level fallback backoff preset when a node omits `retry-policy`
    * (authoring: `default-retry-policy`). */
   default_retry_policy?: RetryPresetName;

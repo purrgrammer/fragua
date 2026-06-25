@@ -54,7 +54,7 @@ export const OutcomeSchema = Type.Object(
      * with no isolated `route` tool call (or the call was paired with
      * other tool calls). The handler-bridge converts this into a
      * `HandlerResult.halt` with this reason; the daemon emits
-     * `fact.run_halted` verbatim. Never constructed by ordinary handlers
+     * `fact.run_terminated{errored}` verbatim. Never constructed by ordinary handlers
      * — use `failHalt()`. */
     halt_reason: Type.Optional(
       Type.Union([

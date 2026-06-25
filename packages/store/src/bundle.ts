@@ -12,6 +12,7 @@
 //   manifest.json                     — index + version stamps only
 //   runs/<id>/events.jsonl            — the run's event log (genesis + facts)
 //   runs/<id>/messages.jsonl          — the transcript (one message per line)
+//   runs/<id>/result.json             — the terminal result envelope (optional)
 //   workflows/<sha>/source.yaml       — the workflow as authored
 //   workflows/<sha>/ir.json           — its compiled IR
 //   blobs/<sha256>                    — content-addressed bytes (artifacts)
@@ -119,6 +120,9 @@ export const MANIFEST_ENTRY = "manifest.json";
 export const runEventsPath = (runId: string): string => `runs/${runId}/events.jsonl`;
 export const runMessagesPath = (runId: string): string => `runs/${runId}/messages.jsonl`;
 export const runArtifactsPath = (runId: string): string => `runs/${runId}/artifacts.jsonl`;
+/** The terminal result envelope (`fragua ci`'s `{ runId, status, outputs, usage }`).
+ *  Present only when the exporter supplies it — a non-terminal run carries none. */
+export const runResultPath = (runId: string): string => `runs/${runId}/result.json`;
 export const workflowSourcePath = (sha: string): string => `workflows/${sha}/source.yaml`;
 export const workflowIrPath = (sha: string): string => `workflows/${sha}/ir.json`;
 export const blobPath = (sha256: string): string => `blobs/${sha256}`;

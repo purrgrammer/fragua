@@ -192,11 +192,8 @@ describe("P12 — event payload bound", () => {
         runId,
         [
           {
-            type: "fact.run_halted",
-            payload: {
-              reason: "error",
-              detail: "x".repeat(MAX_EVENT_PAYLOAD_BYTES),
-            },
+            type: "fact.run_terminated",
+            payload: { status: "errored", reason: "error", detail: "x".repeat(MAX_EVENT_PAYLOAD_BYTES) },
           },
         ],
         s.version,
@@ -208,8 +205,8 @@ describe("P12 — event payload bound", () => {
         runId,
         [
           {
-            type: "fact.run_halted",
-            payload: { reason: "error", detail: "x".repeat(64) },
+            type: "fact.run_terminated",
+            payload: { status: "errored", reason: "error", detail: "x".repeat(64) },
           },
         ],
         s.version,
@@ -427,19 +424,13 @@ const NON_MUTATOR_BUILDERS: {
     type: "fact.message_appended",
     payload: { ordinal: 0, role: "assistant", nodeId: n, iteration: 0 },
   }),
-  "fact.run_paused_human": (n) => ({
-    type: "fact.run_paused_human",
-    payload: { nodeId: n, text: "choose", routes: ["ok"] },
-  }),
   "fact.run_paused": (n) => ({ type: "fact.run_paused", payload: { reason: "operator", nodeId: n } }),
   "fact.provider_retry_attempted": (n) => ({
     type: "fact.provider_retry_attempted",
     payload: { nodeId: n, attempt: 1, httpStatus: 429, delayMs: 100 },
   }),
   "fact.run_resumed": () => ({ type: "fact.run_resumed", payload: { fromStatus: "paused" } }),
-  "fact.run_completed": (n) => ({ type: "fact.run_completed", payload: { finalNode: n } }),
-  "fact.run_halted": () => ({ type: "fact.run_halted", payload: { reason: "error" } }),
-  "fact.run_cancelled": () => ({ type: "fact.run_cancelled", payload: { intentSeq: 2 } }),
+  "fact.run_terminated": (n) => ({ type: "fact.run_terminated", payload: { status: "completed", finalNode: n } }),
   "fact.snapshot_recorded": () => ({
     type: "fact.snapshot_recorded",
     payload: {
@@ -463,6 +454,14 @@ const NON_MUTATOR_BUILDERS: {
   "fact.daemon_takeover": () => ({ type: "fact.daemon_takeover", payload: { reclaimedFrom: 1, at: 1_500 } }),
   "fact.run_accepted": () => ({ type: "fact.run_accepted", payload: { sha: "s", replayed: 1, tailStaged: false } }),
   "fact.run_discarded": () => ({ type: "fact.run_discarded", payload: { refs: [] } }),
+  // LEGACY (≤v3) read-only fold paths — never touch the frontier.
+  "fact.run_completed": (n) => ({ type: "fact.run_completed", payload: { finalNode: n } }),
+  "fact.run_halted": () => ({ type: "fact.run_halted", payload: { reason: "error" } }),
+  "fact.run_cancelled": () => ({ type: "fact.run_cancelled", payload: { intentSeq: 1 } }),
+  "fact.run_paused_human": (n) => ({
+    type: "fact.run_paused_human",
+    payload: { nodeId: n, text: "Approve?", routes: ["yes", "no"] },
+  }),
 };
 
 const NON_MUTATOR_FACTS: ReadonlyArray<(nodeId: string) => FactEvent> = Object.values(NON_MUTATOR_BUILDERS);

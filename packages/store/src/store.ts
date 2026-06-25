@@ -54,6 +54,7 @@ import {
   runArtifactsPath,
   runEventsPath,
   runMessagesPath,
+  runResultPath,
   SCRUBBER_VERSION,
   type TarEntry,
   workflowIrPath,
@@ -107,7 +108,13 @@ import {
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
-import { getAllOutputStructs, getLatestOutput, getOutputsForRun, insertOutput } from "./outputs-queries.ts";
+import {
+  getAllOutputStructs,
+  getLatestOutput,
+  getLatestOutputBatch,
+  getOutputsForRun,
+  insertOutput,
+} from "./outputs-queries.ts";
 import {
   applyCreationPragmas,
   applyPragmas,
@@ -246,6 +253,7 @@ import {
   type ServerEndpointRow,
   type StoredEvent,
   type SweepResult,
+  utf8ByteLength,
   type WorkflowRow,
 } from "./types.ts";
 import { insertWorkflowIfAbsent, selectWorkflow, workflowExists } from "./workflow-queries.ts";
@@ -456,6 +464,11 @@ export interface ExportBundleOptions {
   /** Extra literal needles merged into the registry before compilation.
    * Used by the CI profile to inject captured env secrets. */
   extraLiterals?: Array<{ value: string; source: string }>;
+  /** The run's terminal result envelope (`fragua ci`'s
+   * `{ runId, status, outputs, usage }`). When supplied it is scrubbed as JSON
+   * and shipped as `runs/<id>/result.json` so an imported run carries the same
+   * object the `--json` stream emitted. Omitted for a non-terminal run. */
+  runResult?: unknown;
 }
 
 /** Return value of {@link SqliteStore.exportRunBundle}. */
@@ -727,8 +740,9 @@ export class SqliteStore implements IEventStore {
     }
 
     const routing = JSON.stringify(effectiveRouting);
-    if (routing.length >= MAX_ROUTING_BYTES) {
-      throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
+    const routingBytes = utf8ByteLength(routing);
+    if (routingBytes >= MAX_ROUTING_BYTES) {
+      throw new PayloadTooLargeError(routingBytes, MAX_ROUTING_BYTES);
     }
     const metrics = JSON.stringify(emptyMetrics());
 
@@ -758,8 +772,9 @@ export class SqliteStore implements IEventStore {
       ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
       ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
     } satisfies RunEnqueuedPayload);
-    if (genesisPayload.length >= MAX_EVENT_PAYLOAD_BYTES) {
-      throw new PayloadTooLargeError(genesisPayload.length, MAX_EVENT_PAYLOAD_BYTES);
+    const genesisBytes = utf8ByteLength(genesisPayload);
+    if (genesisBytes >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(genesisBytes, MAX_EVENT_PAYLOAD_BYTES);
     }
 
     this.writeTxn(() => {
@@ -1045,6 +1060,22 @@ export class SqliteStore implements IEventStore {
       // fails closed rather than throwing.
       return null;
     }
+  }
+
+  getLatestOutputBatch(runId: string, nodeIds: readonly string[]): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const { nodeId, struct } of getLatestOutputBatch(this.db, runId, nodeIds)) {
+      try {
+        out.set(
+          nodeId,
+          materializeStructJson(struct, (sha) => this.blobs.get(sha)),
+        );
+      } catch {
+        // Missing/corrupt spilled blob — omit the node so the caller treats it
+        // as "no output" (fails closed), matching `getLatestOutput`.
+      }
+    }
+    return out;
   }
 
   // ─────────────── Aggregations ───────────────
@@ -1803,6 +1834,14 @@ export class SqliteStore implements IEventStore {
           })),
         ),
       },
+      ...(opts.runResult !== undefined
+        ? [
+            {
+              name: runResultPath(runId),
+              data: enc.encode(JSON.stringify(scrubJsonStrings(opts.runResult, registry, scrubOpts))),
+            },
+          ]
+        : []),
       { name: workflowSourcePath(wf.sha), data: new TextEncoder().encode(wf.source) },
       { name: workflowIrPath(wf.sha), data: new TextEncoder().encode(wf.ir) },
       ...blobEntries,
@@ -2231,8 +2270,9 @@ export class SqliteStore implements IEventStore {
 
   private writeProjection(state: RunState, expectedVersion: number): void {
     const routing = JSON.stringify(state.routing);
-    if (routing.length >= MAX_ROUTING_BYTES) {
-      throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
+    const routingBytes = utf8ByteLength(routing);
+    if (routingBytes >= MAX_ROUTING_BYTES) {
+      throw new PayloadTooLargeError(routingBytes, MAX_ROUTING_BYTES);
     }
     const metrics = JSON.stringify(state.metrics);
     const changeStatJson = state.changeStat != null ? JSON.stringify(state.changeStat) : null;
@@ -2267,8 +2307,9 @@ export class SqliteStore implements IEventStore {
 
   private validatePayload(payload: unknown): string {
     const s = JSON.stringify(payload ?? {});
-    if (s.length >= MAX_EVENT_PAYLOAD_BYTES) {
-      throw new PayloadTooLargeError(s.length, MAX_EVENT_PAYLOAD_BYTES);
+    const bytes = utf8ByteLength(s);
+    if (bytes >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(bytes, MAX_EVENT_PAYLOAD_BYTES);
     }
     return s;
   }

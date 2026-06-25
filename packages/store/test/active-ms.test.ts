@@ -63,8 +63,8 @@ const NODE_COMPLETED: FactEvent = {
 };
 
 const RUN_PAUSED_HUMAN: FactEvent = {
-  type: "fact.run_paused_human",
-  payload: { nodeId: "a", text: "pick", routes: [] },
+  type: "fact.run_paused",
+  payload: { reason: "human", nodeId: "a", text: "pick", routes: [] },
 };
 
 const RUN_RESUMED: FactEvent = {
@@ -73,8 +73,8 @@ const RUN_RESUMED: FactEvent = {
 };
 
 const RUN_COMPLETED: FactEvent = {
-  type: "fact.run_completed",
-  payload: { finalNode: "b" },
+  type: "fact.run_terminated",
+  payload: { status: "completed", finalNode: "b" },
 };
 
 function runRequeued(lastAliveAt?: number): FactEvent {

@@ -387,7 +387,7 @@ steps:
         performance:  ${{ outputs.performance_verify.findings }}
         architecture: ${{ outputs.architecture_verify.findings }}
 
-      Merge: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set — you see the whole change; the lenses each saw a slice. THE BAR holds at this layer too: if a surviving item is, on reflection, a preference or a speculative concern dressed as a finding, drop it — never manufacture findings to look thorough; a clean PR SHOULD come back `All clear`.
+      Merge: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set — you see the whole change; the lenses each saw a slice. THE BAR holds at this layer too: if a surviving item is, on reflection, a preference or a speculative concern dressed as a finding, drop it — never manufacture findings to look thorough; a clean PR SHOULD come back `All clear`. SCOPE TO CAUSATION: record a finding only if THIS diff introduced it or made it reachable — a pre-existing issue the change merely sits beside is OUT of scope (drop it; this is a PR review, not an audit).
 
       File shape, headings exactly: `# Code Review` / `## Scope` / `## Critical` / `## High` / `## Medium` (there is NO Low tier).
 
@@ -417,7 +417,7 @@ steps:
       Read `pr-review.md` (the review under gate). Judge on its own merits.
         1. Every finding's path:line is verifiable — spot-check 2-3 by reading the cited path.
         2. Severity calibration sane (no Critical for a contained issue; cross-flagged ≥ High; and no nitpick dressed as High to force a `changes` verdict).
-        3. THE BAR held — NO recorded finding is a formatting/naming/doc-wording nit, a "consider …" preference, a speculative future-author or hypothetical concern, an intra-workspace API-stability opinion, or a guard against an input that can't occur. Those must be DROPPED, not recorded at any severity.
+        3. THE BAR held — NO recorded finding is a formatting/naming/doc-wording nit, a "consider …" preference, a speculative future-author or hypothetical concern, an intra-workspace API-stability opinion, a guard against an input that can't occur, or a PRE-EXISTING issue this diff did not introduce or expose. Those must be DROPPED, not recorded at any severity.
         4. Schema followed — Scope present and names the lens coverage; Critical/High/Medium ordered (no Low tier) or replaced by All clear; Next steps present.
       All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>` (e.g. "nitpick recorded as Medium", "over-severe High", "unverifiable claim").
 

@@ -26,8 +26,10 @@ import type {
   StoredEvent,
 } from "@fragua/store";
 import { FEED_EVENT_KINDS, isTerminal as isTerminalStatus } from "@fragua/types";
+import { deserializeGraph } from "../ir.ts";
+import type { RunOutputDecl } from "../types/graph.ts";
 import { buildExplanation, type RunExplanation } from "./explain.ts";
-import { runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
+import { projectRunOutputs, runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
 import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnapshot } from "./steps.ts";
@@ -111,6 +113,23 @@ export interface ReadPlane {
 
 export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
   const { store } = deps;
+  // Per-sha cache of a workflow's run-level `outputs:` declarations, so repeated
+  // polls of a completed run don't re-`deserializeGraph(wf.ir)` on every
+  // `runDetail`. The value disambiguates three states with a single `.get()`:
+  // `undefined` = not yet cached, `null` = cached miss (no run-level outputs /
+  // malformed IR), `RunOutputDecl[]` = cached hit. Bounded by a small
+  // insertion-order FIFO (oldest-sha-first eviction) so a long-running process
+  // across many workflow versions can't accumulate one entry per unique sha
+  // forever.
+  const RUN_OUTPUTS_CACHE_MAX = 256;
+  const runOutputsBySha = new Map<string, RunOutputDecl[] | null>();
+  const cacheRunOutputs = (sha: string, decls: RunOutputDecl[] | null): void => {
+    runOutputsBySha.set(sha, decls);
+    if (runOutputsBySha.size > RUN_OUTPUTS_CACHE_MAX) {
+      const oldest = runOutputsBySha.keys().next().value;
+      if (oldest !== undefined) runOutputsBySha.delete(oldest);
+    }
+  };
   return {
     runSummaries(opts = {}) {
       return store.listRunSummaryRows(opts).map(runSummaryRowToSummary);
@@ -125,6 +144,31 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
       const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
       const detail = runStateToDetail(state, events, wf?.name, wf?.source);
       detail.lastEventSeq = events.at(-1)?.seq ?? 0;
+      // Typed-partial egress envelope (proposal §11): project the run-level
+      // `outputs:` block over the producer's latest emission. ONLY a completed
+      // run carries an envelope, so skip the IR parse + outputs read entirely
+      // for queued / running / paused runs (the projection would discard them).
+      // The producer's latest struct comes from ONE `getLatestOutputBatch` over
+      // the DISTINCT producer nodes — not a `getOutputsForRun` batch, which
+      // materialises every iteration of every node (N×M blob reads for an
+      // N-iteration goal-gate run) only to keep the last per node.
+      if (wf?.ir != null && state.status === "completed") {
+        let runOutputs = runOutputsBySha.get(state.workflowSha!);
+        if (runOutputs === undefined) {
+          try {
+            runOutputs = deserializeGraph(wf.ir).attrs.outputs ?? null;
+          } catch {
+            runOutputs = null; // malformed IR — no envelope rather than a crash
+          }
+          cacheRunOutputs(state.workflowSha!, runOutputs);
+        }
+        if (runOutputs !== null && runOutputs.length > 0) {
+          const nodeIds = [...new Set(runOutputs.map((d) => d.node))];
+          const latestByNode = store.getLatestOutputBatch(runId, nodeIds);
+          const outputs = projectRunOutputs(runOutputs, state.status, (node) => latestByNode.get(node) ?? null);
+          if (outputs !== undefined) detail.outputs = outputs;
+        }
+      }
       return detail;
     },
     steps(runId) {

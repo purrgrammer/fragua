@@ -2,7 +2,7 @@
 // when the run is `halted`. Unlike RunPausedNotice there is nothing to
 // click: a halt is terminal, so the banner only explains what happened
 // (reason + detail from the read-plane's `haltReason` / `haltDetail`
-// projection of the terminal `fact.run_halted`).
+// projection of the terminal `fact.run_terminated{errored}`).
 //
 // `REASON_LABELS` is keyed by `HaltReason` so adding a literal to
 // `HALT_REASONS` in `@fragua/types` without a label here is a TypeScript

@@ -9,8 +9,10 @@ import { join } from "node:path";
 import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
 import { HALT_REASONS, type HaltReason } from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
+import { projectRunOutput } from "../engine/outputs-substitution.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
-import type { Graph } from "../types/graph.ts";
+import type { Graph, RunOutputDecl } from "../types/graph.ts";
+import type { OutputStructValue } from "../types/outputs.ts";
 import type { NodeState, RunDetail, RunFanoutTopology, RunSummary, SelectedEdge } from "./schemas.ts";
 
 export type UiStatus = RunSummary["status"];
@@ -189,7 +191,10 @@ export function runStateToDetail(
   if (state.status === "halted") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_halted") {
+      // Fold both the v4 terminal fact and the LEGACY (≤v3) `fact.run_halted`.
+      const isErroredTerminal =
+        ev.type === "fact.run_terminated" && (ev.payload as { status?: unknown }).status === "errored";
+      if (isErroredTerminal || ev.type === "fact.run_halted") {
         const p = ev.payload as { reason?: unknown; detail?: unknown; occContext?: unknown } | null | undefined;
         if (typeof p?.reason === "string" && (HALT_REASONS as readonly string[]).includes(p.reason)) {
           detail.haltReason = p.reason as HaltReason;
@@ -205,7 +210,12 @@ export function runStateToDetail(
   if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_paused_human") {
+      // Fold both the v4 `fact.run_paused{reason:human}` and the LEGACY (≤v3)
+      // `fact.run_paused_human` (same HITL prompt/routes payload shape).
+      const isHumanPause =
+        (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") ||
+        ev.type === "fact.run_paused_human";
+      if (isHumanPause) {
         const p = ev.payload as { nodeId?: unknown; text?: unknown; routes?: unknown; routeLabels?: unknown };
         if (typeof p.nodeId === "string") detail.hitlNodeId = p.nodeId;
         if (typeof p.text === "string") detail.hitlLabel = p.text;
@@ -237,7 +247,7 @@ export function runStateToDetail(
   }
 
   // HITL decision history: pair each `intent.human_input` with the gate
-  // it answered (the most recent preceding `fact.run_paused_human`). Built
+  // it answered (the most recent preceding `fact.run_paused{reason:"human"}`). Built
   // for every run, not just paused ones, so a resumed/terminal run still
   // shows what the operator chose. Latest write per node wins, so a loop
   // that revisits the same human gate keeps only its final answer.
@@ -248,6 +258,59 @@ export function runStateToDetail(
   if (requeues.length > 0) detail.crashRequeues = requeues;
 
   return detail;
+}
+
+/** Project a run's declared top-level `outputs:` block into the typed-partial
+ * egress envelope (proposal §11). Only a `completed` run carries an envelope;
+ * any other status returns `undefined` (the run reached no sanctioned
+ * terminal). When the workflow declares no run-level outputs the result is also
+ * `undefined` — there is no envelope to report.
+ *
+ * `lookupLatest(node)` returns the producer's LATEST emitted struct as a JSON
+ * string (already spill-rehydrated by the store's `getLatestOutput`), or `null`
+ * when the producer never ran on the taken path. Resolution is typed-PARTIAL,
+ * NOT fail-closed: a declared output whose producer didn't run — or whose
+ * `from:` path reaches through an `optional:` field the producer omitted — is
+ * ABSENT (its key omitted), never `""` and never a halt. A present `null` leaf
+ * is kept (distinct from absent). */
+export function projectRunOutputs(
+  runOutputs: RunOutputDecl[],
+  status: RunStatus,
+  lookupLatest: (node: string) => string | null,
+): Record<string, OutputStructValue> | undefined {
+  if (runOutputs.length === 0 || status !== "completed") return undefined;
+  // Null-prototype accumulator: a declared output named `__proto__` (or another
+  // prototype property) must land as an OWN key, not silently vanish through the
+  // prototype setter / collide with a builtin. Consistent with inputs/outputs
+  // round-tripping prototype-property names.
+  const out: Record<string, OutputStructValue> = Object.create(null);
+  // Parse each DISTINCT producer node once — multiple declarations projecting
+  // from the same node would otherwise re-`JSON.parse` the same struct. The
+  // `ABSENT` sentinel (producer never ran / unreadable struct) stays distinct
+  // from a present `null` struct value.
+  const ABSENT = Symbol("absent");
+  const parsedByNode = new Map<string, OutputStructValue | typeof ABSENT>();
+  for (const decl of runOutputs) {
+    let struct = parsedByNode.get(decl.node);
+    if (struct === undefined) {
+      const raw = lookupLatest(decl.node);
+      try {
+        struct = raw === null ? ABSENT : (JSON.parse(raw) as OutputStructValue);
+      } catch {
+        struct = ABSENT; // unreadable struct → absent, never a crash
+      }
+      parsedByNode.set(decl.node, struct);
+    }
+    if (struct === ABSENT) continue; // producer never ran / unreadable → absent
+    const projected = projectRunOutput(struct, decl.path);
+    if (!projected.present) continue; // path through an omitted field → absent
+    out[decl.name] = projected.value;
+  }
+  // A completed run whose declared producers ALL skipped has no envelope to
+  // report — return `undefined` (not `{}`) so "no outputs declared" and "all
+  // producers skipped" stay distinguishable downstream (`detail.outputs` /
+  // `buildCiResult` omit the field rather than emit an empty object).
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Narrow a halt fact's `occContext` blob into the typed `haltContext`. Every
@@ -345,7 +408,10 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
   let gateNode: string | null = null;
   let decisions: Record<string, { route: string; note?: string }> | undefined;
   for (const ev of events) {
-    if (ev.type === "fact.run_paused_human") {
+    const isHumanPause =
+      (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") ||
+      ev.type === "fact.run_paused_human";
+    if (isHumanPause) {
       const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
       gateNode = typeof nodeId === "string" ? nodeId : null;
     } else if (ev.type === "intent.human_input" && gateNode != null) {
@@ -376,15 +442,15 @@ function collectHitlDecisions(events: StoredEvent[]): Record<string, { route: st
  * UI groups by `nodeId` and renders the latest iteration's state; non-loop
  * runs see iteration=0 only and behave identically to pre-loop output.
  *
- * Terminal-halt patch: if the run ended via `fact.run_halted`,
- * `fact.run_cancelled`, or `fact.run_quarantined` and any entry is still
+ * Terminal-halt patch: if the run ended via `fact.run_terminated`
+ * (errored / aborted) or `fact.run_quarantined` and any entry is still
  * marked `running`, we downgrade to `failed` so the UI doesn't show a
  * stale "in progress" spinner on a halted run.
  *
  * Active-pause patch: a node aborted because the run paused (budget /
  * operator / provider_error / …) lands as `failed` from its `node_aborted`,
  * but it re-dispatches on resume — it's suspended, not failed. When the
- * latest run-state fact is `fact.run_paused`, reset that pause's node back
+ * latest run-state fact is a non-human `fact.run_paused`, reset that pause's node back
  * to `running` (the UI renders running + paused as "paused"). Mirrors the
  * live overlay's `fact.run_paused` handling.
  */
@@ -459,7 +525,14 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   // that never received its own completion/abort.
   let haltSeq: number | undefined;
   for (const ev of events) {
-    if (ev.type === "fact.run_halted" || ev.type === "fact.run_cancelled" || ev.type === "fact.run_quarantined") {
+    // A COMPLETED run never downgrades a lingering node — only an errored /
+    // aborted terminal or a quarantine does (mirrors the live overlay). Skip
+    // both the v4 `fact.run_terminated{status:"completed"}` and the legacy
+    // `fact.run_completed`; in practice a completed run leaves no node still
+    // `running`, but keying the downgrade off "completed" would diverge.
+    if (ev.type === "fact.run_completed") continue;
+    if (ev.type === "fact.run_terminated" && (ev.payload as { status?: unknown }).status === "completed") continue;
+    if (TERMINAL_RUN_FACT_TYPES.has(ev.type)) {
       haltSeq = ev.seq;
       break;
     }
@@ -499,12 +572,25 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
  *  human-pause supersedes it. */
 const RUN_STATE_FACT_TYPES = new Set<string>([
   "fact.run_paused",
-  "fact.run_paused_human",
   "fact.run_resumed",
+  "fact.run_terminated",
+  "fact.run_quarantined",
+  // LEGACY (≤v3) read-only fold paths — superseded in emission by the v4 facts
+  // above, but still fold for runs pinned below contract v4.
+  "fact.run_paused_human",
   "fact.run_completed",
   "fact.run_halted",
   "fact.run_cancelled",
+]);
+
+/** Terminal run facts, v4 + LEGACY (≤v3). A run ends on exactly one of these;
+ *  the node-state fold uses its seq to downgrade still-`running` nodes. */
+const TERMINAL_RUN_FACT_TYPES = new Set<string>([
+  "fact.run_terminated",
   "fact.run_quarantined",
+  "fact.run_completed",
+  "fact.run_halted",
+  "fact.run_cancelled",
 ]);
 
 /** The currently-active `fact.run_paused` node + seq, or `null` when the
@@ -515,7 +601,12 @@ function latestRunPaused(events: StoredEvent[]): { nodeId: string; seq: number }
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i]!;
     if (!RUN_STATE_FACT_TYPES.has(ev.type)) continue;
+    // A human-reason pause is a workflow question, not an aborted node to
+    // reset — both the v4 `fact.run_paused{reason:human}` and the LEGACY
+    // `fact.run_paused_human` skip the reset.
+    if (ev.type === "fact.run_paused_human") return null;
     if (ev.type !== "fact.run_paused") return null;
+    if ((ev.payload as { reason?: unknown }).reason === "human") return null;
     const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
     return typeof nodeId === "string" ? { nodeId, seq: ev.seq } : null;
   }

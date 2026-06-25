@@ -60,7 +60,7 @@ import {
   providersTestCommand,
 } from "../src/commands/providers.ts";
 import type { ModelOpsFlags } from "../src/commands/providers-custom.ts";
-import { resolveInputArgs, runCommand } from "../src/commands/run.ts";
+import { runCommand } from "../src/commands/run.ts";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 import {
   scheduleAddCommand,
@@ -74,6 +74,7 @@ import { serveCommand } from "../src/commands/serve.ts";
 import { showCommand } from "../src/commands/show.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 import { waitCommand } from "../src/commands/wait.ts";
+import { resolveInputArgs } from "../src/input-coerce.ts";
 import { FRAGUA_VERSION } from "../src/version.ts";
 
 const cli = cac("fragua");
@@ -446,7 +447,11 @@ cli
   )
   .option(
     "-i, --input <name=value>",
-    "Run input; repeat for multiple (one name=value each). Value @path reads a file, @- reads stdin (e.g. --input task=@spec.md)",
+    "Run input; repeat for multiple (one name=value each). Value @path reads a file, @- reads stdin (e.g. --input task=@spec.md). An object/array-typed input's value is JSON-parsed.",
+  )
+  .option(
+    "--input-json <json>",
+    "Whole inputs object as one JSON value (programmatic path); merged under --input overrides",
   )
   .option("--title <text>", "Explicit run title (skips auto-titling)")
   .option("--priority <n>", "Priority tie-breaker (default 0)")
@@ -481,6 +486,7 @@ cli
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(pick("title") !== undefined ? { title: pick("title")! } : {}),
+      ...(pick("inputJson") !== undefined ? { inputJson: pick("inputJson")! } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
       ...(options["follow"] === false ? { follow: false } : {}),
@@ -497,7 +503,14 @@ cli
       "(ANTHROPIC_API_KEY, …); --export writes a portable, secret-free .fragua bundle — " +
       "the artifact to upload/import.",
   )
-  .option("-i, --input <name=value>", "Run input; repeat for multiple. Value @path reads a file, @- reads stdin")
+  .option(
+    "-i, --input <name=value>",
+    "Run input; repeat for multiple. Value @path reads a file, @- reads stdin. Object/array inputs are JSON-parsed.",
+  )
+  .option(
+    "--input-json <json>",
+    "Whole inputs object as one JSON value (programmatic path); merged under --input overrides",
+  )
   .option(
     "--db <path>",
     "Pin the RAW store here for local inspection/resume (credential table dropped, transcript NOT scrubbed — not safe to publish; use --export for that). Default: a temp dir, discarded.",
@@ -538,6 +551,7 @@ cli
       ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
       ...(options["json"] === true ? { json: true } : {}),
+      ...(pick("inputJson") !== undefined ? { inputJson: pick("inputJson")! } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(allowEnv.length > 0 ? { allowEnv } : {}),
     });

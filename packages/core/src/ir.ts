@@ -14,19 +14,25 @@ import type { Graph, Node } from "./types/graph.ts";
  * v2 adds the optional `outputs:` block on `llm` nodes (structured step
  * outputs, additive). A v1 IR without `outputs` fields
  * is executor-equivalent to a v2 IR with no outputs declared. The v1→v2
- * converter is a no-op structural identity. */
-export const CURRENT_IR_VERSION = 2;
+ * converter is a no-op structural identity. v3 adds the top-level run-level
+ * `outputs:` block on `GraphAttrs` (projects step outputs into the run's
+ * typed result, additive); a v2 IR without it is equivalent to a v3 IR
+ * declaring no run-level outputs, so the v2→v3 converter is identity too. */
+export const CURRENT_IR_VERSION = 3;
 
 /** IR version up-converter chain. Each entry is a function that takes a
  * parsed-but-unvalidated IR JSON value at `fromVersion` and returns the
  * same (or restructured) value at `fromVersion + 1`. The GraphLoader calls
  * `convertIr` to walk the chain before handing the executor a current Graph.
  *
- * The v1→v2 converter is identity (outputs is additive; v1 IRs without the
- * field are already valid v2). The slot is explicit so the loader upgrade
- * path is exercised and future converters follow the pattern. */
+ * The v1→v2 and v2→v3 converters are identity (both `outputs:` blocks are
+ * additive; older IRs without the field are already valid at the next
+ * version). The slots are explicit so the loader upgrade path is exercised
+ * and future converters follow the pattern. */
 export const IR_CONVERTERS: Array<(json: unknown) => unknown> = [
-  // v1 → v2: additive outputs field, no structural change needed.
+  // v1 → v2: additive per-step outputs field, no structural change needed.
+  (json: unknown) => json,
+  // v2 → v3: additive run-level outputs block on GraphAttrs, identity.
   (json: unknown) => json,
 ];
 

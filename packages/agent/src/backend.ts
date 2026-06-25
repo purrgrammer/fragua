@@ -730,8 +730,10 @@ export class PiLlmBackend implements LlmBackend {
         // status — otherwise the provider-retry classifier mistakes
         // a manual 400 for a pre-response network failure and burns
         // the whole auto-retry budget against a deterministic failure.
-        const extracted =
-          lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null);
+        const extracted = effectiveProviderHttpStatus(
+          lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
+          last.errorMessage,
+        );
         const httpIs4xx5xx = extracted !== null && extracted >= 400 && extracted < 600;
         const noContent = !Array.isArray(last.content) || last.content.length === 0;
         if (httpIs4xx5xx || noContent) {
@@ -776,8 +778,10 @@ export class PiLlmBackend implements LlmBackend {
       // detail. A plain `fail` here would route a transient transport
       // failure into the no-fail-edge terminal halt (`aborted_exit`),
       // which is reserved for a deliberate abort tool call.
-      const unclassifiedStatus =
-        lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null);
+      const unclassifiedStatus = effectiveProviderHttpStatus(
+        lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
+        last.errorMessage,
+      );
       return failProvider(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
         httpStatus: unclassifiedStatus,
         provider,
@@ -963,6 +967,52 @@ export function extractHttpStatusFromErrorMessage(message: string): number | nul
   const status = Number(match[1]);
   if (!Number.isFinite(status) || status < 100 || status > 599) return null;
   return status;
+}
+
+/** Canonical HTTP status Anthropic uses for a discrete "overloaded"
+ * rejection (529). The provider-retry classifier treats it as
+ * auto-retryable. */
+export const ANTHROPIC_OVERLOADED_STATUS = 529;
+
+/** Detect an Anthropic `overloaded_error` envelope.
+ *
+ * Anthropic's overload can arrive mid-stream: the HTTP response already
+ * returned 200 (so `onResponse` captures `lastHttpStatus = 200`) and the
+ * overload then surfaces as an `error` event in the stream body whose
+ * envelope is `{"type":"error","error":{"type":"overloaded_error",...}}`.
+ * The `error.type` is the signal — the captured status (200) is not.
+ *
+ * Anchored on the envelope STRUCTURE, not a bare substring: a coincidental
+ * `"type":"overloaded_error"` embedded in some other error body (an echoed
+ * prior error, an upstream log) must not upgrade a manual-class failure to
+ * auto-retry and burn the retry budget. So we parse and require top-level
+ * `type:"error"` AND inner `error.type:"overloaded_error"`. The envelope may
+ * be prefixed by a bare HTTP status (the `extractHttpStatusFromErrorMessage`
+ * shape), so we parse from the first brace; a non-JSON / mismatched body
+ * fails closed to `false` (manual classification, the conservative default). */
+export function isOverloadedErrorMessage(message: string | undefined | null): boolean {
+  if (typeof message !== "string" || message.length === 0) return false;
+  const brace = message.indexOf("{");
+  if (brace === -1) return false;
+  try {
+    const parsed = JSON.parse(message.slice(brace)) as { type?: unknown; error?: { type?: unknown } };
+    return parsed?.type === "error" && parsed?.error?.type === "overloaded_error";
+  } catch {
+    return false;
+  }
+}
+
+/** Effective HTTP status for the `pause_provider` outcome. An
+ * `overloaded_error` envelope normalises to the canonical 529 regardless
+ * of the captured status (mid-stream overload returns 200), so the
+ * status-only provider-retry classifier auto-retries it; otherwise the
+ * captured/extracted status passes through unchanged. */
+export function effectiveProviderHttpStatus(
+  httpStatus: number | null,
+  errorMessage: string | undefined | null,
+): number | null {
+  if (isOverloadedErrorMessage(errorMessage)) return ANTHROPIC_OVERLOADED_STATUS;
+  return httpStatus;
 }
 
 /** Derive a `RunEnvironment` from the execution env. Always returns a

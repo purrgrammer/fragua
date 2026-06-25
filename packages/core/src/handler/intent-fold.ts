@@ -64,12 +64,12 @@ export type IntentDecision =
       steering?: string;
       humanInput?: { route: string; note?: string } | string;
       /** Pause this turn (no specific intent in the batch). Executor
-       * commits `fact.run_paused_human` immediately and skips dispatch. */
+       * commits `fact.run_paused{reason:"human"}` immediately and skips dispatch. */
       shouldPause: boolean;
       /** Pause AFTER the handler returns successfully (R3 — pause
        * coexists with steer/human). The handler runs with the steer /
        * human applied; on success the executor commits
-       * `fact.run_paused_human` instead of selecting the next edge.
+       * `fact.run_paused{reason:"human"}` instead of selecting the next edge.
        * Mutually exclusive with `shouldPause`. */
       shouldPauseAfterDispatch: boolean;
       /** Every intent that participated in this fold (applied OR dropped),

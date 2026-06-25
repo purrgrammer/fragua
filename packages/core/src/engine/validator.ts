@@ -8,6 +8,33 @@ import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
 import { inputReferences, outputReferences } from "./substitution.ts";
 
+/** Walk a dotted output path against a producer's declared output profile,
+ * shared by E035 (in-graph `${{ outputs.X.f }}` refs) and E046 (run-level
+ * `outputs:` projections). An empty path (a bare `from: node`) projects the
+ * whole struct — always valid once the producer declares `outputs:`. A first
+ * segment must be a declared output field; deeper segments must each resolve
+ * into a record (dotting into a scalar / array is a dead path). Returns the
+ * first optional segment crossed (E035 surfaces it as W016). */
+function walkOutputPath(
+  producerOutputs: Record<string, OutputProfile>,
+  path: readonly string[],
+): { badPath: true } | { badPath: false; optionalSeg: string | undefined } {
+  const topField = path[0];
+  if (topField === undefined) return { badPath: false, optionalSeg: undefined };
+  const topProfile = producerOutputs[topField];
+  if (topProfile === undefined) return { badPath: true };
+  let segProfile: OutputProfile = topProfile;
+  let optionalSeg: string | undefined;
+  for (const seg of path.slice(1)) {
+    if (!isOutputRecord(segProfile)) return { badPath: true };
+    const next = segProfile.fields[seg];
+    if (next === undefined) return { badPath: true };
+    if (optionalSeg === undefined && !segProfile.required.includes(seg)) optionalSeg = seg;
+    segProfile = next;
+  }
+  return { badPath: false, optionalSeg };
+}
+
 /** Whitelist of known node attribute names — the IR (snake_case) field set
  * the validator runs against, *after* the parser has lowered authoring keys
  * (`thread:` → `thread_id`, `context-files:` →
@@ -76,6 +103,7 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "budget_usd",
   "budget_policy",
   "inputs",
+  "outputs",
   "default_retry_policy",
 ]);
 
@@ -110,6 +138,12 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   const nodeIds = new Set(nodes.map((n) => n.id));
   const starts = nodes.filter((n) => n.type === "start");
   const exits = nodes.filter((n) => n.type === "exit");
+
+  // Computed once and shared across W002, E035/W015, and E046/W018 so a future
+  // graph-normalisation step can't leave one block reading a different graph
+  // state than another (which would produce divergent E035 vs E046 results).
+  const dominance = buildRunDominance(graph);
+  const reachableFromStart = starts.length === 1 ? reachableSet(graph, starts[0]!.id) : new Set(nodeIds);
 
   // E001: start node required
   if (starts.length === 0) {
@@ -171,7 +205,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 
   // W002: unreachable from start
   if (starts.length === 1) {
-    const reachable = reachableSet(graph, starts[0]!.id);
+    const reachable = reachableFromStart;
     for (const n of nodes) {
       if (!reachable.has(n.id)) {
         diags.push({
@@ -292,22 +326,42 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // at validate-time. Scans the substituted-string attrs (prompt / text /
   // tool_command) on every node.
   {
-    const declared = new Set((graph.attrs.inputs ?? []).map((d) => d.name));
+    const declByName = new Map((graph.attrs.inputs ?? []).map((d) => [d.name, d]));
+    const scalarTypes = new Set(["string", "number", "boolean", "choice"]);
     for (const n of nodes) {
       const fields = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
       const seen = new Set<string>();
       for (const f of fields) {
         if (typeof f !== "string") continue;
-        for (const ref of inputReferences(f)) {
-          if (declared.has(ref) || seen.has(ref)) continue;
-          seen.add(ref);
-          diags.push({
-            severity: "error",
-            code: "E030",
-            message: `node "${n.id}" references undeclared input \`${ref}\` — add it to the inputs: block`,
-            nodeId: n.id,
-            ...(n.loc !== undefined ? { loc: n.loc } : {}),
-          });
+        for (const { base, dotted } of inputReferences(f)) {
+          const decl = declByName.get(base);
+          if (decl === undefined) {
+            if (seen.has(base)) continue;
+            seen.add(base);
+            diags.push({
+              severity: "error",
+              code: "E030",
+              message: `node "${n.id}" references undeclared input \`${base}\` — add it to the inputs: block`,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+            continue;
+          }
+          // A dotted sub-reference into a scalar input can never resolve (the
+          // segment collapses to "" at runtime) — only object / array inputs
+          // carry record fields to dot into.
+          if (dotted && scalarTypes.has(decl.type)) {
+            const key = `${base}|dotted`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            diags.push({
+              severity: "error",
+              code: "E030",
+              message: `node "${n.id}" dot-references input \`${base}\` but it is a ${decl.type} — dotted sub-references are only valid on object / array inputs`,
+              nodeId: n.id,
+              ...(n.loc !== undefined ? { loc: n.loc } : {}),
+            });
+          }
         }
       }
     }
@@ -510,7 +564,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // Run-dominance is computed only to SUPPRESS the warning; it never blocks.
   // The runtime guarantee is fail-closed reads, not this analysis.
   {
-    const dominance = buildRunDominance(graph);
     const reachableCache = new Map<string, Set<string>>();
     const producerReaches = (producerId: string, consumerId: string): boolean => {
       let set = reachableCache.get(producerId);
@@ -549,43 +602,15 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             });
             continue;
           }
-          const topField = ref.path[0];
-          const topProfile = topField === undefined ? undefined : producerOutputs[topField];
-          if (topProfile === undefined) {
-            diags.push({
-              severity: "error",
-              code: "E035",
-              message: `node "${n.id}" references \`${refToken}\` but node "${ref.producer}" does not declare output field "${topField ?? "?"}"`,
-              nodeId: n.id,
-              ...(n.loc !== undefined ? { loc: n.loc } : {}),
-            });
-            continue;
-          }
-          // Validate the deeper dotted segments against the field's profile: a
-          // record must declare each next segment; dotting into a scalar or array
+          // Walk the dotted path against the producer's declared profile. A
+          // record must declare each segment; dotting into a scalar or array
           // can never resolve (resolveSegments returns undefined → fails closed),
-          // so it's a dead reference — E035, not just a top-field check.
-          let segProfile: OutputProfile = topProfile;
-          let badPath = false;
-          // Top-level fields are always required (top-level `optional:` is
-          // rejected at parse time), so only deeper segments can be optional. A
-          // ref reaching through an optional field the producer may omit fails
-          // closed at runtime — remember the first such segment for W016.
-          let optionalSeg: string | undefined;
-          for (const seg of ref.path.slice(1)) {
-            if (!isOutputRecord(segProfile)) {
-              badPath = true;
-              break;
-            }
-            const next = segProfile.fields[seg];
-            if (next === undefined) {
-              badPath = true;
-              break;
-            }
-            if (optionalSeg === undefined && !segProfile.required.includes(seg)) optionalSeg = seg;
-            segProfile = next;
-          }
-          if (badPath) {
+          // so it's a dead reference — E035, not just a top-field check. Top-level
+          // fields are always required (top-level `optional:` is rejected at
+          // parse time), so only deeper segments can be optional; `optionalSeg`
+          // is the first such segment, which W016 covers.
+          const walk = walkOutputPath(producerOutputs, ref.path);
+          if (walk.badPath) {
             diags.push({
               severity: "error",
               code: "E035",
@@ -595,6 +620,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             });
             continue;
           }
+          const optionalSeg = walk.optionalSeg;
           // Producer exists and declares the field. Decide error-vs-warn:
           // can't reach the consumer at all → dead ref (E035); reachable but
           // not run-dominating → advisory (W015), fail-closed at runtime.
@@ -1137,6 +1163,94 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
               ...loc,
             });
           }
+        }
+      }
+    }
+  }
+
+  // E046 / W018: run-level `outputs:` projections (the top-level `outputs:`
+  // block, proposal §11.4). The run BOUNDARY is typed-partial — an unproduced
+  // output is absent at runtime, never a halt — so like the per-step E035/W015
+  // pair, only a broken projection is a hard error; a maybe-not-produced one is
+  // advisory:
+  //   - E046 (hard error) when `from:` names a node that doesn't exist, declares
+  //     no `outputs:`, or a `<path>` the producer's schema doesn't declare — a
+  //     definite authoring bug, gated like E035.
+  //   - W018 (advisory) when the producer is reachable but does not run-dominate
+  //     every completing terminal — the W015 analog at the run boundary, reusing
+  //     the same run-dominance oracle. A `wait_all` fan-out branch terminal is
+  //     suppressed the same way W015 suppresses a join read: the barrier
+  //     guarantees the branch ran before its join, so if the join run-dominates
+  //     the exit the branch effectively does too.
+  {
+    if (graph.attrs.outputs !== undefined && !Array.isArray(graph.attrs.outputs)) {
+      diags.push({
+        severity: "error",
+        code: "E046",
+        message: "run-level `outputs:` declaration is not an array",
+      });
+    }
+    const runOutputs = Array.isArray(graph.attrs.outputs) ? graph.attrs.outputs : [];
+    if (runOutputs.length > 0) {
+      const completingTerminals = exits.filter((e) => reachableFromStart.has(e.id));
+      // Reverse the join-producer index (join → {branch nodes}) into branch
+      // node → its join, so a run-level ref to a fan-out branch terminal can be
+      // judged by its join's dominance over the exit.
+      const branchNodeToJoin = new Map<string, string>();
+      for (const [join, producers] of fanoutJoinProducers) {
+        for (const p of producers) branchNodeToJoin.set(p, join);
+      }
+      for (const decl of runOutputs) {
+        const fromToken = `from: ${decl.node}${decl.path.length > 0 ? `.${decl.path.join(".")}` : ""}`;
+        const producer = graph.nodes[decl.node];
+        if (producer === undefined) {
+          diags.push({
+            severity: "error",
+            code: "E046",
+            message: `run output "${decl.name}" (\`${fromToken}\`) references node "${decl.node}" which does not exist`,
+          });
+          continue;
+        }
+        const producerOutputs = producer.attrs.outputs;
+        if (producerOutputs === undefined) {
+          diags.push({
+            severity: "error",
+            code: "E046",
+            message: `run output "${decl.name}" (\`${fromToken}\`) references node "${decl.node}" which declares no \`outputs:\``,
+            nodeId: decl.node,
+          });
+          continue;
+        }
+        // Walk the dotted path against the producer's declared profile. A bare
+        // `from: node` (empty path) projects the whole struct — always valid once
+        // the producer declares outputs. A first segment must be a declared
+        // output field; deeper segments must each resolve into a record (dotting
+        // into a scalar/array is a dead path — E046, mirroring E035's badPath).
+        const badPath = walkOutputPath(producerOutputs, decl.path).badPath;
+        if (badPath) {
+          diags.push({
+            severity: "error",
+            code: "E046",
+            message: `run output "${decl.name}" (\`${fromToken}\`) references a field path node "${decl.node}" does not declare`,
+            nodeId: decl.node,
+          });
+          continue;
+        }
+        // Producer + field resolve. Advise (W018) when the producer is reachable
+        // from start but does not run-dominate every completing terminal.
+        if (!reachableFromStart.has(decl.node)) continue; // W002 already flags an unreachable node
+        if (completingTerminals.length === 0) continue;
+        const dominator = branchNodeToJoin.get(decl.node) ?? decl.node;
+        const runsOnEveryCompletingPath = completingTerminals.every((e) => dominance.dominates(dominator, e.id));
+        if (!runsOnEveryCompletingPath) {
+          diags.push({
+            severity: "warning",
+            code: "W018",
+            message:
+              `run output "${decl.name}" reads \`${fromToken}\` but "${decl.node}" does not run on every completing path — ` +
+              `it is absent from the run's outputs (typed-partial) when "${decl.node}" didn't run`,
+            nodeId: decl.node,
+          });
         }
       }
     }

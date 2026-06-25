@@ -55,7 +55,7 @@ export interface AbortPlanInput {
 }
 
 /**
- * - `halt`         — commit facts (incl. a terminal `run_halted`), run is done.
+ * - `halt`         — commit facts (incl. a terminal `run_terminated{status:errored}`), run is done.
  * - `pause`        — commit facts (incl. `run_paused`), run releases its slot.
  * - `timeout_retry`— commit facts + routing patch; on OCC conflict, re-drive.
  * - `abort_step`   — commit `node_aborted` only; executor then bumps
@@ -96,9 +96,12 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
 
   // 1. Reactive-budget stop-policy breach → terminal halt alongside the abort.
   if (input.reactiveBudgetHaltDetail !== undefined) {
-    const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
+    const haltPayload: { status: "errored"; reason: "budget"; detail?: string } = {
+      status: "errored",
+      reason: "budget",
+    };
     if (input.reactiveBudgetHaltDetail.length > 0) haltPayload.detail = input.reactiveBudgetHaltDetail;
-    facts.push({ type: "fact.run_halted", payload: haltPayload });
+    facts.push({ type: "fact.run_terminated", payload: haltPayload });
     return withBase("halt");
   }
 
@@ -154,8 +157,9 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
       };
     }
     facts.push({
-      type: "fact.run_halted",
+      type: "fact.run_terminated",
       payload: {
+        status: "errored",
         reason: "timeout_exhausted",
         detail: `${TIMEOUT_RETRY_MAX_ATTEMPTS} watchdog timeouts on node "${currentNode}"; thread continuity preserved but progress stalled`,
       },

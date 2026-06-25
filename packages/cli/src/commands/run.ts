@@ -19,40 +19,11 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import chalk from "chalk";
+import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
 import { followRun } from "../run-follow.ts";
 import { withStoreClient } from "../store-client.ts";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
-
-/** Parse repeated `--input name=value` args into a resolved map. A value
- * of `@<path>` reads the file verbatim; `@-` reads stdin (once, cached for
- * reuse). Type coercion is the server's job (against the workflow's
- * `inputs:` schema) — this only resolves the string. Throws on a malformed
- * entry (missing `=` or empty name) or an unreadable `@` source. */
-export async function resolveInputArgs(raw: string | string[] | undefined): Promise<Record<string, string>> {
-  const list = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
-  const out: Record<string, string> = {};
-  let stdinCache: string | undefined;
-  for (const entry of list) {
-    const s = String(entry);
-    const eq = s.indexOf("=");
-    if (eq <= 0) throw new Error(`--input must be name=value (got ${JSON.stringify(s)})`);
-    const name = s.slice(0, eq);
-    const rawVal = s.slice(eq + 1);
-    if (rawVal.startsWith("@")) {
-      const src = rawVal.slice(1);
-      if (src === "-") {
-        stdinCache ??= await Bun.stdin.text();
-        out[name] = stdinCache;
-      } else {
-        out[name] = await readFile(src, "utf8");
-      }
-    } else {
-      out[name] = rawVal;
-    }
-  }
-  return out;
-}
 
 export interface RunCommandOptions {
   workflow: string;
@@ -66,6 +37,9 @@ export interface RunCommandOptions {
   /** Typed run inputs (`--input name=value`). Validated against the
    * workflow's `inputs:` block and substituted as `${{ inputs.name }}`. */
   inputs?: Record<string, string>;
+  /** Whole inputs object as one JSON value (`--input-json '<json>'`). The
+   * programmatic-caller path; merged under per-`--input` overrides. */
+  inputJson?: string;
   /** Exit after the run enters a terminal state. Default true. */
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
@@ -129,9 +103,18 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     client.plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
     console.log(chalk.dim(`workflow ${name} -> ${mint.sha.slice(0, 12)}`));
 
+    const inputDecls = mint.graph.attrs.inputs ?? [];
+    let inputs: Record<string, unknown>;
+    try {
+      inputs = coerceInputs(opts.inputs ?? {}, opts.inputJson);
+    } catch (err) {
+      console.error(chalk.red(`run: ${(err as Error).message}`));
+      return 1;
+    }
+
     const enq = client.plane.buildEnqueue({
       workflowSha: mint.sha,
-      inputDecls: mint.graph.attrs.inputs ?? [],
+      inputDecls,
       cwd: resolve(cwd),
       projectId: project.projectId,
       projectName: project.projectName,
@@ -140,7 +123,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(scope === "global" || scope === "local" ? { workflowName: name } : {}),
       ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
       ...(opts.routing !== undefined ? { routing: opts.routing } : {}),
-      ...(opts.inputs !== undefined && Object.keys(opts.inputs).length > 0 ? { inputs: opts.inputs } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
     });
     if (!enq.ok) {
       console.error(chalk.red(`run: ${enq.error}`));

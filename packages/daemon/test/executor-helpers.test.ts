@@ -15,8 +15,8 @@ import {
   passField,
   readBudgetOverrides,
   readBudgetWarned,
+  readInputMap,
   readNumber,
-  readStringMap,
   recordEdgeSelected,
   resolveBackoff,
   resolveMaxRetries,
@@ -77,14 +77,26 @@ describe("executor-helpers", () => {
     expect(errorMessage(42)).toBe("42");
   });
 
-  test("routingString / readNumber / readStringMap coerce defensively", () => {
+  test("routingString / readNumber / readInputMap coerce defensively", () => {
     expect(routingString({ a: "x" }, "a")).toBe("x");
     expect(routingString({ a: 3 }, "a")).toBeUndefined();
     expect(readNumber(5)).toBe(5);
     expect(readNumber(Number.POSITIVE_INFINITY)).toBe(0);
     expect(readNumber("5")).toBe(0);
-    expect(readStringMap({ a: "x", b: 2, c: "y" })).toEqual({ a: "x", c: "y" });
-    expect(readStringMap(null)).toEqual({});
+    // readInputMap keeps non-string scalar/object values; only $fragua_blob refs drop.
+    expect(readInputMap({ a: "x", b: 2, c: { env: "prod" } })).toEqual({ a: "x", b: 2, c: { env: "prod" } });
+    expect(readInputMap(null)).toEqual({});
+  });
+
+  test("readInputMap preserves a stored 'constructor' key but drops __proto__", () => {
+    // The write path stores `constructor` / `toString` verbatim — only
+    // `__proto__` is filtered (it pollutes the prototype on assignment).
+    const out = readInputMap({ constructor: "v", toString: "t" });
+    expect(out["constructor"]).toBe("v");
+    expect(out["toString"]).toBe("t");
+    const polluted = readInputMap(JSON.parse('{"__proto__":{"x":1},"keep":"y"}'));
+    expect(Object.hasOwn(polluted, "__proto__")).toBe(false);
+    expect(polluted["keep"]).toBe("y");
   });
 
   test("readBudgetWarned parses the dedup tag set", () => {
@@ -118,6 +130,25 @@ describe("executor-helpers", () => {
     const args = buildSubstitutionArgs({ inputs: { topic: "birds" } }, decls);
     expect(args.inputs).toEqual({ topic: "birds", depth: "1" });
     expect(buildSubstitutionArgs({}, []).inputs).toBeUndefined();
+  });
+
+  test("buildSubstitutionArgs preserves object/array input values from routing", () => {
+    const decls = [
+      {
+        name: "config",
+        type: "object" as const,
+        required: false,
+        profile: { kind: "record" as const, fields: { env: { kind: "string" as const } }, required: ["env"] },
+      },
+      {
+        name: "tags",
+        type: "array" as const,
+        required: false,
+        profile: { kind: "array" as const, items: { kind: "string" as const } },
+      },
+    ];
+    const args = buildSubstitutionArgs({ inputs: { config: { env: "prod" }, tags: ["a", "b"] } }, decls);
+    expect(args.inputs).toEqual({ config: { env: "prod" }, tags: ["a", "b"] });
   });
 
   test("resolveBackoff falls back to the 'none' preset and honours custom attrs", () => {

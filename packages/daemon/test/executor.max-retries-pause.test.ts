@@ -133,7 +133,9 @@ describe("executor — max_retries pause + operator resume", () => {
     expect(attempts).toBe(3);
 
     // No terminal halt ever landed.
-    const haltFacts = r.store.getEvents("mrp1").filter((e) => e.type === "fact.run_halted");
+    const haltFacts = r.store
+      .getEvents("mrp1")
+      .filter((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect(haltFacts.length).toBe(0);
 
     r.store.close();
@@ -205,7 +207,9 @@ describe("executor — max_retries pause + operator resume", () => {
 
     // No fact.run_halted between (or after) the two pauses — regression
     // guard against the §6-rejected max_retries_pause_count alternative.
-    const haltFacts = r.store.getEvents("mrp2").filter((e) => e.type === "fact.run_halted");
+    const haltFacts = r.store
+      .getEvents("mrp2")
+      .filter((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect(haltFacts.length).toBe(0);
 
     r.store.close();

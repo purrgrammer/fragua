@@ -270,7 +270,7 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // never constructs a
     // `HandlerResult.halt` itself; it signals via `outcome.halt_reason`
     // and we translate here so the executor's `case "halt"` path emits
-    // `fact.run_halted` with the right reason. `failureReason` becomes
+    // `fact.run_terminated{errored}` with the right reason. `failureReason` becomes
     // the halt `detail`. Restricted to the `halt` union's accepted
     // reasons via the type assertion below — the handler-contract halt
     // shape doesn't carry every HaltReason literal (some are

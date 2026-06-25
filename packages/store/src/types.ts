@@ -536,19 +536,22 @@ export class MessageTooLargeError extends Error {
 
 // ─────────────── Size bounds ───────────────
 //
-// Limit semantics: pre-flight checks reject when `s.length >= MAX_*`, and
-// the schema CHECK clauses reject when `length(col) >= MAX_*`. So the
-// largest value that lands successfully is `MAX_* - 1`. Treat the constant
-// as the *first rejected size*, not the largest accepted.
+// Limit semantics: pre-flight checks reject at `size >= MAX_*` (size measured
+// per the unit caveat below), and the schema CHECK clauses reject when
+// `length(col) >= MAX_*`. So the largest value that lands successfully is
+// `MAX_* - 1`. Treat the constant as the *first rejected size*, not the largest
+// accepted.
 //
-// Unit caveat: JS `string.length` is UTF-16 code units; SQLite `length()`
-// on TEXT is Unicode code-point count. They agree on BMP characters and
-// diverge by up to 2x on surrogate-pair-heavy content (emoji, supplementary
-// planes). The pre-flight check is the binding constraint in practice
-// because it runs first and is stricter for non-BMP content. `MAX_BLOB_BYTES`
-// is the only honest-bytes constant — it gates `Uint8Array.byteLength`.
+// Unit caveat: the byte caps `MAX_EVENT_PAYLOAD_BYTES` and `MAX_ROUTING_BYTES`
+// are enforced pre-flight in honest UTF-8 BYTES (`utf8ByteLength`), while their
+// schema CHECK clauses count Unicode code points (SQLite `length()` on TEXT).
+// Because UTF-8 bytes >= code points, anything that passes the byte pre-flight
+// also passes the looser code-point CHECK — so the pre-flight is the binding,
+// retroactively-safe guard and the CHECK is a backstop (it can't be tightened
+// to bytes without rejecting historical rows that are sub-cap in code points
+// but over in bytes). `MAX_BLOB_BYTES` gates `Uint8Array.byteLength` directly.
 
-export const MAX_EVENT_PAYLOAD_BYTES = 4096;
+export { MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
 export const MAX_ROUTING_BYTES = 8192;
 export const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 export const MAX_MESSAGE_CONTENT_BYTES = 1024 * 1024;
@@ -944,6 +947,10 @@ export interface IEventReader {
   getOutputsForRun(runId: string): Array<{ nodeId: string; iteration: number; struct: string }>;
   /** Latest-iteration output struct for a specific node, or null. */
   getLatestOutput(runId: string, nodeId: string): string | null;
+  /** Latest-iteration struct for each of `nodeIds` in ONE query, keyed by
+   * node id. Nodes that never emitted are absent from the map. Collapses the
+   * per-node N+1 in `runDetail`'s typed-partial projection. */
+  getLatestOutputBatch(runId: string, nodeIds: readonly string[]): Map<string, string>;
 
   // ─── Blobs (raw read)
   /** Read a blob by sha256. Returns `null` when the file is absent (not yet

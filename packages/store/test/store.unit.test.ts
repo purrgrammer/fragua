@@ -345,10 +345,28 @@ describe("SqliteStore — appendFact", () => {
         runId,
         [
           {
-            type: "fact.run_halted",
-            payload: { reason: "error", detail: big },
+            type: "fact.run_terminated",
+            payload: { status: "errored", reason: "error", detail: big },
           },
         ],
+        s.version,
+      ),
+    ).toThrow(PayloadTooLargeError);
+    store.close();
+  });
+
+  test("appendFact measures the cap in UTF-8 bytes, not code points (CJK can't slip past)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s = store.getState(runId)!;
+    // 2000 CJK chars = 2000 UTF-16 code units but 6000 UTF-8 bytes — over the
+    // 4 KiB cap by bytes, under it by `String#length`.
+    const cjk = "字".repeat(2000);
+    expect(cjk.length).toBeLessThan(MAX_EVENT_PAYLOAD_BYTES);
+    expect(() =>
+      store.appendFact(
+        runId,
+        [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: cjk } }],
         s.version,
       ),
     ).toThrow(PayloadTooLargeError);
@@ -828,7 +846,11 @@ describe("SqliteStore — listThreadsWithMessages", () => {
       s.version,
     );
     const s1 = store.getState(done)!;
-    store.appendFact(done, [{ type: "fact.run_completed", payload: { finalNode: "a" } }], s1.version);
+    store.appendFact(
+      done,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "a" } }],
+      s1.version,
+    );
 
     const rows = store.listThreadsWithMessages();
     const runIds = new Set(rows.map((r) => r.runId));
@@ -863,7 +885,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
     const s1 = store.getState(runId)!;
     store.appendFact(
       runId,
-      [{ type: "fact.run_paused_human", payload: { nodeId: "a", text: "p", routes: [] } }],
+      [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "a", text: "p", routes: [] } }],
       s1.version,
     );
     expect(store.getState(runId)!.status).toBe("paused_human");
