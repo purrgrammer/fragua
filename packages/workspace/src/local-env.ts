@@ -269,9 +269,16 @@ export class LocalEnvironment implements ExecutionEnvironment {
       let stderr = "";
       let settled = false;
       let killReason: "timeout" | "abort" | undefined;
+      let reaped = false;
 
-      const killTree = (reason: "timeout" | "abort") => {
-        killReason = reason;
+      // Group-SIGTERM-then-SIGKILL the detached process group. Idempotent:
+      // the `reaped` latch lets us call this on EVERY terminal path (close,
+      // error, timeout, abort) without double-killing. Reaping on normal
+      // close is what stops a shell that exits leaving background children
+      // (`server >/dev/null 2>&1 &`) from stranding them as orphans (#34).
+      const reapGroup = () => {
+        if (reaped) return;
+        reaped = true;
         if (child.pid !== undefined) {
           try {
             process.kill(-child.pid, "SIGTERM");
@@ -284,7 +291,10 @@ export class LocalEnvironment implements ExecutionEnvironment {
             }
           }
           // Escalate to SIGKILL after a short grace window. If the
-          // process already exited the second kill is harmless.
+          // process already exited the second kill is harmless. `.unref()`
+          // so this backstop — now scheduled on EVERY exec via the close
+          // path — never holds an otherwise-idle event loop open for 2s
+          // (a long-lived daemon stays alive on its own and still escalates).
           setTimeout(() => {
             if (child.pid !== undefined) {
               try {
@@ -297,8 +307,13 @@ export class LocalEnvironment implements ExecutionEnvironment {
                 }
               }
             }
-          }, 2_000);
+          }, 2_000).unref();
         }
+      };
+
+      const killTree = (reason: "timeout" | "abort") => {
+        killReason = reason;
+        reapGroup();
       };
 
       const timer = setTimeout(() => {
@@ -330,6 +345,10 @@ export class LocalEnvironment implements ExecutionEnvironment {
         settled = true;
         clearTimeout(timer);
         if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+        // Reap the process group on normal completion too: a shell that
+        // exits leaving backgrounded children (closed pipes → immediate
+        // close) must not strand them past this call's return (#34).
+        reapGroup();
         if (killReason === "timeout") {
           resolvePromise({
             stdout,
@@ -355,6 +374,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
         settled = true;
         clearTimeout(timer);
         if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+        reapGroup();
         resolvePromise({ stdout, stderr: err.message, exitCode: 127, durationMs: Date.now() - start });
       });
     });

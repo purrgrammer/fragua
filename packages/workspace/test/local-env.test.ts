@@ -46,6 +46,78 @@ describe("LocalEnvironment", () => {
     expect(r.stderr).toContain("timed out");
   }, 5_000);
 
+  describe("backgrounded-process reaping (issue #34)", () => {
+    const isAlive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const waitForDeath = async (pid: number, withinMs: number): Promise<boolean> => {
+      const deadline = Date.now() + withinMs;
+      while (Date.now() < deadline) {
+        if (!isAlive(pid)) return true;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return !isAlive(pid);
+    };
+
+    test("a backgrounded child with closed pipes is reaped, not orphaned", async () => {
+      const pidFile = join(scratch, "bg.pid");
+      // Closed pipes (`>/dev/null 2>&1 &`) → child.on("close") fires
+      // immediately with exit 0, but the backgrounded sleeper survives.
+      // `$!` captures the real pid of the backgrounded sleep.
+      const r = await env.exec(`sleep 30 >/dev/null 2>&1 & echo $! > ${pidFile}`);
+      expect(r.exitCode).toBe(0);
+
+      const pid = Number((await env.readFile("bg.pid")).trim());
+      expect(Number.isInteger(pid)).toBe(true);
+      expect(pid).toBeGreaterThan(0);
+
+      const reaped = await waitForDeath(pid, 4_000);
+      if (isAlive(pid)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // ignore
+        }
+      }
+      expect(reaped).toBe(true);
+    }, 10_000);
+
+    test("a normal foreground call still returns its exit code and stdout", async () => {
+      const r = await env.exec("echo hi; exit 7");
+      expect(r.stdout).toContain("hi");
+      expect(r.exitCode).toBe(7);
+    });
+
+    test("abort still reaps and reports exitCode 130", async () => {
+      const ac = new AbortController();
+      const pidFile = join(scratch, "abort.pid");
+      const p = env.exec(`echo $$ > ${pidFile}; exec sleep 30`, { signal: ac.signal });
+      // Give the shell a moment to spawn and write its pid.
+      await new Promise((r) => setTimeout(r, 200));
+      ac.abort();
+      const r = await p;
+      expect(r.exitCode).toBe(130);
+      expect(r.stderr).toContain("aborted");
+
+      const pid = Number((await env.readFile("abort.pid")).trim());
+      const reaped = await waitForDeath(pid, 4_000);
+      if (isAlive(pid)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // ignore
+        }
+      }
+      expect(reaped).toBe(true);
+    }, 10_000);
+  });
+
   describe("path-escape isolation", () => {
     test("writeFile throws PathEscapeError on absolute path outside cwd", async () => {
       const outside = join(tmpdir(), "fragua-escape-target.txt");
