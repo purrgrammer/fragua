@@ -8,6 +8,18 @@ guarantee.
 
 ## [Unreleased]
 
+### Fixed
+
+- Mid-stream provider-retry classification no longer auto-retries permanent
+  failures whose error message coincidentally embeds a transient word (e.g.
+  "network access blocked", "TLS handshake timeout", a refused connection),
+  which previously burned the auto-retry budget on an unrecoverable error.
+  Non-auto-retryable 5xx statuses (505–528, 530–599) now stay a manual pause
+  even when their body looks transient, matching the rest of the retry policy.
+- A backgrounded child that ignores `SIGTERM` is no longer orphaned when a
+  short-lived run exits during a bash step's reap window — the `SIGKILL`
+  backstop now holds until escalation on the abort/timeout path.
+
 ## [0.8.0] — 2026-06-25
 
 ### Added
