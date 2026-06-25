@@ -22,7 +22,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { AUTO_RESUME_AT_KEY } from "@fragua/core";
+import { getTimer } from "@fragua/core";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import { AbortRegistry, type ExecutorOpts, runOne, WorktreeProvisioner, wakePending } from "@fragua/daemon";
@@ -84,8 +84,8 @@ export interface CiCommandOptions {
  * the run for `provider_retry` / `handler_retry` / `timeout_retry`).
  * `undefined` if the run isn't auto-paused or the key is missing. */
 function autoResumeAt(store: Pick<IEventReader, "getState">, runId: string): number | undefined {
-  const v = store.getState(runId)?.routing[AUTO_RESUME_AT_KEY];
-  return typeof v === "number" ? v : undefined;
+  const state = store.getState(runId);
+  return state ? getTimer(state.routing) : undefined;
 }
 
 /** Sleep until `wakeAt` (ms epoch), waking early on shutdown. Floored at
