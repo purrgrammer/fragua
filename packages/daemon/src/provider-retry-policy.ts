@@ -110,6 +110,9 @@ export function decideProviderRetry(opts: DecideProviderRetryOpts): ProviderRetr
   const delayMs = computeBackoffMs({
     ...(opts.retryAfterMs !== undefined ? { retryAfterMs: opts.retryAfterMs } : {}),
     attempt: nextAttempt,
+    // The executor's transition-planner always injects a deterministic `random`;
+    // this fallback only serves direct unit callers.
+    // decision-core-allow: injection seam for randomness
     random: opts.random ?? Math.random,
   });
   if (opts.cumulativeDelayMs + delayMs > PROVIDER_RETRY_MAX_CUMULATIVE_MS && opts.retryAfterMs === undefined) {
