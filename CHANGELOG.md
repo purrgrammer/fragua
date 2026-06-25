@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-25
+
 ### Added
 
 - `fragua ci --json` emits a terminal result envelope as the final line once a
@@ -129,6 +131,11 @@ guarantee.
 - The `@fragua/core` `inputReferences` helper now returns
   `Array<{ base: string; dotted: boolean }>` (was `string[]`), carrying whether
   each `${{ inputs.… }}` reference was dot-addressed.
+- `fragua run --follow` and `fragua runs tail` now exit on a non-human pause
+  instead of streaming indefinitely: the follow returns the pause's mapped exit
+  code and prints a per-reason hint for resuming (e.g. `fragua runs resume` /
+  `budget`), and a followed run that sits idle surfaces an "is a daemon running?"
+  hint rather than appearing to hang.
 
 ### Fixed
 
@@ -545,6 +552,7 @@ back down as a portable `.fragua` bundle for local inspection and aggregation.
 - Nightly property-test suite: raised the per-test timeout to fit PBT scaling and
   deflaked timer-fragile tests (#4).
 
+[0.8.0]: https://github.com/purrgrammer/fragua/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/purrgrammer/fragua/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/purrgrammer/fragua/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/purrgrammer/fragua/compare/v0.1.0...v0.2.0
