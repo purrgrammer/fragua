@@ -82,10 +82,16 @@ describe("unclassified agent-loop error fails open to a resumable pause", () => 
     expect(outcome.halt_reason).toBeUndefined();
   }, 15_000);
 
-  test("plain thrown Error from the stream with non-empty failure envelope (pi-agent-core handleRunFailure shape) → provider_error", async () => {
+  test("known-transient transport error (socket hang up, pi-agent-core handleRunFailure shape) → provider_error carrying the auto-retryable 408", async () => {
     // pi-agent-core's handleRunFailure synthesises
     // `content: [{type:"text", text:""}]` — length 1, so the backend's
     // `noContent` guard does not catch it. Model that envelope directly.
+    //
+    // `socket hang up` is a recognised transient transport signature, so the
+    // backend normalises the captured status to the auto-retryable 408 (the
+    // companion to the overloaded_error → 529 normalisation). The contract
+    // still holds: never a terminal halt, always resumable — auto-retry
+    // (paused_auto) is also non-terminal.
     const outcome = await runBackendWith([
       fauxAssistantMessage([fauxText("")], {
         stopReason: "error",
@@ -96,6 +102,9 @@ describe("unclassified agent-loop error fails open to a resumable pause", () => 
     expect(outcome.status).toBe("fail");
     expect(outcome.provider_error).toBeDefined();
     expect(outcome.provider_error?.errorMessage).toContain("socket hang up");
+    // Normalised to 408 so the daemon's status-only classifier routes it to
+    // provider_retry instead of a manual provider_error pause.
+    expect(outcome.provider_error?.httpStatus).toBe(408);
     expect(outcome.halt_reason).toBeUndefined();
   }, 15_000);
 });

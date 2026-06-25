@@ -1002,17 +1002,88 @@ export function isOverloadedErrorMessage(message: string | undefined | null): bo
   }
 }
 
-/** Effective HTTP status for the `pause_provider` outcome. An
- * `overloaded_error` envelope normalises to the canonical 529 regardless
+/** Canonical auto-retryable status for a recognised transient transport
+ * failure (408 Request Timeout). The provider-retry classifier already
+ * treats 408 as auto-retryable. */
+export const TRANSIENT_TRANSPORT_STATUS = 408;
+
+/** A conservative, explicit set of known-transient transport-failure
+ * signatures. These are bare `Error.message` strings (no JSON envelope to
+ * anchor on), so we match case-insensitive substrings — but kept TIGHT and
+ * specific: the failure mode this guards is a permanent error that
+ * coincidentally contains a transient word, which would burn the retry
+ * budget. A genuinely unknown message must NOT match (it fails open to a
+ * manual, resumable pause). Grounded in what the Anthropic/OpenAI SDKs and
+ * the underlying node networking stack surface. */
+const TRANSIENT_TRANSPORT_SIGNATURES = [
+  // request / operation timeouts
+  "operation timed out",
+  "request timed out",
+  "etimedout",
+  "timeout",
+  // connection drops / resets
+  "socket hang up",
+  "econnreset",
+  "econnrefused",
+  "epipe",
+  "network",
+  "connection error",
+  "connection reset",
+] as const;
+
+/** Detect a transient transport failure from a bare error message.
+ *
+ * A request/operation timeout or a dropped/reset connection can arrive
+ * MID-STREAM: the HTTP response already returned 200 (so `onResponse`
+ * captured `lastHttpStatus = 200`) and the transport then died. The
+ * status-only classifier would route that captured 200 to a manual pause;
+ * a timeout is transient and auto-retryable, so we normalise it instead.
+ *
+ * Only the explicitly-listed signatures match — an unknown message
+ * (e.g. "An unknown error occurred") returns `false` and stays manual. */
+export function isTransientTransportErrorMessage(message: string | undefined | null): boolean {
+  if (typeof message !== "string" || message.length === 0) return false;
+  const lower = message.toLowerCase();
+  return TRANSIENT_TRANSPORT_SIGNATURES.some((sig) => lower.includes(sig));
+}
+
+/** Effective HTTP status for the `pause_provider` outcome.
+ *
+ * An `overloaded_error` envelope normalises to the canonical 529 regardless
  * of the captured status (mid-stream overload returns 200), so the
- * status-only provider-retry classifier auto-retries it; otherwise the
- * captured/extracted status passes through unchanged. */
+ * status-only provider-retry classifier auto-retries it. A recognised
+ * transient transport failure (timeout / connection drop) likewise
+ * normalises to the auto-retryable 408 when the captured status is not
+ * already auto-retryable. Otherwise the captured/extracted status passes
+ * through unchanged — an unknown error keeps its captured status and stays
+ * manual (the conservative, fail-open-to-resumable default). */
 export function effectiveProviderHttpStatus(
   httpStatus: number | null,
   errorMessage: string | undefined | null,
 ): number | null {
   if (isOverloadedErrorMessage(errorMessage)) return ANTHROPIC_OVERLOADED_STATUS;
+  // Already auto-retryable (null / 408 / 429 / 5xx / 529) — leave as-is.
+  if (isAlreadyAutoRetryableStatus(httpStatus)) return httpStatus;
+  // An explicit 4xx is a definitive provider rejection carrying its own
+  // error envelope — keep its manual classification even if the message
+  // coincidentally contains a transient-looking word. The transient path
+  // only rescues the MID-STREAM shape (captured 2xx/3xx) where the
+  // transport died after the response began.
+  if (httpStatus !== null && httpStatus >= 400 && httpStatus <= 499) return httpStatus;
+  if (isTransientTransportErrorMessage(errorMessage)) return TRANSIENT_TRANSPORT_STATUS;
   return httpStatus;
+}
+
+/** Mirror of the daemon's `isAutoRetryableStatus` auto-retry set, kept
+ * local because `@fragua/agent` is a leaf package (the daemon depends on
+ * it, not the reverse). Used only to avoid overriding an already
+ * auto-retryable captured status when normalising a transient transport
+ * message. The daemon's classifier remains the single source of truth for
+ * the actual retry decision. */
+function isAlreadyAutoRetryableStatus(httpStatus: number | null): boolean {
+  if (httpStatus === null) return true;
+  if (httpStatus === 408 || httpStatus === 429 || httpStatus === ANTHROPIC_OVERLOADED_STATUS) return true;
+  return httpStatus >= 500 && httpStatus <= 504;
 }
 
 /** Derive a `RunEnvironment` from the execution env. Always returns a

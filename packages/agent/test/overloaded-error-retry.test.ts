@@ -25,7 +25,9 @@ import {
   ANTHROPIC_OVERLOADED_STATUS,
   effectiveProviderHttpStatus,
   isOverloadedErrorMessage,
+  isTransientTransportErrorMessage,
   PiLlmBackend,
+  TRANSIENT_TRANSPORT_STATUS,
 } from "../src/backend.ts";
 
 // Verbatim shape from a real run that paused with provider_error.
@@ -58,6 +60,53 @@ describe("isOverloadedErrorMessage / effectiveProviderHttpStatus — the AGENT h
     expect(effectiveProviderHttpStatus(200, '{"type":"error","error":{"type":"api_error"}}')).toBe(200);
     expect(effectiveProviderHttpStatus(400, "400 invalid")).toBe(400);
     expect(effectiveProviderHttpStatus(null, "stream aborted")).toBeNull();
+  });
+
+  test("normalises a mid-stream transient transport error (captured 200) to 408", () => {
+    // A request/operation timeout arriving mid-stream carries a captured 200
+    // (the response started, then the connection timed out). It is transient
+    // and auto-retryable — normalise to 408 so the status-only classifier
+    // routes it to provider_retry instead of a manual provider_error pause.
+    expect(effectiveProviderHttpStatus(200, "The operation timed out.")).toBe(TRANSIENT_TRANSPORT_STATUS);
+    // A genuinely unknown error stays manual (fail-open to a resumable pause).
+    expect(effectiveProviderHttpStatus(200, "An unknown error occurred")).toBe(200);
+    // An already-auto-retryable captured status is left as-is, not
+    // downgraded to 408: a 503 with a coincidental "timeout" stays 503.
+    expect(effectiveProviderHttpStatus(503, "503 gateway timeout")).toBe(503);
+    expect(effectiveProviderHttpStatus(null, "socket hang up")).toBeNull();
+    // overloaded_error precedence is unaffected by the transient path.
+    expect(effectiveProviderHttpStatus(200, OVERLOADED_ENVELOPE)).toBe(ANTHROPIC_OVERLOADED_STATUS);
+    // A manual 4xx with a transient-looking word is NOT flipped to 408.
+    expect(effectiveProviderHttpStatus(400, "400 invalid timeout config")).toBe(400);
+  });
+});
+
+describe("isTransientTransportErrorMessage — the conservative transient set", () => {
+  test("recognises each listed transient signature (case-insensitive)", () => {
+    for (const msg of [
+      "The operation timed out.",
+      "Request timed out",
+      "connect ETIMEDOUT 1.2.3.4:443",
+      "Request timeout",
+      "socket hang up",
+      "read ECONNRESET",
+      "connect ECONNREFUSED 127.0.0.1:443",
+      "write EPIPE",
+      "network error",
+      "Connection error.",
+      "connection reset by peer",
+    ]) {
+      expect(isTransientTransportErrorMessage(msg)).toBe(true);
+    }
+  });
+
+  test("rejects unknown / unrelated messages and empties", () => {
+    expect(isTransientTransportErrorMessage("An unknown error occurred")).toBe(false);
+    expect(isTransientTransportErrorMessage("invalid_request_error: bad model")).toBe(false);
+    expect(isTransientTransportErrorMessage("401 unauthorized")).toBe(false);
+    expect(isTransientTransportErrorMessage(undefined)).toBe(false);
+    expect(isTransientTransportErrorMessage(null)).toBe(false);
+    expect(isTransientTransportErrorMessage("")).toBe(false);
   });
 });
 
@@ -110,6 +159,26 @@ describe("overloaded_error end-to-end through PiLlmBackend — the seam", () => 
     // daemon's status-only classifier (provider-retry-policy.test.ts) then
     // routes 529 to provider_retry / paused_auto instead of a manual pause.
     expect(outcome.provider_error?.httpStatus).toBe(ANTHROPIC_OVERLOADED_STATUS);
+    expect(outcome.halt_reason).toBeUndefined();
+  }, 15_000);
+
+  test("a mid-stream transient transport timeout (partial content, captured status 200) → provider_error carrying the auto-retryable 408", async () => {
+    // The live shape from the fleet: the stream produced partial content,
+    // then errored with `Error("The operation timed out.")`; `onResponse`
+    // captured 200. The transient signature normalises the effective status
+    // to 408 so the daemon's status-only classifier (which already covers
+    // 408 in provider-retry-policy.test.ts) routes it to provider_retry /
+    // paused_auto instead of a manual pause.
+    const outcome = await runBackendWith([
+      fauxAssistantMessage([fauxText("partial answer before the transport died")], {
+        stopReason: "error",
+        errorMessage: "The operation timed out.",
+      }),
+    ]);
+
+    expect(outcome.status).toBe("fail");
+    expect(outcome.provider_error).toBeDefined();
+    expect(outcome.provider_error?.httpStatus).toBe(TRANSIENT_TRANSPORT_STATUS);
     expect(outcome.halt_reason).toBeUndefined();
   }, 15_000);
 });
