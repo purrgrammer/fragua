@@ -15,4 +15,5 @@
 
 /scripts/check-contract-bump.sh                        @purrgrammer
 /packages/store/src/reducers.ts                        @purrgrammer
+/packages/types/src/events.ts                          @purrgrammer
 /packages/store/test/contract-surface.snapshot.json    @purrgrammer
