@@ -312,6 +312,29 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.inputErrors).toEqual([]);
   });
 
+  test("structured inputs that JOINTLY exceed the cap (neither alone) report the combined total, not a per-field 'exceeds'", () => {
+    const WITH_TWO =
+      "name: cfg\ninputs:\n  a:\n    type: object\n    fields:\n      blob: {type: string}\n  b:\n    type: object\n    fields:\n      blob: {type: string}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";
+    const decls = parseWorkflow(WITH_TWO).attrs.inputs;
+    const { plane } = rig();
+    // Each field is ~1.7 KB (under the 3072-byte cap), but together they breach it.
+    const r = plane.buildEnqueue({
+      workflowSha: "sha1",
+      inputDecls: decls,
+      inputs: { a: { blob: "x".repeat(1700) }, b: { blob: "x".repeat(1700) } },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.error).toMatch(/too large/);
+    // The message must name the COMBINED total — not claim a single field exceeds
+    // a limit it doesn't individually hit.
+    expect(r.error).toContain("combined structured inputs");
+    expect(r.error).toMatch(/\d+ bytes/);
+    expect(r.error).toMatch(/3072-byte/);
+    expect(r.error).not.toMatch(/"a" \(\d+ bytes\) exceed|"b" \(\d+ bytes\) exceed/);
+    expect(r.inputErrors).toEqual([]);
+  });
+
   test("number/boolean inputs submitted as STRINGS (the web shape) coerce, validate, and land typed", () => {
     const WITH_SCALARS =
       "name: cfg\ninputs:\n  count: {type: number, required: true}\n  flag: {type: boolean, required: true}\nsteps:\n  work: {type: llm, prompt: do, next: exit}\n";

@@ -297,14 +297,19 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
             .map(([name, value]) => ({ name, bytes: utf8ByteLength(JSON.stringify(value)) }))
             .sort((a, b) => b.bytes - a.bytes);
           const overLimit = sized.filter((f) => f.bytes >= GENESIS_INPUTS_MAX_BYTES);
-          const offenders = overLimit.length > 0 ? overLimit : sized;
-          const fieldList = offenders.map((f) => `"${f.name}" (${f.bytes} bytes)`).join(", ");
-          const noun = offenders.length === 1 ? "field" : "fields";
+          // No single field exceeds the (combined) cap → the breach is the sum;
+          // naming individual fields as "exceeding" would mislead the caller.
+          const detail =
+            overLimit.length > 0
+              ? `${overLimit.length === 1 ? "field" : "fields"} ${overLimit
+                  .map((f) => `"${f.name}" (${f.bytes} bytes)`)
+                  .join(", ")} exceed`
+              : `combined structured inputs (${utf8ByteLength(JSON.stringify({ inputs: nonSpillable }))} bytes) exceed`;
           return {
             ok: false,
             error:
-              `input payload too large: ${noun} ${fieldList} exceed the ${GENESIS_INPUTS_MAX_BYTES}-byte ` +
-              `genesis inputs limit. Trim the field, or pass the large value as a file reference instead of inlining it.`,
+              `input payload too large: ${detail} the ${GENESIS_INPUTS_MAX_BYTES}-byte ` +
+              `genesis inputs limit. Trim the inputs, or pass large values as file references instead of inlining them.`,
             inputErrors: [],
           };
         }
