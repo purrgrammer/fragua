@@ -7,7 +7,8 @@
 //
 // Sections:
 //   1. contract_files       — line count + sha256(first 12) per surface
-//   2. taxonomy             — verbatim union literals from fragua-events.ts
+//   2. taxonomy             — verbatim union literals from events.ts (emitted +
+//                             legacy/never-emitted fact types are distinguished)
 //   3. schema_sql           — verbatim contents of schema.sql
 //   4. recent_commits       — last 30 across the repo
 //   5. contract_file_history — last 50 per contract file (for AGENTS.md rule #1)
@@ -23,7 +24,7 @@ import { resolve } from "node:path";
 
 const CONTRACT_FILES = [
   "packages/store/src/schema.sql",
-  "packages/types/src/fragua-events.ts",
+  "packages/types/src/events.ts",
   "packages/core/src/handler/types.ts",
   "packages/core/src/handler/intent-fold.ts",
   "docs/SPEC.md",
@@ -84,6 +85,11 @@ interface Taxonomy {
   quarantine_reasons: string[];
   intent_types: string[];
   fact_types: string[];
+  // Subset of fact_types whose union member is marked LEGACY / NEVER EMITTED —
+  // retained only for the reducer's fold of pre-v4 events. A doc that describes
+  // one of these as currently emitted is drift (e.g. "Emits `fact.run_halted`"
+  // when the daemon now emits `fact.run_terminated{status:"errored"}`).
+  legacy_fact_types: string[];
   daemon_event_types: string[];
 }
 
@@ -93,6 +99,16 @@ function extractStringUnion(src: string, typeName: string): string[] {
   if (!m) return [];
   const body = m[1] ?? "";
   return Array.from(body.matchAll(/"([^"]+)"/g)).map((x) => x[1] as string);
+}
+
+// Literals from an `export const NAME = [ "a", "b", ... ] as const` tuple.
+// RunStatus / HaltReason are derived from these tuples (CLAUDE.md ground rule
+// #1), not declared as literal unions, so extractStringUnion misses them.
+function extractConstTuple(src: string, constName: string): string[] {
+  const re = new RegExp(`export\\s+const\\s+${constName}\\s*=\\s*\\[([\\s\\S]*?)\\]`, "m");
+  const m = src.match(re);
+  if (!m) return [];
+  return Array.from((m[1] ?? "").matchAll(/"([^"]+)"/g)).map((x) => x[1] as string);
 }
 
 function extractUnionBody(src: string, typeName: string): string {
@@ -115,15 +131,33 @@ function extractDiscriminatorTypes(body: string, prefix: string): string[] {
   return [...out];
 }
 
+// Fact types whose union member carries a LEGACY / NEVER EMITTED marker in the
+// JSDoc immediately above its `type:` discriminator. The marker lives between
+// the previous member's discriminator and this one, so we scan that segment.
+function extractLegacyDiscriminatorTypes(body: string, prefix: string): string[] {
+  const re = new RegExp(`type:\\s*"(${prefix.replace(/\./g, "\\.")}[a-z_]+)"`, "g");
+  const matches = [...body.matchAll(re)];
+  const out = new Set<string>();
+  for (let i = 0; i < matches.length; i++) {
+    const prev = matches[i - 1];
+    const prevEnd = i > 0 ? (prev?.index ?? 0) + (prev?.[0]?.length ?? 0) : 0;
+    const segment = body.slice(prevEnd, matches[i]?.index ?? 0);
+    if (/NEVER EMITTED|LEGACY/.test(segment)) out.add(matches[i]?.[1] as string);
+  }
+  return [...out];
+}
+
 function extractTaxonomy(): Taxonomy {
-  const src = readOrEmpty("packages/types/src/fragua-events.ts");
+  const src = readOrEmpty("packages/types/src/events.ts");
+  const factBody = extractUnionBody(src, "FactEvent");
   return {
-    run_statuses: extractStringUnion(src, "RunStatus"),
+    run_statuses: extractConstTuple(src, "RUN_STATUSES"),
     pause_reasons: extractStringUnion(src, "PauseReason"),
-    halt_reasons: extractStringUnion(src, "HaltReason"),
+    halt_reasons: extractConstTuple(src, "HALT_REASONS"),
     quarantine_reasons: extractStringUnion(src, "QuarantineReason"),
     intent_types: extractDiscriminatorTypes(extractUnionBody(src, "IntentEvent"), "intent."),
-    fact_types: extractDiscriminatorTypes(extractUnionBody(src, "FactEvent"), "fact."),
+    fact_types: extractDiscriminatorTypes(factBody, "fact."),
+    legacy_fact_types: extractLegacyDiscriminatorTypes(factBody, "fact."),
     daemon_event_types: extractDiscriminatorTypes(extractUnionBody(src, "DaemonEvent"), "daemon."),
   };
 }

@@ -29,7 +29,7 @@ const SKILL_TARGET_HINTS: Record<string, string> = {
   operate:
     "Operator HTTP routes (POST /runs/:id/{steer,pause,cancel,hitl,resume,unquarantine,priority,budget}) — cross-reference packages/server/src/store/routes.ts and runs-routes.ts; flag examples whose body shape would 4xx.",
   postmortem:
-    "Event taxonomy / halt reasons / quarantine reasons / payload field names — cross-reference packages/types/src/fragua-events.ts. Verify §4.1 fact-type table, §8 halt + paused statuses, §8.1 schedule daemon-events, §8.2 subagent observability events match current literals.",
+    "Event taxonomy / halt reasons / quarantine reasons / payload field names — cross-reference packages/types/src/events.ts. Verify §4.1 fact-type table, §8 halt + paused statuses, §8.1 schedule daemon-events, §8.2 subagent observability events match current literals.",
 };
 
 interface FileSnapshot {
