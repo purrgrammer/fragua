@@ -19,6 +19,24 @@ guarantee.
 
 ### Fixed
 
+- An operator pause that lands in the same turn as a handler-retry backoff now
+  keeps the run paused for the operator instead of being silently auto-resumed
+  by the retry-pause's wake timer.
+- A goal-gate retarget that co-occurs with a budget pause no longer bumps the
+  goal-gate retry counter: the budget pause parks the run at the gate, so the
+  bump would double-count and prematurely halt the run with
+  `goal_gate_unsatisfied` under repeated budget pauses. Logs from before this
+  fix may carry elevated goal-gate retry counts; `intent.goal_gate_adjusted`
+  raises the per-gate ceiling to recover such a run.
+- The provider auto-retry cumulative-time cap is now enforced: prior backoff
+  delays accrue in run routing across the chain (including manual resumes), so
+  a chain that exceeds the cumulative-time ceiling halts as `provider_exhausted`
+  rather than retrying indefinitely under the per-attempt budget.
+- The bare "connection error" transient signature was dropped from the
+  mid-stream retry classifier: it matched permanent failures ("SSL connection
+  error", "Proxy connection error: 407", the SDK's "Connection error." wrapper
+  over a refused connection) and would burn the auto-retry budget. Genuine
+  transient connection drops are still recognised via "connection reset".
 - Mid-stream provider-retry classification no longer auto-retries permanent
   failures whose error message coincidentally embeds a transient word (e.g.
   "network access blocked", "TLS handshake timeout", a refused connection),
