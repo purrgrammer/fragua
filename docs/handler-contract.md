@@ -97,7 +97,7 @@ return {
 `outcomeStatus="retry"` has distinct executor semantics: no edge is selected and no `fact.node_completed` is committed. Instead the executor consults the retry-policy (`packages/core/src/engine/retry-policy.ts`) and emits `fact.run_paused{reason:"handler_retry"}` → `paused_auto`. The wake-pending sweeper re-queues the run at `resumeAt`; the same `(nodeId, iteration)` re-dispatches with the prior transcript intact. The per-node retry counter is bounded by the node's `max_retries` attr; exhaustion emits `fact.run_paused{reason:"max_retries"}` → `paused` (operator-resumable via `intent.max_retries_adjusted { nodeId, newLimit }`). Source: `packages/daemon/src/transition-planner.ts`.
 
 ### `yield_human`
-Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. A human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
+Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused{reason:"human"}` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. A human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
 
 When an operator writes `intent.human_input { route, note? }` the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
 
@@ -120,7 +120,7 @@ interface HumanInput {
 }
 ```
 
-Server-side enum validation: `POST /runs/:id/human` reads the latest `fact.run_paused_human` payload's `routes` and rejects off-list routes with 400 before any intent is written. The handler re-validates as defense-in-depth (a hand-crafted intent could bypass the server check) and halts with `reason: "error"` + a descriptive `detail` if an unknown route reaches it.
+Server-side enum validation: `POST /runs/:id/human` reads the latest `fact.run_paused{reason:"human"}` payload's `routes` and rejects off-list routes with 400 before any intent is written. The handler re-validates as defense-in-depth (a hand-crafted intent could bypass the server check) and halts with `reason: "error"` + a descriptive `detail` if an unknown route reaches it.
 
 ### `halt`
 Terminal failure. Emits `fact.run_terminated{status:"errored"}`.
