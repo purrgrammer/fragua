@@ -1,13 +1,12 @@
 # Typed wrapper struct for `run_state.routing` — DRAFT proposal
 
-> **Status: DRAFT (parked).** From a `propose` run that did not converge — it hit
-> its goal-gate loop cap with the design SHAPE decided (option (c): a typed
-> wrapper struct with reserved namespaces) but five precision items from the
-> panel critique still open (see *Open items* at the end). The body below is the
-> run's grounding/decision doc; the full draft prose + panel transcript persist
-> in the original run's event log. Soundness verdict: **sound** — the open items
-> are precision fixes, not design flaws. Pick this up when implementing routing
-> typing (and the cap-as-tripwire decision discussed alongside it).
+> **Status: DESIGN FIRMED UP — ready to implement.** Shape decided (option (c):
+> typed wrapper struct, reserved namespaces) and realised as a **typed
+> accessor layer over unchanged on-disk bytes** (no reshape, no schema
+> migration, no contract bump). §1–§5 are the grounding; **§6 is the concrete
+> design** — it answers Q1–Q5 and folds in all five panel rulings (which are no
+> longer open). The full original `propose` draft + panel transcript persist in
+> that run's event log.
 
 
 Grounding for the design draft. The author reads this instead of re-deriving the
@@ -300,41 +299,164 @@ keys are the dotted strings above.
   module (`@fragua/core`) that all of the above route through — the seam that
   makes the migration mechanical and the discipline enforceable.
 
-### Recommended framing for the draft
-
-The lowest-risk realisation of decision (c) is **a typed accessor layer + a
-TypeBox `RoutingStruct` schema, with the on-disk serialization unchanged** (still
-the flat dotted JSON the reducer already writes). Namespaces are a *typed view*
-(`getBudget(routing)`, `getFrontier(routing)`, …) that validate-and-degrade per
-namespace — generalising `readActiveNodes` — while writes continue to go through
-the existing key-wise `routingPatch` spread. This keeps I1 (no validation in the
-txn), I6 (no byte growth), the blob-spill/GC paths, and avoids both a schema
-migration and (if `reducers.ts` fold reads are unchanged) a contract bump. The
-draft should weigh this against a true reshape-on-disk wrapper and state the
-trade explicitly; the reshape buys a cleaner serialization but costs a contract
--version decision and a read-tolerant legacy-fold path for every live run.
-
 ---
 
-## Open items (panel critique — resolve before landing)
+## 6. The design
 
-1. **Drop the genesis-time budget sanitize claim.** No seam exists to strip
-   before persistence without violating events-are-truth or
-   `run_state.routing == deriveRunState(events)`. An imported run's persisted
-   `routing` stays exactly `deriveRunState(events)`, degraded only on read via
-   per-namespace getters; keep `store.ts` hydration a plain `JSON.parse`.
-2. **Specify `getInputs` guards verbatim against `readInputMap`** — all three:
-   the `__proto__` key filter, the per-entry `$fragua_blob` un-materialized-ref
-   drop, and object-or-`{}`. Add a regression test that an input named
-   `__proto__` is dropped identically by `getInputs` and `readInputMap`.
-3. **Cut the recursive `InputValue` TypeBox tower** → `Type.Record(Type.String(),
-   Type.Unknown())`; drop `InputValue`/`BlobRefSchema`/`InputScalar` as TypeBox
-   nodes (keep `InputValue` only as a documentary TS alias). `OUTCOME_STATUS`
-   stays (it is value-checked by `getGoalGate`).
-4. **Reconcile the single-seam lint exception count.**
-   `spillRoutingInputs`/`gcBlobs` read `routing["inputs"]` by literal — a third
-   production index. Either add an exported `INPUTS_KEY` constant routed through,
-   or document `routing-blobs.ts` as a third allow-list exception.
-5. **Fix the `@fragua/cli` blast-radius gap.** Add `@fragua/cli` to the
-   per-package enumeration; move the `ci.ts (autoResumeAt)` entry there; keep
-   `@fragua/core` re-exporting `AUTO_RESUME_AT_KEY`.
+**The chosen realisation of decision (c): a typed accessor layer over unchanged
+on-disk bytes.** `run_state.routing` stays the flat, dotted JSON the reducer
+writes today. Namespaces are a *typed view*, not a reshape — a `@fragua/core`
+module exports the key constants (one source of truth), validate-and-degrade
+accessors, and a documentary `RoutingStruct` TypeBox schema. Writes keep going
+through the existing key-wise `routingPatch` spread. This is the lowest-risk
+option: it keeps I1 (no validation in the txn), I6 (no byte growth), and the
+blob-spill/GC paths, and — because the on-disk bytes and the reducer's fold reads
+are unchanged — it needs **neither a schema migration nor a contract bump**. The
+alternative (reshape-on-disk) buys a cleaner serialization but costs a
+contract-version decision and a read-tolerant legacy-fold path for every live
+run; we reject it as not worth that.
+
+### 6.1 The accessor module (`packages/core/src/routing.ts`) — answers Q1, Q5
+
+A single module both writers (key constants) and readers (accessors) route
+through. It exports:
+
+- **Key constants / builders** — the dotted-key vocabulary as named exports:
+  `INPUTS_KEY`, `ACTIVE_NODES_KEY`, `AUTO_RESUME_AT_KEY`, `retryCountKey(node)`,
+  `timeoutRetriesKey(node)`, `PROVIDER_RETRY_ATTEMPT_KEY`,
+  `budgetOverrideKey(scope, metric)`, `BUDGET_WARNED_KEY`,
+  `maxRetriesOverrideKey(node)`, `MAX_LOOPS_OVERRIDE_KEY`,
+  `MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY`, `goalGateOutcomeKey(node)`,
+  `GOAL_GATE_RETRIES_KEY`, `GRAPH_GOAL_KEY`. Today these literals live scattered
+  across `executor-helpers.ts` / `goal-gate-policy.ts` / planners; this gathers
+  them.
+- **Typed accessors**, each a *typed view* assembled by reading the relevant
+  dotted keys with validate-and-degrade (generalising `readActiveNodes`):
+
+  | accessor | reads (keys) | returns | degrade |
+  |---|---|---|---|
+  | `getInputs(routing)` | `inputs` | `Record<string, unknown>` (own props only) | non-object → `{}`; `__proto__` key filtered; entry still an un-materialized `$fragua_blob` ref dropped (verbatim parity with `readInputMap`) |
+  | `getFrontier(routing)` | `internal.active_nodes` | `string[] \| null` | element-validated → `null` (= no fan-out). This **is** `readActiveNodes`, relocated. |
+  | `getBudget(routing)` | `budget_override.*`, `__budget_warned` | `{ override(scope,metric): number\|undefined; warned: ReadonlySet<string> }` | per-key `typeof === "number"` else undefined; warned non-array → ∅ |
+  | `getRetry(routing)` | `internal.retry_count.<n>`, `internal.timeout_retries.<n>`, `internal.provider_retry.attempt` | `{ count(n); timeoutRetries(n); providerAttempt }: number` | `Number.isFinite` else `0` |
+  | `getGoalGate(routing)` | `goal_gates.<n>`, `goal_gates.__retries` | `{ outcome(n): OutcomeStatus\|undefined; retries: number }` | outcome value-checked against `OUTCOME_STATUS`; retries finite else `0` |
+  | `getLimits(routing)` | `max_loops_override`, `max_goal_gate_retries_override`, `max_retries_override.<n>` | `{ maxLoops; maxGoalGateRetries; maxRetries(n) }: number\|undefined` | finite else undefined (→ caller falls back to attrs) |
+  | `getTimer(routing)` | `internal.auto_resume_at` | `number \| undefined` | `typeof === "number"` else undefined |
+  | `getContext(routing)` | `graph.goal`, `graph.run_id` | `{ goal: string\|undefined; runId }` | `typeof === "string"` else undefined |
+
+  **Per-node keys stay flat-dotted on disk** (`internal.retry_count.<nodeId>`);
+  the accessor presents them as a function (`getRetry(routing).count(nodeId)`),
+  not a materialised `Record`, so there is zero reshape and no prefix-scan cost
+  on the hot path.
+
+- **`RoutingStruct`** — a documentary TypeBox schema describing the logical
+  namespaces, used by the accessors' value-checks and as the single place the
+  shape is written down. Per **ruling 3**, the `inputs` slot is
+  `Type.Record(Type.String(), Type.Unknown())` — **no recursive `InputValue`
+  tower**, no `BlobRefSchema`/`InputScalar` TypeBox nodes (`getInputs` is
+  annotation-only and never `Value.Check`s a deep tree). `OUTCOME_STATUS` stays a
+  value-checked union (it *is* exercised by `getGoalGate`).
+
+### 6.2 Where validation runs — answers Q2
+
+On **read**, in the accessors — never in the write txn. On-disk stays flat+dotted
+(no fold-semantics change). Writes are unchanged: planners/intent-fold build the
+same `routingPatch`, the txn body stays a key-wise spread + pure SQL (I1 intact;
+no `Compile`/`Check` reachable from `writeTxn`). The accessors are exactly the
+typed form of today's ad-hoc inline casts, so a pre-wrapper run's bytes read
+identically.
+
+### 6.3 Fail-safe posture — answers Q3: **degrade everywhere, no pause**
+
+Every namespace degrades to the *conservative authored default*, and crucially
+none of those degrades can let a run exceed an authored bound:
+
+- frontier → `null` (no fan-out; self-heals on re-derive).
+- **budget override → undefined ⇒ the run falls back to the *lower* authored
+  cap.** This was Q3's worry ("could a corrupt override let a run overspend?") —
+  the answer is no: an override only ever *raises* a ceiling via operator intent,
+  so losing it makes the run pause *sooner*, never overspend. Degrade is safe.
+- retry / timeout / provider counters → `0` (re-counts from scratch; bounded by
+  the same caps).
+- limits overrides → undefined ⇒ authored `max_*` attrs apply.
+- goal-gate outcome → undefined ⇒ gate treated unsatisfied (re-runs, bounded by
+  cap); retries → `0`.
+
+No namespace warrants pause-with-reason; pause would be *less* safe than the
+conservative default in every case.
+
+### 6.4 Migration & contract — answers Q4 (folds in **ruling 1**)
+
+- **No `schema.sql` change** — column + 8 KB CHECK stay; no `fragua db migrate`.
+- **No `EVENT_CONTRACT_VERSION` bump.** `applyFact`'s fold reads/writes are
+  unchanged (it still only touches `internal.active_nodes`, now via the relocated
+  `getFrontier`). The new accessors are read-side, called by the
+  executor/policies, **not by the fold**. Relocating `readActiveNodes` into the
+  accessor module means `reducers.ts` imports it — which trips the
+  contract-touch-gate; since the fold *behaviour* is byte-identical this is a
+  legitimate `// contract: no-bump — relocate frontier reader, fold unchanged`.
+- **Ruling 1 (genesis sanitize: dropped).** There is no seam to strip a tampered
+  bundle's `routing` before persistence without breaking events-are-truth or
+  `run_state.routing == deriveRunState(events)`. `store.ts` hydration stays a
+  plain `JSON.parse`; an imported run's persisted `routing` remains exactly
+  `deriveRunState(events)`, degraded *only on read* by the accessors. Pacing
+  namespaces (budget/limits/retry overrides) are intent-folded, not
+  fold-rederived, so a bundle re-import legitimately doesn't re-materialise them —
+  already true today, and safe (they default conservative).
+- **Legacy runs never brick.** The accessors read the same flat dotted bytes
+  live runs already carry; degrade-to-default covers any malformed legacy shape.
+
+### 6.5 The single seam + its lint — folds in **rulings 2, 4, 5**
+
+The migration is mechanical because every raw `routing[...]` index moves behind
+the accessor module. The readers to convert (Q5):
+`executor-helpers.ts` (`readInputMap`/`nodeRetryCount`/`readBudgetWarned`/`readBudgetOverrides`/`buildSubstitutionArgs`/override-key helpers),
+`budget-policy.ts`, `goal-gate-policy.ts` (`readGoalGateRetries`/`readGateOutcomes`),
+`transition-planner.ts` + `abort-planner.ts` (patch construction reads),
+`reducers.ts` (`readActiveNodes`, genesis seed), `handler-bridge.ts:93`
+(`graph.goal`), **`@fragua/cli` `ci.ts:87`** (`auto_resume_at`), and
+`store.ts` (spill/GC/`materializeRouting`).
+
+- **Ruling 2 — `getInputs` guard parity.** It preserves all three guards
+  verbatim from `readInputMap`: the `__proto__` key filter, the per-entry
+  un-materialized-`$fragua_blob` drop, and object-or-`{}`. A regression test
+  asserts an input named `__proto__` is dropped *identically* by `getInputs` and
+  the legacy `readInputMap`.
+- **Ruling 4 — honest seam count.** `routing-blobs.ts` (`spillRoutingInputs`,
+  `gcBlobs`) indexes `routing["inputs"]` by literal — make it import the exported
+  `INPUTS_KEY` so it routes through the one constant rather than a fourth raw
+  literal. The single-seam lint then has exactly two sanctioned raw-index sites:
+  the accessor module itself, and the reducer's frontier write (both documented).
+- **Ruling 5 — `@fragua/cli` blast radius.** `ci.ts:87` reads
+  `routing[AUTO_RESUME_AT_KEY]`; it routes through `getTimer` (or the re-exported
+  constant). `@fragua/core` keeps re-exporting `AUTO_RESUME_AT_KEY` so `ci.ts`'s
+  import source is unchanged.
+- **Enforcement:** a discipline lint (mirroring the new
+  `decision-core-discipline` test) bans raw `routing[` / `.routing[` indexing
+  outside the accessor module + the two documented exceptions — so the seam
+  can't silently erode.
+
+### 6.6 The cap becomes a tripwire (I6)
+
+With routing read through bounded, typed accessors, the 8 KB CHECK stops being a
+budget the code is designed against and becomes a *defense-in-depth tripwire*
+that should never fire in correct operation. Keep the CHECK; reframe I6 in
+`SPEC.md` as a backstop (it catches a payload leaking into a variable-length
+namespace), not a functional limit. (This is the cap-as-tripwire decision raised
+alongside this work — it lands here, not as a separate change.)
+
+### 6.7 Implementation phases
+
+1. **Spec-first:** update `SPEC.md`/`ARCHITECTURE.md` §2.1 — the typed-routing
+   contract (accessors are the read surface; on-disk stays flat dotted) + I6 as a
+   tripwire.
+2. **Accessor module:** `packages/core/src/routing.ts` — key constants +
+   `RoutingStruct` + the eight accessors, each generalising its existing reader,
+   validate-and-degrade. Tests, incl. the `__proto__` parity test (ruling 2) and
+   a legacy-flat-bytes degrade test.
+3. **Migrate readers** (Q5 list) to the accessors; delete the ad-hoc casts.
+   `reducers.ts` `readActiveNodes` → `getFrontier` with the `// contract: no-bump`
+   marker; `routing-blobs.ts` → `INPUTS_KEY` (ruling 4); `ci.ts` → `getTimer`
+   (ruling 5).
+4. **Discipline lint** banning raw `routing[...]` outside the seam (§6.5).
+5. `bun run ci` green; no schema migration, no contract bump.
