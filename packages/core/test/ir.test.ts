@@ -4,9 +4,8 @@
 // validator-only metadata that must NOT survive into the persisted IR.
 
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { sourceHashGate } from "@fragua/test-utils";
 import { CURRENT_IR_VERSION, convertIr, deserializeGraph, serializeGraph, stripLoc } from "../src/ir.ts";
 import { parseWorkflow } from "../src/parser/yaml.ts";
 
@@ -100,83 +99,27 @@ describe("IR codec — round-trip modulo loc", () => {
 // and the snapshot move in the same diff. It does not DECIDE the bump — it
 // turns "silently forgot" into "build red until you consciously choose bump vs.
 // re-snapshot-only".
-const IR_TS = join(__dirname, "..", "src", "ir.ts");
-const IR_SNAPSHOT = join(__dirname, "ir-converters.snapshot.json");
-
-/** Declarations that ARE the converter chain. Slice each from its start line to
- * the line before the next top-level declaration — brace-agnostic, so the
- * arrow-function bodies and the loop don't need brace balancing. */
-const CONVERTER_DECLS = ["IR_CONVERTERS", "convertIr"] as const;
-
-function extractConverters(source: string): string {
-  const lines = source.split("\n");
-  const declRe = /^(?:export\s+)?(?:type|const|function|interface)\s+([A-Za-z0-9_]+)/;
-  const starts: { name: string; line: number }[] = [];
-  lines.forEach((line, i) => {
-    const m = declRe.exec(line);
-    if (m?.[1]) starts.push({ name: m[1], line: i });
-  });
-
-  const out: string[] = [];
-  for (const name of CONVERTER_DECLS) {
-    const start = starts.find((s) => s.name === name)?.line;
-    if (start === undefined) {
-      throw new Error(`ir-converters: declaration '${name}' not found in ir.ts — was it renamed?`);
-    }
-    const end = starts.reduce((acc, s) => (s.line > start && s.line < acc ? s.line : acc), lines.length);
-    out.push(`### ${name}\n${lines.slice(start, end).join("\n")}`);
-  }
-  return out.join("\n");
-}
-
-/** Strip comments and collapse whitespace so the hash tracks converter logic
- * only — comment/format edits don't trip it; the converter bodies do. */
-function normalizeConverters(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/[^\n]*/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function computeConverterHash(): string {
-  const src = readFileSync(IR_TS, "utf8");
-  return createHash("sha256")
-    .update(normalizeConverters(extractConverters(src)))
-    .digest("hex");
-}
-
+// Mechanics live in the shared `sourceHashGate` helper.
 describe("IR-converter version discipline", () => {
   test("converter chain matches the snapshot", () => {
-    const hash = computeConverterHash();
-
-    if (process.env["UPDATE_IR_SNAPSHOT"] === "1") {
-      writeFileSync(IR_SNAPSHOT, `${JSON.stringify({ version: CURRENT_IR_VERSION, hash }, null, 2)}\n`);
-      return;
-    }
-
-    const snap = JSON.parse(readFileSync(IR_SNAPSHOT, "utf8")) as { version: number; hash: string };
-
-    // The snapshot's version moves WITH the constant — re-snapshotting a real
-    // converter change without bumping (when a bump is due) is caught here.
-    expect(snap.version).toBe(CURRENT_IR_VERSION);
-
-    if (hash !== snap.hash) {
-      throw new Error(
-        [
-          "IR converter chain changed (the IR_CONVERTERS array or convertIr walk).",
-          `  snapshot ${snap.hash}`,
-          `  current  ${hash}`,
-          "",
-          "If this changes how persisted IR migrates: bump CURRENT_IR_VERSION in",
-          "packages/core/src/ir.ts (and the toBe(...) assertion above), then re-snapshot:",
-          "  UPDATE_IR_SNAPSHOT=1 bun test packages/core/test/ir.test.ts",
-          "",
-          "If it is migration-invariant (a comment, a reorder of identity converters):",
-          "re-snapshot the same way and note why no bump was needed.",
-        ].join("\n"),
-      );
-    }
+    sourceHashGate({
+      srcPath: join(__dirname, "..", "src", "ir.ts"),
+      declNames: ["IR_CONVERTERS", "convertIr"],
+      snapshotPath: join(__dirname, "ir-converters.snapshot.json"),
+      envVar: "UPDATE_IR_SNAPSHOT",
+      version: CURRENT_IR_VERSION,
+      errorPrefix: "ir-converters",
+      bumpHint: [
+        "IR converter chain changed (the IR_CONVERTERS array or convertIr walk).",
+        "",
+        "If this changes how persisted IR migrates: bump CURRENT_IR_VERSION in",
+        "packages/core/src/ir.ts (and the toBe(...) assertion in ir.test.ts), then re-snapshot:",
+        "  UPDATE_IR_SNAPSHOT=1 bun test packages/core/test/ir.test.ts",
+        "",
+        "If it is migration-invariant (a comment, a reorder of identity converters):",
+        "re-snapshot the same way and note why no bump was needed.",
+      ].join("\n"),
+    });
   });
 });
 

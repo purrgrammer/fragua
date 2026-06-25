@@ -11,7 +11,7 @@
     },
     "packages/agent": {
       "name": "@fragua/agent",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "0.79.1",
         "@earendil-works/pi-ai": "0.79.1",
@@ -28,7 +28,7 @@
     },
     "packages/cli": {
       "name": "@fragua/cli",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "bin": {
         "fragua": "./bin/fragua.ts",
       },
@@ -62,7 +62,7 @@
     },
     "packages/core": {
       "name": "@fragua/core",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
         "@fragua/types": "workspace:*",
         "@noble/hashes": "2.2.0",
@@ -71,13 +71,14 @@
       },
       "devDependencies": {
         "@fragua/store": "workspace:*",
+        "@fragua/test-utils": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },
     },
     "packages/daemon": {
       "name": "@fragua/daemon",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
         "@fragua/core": "workspace:*",
         "@fragua/store": "workspace:*",
@@ -91,10 +92,8 @@
     },
     "packages/server": {
       "name": "@fragua/server",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
-        "@earendil-works/pi-ai": "0.79.1",
-        "@fragua/agent": "workspace:*",
         "@fragua/core": "workspace:*",
         "@fragua/store": "workspace:*",
         "@fragua/types": "workspace:*",
@@ -103,24 +102,33 @@
         "hono": "4.12.23",
       },
       "devDependencies": {
+        "@fragua/agent": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },
     },
     "packages/store": {
       "name": "@fragua/store",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
         "@fragua/types": "workspace:*",
       },
       "devDependencies": {
+        "@fragua/test-utils": "workspace:*",
         "fast-check": "3.23.1",
+        "typescript": "5.7.3",
+      },
+    },
+    "packages/test-utils": {
+      "name": "@fragua/test-utils",
+      "version": "0.8.0",
+      "devDependencies": {
         "typescript": "5.7.3",
       },
     },
     "packages/types": {
       "name": "@fragua/types",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "0.79.1",
         "@earendil-works/pi-ai": "0.79.1",
@@ -131,7 +139,7 @@
     },
     "packages/web": {
       "name": "@fragua/web",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
         "@fontsource-variable/geist": "5.2.9",
         "@fragua/core": "workspace:*",
@@ -178,6 +186,7 @@
         "@types/react": "18.3.12",
         "@types/react-dom": "18.3.1",
         "@vitejs/plugin-react": "4.3.4",
+        "fast-check": "3.23.1",
         "jsdom": "25.0.1",
         "tailwindcss": "4.2.2",
         "typescript": "5.7.3",
@@ -187,7 +196,7 @@
     },
     "packages/workspace": {
       "name": "@fragua/workspace",
-      "version": "0.6.0",
+      "version": "0.8.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "0.79.1",
         "@earendil-works/pi-ai": "0.79.1",
@@ -449,6 +458,8 @@
     "@fragua/server": ["@fragua/server@workspace:packages/server"],
 
     "@fragua/store": ["@fragua/store@workspace:packages/store"],
+
+    "@fragua/test-utils": ["@fragua/test-utils@workspace:packages/test-utils"],
 
     "@fragua/types": ["@fragua/types@workspace:packages/types"],
 
