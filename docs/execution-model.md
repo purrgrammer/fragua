@@ -71,7 +71,7 @@ Snapshots capture the worktree's state (committed + uncommitted) at **step bound
 ### When snapshots are taken
 
 - **After each completed node** (`fact.node_completed`) — `step` boundary.
-- **On HITL pause** (`fact.run_paused_human`) — `hitl` boundary.
+- **On HITL pause** (`fact.run_paused{reason:"human"}`) — `hitl` boundary.
 - **On terminal status** — a `terminal` boundary, then dispose.
 
 ### Delta suppression

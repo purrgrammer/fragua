@@ -346,7 +346,7 @@ signoff:
     feedback: {to: implement, label: "Request changes"}    # a redo loop
 ```
 
-`fact.run_paused_human` carries `text` + the route names; the UI renders one button per route (label = the edge `label`, else the humanized route name). The operator resumes with `POST /runs/:id/human { route, note? }`; the server validates `route` against the declared set.
+`fact.run_paused{reason:"human"}` carries `text` + the route names; the UI renders one button per route (label = the edge `label`, else the humanized route name). The operator resumes with `POST /runs/:id/human { route, note? }`; the server validates `route` against the declared set.
 
 - `human` steps require `routes:` (E022) and can't be a `thread` member (humans don't see LLM threads).
 - "Reject / send back" is a **redo** route (→ an upstream step), not a fail terminal. To *fail/discard* the run, the operator uses `cancel` (with a note).

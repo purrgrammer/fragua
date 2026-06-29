@@ -156,7 +156,7 @@ The authoritative DDL is `packages/store/src/schema.sql`; connection pragmas (WA
 ### Intent events (writer: `client`, no OCC)
 | Type | Payload fields | Semantics |
 |---|---|---|
-| `intent.run_enqueued` | `workflowSha`, `priority?` | Queue a new run |
+| `intent.run_enqueued` | `workflowSha`, `priority?`, `projectId`, `projectName`, `routing`, `contractVersion`, `workflowName?`, `workflowScope?`, `workflowPath?`, `scheduleId?` | Queue a new run |
 | `intent.steering_requested` | `text: string` | Abort current node; inject steering before re-entry |
 | `intent.pause_requested` | — | Abort current node; transition to `paused` |
 | `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
@@ -428,7 +428,7 @@ No IPC. No daemon dependency for reads or intent writes. Polling is the whole st
 
 ## 8. Queue fairness
 
-**Rule.** Within a priority tier, FIFO on `ready_at`. `ready_at` is reset to `now()` on every transition INTO `queued` (initial enqueue, HITL wake, crash requeue, unquarantine-retry). Ties break by `run_id` (deterministic, seeded by ULID-like ordering). The claim index orders by `priority DESC, ready_at ASC, run_id ASC`.
+**Rule.** Within a priority tier, FIFO on `ready_at`. `ready_at` is reset to `now()` on every transition INTO `queued` (initial enqueue, HITL wake, crash requeue, unquarantine-retry). Ties break by `run_id` (deterministic, seeded by ULID-like ordering). The claim query orders by `priority DESC, ready_at ASC, run_id ASC`; the SQL index (`idx_run_state_queue`) covers only the first two columns — `run_id ASC` is the tiebreaker in the ORDER BY clause, not in the index.
 
 **Why this over alternatives:**
 
@@ -440,7 +440,7 @@ No IPC. No daemon dependency for reads or intent writes. Polling is the whole st
 | **FIFO on `ready_at`** | Everyone queues fresh on transition | Simple; predictable; no starvation at single-machine scale |
 
 **Scenario — N priority-10 runs wake from HITL simultaneously:**
-SQLite serializes the N `intent.human_input` commits; each human-resume transaction sets `ready_at = now()` inside the same txn. Even at ms-level clustering, SQL commit order gives each a distinct `ready_at`; ties break by `run_id`. The claim index (`priority DESC, ready_at ASC, run_id ASC`) pops them deterministically in commit order. No thundering herd.
+SQLite serializes the N `intent.human_input` commits; each human-resume transaction sets `ready_at = now()` inside the same txn. Even at ms-level clustering, SQL commit order gives each a distinct `ready_at`; ties break by `run_id`. The claim query (`priority DESC, ready_at ASC, run_id ASC`) pops them deterministically in commit order. No thundering herd.
 
 **Not starvation-free in theory:** a relentless priority-11 stream starves priority-10. That's priority's point. If workflow-level fairness becomes a need, add `workflow_max_concurrent` per workflow (cheap partial-index count). Not needed day 1.
 
