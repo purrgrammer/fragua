@@ -23,7 +23,7 @@ fragua run change --input task="rename foo() to bar() in packages/core"
 fragua run deploy --input ticket=BUG-1 --input env=prod
 ```
 
-`fragua run` saves the workflow, enqueues, and tails its event log until terminal. Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. Its exit code reflects the outcome — `0` completed, non-zero banded by halt / pause / quarantine reason (the same `cliExitCode` map `fragua ci` uses; full table in [`docs/cli.md`](../../../docs/cli.md#exit-codes)). A `paused_human` gate prompts you inline (on a TTY — answer and it keeps following) or exits `60` for `fragua runs respond`; `paused_auto` resumes itself on the retry timer.
+`fragua run` saves the workflow, enqueues, and tails its event log until terminal. Terminal facts: `fact.run_terminated{status:"completed"}` (run completed), `fact.run_terminated{status:"errored"}` (run halted), `fact.run_terminated{status:"aborted"}` (run cancelled), `fact.run_paused{reason:"human"}` (HITL gate), `fact.run_paused` (any operator-resumable pause), `fact.run_quarantined`. Its exit code reflects the outcome — `0` completed, non-zero banded by halt / pause / quarantine reason (the same `cliExitCode` map `fragua ci` uses; full table in [`docs/cli.md`](../../../docs/cli.md#exit-codes)). A `paused_human` gate prompts you inline (on a TTY — answer and it keeps following) or exits `60` for `fragua runs respond`; `paused_auto` resumes itself on the retry timer.
 
 > `fragua` and `bun run fragua <args…>` are interchangeable on a checkout; this doc uses the bare binary.
 
@@ -127,7 +127,7 @@ Each verb appends an `intent.*` event the daemon folds on its next tick (~50ms);
 |---|---|---|
 | `fragua runs steer <id> "<text>"` | `intent.steering_requested` | Handler aborts (`cause:"steer"`); next dispatch sees the text in the thread. |
 | `fragua runs pause <id>` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); → `paused` (`reason:"operator"`). |
-| `fragua runs cancel <id> [--reason <t>]` | `intent.cancel_requested` | Handler aborts; terminal `fact.run_cancelled`. No resume path. |
+| `fragua runs cancel <id> [--reason <t>]` | `intent.cancel_requested` | Handler aborts; terminal `fact.run_terminated{status:"aborted"}`. No resume path. |
 | `fragua runs resume <id> [--note <t>]` | `intent.resume` | Any `paused_*` run → `queued`. |
 | `fragua runs respond <id> [route] [--note <t>]` | `intent.human_input` | Answers a `paused_human` gate; route must be in the gate's enum (§5). |
 | `fragua runs unquarantine <id> --resolution treat_as_done\|retry\|cancel` | `intent.unquarantine` | Resolves an orphan side effect (§6). |

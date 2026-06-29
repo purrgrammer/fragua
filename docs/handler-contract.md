@@ -89,6 +89,7 @@ return {
   cacheReadTokens?: 0,
   cacheWriteTokens?: 0,
   modelName?: "gemini-1.5-pro",         // for per-model rollups
+  outputs?: Record<string, unknown>,    // structured outputs from emit_output (llm steps with `outputs:` declared); present iff the node emitted a valid struct
 };
 ```
 
