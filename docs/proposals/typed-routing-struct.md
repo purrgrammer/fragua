@@ -35,9 +35,16 @@ between the JSON column and the readers.
 
 **Decision (do not re-open):** introduce a TypeBox-schematized wrapper struct
 with reserved namespaces per subsystem (`inputs` / `budget` / `retry` /
-`frontier` / `timer` / …). Not per-key read accessors (option a, the
-`readActiveNodes` generalisation the appraisal leans toward), not a whole-object
-TypeBox `Check` at the fold boundary (option b). The draft designs (c) in
+`frontier` / `timer` / …) — where "wrapper struct" names a typed *view* over the
+unchanged bytes (the decoded namespaces + a documentary `RoutingStruct` schema),
+**not** a reshape of the column. The on-disk form stays flat + dotted; the column
+has dynamic, runtime-keyed entries (`retry_count.<nodeId>`,
+`budget_override.<scope>.<metric>`) and so is intrinsically an open record with no
+closed struct to be lifted to (§6 spells this out). The view is realised as
+namespace-level accessors — distinct from option (a)'s per-key read accessors (the
+`readActiveNodes` generalisation the appraisal leans toward) by carrying typed
+per-namespace views + the schema, and from option (b)'s whole-object TypeBox
+`Check` at the fold boundary by validating on read, never in the txn. The draft designs (c) in
 detail and answers the five sub-questions: the namespace shape, where validation
 runs, per-namespace fail-safe posture, migration/back-compat, and blast radius.
 
@@ -308,13 +315,41 @@ on-disk bytes.** `run_state.routing` stays the flat, dotted JSON the reducer
 writes today. Namespaces are a *typed view*, not a reshape — a `@fragua/core`
 module exports the key constants (one source of truth), validate-and-degrade
 accessors, and a documentary `RoutingStruct` TypeBox schema. Writes keep going
-through the existing key-wise `routingPatch` spread. This is the lowest-risk
-option: it keeps I1 (no validation in the txn), I6 (no byte growth), and the
-blob-spill/GC paths, and — because the on-disk bytes and the reducer's fold reads
-are unchanged — it needs **neither a schema migration nor a contract bump**. The
-alternative (reshape-on-disk) buys a cleaner serialization but costs a
-contract-version decision and a read-tolerant legacy-fold path for every live
-run; we reject it as not worth that.
+through the existing key-wise `routingPatch` spread.
+
+**Why the accessors *are* the lift, not a fallback to dodge a migration.** The
+on-disk form is not a struct-shaped object and never can be: its load-bearing
+keys are *dynamic*, keyed by runtime values — per-node retry counters
+(`internal.retry_count.<nodeId>`), per-(scope, metric) budget overrides
+(`budget_override.<scope>.<metric>`), per-gate outcomes (`goal_gates.<nodeId>`),
+per-node max-retries (`max_retries_override.<nodeId>`). A map keyed by arbitrary
+node ids has no closed struct to be lifted to; the honest static type of the
+column is, and stays, an open string-keyed record. The thing that *does* have a
+fixed shape is the **decoded namespaced view** (`inputs / frontier / budget /
+retry / goalGate / limits / timer / context`) — and that is exactly what
+`RoutingStruct` describes and what the accessor return types (`BudgetView`,
+`RetryView`, `GoalGateView`, …) hand back, folding each family of dynamic keys
+into a typed lookup (`getRetry(routing).count(nodeId)`,
+`getBudget(routing).override(scope, metric)`). So "lift the data structure to a
+proper type" decomposes into two parts: the part with a fixed shape (the view) is
+typed; the part with dynamic keys (the storage) is intrinsically a `Record` and
+there is nothing to lift it to. The accessors are the lift — they turn the flat
+dynamic-key map into the typed view at the one boundary where the type matters,
+the read.
+
+**This needs neither a schema migration nor a contract bump — and not because
+we're dodging the cost.** `routing` is a `run_state` *projection*, not an emitted
+event payload, so Ground Rule 11's fold-all-versions machinery (which governs the
+append-only log) does not apply to *retyping* it: the bytes don't move, the
+reducer's fold reads are unchanged, and because routing has only ever grown
+additively (optional namespaces) every historical blob reads identically through
+the accessors. This also keeps I1 (no validation in the txn), I6 (no byte
+growth), and the blob-spill/GC paths intact. A genuine reshape-on-disk (nesting
+the dotted keys into literal namespace objects) would cost a re-snapshot of every
+live run and a *larger* byte footprint under the 8 KB cap — while still leaving
+the dynamic per-node keys as `Record`s inside the nesting, so it would not even
+close the typing gap the accessors already close. We reject it: real cost, for a
+serialization change that buys nothing the accessors don't.
 
 ### 6.1 The accessor module (`packages/core/src/routing.ts`) — answers Q1, Q5
 
