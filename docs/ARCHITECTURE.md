@@ -255,9 +255,18 @@ on the narrowest interface that fits its needs — analytics routes need
 daemon executor needs the full set.
 
 `SqliteStore` implements all four in a single class today. Splitting
-them by surface lets a future implementation back the reader interface
-with a Postgres replica or the analytics one with DuckDB without
-disturbing the writer.
+them by surface is **necessary but not sufficient** for any future
+shared or out-of-process backing — say, the reader interface fronted by
+a Postgres replica or the analytics one by DuckDB. It removes one
+blocker (a backing could vary per surface without disturbing the
+writer), but it does **not** make such a backing reachable today: the
+binding constraint is that all four interfaces are **synchronous**
+(matching `bun:sqlite`), and a networked store is inherently async.
+Reaching a shared backing would require async-ifying every method and
+every callsite — a structural change this segregation does not perform.
+SPEC §5 is authoritative here: multi-machine / shared deployment is out
+of scope by design, and this split is groundwork, not a drop-in seam.
+See §12.
 
 The composite `IEventStore` is preserved as `IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator` in `packages/store/src/types.ts`, where every method signature is authoritative.
 
@@ -540,7 +549,7 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 ## 12. Deferred decisions
 
 - **Blob encryption** for secret-bearing outputs — single-user local; deferred.
-- **Cross-machine deployment** — single-machine by design. `IEventStore` is synchronous (matches `bun:sqlite`); a Postgres backing would require async-ifying the interface and every callsite, so this is a future direction rather than a clean drop-in.
+- **Cross-machine deployment** — single-machine by design (SPEC §5). `IEventStore` is synchronous (matches `bun:sqlite`); a shared/Postgres backing is inherently async, so it would require async-ifying the interface and every callsite. The §4 surface segregation removes one blocker (a backing can vary per surface) but not this one — the synchronous interface remains the binding constraint, so a shared instance is structurally foreclosed today, not a clean drop-in.
 - **Retention policies** per workflow — manual `fragua prune` until demand.
 - **Blob streaming** for >16MB — handler must chunk; revisit on real use case.
 - **Auto-migration across schema bumps** — `migrate()` creates the baseline on a fresh DB and walks an existing store forward through the `SCHEMA_MIGRATIONS` step-delta map (`packages/store/src/migrations.ts`, keyed by target version) up to CURRENT; a store newer than the binary is refused. Each step carries an optional `down` inverse, so a downgrade is available as an explicit, backed-up operator action (`fragua db migrate --to <lower>` → `migrateTo`), never automatic.

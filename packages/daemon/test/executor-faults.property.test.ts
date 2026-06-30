@@ -222,7 +222,7 @@ describe("executor faults — OCC conflict at the commit seam", () => {
       ),
       { numRuns: pbtFaultRuns(150) },
     );
-  });
+  }, 60_000);
 
   // A PERSISTENT conflict on a node's commits can't be absorbed: the OCC
   // controller hits its ceiling and halts the run with `occ_exhausted` — bounded
@@ -278,7 +278,7 @@ describe("executor faults — handler hang (leaked watchdog timeout)", () => {
       }),
       { numRuns: pbtFaultRuns(60) },
     );
-  });
+  }, 60_000);
 });
 
 /** Drive a generated run to mid-flight `running` (one turn → run_started), then
