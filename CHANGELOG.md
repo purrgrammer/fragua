@@ -8,6 +8,15 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- Quarantined runs now get a first-class operator surface. In the web UI a
+  banner on the run detail page explains the quarantine reason, lists the
+  orphaned intent seqs, and offers the three resolutions (`treat as done`,
+  `retry`, `cancel run`) as one-click actions. In the CLI follow/tail loop a
+  `fact.run_quarantined` event renders the reason and orphaned intents with an
+  `unquarantine` hint instead of raw JSON.
+
 ### Changed
 
 - Per-run dispatch state in `run_state.routing` is now read through a typed,

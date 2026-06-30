@@ -250,6 +250,18 @@ export function renderEvent(ev: StoredEvent): void {
     );
     return;
   }
+  if (ev.type === "fact.run_quarantined") {
+    const p = ev.payload as { reason?: QuarantineReason; orphanedIntents?: number[] };
+    const reason = p.reason ?? "other";
+    const orphans = p.orphanedIntents ?? [];
+    const orphanNote = orphans.length > 0 ? ` (orphaned intents: ${orphans.join(", ")})` : "";
+    console.log(
+      `${chalk.dim(`[${ev.seq}]`)} ${chalk.red(`⚠ ${ev.type}`)} ` +
+        chalk.red(`quarantined: ${reason}${orphanNote}`) +
+        chalk.dim(" — resolve with `fragua runs unquarantine <run> --resolution treat_as_done|retry|cancel`"),
+    );
+    return;
+  }
   const terminalStatus = ev.type === "fact.run_terminated" ? (ev.payload as { status?: string }).status : undefined;
   const color =
     terminalStatus === "completed"

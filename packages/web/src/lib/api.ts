@@ -944,6 +944,20 @@ export async function cancelRun(id: string, reason?: string): Promise<{ seq: num
   return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedSeq);
 }
 
+/** Resolve a `quarantined` run's orphaned side effect. `resolution` MUST be
+ *  one of the three the intent plane / `runs unquarantine` verb accept:
+ *  `treat_as_done` (synthesise the missing done + resume), `retry` (re-run
+ *  the orphaned side effect), or `cancel` (terminate the run). */
+export async function unquarantineRun(
+  id: string,
+  resolution: "treat_as_done" | "retry" | "cancel",
+  note?: string,
+): Promise<{ seq: number }> {
+  const body: { resolution: "treat_as_done" | "retry" | "cancel"; note?: string } = { resolution };
+  if (note !== undefined && note.length > 0) body.note = note;
+  return postJson(`/runs/${encodeURIComponent(id)}/unquarantine`, body, isAcceptedSeq);
+}
+
 export async function acceptRun(id: string): Promise<{ seq: number }> {
   return postJson(`/runs/${encodeURIComponent(id)}/accept`, {}, isAcceptedSeq);
 }

@@ -30,6 +30,7 @@ import { RunConversation } from "../components/RunConversation.tsx";
 import { hasDiff, RunDiffTab } from "../components/RunDiffTab.tsx";
 import { RunHaltedNotice } from "../components/RunHaltedNotice.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
+import { RunQuarantinedNotice } from "../components/RunQuarantinedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -230,6 +231,9 @@ export function RunDetail(): JSX.Element {
           haltDetail={detail.haltDetail}
           haltContext={detail.haltContext}
         />
+      )}
+      {detail?.runStatus === "quarantined" && (
+        <RunQuarantinedNotice runId={id} eventEpoch={totalEvents} imported={detail.imported} />
       )}
       {detail?.crashRequeues != null && detail.crashRequeues.length > 0 && (
         <CrashRequeueNotice crashRequeues={detail.crashRequeues} />
