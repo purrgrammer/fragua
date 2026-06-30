@@ -15,6 +15,7 @@ import {
   isSettled,
   newRunId,
   PayloadTooLargeError,
+  RunNotFoundError,
 } from "@fragua/store";
 import { applyAccept, applyDiscard, defaultGitExec, type RunActionGate } from "@fragua/workspace";
 import type { Context } from "hono";
@@ -435,8 +436,12 @@ export function createRoutes(deps: ServerDeps): Hono {
   });
 
   /**
-   * Append an intent and translate the store-level `PayloadTooLargeError`
-   * into a typed 413. Operator-supplied text fields (`steer.text`,
+   * Append an intent and translate store-level errors into typed HTTP
+   * responses: an unknown run id (`RunNotFoundError`) becomes a 404 with
+   * `code: "not_found"` (a client error, not a 500), matching the
+   * human/accept not-found shape; an oversized payload
+   * (`PayloadTooLargeError`) becomes a 413. Operator-supplied text fields
+   * (`steer.text`,
    * `cancel.reason`, `hitl.input`, `unquarantine.note`) can plausibly
    * exceed the 4 KB event-payload cap (§I7); without this wrapper the
    * caller gets a 500 with a stack trace and no actionable signal. With
@@ -448,6 +453,9 @@ export function createRoutes(deps: ServerDeps): Hono {
       const { seq } = plane.commit(runId, intent);
       return c.json({ seq });
     } catch (err) {
+      if (err instanceof RunNotFoundError) {
+        return c.json({ error: "run not found", code: "not_found" }, 404);
+      }
       if (err instanceof PayloadTooLargeError) {
         return c.json(
           {

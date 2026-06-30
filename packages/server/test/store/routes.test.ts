@@ -934,6 +934,20 @@ describe("intent-write routes", () => {
     expect(events.some((e) => e.type === type)).toBe(true);
   });
 
+  test.each([
+    ["steer", "/steer", { text: "go" }],
+    ["pause", "/pause", undefined],
+    ["cancel", "/cancel", { reason: "stop" }],
+    ["resume", "/resume", { note: "topped up" }],
+    ["unquarantine", "/unquarantine", { resolution: "retry", note: "try again" }],
+    ["priority", "/priority", { newPriority: 5 }],
+  ] as const)("POST /runs/:id/%s on an unknown run → 404 with code=not_found", async (_label, path, body) => {
+    const res = await req("POST", `/runs/does-not-exist${path}`, body);
+    expect(res.status).toBe(404);
+    const responseBody = (await res.json()) as { error: string; code: string };
+    expect(responseBody.code).toBe("not_found");
+  });
+
   test("POST /runs/:id/human writes an intent.human_input intent when route is in the declared enum", async () => {
     // Phase 7 of llm-routing.md adds server-side enum validation:
     // the endpoint reads the latest fact.run_paused_human payload to

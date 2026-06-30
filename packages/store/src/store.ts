@@ -249,6 +249,7 @@ import {
   type ProviderConfigRow,
   type ProviderCredentialRow,
   type RunMetrics,
+  RunNotFoundError,
   type RunState,
   type Schedule,
   type ServerEndpointRow,
@@ -627,7 +628,7 @@ export class SqliteStore implements IEventStore {
 
     this.writeTxn(() => {
       const row = selectRunStateRow(this.db, runId);
-      if (row == null) throw new Error(`unknown run ${runId}`);
+      if (row == null) throw new RunNotFoundError(runId);
       seq = bumpRunSeq(this.db, runId);
       insertEventWeb(this.db, runId, seq, event.type, payload, ts);
     });

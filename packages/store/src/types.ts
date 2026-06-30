@@ -514,6 +514,13 @@ export class QuarantineError extends Error {
   }
 }
 
+export class RunNotFoundError extends Error {
+  constructor(public readonly runId: string) {
+    super(`unknown run ${runId}`);
+    this.name = "RunNotFoundError";
+  }
+}
+
 export class PayloadTooLargeError extends Error {
   constructor(
     public readonly sizeBytes: number,
