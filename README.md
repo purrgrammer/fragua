@@ -159,7 +159,7 @@ Output lands in the run's own worktree at `.fragua/worktrees/<run_id>/` under th
 defaults: { provider: openai, model: gpt-5 }
 ```
 
-`fragua run` works from any directory against the global DB. A name resolves under `~/.fragua/workflows/` then `<cwd>/.fragua/workflows/`; `-i name=value` binds typed inputs (`@path`/`@-` read a file/stdin). Driving, steering, and landing runs is the **operate** skill; HITL and forensics live there too.
+`fragua run` works from any directory against the global DB. A name resolves under `~/.fragua/workflows/` then `<cwd>/.fragua/workflows/`; `-i name=value` binds typed inputs (`@path`/`@-` read a file/stdin). For a human walkthrough of driving a run that pauses for input — pause → respond → inbox → accept/discard — see the **[operator guide](docs/operator-guide.md)**. The agent-facing **operate** skill covers steering and forensics.
 
 ## CI
 
@@ -220,6 +220,7 @@ The CLI is a direct store-client — these work from any directory, daemon up or
 ## Docs
 
 - **[STATUS.md](STATUS.md)** — what's working today
+- **[docs/operator-guide.md](docs/operator-guide.md)** — driving a HITL run end to end
 - **[docs/cli.md](docs/cli.md)** — CLI reference + exit codes
 - **[docs/CI.md](docs/CI.md)** — running fragua in CI
 - **[docs/SPEC.md](docs/SPEC.md)** — what fragua is
