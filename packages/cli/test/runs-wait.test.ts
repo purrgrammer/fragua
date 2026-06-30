@@ -12,10 +12,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
-import { type IEventStore, SqliteStore } from "@fragua/store";
+import { type IEventStore, RUN_STATUSES, SETTLED_STATUSES, SqliteStore } from "@fragua/store";
 import type { HaltReason } from "@fragua/types";
 import { CLI_EXIT, HALT_EXIT, PAUSE_EXIT, QUARANTINE_EXIT } from "../src/cli-exit.ts";
-import { waitCommand } from "../src/commands/wait.ts";
+import { ACTIVE_STATUSES, BLOCKED_STATUSES, TERMINAL_STATUSES, waitCommand } from "../src/commands/wait.ts";
 
 const CWD = "/tmp/wait-repo";
 
@@ -91,6 +91,26 @@ function pause(store: IEventStore, runId: string): void {
   const s = store.getState(runId)!;
   store.appendFact(runId, [{ type: "fact.run_paused", payload: { reason: "operator", nodeId: "n1" } }], s.version);
 }
+
+describe("runs wait settle-status taxonomy", () => {
+  test("TERMINAL_STATUSES is derived from the canonical SETTLED tuple", () => {
+    expect([...TERMINAL_STATUSES].sort()).toEqual([...SETTLED_STATUSES].sort());
+  });
+
+  test("TERMINAL ⊎ ACTIVE ⊎ BLOCKED partitions RUN_STATUSES exactly (completeness)", () => {
+    const union = new Set<string>([...TERMINAL_STATUSES, ...ACTIVE_STATUSES, ...BLOCKED_STATUSES]);
+    // No overlap and no gap: every lifecycle status lands in exactly one
+    // settle bucket. A newly-added literal that fits neither/both trips this.
+    expect(union.size).toBe(TERMINAL_STATUSES.size + ACTIVE_STATUSES.size + BLOCKED_STATUSES.size);
+    expect(union).toEqual(new Set<string>(RUN_STATUSES));
+  });
+
+  test("BLOCKED_STATUSES is exactly the operator-pause family", () => {
+    // BLOCKED is computed by difference, so an unclassified new literal would
+    // silently fall in here — this pin forces a conscious classification.
+    expect([...BLOCKED_STATUSES].sort()).toEqual(["paused", "paused_human"]);
+  });
+});
 
 describe("runs wait", () => {
   let r: Rig;

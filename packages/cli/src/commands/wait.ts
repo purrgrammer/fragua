@@ -12,7 +12,7 @@
 
 import { resolve } from "node:path";
 import type { ReadPlane } from "@fragua/core/read-plane";
-import type { RunStatus } from "@fragua/store";
+import { RUN_STATUSES, type RunStatus, SETTLED_STATUSES } from "@fragua/store";
 import type { HaltReason, PauseReason, QuarantineReason } from "@fragua/types";
 import chalk from "chalk";
 import { CLI_EXIT, cliExitCode } from "../cli-exit.ts";
@@ -27,12 +27,23 @@ const SELECT_LIMIT = 1000;
 
 export type SettleMode = "terminal" | "blocked";
 
-/** Terminal lifecycle statuses — the run is done for good. */
-const TERMINAL_STATUSES = new Set<RunStatus>(["completed", "halted", "cancelled", "quarantined"]);
-/** Blocked-on-operator statuses — the run needs a human to proceed.
- * `paused_auto` is deliberately absent: the daemon owns its wake, so a wait
- * keeps polling through it in both settle modes. */
-const BLOCKED_STATUSES = new Set<RunStatus>(["paused", "paused_human"]);
+/** Terminal lifecycle statuses — the run is done for good. Derived from the
+ * canonical {@link SETTLED_STATUSES} tuple so a renamed/added settled literal
+ * can't desync this command. */
+export const TERMINAL_STATUSES = new Set<RunStatus>(SETTLED_STATUSES);
+/** In-flight statuses the daemon drives on its own — a wait keeps polling
+ * through these in both settle modes. `paused_auto` lives here: the daemon owns
+ * its wake. Hand-listed (the intentional non-derivable subset), pinned by the
+ * partition-completeness test. */
+export const ACTIVE_STATUSES = new Set<RunStatus>(["queued", "running", "paused_auto"]);
+/** Blocked-on-operator statuses — the run needs a human to proceed. Computed by
+ * difference from the canonical status universe (everything that is neither
+ * terminal nor daemon-driven) rather than hand-listed, so a new lifecycle
+ * literal can't silently slip past; the partition-completeness test pins which
+ * statuses land here. */
+export const BLOCKED_STATUSES = new Set<RunStatus>(
+  RUN_STATUSES.filter((s) => !TERMINAL_STATUSES.has(s) && !ACTIVE_STATUSES.has(s)),
+);
 
 function isSettled(status: RunStatus, mode: SettleMode): boolean {
   if (TERMINAL_STATUSES.has(status)) return true;
