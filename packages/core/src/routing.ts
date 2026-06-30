@@ -91,6 +91,9 @@ export const GRAPH_GOAL_KEY = "graph.goal";
 /** The run id, surfaced to the agent context. */
 export const GRAPH_RUN_ID_KEY = "graph.run_id";
 
+/** Operator-supplied dispatch priority, folded from `intent.priority_adjusted`. */
+export const PRIORITY_KEY = "priority";
+
 // ── Value-checked union + documentary schema ─────────────────────────────────
 
 /** The goal-gate outcome union. A value-checked TypeBox union exercised by
@@ -100,6 +103,110 @@ export const OUTCOME_STATUS = Type.Union([Type.Literal("success"), Type.Literal(
 const OUTCOME_VALUES = new Set<OutcomeStatus>(["success", "fail", "retry"]);
 function isOutcomeStatus(v: unknown): v is OutcomeStatus {
   return typeof v === "string" && OUTCOME_VALUES.has(v as OutcomeStatus);
+}
+
+// ── Write-time routing-key gate ──────────────────────────────────────────────
+// The READ accessors above degrade silently — a mis-typed or unknown key reads
+// back as the conservative default. That is correct for a tampered import
+// bundle, but it means a *write* of a malformed key persists unnoticed and then
+// degrades the next dispatch decision (wrong retry budget, wrong loop cap) with
+// no error and no audit signal. This gate closes that hole at the single point
+// a `routingPatch` first enters the store: every key must belong to a known
+// family and carry the expected value type, or the write is rejected before the
+// transaction opens (I1 — the check stays out of the pure-SQL txn body).
+//
+// On-disk bytes and the read accessors are unchanged; this only constrains what
+// the writer is allowed to spread into `run_state.routing`.
+
+/** The value shape a routing-key family expects. */
+type RoutingValueKind = "number" | "string" | "string-array" | "object" | "outcome-status";
+
+const BUDGET_SCOPES = ["run", "node"] as const;
+const BUDGET_METRICS = ["cost", "tokens"] as const;
+const BUDGET_OVERRIDE_KEYS = new Set<string>(
+  BUDGET_SCOPES.flatMap((scope) => BUDGET_METRICS.map((metric) => budgetOverrideKey(scope, metric))),
+);
+
+const RETRY_COUNT_PREFIX = "internal.retry_count.";
+const TIMEOUT_RETRIES_PREFIX = "internal.timeout_retries.";
+const MAX_RETRIES_OVERRIDE_PREFIX = "max_retries_override.";
+
+/** Exact-match routing keys and the value kind each carries. */
+const EXACT_ROUTING_KINDS = new Map<string, RoutingValueKind>([
+  [INPUTS_KEY, "object"],
+  [ACTIVE_NODES_KEY, "string-array"],
+  [AUTO_RESUME_AT_KEY, "number"],
+  [PROVIDER_RETRY_ATTEMPT_KEY, "number"],
+  [PROVIDER_RETRY_CUMULATIVE_MS_KEY, "number"],
+  [BUDGET_WARNED_KEY, "string-array"],
+  [MAX_LOOPS_OVERRIDE_KEY, "number"],
+  [MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY, "number"],
+  [GOAL_GATE_RETRIES_KEY, "number"],
+  [GRAPH_GOAL_KEY, "string"],
+  [GRAPH_RUN_ID_KEY, "string"],
+  [PRIORITY_KEY, "number"],
+]);
+
+/** Resolve a routing key to its expected value kind, or `undefined` when the key
+ * belongs to no known family. Exact keys win first; `goal_gates.__retries` is an
+ * exact key so it never falls through to the per-gate outcome prefix. */
+function routingKeyKind(key: string): RoutingValueKind | undefined {
+  const exact = EXACT_ROUTING_KINDS.get(key);
+  if (exact !== undefined) return exact;
+  if (BUDGET_OVERRIDE_KEYS.has(key)) return "number";
+  if (key.length > RETRY_COUNT_PREFIX.length && key.startsWith(RETRY_COUNT_PREFIX)) return "number";
+  if (key.length > TIMEOUT_RETRIES_PREFIX.length && key.startsWith(TIMEOUT_RETRIES_PREFIX)) return "number";
+  if (key.length > MAX_RETRIES_OVERRIDE_PREFIX.length && key.startsWith(MAX_RETRIES_OVERRIDE_PREFIX)) return "number";
+  if (key.length > GOAL_GATE_OUTCOME_KEY_PREFIX.length && key.startsWith(GOAL_GATE_OUTCOME_KEY_PREFIX)) {
+    return "outcome-status";
+  }
+  return undefined;
+}
+
+function matchesRoutingKind(value: unknown, kind: RoutingValueKind): boolean {
+  switch (kind) {
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "string":
+      return typeof value === "string";
+    case "string-array":
+      return Array.isArray(value) && value.every((e) => typeof e === "string");
+    case "object":
+      return value !== null && typeof value === "object" && !Array.isArray(value);
+    case "outcome-status":
+      return isOutcomeStatus(value);
+  }
+}
+
+/** Thrown by {@link validateRoutingPatch} when a key is outside the known
+ * vocabulary (`unknown-family`) or carries a value of the wrong type for its
+ * family (`wrong-type`). A typed error so callers can distinguish a write-gate
+ * rejection from an OCC/payload-size failure. */
+export class RoutingPatchError extends Error {
+  constructor(
+    readonly key: string,
+    readonly violation: "unknown-family" | "wrong-type",
+    readonly value: unknown,
+  ) {
+    super(
+      violation === "unknown-family"
+        ? `routingPatch key ${JSON.stringify(key)} belongs to no known routing-key family`
+        : `routingPatch key ${JSON.stringify(key)} has a value of the wrong type for its family`,
+    );
+    this.name = "RoutingPatchError";
+  }
+}
+
+/** Gate a `routingPatch` against the known routing-key vocabulary before it is
+ * spread into `run_state.routing`. Throws {@link RoutingPatchError} on the first
+ * unknown key family or wrong-typed value; returns normally when every entry is
+ * well-formed. Pure — no I/O — so it can run before the write transaction opens. */
+export function validateRoutingPatch(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    const kind = routingKeyKind(key);
+    if (kind === undefined) throw new RoutingPatchError(key, "unknown-family", value);
+    if (!matchesRoutingKind(value, kind)) throw new RoutingPatchError(key, "wrong-type", value);
+  }
 }
 
 /** Documentary TypeBox schema describing the LOGICAL namespaces the accessors

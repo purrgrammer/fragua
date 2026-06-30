@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { INPUTS_KEY } from "@fragua/core";
+import { INPUTS_KEY, validateRoutingPatch } from "@fragua/core";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
 import { NODE_LIFECYCLE_FACT_TYPES, VALID_WRITERS } from "@fragua/types";
 import {
@@ -530,6 +530,11 @@ export class SqliteStore implements IEventStore {
     if (events.length === 0) {
       throw new Error("appendFact requires at least one event");
     }
+    // Gate the routing patch against the known key vocabulary BEFORE the write
+    // transaction opens (I1): an unknown key family or wrong-typed value must be
+    // rejected here, never spread into the projection where a later typed read
+    // would silently degrade to a conservative default and a wrong dispatch.
+    if (opts.routingPatch != null) validateRoutingPatch(opts.routingPatch);
     const ts = this.now();
     const seqs: number[] = [];
     let newVersion = 0;
