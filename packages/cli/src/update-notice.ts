@@ -2,9 +2,9 @@
 //
 // Seam: the whole "should we notify, and with what?" decision is a pure
 // function of {current version, latest tag, config, cache freshness, now}.
-// The network fetch (`gh`) and the cache file I/O are thin wrappers around
-// it. Everything is best-effort — any error, timeout, or unauthenticated
-// `gh` silently yields no notice and never delays harness startup.
+// The network fetch (tokenless GitHub API GET) and the cache file I/O are thin
+// wrappers around it. Everything is best-effort — any error or timeout
+// silently yields no notice and never delays harness startup.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,7 +17,7 @@ import { FRAGUA_VERSION } from "./version.ts";
 
 /** Hit the network at most ~4×/day. */
 export const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000;
-/** Short cap so a slow network can't leave a lingering `gh` child. */
+/** Short cap so a slow network can't stall the check. */
 export const UPDATE_CHECK_FETCH_TIMEOUT_MS = 3_000;
 
 const CACHE_FILE = "update-check.json";

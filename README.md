@@ -131,7 +131,7 @@ fragua upgrade                  # install the latest published release
 fragua upgrade --to v0.9.0      # install a specific tag (0.9.0 or v0.9.0)
 ```
 
-It verifies the download against `SHA256SUMS` before swapping the binary in place. A `version:` pin in `~/.fragua/config.yaml` freezes the install — `fragua upgrade` then refuses unless you pass `--to`.
+It downloads over plain HTTPS (the release repo is public — no `gh` CLI, no auth) and verifies the download against `SHA256SUMS` before swapping the binary in place. A `version:` pin in `~/.fragua/config.yaml` freezes the install — `fragua upgrade` then refuses unless you pass `--to`.
 
 ## Quickstart
 

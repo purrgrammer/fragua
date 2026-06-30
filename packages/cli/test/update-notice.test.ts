@@ -1,5 +1,5 @@
 // Harness update notice — pure-function units: cache freshness, the
-// should-we-check gate, and the single-line decision. The `gh` fetch and the
+// should-we-check gate, and the single-line decision. The network fetch and the
 // cache file I/O are thin and untested.
 
 import { describe, expect, test } from "bun:test";

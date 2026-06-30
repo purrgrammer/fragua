@@ -1,19 +1,17 @@
 // `fragua upgrade` — self-update the installed fragua binary from GitHub
 // Releases. Mirrors `.github/actions/setup-fragua` (same target table, same
-// `gh release` download, same fail-closed SHA256SUMS verification) but
-// installs the FULL binary (web UI embedded — `harness`/`serve`) and replaces
-// the currently-running executable in place.
+// release assets, same fail-closed SHA256SUMS verification) but installs the
+// FULL binary (web UI embedded — `harness`/`serve`) and replaces the
+// currently-running executable in place.
 //
-// All network + auth go through the `gh` CLI so private-repo access comes for
-// free (the team already installs via `gh`). The pure parts — target mapping,
-// asset naming, checksum lookup, tag comparison, and the upgrade decision —
-// are factored out and unit-tested; only the `gh` calls and the rename are
-// thin and untested.
+// The release repo is PUBLIC, so downloads go over plain HTTPS with no auth and
+// no `gh` CLI required. The pure parts — target mapping, asset naming, the
+// download-URL builder, checksum lookup, tag comparison, and the upgrade
+// decision — are factored out and unit-tested; only the `fetch` calls and the
+// rename are thin and untested.
 
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
@@ -60,6 +58,14 @@ export function lookupDigest(sums: string, asset: string): string | null {
     if (digest !== undefined && name === asset) return digest.toLowerCase();
   }
   return null;
+}
+
+/** Build the public release-download URL for a named file (the binary asset or
+ * `SHA256SUMS`) at a tag. PURE: the tag is used LITERALLY (its `v` prefix is
+ * part of the published download path), only the version compare/display
+ * strips it. */
+export function assetDownloadUrl(repo: string, tag: string, asset: string): string {
+  return `https://github.com/${repo}/releases/download/${tag}/${asset}`;
 }
 
 /** Drop a single leading `v` and surrounding whitespace so `v0.9.0` and
@@ -109,36 +115,6 @@ export function decideAction(args: {
   return { action: "upgrade" };
 }
 
-function ghAvailable(): boolean {
-  return spawnSync("gh", ["--version"], { encoding: "utf8" }).status === 0;
-}
-
-function ghAuthenticated(): boolean {
-  return spawnSync("gh", ["auth", "status"], { encoding: "utf8" }).status === 0;
-}
-
-function ghDownload(tag: string, asset: string, dir: string): boolean {
-  const r = spawnSync(
-    "gh",
-    [
-      "release",
-      "download",
-      tag,
-      "--repo",
-      RELEASE_REPO,
-      "--pattern",
-      asset,
-      "--pattern",
-      "SHA256SUMS",
-      "--dir",
-      dir,
-      "--clobber",
-    ],
-    { stdio: "inherit" },
-  );
-  return r.status === 0;
-}
-
 export interface UpgradeOptions {
   /** Explicit release tag to install (e.g. `0.9.0` or `v0.9.0`). Omitted ⇒
    * resolve the latest published tag. */
@@ -153,17 +129,6 @@ export async function upgradeCommand(opts: UpgradeOptions): Promise<number> {
     return 0;
   }
 
-  if (!ghAvailable()) {
-    console.error(chalk.red("fragua upgrade: GitHub CLI (`gh`) is not installed"));
-    console.error(chalk.dim("  install gh (https://cli.github.com), then run `gh auth login`"));
-    return 1;
-  }
-  if (!ghAuthenticated()) {
-    console.error(chalk.red("fragua upgrade: `gh` is not authenticated"));
-    console.error(chalk.dim("  run `gh auth login` to reach the release repo"));
-    return 1;
-  }
-
   const config = await loadConfig(process.cwd());
   const pin = typeof config.version === "string" ? config.version : undefined;
 
@@ -176,7 +141,7 @@ export async function upgradeCommand(opts: UpgradeOptions): Promise<number> {
 
   const resolvedTag = opts.to ?? (await resolveLatestTag());
   if (resolvedTag == null || resolvedTag.length === 0) {
-    console.error(chalk.red("fragua upgrade: could not resolve the latest release tag via `gh`"));
+    console.error(chalk.red("fragua upgrade: could not resolve the latest release tag"));
     return 1;
   }
 
@@ -195,24 +160,29 @@ export async function upgradeCommand(opts: UpgradeOptions): Promise<number> {
   }
   const asset = assetName(target);
 
-  const dir = mkdtempSync(join(tmpdir(), "fragua-upgrade-"));
+  // Public release — plain HTTPS, no auth. `fetch` follows GitHub's redirect to
+  // the asset CDN automatically.
   console.log(chalk.dim(`downloading ${asset} (${resolvedTag})…`));
-  if (!ghDownload(resolvedTag, asset, dir)) {
-    console.error(chalk.red(`fragua upgrade: failed to download ${asset} for ${resolvedTag}`));
+  let sums: string;
+  let bytes: Buffer;
+  try {
+    const assetRes = await fetch(assetDownloadUrl(RELEASE_REPO, resolvedTag, asset));
+    if (!assetRes.ok) throw new Error(`HTTP ${assetRes.status}`);
+    bytes = Buffer.from(new Uint8Array(await assetRes.arrayBuffer()));
+    const sumsRes = await fetch(assetDownloadUrl(RELEASE_REPO, resolvedTag, "SHA256SUMS"));
+    if (!sumsRes.ok) throw new Error(`HTTP ${sumsRes.status}`);
+    sums = await sumsRes.text();
+  } catch (e) {
+    console.error(
+      chalk.red(
+        `fragua upgrade: could not download ${asset} for ${resolvedTag}: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
     return 1;
   }
 
   // Fail closed: a missing checksum entry OR a digest mismatch aborts before
   // any replacement, exactly like setup-fragua.
-  let sums: string;
-  let bytes: Buffer;
-  try {
-    sums = readFileSync(join(dir, "SHA256SUMS"), "utf8");
-    bytes = readFileSync(join(dir, asset));
-  } catch (e) {
-    console.error(chalk.red(`fragua upgrade: download incomplete: ${e instanceof Error ? e.message : String(e)}`));
-    return 1;
-  }
   const expected = lookupDigest(sums, asset);
   if (expected == null) {
     console.error(chalk.red(`fragua upgrade: no checksum entry for ${asset} in SHA256SUMS`));

@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  assetDownloadUrl,
   assetName,
   compareVersions,
   decideAction,
@@ -31,6 +32,23 @@ describe("assetName", () => {
   test("builds the FULL binary asset name from a target", () => {
     expect(assetName("bun-linux-x64")).toBe("fragua-bun-linux-x64");
     expect(assetName("bun-darwin-arm64")).toBe("fragua-bun-darwin-arm64");
+  });
+});
+
+describe("assetDownloadUrl", () => {
+  test("builds the public release-download URL with the literal tag", () => {
+    expect(assetDownloadUrl("purrgrammer/fragua", "v0.9.0", "fragua-bun-linux-x64")).toBe(
+      "https://github.com/purrgrammer/fragua/releases/download/v0.9.0/fragua-bun-linux-x64",
+    );
+  });
+
+  test("uses the tag literally — no v stripping", () => {
+    expect(assetDownloadUrl("purrgrammer/fragua", "0.9.0", "SHA256SUMS")).toBe(
+      "https://github.com/purrgrammer/fragua/releases/download/0.9.0/SHA256SUMS",
+    );
+    expect(assetDownloadUrl("purrgrammer/fragua", "v1.2.3", "SHA256SUMS")).toBe(
+      "https://github.com/purrgrammer/fragua/releases/download/v1.2.3/SHA256SUMS",
+    );
   });
 });
 

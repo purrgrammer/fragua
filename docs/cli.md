@@ -258,11 +258,11 @@ never downgrades — only this explicit, backed-up command does.
 `upgrade` replaces the currently-running fragua binary in place with the FULL
 release build (web UI embedded — what `harness`/`serve` want). It resolves the
 latest published tag (or `--to <version>`, which accepts `0.9.0` or `v0.9.0`),
-downloads the matching `fragua-bun-<os>-<arch>` asset plus `SHA256SUMS` via the
-`gh` CLI, verifies the checksum fail-closed (a missing entry or digest mismatch
-aborts before any replacement), then atomically swaps the executable. All
-network + auth go through `gh`, so a private release repo works once you've run
-`gh auth login`. It no-ops (no download) when already on the resolved target or
+downloads the matching `fragua-bun-<os>-<arch>` asset plus `SHA256SUMS` over
+plain HTTPS, verifies the checksum fail-closed (a missing entry or digest
+mismatch aborts before any replacement), then atomically swaps the executable.
+The release repo is public, so no `gh` CLI and no auth are needed. It no-ops (no
+download) when already on the resolved target or
 newer, and refuses entirely when run from a `bun run` checkout rather than an
 installed binary. A `version:` pin in `~/.fragua/config.yaml` freezes upgrades
 unless `--to` is passed explicitly.
@@ -270,8 +270,8 @@ unless `--to` is passed explicitly.
 On startup `fragua harness` runs a best-effort, non-blocking check for a newer
 published release and, if behind, prints one dim line
 (`fragua <new> available (you're on <cur>) · run \`fragua upgrade\``). The check
-never delays startup, silently does nothing on any error / timeout /
-unauthenticated `gh`, and caches its result in `~/.fragua/update-check.json`
+never delays startup, silently does nothing on any error / timeout, and caches
+its result in `~/.fragua/update-check.json`
 with a ~6h TTL (so it hits the network at most ~4×/day). Set
 `check_for_updates: false` in `~/.fragua/config.yaml` to disable it; a `version:`
 pin or a `bun run` (dev) checkout suppresses it too.
