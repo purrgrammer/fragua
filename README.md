@@ -108,9 +108,14 @@ One bet: the **control plane** is worth making deterministic even when the LLM b
 **Release binary** — self-contained builds for linux & macOS (x64/arm64), each in a full flavor (web UI embedded) and a headless one (what CI installs). `SHA256SUMS` + Sigstore attestations cover every asset.
 
 ```sh
-gh release download --repo purrgrammer/fragua \
-  --pattern "fragua-bun-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed -e 's/x86_64/x64/' -e 's/aarch64/arm64/')" \
-  --output fragua
+asset="fragua-bun-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed -e 's/x86_64/x64/' -e 's/aarch64/arm64/')"
+
+# Direct HTTPS (curl) — no extra tooling beyond curl:
+curl -fL -o fragua "https://github.com/purrgrammer/fragua/releases/latest/download/$asset"
+
+# …or with the GitHub CLI, if you have it:
+gh release download --repo purrgrammer/fragua --pattern "$asset" --output fragua
+
 chmod +x fragua && mv fragua ~/.local/bin/   # anywhere on PATH
 fragua --version
 ```
