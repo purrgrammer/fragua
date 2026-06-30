@@ -6,34 +6,62 @@
 // or a store/db handle. Time and randomness are threaded in explicitly (`now`,
 // `random`) so a replay or a fault-injecting test gets bit-identical output.
 //
-// This lint scans the decision-core source files and fails if any ambient
-// source of nondeterminism / IO appears: Date.now, new Date()/Date(),
-// Math.random, a raw fetch, or a node:fs / node:child_process import. The
-// documented escape for a justified seam (e.g. the lone injection default) is
-// the marker `// decision-core-allow: <reason>` on the offending line or the
-// line directly above it.
+// This lint SCANS every file under packages/daemon/src and fails if any
+// ambient source of nondeterminism / IO appears: Date.now, new Date()/Date(),
+// Math.random, a raw fetch, a node:fs / node:child_process import, or a
+// @fragua/store / bun:sqlite (store/db handle) import. Files are guarded by
+// default — a new pure planning module is covered the moment it lands, with
+// no static include list to update. Files that legitimately do I/O (the
+// executor, supervisor, recorder, provisioner, and the like) opt OUT through
+// the explicit, named IO_ALLOWED exclusion list below.
+//
+// The documented escape for a justified seam on an otherwise-pure file (e.g.
+// the lone injection default) is the marker `// decision-core-allow: <reason>`
+// on the offending line or the line directly above it.
 //
 // Shape mirrors packages/core/test/handler/discipline.test.ts and
 // packages/server/test/inline-import-discipline.test.ts (source-scan lint).
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const SRC_DIR = join(import.meta.dir, "..", "src");
 const ALLOW_MARKER = "decision-core-allow:";
 
-// The decision-core files. Each must be a pure function of its declared
-// inputs. executor-helpers.ts holds the pure leaf projections alongside some
-// timer glue (sleep/armTimeout) — that glue uses setTimeout, which is not a
-// banned token here, so the whole file is linted without an exclusion.
-const DECISION_CORE_FILES = [
-  "transition-planner.ts",
-  "abort-planner.ts",
-  "result-to-facts.ts",
-  "provider-retry-policy.ts",
-  "executor-helpers.ts",
-];
+// I/O-allowed files: these run the engine's side effects (store appends,
+// process spawning, filesystem, timers tied to wall-clock, abort wiring) and
+// are exempt from the purity scan. Everything else under src/ — including any
+// new pure planning module — IS scanned. To exempt a new file you must name it
+// here explicitly, which forces the "is this really allowed to do I/O?"
+// decision instead of letting a store handle slip into the decision core.
+const IO_ALLOWED = new Set<string>([
+  "abort-registry.ts",
+  "auto-dispatcher.ts",
+  "auto-titler.ts",
+  "blob-gc.ts",
+  "entrypoint.ts",
+  "executor.ts",
+  "graph-loader.ts",
+  "index.ts",
+  "invoke-handler.ts",
+  "occ-append.ts",
+  "operator-actions.ts",
+  "recorder.ts",
+  "schedule-dispatcher.ts",
+  "snapshot-service.ts",
+  "snapshotter.ts",
+  "supervisor.ts",
+  "wake-pending.ts",
+  "worktree-provisioner.ts",
+]);
+
+function decisionCoreFiles(): string[] {
+  return readdirSync(SRC_DIR)
+    .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+    .filter((name) => !IO_ALLOWED.has(name))
+    .sort();
+}
 
 const BANNED = [
   {
@@ -67,6 +95,23 @@ const BANNED = [
     pattern: /\bfrom\s+["'](?:node:)?child_process["']/,
     reason: "decision core must not spawn processes",
   },
+  {
+    id: "bun:sqlite import",
+    // The sqlite driver (and its Database handle) is never a pure input.
+    pattern: /\bfrom\s+["']bun:sqlite["']/,
+    reason: "decision core must not reach the sqlite driver — fold plain FactEvent / RunState inputs instead",
+  },
+  {
+    id: "store handle import",
+    // A store/db HANDLE type smuggled in through an input — even type-only —
+    // gives the decision core a live read/write surface. The pure-data event
+    // and state types (FactEvent, RunState, …) stay allowed; only the handle
+    // types are banned. Matched on a single import line (the daemon writes
+    // these one per line, mirroring the rest of this line-based lint).
+    pattern:
+      /\b(?:IEventStore|IEventReader|IEventWriter|EventStore|Database)\b[^;]*\bfrom\s+["'](?:@fragua\/store|bun:sqlite)["']/,
+    reason: "decision core must not reach a store/db handle — keep it a pure function of plain inputs",
+  },
 ];
 
 function scan(source: string): { rule: string; line: number }[] {
@@ -95,7 +140,7 @@ function scan(source: string): { rule: string; line: number }[] {
 describe("decision-core purity discipline", () => {
   test("no ambient time / randomness / IO in the decision-core files", () => {
     const offenders: { file: string; rule: string; line: number; reason: string }[] = [];
-    for (const name of DECISION_CORE_FILES) {
+    for (const name of decisionCoreFiles()) {
       const file = join(SRC_DIR, name);
       const src = readFileSync(file, "utf8");
       for (const hit of scan(src)) {
@@ -142,6 +187,40 @@ describe("decision-core purity discipline", () => {
     expect(scan(`import { spawn } from "node:child_process";\n`).some((h) => h.rule === "node:child_process")).toBe(
       true,
     );
+  });
+
+  test("lint catches a store/db handle import", () => {
+    expect(
+      scan(`import type { IEventStore } from "@fragua/store";\n`).some((h) => h.rule === "store handle import"),
+    ).toBe(true);
+    expect(scan(`import { Database } from "bun:sqlite";\n`).some((h) => h.rule === "bun:sqlite import")).toBe(true);
+    expect(
+      scan(`import type { IEventReader, IEventWriter } from "@fragua/store";\n`).some(
+        (h) => h.rule === "store handle import",
+      ),
+    ).toBe(true);
+  });
+
+  test("lint allows pure-data event/state type imports from @fragua/store", () => {
+    expect(scan(`import type { FactEvent, RunState } from "@fragua/store";\n`)).toHaveLength(0);
+    expect(scan(`import { SETTLED_STATUSES } from "@fragua/store";\n`)).toHaveLength(0);
+  });
+
+  test("fanout-planner.ts is covered by the scan", () => {
+    expect(decisionCoreFiles()).toContain("fanout-planner.ts");
+  });
+
+  test("the scan walks the directory rather than a static include list", () => {
+    // A documented-pure module added tomorrow is guarded automatically: it is
+    // scanned unless it is named on the IO_ALLOWED exclusion list.
+    const scanned = decisionCoreFiles();
+    expect(scanned).toContain("transition-planner.ts");
+    for (const name of scanned) expect(IO_ALLOWED.has(name)).toBe(false);
+  });
+
+  test("the IO_ALLOWED exclusion list names only files that exist", () => {
+    const present = new Set(readdirSync(SRC_DIR));
+    for (const name of IO_ALLOWED) expect(present.has(name)).toBe(true);
   });
 
   test("lint honors the decision-core-allow marker", () => {
