@@ -146,6 +146,8 @@ curl -fsSL -o .fragua/workflows/hello-world.yaml \
 fragua run hello-world --input name="Ada"
 ```
 
+Output lands in the run's own worktree at `.fragua/worktrees/<run_id>/` under the run cwd — your project stays untouched until you accept. Watch it live in the web UI at **http://localhost:6767**, or inspect from the terminal with `fragua runs status <id>`. Finished runs queue in the inbox (`fragua runs inbox`) where you `fragua runs accept <id>` to merge the worktree back or `fragua runs discard <id>` to drop it. See **[docs/execution-model.md](docs/execution-model.md)** for the full filesystem layout and accept/discard lifecycle.
+
 `hello-world` pins no provider, so it runs on whatever key you added. To pin one for every provider-neutral workflow without touching any YAML, set `defaults:` in `~/.fragua/config.yaml`:
 
 ```yaml
