@@ -1112,6 +1112,14 @@ export type DaemonEvent =
       type: "daemon.sweep_completed";
       payload: { requeued: number; quarantined: number; durationMs: number };
     }
+  | {
+      // A single run's startup-sweep mutation failed (e.g. a corrupt or
+      // missing `run_state` projection row). Its savepoint was rolled
+      // back and the sweep moved on to the next run — one poisoned row
+      // can't abort the sweep or crash-loop the daemon at boot.
+      type: "daemon.sweep_run_failed";
+      payload: { runId: string; error: string };
+    }
   | { type: "daemon.blob_gc_completed"; payload: { deleted: number; durationMs: number } }
   | { type: "daemon.blob_gc_failed"; payload: { reason: string; durationMs: number } }
   | {
@@ -1172,6 +1180,7 @@ export const ALL_DAEMON_EVENT_TYPES: readonly DaemonEventType[] = [
   "daemon.stopped",
   "daemon.reaper_took_over",
   "daemon.sweep_completed",
+  "daemon.sweep_run_failed",
   "daemon.blob_gc_completed",
   "daemon.blob_gc_failed",
   "daemon.leak_detected",

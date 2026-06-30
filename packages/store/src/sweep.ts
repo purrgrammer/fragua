@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { insertDaemonEvent } from "./daemon-queries.ts";
 import type { SweepResult } from "./types.ts";
 
 interface RunningRow {
@@ -85,10 +86,34 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     requeuePayloads.set(row.run_id, JSON.stringify(payload));
   }
 
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    // Quarantine orphan runs (only those currently in a non-terminal, non-quarantined state).
-    for (const [runId, _seqs] of quarantined) {
+  // Each run's mutation runs in its own SAVEPOINT. A single corrupt or
+  // missing `run_state` row that throws mid-mutation is rolled back to
+  // its savepoint and recorded as a `daemon.sweep_run_failed`
+  // observability event — it can't abort the sweep of any other run or
+  // crash-loop the daemon at boot. (Contrast the old single outer
+  // BEGIN IMMEDIATE, where one throw discarded every other run's heal.)
+  const sweepRun = (runId: string, mutate: () => void): void => {
+    db.exec("SAVEPOINT sweep_run");
+    try {
+      mutate();
+      db.exec("RELEASE sweep_run");
+    } catch (err) {
+      try {
+        db.exec("ROLLBACK TO sweep_run");
+        db.exec("RELEASE sweep_run");
+      } catch {
+        // best-effort savepoint cleanup
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      insertDaemonEvent(db, "daemon.sweep_run_failed", JSON.stringify({ runId, error: message }), now(), runId);
+    }
+  };
+
+  // Quarantine orphan runs (only those currently in a non-terminal,
+  // non-quarantined state). Quarantine runs BEFORE requeue so it takes
+  // precedence: a run flagged here is re-read as non-'running' below.
+  for (const [runId, _seqs] of quarantined) {
+    sweepRun(runId, () => {
       const ts = now();
       const stateRow = db
         .query<{ version: number; status: string; next_seq: number; imported: number }, [string]>(
@@ -97,7 +122,7 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
              FROM run_state WHERE run_id = ?`,
         )
         .get(runId);
-      if (stateRow == null) continue;
+      if (stateRow == null) return;
       if (
         stateRow.status === "completed" ||
         stateRow.status === "cancelled" ||
@@ -107,7 +132,7 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
         // (it would mutate an inert, inspect-only run).
         stateRow.imported === 1
       ) {
-        continue;
+        return;
       }
 
       const seq = bumpSeq(db, runId);
@@ -129,17 +154,19 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
              updated_at = ?
            WHERE run_id = ?`,
       ).run(ts, runId);
-    }
+    });
+  }
 
-    // Requeue runs still in 'running'. Re-read status here (inside the txn)
-    // because the quarantine loop above may have moved some of them.
-    for (const row of running) {
+  // Requeue runs still in 'running'. Re-read status here (per run)
+  // because the quarantine loop above may have moved some of them.
+  for (const row of running) {
+    sweepRun(row.run_id, () => {
       const current = db
         .query<{ status: string; dispatch_started_at: number | null }, [string]>(
           "SELECT status, dispatch_started_at FROM run_state WHERE run_id = ?",
         )
         .get(row.run_id);
-      if (current == null || current.status !== "running") continue;
+      if (current == null || current.status !== "running") return;
       const ts = now();
       const seq = bumpSeq(db, row.run_id);
       db.query(
@@ -178,16 +205,7 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
            WHERE run_id = ?`,
       ).run(ts, ts, activeMsDelta, row.run_id);
       requeued.push(row.run_id);
-    }
-
-    db.exec("COMMIT");
-  } catch (err) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // ignore
-    }
-    throw err;
+    });
   }
 
   return {

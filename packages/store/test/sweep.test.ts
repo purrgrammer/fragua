@@ -1,10 +1,47 @@
 // startupSweep — ARCHITECTURE.md §1.4 and §1.1.
 
+import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { FactEvent } from "../src/index.ts";
 import { freshStore, seedRun } from "./helpers.ts";
 
 describe("startupSweep", () => {
+  test("a poisoned run_state row does not abort the sweep of a healthy sibling", async () => {
+    const store = freshStore();
+    const healthy = await seedRun(store);
+    const poisoned = await seedRun(store);
+    for (const runId of [healthy, poisoned]) {
+      const s0 = store.getState(runId)!;
+      store.appendFact(
+        runId,
+        [
+          {
+            type: "fact.run_started",
+            payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "a" },
+          },
+        ],
+        s0.version,
+      );
+      expect(store.getState(runId)!.status).toBe("running");
+    }
+
+    // Corrupt the poisoned run's next_seq so its requeue event INSERT
+    // collides with an existing (run_id, seq) and throws mid-sweep.
+    const db = (store as unknown as { db: Database }).db;
+    db.query("UPDATE run_state SET next_seq = 2 WHERE run_id = ?").run(poisoned);
+
+    expect(() => store.startupSweep()).not.toThrow();
+    expect(store.getState(healthy)!.status).toBe("queued");
+
+    // The poisoned run's failure is recorded as an observability event
+    // (skips the reducer) carrying its run id and the error message.
+    const failures = store.getDaemonEvents({ runId: poisoned }).filter((e) => e.type === "daemon.sweep_run_failed");
+    expect(failures).toHaveLength(1);
+    expect((failures[0]!.payload as { runId: string }).runId).toBe(poisoned);
+    expect((failures[0]!.payload as { error: string }).error).toContain("UNIQUE constraint");
+    store.close();
+  });
+
   test("requeues runs that were 'running' at crash time", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
