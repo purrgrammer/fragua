@@ -180,6 +180,7 @@ Ships under `.fragua/workflows/`. `hello-world`, `review`, and `pr_review` are *
 | `pr_review` | unattended CI review — posts the verdict to the PR | portable (needs `gh` + `GH_TOKEN`) | `21.00` cap |
 | `work` | triage → (plan / reproduce) → implement → review → CI | fragua-internal | **set one**; frontier model |
 | `analyze` | cost / token / latency analytics over recorded runs | fragua-internal | `5.00` cap |
+| `appraise` | survey → 5-lens appraisal → graded scorecard + backlog | fragua-internal | `35.00` cap |
 | `dependencies` | bump dep pins, keep typecheck + CI green | fragua-internal | `6.00` cap |
 | `drift` | audit arch / spec / skill docs against the code | fragua-internal | `10.00` cap, stops |
 | `propose` | draft a proposal through a five-lens adversarial panel | fragua-internal | `40.00` cap |
