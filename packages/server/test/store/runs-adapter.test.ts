@@ -7,13 +7,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deriveNodeStates, deriveSelectedEdges, runStateToDetail, runStateToSummary } from "@fragua/core/read-plane";
 import type { RunState, StoredEvent } from "@fragua/store";
-import {
-  deriveNodeStates,
-  deriveSelectedEdges,
-  runStateToDetail,
-  runStateToSummary,
-} from "../../src/store/runs-adapter.ts";
 
 function makeState(overrides: Partial<RunState> = {}): RunState {
   return {

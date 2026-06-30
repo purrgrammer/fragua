@@ -1,8 +1,8 @@
 // Unit tests for the eventsToSteps reducer.
 
 import { describe, expect, test } from "bun:test";
+import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "@fragua/core/read-plane";
 import type { StoredEvent } from "@fragua/store";
-import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "../../src/store/steps.ts";
 
 function ev(type: string, ts: number, payload: Record<string, unknown>): StoredEvent {
   return { runId: "r", seq: ts, type, writer: "daemon", payload, ts };

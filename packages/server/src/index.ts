@@ -268,6 +268,12 @@ function defaultWorkflowReader(opts: ServerOptions, cwd: string): WorkflowReader
   });
 }
 
+export {
+  listRuns as listStoreRuns,
+  mapStatus,
+  runStateToDetail,
+  runStateToSummary,
+} from "@fragua/core/read-plane";
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 export { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
 export { createFsProjectTreeReader } from "./adapters/project-tree-reader.ts";
@@ -312,10 +318,4 @@ export type { ServerDeps } from "./store/index.ts";
 export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
 export type { WorkflowModelValidator } from "./store/routes.ts";
 export { registryPreflight } from "./store/routes.ts";
-export {
-  listRuns as listStoreRuns,
-  mapStatus,
-  runStateToDetail,
-  runStateToSummary,
-} from "./store/runs-adapter.ts";
 export { storeRunsRoutes } from "./store/runs-routes.ts";

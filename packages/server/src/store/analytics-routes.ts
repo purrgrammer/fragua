@@ -15,6 +15,7 @@
 //                          the UI renders these with the same RunRow
 //                          component the /runs page uses.
 
+import { runStateToSummary } from "@fragua/core/read-plane";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
@@ -27,7 +28,6 @@ import {
 } from "@fragua/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
-import { runStateToSummary } from "./runs-adapter.ts";
 
 export interface AnalyticsRoutesOpts {
   store: IAnalyticsReader & IEventReader;
