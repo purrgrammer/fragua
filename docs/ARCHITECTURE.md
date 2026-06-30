@@ -226,6 +226,7 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 | `daemon.reaper_took_over` | `priorPid`, `priorHostname`, `priorHeartbeatAt`, `staleForMs` | Lock TTL exceeded; this daemon force-acquired |
 | `daemon.sweep_completed` | `requeued: number`, `quarantined: number`, `durationMs` | Startup sweep finished |
 | `daemon.blob_gc_completed` | `deleted: number`, `durationMs` | Orphan-blob GC sweep finished |
+| `daemon.blob_gc_failed` | `reason: string`, `durationMs` | Orphan-blob GC sweep threw (permission error, race, …); loop survives. Leaves a queryable trace instead of stderr-only |
 | `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced. Only fires for nodes with a numeric `HandlerSpec.maxMs` — unbounded llm (`max_ms=0`) skips the watchdog. |
 | `daemon.worktree_provisioned` | `runId`, `ok: boolean`, `errorDetail?` | Provisioner result; `ok: false` records why a run halted at provision time |
 | `intent.schedule_create` | `scheduleId`, `workflowRef`, `cwd`, `intervalMs`, `intervalText`, `title?`, `overlapPolicy`, `fireOnCreate` | Operator created a schedule (writer: web/CLI). Audit only — the row in `schedules` is the canonical state |

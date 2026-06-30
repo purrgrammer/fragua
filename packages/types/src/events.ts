@@ -1113,6 +1113,7 @@ export type DaemonEvent =
       payload: { requeued: number; quarantined: number; durationMs: number };
     }
   | { type: "daemon.blob_gc_completed"; payload: { deleted: number; durationMs: number } }
+  | { type: "daemon.blob_gc_failed"; payload: { reason: string; durationMs: number } }
   | {
       type: "daemon.leak_detected";
       payload: { runId: string; nodeId: string; count: number; ceiling: number };
@@ -1172,6 +1173,7 @@ export const ALL_DAEMON_EVENT_TYPES: readonly DaemonEventType[] = [
   "daemon.reaper_took_over",
   "daemon.sweep_completed",
   "daemon.blob_gc_completed",
+  "daemon.blob_gc_failed",
   "daemon.leak_detected",
   "daemon.worktree_provisioned",
   "intent.schedule_create",

@@ -50,6 +50,10 @@ export function startBlobGc(opts: BlobGcOpts): { promise: Promise<void> } {
       } catch (err) {
         // Never crash the loop. GC failures (filesystem permission, race
         // with a concurrent write, etc.) should be visible but not fatal.
+        opts.store.appendDaemonEvent({
+          type: "daemon.blob_gc_failed",
+          payload: { reason: err instanceof Error ? err.message : String(err), durationMs: Date.now() - startedAt },
+        });
         // eslint-disable-next-line no-console
         console.warn("[blob-gc] sweep failed:", err);
       }

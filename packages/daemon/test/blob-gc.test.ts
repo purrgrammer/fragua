@@ -66,7 +66,7 @@ describe("startBlobGc", () => {
     r.store.close();
   });
 
-  test("a sweep that throws does not crash the loop", async () => {
+  test("a sweep that throws emits daemon.blob_gc_failed and does not crash the loop", async () => {
     const r = rig();
     // Replace gcBlobs with a method that throws once, then succeeds.
     let calls = 0;
@@ -99,6 +99,13 @@ describe("startBlobGc", () => {
     expect(calls).toBeGreaterThanOrEqual(2);
     // First call threw → no onSweep; second succeeded → onSweep called.
     expect(sweeps.length).toBeGreaterThanOrEqual(1);
+
+    // The thrown sweep also lands a daemon.blob_gc_failed event in the
+    // audit log, carrying the error reason — queryable like the success event.
+    const failures = r.store.getDaemonEvents({ limit: 50 }).filter((e) => e.type === "daemon.blob_gc_failed");
+    expect(failures.length).toBeGreaterThanOrEqual(1);
+    const reason = (failures[0]?.payload as { reason: string }).reason;
+    expect(reason).toBe("simulated FS error");
     r.store.close();
   });
 });
