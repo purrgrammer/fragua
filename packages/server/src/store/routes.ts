@@ -482,7 +482,7 @@ export function createRoutes(deps: ServerDeps): Hono {
   app.post("/runs/:id/human", async (c) => {
     const runId = c.req.param("id");
     const built = plane.buildHuman(await readJson(c));
-    if (!built.ok) return c.json({ error: built.error }, 400);
+    if (!built.ok) return c.json({ error: built.error, code: "invalid_intent" }, 400);
     const route = built.intent.payload.route;
     // Stateful route-enum check: read the paused-node descriptor from the
     // latest fact.run_paused{reason:"human"} and reject off-list routes with 400. This
@@ -492,9 +492,9 @@ export function createRoutes(deps: ServerDeps): Hono {
     // the operator-facing path fails loudly here so the UI surfaces it instead
     // of letting the daemon halt the run on resume.
     const state = deps.store.getState(runId);
-    if (state == null) return c.json({ error: "run not found" }, 404);
+    if (state == null) return c.json({ error: "run not found", code: "not_found" }, 404);
     if (state.status !== "paused_human") {
-      return c.json({ error: `run not paused at a human node (status=${state.status})` }, 409);
+      return c.json({ error: `run not paused at a human node (status=${state.status})`, code: "wrong_status" }, 409);
     }
     const events = deps.store.getEvents(runId);
     let declaredRoutes: string[] = [];
@@ -509,7 +509,13 @@ export function createRoutes(deps: ServerDeps): Hono {
       }
     }
     if (declaredRoutes.length > 0 && !declaredRoutes.includes(route)) {
-      return c.json({ error: `unknown route "${route}" (expected one of: ${declaredRoutes.join(", ")})` }, 400);
+      return c.json(
+        {
+          error: `unknown route "${route}" (expected one of: ${declaredRoutes.join(", ")})`,
+          code: "unknown_route",
+        },
+        400,
+      );
     }
     if (declaredRoutes.length === 0) {
       // Fail-open is intentional (older event shapes carry no route enum),

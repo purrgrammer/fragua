@@ -985,9 +985,10 @@ describe("intent-write routes", () => {
 
     const bad = await req("POST", "/runs/rh2/human", { route: "ship" });
     expect(bad.status).toBe(400);
-    const body = (await bad.json()) as { error: string };
+    const body = (await bad.json()) as { error: string; code: string };
     expect(body.error).toMatch(/unknown route "ship"/);
     expect(body.error).toMatch(/approve, reject/);
+    expect(body.code).toBe("unknown_route");
   });
 
   test("POST /runs/:id/human accepts any route but warns when the pause fact declares no routes", async () => {
@@ -1022,6 +1023,22 @@ describe("intent-write routes", () => {
     store.enqueueRun({ runId: "rh3", workflowSha: "wf" });
     const res = await req("POST", "/runs/rh3/human", { route: "A" });
     expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("wrong_status");
+  });
+
+  test("POST /runs/:id/human returns 404 with code=not_found for an unknown run", async () => {
+    const res = await req("POST", "/runs/no-such-run/human", { route: "A" });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("not_found");
+  });
+
+  test("POST /runs/:id/human returns 400 with code=invalid_intent for a malformed body", async () => {
+    const res = await req("POST", "/runs/whatever/human", { route: 123 });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("invalid_intent");
   });
 
   test("POST /runs/:id/steer rejects empty text", async () => {
