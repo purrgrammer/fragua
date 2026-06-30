@@ -174,7 +174,7 @@ describe("P4 — projection equals fold of facts", () => {
           store.close();
         },
       ),
-      { numRuns: pbtRuns(20) },
+      { numRuns: pbtRuns(50) },
     );
   });
 });
@@ -255,7 +255,7 @@ describe("P14 — blob dedup", () => {
         expect(artCount).toBe(copies);
         store.close();
       }),
-      { numRuns: pbtRuns(10) },
+      { numRuns: pbtRuns(50) },
     );
   });
 });
@@ -291,7 +291,7 @@ describe("P15 — artifact loop scoping across iterations", () => {
         }
         store.close();
       }),
-      { numRuns: pbtRuns(15) },
+      { numRuns: pbtRuns(50) },
     );
   });
 
