@@ -98,6 +98,11 @@ export const FraguaConfigSchema = Type.Object(
     // installed binary unless an explicit `--to <version>` overrides it.
     // Advisory metadata otherwise — nothing else reads it.
     version: Type.Optional(Type.String()),
+    // Toggle the harness's best-effort "new version available" startup
+    // notice. Unset/true ⇒ enabled; false ⇒ skip the check entirely. A
+    // `version` pin also suppresses the notice (a frozen install makes it
+    // noise), as does running a dev (`bun run`) checkout.
+    check_for_updates: Type.Optional(Type.Boolean()),
     // Shell command run inside each fresh worktree before the first node
     // fires. Use whatever the project's stack needs — `bun install
     // --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,

@@ -17,9 +17,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
+import { isDevBuild, isStandaloneBinary, RELEASE_REPO, resolveLatestTag } from "../release.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 
-const RELEASE_REPO = "purrgrammer/fragua";
+// Dev/standalone detection is shared with the harness update notice.
+export { isDevBuild } from "../release.ts";
 
 // process.platform/process.arch → release target, matching setup-fragua's
 // case table. Any pair not here has no published binary.
@@ -107,35 +109,12 @@ export function decideAction(args: {
   return { action: "upgrade" };
 }
 
-/** A `bun run` checkout (not a compiled single binary) can't replace itself —
- * there's no standalone executable to swap. Treat the dev fallback version or
- * a non-standalone entry module as dev. */
-export function isDevBuild(version: string, standalone: boolean): boolean {
-  return !standalone || version === "0.0.0-dev";
-}
-
-// `bun build --compile` serves the entry module from an embedded virtual
-// filesystem; in dev it's a real `.ts` on disk.
-function isStandaloneBinary(): boolean {
-  const u = import.meta.url;
-  return u.includes("/$bunfs/") || u.includes("/~BUN/") || u.includes("\\~BUN\\") || u.startsWith("B:");
-}
-
 function ghAvailable(): boolean {
   return spawnSync("gh", ["--version"], { encoding: "utf8" }).status === 0;
 }
 
 function ghAuthenticated(): boolean {
   return spawnSync("gh", ["auth", "status"], { encoding: "utf8" }).status === 0;
-}
-
-function ghLatestTag(): string | null {
-  const r = spawnSync("gh", ["release", "view", "--repo", RELEASE_REPO, "--json", "tagName", "-q", ".tagName"], {
-    encoding: "utf8",
-  });
-  if (r.status !== 0) return null;
-  const tag = r.stdout.trim();
-  return tag.length > 0 ? tag : null;
 }
 
 function ghDownload(tag: string, asset: string, dir: string): boolean {
@@ -195,7 +174,7 @@ export async function upgradeCommand(opts: UpgradeOptions): Promise<number> {
     return 1;
   }
 
-  const resolvedTag = opts.to ?? ghLatestTag();
+  const resolvedTag = opts.to ?? (await resolveLatestTag());
   if (resolvedTag == null || resolvedTag.length === 0) {
     console.error(chalk.red("fragua upgrade: could not resolve the latest release tag via `gh`"));
     return 1;

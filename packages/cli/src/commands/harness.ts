@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
+import { startUpdateNotice } from "../update-notice.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
@@ -56,6 +57,10 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
 
   console.log(chalk.green("fragua harness starting"));
   console.log(chalk.dim(`  store: ${dbPath}`));
+
+  // Best-effort "new version available" notice. Detached + not awaited so it
+  // can never delay startup; prints at most one dim line later, or nothing.
+  startUpdateNotice();
 
   // Build / refresh the web bundle before binding so the moment the URL
   // prints, the latest UI is what gets served. Compiled binary: the

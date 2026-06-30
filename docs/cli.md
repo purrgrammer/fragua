@@ -267,6 +267,15 @@ newer, and refuses entirely when run from a `bun run` checkout rather than an
 installed binary. A `version:` pin in `~/.fragua/config.yaml` freezes upgrades
 unless `--to` is passed explicitly.
 
+On startup `fragua harness` runs a best-effort, non-blocking check for a newer
+published release and, if behind, prints one dim line
+(`fragua <new> available (you're on <cur>) · run \`fragua upgrade\``). The check
+never delays startup, silently does nothing on any error / timeout /
+unauthenticated `gh`, and caches its result in `~/.fragua/update-check.json`
+with a ~6h TTL (so it hits the network at most ~4×/day). Set
+`check_for_updates: false` in `~/.fragua/config.yaml` to disable it; a `version:`
+pin or a `bun run` (dev) checkout suppresses it too.
+
 ---
 
 ## Exit codes
