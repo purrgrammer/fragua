@@ -18,6 +18,12 @@ import { join, relative } from "node:path";
 const SRC_DIR = join(__dirname, "..", "..", "src");
 const HANDLERS_DIR = join(SRC_DIR, "handler", "handlers");
 
+// Pure server-only handler modules that are excluded from the browser-safety
+// walk (they live under the server-only handler/ sub-entry) but must still
+// stay free of I/O imports — context.ts is the deliberate exception, it
+// persists via @fragua/store.
+const PURE_HANDLER_FILES = ["handler/types.ts", "handler/intent-fold.ts"].map((p) => join(SRC_DIR, ...p.split("/")));
+
 // Server-only sub-entries declared in package.json exports; everything else
 // under src/ is reachable from the browser-safe main entry.
 const SERVER_ONLY_DIRS = new Set(["handler", "intent-plane", "read-plane"]);
@@ -42,6 +48,11 @@ const BANNED = [
     id: "node:net",
     pattern: /\bfrom\s+["']node:net["']/,
     reason: "use ctx.http for network I/O",
+  },
+  {
+    id: "node:io",
+    pattern: /\bfrom\s+["']node:(http|https|dns|os|process)["']/,
+    reason: "pure core must not import I/O modules",
   },
   {
     id: "raw fetch",
@@ -116,6 +127,23 @@ describe("handler discipline", () => {
         `Handlers declaring sideEffect:"external" must call ctx.externalCall:\n` +
           offenders.map((f) => `  ${f}`).join("\n"),
       );
+    }
+    expect(offenders).toHaveLength(0);
+  });
+
+  test("pure handler modules (types.ts, intent-fold.ts) have no I/O imports", () => {
+    const offenders: string[] = [];
+    for (const file of PURE_HANDLER_FILES) {
+      const src = readFileSync(file, "utf8");
+      // Only the module-import bans apply here — a `fetch(...)` type-method
+      // signature is legitimate in a types module.
+      for (const hit of scan(src)) {
+        if (hit.rule === "raw fetch") continue;
+        offenders.push(`  ${relative(SRC_DIR, file)}:${hit.line} → ${hit.rule}`);
+      }
+    }
+    if (offenders.length > 0) {
+      throw new Error(`Pure handler modules must not import I/O:\n${offenders.join("\n")}`);
     }
     expect(offenders).toHaveLength(0);
   });
