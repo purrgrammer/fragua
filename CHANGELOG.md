@@ -25,10 +25,6 @@ guarantee.
   back to the lower cap, a corrupt fan-out frontier to no fan-out, retry
   counters to zero) instead of feeding a wrong dispatch decision. On-disk
   routing bytes are unchanged and runs in flight are unaffected.
-- The `work` workflow's format and CI commands are now `inputs:`-driven
-  (`format_cmd`, `ci_cmd`), so the flagship coding-agent pipeline is adoptable
-  in any repo. Defaults (`bun run format` / `bun run ci`) preserve current
-  behavior; override with `--input ci_cmd="…"` / `--input format_cmd="…"`.
 
 ### Fixed
 

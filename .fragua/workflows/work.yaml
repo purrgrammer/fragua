@@ -38,14 +38,6 @@ inputs:
     type: string
     required: true
     description: The task to work on
-  format_cmd:
-    type: string
-    default: bun run format
-    description: Command that formats the worktree before CI
-  ci_cmd:
-    type: string
-    default: bun run ci
-    description: Command that runs the repo's full CI gate
 
 defaults:
   provider: anthropic
@@ -132,12 +124,12 @@ steps:
 
   format:
     type: tool
-    run: ${{ inputs.format_cmd }}
+    run: bun run format
     next: ci
 
   ci:
     type: tool
-    run: ${{ inputs.ci_cmd }}
+    run: bun run ci
     max-retries: 5
     on:
       success: exit
@@ -148,5 +140,5 @@ steps:
     model: claude-sonnet-4-6           # mechanical CI fixing; bounded by the run budget, not a per-node cap
     allowed-tools: [read, write, edit, bash]
     prompt: |
-      CI failed. Re-run `${{ inputs.ci_cmd }}`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
+      CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.
     next: ci
