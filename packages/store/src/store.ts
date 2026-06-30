@@ -566,21 +566,59 @@ export class SqliteStore implements IEventStore {
     }
 
     try {
+      // Fold + serialize OUTSIDE the write lock (invariant I1: no JSON.stringify
+      // inside a txn body). We read the row optimistically, fold the events, and
+      // serialize the resulting projection here; the txn below re-checks the
+      // version under the lock and writeProjection's expectedVersion guard rejects
+      // a stale write, so the speculative fold stays OCC-correct.
+      const row = selectRunStateRow(this.db, runId);
+      if (row == null) throw new Error(`unknown run ${runId}`);
+      if (row.version !== expectedVersion) {
+        throw new ConcurrencyError(expectedVersion, row.version);
+      }
+
+      let state = rowToRunState(row);
+      for (const event of events) {
+        state = applyFact(state, event, ts);
+      }
+      if (opts.routingPatch != null) {
+        state = { ...state, routing: { ...state.routing, ...opts.routingPatch } };
+      }
+      state = {
+        ...state,
+        version: state.version + 1,
+        lastAppliedSeq: opts.advanceAppliedTo != null ? opts.advanceAppliedTo : state.lastAppliedSeq,
+      };
+
+      // Pre-serialize the projection + event payloads, and run the MAX_ROUTING_BYTES
+      // guard here so an oversized routing payload fails closed before the lock.
+      const routingJson = JSON.stringify(state.routing);
+      const routingBytes = utf8ByteLength(routingJson);
+      if (routingBytes >= MAX_ROUTING_BYTES) {
+        throw new PayloadTooLargeError(routingBytes, MAX_ROUTING_BYTES);
+      }
+      const projection = {
+        routingJson,
+        metricsJson: JSON.stringify(state.metrics),
+        changeStatJson: state.changeStat != null ? JSON.stringify(state.changeStat) : null,
+      };
+      const eventPayloads = events.map((event) => this.validatePayload(event.payload));
+      committedState = state;
+      newVersion = state.version;
+
       this.writeTxn(() => {
-        const row = selectRunStateRow(this.db, runId);
-        if (row == null) throw new Error(`unknown run ${runId}`);
-        if (row.version !== expectedVersion) {
-          throw new ConcurrencyError(expectedVersion, row.version);
+        // Re-check the version under the lock: the fold above ran on a snapshot
+        // read taken before the txn, so another writer may have advanced the row.
+        const current = selectRunStateRow(this.db, runId);
+        if (current == null) throw new Error(`unknown run ${runId}`);
+        if (current.version !== expectedVersion) {
+          throw new ConcurrencyError(expectedVersion, current.version);
         }
 
-        let state = rowToRunState(row);
-
-        for (const event of events) {
-          const payload = this.validatePayload(event.payload);
+        for (let i = 0; i < events.length; i++) {
           const seq = bumpRunSeq(this.db, runId);
           seqs.push(seq);
-          insertEventDaemon(this.db, runId, seq, event.type, payload, ts);
-          state = applyFact(state, event, ts);
+          insertEventDaemon(this.db, runId, seq, events[i]!.type, eventPayloads[i]!, ts);
         }
 
         // Durability barrier for spilled-output blobs: the BlobFS.put() ran
@@ -594,22 +632,7 @@ export class SqliteStore implements IEventStore {
           insertOutput(this.db, runId, o.nodeId, o.iteration, o.structJson);
         }
 
-        if (opts.routingPatch != null) {
-          state = {
-            ...state,
-            routing: { ...state.routing, ...opts.routingPatch },
-          };
-        }
-
-        state = {
-          ...state,
-          version: state.version + 1,
-          lastAppliedSeq: opts.advanceAppliedTo != null ? opts.advanceAppliedTo : state.lastAppliedSeq,
-        };
-
-        this.writeProjection(state, expectedVersion);
-        newVersion = state.version;
-        committedState = state;
+        this.writeProjection(state, expectedVersion, projection);
       });
       this.metrics.recordWrite(performance.now() - startAt, "fact");
     } catch (err) {
@@ -2270,22 +2293,25 @@ export class SqliteStore implements IEventStore {
     }
   }
 
-  private writeProjection(state: RunState, expectedVersion: number): void {
-    const routing = JSON.stringify(state.routing);
-    const routingBytes = utf8ByteLength(routing);
-    if (routingBytes >= MAX_ROUTING_BYTES) {
-      throw new PayloadTooLargeError(routingBytes, MAX_ROUTING_BYTES);
-    }
-    const metrics = JSON.stringify(state.metrics);
-    const changeStatJson = state.changeStat != null ? JSON.stringify(state.changeStat) : null;
+  /**
+   * Apply the in-memory projection to `run_state`. Runs under the write lock
+   * (it is only ever called from inside a `writeTxn`), so it MUST NOT serialize
+   * (invariant I1): the caller pre-serializes `routing`/`metrics`/`changeStat`
+   * and runs the MAX_ROUTING_BYTES guard before opening the transaction.
+   */
+  private writeProjection(
+    state: RunState,
+    expectedVersion: number,
+    serialized: { routingJson: string; metricsJson: string; changeStatJson: string | null },
+  ): void {
     const applied = writeRunStateProjection(this.db, {
       runId: state.runId,
       version: state.version,
       expectedVersion,
       status: state.status,
       currentNode: state.currentNode,
-      routingJson: routing,
-      metricsJson: metrics,
+      routingJson: serialized.routingJson,
+      metricsJson: serialized.metricsJson,
       lastAppliedSeq: state.lastAppliedSeq,
       priority: state.priority,
       readyAt: state.readyAt,
@@ -2297,7 +2323,7 @@ export class SqliteStore implements IEventStore {
       finalGitSha: state.finalGitSha,
       finalHeadRef: state.finalHeadRef,
       diffBaseSha: state.diffBaseSha,
-      changeStatJson,
+      changeStatJson: serialized.changeStatJson,
       inboxStatus: state.inboxStatus,
       acceptedSha: state.acceptedSha,
     });

@@ -115,11 +115,22 @@ describe("SqliteStore — projection write throws on stale expected version", ()
     // normally catch the stale version first, so this exercises the
     // structural guard that backs it (defense in depth).
     const writeProjection = (
-      store as unknown as { writeProjection(state: RunState, expectedVersion: number): void }
+      store as unknown as {
+        writeProjection(
+          state: RunState,
+          expectedVersion: number,
+          serialized: { routingJson: string; metricsJson: string; changeStatJson: string | null },
+        ): void;
+      }
     ).writeProjection.bind(store);
 
     const doomed: RunState = { ...state, version: state.version + 6, status: "running", currentNode: "work" };
-    expect(() => writeProjection(doomed, state.version + 5)).toThrow(ConcurrencyError);
+    const serialized = {
+      routingJson: JSON.stringify(doomed.routing),
+      metricsJson: JSON.stringify(doomed.metrics),
+      changeStatJson: doomed.changeStat != null ? JSON.stringify(doomed.changeStat) : null,
+    };
+    expect(() => writeProjection(doomed, state.version + 5, serialized)).toThrow(ConcurrencyError);
 
     const after = store.getState(runId)!;
     expect(after.version).toBe(state.version);

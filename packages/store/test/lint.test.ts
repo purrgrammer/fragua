@@ -59,6 +59,23 @@ function* txnBodies(source: string): IterableIterator<string> {
   for (const match of source.matchAll(BEGIN2)) {
     yield match[0];
   }
+  // Shape D: this.writeTxn(() => { ... }) — the primary store write path. The
+  // body runs under BEGIN IMMEDIATE just like Shape A, so it gets the same scan.
+  const WRITE_TXN_RE = /\bwriteTxn\s*\(\s*\(\s*\)\s*=>\s*\{/g;
+  for (const match of source.matchAll(WRITE_TXN_RE)) {
+    const start = match.index + match[0].length;
+    const end = matchBrace(source, start - 1);
+    if (end > start) yield source.slice(start, end);
+  }
+  // Shape E: writeProjection's own body. It is only ever invoked from inside a
+  // writeTxn (Shape D), so its body executes under the write lock and must obey
+  // I1 too. Scanning its body directly is simpler than inline-expanding the call.
+  const PROJ_RE = /\bprivate\s+writeProjection\b[\s\S]*?\)\s*:\s*void\s*\{/g;
+  for (const match of source.matchAll(PROJ_RE)) {
+    const start = match.index + match[0].length;
+    const end = matchBrace(source, start - 1);
+    if (end > start) yield source.slice(start, end);
+  }
 }
 
 function matchBrace(source: string, openIdx: number): number {
