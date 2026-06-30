@@ -214,6 +214,7 @@ row — there is no `serve.json` file and no localhost default.
 fragua validate <workflow.yaml>          # parse + lint, no execution; reports tool steps using the default 5-min timeout
 fragua init [--cwd <path>]               # write <cwd>/.fragua/config.yaml
 fragua doctor                            # liveness: store path, daemon lock, server endpoint, providers
+fragua upgrade [--to <version>]          # self-update the installed binary from GitHub Releases
 fragua gc --snapshots [--older-than 30d] [--dry-run]
 fragua db vacuum                         # reclaim free pages
 fragua db gc-blobs [--limit N]           # delete orphaned blob rows
@@ -253,6 +254,18 @@ against the store (its `daemon_lock` heartbeat is fresh) — stop it first.
 
 The harness/daemon auto-migrate forward under their lock; that automatic path
 never downgrades — only this explicit, backed-up command does.
+
+`upgrade` replaces the currently-running fragua binary in place with the FULL
+release build (web UI embedded — what `harness`/`serve` want). It resolves the
+latest published tag (or `--to <version>`, which accepts `0.9.0` or `v0.9.0`),
+downloads the matching `fragua-bun-<os>-<arch>` asset plus `SHA256SUMS` via the
+`gh` CLI, verifies the checksum fail-closed (a missing entry or digest mismatch
+aborts before any replacement), then atomically swaps the executable. All
+network + auth go through `gh`, so a private release repo works once you've run
+`gh auth login`. It no-ops (no download) when already on the resolved target or
+newer, and refuses entirely when run from a `bun run` checkout rather than an
+installed binary. A `version:` pin in `~/.fragua/config.yaml` freezes upgrades
+unless `--to` is passed explicitly.
 
 ---
 

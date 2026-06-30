@@ -72,6 +72,7 @@ import {
 } from "../src/commands/schedule.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { showCommand } from "../src/commands/show.ts";
+import { upgradeCommand } from "../src/commands/upgrade.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 import { waitCommand } from "../src/commands/wait.ts";
 import { resolveInputArgs } from "../src/input-coerce.ts";
@@ -435,6 +436,15 @@ cli
   .action(async (options: Record<string, unknown>) => {
     const db = typeof options["db"] === "string" ? (options["db"] as string) : undefined;
     const code = await doctorCommand(db !== undefined ? { dbPath: db } : {});
+    process.exit(code);
+  });
+
+cli
+  .command("upgrade", "Self-update the installed fragua binary from GitHub Releases")
+  .option("--to <version>", "Install a specific release tag (e.g. 0.9.0 or v0.9.0); default is the latest")
+  .action(async (options: Record<string, unknown>) => {
+    const to = typeof options["to"] === "string" ? (options["to"] as string) : undefined;
+    const code = await upgradeCommand(to !== undefined ? { to } : {});
     process.exit(code);
   });
 

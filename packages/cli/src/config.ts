@@ -93,6 +93,11 @@ export const FraguaConfigSchema = Type.Object(
     // Display name for the project — surfaced in UI listings and the
     // run dashboard. Optional and advisory.
     name: Type.Optional(Type.String()),
+    // Release pin for `fragua upgrade`. When set (in the global
+    // `~/.fragua/config.yaml`), `fragua upgrade` refuses to move the
+    // installed binary unless an explicit `--to <version>` overrides it.
+    // Advisory metadata otherwise — nothing else reads it.
+    version: Type.Optional(Type.String()),
     // Shell command run inside each fresh worktree before the first node
     // fires. Use whatever the project's stack needs — `bun install
     // --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
