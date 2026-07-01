@@ -179,4 +179,26 @@ describe("StoredOAuthProvider", () => {
     provider.saveTokens(tokens());
     expect(provider.tokens()).toEqual(tokens());
   });
+
+  test("state() persists a CSRF value a fresh instance reads back via expectedAuthState()", () => {
+    const store = fakeStore();
+    const p1 = new StoredOAuthProvider({
+      url: URL_A,
+      store,
+      redirectUrl: "http://localhost:8888/callback",
+      onRedirect: () => {},
+    });
+    const s = p1.state();
+    expect(typeof s).toBe("string");
+    expect(s.length).toBeGreaterThan(0);
+    expect(p1.expectedAuthState()).toBe(s);
+    // Must survive across the redirect (persisted, not in-memory).
+    const p2 = new StoredOAuthProvider({
+      url: URL_A,
+      store,
+      redirectUrl: "http://localhost:8888/callback",
+      onRedirect: () => {},
+    });
+    expect(p2.expectedAuthState()).toBe(s);
+  });
 });

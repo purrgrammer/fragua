@@ -235,16 +235,47 @@ export function mcpLogoutCommand(server: string, opts: McpOptions = {}): Promise
   });
 }
 
+/** A login transport as `runLoginFlow` uses it — the real one wraps an MCP
+ * `Client` + `StreamableHTTPClientTransport`; tests inject a fake to drive the
+ * valid-token fast-path and the auth-required path without a live server. */
+export interface LoginTransport {
+  connect(): Promise<void>;
+  finishAuth(code: string): Promise<void>;
+  close(): Promise<void>;
+}
+export type LoginTransportFactory = (
+  url: string,
+  headers: Record<string, string>,
+  authProvider: StoredOAuthProvider,
+) => LoginTransport;
+
+const defaultLoginTransport: LoginTransportFactory = (url, headers, authProvider) => {
+  const mcpClient = new Client({ name: "fragua", version: "0.1.0" }, { capabilities: {} });
+  const transport = new StreamableHTTPClientTransport(new URL(url), { authProvider, requestInit: { headers } });
+  return {
+    connect: () => mcpClient.connect(transport as Transport),
+    finishAuth: (code) => transport.finishAuth(code),
+    close: async () => {
+      await transport.close().catch(() => {});
+      await mcpClient.close().catch(() => {});
+    },
+  };
+};
+
 export function mcpLoginCommand(
   server: string,
   creds: { clientId?: string; clientSecret?: string } = {},
   opts: McpOptions = {},
+  deps: { transportFactory?: LoginTransportFactory } = {},
 ): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
   const target = resolveOAuthTarget(server, cwd, true);
   if (!target.ok) return Promise.resolve(target.code);
+  const factory = deps.transportFactory ?? defaultLoginTransport;
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
-  return withStoreClient(clientOpts, (client) => runLoginFlow(server, target.url, target.headers, creds, client));
+  return withStoreClient(clientOpts, (client) =>
+    runLoginFlow(server, target.url, target.headers, creds, client, factory),
+  );
 }
 
 /** Best-effort platform browser opener — the auth URL is already printed, so a
@@ -281,40 +312,26 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
   });
 }
 
+/** Strip control bytes so a hostile `?error=` value can't inject terminal
+ * escapes when we print it, and cap its length. */
+function sanitizeErrorParam(v: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control bytes to remove them.
+  return v.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200);
+}
+
 async function runLoginFlow(
   server: string,
   url: string,
   headers: Record<string, string>,
   creds: { clientId?: string; clientSecret?: string },
   client: StoreClient,
+  transportFactory: LoginTransportFactory,
 ): Promise<number> {
-  const callback = new URL(MCP_OAUTH_CALLBACK_URL);
-  const providerOpts: ConstructorParameters<typeof StoredOAuthProvider>[0] = {
-    url,
-    store: makeMcpOAuthStore(client.store),
-    redirectUrl: MCP_OAUTH_CALLBACK_URL,
-    onRedirect: (authUrl) => {
-      console.log(chalk.bold("Open this URL to authorize:"));
-      console.log(authUrl.toString());
-      openInBrowser(authUrl.toString());
-    },
-  };
-  if (creds.clientId !== undefined) {
-    providerOpts.client =
-      creds.clientSecret !== undefined
-        ? { clientId: creds.clientId, clientSecret: creds.clientSecret }
-        : { clientId: creds.clientId };
-  }
-  const authProvider = new StoredOAuthProvider(providerOpts);
-  // Persist a preset confidential client so the DAEMON — which builds its own
-  // provider without these flags — can read client_id/secret to refresh tokens.
-  // (With a preset, `clientInformation()` returns it in-memory and the SDK never
-  // calls `saveClientInformation`, so it would otherwise never reach the store.)
-  if (creds.clientId !== undefined) {
-    const info: OAuthClientInformation = { client_id: creds.clientId };
-    if (creds.clientSecret !== undefined) info.client_secret = creds.clientSecret;
-    authProvider.saveClientInformation(info);
-  }
+  const callbackPath = new URL(MCP_OAUTH_CALLBACK_URL).pathname;
+  // Confidential clients pre-register a fixed redirect URI, so they MUST use the
+  // fixed callback port. DCR / public clients register the redirect at auth time,
+  // so bind an ephemeral port — no fixed-port pre-bind clash, concurrent logins ok.
+  const confidential = creds.clientId !== undefined;
 
   let resolveCode!: (code: string) => void;
   let rejectCode!: (err: Error) => void;
@@ -323,39 +340,78 @@ async function runLoginFlow(
     rejectCode = rej;
   });
   const htmlPage = (body: string): string => `<!doctype html><html><body><p>${body}</p></body></html>`;
+  // Assigned after we know the port; the handler only runs on a browser request,
+  // by which time it's set.
+  let authProvider: StoredOAuthProvider;
   const httpServer = createServer((req, resp) => {
-    const reqUrl = new URL(req.url ?? "/", `http://${callback.host}`);
-    if (reqUrl.pathname !== callback.pathname) {
+    const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (reqUrl.pathname !== callbackPath) {
       resp.writeHead(404).end();
       return;
     }
     const error = reqUrl.searchParams.get("error");
     const code = reqUrl.searchParams.get("code");
-    // Reflect the AS's outcome to the browser — success page ONLY on a code.
-    if (code) {
-      resp.writeHead(200, { "content-type": "text/html" });
-      resp.end(htmlPage("Authorization complete — you can close this tab and return to your terminal."));
-      resolveCode(code);
-    } else {
+    const state = reqUrl.searchParams.get("state");
+    const fail = (msg: string): void => {
       resp.writeHead(400, { "content-type": "text/html" });
       resp.end(htmlPage("Authorization failed — return to your terminal for details."));
-      rejectCode(
-        new Error(error ? `authorization failed: ${error}` : "callback received without an authorization code"),
+      rejectCode(new Error(msg));
+    };
+    // CSRF: the returned state must match the one the SDK sent (PKCE already
+    // binds the code, but state blocks a stray/forged localhost callback).
+    if (state !== authProvider.expectedAuthState()) return fail("authorization state mismatch");
+    if (!code)
+      return fail(
+        error
+          ? `authorization failed: ${sanitizeErrorParam(error)}`
+          : "callback received without an authorization code",
       );
-    }
+    resp.writeHead(200, { "content-type": "text/html" });
+    resp.end(htmlPage("Authorization complete — you can close this tab and return to your terminal."));
+    resolveCode(code);
   });
 
-  const mcpClient = new Client({ name: "fragua", version: "0.1.0" }, { capabilities: {} });
-  const transport = new StreamableHTTPClientTransport(new URL(url), { authProvider, requestInit: { headers } });
-
+  let transport: LoginTransport | undefined;
   try {
     await new Promise<void>((res, rej) => {
       httpServer.once("error", rej);
-      httpServer.listen(Number(callback.port), callback.hostname, () => res());
+      httpServer.listen(confidential ? Number(new URL(MCP_OAUTH_CALLBACK_URL).port) : 0, "127.0.0.1", () => res());
     });
+    const addr = httpServer.address();
+    const port = typeof addr === "object" && addr ? addr.port : Number(new URL(MCP_OAUTH_CALLBACK_URL).port);
+    const redirectUrl = `http://127.0.0.1:${port}${callbackPath}`;
+
+    const providerOpts: ConstructorParameters<typeof StoredOAuthProvider>[0] = {
+      url,
+      store: makeMcpOAuthStore(client.store),
+      redirectUrl,
+      onRedirect: (authUrl) => {
+        console.log(chalk.bold("Open this URL to authorize:"));
+        console.log(authUrl.toString());
+        openInBrowser(authUrl.toString());
+      },
+    };
+    if (creds.clientId !== undefined) {
+      providerOpts.client =
+        creds.clientSecret !== undefined
+          ? { clientId: creds.clientId, clientSecret: creds.clientSecret }
+          : { clientId: creds.clientId };
+    }
+    authProvider = new StoredOAuthProvider(providerOpts);
+    // Persist a preset confidential client so the DAEMON — which builds its own
+    // provider without these flags — can read client_id/secret to refresh tokens.
+    // (With a preset, `clientInformation()` returns it in-memory and the SDK never
+    // calls `saveClientInformation`, so it would otherwise never reach the store.)
+    if (creds.clientId !== undefined) {
+      const info: OAuthClientInformation = { client_id: creds.clientId };
+      if (creds.clientSecret !== undefined) info.client_secret = creds.clientSecret;
+      authProvider.saveClientInformation(info);
+    }
+
+    transport = transportFactory(url, headers, authProvider);
 
     try {
-      await mcpClient.connect(transport as Transport);
+      await transport.connect();
       // Stored tokens were still valid — no interactive step required.
       console.log(chalk.green(`Logged in to ${server}.`));
       return 0;
@@ -379,7 +435,6 @@ async function runLoginFlow(
     return 1;
   } finally {
     await new Promise<void>((res) => httpServer.close(() => res()));
-    await transport.close().catch(() => {});
-    await mcpClient.close().catch(() => {});
+    await transport?.close().catch(() => {});
   }
 }

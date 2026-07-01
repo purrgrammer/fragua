@@ -228,12 +228,16 @@ async function connectServer(
   try {
     let transport: Transport;
     if (server.transport === "http") {
+      const parsedUrl = new URL(server.url);
+      if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+        throw new Error(`unsupported url scheme "${parsedUrl.protocol}" (http/https only)`);
+      }
       // No static `Authorization` header + an injected factory → authenticate
       // through the OAuth provider. A provider persists tokens across runs and
       // (on the daemon) throws on redirect so an un-authed server is skipped
       // via the connect-failure path rather than hanging.
       const provider = needsOAuthProvider(server, oauthProviderFor) ? oauthProviderFor?.(server.url) : undefined;
-      transport = new StreamableHTTPClientTransport(new URL(server.url), {
+      transport = new StreamableHTTPClientTransport(parsedUrl, {
         ...(provider ? { authProvider: provider } : {}),
         requestInit: { headers: server.headers },
       }) as Transport;

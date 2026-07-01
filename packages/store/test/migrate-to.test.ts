@@ -204,7 +204,7 @@ describe("lossy-step policy — v4 messages.pass", () => {
   test("a down walk crossing v4 refuses without allowDataLoss, drops the column with it", () => {
     const db = freshDb();
     migrate(db);
-    migrateTo(db, 4, { allowDataLoss: true }); // step down past the lossy v5 (mcp_oauth) first
+    migrateTo(db, 4, { allowDataLoss: true }); // v5 (mcp_oauth) down is lossy → allowDataLoss to reach v4 before testing v4→v3
     expect(() => migrateTo(db, 3)).toThrow(/loses data at v4/i);
 
     migrateTo(db, 3, { allowDataLoss: true });

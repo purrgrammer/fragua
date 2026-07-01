@@ -200,7 +200,11 @@ export function resolveMcpServer(
   if (config.transport === "http") {
     const url = collect(substitute(config.url, env));
     const headers: Record<string, string> = {};
-    for (const [k, v] of Object.entries(config.headers ?? {})) headers[k] = collect(substitute(v, env));
+    // Strip CR/LF from resolved header values so a substituted env var can't
+    // smuggle an extra header / split the request.
+    for (const [k, v] of Object.entries(config.headers ?? {})) {
+      headers[k] = collect(substitute(v, env)).replace(/[\r\n]/g, "");
+    }
     if (missing.length > 0) return { ok: false, missing };
     return { ok: true, server: { transport: "http", url, headers } };
   }

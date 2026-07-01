@@ -174,6 +174,29 @@ describe("mcp login error paths (no listener / browser)", () => {
     expect(await mcpLoginCommand("remote", {}, { cwd, dbPath })).toBe(1);
     expect(out()).toContain("no login needed");
   });
+
+  test("valid stored token → fast-path connect resolves → exit 0, transport closed", async () => {
+    const dbPath = tempStore();
+    const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });
+    let closed = false;
+    const code = await mcpLoginCommand(
+      "remote",
+      {},
+      { cwd, dbPath },
+      {
+        transportFactory: () => ({
+          connect: async () => {},
+          finishAuth: async () => {},
+          close: async () => {
+            closed = true;
+          },
+        }),
+      },
+    );
+    expect(code).toBe(0);
+    expect(closed).toBe(true);
+    expect(out()).toContain("Logged in to remote");
+  });
 });
 
 describe("mcp check", () => {

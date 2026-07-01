@@ -11,6 +11,7 @@
 // the real store-backed implementation is injected by callers (CLI login flow,
 // daemon connector) in a later slice.
 
+import { randomUUID } from "node:crypto";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
   OAuthClientInformation,
@@ -61,6 +62,8 @@ interface PersistedOAuthState {
   clientInformation?: OAuthClientInformation;
   tokens?: OAuthTokens;
   codeVerifier?: string;
+  /** CSRF `state` for the in-flight authorization, validated on the callback. */
+  authState?: string;
 }
 
 export class StoredOAuthProvider implements OAuthClientProvider {
@@ -69,6 +72,11 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   private readonly _redirectUrl: string;
   private readonly onRedirect: (authorizationUrl: URL) => void | Promise<void>;
   private readonly client: McpOAuthClient | undefined;
+  // Per-instance cache of the parsed blob. One provider instance owns its own
+  // writes, so a handshake's repeated reads/writes need not re-parse the store
+  // each time. Distinct instances (login vs daemon) don't share it — correct,
+  // they operate independently.
+  private cache: PersistedOAuthState | undefined;
 
   constructor(opts: StoredOAuthProviderOptions) {
     this.url = opts.url;
@@ -81,21 +89,26 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   // Read the whole blob lazily; an absent or corrupt payload folds to empty so
   // a garbled row can't wedge the flow — the SDK will re-drive auth from clean.
   private read(): PersistedOAuthState {
+    if (this.cache !== undefined) return this.cache;
     const raw = this.store.load(this.url);
-    if (raw === undefined) return {};
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed as PersistedOAuthState;
-      return {};
-    } catch {
-      return {};
+    let state: PersistedOAuthState = {};
+    if (raw !== undefined) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") state = parsed as PersistedOAuthState;
+      } catch {
+        state = {};
+      }
     }
+    this.cache = state;
+    return state;
   }
 
   // Write-through: fold the mutation into the current blob and persist the whole
   // thing. Every mutator routes through here so the payload stays one object.
   private write(patch: Partial<PersistedOAuthState>): void {
     const next = { ...this.read(), ...patch };
+    this.cache = next;
     this.store.save(this.url, JSON.stringify(next));
   }
 
@@ -112,6 +125,22 @@ export class StoredOAuthProvider implements OAuthClientProvider {
       response_types: ["code"],
       token_endpoint_auth_method: hasSecret ? "client_secret_post" : "none",
     };
+  }
+
+  // Called by the SDK before it builds the authorization URL; the value is
+  // echoed back on the callback. Generated fresh + persisted so it survives the
+  // redirect, and validated against `expectedAuthState()` by the login callback.
+  state(): string {
+    const value = randomUUID();
+    this.write({ authState: value });
+    return value;
+  }
+
+  /** The CSRF `state` expected on the authorization callback, if a flow is in
+   * progress. The interactive login server compares the returned `state`
+   * against this before accepting the code. */
+  expectedAuthState(): string | undefined {
+    return this.read().authState;
   }
 
   clientInformation(): OAuthClientInformation | undefined {
