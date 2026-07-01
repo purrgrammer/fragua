@@ -97,7 +97,7 @@ One bet: the **control plane** is worth making deterministic even when the LLM b
 
 ## Prerequisites
 
-- **git** (required) — every run executes in an isolated worktree; diff / accept / discard are git operations.
+- **git** (recommended) — a git repo gives each run an isolated worktree with diff / accept / discard as git operations; without one, a run executes directly in its `cwd` with no isolation layer (see [execution-model](docs/execution-model.md)).
 - **A provider API key** — Anthropic, OpenAI, or any [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai) provider. `fragua providers add` stores it.
 - **Bun ≥ 1.2** — only to build from source; release binaries are self-contained.
 - **[`gh`](https://cli.github.com/)** (optional) — only for PR-number targets (`target="PR <n>"`).
@@ -221,6 +221,7 @@ The CLI is a direct store-client — these work from any directory, daemon up or
 ## Docs
 
 - **[STATUS.md](STATUS.md)** — what's working today
+- **[docs/workflows.md](docs/workflows.md)** — authoring workflows (the YAML guide)
 - **[docs/operator-guide.md](docs/operator-guide.md)** — driving a HITL run end to end
 - **[docs/cli.md](docs/cli.md)** — CLI reference + exit codes
 - **[docs/CI.md](docs/CI.md)** — running fragua in CI
