@@ -20,6 +20,8 @@ const SCAN_DIRS = [
   join(ROOT, "packages/server/src"),
   join(ROOT, "packages/daemon/src"),
   join(ROOT, "packages/cli/src"),
+  join(ROOT, "packages/workspace/src"),
+  join(ROOT, "packages/agent/src"),
 ];
 
 function walkTs(dir: string): string[] {
