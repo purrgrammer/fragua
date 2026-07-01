@@ -1,5 +1,5 @@
 // MCP connector — fragua is the MCP *client*. Given a set of server names
-// declared on an llm step (`mcp-servers:`), it loads `<cwd>/.fragua/mcp.json`,
+// declared on an llm step (`mcp-servers:`), it loads `<cwd>/.mcp.json`,
 // spawns each requested stdio server, lists its tools, and materialises each as
 // an ordinary fragua `Tool` named `mcp__<server>__<tool>`. The LLM then calls
 // them exactly like `read` / `bash`; a call is routed back through the live MCP
@@ -36,7 +36,7 @@ const MCP_OUTPUT_MAX_CHARS = 100_000;
 const STDERR_TAIL_MAX = 2_000;
 
 export interface McpMaterializeOptions {
-  /** Project cwd — `<cwd>/.fragua/mcp.json` is the server registry. */
+  /** Project cwd — `<cwd>/.mcp.json` is the server registry. */
   cwd: string;
   /** Environment for `${VAR}` substitution. Defaults to `process.env`. */
   env?: Record<string, string | undefined>;
@@ -144,8 +144,11 @@ function renderContent(content: unknown): string {
 // slugged names (never malformed XML); an embedded closer is escaped so tool
 // output that happens to contain the tag can't close the envelope early.
 export function labelMcpOutput(server: string, tool: string, body: string): string {
+  // Cap the attribute slugs so a pathologically long tool name can't inflate the
+  // opening tag past the body's truncation headroom and strip the label.
+  const cap = (s: string): string => slug(s).slice(0, 64);
   const safe = body.replaceAll("</mcp_output>", "&lt;/mcp_output&gt;");
-  return `<mcp_output server="${slug(server)}" tool="${slug(tool)}" trust="untrusted">\n${safe}\n</mcp_output>`;
+  return `<mcp_output server="${cap(server)}" tool="${cap(tool)}" trust="untrusted">\n${safe}\n</mcp_output>`;
 }
 
 function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client, callTimeoutMs: number): AnyTool {

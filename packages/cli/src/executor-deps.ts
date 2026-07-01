@@ -251,7 +251,7 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
       // call, filtered per-node by `attrs.skills` / `skills_disabled`.
       skills: discoveredSkills,
       // Materialises MCP-server tools for nodes that declare `mcp-servers:`.
-      // Reads `<run cwd>/.fragua/mcp.json` lazily per node. Remote http servers
+      // Reads `<run cwd>/.mcp.json` lazily per node. Remote http servers
       // with no static `Authorization` header authenticate through a stored
       // OAuth token; the daemon's `onRedirect` throws (never opens a browser)
       // so an un-authed server is skipped via the connect-failure path with a

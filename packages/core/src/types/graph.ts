@@ -52,7 +52,7 @@ export interface NodeAttrs {
   reasoning_effort?: "low" | "medium" | "high";
   allowed_tools?: string[];
   denied_tools?: string[];
-  /** MCP servers (by name, defined in `<cwd>/.fragua/mcp.json`) to connect
+  /** MCP servers (by name, defined in `<cwd>/.mcp.json`) to connect
    * for this llm step. Every tool the servers expose is materialised as
    * `mcp__<server>__<tool>` and added on top of `allowed_tools`; `denied_tools`
    * can still remove individual ones. llm-only. See docs/proposals/mcp-tools.md. */
