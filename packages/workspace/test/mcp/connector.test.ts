@@ -6,6 +6,7 @@ import { LocalEnvironment } from "../../src/local-env.ts";
 import { createMcpConnector, mcpToolName } from "../../src/mcp/connector.ts";
 
 const ECHO_SERVER = join(import.meta.dir, "echo-server.ts");
+const BAD_LIST_SERVER = join(import.meta.dir, "bad-list-server.ts");
 
 function projectWith(config: unknown): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-conn-"));
@@ -82,6 +83,21 @@ describe("createMcpConnector.materialize — live stdio server", () => {
 
       const err = await tool.execute({ text: "__error__" }, new LocalEnvironment());
       expect(err.is_error).toBe(true);
+    } finally {
+      await set.dispose();
+    }
+  }, 30_000);
+
+  test("server that connects but fails listTools → error recorded, no tools, never throws", async () => {
+    const cwd = projectWith({ mcpServers: { bad: { command: process.execPath, args: [BAD_LIST_SERVER] } } });
+    // Must resolve (not reject): a post-connect listTools failure is caught,
+    // the client closed (no orphaned child), and the server reported in errors.
+    const set = await createMcpConnector().materialize(["bad"], { cwd });
+    try {
+      expect(set.tools).toEqual([]);
+      expect(set.errors).toHaveLength(1);
+      expect(set.errors[0]?.server).toBe("bad");
+      expect(set.errors[0]?.message).toContain("failed to connect");
     } finally {
       await set.dispose();
     }

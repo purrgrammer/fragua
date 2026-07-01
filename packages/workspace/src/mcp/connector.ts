@@ -14,7 +14,7 @@
 // See docs/proposals/mcp-tools.md.
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { TSchema } from "@sinclair/typebox";
 import type { AnyTool, ToolOutput } from "../types.ts";
 import { loadMcpConfig, resolveMcpServer } from "./config.ts";
@@ -126,28 +126,32 @@ async function connectServer(
   name: string,
   server: { command: string; args: string[]; env: Record<string, string>; cwd?: string },
   connectTimeoutMs: number,
+  listTimeoutMs: number,
 ): Promise<{ connection: OpenConnection; tools: McpToolDescriptor[] }> {
   const transport = new StdioClientTransport({
     command: server.command,
     args: server.args,
-    // Merge onto the parent env so the child still sees PATH etc.; the resolved
-    // config values win.
-    env: { ...filterEnv(process.env), ...server.env },
+    // Start from the SDK's hardened default allowlist (HOME / PATH / USER / …)
+    // so the child gets a working PATH WITHOUT inheriting the daemon's whole
+    // environment — provider API keys and other secrets must not leak into a
+    // third-party server binary. Only the server's own resolved `env:` is added.
+    env: { ...getDefaultEnvironment(), ...server.env },
     ...(server.cwd !== undefined ? { cwd: server.cwd } : {}),
     stderr: "ignore",
   });
   const client = new Client({ name: `fragua-${name}`, version: "0.1.0" }, { capabilities: {} });
+  // `connect` self-closes the transport if `initialize` fails, so a connect
+  // error leaves nothing spawned. `listTools` runs AFTER connect succeeds, so a
+  // failure there must close the client ourselves — otherwise the already-
+  // spawned child process leaks for the daemon's lifetime.
   await client.connect(transport, { timeout: connectTimeoutMs });
-  const listed = (await client.listTools()) as { tools?: McpToolDescriptor[] };
-  return { connection: { client, transport }, tools: listed.tools ?? [] };
-}
-
-/** Only forward defined string env vars to the child (StdioClientTransport's
- * env type is `Record<string,string>`). */
-function filterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) if (typeof v === "string") out[k] = v;
-  return out;
+  try {
+    const listed = (await client.listTools(undefined, { timeout: listTimeoutMs })) as { tools?: McpToolDescriptor[] };
+    return { connection: { client, transport }, tools: listed.tools ?? [] };
+  } catch (err) {
+    await client.close().catch(() => {});
+    throw err;
+  }
 }
 
 export function createMcpConnector(): McpConnector {
@@ -180,7 +184,12 @@ export function createMcpConnector(): McpConnector {
           continue;
         }
         try {
-          const { connection, tools: descriptors } = await connectServer(name, resolved.server, connectTimeoutMs);
+          const { connection, tools: descriptors } = await connectServer(
+            name,
+            resolved.server,
+            connectTimeoutMs,
+            connectTimeoutMs,
+          );
           open.push(connection);
           for (const d of descriptors) tools.push(toFraguaTool(name, d, connection.client, callTimeoutMs));
         } catch (err) {
