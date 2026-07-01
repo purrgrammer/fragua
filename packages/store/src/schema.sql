@@ -334,6 +334,18 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+-- Remote (http) MCP server OAuth state.
+-- Secret-bearing and excluded from run bundles exactly like
+-- `provider_credentials`. One row per MCP server URL; `payload` is an opaque
+-- JSON blob (OAuth client registration + token set) — the store never models
+-- its shape, it only round-trips the string.
+CREATE TABLE IF NOT EXISTS mcp_oauth (
+  url        TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 -- Custom-provider definitions.
 -- One row per provider id; `config` carries the per-provider definition
 -- blob (baseUrl, headers, compat, models, modelOverrides) — the

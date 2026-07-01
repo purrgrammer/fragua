@@ -74,6 +74,22 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
     down: (db) => db.exec("ALTER TABLE messages DROP COLUMN pass"),
     lossy: true,
   },
+  // v4 → v5: add the `mcp_oauth` table (per-server OAuth state for remote MCP
+  // servers). `CREATE TABLE IF NOT EXISTS` keeps the step idempotent like the
+  // other table steps. `down` is lossy: the stored client registration +
+  // tokens are source-of-truth secrets that can't be rebuilt once dropped.
+  5: {
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS mcp_oauth (
+  url        TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT`);
+    },
+    down: (db) => db.exec("DROP TABLE IF EXISTS mcp_oauth"),
+    lossy: true,
+  },
 };
 
 /** Steps that deliberately ship without a `down`, each with the reason a

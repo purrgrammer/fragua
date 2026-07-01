@@ -5,8 +5,8 @@
 // There is NO projection in a bundle — `run_state` is re-derived on import by
 // replaying the event log. The tar is MANIFEST-FIRST (`manifest.json`, a pure
 // index a reader can pull without unpacking), then per-run logs, workflows, and
-// blobs. No `provider_credentials`/`provider_config` ever — secret-free by
-// construction.
+// blobs. No `provider_credentials`/`provider_config`/`mcp_oauth` ever —
+// secret-free by construction.
 //
 // Layout:
 //   manifest.json                     — index + version stamps only
