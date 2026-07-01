@@ -84,6 +84,31 @@ describe("mcp ls", () => {
     expect(await mcpLsCommand({ cwd })).toBe(1);
   });
 
+  test("stdio-only project lists without touching the store (works before any store exists)", async () => {
+    const cwd = project({
+      mcpServers: {
+        fs: { command: "true" },
+        gh: { type: "http", url: "https://x/mcp", headers: { Authorization: "Bearer ${T}" } },
+      },
+    });
+    // Bogus db path: an OAuth-column lookup would open it and fail — none needed here.
+    expect(await mcpLsCommand({ cwd, dbPath: "/nonexistent/never.db" })).toBe(0);
+    expect(out()).toContain("fs");
+    expect(out()).toContain("gh");
+  });
+
+  test("http server with a missing static-auth env var shows missing-env, not a false OAuth ready", async () => {
+    const cwd = project({
+      mcpServers: {
+        gh: { type: "http", url: "https://x/mcp", headers: { Authorization: "Bearer ${FRAGUA_TEST_ABSENT_VAR}" } },
+      },
+    });
+    expect(await mcpLsCommand({ cwd, dbPath: "/nonexistent/never.db" })).toBe(0);
+    expect(out()).toContain("missing env: FRAGUA_TEST_ABSENT_VAR");
+    // The OAuth column must NOT render a green "ready" for a row that didn't resolve.
+    expect(out()).not.toContain("ready  ready");
+  });
+
   test("http oauth state: ready / logged in / login required", async () => {
     const dbPath = tempStore();
     seedStore(dbPath, "https://loggedin.example.com/mcp", JSON.stringify({ tokens: { access_token: "x" } }));

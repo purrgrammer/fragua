@@ -26,6 +26,7 @@ import {
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import chalk from "chalk";
 import { makeMcpOAuthStore } from "../mcp-oauth-store.ts";
@@ -58,6 +59,14 @@ function staticAuthHeader(server: McpHttpServerConfig): string | undefined {
   return undefined;
 }
 
+/** An http server that could carry stored OAuth state — no static Authorization
+ * header, so the store must be consulted for its login status. Anything else
+ * (stdio, or http with a static header) needs no store, so `mcp ls` stays a
+ * pure inspection that works before the harness/store exists. */
+function needsOAuthState(server: McpServerConfig): boolean {
+  return server.transport === "http" && staticAuthHeader(server) === undefined;
+}
+
 export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
   const load = loadMcpConfig(cwd);
@@ -72,24 +81,21 @@ export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
     console.log(chalk.yellow("  no servers defined"));
     return Promise.resolve(0);
   }
-  const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
-  return withStoreClient(clientOpts, ({ store }) => {
+
+  const render = (loggedIn?: (url: string) => boolean): number => {
     for (const name of names) {
       const server = load.servers[name];
       if (!server) continue;
       const target = server.transport === "http" ? server.url : server.command;
       const resolved = resolveMcpServer(server, process.env);
       const status = resolved.ok ? chalk.green("ready") : chalk.yellow(`missing env: ${resolved.missing.join(", ")}`);
+      // OAuth column only when the row itself resolved — a missing-env row shows
+      // `missing env: …` and nothing more (never a false `ready`).
       let oauth = "";
-      if (server.transport === "http") {
-        if (staticAuthHeader(server) !== undefined) {
-          oauth = chalk.green("  ready");
-        } else if (resolved.ok && resolved.server.transport === "http") {
-          oauth =
-            store.getMcpOAuth(resolved.server.url) !== undefined
-              ? chalk.green("  logged in")
-              : chalk.yellow("  login required");
-        }
+      if (server.transport === "http" && resolved.ok && resolved.server.transport === "http") {
+        if (staticAuthHeader(server) !== undefined) oauth = chalk.green("  ready");
+        else if (loggedIn)
+          oauth = loggedIn(resolved.server.url) ? chalk.green("  logged in") : chalk.yellow("  login required");
       }
       console.log(`  ${chalk.cyan(name)}  ${chalk.dim(`${server.transport}:${target}`)}  ${status}${oauth}`);
     }
@@ -97,7 +103,20 @@ export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
       console.log(`  ${chalk.cyan(name)}  ${chalk.yellow(reason)}`);
     }
     return 0;
-  });
+  };
+
+  // Only open the store when an OAuth server needs its login status — otherwise
+  // `ls` works on a fresh checkout with no store yet.
+  if (
+    !names.some((n) => {
+      const s = load.servers[n];
+      return s !== undefined && needsOAuthState(s);
+    })
+  ) {
+    return Promise.resolve(render());
+  }
+  const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
+  return withStoreClient(clientOpts, ({ store }) => render((url) => store.getMcpOAuth(url) !== undefined));
 }
 
 export async function mcpCheckCommand(server: string | undefined, opts: McpOptions = {}): Promise<number> {
@@ -112,30 +131,58 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
     console.log(chalk.yellow("no servers defined"));
     return 0;
   }
-  let set: McpToolset | undefined;
-  try {
-    set = await createMcpConnector().materialize(targets, { cwd });
-    let failed = false;
-    for (const name of targets) {
-      const unavailable = set.errors.find((e) => e.server === name && e.kind === "unavailable");
-      if (unavailable) {
-        console.log(`${chalk.cyan(name)}  ${chalk.red(unavailable.message)}`);
-        failed = true;
-        continue;
+
+  const runCheck = async (oauthProviderFor?: (url: string) => StoredOAuthProvider): Promise<number> => {
+    let set: McpToolset | undefined;
+    try {
+      set = await createMcpConnector(oauthProviderFor ? { oauthProviderFor } : {}).materialize(targets, { cwd });
+      let failed = false;
+      for (const name of targets) {
+        const unavailable = set.errors.find((e) => e.server === name && e.kind === "unavailable");
+        if (unavailable) {
+          console.log(`${chalk.cyan(name)}  ${chalk.red(unavailable.message)}`);
+          failed = true;
+          continue;
+        }
+        const prefix = mcpToolPrefix(name);
+        const tools = set.tools.filter((t) => t.name.startsWith(prefix));
+        console.log(`${chalk.cyan(name)}  ${chalk.green(`${tools.length} tool(s)`)}`);
+        for (const t of tools) console.log(`  ${chalk.dim(t.name)}`);
+        // A collision is non-fatal — the server is live and its other tools listed.
+        for (const c of set.errors.filter((e) => e.server === name && e.kind === "collision")) {
+          console.log(`  ${chalk.yellow(c.message)}`);
+        }
       }
-      const prefix = mcpToolPrefix(name);
-      const tools = set.tools.filter((t) => t.name.startsWith(prefix));
-      console.log(`${chalk.cyan(name)}  ${chalk.green(`${tools.length} tool(s)`)}`);
-      for (const t of tools) console.log(`  ${chalk.dim(t.name)}`);
-      // A collision is non-fatal — the server is live and its other tools listed.
-      for (const c of set.errors.filter((e) => e.server === name && e.kind === "collision")) {
-        console.log(`  ${chalk.yellow(c.message)}`);
-      }
+      return failed ? 1 : 0;
+    } finally {
+      await set?.dispose();
     }
-    return failed ? 1 : 0;
-  } finally {
-    await set?.dispose();
+  };
+
+  // OAuth-only servers need the daemon-style provider (stored tokens, no browser)
+  // to connect; open the store only when a target actually needs it.
+  if (
+    !targets.some((n) => {
+      const s = load.servers[n];
+      return s !== undefined && needsOAuthState(s);
+    })
+  ) {
+    return runCheck();
   }
+  const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
+  return withStoreClient(clientOpts, ({ store }) =>
+    runCheck(
+      (url) =>
+        new StoredOAuthProvider({
+          url,
+          store: makeMcpOAuthStore(store),
+          redirectUrl: MCP_OAUTH_CALLBACK_URL,
+          onRedirect: () => {
+            throw new Error(`not logged in — run \`fragua mcp login\` for ${url}`);
+          },
+        }),
+    ),
+  );
 }
 
 /** Locate a server in mcp.json and validate it as an http OAuth target. `login`
@@ -146,7 +193,7 @@ function resolveOAuthTarget(
   server: string,
   cwd: string,
   requireOAuth: boolean,
-): { ok: true; url: string } | { ok: false; code: number } {
+): { ok: true; url: string; headers: Record<string, string> } | { ok: false; code: number } {
   const load = loadMcpConfig(cwd);
   if (!load.ok) {
     console.error(load.error ? chalk.red(load.error) : chalk.yellow(`no mcp.json at ${mcpConfigPath(cwd)}`));
@@ -171,7 +218,7 @@ function resolveOAuthTarget(
     console.error(chalk.red(`mcp: cannot resolve url for "${server}"${missing ? ` (missing env: ${missing})` : ""}`));
     return { ok: false, code: 1 };
   }
-  return { ok: true, url: resolved.server.url };
+  return { ok: true, url: resolved.server.url, headers: resolved.server.headers };
 }
 
 export function mcpLogoutCommand(server: string, opts: McpOptions = {}): Promise<number> {
@@ -197,15 +244,19 @@ export function mcpLoginCommand(
   const target = resolveOAuthTarget(server, cwd, true);
   if (!target.ok) return Promise.resolve(target.code);
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
-  return withStoreClient(clientOpts, (client) => runLoginFlow(server, target.url, creds, client));
+  return withStoreClient(clientOpts, (client) => runLoginFlow(server, target.url, target.headers, creds, client));
 }
 
 /** Best-effort platform browser opener — the auth URL is already printed, so a
- * failure to spawn is silently ignored (no new npm dependency). */
+ * failure to spawn is silently ignored (no new npm dependency). Never uses a
+ * shell: the URL comes from the auth-server's metadata, so `shell: true` would
+ * be a command-injection vector (`start & calc.exe`). On Windows we invoke
+ * `cmd /c start "" <url>` with argument passing, no shell interpolation. */
 function openInBrowser(url: string): void {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args: string[] = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   try {
-    const child = spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" });
+    const child = spawn(cmd, args, { stdio: "ignore", detached: true });
     child.on("error", () => {});
     child.unref();
   } catch {
@@ -233,6 +284,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
 async function runLoginFlow(
   server: string,
   url: string,
+  headers: Record<string, string>,
   creds: { clientId?: string; clientSecret?: string },
   client: StoreClient,
 ): Promise<number> {
@@ -254,6 +306,15 @@ async function runLoginFlow(
         : { clientId: creds.clientId };
   }
   const authProvider = new StoredOAuthProvider(providerOpts);
+  // Persist a preset confidential client so the DAEMON — which builds its own
+  // provider without these flags — can read client_id/secret to refresh tokens.
+  // (With a preset, `clientInformation()` returns it in-memory and the SDK never
+  // calls `saveClientInformation`, so it would otherwise never reach the store.)
+  if (creds.clientId !== undefined) {
+    const info: OAuthClientInformation = { client_id: creds.clientId };
+    if (creds.clientSecret !== undefined) info.client_secret = creds.clientSecret;
+    authProvider.saveClientInformation(info);
+  }
 
   let resolveCode!: (code: string) => void;
   let rejectCode!: (err: Error) => void;
@@ -261,6 +322,7 @@ async function runLoginFlow(
     resolveCode = res;
     rejectCode = rej;
   });
+  const htmlPage = (body: string): string => `<!doctype html><html><body><p>${body}</p></body></html>`;
   const httpServer = createServer((req, resp) => {
     const reqUrl = new URL(req.url ?? "/", `http://${callback.host}`);
     if (reqUrl.pathname !== callback.pathname) {
@@ -269,17 +331,22 @@ async function runLoginFlow(
     }
     const error = reqUrl.searchParams.get("error");
     const code = reqUrl.searchParams.get("code");
-    resp.writeHead(200, { "content-type": "text/html" });
-    resp.end(
-      "<!doctype html><html><body><p>Authorization complete — you can close this tab and return to your terminal.</p></body></html>",
-    );
-    if (error) rejectCode(new Error(`authorization failed: ${error}`));
-    else if (code) resolveCode(code);
-    else rejectCode(new Error("callback received without an authorization code"));
+    // Reflect the AS's outcome to the browser — success page ONLY on a code.
+    if (code) {
+      resp.writeHead(200, { "content-type": "text/html" });
+      resp.end(htmlPage("Authorization complete — you can close this tab and return to your terminal."));
+      resolveCode(code);
+    } else {
+      resp.writeHead(400, { "content-type": "text/html" });
+      resp.end(htmlPage("Authorization failed — return to your terminal for details."));
+      rejectCode(
+        new Error(error ? `authorization failed: ${error}` : "callback received without an authorization code"),
+      );
+    }
   });
 
   const mcpClient = new Client({ name: "fragua", version: "0.1.0" }, { capabilities: {} });
-  const transport = new StreamableHTTPClientTransport(new URL(url), { authProvider });
+  const transport = new StreamableHTTPClientTransport(new URL(url), { authProvider, requestInit: { headers } });
 
   try {
     await new Promise<void>((res, rej) => {
@@ -311,7 +378,7 @@ async function runLoginFlow(
     console.error(chalk.red(`mcp: login failed: ${(e as Error).message}`));
     return 1;
   } finally {
-    httpServer.close();
+    await new Promise<void>((res) => httpServer.close(() => res()));
     await transport.close().catch(() => {});
     await mcpClient.close().catch(() => {});
   }
