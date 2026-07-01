@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { LocalEnvironment } from "../../src/local-env.ts";
-import { createMcpConnector, labelMcpOutput, mcpToolName } from "../../src/mcp/connector.ts";
+import type { ResolvedMcpServer } from "../../src/mcp/config.ts";
+import { createMcpConnector, labelMcpOutput, mcpToolName, needsOAuthProvider } from "../../src/mcp/connector.ts";
+import { type McpOAuthStore, StoredOAuthProvider } from "../../src/mcp/oauth.ts";
 
 const ECHO_SERVER = join(import.meta.dir, "echo-server.ts");
 const BAD_LIST_SERVER = join(import.meta.dir, "bad-list-server.ts");
@@ -179,5 +182,76 @@ describe("createMcpConnector.materialize — live stdio server", () => {
     } finally {
       await set.dispose();
     }
+  }, 30_000);
+});
+
+const httpServer = (headers: Record<string, string>): ResolvedMcpServer => ({
+  transport: "http",
+  url: "https://mcp.example.com/mcp",
+  headers,
+});
+
+describe("needsOAuthProvider", () => {
+  const factory = () => undefined;
+
+  test("http server with no Authorization header → wants a provider", () => {
+    expect(needsOAuthProvider(httpServer({}), factory)).toBe(true);
+  });
+
+  test("Authorization header (any case) suppresses the provider — static auth wins", () => {
+    expect(needsOAuthProvider(httpServer({ Authorization: "Bearer x" }), factory)).toBe(false);
+    expect(needsOAuthProvider(httpServer({ authorization: "Bearer x" }), factory)).toBe(false);
+    expect(needsOAuthProvider(httpServer({ AUTHORIZATION: "Bearer x" }), factory)).toBe(false);
+  });
+
+  test("no factory or non-http transport → never wants a provider", () => {
+    expect(needsOAuthProvider(httpServer({}), undefined)).toBe(false);
+    expect(needsOAuthProvider({ transport: "stdio", command: "true", args: [], env: {} }, factory)).toBe(false);
+  });
+});
+
+describe("createMcpConnector.materialize — oauth provider selection", () => {
+  test("http server WITHOUT Authorization requests a provider for its url; a static-auth one does NOT", async () => {
+    const cwd = projectWith({
+      mcpServers: {
+        oauthed: { type: "http", url: "http://127.0.0.1:41999/mcp" },
+        static: { type: "http", url: "http://127.0.0.1:41998/mcp", headers: { Authorization: "Bearer tok" } },
+      },
+    });
+    const seen: string[] = [];
+    const oauthProviderFor = (url: string): OAuthClientProvider | undefined => {
+      seen.push(url);
+      return undefined;
+    };
+    const set = await createMcpConnector({ oauthProviderFor }).materialize(["oauthed", "static"], {
+      cwd,
+      connectTimeoutMs: 500,
+    });
+    // The un-authed server asked for a provider by its url; the static-auth one never did.
+    expect(seen).toEqual(["http://127.0.0.1:41999/mcp"]);
+    await set.dispose();
+  }, 30_000);
+
+  test("daemon-style throwing onRedirect → server reported in errors, materialize resolves", async () => {
+    const cwd = projectWith({ mcpServers: { oauthed: { type: "http", url: "http://127.0.0.1:41997/mcp" } } });
+    const port: McpOAuthStore = { load: () => undefined, save: () => {}, clear: () => {} };
+    const oauthProviderFor = (url: string): OAuthClientProvider =>
+      new StoredOAuthProvider({
+        url,
+        store: port,
+        redirectUrl: "http://127.0.0.1:41765/callback",
+        onRedirect: () => {
+          throw new Error(`MCP server ${url} requires OAuth`);
+        },
+      });
+    // No live server → connect fails and the server is reported, never thrown.
+    const set = await createMcpConnector({ oauthProviderFor }).materialize(["oauthed"], {
+      cwd,
+      connectTimeoutMs: 500,
+    });
+    expect(set.tools).toEqual([]);
+    expect(set.errors).toHaveLength(1);
+    expect(set.errors[0]?.server).toBe("oauthed");
+    await set.dispose();
   }, 30_000);
 });

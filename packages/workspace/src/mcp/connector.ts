@@ -13,6 +13,7 @@
 //
 // See docs/proposals/mcp-tools.md.
 
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -65,6 +66,31 @@ export interface McpToolset {
 
 export interface McpConnector {
   materialize(serverNames: readonly string[], opts: McpMaterializeOptions): Promise<McpToolset>;
+}
+
+/** Injected dependencies for the connector. Kept store-free — the connector
+ * sees only the SDK `OAuthClientProvider` type and this factory, never
+ * @fragua/store. */
+export interface McpConnectorDeps {
+  /** Given a remote server URL, return an OAuth provider to drive interactive
+   * auth + token persistence, or `undefined` to skip OAuth for it. Consulted
+   * only for http servers with no static `Authorization` header. */
+  oauthProviderFor?: (url: string) => OAuthClientProvider | undefined;
+}
+
+/** Decide whether a resolved server should authenticate through an injected
+ * OAuth provider: only http, only when a factory is present, and only when the
+ * server carries NO static `Authorization` header (case-insensitive). A static
+ * header always wins — the OAuth path stays off. Extracted so the decision is
+ * testable without a live server. */
+export function needsOAuthProvider(
+  server: ResolvedMcpServer,
+  oauthProviderFor?: (url: string) => OAuthClientProvider | undefined,
+): boolean {
+  if (server.transport !== "http") return false;
+  if (oauthProviderFor === undefined) return false;
+  const hasStaticAuth = Object.keys(server.headers).some((k) => k.toLowerCase() === "authorization");
+  return !hasStaticAuth;
 }
 
 /** Namespace every materialised MCP tool name carries. Callers that need to
@@ -192,6 +218,7 @@ async function connectServer(
   listTimeoutMs: number,
   defaultCwd: string,
   signal?: AbortSignal,
+  oauthProviderFor?: (url: string) => OAuthClientProvider | undefined,
 ): Promise<{ connection: OpenConnection; tools: McpToolDescriptor[] }> {
   const client = new Client({ name: `fragua-${name}`, version: "0.1.0" }, { capabilities: {} });
   // Only stdio carries a child + stderr; http has neither.
@@ -201,7 +228,13 @@ async function connectServer(
   try {
     let transport: Transport;
     if (server.transport === "http") {
+      // No static `Authorization` header + an injected factory → authenticate
+      // through the OAuth provider. A provider persists tokens across runs and
+      // (on the daemon) throws on redirect so an un-authed server is skipped
+      // via the connect-failure path rather than hanging.
+      const provider = needsOAuthProvider(server, oauthProviderFor) ? oauthProviderFor?.(server.url) : undefined;
       transport = new StreamableHTTPClientTransport(new URL(server.url), {
+        ...(provider ? { authProvider: provider } : {}),
         requestInit: { headers: server.headers },
       }) as Transport;
     } else {
@@ -251,7 +284,7 @@ async function closeWithDeadline(client: Client): Promise<void> {
   ]);
 }
 
-export function createMcpConnector(): McpConnector {
+export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
   return {
     async materialize(serverNames, opts): Promise<McpToolset> {
       const env = opts.env ?? process.env;
@@ -291,6 +324,7 @@ export function createMcpConnector(): McpConnector {
               DEFAULT_LIST_TIMEOUT_MS,
               opts.cwd,
               opts.signal,
+              deps?.oauthProviderFor,
             );
             return { name, connection, descriptors };
           } catch (err) {

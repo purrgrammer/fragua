@@ -25,8 +25,13 @@ guarantee.
   is skipped with a warning rather than hanging or failing the step.
   Connections are opened lazily per step and torn down when it finishes. New
   `fragua mcp ls` lists configured servers and their credential state;
-  `fragua mcp check [server]` connects and lists the tools each exposes. OAuth,
-  HTTP transport, and progressive disclosure are not yet supported.
+  `fragua mcp check [server]` connects and lists the tools each exposes. A
+  remote HTTP server with no static `Authorization` header now authenticates
+  through a stored OAuth token: the daemon attaches an OAuth provider that reads
+  the token persisted for that server URL. When no token is stored the server is
+  skipped with a message to authenticate it (the interactive `fragua mcp login`
+  command lands separately) rather than hanging startup. Progressive disclosure
+  is not yet supported.
 - Quarantined runs now get a first-class operator surface. In the web UI a
   banner on the run detail page explains the quarantine reason, lists the
   orphaned intent seqs, and offers the three resolutions (`treat as done`,

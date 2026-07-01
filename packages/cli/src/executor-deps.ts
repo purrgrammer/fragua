@@ -35,9 +35,17 @@ import {
 import * as handler from "@fragua/core/handler";
 import { autoDispatcherResolver, Dispatcher, type GraphLoader, makeGraphLoader } from "@fragua/daemon";
 import type { SqliteStore } from "@fragua/store";
-import { CORE_TOOLS, createMcpConnector, discoverSkills, ToolRegistry } from "@fragua/workspace";
+import {
+  CORE_TOOLS,
+  createMcpConnector,
+  discoverSkills,
+  MCP_OAUTH_CALLBACK_URL,
+  StoredOAuthProvider,
+  ToolRegistry,
+} from "@fragua/workspace";
 import chalk from "chalk";
 import type { FraguaConfig, ResolvedTimeouts } from "./config.ts";
+import { makeMcpOAuthStore } from "./mcp-oauth-store.ts";
 
 /** Where the resolved provider/model came from — drives the operator-facing
  * label so it's clear whether the daemon picked up flags, config, or env. */
@@ -243,8 +251,22 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
       // call, filtered per-node by `attrs.skills` / `skills_disabled`.
       skills: discoveredSkills,
       // Materialises MCP-server tools for nodes that declare `mcp-servers:`.
-      // Reads `<run cwd>/.fragua/mcp.json` lazily per node; env-var creds only.
-      mcpConnector: createMcpConnector(),
+      // Reads `<run cwd>/.fragua/mcp.json` lazily per node. Remote http servers
+      // with no static `Authorization` header authenticate through a stored
+      // OAuth token; the daemon's `onRedirect` throws (never opens a browser)
+      // so an un-authed server is skipped via the connect-failure path with a
+      // clear "run `fragua mcp login`" message rather than hanging startup.
+      mcpConnector: createMcpConnector({
+        oauthProviderFor: (url) =>
+          new StoredOAuthProvider({
+            url,
+            store: makeMcpOAuthStore(store),
+            redirectUrl: MCP_OAUTH_CALLBACK_URL,
+            onRedirect: () => {
+              throw new Error(`MCP server ${url} requires OAuth — run \`fragua mcp login\` for it`);
+            },
+          }),
+      }),
       ...(summariser.backend ? { summariser: summariser.backend } : {}),
     };
     // `nextNode` is intentionally NOT forwarded to makeLlmHandler — for llm

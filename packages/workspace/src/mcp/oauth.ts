@@ -31,6 +31,12 @@ export interface McpOAuthStore {
   clear(url: string): void;
 }
 
+/** The fixed OAuth redirect URI fragua registers with confidential clients. A
+ * confidential app pre-registers its redirect URI, so both the daemon provider
+ * and the (later) `fragua mcp login` command MUST present the same fixed value
+ * — hence a shared constant, not a per-run ephemeral port. */
+export const MCP_OAUTH_CALLBACK_URL = "http://127.0.0.1:41765/callback";
+
 /** A preset confidential client (client_id + optional secret), skipping DCR. */
 export interface McpOAuthClient {
   clientId: string;
