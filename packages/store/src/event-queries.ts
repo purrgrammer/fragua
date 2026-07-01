@@ -2,7 +2,8 @@
 //
 // Every statement against `events` lives here as a named constant with a
 // thin function that takes a Database handle and returns shaped rows.
-// Inlined SQL elsewhere is a smell — `.agents/skills/backend`. The
+// Inlined SQL elsewhere is a smell: keeping every statement in one file
+// makes the query surface auditable in a single place. The
 // `events` table is the central event log: facts (writer='daemon'),
 // intents (writer='client'), and observability (writer='daemon', no OCC)
 // all share the same physical table.
