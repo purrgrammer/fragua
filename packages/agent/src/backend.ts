@@ -491,6 +491,16 @@ export class PiLlmBackend implements LlmBackend {
     // pi-agent-core's `AgentState.thinkingLevel`.
     const thinkingLevel = resolveThinkingLevel(model, input.node.attrs as Record<string, unknown>);
 
+    // Boundary between the rehydrated shared-thread history and this turn's
+    // fresh messages. Every self-abort / route / emit scan below is scoped to
+    // the slice AFTER this index: on a shared `thread_id`, the hydrated prefix
+    // can carry an UPSTREAM node's `abort` toolCall (e.g. a goal gate that
+    // REJECTed to drive its §3.4 retarget). A whole-transcript, first-wins
+    // abort scan would re-detect that stale abort and stamp the retargeted
+    // node `fail`, terminating the run with a spurious `aborted_exit` instead
+    // of letting the loop iterate.
+    const hydratedCount = hydrateMessages.length;
+
     const agent = new Agent({
       initialState: {
         systemPrompt,
@@ -649,7 +659,7 @@ export class PiLlmBackend implements LlmBackend {
         !input.signal?.aborted &&
         lastAssistantMessage(agent.state.messages) !== undefined &&
         findEmitOutputCall(agent.state.messages) == null &&
-        findAbortToolCall(agent.state.messages) == null
+        findAbortToolCall(agent.state.messages.slice(hydratedCount)) == null
       ) {
         await agent.prompt(EMIT_OUTPUT_REMINDER);
         await agent.waitForIdle();
@@ -774,7 +784,7 @@ export class PiLlmBackend implements LlmBackend {
       // abort still wins — `aborted_exit` is reserved for exactly this
       // transcript evidence, and routing it as a provider pause would
       // resurrect a run the agent declared unworkable.
-      const abortedEarlier = findAbortToolCall(agent.state.messages);
+      const abortedEarlier = findAbortToolCall(agent.state.messages.slice(hydratedCount));
       if (abortedEarlier) {
         return fail(abortedEarlier.reason, { notes: summarizeMessage(last), non_retryable: true });
       }
@@ -827,7 +837,7 @@ export class PiLlmBackend implements LlmBackend {
     // batch alongside other tool calls.
     const lastAssistant = lastAssistantMessage(agent.state.messages);
     const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
-    const aborted = findAbortToolCall(agent.state.messages);
+    const aborted = findAbortToolCall(agent.state.messages.slice(hydratedCount));
     if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
     // Route-tool resolution. Only considered when the node opted into

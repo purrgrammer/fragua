@@ -28,6 +28,14 @@ guarantee.
 
 ### Fixed
 
+- An evaluator–optimizer goal gate that REJECTs by calling `abort` on a shared
+  thread no longer kills the run after its first retarget. The retargeted
+  generator's clean re-run was mis-read as an abort — the failing gate's `abort`
+  toolCall, carried in the shared-thread history, was re-detected by the whole-
+  transcript scan and stamped the generator `fail`, terminating the run with a
+  stale `aborted_exit`. The self-abort scan is now scoped to the current turn,
+  so the loop iterates up to `max-retries` and only then halts
+  `goal_gate_unsatisfied` (operator-resumable).
 - An operator pause that lands in the same turn as a handler-retry backoff now
   keeps the run paused for the operator instead of being silently auto-resumed
   by the retry-pause's wake timer.
