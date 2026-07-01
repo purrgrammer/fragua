@@ -138,6 +138,7 @@ const STEP_KEY_TO_IR: Readonly<Record<string, string>> = {
   effort: "reasoning_effort",
   "allowed-tools": "allowed_tools",
   "denied-tools": "denied_tools",
+  "mcp-servers": "mcp_servers",
   "max-cost": "max_cost_usd",
   "max-tokens": "max_tokens",
   "max-retries": "max_retries",
@@ -188,6 +189,7 @@ const NUMBER_KEYS: ReadonlySet<string> = new Set(["max_cost_usd", "budget_usd", 
 const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set([
   "allowed_tools",
   "denied_tools",
+  "mcp_servers",
   "skills",
   "routes",
   "branches",
@@ -671,6 +673,15 @@ export function parseWorkflow(source: string): Graph {
           ...locArr(locOf(outputsNode, lineCounter)),
         );
       }
+    }
+
+    // ---- mcp-servers (llm steps only) ----
+    if (attrs["mcp_servers"] !== undefined && nodeType !== "llm") {
+      const mcpNode = body.get("mcp-servers", true);
+      throw new ParseError(
+        `step "${stepId}" declares \`mcp-servers:\` but has type "${nodeType}" — MCP servers are only supported on \`llm\` steps`,
+        ...locArr(locOf(mcpNode, lineCounter)),
+      );
     }
 
     // ---- materialise the node ----

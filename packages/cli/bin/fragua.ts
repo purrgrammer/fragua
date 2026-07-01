@@ -18,6 +18,7 @@ import { doctorCommand } from "../src/commands/doctor.ts";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
+import { mcpCheckCommand, mcpHelp, mcpLsCommand } from "../src/commands/mcp.ts";
 import {
   acceptCommand,
   artifactCommand,
@@ -133,6 +134,28 @@ cli
     const cwd = typeof options["cwd"] === "string" ? (options["cwd"] as string) : undefined;
     const code = await initCommand(cwd !== undefined ? { cwd } : {});
     process.exit(code);
+  });
+
+// `fragua mcp [action] [target]` — inspect the project's MCP servers. Bare
+// form prints help (see the providers convention below). Positional dispatch
+// for the same cac multi-word-matching reason.
+cli
+  .command("mcp [action] [target]", "Inspect this project's MCP servers (run without args for help)")
+  .action(async (action: string | undefined, target: string | undefined) => {
+    switch (action) {
+      case undefined:
+        process.exit(mcpHelp());
+        break;
+      case "ls":
+        process.exit(mcpLsCommand());
+        break;
+      case "check":
+        process.exit(await mcpCheckCommand(target));
+        break;
+      default:
+        console.error(chalk.red(`mcp: unknown action "${action}" (expected ls / check)`));
+        process.exit(1);
+    }
   });
 
 // `fragua providers [action]` — bare form prints subcommand help, per

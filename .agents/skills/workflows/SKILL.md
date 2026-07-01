@@ -292,6 +292,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 | `outputs` | map | Typed step outputs (`llm` only; mutually exclusive with `routes:`). Read downstream as `${{ outputs.X.f }}` (§6). |
 | `allowed-tools` | string[] | Tool whitelist. Name them — unconstrained is usually wrong. |
 | `denied-tools` | string[] | Subtractive filter. |
+| `mcp-servers` | string[] | MCP servers (from `.fragua/mcp.json`) to connect for this `llm` step; their tools materialise as `mcp__<server>__<tool>` (§7 · The toolset). |
 | `effort` | `low\|medium\|high` | Reasoning effort for extended-thinking providers. |
 | `max-cost` | number | Per-step USD ceiling. |
 | `max-tokens` | int | Per-step token ceiling. |
@@ -319,6 +320,33 @@ Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-p
 | `web_fetch` | fetch a URL | opt-in |
 
 Three tools are **force-included** and need not be listed — they're available even if `allowed-tools` omits them (and survive `denied-tools`): `skill` (load a skill), `abort` (fail the step with a reason, §4), and `route` (synthesised per-call on a node that declares `routes:`).
+
+### MCP tools (experimental)
+
+An `llm` step can pull in [Model Context Protocol](https://modelcontextprotocol.io) servers with `mcp-servers:`. Every tool a listed server exposes is materialised as an ordinary tool named `mcp__<server>__<tool>` — the model calls it exactly like `read` or `bash`.
+
+```yaml
+steps:
+  triage:
+    type: llm
+    mcp-servers: [github]          # connect this server for this step
+    prompt: Summarise the open issues and file a report.
+```
+
+- **Additive, not a whitelist.** Declaring a server exposes *all* of its tools *on top of* `allowed-tools` — you opt into a server, not into each tool (MCP tool names are only known at connect time). `denied-tools` can still drop an individual materialised tool by its full name (`mcp__github__delete_repo`).
+- **Servers are declared per project** in `<project>/.fragua/mcp.json` — the standard MCP client shape, stdio transport:
+
+  ```json
+  { "mcpServers": { "github": {
+      "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } } } }
+  ```
+
+  `${VAR}` is resolved from the daemon's environment. A server whose credential is unset — or that fails to connect — is **skipped with a warning**, and the step runs with whatever tools did materialise; it never hangs or fails the step for a missing server.
+- **`llm` only.** `mcp-servers` on a `tool`/`human` step is a parse error. Connections open lazily when the step runs and close when it finishes.
+- **Inspect before you author:** `fragua mcp ls` lists the project's servers and their credential state; `fragua mcp check [server]` connects and prints the exact tool names to reference in `denied-tools`.
+
+Not yet supported: OAuth servers (skipped like any missing-credential server for now), HTTP transport, and progressive disclosure — see `docs/proposals/mcp-tools.md`.
 
 ### Tool steps
 

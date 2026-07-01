@@ -35,7 +35,7 @@ import {
 import * as handler from "@fragua/core/handler";
 import { autoDispatcherResolver, Dispatcher, type GraphLoader, makeGraphLoader } from "@fragua/daemon";
 import type { SqliteStore } from "@fragua/store";
-import { CORE_TOOLS, discoverSkills, ToolRegistry } from "@fragua/workspace";
+import { CORE_TOOLS, createMcpConnector, discoverSkills, ToolRegistry } from "@fragua/workspace";
 import chalk from "chalk";
 import type { FraguaConfig, ResolvedTimeouts } from "./config.ts";
 
@@ -242,6 +242,9 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
       // Tier-1 skills catalog — rendered into the system prompt of every llm
       // call, filtered per-node by `attrs.skills` / `skills_disabled`.
       skills: discoveredSkills,
+      // Materialises MCP-server tools for nodes that declare `mcp-servers:`.
+      // Reads `<run cwd>/.fragua/mcp.json` lazily per node; env-var creds only.
+      mcpConnector: createMcpConnector(),
       ...(summariser.backend ? { summariser: summariser.backend } : {}),
     };
     // `nextNode` is intentionally NOT forwarded to makeLlmHandler — for llm

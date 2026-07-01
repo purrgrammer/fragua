@@ -139,6 +139,40 @@ steps:
   });
 });
 
+describe("parseWorkflow — mcp-servers", () => {
+  test("lowers to mcp_servers string[] on an llm step", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  work:
+    type: llm
+    mcp-servers: [github, linear]
+    prompt: hi
+`);
+    expect(g.nodes["work"]?.attrs.mcp_servers).toEqual(["github", "linear"]);
+  });
+
+  test("passes validation (mcp_servers is a known node attr)", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  work: {type: llm, prompt: hi, mcp-servers: [github]}
+`);
+    const w013 = validate(g).filter((d) => d.code === "W013");
+    expect(w013).toEqual([]);
+  });
+
+  test("rejects mcp-servers on a non-llm step at parse time", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+steps:
+  build: {type: tool, run: "make", mcp-servers: [github]}
+`),
+    ).toThrow(ParseError);
+  });
+});
+
 describe("parseWorkflow — graph attrs", () => {
   test("`max-goal-gate-retries` is no longer a known graph attr — becomes W013 unknown-attr warning", () => {
     // After the removal from GRAPH_KEY_TO_IR it passes through as an

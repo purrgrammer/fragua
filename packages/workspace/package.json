@@ -18,6 +18,7 @@
     "@sinclair/typebox": "0.34.49",
     "@fragua/core": "workspace:*",
     "@fragua/types": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "diff": "8.0.4",
     "turndown": "7.2.4",
     "yaml": "2.7.0"

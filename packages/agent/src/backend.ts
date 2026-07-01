@@ -29,7 +29,7 @@ import {
   validateOutputsValue,
 } from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
-import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
+import type { ExecutionEnvironment, FraguaToolContext, McpConnector, Skill, ToolRegistry } from "@fragua/workspace";
 import {
   filterCatalogueForRun,
   filterSkillsForNode,
@@ -75,6 +75,11 @@ export interface PiLlmBackendOptions {
    * the backend renders a tier-1 catalog into the system prompt and
    * adds a scoped `local:load_skill` tool to the run. */
   skills?: Skill[];
+  /** Materialises MCP-server tools for a node's `mcp_servers`. When wired,
+   * an llm node that lists servers gets each server's tools appended as
+   * `mcp__<server>__<tool>`, connected lazily for the node and torn down when
+   * it finishes. Omit to disable MCP entirely (tests / bare daemons). */
+  mcpConnector?: McpConnector;
   /** Per-run isolation facts — worktree path, run id, bootstrap command.
    * When provided, the backend prepends an `<environment>` block to
    * every node's system prompt so agents know where they are and which
@@ -136,6 +141,7 @@ export class PiLlmBackend implements LlmBackend {
    * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
+  private readonly mcpConnector: McpConnector | undefined;
 
   constructor(opts: PiLlmBackendOptions) {
     this.registry = opts.registry;
@@ -151,6 +157,7 @@ export class PiLlmBackend implements LlmBackend {
     this.runEnv = opts.runEnv;
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
+    this.mcpConnector = opts.mcpConnector;
   }
 
   /** True when we've already persisted `threadId` for `runId` during
@@ -180,6 +187,24 @@ export class PiLlmBackend implements LlmBackend {
   }
 
   async run(input: LlmInput): Promise<Outcome> {
+    // Cleanup callbacks registered during the run (currently MCP connection
+    // teardown). Runs on every exit path so a lazily-connected server is never
+    // left dangling, no matter which of runInner's many returns fires.
+    const disposers: Array<() => Promise<void>> = [];
+    try {
+      return await this.runInner(input, disposers);
+    } finally {
+      for (const dispose of disposers) {
+        try {
+          await dispose();
+        } catch {
+          // best-effort teardown — a failed close must not mask the run outcome.
+        }
+      }
+    }
+  }
+
+  private async runInner(input: LlmInput, disposers: Array<() => Promise<void>>): Promise<Outcome> {
     const provider = input.node.attrs.provider ?? this.defaultModel.provider;
     const modelId = input.node.attrs.model ?? this.defaultModel.model;
     let model: Model<string> | undefined;
@@ -285,6 +310,33 @@ export class PiLlmBackend implements LlmBackend {
       if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
     } else {
       finalTools = finalTools.filter((t) => t.name !== "skill");
+    }
+
+    // Materialise MCP-server tools for this node. Lazy + additive: declaring a
+    // server exposes all of its tools on top of `allowed_tools`; `denied_tools`
+    // can still remove individual ones by name. A server that can't connect
+    // (missing credential, spawn failure, bad mcp.json) is skipped with an
+    // `agent.warning` — never fatal to the node. Teardown is registered on
+    // `disposers` so the connection is released on every exit path.
+    const mcpServers = input.node.attrs.mcp_servers as string[] | undefined;
+    if (this.mcpConnector && mcpServers && mcpServers.length > 0) {
+      const materializeOpts: Parameters<McpConnector["materialize"]>[1] = { cwd: runProjectCwd };
+      if (input.signal) materializeOpts.signal = input.signal;
+      const toolset = await this.mcpConnector.materialize(mcpServers, materializeOpts);
+      disposers.push(() => toolset.dispose());
+      const denied = new Set((input.node.attrs.denied_tools as string[] | undefined) ?? []);
+      const mcpTools = toolset.tools.filter((t) => !denied.has(t.name));
+      finalTools = [...finalTools, ...mcpTools];
+      if (input.emit) {
+        for (const e of toolset.errors) {
+          await input.emit("agent.warning", { message: `mcp server "${e.server}" skipped: ${e.message}` });
+        }
+        if (mcpTools.length > 0) {
+          await input.emit("agent.info", {
+            message: `mcp: ${mcpTools.length} tool(s) from [${mcpServers.join(", ")}]`,
+          });
+        }
+      }
     }
     // Per-run fragua context. Built-in I/O tools ignore this field; the
     // `skill` tool reads `skillCatalog` for its name lookup. Captured by
