@@ -132,15 +132,67 @@ through unchanged: pi-ai's tool-argument validator has a plain-JSON-Schema
 fallback (it only reaches for TypeBox compilation when the schema carries the
 TypeBox `Kind` symbol), so no schema translation is needed.
 
+## OAuth
+
+> Status: design. Static-header auth (above) covers token servers like GitHub;
+> ClickUp and Slack are OAuth-only, so native OAuth is required for the seed use
+> case.
+
+The MCP SDK drives the OAuth 2.1 flow itself — `StreamableHTTPClientTransport`
+takes an `authProvider: OAuthClientProvider`. On connect it uses the stored
+access token, silently refreshes an expired one via the refresh token, and only
+falls back to an interactive authorization when there's no usable token. We
+supply the provider (storage + the interactive callback) and split it across two
+contexts so **the daemon never blocks on a browser** (the invariant set at the
+start):
+
+- **`fragua mcp login <server>`** (operator machine, interactive): resolves the
+  http server from `.mcp.json`, spins a localhost redirect listener on a fixed
+  port, opens the browser to the authorization URL, catches the `code`, calls
+  `transport.finishAuth(code)`, and persists client registration + tokens.
+- **Daemon run** (headless): the provider reads tokens from the store and the SDK
+  refreshes silently; `redirectToAuthorization` is a no-op that throws, so a
+  server with no valid token is **skipped** with "not logged in — run
+  `fragua mcp login <server>`", never a hung startup.
+
+**Token storage** mirrors `provider_credentials`: a new `mcp_oauth` store table
+(plain, secret-bearing, excluded from run bundles) with its own
+`mcp-oauth-queries.ts`, **keyed by server URL** (the service identity — one login
+serves every project that references the same URL) holding the client
+registration (`client_id`, optional `client_secret`) and the token set
+(`access`, `refresh`, `expires_at`).
+
+`.mcp.json` stays purely server *definitions* (transport / url / headers) —
+**no OAuth client config lives in it**. Everything secret (client registration
++ tokens) lives in the store and is managed through `fragua mcp login`.
+
+**Client registration — two paths, because the servers differ:**
+
+- **Dynamic Client Registration (DCR)** — GitHub / ClickUp: `fragua mcp login
+  <server>` with no client flags; the SDK auto-registers a public client (PKCE)
+  and we persist the returned `client_id`.
+- **Confidential client** — Slack requires a pre-registered app with
+  `client_id` + `client_secret` and **forbids DCR**. The operator passes them to
+  the login command: `fragua mcp login slack --client-id … --client-secret …`
+  (or an interactive prompt), and they're stored in `mcp_oauth` alongside the
+  tokens — never in `.mcp.json`. Confidential clients also need their **redirect
+  URI pre-registered** in the provider's app config, so `fragua mcp login` uses a
+  **fixed** callback URL (documented) rather than an ephemeral port.
+
+**Selecting the auth mode:** an `http` server with a static `Authorization`
+header uses the header (no OAuth); otherwise the connector attaches the
+authProvider and the SDK negotiates auth (token → refresh → skip-if-absent).
+
+**`fragua mcp` surface:** `login <server> [--client-id … --client-secret …]`
+(interactive browser flow), `logout <server>` (drop stored client + tokens), and
+`ls` shows a per-server auth state (`ready` / `login required` / `missing env`).
+
 ## Deferred (§7)
 
-- **OAuth** — servers needing a browser login are authorised ahead of time; the
-  daemon reads stored tokens and never blocks startup on a login flow. Token
-  storage parallels provider credentials. Until then, OAuth servers are simply
-  skipped like any missing-credential server.
-- **Server-state UI + `fragua mcp login`** — see live server status and log in.
-- **HTTP/SSE transport.**
+- **Server-state UI** — the web dashboard equivalent of `fragua mcp ls` + a
+  login affordance.
 - **Progressive disclosure** — a tool-index + on-demand fetch when a server
   exposes many tools, instead of materialising all of them.
 - **Per-run connection pooling** — reuse one connection across a run's steps.
 - **User-level `~/.mcp.json`** cascade.
+- **SSE transport** — deprecated upstream; skipped, not planned.
