@@ -131,6 +131,42 @@ describe("event-contract version discipline", () => {
     ).toEqual([]);
   });
 
+  // The no-bump gate (scripts/check-contract-bump.sh) lets a diff skip the
+  // EVENT_CONTRACT_VERSION bump when it adds a `contract: no-bump` marker —
+  // self-service by design (single maintainer). This backstop denies a BARE
+  // marker: every one must state WHY the fold contract is unchanged, so the
+  // skip is reviewable instead of merely asserted.
+  test("every 'contract: no-bump' marker carries a justification (§3.4)", () => {
+    const sources: Record<string, string> = {
+      "packages/store/src/reducers.ts": readFileSync(join(__dirname, "..", "src", "reducers.ts"), "utf8"),
+      "packages/types/src/events.ts": readFileSync(join(__dirname, "..", "..", "types", "src", "events.ts"), "utf8"),
+    };
+    const bare: string[] = [];
+    let total = 0;
+    for (const [name, src] of Object.entries(sources)) {
+      src.split("\n").forEach((line, i) => {
+        if (!/contract:\s*no-bump/.test(line)) return;
+        total++;
+        // Justified iff a dash (— or -) and a non-empty reason follow the marker
+        // on the same line.
+        if (!/contract:\s*no-bump\s*[—-]\s*\S/.test(line)) bare.push(`${name}:${i + 1}  ${line.trim()}`);
+      });
+    }
+    // Sanity: the scan must find the known markers, else a regex/path regression
+    // makes this gate vacuously green.
+    expect(total).toBeGreaterThan(0);
+    expect(
+      bare,
+      [
+        "bare 'contract: no-bump' marker(s) with no justification:",
+        ...bare,
+        "",
+        "Every no-bump marker must read `contract: no-bump — <why the fold is unchanged>`",
+        "so the skip is reviewable, not just asserted.",
+      ].join("\n"),
+    ).toEqual([]);
+  });
+
   test("MIN_COMPATIBLE_CONTRACT_VERSION is pinned — a ratchet strands runs (§3.4)", () => {
     // Advancing the floor permanently strands every run pinned below it, so it
     // must be a conscious, reviewed diff — never a refactor side effect. Moving
