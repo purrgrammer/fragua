@@ -8,6 +8,7 @@ import {
   HALT_REASONS,
   isSettled,
   isTerminal,
+  mapStatus,
   RUN_STATUSES,
   type RunStatus,
   SETTLED_STATUS_TERMINAL_FACT,
@@ -50,5 +51,14 @@ describe("enum literal tuples", () => {
     for (const s of RUN_STATUSES as readonly RunStatus[]) {
       expect(isSettled(s)).toBe(isTerminal(s) || s === "quarantined");
     }
+  });
+
+  test("mapStatus is total over RUN_STATUSES and maps cancelled→canceled", () => {
+    for (const s of RUN_STATUSES) {
+      expect(mapStatus(s)).toBeDefined();
+    }
+    // Intentional spelling split: raw double-l cancelled → UI single-l canceled.
+    expect(mapStatus("cancelled")).toBe("canceled");
+    expect(new Set(SETTLED_STATUSES.map(mapStatus))).toEqual(new Set(["success", "fail", "canceled"]));
   });
 });

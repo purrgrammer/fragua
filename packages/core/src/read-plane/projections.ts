@@ -7,41 +7,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
-import { HALT_REASONS, type HaltReason } from "@fragua/types";
+import { HALT_REASONS, type HaltReason, mapStatus } from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
 import { projectRunOutput } from "../engine/outputs-substitution.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
 import type { Graph, RunOutputDecl } from "../types/graph.ts";
 import type { OutputStructValue } from "../types/outputs.ts";
 import type { NodeState, RunDetail, RunFanoutTopology, RunSummary, SelectedEdge } from "./schemas.ts";
-
-export type UiStatus = RunSummary["status"];
-
-export function mapStatus(status: RunStatus): UiStatus {
-  switch (status) {
-    case "completed":
-      return "success";
-    // Intentional spelling split: the raw RunStatus literal is the
-    // double-l `cancelled` (British; the persisted/schema value, never
-    // rename it), while the UI-facing UiStatus is the single-l `canceled`
-    // (American; what the web renders). The two layers spell it differently
-    // on purpose — this arm is the seam between them.
-    case "cancelled":
-      return "canceled";
-    case "halted":
-      return "fail";
-    case "running":
-      return "running";
-    case "queued":
-      return "queued";
-    case "paused":
-    case "paused_human":
-    case "paused_auto":
-      return "paused";
-    case "quarantined":
-      return "fail";
-  }
-}
 
 /** Build a RunSummary from a run's projection + its event tail. */
 export function runStateToSummary(

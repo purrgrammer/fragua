@@ -1,3 +1,4 @@
+export { mapStatus, type UiStatus } from "@fragua/types";
 export {
   type BudgetWarnEntry,
   buildExplanation,
@@ -23,11 +24,9 @@ export {
   deriveSelectedEdges,
   type ListRunsOpts,
   listRuns,
-  mapStatus,
   runStateToDetail,
   runStateToSummary,
   runSummaryRowToSummary,
-  type UiStatus,
 } from "./projections.ts";
 export { HaltContext, NodeState, RunDetail, RunSummary, SelectedEdge } from "./schemas.ts";
 export {

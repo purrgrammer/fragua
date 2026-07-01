@@ -47,6 +47,7 @@ export {
   isSettled,
   isTerminal,
   type MessageRole,
+  mapStatus,
   NODE_LIFECYCLE_FACT_TYPES,
   PAUSE_REASONS,
   type PauseReason,
@@ -60,7 +61,9 @@ export {
   type SettledStatus,
   type SnapshotCapturedData,
   type SnapshotStat,
+  STATUS_TO_UI,
   TERMINAL_FACT_TYPES,
+  type UiStatus,
   VALID_WRITERS,
 } from "./events.ts";
 export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "./skills.ts";

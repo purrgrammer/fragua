@@ -166,6 +166,34 @@ export const RUN_STATUSES = [
 
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
+/** Coarse UI status the run badge renders — the vocabulary raw `RunStatus`
+ * projects into. Narrower than the read-plane's soft-validate `status` field,
+ * which adds an `"unknown"` fallback for unrecognised wire values.
+ *
+ * Spelling split is intentional: raw `cancelled` (double-l, the persisted
+ * store value) → UI `canceled` (single-l, what the web renders). */
+export type UiStatus = "queued" | "running" | "paused" | "success" | "fail" | "canceled";
+
+/** The single `RunStatus` → `UiStatus` table. `satisfies` keeps it total over
+ * `RunStatus`, so a new lifecycle literal forces a mapping entry here. */
+export const STATUS_TO_UI = {
+  completed: "success",
+  cancelled: "canceled",
+  halted: "fail",
+  quarantined: "fail",
+  running: "running",
+  queued: "queued",
+  paused: "paused",
+  paused_human: "paused",
+  paused_auto: "paused",
+} satisfies Record<RunStatus, UiStatus>;
+
+/** Pure, browser-safe raw `RunStatus` → `UiStatus` mapper. The one source of
+ * truth — the server read-plane and the web both import this. */
+export function mapStatus(status: RunStatus): UiStatus {
+  return STATUS_TO_UI[status];
+}
+
 const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "cancelled", "halted"]);
 
 /** True for the three terminal lifecycle states. Pure predicate over the
