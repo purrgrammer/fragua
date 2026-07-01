@@ -48,6 +48,7 @@ export {
   isTerminal,
   type MessageRole,
   NODE_LIFECYCLE_FACT_TYPES,
+  PAUSE_REASONS,
   type PauseReason,
   type QuarantineReason,
   type RawEvent,

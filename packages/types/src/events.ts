@@ -235,21 +235,30 @@ export function isSettled(status: RunStatus): boolean {
  * fires until the branch lands). No new status, no schema migration.
  * Stage 3 of the proposal will add `max_retries`, `goal_gate`,
  * `max_loops`, `abort_loop`, `provider_exhausted`. PR 4 will add
- * `timeout_retry`. */
-export type PauseReason =
-  | "operator"
-  | "provider_error"
-  | "payment_required"
-  | "budget"
-  | "max_retries"
-  | "goal_gate"
-  | "max_loops"
-  | "abort_loop"
-  | "provider_exhausted"
-  | "engine_incompatible"
-  | "provider_retry"
-  | "handler_retry"
-  | "timeout_retry";
+ * `timeout_retry`.
+ *
+ * Like {@link RUN_STATUSES} / {@link HALT_REASONS}, the runtime tuple is
+ * the single source of truth; the `PauseReason` union derives from it, so
+ * the values and the type cannot drift. The pause-mapping test asserts
+ * the reducer's classified key set equals this tuple exactly — adding a
+ * literal without classifying it fails that gate. */
+export const PAUSE_REASONS = [
+  "operator",
+  "provider_error",
+  "payment_required",
+  "budget",
+  "max_retries",
+  "goal_gate",
+  "max_loops",
+  "abort_loop",
+  "provider_exhausted",
+  "engine_incompatible",
+  "provider_retry",
+  "handler_retry",
+  "timeout_retry",
+] as const;
+
+export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 /** Reasons that project to `paused_auto` (daemon timer). Everything
  * else in {@link PauseReason} projects to `paused` (operator must

@@ -27,12 +27,14 @@ import { EVENT_CONTRACT_VERSION, MIN_COMPATIBLE_CONTRACT_VERSION } from "../src/
  * shapes. `TERMINAL_STATUSES` + `AUTO_WAKE_PAUSE_REASONS` are in because the
  * reducer projects status through them. */
 const SURFACE_DECLS = [
-  // contract: no-bump — RunStatus/HaltReason reshaped into derived types over
-  // the RUN_STATUSES/HALT_REASONS tuples (enum-consumer mechanization); the
-  // literal sets are unchanged and now hashed via the tuple declarations.
+  // contract: no-bump — RunStatus/HaltReason/PauseReason reshaped into derived
+  // types over the RUN_STATUSES/HALT_REASONS/PAUSE_REASONS tuples (enum-consumer
+  // mechanization); the literal sets are unchanged and now hashed via the tuple
+  // declarations.
   "RUN_STATUSES",
   "RunStatus",
   "TERMINAL_STATUSES",
+  "PAUSE_REASONS",
   "PauseReason",
   "AUTO_WAKE_PAUSE_REASONS",
   "HALT_REASONS",
