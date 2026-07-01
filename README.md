@@ -13,7 +13,7 @@
 [![Release](https://img.shields.io/badge/release-v0.7.0-blue)](https://github.com/purrgrammer/fragua/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**Durable AI workflows for engineering.** Wire LLM agents into a YAML state machine; fragua runs it deterministically — survives crashes and provider outages, lets you steer a live run mid-flight, and records every run as a replayable artifact. On your laptop and in CI.
+**A durable, steerable, auditable control plane for an AI coding harness.** Wire LLM agents into a YAML state machine; fragua runs it deterministically — survives crashes and provider outages, lets you steer a live run mid-flight, and records every run as a replayable artifact. It's the control plane, not the model — not a replacement for Claude Code or Codex, but the layer that makes an agent loop durable, inspectable, and safe to leave running. On your laptop and in CI.
 
 A workflow is a small state machine in plain text:
 
@@ -53,7 +53,7 @@ The engine compiles that into a graph and drives it — here's a richer one (`wo
 - **Review every diff or PR** — flag bugs/security/scope-creep, gate the post behind a human (`review`, `pr_review`).
 - **A coding agent with guardrails** — triage → plan or write-the-failing-test-first → implement → review → CI, change left in a worktree to accept (`work`).
 - **Repo health on a schedule** — bump deps keeping CI green (`dependencies`), audit docs against code (`drift`), roll up cost/latency analytics (`analyze`).
-- **A fleet that improves itself** — workflows that draft proposals through an adversarial panel (`propose`), dispatched and met in an inbox.
+- **Draft improvements through an adversarial panel** — `propose` puts an idea through multi-lens critique and lands the result in your inbox to dispatch.
 
 Each is a YAML file you can diff, version, and code-review. Nothing in the engine is code-specific — worktrees and CI are just one environment adapter.
 
