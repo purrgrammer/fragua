@@ -24,14 +24,18 @@ guarantee.
   environment, and a server whose credential is missing or that fails to connect
   is skipped with a warning rather than hanging or failing the step.
   Connections are opened lazily per step and torn down when it finishes. New
-  `fragua mcp ls` lists configured servers and their credential state;
-  `fragua mcp check [server]` connects and lists the tools each exposes. A
-  remote HTTP server with no static `Authorization` header now authenticates
-  through a stored OAuth token: the daemon attaches an OAuth provider that reads
-  the token persisted for that server URL. When no token is stored the server is
-  skipped with a message to authenticate it (the interactive `fragua mcp login`
-  command lands separately) rather than hanging startup. Progressive disclosure
-  is not yet supported.
+  `fragua mcp ls` lists configured servers with their credential and OAuth state
+  (`ready` / `logged in` / `login required`); `fragua mcp check [server]`
+  connects and lists the tools each exposes. A remote HTTP server with no static
+  `Authorization` header authenticates through a stored OAuth token: the daemon
+  attaches an OAuth provider that reads the token persisted for that server URL,
+  and `fragua mcp login <server>` runs the interactive browser flow (opening the
+  authorization URL, catching the redirect on a fixed localhost callback, and
+  persisting client registration + tokens) — `--client-id` / `--client-secret`
+  cover confidential servers like Slack that forbid dynamic registration.
+  `fragua mcp logout <server>` forgets a server's stored tokens. When no token
+  is stored a run skips the server with a message to authenticate it rather than
+  hanging startup. Progressive disclosure is not yet supported.
 - Quarantined runs now get a first-class operator surface. In the web UI a
   banner on the run detail page explains the quarantine reason, lists the
   orphaned intent seqs, and offers the three resolutions (`treat as done`,

@@ -18,7 +18,7 @@ import { doctorCommand } from "../src/commands/doctor.ts";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
-import { mcpCheckCommand, mcpHelp, mcpLsCommand } from "../src/commands/mcp.ts";
+import { mcpCheckCommand, mcpHelp, mcpLoginCommand, mcpLogoutCommand, mcpLsCommand } from "../src/commands/mcp.ts";
 import {
   acceptCommand,
   artifactCommand,
@@ -141,22 +141,49 @@ cli
 // for the same cac multi-word-matching reason.
 cli
   .command("mcp [action] [target]", "Inspect this project's MCP servers (run without args for help)")
-  .action(async (action: string | undefined, target: string | undefined) => {
-    switch (action) {
-      case undefined:
-        process.exit(mcpHelp());
-        break;
-      case "ls":
-        process.exit(mcpLsCommand());
-        break;
-      case "check":
-        process.exit(await mcpCheckCommand(target));
-        break;
-      default:
-        console.error(chalk.red(`mcp: unknown action "${action}" (expected ls / check)`));
-        process.exit(1);
-    }
-  });
+  .option("--client-id <id>", "`login` only: preset OAuth client_id (confidential servers that forbid DCR)")
+  .option("--client-secret <secret>", "`login` only: preset OAuth client_secret")
+  .action(
+    async (
+      action: string | undefined,
+      target: string | undefined,
+      options: { clientId?: string; clientSecret?: string },
+    ) => {
+      switch (action) {
+        case undefined:
+          process.exit(mcpHelp());
+          break;
+        case "ls":
+          process.exit(await mcpLsCommand());
+          break;
+        case "check":
+          process.exit(await mcpCheckCommand(target));
+          break;
+        case "login": {
+          if (!target) {
+            console.error(chalk.red("mcp login: a server name is required"));
+            process.exit(1);
+          }
+          const creds: { clientId?: string; clientSecret?: string } = {};
+          if (options.clientId !== undefined) creds.clientId = options.clientId;
+          if (options.clientSecret !== undefined) creds.clientSecret = options.clientSecret;
+          process.exit(await mcpLoginCommand(target, creds));
+          break;
+        }
+        case "logout": {
+          if (!target) {
+            console.error(chalk.red("mcp logout: a server name is required"));
+            process.exit(1);
+          }
+          process.exit(await mcpLogoutCommand(target));
+          break;
+        }
+        default:
+          console.error(chalk.red(`mcp: unknown action "${action}" (expected ls / check / login / logout)`));
+          process.exit(1);
+      }
+    },
+  );
 
 // `fragua providers [action]` — bare form prints subcommand help, per
 // the "top-level commands without arguments should list options"

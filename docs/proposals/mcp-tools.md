@@ -1,8 +1,8 @@
 # MCP tools
 
-> Status: MVP — env-var credentials, stdio transport, step-level opt-in. OAuth,
-> HTTP transport, progressive disclosure, and server-state UI are deferred (see
-> §7).
+> Status: MVP — env-var credentials, stdio + HTTP transport, step-level opt-in,
+> native OAuth (`fragua mcp login` / `logout`). Progressive disclosure and
+> server-state UI are deferred (see §7).
 
 ## What this is
 
@@ -134,9 +134,9 @@ TypeBox `Kind` symbol), so no schema translation is needed.
 
 ## OAuth
 
-> Status: design. Static-header auth (above) covers token servers like GitHub;
-> ClickUp and Slack are OAuth-only, so native OAuth is required for the seed use
-> case.
+> Status: shipped. `fragua mcp login <server>` / `logout <server>` drive the
+> interactive flow; the daemon connector reads tokens headlessly. Static-header
+> auth (above) covers token servers like GitHub; ClickUp and Slack are OAuth-only.
 
 The MCP SDK drives the OAuth 2.1 flow itself — `StreamableHTTPClientTransport`
 takes an `authProvider: OAuthClientProvider`. On connect it uses the stored
