@@ -33,6 +33,7 @@ import type { ExecutionEnvironment, FraguaToolContext, McpConnector, Skill, Tool
 import {
   filterCatalogueForRun,
   filterSkillsForNode,
+  isMcpToolName,
   renderSkillsCatalog,
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
@@ -244,7 +245,7 @@ export class PiLlmBackend implements LlmBackend {
     // server is declared to materialise them. With no `mcp-servers:`, an
     // `mcp__*` allow entry can never resolve, so it must still trip the gate.
     const hasMcpServers = ((input.node.attrs.mcp_servers as string[] | undefined)?.length ?? 0) > 0;
-    const gateAllow = hasMcpServers ? allow?.filter((a) => !a.startsWith("mcp__")) : allow;
+    const gateAllow = hasMcpServers ? allow?.filter((a) => !isMcpToolName(a)) : allow;
     if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
       const registered = this.registry.list().map((t) => t.name);
       return fail(

@@ -117,6 +117,22 @@ describe("createMcpConnector.materialize — live stdio server", () => {
     }
   }, 30_000);
 
+  test("multiple servers connect concurrently; tools appear in request order", async () => {
+    const cwd = projectWith({
+      mcpServers: {
+        alpha: { command: process.execPath, args: [ECHO_SERVER] },
+        beta: { command: process.execPath, args: [ECHO_SERVER] },
+      },
+    });
+    const set = await createMcpConnector().materialize(["alpha", "beta"], { cwd });
+    try {
+      expect(set.errors).toEqual([]);
+      expect(set.tools.map((t) => t.name)).toEqual(["mcp__alpha__echo", "mcp__beta__echo"]);
+    } finally {
+      await set.dispose();
+    }
+  }, 30_000);
+
   test("two tools slugging to the same name → first wins, collision reported", async () => {
     const cwd = projectWith({ mcpServers: { collide: { command: process.execPath, args: [COLLIDE_SERVER] } } });
     const set = await createMcpConnector().materialize(["collide"], { cwd });

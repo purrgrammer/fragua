@@ -6,7 +6,14 @@
 // Read-only. Works off the current directory's mcp.json; no store, no daemon.
 // See docs/proposals/mcp-tools.md.
 
-import { createMcpConnector, loadMcpConfig, mcpConfigPath, mcpToolPrefix, resolveMcpServer } from "@fragua/workspace";
+import {
+  createMcpConnector,
+  loadMcpConfig,
+  type McpToolset,
+  mcpConfigPath,
+  mcpToolPrefix,
+  resolveMcpServer,
+} from "@fragua/workspace";
 import chalk from "chalk";
 
 export interface McpOptions {
@@ -59,7 +66,7 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
     console.log(chalk.yellow("no servers defined"));
     return 0;
   }
-  let set: Awaited<ReturnType<ReturnType<typeof createMcpConnector>["materialize"]>> | undefined;
+  let set: McpToolset | undefined;
   try {
     set = await createMcpConnector().materialize(targets, { cwd });
     let failed = false;

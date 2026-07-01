@@ -25,6 +25,7 @@ const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 const CLOSE_DEADLINE_MS = 5_000;
 const MAX_TOOL_NAME_LEN = 128;
 const MCP_OUTPUT_MAX_CHARS = 100_000;
+const STDERR_TAIL_MAX = 2_000;
 
 export interface McpMaterializeOptions {
   /** Project cwd — `<cwd>/.fragua/mcp.json` is the server registry. */
@@ -59,23 +60,32 @@ export interface McpConnector {
   materialize(serverNames: readonly string[], opts: McpMaterializeOptions): Promise<McpToolset>;
 }
 
+/** Namespace every materialised MCP tool name carries. Callers that need to
+ * recognise one (the backend's allow-gate) MUST use `isMcpToolName`, not a
+ * re-inlined literal, so the two can't drift. */
+export const MCP_TOOL_NAMESPACE = "mcp__";
+
+export function isMcpToolName(name: string): boolean {
+  return name.startsWith(MCP_TOOL_NAMESPACE);
+}
+
 /** Slugify a server / tool segment to the `[a-z0-9_]` alphabet. */
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }
 
 export function mcpToolName(server: string, tool: string): string {
-  const name = `mcp__${slug(server)}__${slug(tool)}`;
+  const name = `${MCP_TOOL_NAMESPACE}${slug(server)}__${slug(tool)}`;
   if (name.length <= MAX_TOOL_NAME_LEN) return name;
   return name.slice(0, MAX_TOOL_NAME_LEN);
 }
 
-/** The `mcp__<server>__` prefix every tool from `server` shares. The single
- * source of the slug rule — callers filtering tools by server (e.g. the CLI's
- * `mcp check`) MUST use this rather than re-inlining the slug, or they desync
- * from `mcpToolName` the moment `slug` changes. */
+/** The prefix every tool from `server` shares — the single source of the slug
+ * rule for callers filtering tools by server (e.g. the CLI's `mcp check`).
+ * Capped at the same length bound as `mcpToolName` so `startsWith` still holds
+ * for very long server slugs. */
 export function mcpToolPrefix(server: string): string {
-  return `mcp__${slug(server)}__`;
+  return `${MCP_TOOL_NAMESPACE}${slug(server)}__`.slice(0, MAX_TOOL_NAME_LEN);
 }
 
 interface McpContentBlock {
@@ -158,11 +168,16 @@ interface OpenConnection {
   transport: StdioClientTransport;
 }
 
+type ServerResult =
+  | { name: string; error: string; connection?: undefined; descriptors?: undefined }
+  | { name: string; error?: undefined; connection: OpenConnection; descriptors: McpToolDescriptor[] };
+
 async function connectServer(
   name: string,
   server: { command: string; args: string[]; env: Record<string, string>; cwd?: string },
   connectTimeoutMs: number,
   listTimeoutMs: number,
+  defaultCwd: string,
   signal?: AbortSignal,
 ): Promise<{ connection: OpenConnection; tools: McpToolDescriptor[] }> {
   const transport = new StdioClientTransport({
@@ -171,13 +186,18 @@ async function connectServer(
     // SDK allowlist (HOME/PATH/USER/…) as the base, NOT the daemon's full env —
     // provider keys must not leak into a third-party binary. Only `server.env` added.
     env: { ...getDefaultEnvironment(), ...server.env },
-    ...(server.cwd !== undefined ? { cwd: server.cwd } : {}),
+    // Run in the project dir (where mcp.json lives) by default, not the daemon's
+    // launch dir; an author can override per-server via `cwd` in mcp.json.
+    cwd: server.cwd ?? defaultCwd,
     // Piped so a spawn/handshake failure carries the child's own diagnostics.
     stderr: "pipe",
   });
+  // Keep this listener attached for the connection's lifetime: it drains the
+  // pipe continuously (a paused pipe would fill its OS buffer and stall the
+  // child); the cap only stops the tail string from growing, not the drain.
   let stderrTail = "";
   transport.stderr?.on("data", (chunk: unknown) => {
-    if (stderrTail.length < 2000) stderrTail += String(chunk);
+    if (stderrTail.length < STDERR_TAIL_MAX) stderrTail += String(chunk).slice(0, STDERR_TAIL_MAX - stderrTail.length);
   });
   const client = new Client({ name: `fragua-${name}`, version: "0.1.0" }, { capabilities: {} });
   // Close on any failure — a post-connect listTools throw would otherwise leak
@@ -218,8 +238,6 @@ export function createMcpConnector(): McpConnector {
       const tools: AnyTool[] = [];
       const errors: McpServerError[] = [];
       const open: OpenConnection[] = [];
-      // First-wins dedup: two tools slugging to one name would route ambiguously.
-      const seenNames = new Set<string>();
 
       const config = loadMcpConfig(opts.cwd);
       if (!config.ok) {
@@ -228,49 +246,52 @@ export function createMcpConnector(): McpConnector {
         return { tools, errors, dispose: async () => {} };
       }
 
-      for (const name of requested) {
-        if (opts.signal?.aborted) {
-          errors.push({ server: name, message: "run aborted before connect", kind: "unavailable" });
-          continue;
-        }
-        const raw = config.servers[name];
-        if (raw === undefined) {
-          errors.push({ server: name, message: `not defined in ${config.path}`, kind: "unavailable" });
-          continue;
-        }
-        const resolved = resolveMcpServer(raw, env);
-        if (!resolved.ok) {
-          errors.push({
-            server: name,
-            message: `missing environment variable(s): ${resolved.missing.join(", ")}`,
-            kind: "unavailable",
-          });
-          continue;
-        }
-        try {
-          const { connection, tools: descriptors } = await connectServer(
-            name,
-            resolved.server,
-            connectTimeoutMs,
-            callTimeoutMs,
-            opts.signal,
-          );
-          open.push(connection);
-          for (const d of descriptors) {
-            const tool = toFraguaTool(name, d, connection.client, callTimeoutMs);
-            if (seenNames.has(tool.name)) {
-              errors.push({
-                server: name,
-                message: `tool "${tool.name}" collides with an earlier tool of the same name; skipped`,
-                kind: "collision",
-              });
-              continue;
-            }
-            seenNames.add(tool.name);
-            tools.push(tool);
+      // Connect every server concurrently — a slow/unreachable one no longer
+      // serialises the others on the hot per-step path. `Promise.all` preserves
+      // request order, so the fold below stays deterministic.
+      const connected = await Promise.all(
+        requested.map(async (name): Promise<ServerResult> => {
+          if (opts.signal?.aborted) return { name, error: "run aborted before connect" };
+          const raw = config.servers[name];
+          if (raw === undefined) return { name, error: `not defined in ${config.path}` };
+          const resolved = resolveMcpServer(raw, env);
+          if (!resolved.ok) return { name, error: `missing environment variable(s): ${resolved.missing.join(", ")}` };
+          try {
+            const { connection, tools: descriptors } = await connectServer(
+              name,
+              resolved.server,
+              connectTimeoutMs,
+              callTimeoutMs,
+              opts.cwd,
+              opts.signal,
+            );
+            return { name, connection, descriptors };
+          } catch (err) {
+            return { name, error: `failed to connect: ${(err as Error).message}` };
           }
-        } catch (err) {
-          errors.push({ server: name, message: `failed to connect: ${(err as Error).message}`, kind: "unavailable" });
+        }),
+      );
+
+      // First-wins dedup: two tools slugging to one name would route ambiguously.
+      const seenNames = new Set<string>();
+      for (const r of connected) {
+        if (r.error !== undefined) {
+          errors.push({ server: r.name, message: r.error, kind: "unavailable" });
+          continue;
+        }
+        open.push(r.connection);
+        for (const d of r.descriptors) {
+          const tool = toFraguaTool(r.name, d, r.connection.client, callTimeoutMs);
+          if (seenNames.has(tool.name)) {
+            errors.push({
+              server: r.name,
+              message: `tool "${tool.name}" collides with an earlier tool of the same name; skipped`,
+              kind: "collision",
+            });
+            continue;
+          }
+          seenNames.add(tool.name);
+          tools.push(tool);
         }
       }
 
