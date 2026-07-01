@@ -21,6 +21,11 @@ import type { AnyTool, ToolOutput } from "../types.ts";
 import { loadMcpConfig, resolveMcpServer } from "./config.ts";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
+// `tools/list` is metadata enumeration, not a tool call — give it a moderate
+// budget of its own, not the 120s per-call timeout (a stalled enumeration would
+// otherwise block the whole step) nor the 15s connect timeout (too tight for a
+// large catalogue on a cold server).
+const DEFAULT_LIST_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 const CLOSE_DEADLINE_MS = 5_000;
 const MAX_TOOL_NAME_LEN = 128;
@@ -129,11 +134,18 @@ function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client
     async execute(args, _env, opts): Promise<ToolOutput> {
       const requestOptions: { timeout: number; signal?: AbortSignal } = { timeout: callTimeoutMs };
       if (opts?.signal) requestOptions.signal = opts.signal;
-      const result = await client.callTool(
-        { name: mcpTool.name, arguments: (args ?? {}) as Record<string, unknown> },
-        undefined,
-        requestOptions,
-      );
+      let result: unknown;
+      try {
+        result = await client.callTool(
+          { name: mcpTool.name, arguments: (args ?? {}) as Record<string, unknown> },
+          undefined,
+          requestOptions,
+        );
+      } catch (err) {
+        // A transport error / timeout / server crash becomes a tool-error result
+        // the LLM can react to, not an uncaught throw that halts the whole run.
+        return { text: `MCP tool "${mcpTool.name}" failed: ${(err as Error).message}`, is_error: true };
+      }
       // Bound the body BEFORE wrapping so the envelope's own truncation (tail
       // mode) can't drop the opening tag and strip the label on large output.
       const body = truncate(renderContent((result as { content?: unknown }).content), {
@@ -253,7 +265,11 @@ export function createMcpConnector(): McpConnector {
         requested.map(async (name): Promise<ServerResult> => {
           if (opts.signal?.aborted) return { name, error: "run aborted before connect" };
           const raw = config.servers[name];
-          if (raw === undefined) return { name, error: `not defined in ${config.path}` };
+          if (raw === undefined) {
+            const unsupported = config.unsupported[name];
+            if (unsupported !== undefined) return { name, error: `unsupported transport: ${unsupported}` };
+            return { name, error: `not defined in ${config.path}` };
+          }
           const resolved = resolveMcpServer(raw, env);
           if (!resolved.ok) return { name, error: `missing environment variable(s): ${resolved.missing.join(", ")}` };
           try {
@@ -261,7 +277,7 @@ export function createMcpConnector(): McpConnector {
               name,
               resolved.server,
               connectTimeoutMs,
-              callTimeoutMs,
+              DEFAULT_LIST_TIMEOUT_MS,
               opts.cwd,
               opts.signal,
             );

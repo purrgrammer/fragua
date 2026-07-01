@@ -1,6 +1,7 @@
-// Load and resolve `<cwd>/.fragua/mcp.json` — the project-level MCP server
-// registry. Standard MCP client shape: `{ "mcpServers": { name: {command,
-// args?, env?, cwd?} } }`. `${VAR}` in command / args / env values is
+// Load and resolve `<cwd>/.mcp.json` — the project-root MCP server registry,
+// the same file (and `{ "mcpServers": { name: {command, args?, env?, cwd?} } }`
+// shape) Claude Code and other tools read, so a repo already configured for MCP
+// works with fragua unchanged. `${VAR}` in command / args / env values is
 // substituted from the supplied environment; a referenced-but-unset var makes
 // the server unusable (skipped with an error at connect time) rather than
 // spawning a half-configured process.
@@ -31,13 +32,18 @@ export interface McpConfigLoad {
   path: string;
   /** True when the file exists and parsed into a valid `mcpServers` map. */
   ok: boolean;
-  /** Server name → raw config. Empty when the file is absent or malformed. */
+  /** Stdio server name → raw config. Empty when the file is absent or malformed. */
   servers: Record<string, McpServerConfig>;
+  /** Servers we recognised but can't run yet (name → reason), e.g. an `http`
+   * / `sse` entry in a `.mcp.json` shared with other tools. Kept separate so a
+   * mixed file's stdio servers still work and a request for a remote one gets a
+   * clear "unsupported transport" message instead of "not defined". */
+  unsupported: Record<string, string>;
   /** Populated when the file exists but could not be parsed / validated. */
   error?: string;
 }
 
-const MCP_CONFIG_RELPATH = join(".fragua", "mcp.json");
+const MCP_CONFIG_RELPATH = ".mcp.json";
 
 /** `${NAME}` references. Bare `$NAME` is intentionally NOT a reference — it
  * stays literal, matching the workflow substitution grammar's "a bare `$name`
@@ -48,21 +54,39 @@ export function mcpConfigPath(cwd: string): string {
   return join(cwd, MCP_CONFIG_RELPATH);
 }
 
-function isServerConfig(value: unknown): value is McpServerConfig {
-  if (typeof value !== "object" || value === null) return false;
+type ServerClass =
+  | { kind: "stdio"; config: McpServerConfig }
+  | { kind: "unsupported"; reason: string }
+  | { kind: "malformed" };
+
+/** Classify a raw `mcpServers` entry. A `command` entry is a runnable stdio
+ * server; an entry that names a remote transport (`url` / `type: http|sse`) is
+ * a recognised-but-unsupported server (skipped, not an error); anything else is
+ * malformed. */
+function classifyServer(value: unknown): ServerClass {
+  if (typeof value !== "object" || value === null) return { kind: "malformed" };
   const v = value as Record<string, unknown>;
   const command = v["command"];
-  const args = v["args"];
-  const cwd = v["cwd"];
-  const env = v["env"];
-  if (typeof command !== "string" || command === "") return false;
-  if (args !== undefined && (!Array.isArray(args) || !args.every((a) => typeof a === "string"))) return false;
-  if (cwd !== undefined && typeof cwd !== "string") return false;
-  if (env !== undefined) {
-    if (typeof env !== "object" || env === null) return false;
-    if (!Object.values(env as Record<string, unknown>).every((e) => typeof e === "string")) return false;
+  if (typeof command === "string" && command !== "") {
+    const args = v["args"];
+    const cwd = v["cwd"];
+    const env = v["env"];
+    if (args !== undefined && (!Array.isArray(args) || !args.every((a) => typeof a === "string")))
+      return { kind: "malformed" };
+    if (cwd !== undefined && typeof cwd !== "string") return { kind: "malformed" };
+    if (env !== undefined) {
+      if (typeof env !== "object" || env === null) return { kind: "malformed" };
+      if (!Object.values(env as Record<string, unknown>).every((e) => typeof e === "string"))
+        return { kind: "malformed" };
+    }
+    return { kind: "stdio", config: v as unknown as McpServerConfig };
   }
-  return true;
+  const type = v["type"];
+  if (typeof v["url"] === "string" || type === "http" || type === "sse" || type === "streamable-http") {
+    const t = typeof type === "string" ? type : "remote";
+    return { kind: "unsupported", reason: `${t} transport (only stdio is supported)` };
+  }
+  return { kind: "malformed" };
 }
 
 /** Read + parse mcp.json. Never throws — a malformed file surfaces as
@@ -74,29 +98,43 @@ export function loadMcpConfig(cwd: string): McpConfigLoad {
   try {
     raw = readFileSync(path, "utf8");
   } catch {
-    return { path, ok: false, servers: {} };
+    return { path, ok: false, servers: {}, unsupported: {} };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    return { path, ok: false, servers: {}, error: `mcp.json is not valid JSON: ${(err as Error).message}` };
+    return {
+      path,
+      ok: false,
+      servers: {},
+      unsupported: {},
+      error: `.mcp.json is not valid JSON: ${(err as Error).message}`,
+    };
   }
   if (typeof parsed !== "object" || parsed === null || !("mcpServers" in parsed)) {
-    return { path, ok: false, servers: {}, error: 'mcp.json must contain an "mcpServers" object' };
+    return { path, ok: false, servers: {}, unsupported: {}, error: '.mcp.json must contain an "mcpServers" object' };
   }
   const map = (parsed as { mcpServers: unknown }).mcpServers;
   if (typeof map !== "object" || map === null) {
-    return { path, ok: false, servers: {}, error: '"mcpServers" must be an object' };
+    return { path, ok: false, servers: {}, unsupported: {}, error: '"mcpServers" must be an object' };
   }
   const servers: Record<string, McpServerConfig> = {};
+  const unsupported: Record<string, string> = {};
   for (const [name, entry] of Object.entries(map)) {
-    if (!isServerConfig(entry)) {
-      return { path, ok: false, servers: {}, error: `mcp server "${name}" is malformed (need a string "command")` };
-    }
-    servers[name] = entry;
+    const cls = classifyServer(entry);
+    if (cls.kind === "stdio") servers[name] = cls.config;
+    else if (cls.kind === "unsupported") unsupported[name] = cls.reason;
+    else
+      return {
+        path,
+        ok: false,
+        servers: {},
+        unsupported: {},
+        error: `mcp server "${name}" is malformed (need a string "command", or a "url"/"type" for a remote server)`,
+      };
   }
-  return { path, ok: true, servers };
+  return { path, ok: true, servers, unsupported };
 }
 
 interface SubstituteResult {

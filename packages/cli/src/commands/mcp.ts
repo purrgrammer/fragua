@@ -40,7 +40,8 @@ export function mcpLsCommand(opts: McpOptions = {}): number {
     return load.error ? 1 : 0;
   }
   const names = Object.keys(load.servers);
-  if (names.length === 0) {
+  const unsupported = Object.entries(load.unsupported);
+  if (names.length === 0 && unsupported.length === 0) {
     console.log(chalk.yellow("  no servers defined"));
     return 0;
   }
@@ -50,6 +51,9 @@ export function mcpLsCommand(opts: McpOptions = {}): number {
     const resolved = resolveMcpServer(server, process.env);
     const status = resolved.ok ? chalk.green("ready") : chalk.yellow(`missing env: ${resolved.missing.join(", ")}`);
     console.log(`  ${chalk.cyan(name)}  ${chalk.dim(server.command)}  ${status}`);
+  }
+  for (const [name, reason] of unsupported) {
+    console.log(`  ${chalk.cyan(name)}  ${chalk.yellow(reason)}`);
   }
   return 0;
 }

@@ -34,6 +34,7 @@ import {
   filterCatalogueForRun,
   filterSkillsForNode,
   isMcpToolName,
+  mcpToolPrefix,
   renderSkillsCatalog,
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
@@ -240,12 +241,16 @@ export class PiLlmBackend implements LlmBackend {
     // post-skill-merge `finalTools` below) so the diagnostic still fires
     // when the registry is genuinely empty — a registry that holds only
     // the force-included `skill` is still misconfigured.
-    // `mcp__*` allow entries name tools materialised later (additive, per
-    // mcp-servers), not registry tools — exclude them from the gate ONLY when a
-    // server is declared to materialise them. With no `mcp-servers:`, an
-    // `mcp__*` allow entry can never resolve, so it must still trip the gate.
-    const hasMcpServers = ((input.node.attrs.mcp_servers as string[] | undefined)?.length ?? 0) > 0;
-    const gateAllow = hasMcpServers ? allow?.filter((a) => !isMcpToolName(a)) : allow;
+    // An `mcp__<srv>__*` allow entry names a tool materialised later (additive,
+    // per mcp-servers), not a registry tool — exclude it from the gate ONLY when
+    // its server is declared in `mcp-servers` (so it can actually resolve). An
+    // `mcp__*` entry for an undeclared server, or with no `mcp-servers:` at all,
+    // can never resolve and must still trip the gate.
+    const declaredMcpServers = (input.node.attrs.mcp_servers as string[] | undefined) ?? [];
+    const mcpPrefixes = declaredMcpServers.map((s) => mcpToolPrefix(s));
+    const willMaterialise = (name: string): boolean =>
+      isMcpToolName(name) && mcpPrefixes.some((p) => name.startsWith(p));
+    const gateAllow = allow?.filter((a) => !willMaterialise(a));
     if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
       const registered = this.registry.list().map((t) => t.name);
       return fail(

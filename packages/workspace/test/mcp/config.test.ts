@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMcpConfig, mcpConfigPath, resolveMcpServer } from "../../src/mcp/config.ts";
 
 function projectWith(json: string): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-cfg-"));
-  mkdirSync(join(cwd, ".fragua"), { recursive: true });
-  writeFileSync(join(cwd, ".fragua", "mcp.json"), json);
+  writeFileSync(join(cwd, ".mcp.json"), json);
   return cwd;
 }
 
@@ -50,6 +49,29 @@ describe("loadMcpConfig", () => {
     expect(load.ok).toBe(true);
     expect(load.servers["github"]?.command).toBe("npx");
     expect(load.servers["github"]?.args).toEqual(["-y", "srv"]);
+  });
+
+  test("reads .mcp.json from the project root (not .fragua/)", () => {
+    const cwd = projectWith(JSON.stringify({ mcpServers: { fs: { command: "true" } } }));
+    expect(mcpConfigPath(cwd)).toBe(join(cwd, ".mcp.json"));
+    expect(loadMcpConfig(cwd).servers["fs"]?.command).toBe("true");
+  });
+
+  test("http/sse entries are tolerated (unsupported, not malformed); stdio entries still parse", () => {
+    const cwd = projectWith(
+      JSON.stringify({
+        mcpServers: {
+          local: { command: "true" },
+          remote: { type: "http", url: "https://example.com/mcp" },
+          streamed: { url: "https://example.com/sse" },
+        },
+      }),
+    );
+    const load = loadMcpConfig(cwd);
+    expect(load.ok).toBe(true);
+    expect(Object.keys(load.servers)).toEqual(["local"]);
+    expect(load.unsupported["remote"]).toContain("http");
+    expect(load.unsupported["streamed"]).toBeDefined();
   });
 });
 

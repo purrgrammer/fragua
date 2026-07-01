@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalEnvironment } from "../../src/local-env.ts";
@@ -11,8 +11,7 @@ const COLLIDE_SERVER = join(import.meta.dir, "collide-server.ts");
 
 function projectWith(config: unknown): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-conn-"));
-  mkdirSync(join(cwd, ".fragua"), { recursive: true });
-  writeFileSync(join(cwd, ".fragua", "mcp.json"), JSON.stringify(config));
+  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify(config));
   return cwd;
 }
 
@@ -67,10 +66,17 @@ describe("createMcpConnector.materialize — error paths", () => {
     await set.dispose();
   });
 
+  test("requesting a remote (http/sse) server → unsupported-transport error, no connect", async () => {
+    const cwd = projectWith({ mcpServers: { remote: { type: "http", url: "https://example.com/mcp" } } });
+    const set = await createMcpConnector().materialize(["remote"], { cwd });
+    expect(set.tools).toEqual([]);
+    expect(set.errors[0]?.message).toContain("unsupported transport");
+    await set.dispose();
+  });
+
   test("malformed mcp.json → requested servers skipped with error", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-bad-"));
-    mkdirSync(join(cwd, ".fragua"), { recursive: true });
-    writeFileSync(join(cwd, ".fragua", "mcp.json"), "{ broken");
+    writeFileSync(join(cwd, ".mcp.json"), "{ broken");
     const set = await createMcpConnector().materialize(["gh"], { cwd });
     expect(set.errors[0]?.server).toBe("gh");
     await set.dispose();
@@ -112,6 +118,20 @@ describe("createMcpConnector.materialize — live stdio server", () => {
       expect(big.text.startsWith("<mcp_output ")).toBe(true);
       expect(big.text.endsWith("</mcp_output>")).toBe(true);
       expect(big.text.length).toBeLessThanOrEqual(100_000);
+    } finally {
+      await set.dispose();
+    }
+  }, 30_000);
+
+  test("a callTool timeout/transport error → is_error result, not an uncaught throw", async () => {
+    const cwd = projectWith({ mcpServers: { echo: { command: process.execPath, args: [ECHO_SERVER] } } });
+    const set = await createMcpConnector().materialize(["echo"], { cwd, callTimeoutMs: 500 });
+    try {
+      const tool = set.tools[0];
+      if (!tool) throw new Error("no tool");
+      const out = await tool.execute({ text: "__hang__" }, new LocalEnvironment());
+      expect(out.is_error).toBe(true);
+      expect(out.text).toContain("failed");
     } finally {
       await set.dispose();
     }

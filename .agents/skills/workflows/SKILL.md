@@ -292,7 +292,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 | `outputs` | map | Typed step outputs (`llm` only; mutually exclusive with `routes:`). Read downstream as `${{ outputs.X.f }}` (§6). |
 | `allowed-tools` | string[] | Tool whitelist. Name them — unconstrained is usually wrong. |
 | `denied-tools` | string[] | Subtractive filter. |
-| `mcp-servers` | string[] | MCP servers (from `.fragua/mcp.json`) to connect for this `llm` step; their tools materialise as `mcp__<server>__<tool>` (§7 · The toolset). |
+| `mcp-servers` | string[] | MCP servers (from `.mcp.json`) to connect for this `llm` step; their tools materialise as `mcp__<server>__<tool>` (§7 · The toolset). |
 | `effort` | `low\|medium\|high` | Reasoning effort for extended-thinking providers. |
 | `max-cost` | number | Per-step USD ceiling. |
 | `max-tokens` | int | Per-step token ceiling. |
@@ -334,7 +334,7 @@ steps:
 ```
 
 - **Additive, not a whitelist.** Declaring a server exposes *all* of its tools *on top of* `allowed-tools` — you opt into a server, not into each tool (MCP tool names are only known at connect time). `denied-tools` can still drop an individual materialised tool by its full name (`mcp__github__delete_repo`).
-- **Servers are declared per project** in `<project>/.fragua/mcp.json` — the standard MCP client shape, stdio transport:
+- **Servers are declared** in `<project>/.mcp.json` at the repo root — the same file and shape Claude Code reads, so an MCP-configured repo just works; stdio transport (HTTP/SSE entries are tolerated but skipped):
 
   ```json
   { "mcpServers": { "github": {

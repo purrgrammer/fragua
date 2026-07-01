@@ -27,6 +27,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (text === "__error__") {
     return { content: [{ type: "text", text: "boom" }], isError: true };
   }
+  if (text === "__hang__") {
+    // Never respond — the client's call timeout must fire.
+    await new Promise(() => {});
+  }
   return { content: [{ type: "text", text: `echo: ${text}` }] };
 });
 

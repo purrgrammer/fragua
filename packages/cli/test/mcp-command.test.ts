@@ -4,15 +4,14 @@
 // spawning a subprocess and just pin the CLI's rendering + exit codes.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mcpCheckCommand, mcpLsCommand } from "../src/commands/mcp.ts";
 
 function project(config: unknown): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-cli-mcp-"));
-  mkdirSync(join(cwd, ".fragua"), { recursive: true });
-  writeFileSync(join(cwd, ".fragua", "mcp.json"), typeof config === "string" ? config : JSON.stringify(config));
+  writeFileSync(join(cwd, ".mcp.json"), typeof config === "string" ? config : JSON.stringify(config));
   return cwd;
 }
 

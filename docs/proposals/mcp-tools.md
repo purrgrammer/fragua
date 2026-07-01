@@ -41,8 +41,9 @@ time, so an allowlist would be unauthorable).
 
 ## Server configuration
 
-Servers are declared in a project-level **`<cwd>/.fragua/mcp.json`**, the
-standard MCP client shape:
+Servers are declared in **`<cwd>/.mcp.json`** at the project root — the same
+file and shape Claude Code (and other tools) read, so a repo already configured
+for MCP works with fragua unchanged:
 
 ```json
 {
@@ -56,13 +57,17 @@ standard MCP client shape:
 }
 ```
 
-- **Transport:** stdio only for the MVP (`command` + `args`). HTTP/SSE later.
+- **Transport:** stdio only for the MVP (`command` + `args`). A shared `.mcp.json`
+  may also contain HTTP/SSE entries (`{ "type": "http", "url": … }`); those are
+  **tolerated but skipped** — the stdio servers still load, and requesting a
+  remote one yields a clear "unsupported transport" message rather than breaking
+  the whole file. HTTP/SSE transport itself is deferred.
 - **Secrets:** `${VAR}` in `command` / `args` / `env` values is substituted from
   the daemon's `process.env`. **If any referenced `${VAR}` is unset, the server
   is skipped with an error** — never a connection that hangs waiting on a
   half-configured server. No `.env` file loading in the MVP; the operator
   exports vars before starting the harness.
-- **Scope:** project only for the MVP. A global `~/.fragua/mcp.json` merge
+- **Scope:** project root only for the MVP. A user-level `~/.mcp.json` cascade
   (mirroring the config.yaml cascade) is a later addition.
 
 ## Connection lifecycle
@@ -130,4 +135,4 @@ TypeBox `Kind` symbol), so no schema translation is needed.
 - **Progressive disclosure** — a tool-index + on-demand fetch when a server
   exposes many tools, instead of materialising all of them.
 - **Per-run connection pooling** — reuse one connection across a run's steps.
-- **Global `~/.fragua/mcp.json`** cascade.
+- **User-level `~/.mcp.json`** cascade.
