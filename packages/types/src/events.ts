@@ -191,6 +191,9 @@ export const SETTLED_STATUSES = [
   "quarantined",
 ] as const satisfies readonly RunStatus[];
 
+/** A single settled lifecycle state — the element type of {@link SETTLED_STATUSES}. */
+export type SettledStatus = (typeof SETTLED_STATUSES)[number];
+
 const SETTLED_STATUS_SET: ReadonlySet<RunStatus> = new Set<RunStatus>(SETTLED_STATUSES);
 
 /** True when a run has stopped progressing on its own — terminal or
@@ -1247,6 +1250,35 @@ export interface RawEvent extends EventEnvelope {
   type: string;
   payload: unknown;
 }
+
+/**
+ * The terminal `fact.*` type that lands for each settled lifecycle state —
+ * the single source of truth for "which fact settles the run for good".
+ * `fact.run_terminated` is status-discriminated (completed | aborted |
+ * errored → completed | cancelled | halted), so the three terminal statuses
+ * collapse onto it; `quarantined` has its own fact. Keyed by
+ * {@link SETTLED_STATUSES}, so `as const satisfies Record<SettledStatus, …>`
+ * makes a new settled status a compile error until its terminal fact is named
+ * here — the follow/tail terminal set derives from this and can't drift.
+ *
+ * `fact.run_paused` is deliberately absent: it is conditionally terminal
+ * (operator reasons stop; auto-wake reasons continue), handled by the caller,
+ * not by the settled set.
+ */
+export const SETTLED_STATUS_TERMINAL_FACT = {
+  completed: "fact.run_terminated",
+  cancelled: "fact.run_terminated",
+  halted: "fact.run_terminated",
+  quarantined: "fact.run_quarantined",
+} as const satisfies Record<SettledStatus, FactEvent["type"]>;
+
+/** The distinct terminal `fact.*` types — those that settle a run for good.
+ * Derived from {@link SETTLED_STATUS_TERMINAL_FACT} so it can't drift from the
+ * settled statuses; consumers (the CLI follow/tail loop) watch this set to know
+ * a run has stopped. Excludes the conditionally-terminal `fact.run_paused`. */
+export const TERMINAL_FACT_TYPES: ReadonlySet<FactEvent["type"]> = new Set<FactEvent["type"]>(
+  Object.values(SETTLED_STATUS_TERMINAL_FACT),
+);
 
 /**
  * Operator-relevant event kinds for the global Home feed. Facts only —

@@ -13,6 +13,7 @@ import {
   type HaltReason,
   type PauseReason,
   type QuarantineReason,
+  TERMINAL_FACT_TYPES,
 } from "@fragua/types";
 import chalk from "chalk";
 import { cliExitCode } from "./cli-exit.ts";
@@ -29,14 +30,14 @@ const IDLE_HINT_MS = 15_000;
 /** The HITL picker, injectable so tests can drive the gate without a TTY. */
 type RoutePicker = typeof pickRoute;
 
-// Typed as the FactEvent union so the compiler rejects a stale literal — the
-// unguarded `Set<string>` here is exactly the enum-consumer footgun (AGENTS.md).
-// `fact.run_paused` is conditionally terminal (operator reasons stop; auto-wake
-// reasons continue; `human` prompts), so it's handled explicitly in the loop,
-// not via this set.
-const TERMINAL_TYPES = new Set<FactEvent["type"]>(["fact.run_terminated", "fact.run_quarantined"]);
-
-const isTerminalType = (type: string): boolean => TERMINAL_TYPES.has(type as FactEvent["type"]);
+// Derived from `@fragua/types` (`TERMINAL_FACT_TYPES`, folded out of
+// `SETTLED_STATUS_TERMINAL_FACT`) so the set that stops the follow/tail stream
+// can't drift from the real terminal facts — a new settled status must name its
+// terminal fact there, and this loop picks it up for free.
+// `fact.run_paused` is deliberately not in that set: it is conditionally
+// terminal (operator reasons stop; auto-wake reasons continue; `human`
+// prompts), so it's handled explicitly in the loop below.
+const isTerminalType = (type: string): boolean => TERMINAL_FACT_TYPES.has(type as FactEvent["type"]);
 
 /** Per non-auto-wake pause reason: the verb an operator runs to unblock, shown
  * after the structural pause render so a followed stop is self-documenting. */

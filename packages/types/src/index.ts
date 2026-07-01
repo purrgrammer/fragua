@@ -54,9 +54,12 @@ export {
   RUN_STATUSES,
   type RunEnqueuedPayload,
   type RunStatus,
+  SETTLED_STATUS_TERMINAL_FACT,
   SETTLED_STATUSES,
+  type SettledStatus,
   type SnapshotCapturedData,
   type SnapshotStat,
+  TERMINAL_FACT_TYPES,
   VALID_WRITERS,
 } from "./events.ts";
 export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "./skills.ts";

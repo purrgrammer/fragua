@@ -4,7 +4,16 @@
 // only property to pin here is that the tuples themselves are well-formed.
 
 import { describe, expect, test } from "bun:test";
-import { HALT_REASONS, isSettled, isTerminal, RUN_STATUSES, type RunStatus, SETTLED_STATUSES } from "../src/index.ts";
+import {
+  HALT_REASONS,
+  isSettled,
+  isTerminal,
+  RUN_STATUSES,
+  type RunStatus,
+  SETTLED_STATUS_TERMINAL_FACT,
+  SETTLED_STATUSES,
+  TERMINAL_FACT_TYPES,
+} from "../src/index.ts";
 
 describe("enum literal tuples", () => {
   test("RUN_STATUSES and HALT_REASONS are duplicate-free", () => {
@@ -18,6 +27,21 @@ describe("enum literal tuples", () => {
     for (const s of SETTLED_STATUSES) {
       expect(RUN_STATUSES).toContain(s);
     }
+  });
+
+  test("SETTLED_STATUS_TERMINAL_FACT names a terminal fact for every settled status", () => {
+    // Record<SettledStatus, …> makes a missing key a compile error; this belt
+    // asserts both-direction coverage against the real tuple at runtime.
+    expect(new Set(Object.keys(SETTLED_STATUS_TERMINAL_FACT))).toEqual(new Set(SETTLED_STATUSES));
+  });
+
+  test("TERMINAL_FACT_TYPES is exactly the distinct terminal facts, both directions", () => {
+    // The set the CLI follow/tail loop watches to stop. Pinned so adding a
+    // terminal fact (a new settled status → fact mapping) fails here until
+    // TERMINAL_FACT_TYPES — and thus `run follow` / `runs tail` — covers it.
+    const expected = new Set(["fact.run_terminated", "fact.run_quarantined"]);
+    expect(TERMINAL_FACT_TYPES).toEqual(expected);
+    expect(new Set(Object.values(SETTLED_STATUS_TERMINAL_FACT))).toEqual(TERMINAL_FACT_TYPES);
   });
 
   test("isSettled is isTerminal plus quarantined, and quarantined is NOT terminal", () => {
