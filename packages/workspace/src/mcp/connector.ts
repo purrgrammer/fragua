@@ -92,6 +92,14 @@ function renderContent(content: unknown): string {
   return parts.join("\n");
 }
 
+// XML boundary marking MCP output as untrusted third-party data (prompt-
+// injection defence); forged closers are escaped so output can't break out.
+function labelMcpOutput(server: string, tool: string, body: string): string {
+  const attr = (s: string) => s.replace(/[<>"]/g, "");
+  const safe = body.replaceAll("</mcp_output>", "&lt;/mcp_output&gt;");
+  return `<mcp_output server="${attr(server)}" tool="${attr(tool)}" trust="untrusted">\n${safe}\n</mcp_output>`;
+}
+
 function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client, callTimeoutMs: number): AnyTool {
   const inputSchema = mcpTool.inputSchema ?? { type: "object" };
   return {
@@ -112,7 +120,7 @@ function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client
         undefined,
         requestOptions,
       );
-      const text = renderContent((result as { content?: unknown }).content);
+      const text = labelMcpOutput(server, mcpTool.name, renderContent((result as { content?: unknown }).content));
       const isError = (result as { isError?: boolean }).isError === true;
       const out: ToolOutput = { text };
       if (isError) out.is_error = true;
@@ -142,21 +150,22 @@ async function connectServer(
   const transport = new StdioClientTransport({
     command: server.command,
     args: server.args,
-    // Start from the SDK's hardened default allowlist (HOME / PATH / USER / …)
-    // so the child gets a working PATH WITHOUT inheriting the daemon's whole
-    // environment — provider API keys and other secrets must not leak into a
-    // third-party server binary. Only the server's own resolved `env:` is added.
+    // SDK allowlist (HOME/PATH/USER/…) as the base, NOT the daemon's full env —
+    // provider keys must not leak into a third-party binary. Only `server.env` added.
     env: { ...getDefaultEnvironment(), ...server.env },
     ...(server.cwd !== undefined ? { cwd: server.cwd } : {}),
-    stderr: "ignore",
+    // Piped so a spawn/handshake failure carries the child's own diagnostics.
+    stderr: "pipe",
+  });
+  let stderrTail = "";
+  transport.stderr?.on("data", (chunk: unknown) => {
+    if (stderrTail.length < 2000) stderrTail += String(chunk);
   });
   const client = new Client({ name: `fragua-${name}`, version: "0.1.0" }, { capabilities: {} });
-  // `connect` self-closes the transport if `initialize` fails, so a connect
-  // error leaves nothing spawned. `listTools` runs AFTER connect succeeds, so a
-  // failure there must close the client ourselves — otherwise the already-
-  // spawned child process leaks for the daemon's lifetime.
-  await client.connect(transport, { timeout: connectTimeoutMs, ...(signal ? { signal } : {}) });
+  // Close on any failure — a post-connect listTools throw would otherwise leak
+  // the spawned child for the daemon's lifetime.
   try {
+    await client.connect(transport, { timeout: connectTimeoutMs, ...(signal ? { signal } : {}) });
     const listed = (await client.listTools(undefined, {
       timeout: listTimeoutMs,
       ...(signal ? { signal } : {}),
@@ -164,13 +173,14 @@ async function connectServer(
     return { connection: { client, transport }, tools: listed.tools ?? [] };
   } catch (err) {
     await closeWithDeadline(client);
-    throw err;
+    const tail = stderrTail.trim().slice(-500);
+    const e = err instanceof Error ? err : new Error(String(err));
+    if (tail) e.message = `${e.message} (server stderr: ${tail})`;
+    throw e;
   }
 }
 
-/** Close a client but never block on it forever — a dead or unresponsive child
- * can leave `client.close()` (which awaits stdio drain) unsettled, which would
- * otherwise wedge the caller's teardown `await`. */
+// Deadline-bounded so a dead child's never-draining `close()` can't wedge teardown.
 async function closeWithDeadline(client: Client): Promise<void> {
   await Promise.race([
     client.close().catch(() => {}),
@@ -190,6 +200,8 @@ export function createMcpConnector(): McpConnector {
       const tools: AnyTool[] = [];
       const errors: McpServerError[] = [];
       const open: OpenConnection[] = [];
+      // First-wins dedup: two tools slugging to one name would route ambiguously.
+      const seenNames = new Set<string>();
 
       const config = loadMcpConfig(opts.cwd);
       if (!config.ok) {
@@ -222,16 +234,30 @@ export function createMcpConnector(): McpConnector {
             opts.signal,
           );
           open.push(connection);
-          for (const d of descriptors) tools.push(toFraguaTool(name, d, connection.client, callTimeoutMs));
+          for (const d of descriptors) {
+            const tool = toFraguaTool(name, d, connection.client, callTimeoutMs);
+            if (seenNames.has(tool.name)) {
+              errors.push({
+                server: name,
+                message: `tool "${tool.name}" collides with an earlier tool of the same name; skipped`,
+              });
+              continue;
+            }
+            seenNames.add(tool.name);
+            tools.push(tool);
+          }
         } catch (err) {
           errors.push({ server: name, message: `failed to connect: ${(err as Error).message}` });
         }
       }
 
+      let disposed = false;
       return {
         tools,
         errors,
         dispose: async () => {
+          if (disposed) return;
+          disposed = true;
           await Promise.allSettled(open.map((c) => closeWithDeadline(c.client)));
         },
       };

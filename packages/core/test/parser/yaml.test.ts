@@ -162,12 +162,22 @@ steps:
     expect(w013).toEqual([]);
   });
 
-  test("rejects mcp-servers on a non-llm step at parse time", () => {
+  test("rejects mcp-servers on a tool step at parse time", () => {
     expect(() =>
       parseWorkflow(`
 name: t
 steps:
   build: {type: tool, run: "make", mcp-servers: [github]}
+`),
+    ).toThrow(ParseError);
+  });
+
+  test("rejects mcp-servers on a human step at parse time", () => {
+    expect(() =>
+      parseWorkflow(`
+name: t
+steps:
+  gate: {type: human, text: "ok?", mcp-servers: [github]}
 `),
     ).toThrow(ParseError);
   });

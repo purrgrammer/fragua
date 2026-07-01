@@ -239,10 +239,14 @@ export class PiLlmBackend implements LlmBackend {
     // post-skill-merge `finalTools` below) so the diagnostic still fires
     // when the registry is genuinely empty — a registry that holds only
     // the force-included `skill` is still misconfigured.
-    if (allow && allow.length > 0 && selectedTools.length === 0) {
+    // `mcp__*` allow entries name tools materialised later (additive, per
+    // mcp-servers), not registry tools — exclude them so allowlisting only an
+    // MCP tool doesn't trip this gate.
+    const nonMcpAllow = allow?.filter((a) => !a.startsWith("mcp__"));
+    if (nonMcpAllow && nonMcpAllow.length > 0 && selectedTools.length === 0) {
       const registered = this.registry.list().map((t) => t.name);
       return fail(
-        `allowed_tools=[${allow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
+        `allowed_tools=[${allow?.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
           "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
       );
     }

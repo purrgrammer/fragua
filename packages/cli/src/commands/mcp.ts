@@ -59,8 +59,9 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
     console.log(chalk.yellow("no servers defined"));
     return 0;
   }
-  const set = await createMcpConnector().materialize(targets, { cwd });
+  let set: Awaited<ReturnType<ReturnType<typeof createMcpConnector>["materialize"]>> | undefined;
   try {
+    set = await createMcpConnector().materialize(targets, { cwd });
     let failed = false;
     for (const name of targets) {
       const err = set.errors.find((e) => e.server === name);
@@ -76,6 +77,6 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
     }
     return failed ? 1 : 0;
   } finally {
-    await set.dispose();
+    await set?.dispose();
   }
 }

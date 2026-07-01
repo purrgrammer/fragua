@@ -164,6 +164,24 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(disposed.n).toBe(1);
   });
 
+  test("allowed_tools naming only an MCP tool doesn't hard-fail before materialisation", async () => {
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "echoed!")], errors: [], disposed });
+    const { events, outcome } = await runMcp({
+      // Only an mcp__ tool in allowed_tools → registry.select() yields nothing,
+      // but the tool materialises additively, so the run must proceed.
+      attrs: { mcp_servers: ["srv"], allowed_tools: ["mcp__srv__echo"] },
+      connector,
+      script: [
+        fauxAssistantMessage([fauxToolCall("mcp__srv__echo", {}, { id: "tc1" })], { stopReason: "toolUse" }),
+        stop,
+      ],
+    });
+    expect(outcome.status).not.toBe("fail");
+    const ends = events.filter((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "mcp:srv:echo");
+    expect(ends.length).toBe(1);
+  });
+
   test("no mcpConnector wired → node runs without MCP, no crash", async () => {
     const faux = registerFauxProvider();
     try {
