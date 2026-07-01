@@ -6,7 +6,7 @@
 // Read-only. Works off the current directory's mcp.json; no store, no daemon.
 // See docs/proposals/mcp-tools.md.
 
-import { createMcpConnector, loadMcpConfig, mcpConfigPath, resolveMcpServer } from "@fragua/workspace";
+import { createMcpConnector, loadMcpConfig, mcpConfigPath, mcpToolPrefix, resolveMcpServer } from "@fragua/workspace";
 import chalk from "chalk";
 
 export interface McpOptions {
@@ -69,7 +69,7 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
         failed = true;
         continue;
       }
-      const prefix = `mcp__${name.toLowerCase().replace(/[^a-z0-9_]/g, "_")}__`;
+      const prefix = mcpToolPrefix(name);
       const tools = set.tools.filter((t) => t.name.startsWith(prefix));
       console.log(`${chalk.cyan(name)}  ${chalk.green(`${tools.length} tool(s)`)}`);
       for (const t of tools) console.log(`  ${chalk.dim(t.name)}`);

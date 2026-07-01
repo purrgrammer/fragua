@@ -36,7 +36,8 @@ matches "materialise all tools, no progressive disclosure" — an author opts in
 a *server*, not into each tool by name (MCP tool names are only known at connect
 time, so an allowlist would be unauthorable).
 
-`mcp-servers` is valid on `llm` steps only. `tool` / `human` steps ignore it.
+`mcp-servers` is valid on `llm` steps only — declaring it on a `tool` or
+`human` step is a parse error (not silently ignored).
 
 ## Server configuration
 

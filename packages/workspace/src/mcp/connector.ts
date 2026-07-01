@@ -21,6 +21,7 @@ import { loadMcpConfig, resolveMcpServer } from "./config.ts";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
+const CLOSE_DEADLINE_MS = 5_000;
 const MAX_TOOL_NAME_LEN = 128;
 
 export interface McpMaterializeOptions {
@@ -64,6 +65,14 @@ export function mcpToolName(server: string, tool: string): string {
   return name.slice(0, MAX_TOOL_NAME_LEN);
 }
 
+/** The `mcp__<server>__` prefix every tool from `server` shares. The single
+ * source of the slug rule — callers filtering tools by server (e.g. the CLI's
+ * `mcp check`) MUST use this rather than re-inlining the slug, or they desync
+ * from `mcpToolName` the moment `slug` changes. */
+export function mcpToolPrefix(server: string): string {
+  return `mcp__${slug(server)}__`;
+}
+
 interface McpContentBlock {
   type: string;
   text?: string;
@@ -73,7 +82,8 @@ interface McpContentBlock {
  * blocks pass through; non-text blocks (image / audio / resource) collapse to a
  * short placeholder — rich-content forwarding is deferred (MVP). */
 function renderContent(content: unknown): string {
-  if (!Array.isArray(content)) return typeof content === "string" ? content : JSON.stringify(content ?? null);
+  if (content == null) return "";
+  if (!Array.isArray(content)) return typeof content === "string" ? content : JSON.stringify(content);
   const parts: string[] = [];
   for (const block of content as McpContentBlock[]) {
     if (block && block.type === "text" && typeof block.text === "string") parts.push(block.text);
@@ -127,6 +137,7 @@ async function connectServer(
   server: { command: string; args: string[]; env: Record<string, string>; cwd?: string },
   connectTimeoutMs: number,
   listTimeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<{ connection: OpenConnection; tools: McpToolDescriptor[] }> {
   const transport = new StdioClientTransport({
     command: server.command,
@@ -144,14 +155,29 @@ async function connectServer(
   // error leaves nothing spawned. `listTools` runs AFTER connect succeeds, so a
   // failure there must close the client ourselves — otherwise the already-
   // spawned child process leaks for the daemon's lifetime.
-  await client.connect(transport, { timeout: connectTimeoutMs });
+  await client.connect(transport, { timeout: connectTimeoutMs, ...(signal ? { signal } : {}) });
   try {
-    const listed = (await client.listTools(undefined, { timeout: listTimeoutMs })) as { tools?: McpToolDescriptor[] };
+    const listed = (await client.listTools(undefined, {
+      timeout: listTimeoutMs,
+      ...(signal ? { signal } : {}),
+    })) as { tools?: McpToolDescriptor[] };
     return { connection: { client, transport }, tools: listed.tools ?? [] };
   } catch (err) {
-    await client.close().catch(() => {});
+    await closeWithDeadline(client);
     throw err;
   }
+}
+
+/** Close a client but never block on it forever — a dead or unresponsive child
+ * can leave `client.close()` (which awaits stdio drain) unsettled, which would
+ * otherwise wedge the caller's teardown `await`. */
+async function closeWithDeadline(client: Client): Promise<void> {
+  await Promise.race([
+    client.close().catch(() => {}),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, CLOSE_DEADLINE_MS).unref?.();
+    }),
+  ]);
 }
 
 export function createMcpConnector(): McpConnector {
@@ -173,6 +199,10 @@ export function createMcpConnector(): McpConnector {
       }
 
       for (const name of requested) {
+        if (opts.signal?.aborted) {
+          errors.push({ server: name, message: "run aborted before connect" });
+          continue;
+        }
         const raw = config.servers[name];
         if (raw === undefined) {
           errors.push({ server: name, message: `not defined in ${config.path}` });
@@ -189,6 +219,7 @@ export function createMcpConnector(): McpConnector {
             resolved.server,
             connectTimeoutMs,
             connectTimeoutMs,
+            opts.signal,
           );
           open.push(connection);
           for (const d of descriptors) tools.push(toFraguaTool(name, d, connection.client, callTimeoutMs));
@@ -201,7 +232,7 @@ export function createMcpConnector(): McpConnector {
         tools,
         errors,
         dispose: async () => {
-          await Promise.allSettled(open.map((c) => c.client.close()));
+          await Promise.allSettled(open.map((c) => closeWithDeadline(c.client)));
         },
       };
     },
