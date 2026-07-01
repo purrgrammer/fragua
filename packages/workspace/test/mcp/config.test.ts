@@ -47,49 +47,79 @@ describe("loadMcpConfig", () => {
     );
     const load = loadMcpConfig(cwd);
     expect(load.ok).toBe(true);
-    expect(load.servers["github"]?.command).toBe("npx");
-    expect(load.servers["github"]?.args).toEqual(["-y", "srv"]);
+    const g = load.servers["github"];
+    expect(g?.transport).toBe("stdio");
+    if (g?.transport !== "stdio") throw new Error("expected stdio");
+    expect(g.command).toBe("npx");
+    expect(g.args).toEqual(["-y", "srv"]);
   });
 
   test("reads .mcp.json from the project root (not .fragua/)", () => {
     const cwd = projectWith(JSON.stringify({ mcpServers: { fs: { command: "true" } } }));
     expect(mcpConfigPath(cwd)).toBe(join(cwd, ".mcp.json"));
-    expect(loadMcpConfig(cwd).servers["fs"]?.command).toBe("true");
+    const s = loadMcpConfig(cwd).servers["fs"];
+    expect(s?.transport === "stdio" && s.command).toBe("true");
   });
 
-  test("http/sse entries are tolerated (unsupported, not malformed); stdio entries still parse", () => {
+  test("http entries parse as http servers; sse is tolerated-but-unsupported", () => {
     const cwd = projectWith(
       JSON.stringify({
         mcpServers: {
           local: { command: "true" },
-          remote: { type: "http", url: "https://example.com/mcp" },
-          streamed: { url: "https://example.com/sse" },
+          github: { type: "http", url: "https://api.example.com/mcp", headers: { Authorization: "Bearer ${T}" } },
+          bare: { url: "https://example.com/mcp" },
+          legacy: { type: "sse", url: "https://example.com/sse" },
         },
       }),
     );
     const load = loadMcpConfig(cwd);
     expect(load.ok).toBe(true);
-    expect(Object.keys(load.servers)).toEqual(["local"]);
-    expect(load.unsupported["remote"]).toContain("http");
-    expect(load.unsupported["streamed"]).toBeDefined();
+    expect(Object.keys(load.servers).sort()).toEqual(["bare", "github", "local"]);
+    expect(load.servers["github"]?.transport).toBe("http");
+    expect(load.servers["bare"]?.transport).toBe("http");
+    expect(load.unsupported["legacy"]).toContain("sse");
   });
 });
 
 describe("resolveMcpServer", () => {
   test("substitutes ${VAR} from env in command / args / env values", () => {
     const r = resolveMcpServer(
-      { command: "${BIN}", args: ["--token=${TOKEN}"], env: { AUTH: "${TOKEN}" } },
+      { transport: "stdio", command: "${BIN}", args: ["--token=${TOKEN}"], env: { AUTH: "${TOKEN}" } },
       { BIN: "npx", TOKEN: "secret" },
     );
     expect(r.ok).toBe(true);
-    if (!r.ok) throw new Error("expected ok");
+    if (!r.ok || r.server.transport !== "stdio") throw new Error("expected stdio ok");
     expect(r.server.command).toBe("npx");
     expect(r.server.args).toEqual(["--token=secret"]);
     expect(r.server.env["AUTH"]).toBe("secret");
   });
 
+  test("substitutes ${VAR} in http url + header values", () => {
+    const r = resolveMcpServer(
+      { transport: "http", url: "https://${HOST}/mcp", headers: { Authorization: "Bearer ${TOKEN}" } },
+      { HOST: "api.example.com", TOKEN: "pat123" },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok || r.server.transport !== "http") throw new Error("expected http ok");
+    expect(r.server.url).toBe("https://api.example.com/mcp");
+    expect(r.server.headers["Authorization"]).toBe("Bearer pat123");
+  });
+
+  test("http server with an unset header var → skipped (missing listed)", () => {
+    const r = resolveMcpServer(
+      { transport: "http", url: "https://api.example.com/mcp", headers: { Authorization: "Bearer ${ABSENT}" } },
+      {},
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected err");
+    expect(r.missing).toContain("ABSENT");
+  });
+
   test("unset referenced var → ok:false listing the missing names", () => {
-    const r = resolveMcpServer({ command: "npx", env: { AUTH: "${TOKEN}", OTHER: "${MISSING}" } }, {});
+    const r = resolveMcpServer(
+      { transport: "stdio", command: "npx", env: { AUTH: "${TOKEN}", OTHER: "${MISSING}" } },
+      {},
+    );
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error("expected err");
     expect(r.missing).toContain("TOKEN");
@@ -97,9 +127,9 @@ describe("resolveMcpServer", () => {
   });
 
   test("bare $NAME is literal, not a reference", () => {
-    const r = resolveMcpServer({ command: "echo", args: ["$HOME/x"] }, {});
+    const r = resolveMcpServer({ transport: "stdio", command: "echo", args: ["$HOME/x"] }, {});
     expect(r.ok).toBe(true);
-    if (!r.ok) throw new Error("expected ok");
+    if (!r.ok || r.server.transport !== "stdio") throw new Error("expected stdio ok");
     expect(r.server.args).toEqual(["$HOME/x"]);
   });
 });

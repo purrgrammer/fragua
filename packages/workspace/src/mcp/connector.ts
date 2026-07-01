@@ -15,10 +15,12 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TSchema } from "@sinclair/typebox";
 import { truncate } from "../truncate.ts";
 import type { AnyTool, ToolOutput } from "../types.ts";
-import { loadMcpConfig, resolveMcpServer } from "./config.ts";
+import { loadMcpConfig, type ResolvedMcpServer, resolveMcpServer } from "./config.ts";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 // `tools/list` is metadata enumeration, not a tool call — give it a moderate
@@ -177,7 +179,6 @@ interface McpToolDescriptor {
 
 interface OpenConnection {
   client: Client;
-  transport: StdioClientTransport;
 }
 
 type ServerResult =
@@ -186,41 +187,51 @@ type ServerResult =
 
 async function connectServer(
   name: string,
-  server: { command: string; args: string[]; env: Record<string, string>; cwd?: string },
+  server: ResolvedMcpServer,
   connectTimeoutMs: number,
   listTimeoutMs: number,
   defaultCwd: string,
   signal?: AbortSignal,
 ): Promise<{ connection: OpenConnection; tools: McpToolDescriptor[] }> {
-  const transport = new StdioClientTransport({
-    command: server.command,
-    args: server.args,
-    // SDK allowlist (HOME/PATH/USER/…) as the base, NOT the daemon's full env —
-    // provider keys must not leak into a third-party binary. Only `server.env` added.
-    env: { ...getDefaultEnvironment(), ...server.env },
-    // Run in the project dir (where mcp.json lives) by default, not the daemon's
-    // launch dir; an author can override per-server via `cwd` in mcp.json.
-    cwd: server.cwd ?? defaultCwd,
-    // Piped so a spawn/handshake failure carries the child's own diagnostics.
-    stderr: "pipe",
-  });
-  // Keep this listener attached for the connection's lifetime: it drains the
-  // pipe continuously (a paused pipe would fill its OS buffer and stall the
-  // child); the cap only stops the tail string from growing, not the drain.
-  let stderrTail = "";
-  transport.stderr?.on("data", (chunk: unknown) => {
-    if (stderrTail.length < STDERR_TAIL_MAX) stderrTail += String(chunk).slice(0, STDERR_TAIL_MAX - stderrTail.length);
-  });
   const client = new Client({ name: `fragua-${name}`, version: "0.1.0" }, { capabilities: {} });
-  // Close on any failure — a post-connect listTools throw would otherwise leak
-  // the spawned child for the daemon's lifetime.
+  // Only stdio carries a child + stderr; http has neither.
+  let stderrTail = "";
+  // Close on ANY failure — a post-connect listTools throw would otherwise leak
+  // an stdio child (or a dangling http session) for the daemon's lifetime.
   try {
+    let transport: Transport;
+    if (server.transport === "http") {
+      transport = new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: { headers: server.headers },
+      }) as Transport;
+    } else {
+      const stdio = new StdioClientTransport({
+        command: server.command,
+        args: server.args,
+        // SDK allowlist (HOME/PATH/USER/…) as the base, NOT the daemon's full env —
+        // provider keys must not leak into a third-party binary. Only `server.env` added.
+        env: { ...getDefaultEnvironment(), ...server.env },
+        // Run in the project dir (where mcp.json lives) by default, not the daemon's
+        // launch dir; an author can override per-server via `cwd` in mcp.json.
+        cwd: server.cwd ?? defaultCwd,
+        // Piped so a spawn/handshake failure carries the child's own diagnostics.
+        stderr: "pipe",
+      });
+      // Listener stays attached for the connection's lifetime: it drains the pipe
+      // continuously (a paused pipe would fill its OS buffer and stall the child);
+      // the cap only stops the tail string from growing, not the drain.
+      stdio.stderr?.on("data", (chunk: unknown) => {
+        if (stderrTail.length < STDERR_TAIL_MAX)
+          stderrTail += String(chunk).slice(0, STDERR_TAIL_MAX - stderrTail.length);
+      });
+      transport = stdio;
+    }
     await client.connect(transport, { timeout: connectTimeoutMs, ...(signal ? { signal } : {}) });
     const listed = (await client.listTools(undefined, {
       timeout: listTimeoutMs,
       ...(signal ? { signal } : {}),
     })) as { tools?: McpToolDescriptor[] };
-    return { connection: { client, transport }, tools: listed.tools ?? [] };
+    return { connection: { client }, tools: listed.tools ?? [] };
   } catch (err) {
     await closeWithDeadline(client);
     const tail = stderrTail.trim().slice(-500);

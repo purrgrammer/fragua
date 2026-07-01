@@ -66,9 +66,9 @@ describe("createMcpConnector.materialize — error paths", () => {
     await set.dispose();
   });
 
-  test("requesting a remote (http/sse) server → unsupported-transport error, no connect", async () => {
-    const cwd = projectWith({ mcpServers: { remote: { type: "http", url: "https://example.com/mcp" } } });
-    const set = await createMcpConnector().materialize(["remote"], { cwd });
+  test("requesting an sse (deprecated) server → unsupported-transport error, no connect", async () => {
+    const cwd = projectWith({ mcpServers: { legacy: { type: "sse", url: "https://example.com/sse" } } });
+    const set = await createMcpConnector().materialize(["legacy"], { cwd });
     expect(set.tools).toEqual([]);
     expect(set.errors[0]?.message).toContain("unsupported transport");
     await set.dispose();

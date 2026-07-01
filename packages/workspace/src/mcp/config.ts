@@ -1,31 +1,41 @@
 // Load and resolve `<cwd>/.mcp.json` — the project-root MCP server registry,
-// the same file (and `{ "mcpServers": { name: {command, args?, env?, cwd?} } }`
-// shape) Claude Code and other tools read, so a repo already configured for MCP
-// works with fragua unchanged. `${VAR}` in command / args / env values is
-// substituted from the supplied environment; a referenced-but-unset var makes
-// the server unusable (skipped with an error at connect time) rather than
-// spawning a half-configured process.
+// the same file and `{ "mcpServers": {…} }` shape Claude Code and other tools
+// read, so a repo already configured for MCP works with fragua unchanged. Each
+// entry is stdio (`command`/`args`/`env`/`cwd`) or Streamable HTTP (`type:http`,
+// `url`, `headers`); legacy `sse` is recognised-but-unsupported. `${VAR}` in any
+// string value is substituted from the supplied environment; a referenced-but-
+// unset var makes the server unusable (skipped with an error at connect time)
+// rather than connecting half-configured.
 //
 // See docs/proposals/mcp-tools.md.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** A server entry as authored in mcp.json (pre-substitution). */
-export interface McpServerConfig {
+/** A stdio server entry as authored in mcp.json (pre-substitution). */
+export interface McpStdioServerConfig {
+  transport: "stdio";
   command: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
 }
 
-/** A server entry with all `${VAR}` refs resolved, ready to spawn. */
-export interface ResolvedMcpServer {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  cwd?: string;
+/** A Streamable-HTTP server entry (pre-substitution). `headers` carries static
+ * auth (`Authorization: Bearer ${TOKEN}`); OAuth is layered on later via an
+ * authProvider, not the file. */
+export interface McpHttpServerConfig {
+  transport: "http";
+  url: string;
+  headers?: Record<string, string>;
 }
+
+export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig;
+
+/** A server entry with all `${VAR}` refs resolved, ready to connect. */
+export type ResolvedMcpServer =
+  | { transport: "stdio"; command: string; args: string[]; env: Record<string, string>; cwd?: string }
+  | { transport: "http"; url: string; headers: Record<string, string> };
 
 export interface McpConfigLoad {
   /** Absolute path we looked at. */
@@ -55,14 +65,18 @@ export function mcpConfigPath(cwd: string): string {
 }
 
 type ServerClass =
-  | { kind: "stdio"; config: McpServerConfig }
+  | { kind: "server"; config: McpServerConfig }
   | { kind: "unsupported"; reason: string }
   | { kind: "malformed" };
 
-/** Classify a raw `mcpServers` entry. A `command` entry is a runnable stdio
- * server; an entry that names a remote transport (`url` / `type: http|sse`) is
- * a recognised-but-unsupported server (skipped, not an error); anything else is
- * malformed. */
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === "object" && value !== null && Object.values(value).every((e) => typeof e === "string");
+}
+
+/** Classify a raw `mcpServers` entry. A `command` entry is a stdio server; a
+ * `type: http` (or `url`) entry is a Streamable-HTTP server; a `type: sse` entry
+ * is recognised-but-unsupported (deprecated transport, skipped not errored);
+ * anything else is malformed. */
 function classifyServer(value: unknown): ServerClass {
   if (typeof value !== "object" || value === null) return { kind: "malformed" };
   const v = value as Record<string, unknown>;
@@ -74,17 +88,22 @@ function classifyServer(value: unknown): ServerClass {
     if (args !== undefined && (!Array.isArray(args) || !args.every((a) => typeof a === "string")))
       return { kind: "malformed" };
     if (cwd !== undefined && typeof cwd !== "string") return { kind: "malformed" };
-    if (env !== undefined) {
-      if (typeof env !== "object" || env === null) return { kind: "malformed" };
-      if (!Object.values(env as Record<string, unknown>).every((e) => typeof e === "string"))
-        return { kind: "malformed" };
-    }
-    return { kind: "stdio", config: v as unknown as McpServerConfig };
+    if (env !== undefined && !isStringRecord(env)) return { kind: "malformed" };
+    const config: McpStdioServerConfig = { transport: "stdio", command };
+    if (Array.isArray(args)) config.args = args as string[];
+    if (isStringRecord(env)) config.env = env;
+    if (typeof cwd === "string") config.cwd = cwd;
+    return { kind: "server", config };
   }
   const type = v["type"];
-  if (typeof v["url"] === "string" || type === "http" || type === "sse" || type === "streamable-http") {
-    const t = typeof type === "string" ? type : "remote";
-    return { kind: "unsupported", reason: `${t} transport (only stdio is supported)` };
+  const url = v["url"];
+  if (type === "sse") return { kind: "unsupported", reason: "sse transport (deprecated; use streamable http)" };
+  if (typeof url === "string" && (type === undefined || type === "http" || type === "streamable-http")) {
+    const headers = v["headers"];
+    if (headers !== undefined && !isStringRecord(headers)) return { kind: "malformed" };
+    const config: McpHttpServerConfig = { transport: "http", url };
+    if (isStringRecord(headers)) config.headers = headers;
+    return { kind: "server", config };
   }
   return { kind: "malformed" };
 }
@@ -123,7 +142,7 @@ export function loadMcpConfig(cwd: string): McpConfigLoad {
   const unsupported: Record<string, string> = {};
   for (const [name, entry] of Object.entries(map)) {
     const cls = classifyServer(entry);
-    if (cls.kind === "stdio") servers[name] = cls.config;
+    if (cls.kind === "server") servers[name] = cls.config;
     else if (cls.kind === "unsupported") unsupported[name] = cls.reason;
     else
       return {
@@ -131,7 +150,7 @@ export function loadMcpConfig(cwd: string): McpConfigLoad {
         ok: false,
         servers: {},
         unsupported: {},
-        error: `mcp server "${name}" is malformed (need a string "command", or a "url"/"type" for a remote server)`,
+        error: `mcp server "${name}" is malformed (need a string "command" for stdio, or a "url" for http)`,
       };
   }
   return { path, ok: true, servers, unsupported };
@@ -178,6 +197,14 @@ export function resolveMcpServer(
     return r.value;
   };
 
+  if (config.transport === "http") {
+    const url = collect(substitute(config.url, env));
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(config.headers ?? {})) headers[k] = collect(substitute(v, env));
+    if (missing.length > 0) return { ok: false, missing };
+    return { ok: true, server: { transport: "http", url, headers } };
+  }
+
   const command = collect(substitute(config.command, env));
   const args = (config.args ?? []).map((a) => collect(substitute(a, env)));
   const resolvedEnv: Record<string, string> = {};
@@ -187,7 +214,9 @@ export function resolveMcpServer(
   const cwd = config.cwd !== undefined ? collect(substitute(config.cwd, env)) : undefined;
 
   if (missing.length > 0) return { ok: false, missing };
-  const server: ResolvedMcpServer = { command, args, env: resolvedEnv };
-  if (cwd !== undefined) server.cwd = cwd;
+  const server: ResolvedMcpServer =
+    cwd !== undefined
+      ? { transport: "stdio", command, args, env: resolvedEnv, cwd }
+      : { transport: "stdio", command, args, env: resolvedEnv };
   return { ok: true, server };
 }

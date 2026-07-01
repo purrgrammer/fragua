@@ -334,12 +334,13 @@ steps:
 ```
 
 - **Additive, not a whitelist.** Declaring a server exposes *all* of its tools *on top of* `allowed-tools` — you opt into a server, not into each tool (MCP tool names are only known at connect time). `denied-tools` can still drop an individual materialised tool by its full name (`mcp__github__delete_repo`).
-- **Servers are declared** in `<project>/.mcp.json` at the repo root — the same file and shape Claude Code reads, so an MCP-configured repo just works; stdio transport (HTTP/SSE entries are tolerated but skipped):
+- **Servers are declared** in `<project>/.mcp.json` at the repo root — the same file and shape Claude Code reads, so an MCP-configured repo just works. Both stdio and Streamable-HTTP servers are supported (legacy SSE is skipped):
 
   ```json
-  { "mcpServers": { "github": {
-      "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } } } }
+  { "mcpServers": {
+      "fs":     { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] },
+      "github": { "type": "http", "url": "https://api.githubcopilot.com/mcp/",
+                  "headers": { "Authorization": "Bearer ${GITHUB_PAT}" } } } }
   ```
 
   `${VAR}` is resolved from the daemon's environment. A server whose credential is unset — or that fails to connect — is **skipped with a warning**, and the step runs with whatever tools did materialise; it never hangs or fails the step for a missing server.

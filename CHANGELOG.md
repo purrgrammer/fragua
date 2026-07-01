@@ -15,11 +15,14 @@ guarantee.
   is materialised as an ordinary tool named `mcp__<server>__<tool>`, added on
   top of `allowed-tools` (`denied-tools` can still remove individual ones).
   Servers are declared in `<project>/.mcp.json` (the same file and `mcpServers`
-  shape Claude Code reads, so an existing MCP-configured repo just works; stdio
-  transport, with HTTP/SSE entries tolerated-but-skipped); `${VAR}` in a
-  server's command/args/env is resolved from the environment, and a server
-  whose credential is missing or that fails to connect is skipped with a
-  warning rather than hanging or failing the step.
+  shape Claude Code reads, so an existing MCP-configured repo just works).
+  Both **stdio** (`command`/`args`) and **Streamable HTTP**
+  (`{ "type": "http", "url", "headers" }`) transports are supported — HTTP with
+  static header auth (`"Authorization": "Bearer ${TOKEN}"`) covers remote
+  servers like GitHub; the legacy SSE transport is tolerated-but-skipped.
+  `${VAR}` in a server's command/args/env/url/headers is resolved from the
+  environment, and a server whose credential is missing or that fails to connect
+  is skipped with a warning rather than hanging or failing the step.
   Connections are opened lazily per step and torn down when it finishes. New
   `fragua mcp ls` lists configured servers and their credential state;
   `fragua mcp check [server]` connects and lists the tools each exposes. OAuth,

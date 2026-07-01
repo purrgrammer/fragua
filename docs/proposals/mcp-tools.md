@@ -57,11 +57,19 @@ for MCP works with fragua unchanged:
 }
 ```
 
-- **Transport:** stdio only for the MVP (`command` + `args`). A shared `.mcp.json`
-  may also contain HTTP/SSE entries (`{ "type": "http", "url": … }`); those are
-  **tolerated but skipped** — the stdio servers still load, and requesting a
-  remote one yields a clear "unsupported transport" message rather than breaking
-  the whole file. HTTP/SSE transport itself is deferred.
+- **Transport:** **stdio** (`command` + `args`) and **Streamable HTTP**
+  (`{ "type": "http", "url": …, "headers": {…} }`). HTTP covers the remote
+  servers most tools ship (GitHub, ClickUp, Slack). Static auth goes in
+  `headers` (`"Authorization": "Bearer ${TOKEN}"`); OAuth is layered on
+  separately (see Auth below). The legacy **SSE** transport is
+  tolerated-but-skipped (deprecated; requesting one yields a clear message and
+  the rest of the file still loads).
+
+  ```json
+  { "mcpServers": { "github": {
+      "type": "http", "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer ${GITHUB_PAT}" } } } }
+  ```
 - **Secrets:** `${VAR}` in `command` / `args` / `env` values is substituted from
   the daemon's `process.env`. **If any referenced `${VAR}` is unset, the server
   is skipped with an error** — never a connection that hangs waiting on a

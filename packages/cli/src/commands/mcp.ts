@@ -48,9 +48,10 @@ export function mcpLsCommand(opts: McpOptions = {}): number {
   for (const name of names) {
     const server = load.servers[name];
     if (!server) continue;
+    const target = server.transport === "http" ? server.url : server.command;
     const resolved = resolveMcpServer(server, process.env);
     const status = resolved.ok ? chalk.green("ready") : chalk.yellow(`missing env: ${resolved.missing.join(", ")}`);
-    console.log(`  ${chalk.cyan(name)}  ${chalk.dim(server.command)}  ${status}`);
+    console.log(`  ${chalk.cyan(name)}  ${chalk.dim(`${server.transport}:${target}`)}  ${status}`);
   }
   for (const [name, reason] of unsupported) {
     console.log(`  ${chalk.cyan(name)}  ${chalk.yellow(reason)}`);
