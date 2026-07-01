@@ -240,10 +240,12 @@ export class PiLlmBackend implements LlmBackend {
     // when the registry is genuinely empty — a registry that holds only
     // the force-included `skill` is still misconfigured.
     // `mcp__*` allow entries name tools materialised later (additive, per
-    // mcp-servers), not registry tools — exclude them so allowlisting only an
-    // MCP tool doesn't trip this gate.
-    const nonMcpAllow = allow?.filter((a) => !a.startsWith("mcp__"));
-    if (nonMcpAllow && nonMcpAllow.length > 0 && selectedTools.length === 0) {
+    // mcp-servers), not registry tools — exclude them from the gate ONLY when a
+    // server is declared to materialise them. With no `mcp-servers:`, an
+    // `mcp__*` allow entry can never resolve, so it must still trip the gate.
+    const hasMcpServers = ((input.node.attrs.mcp_servers as string[] | undefined)?.length ?? 0) > 0;
+    const gateAllow = hasMcpServers ? allow?.filter((a) => !a.startsWith("mcp__")) : allow;
+    if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
       const registered = this.registry.list().map((t) => t.name);
       return fail(
         `allowed_tools=[${allow?.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +

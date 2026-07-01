@@ -64,9 +64,9 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
     set = await createMcpConnector().materialize(targets, { cwd });
     let failed = false;
     for (const name of targets) {
-      const err = set.errors.find((e) => e.server === name);
-      if (err) {
-        console.log(`${chalk.cyan(name)}  ${chalk.red(err.message)}`);
+      const unavailable = set.errors.find((e) => e.server === name && e.kind === "unavailable");
+      if (unavailable) {
+        console.log(`${chalk.cyan(name)}  ${chalk.red(unavailable.message)}`);
         failed = true;
         continue;
       }
@@ -74,6 +74,10 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
       const tools = set.tools.filter((t) => t.name.startsWith(prefix));
       console.log(`${chalk.cyan(name)}  ${chalk.green(`${tools.length} tool(s)`)}`);
       for (const t of tools) console.log(`  ${chalk.dim(t.name)}`);
+      // A collision is non-fatal — the server is live and its other tools listed.
+      for (const c of set.errors.filter((e) => e.server === name && e.kind === "collision")) {
+        console.log(`  ${chalk.yellow(c.message)}`);
+      }
     }
     return failed ? 1 : 0;
   } finally {

@@ -16,6 +16,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { TSchema } from "@sinclair/typebox";
+import { truncate } from "../truncate.ts";
 import type { AnyTool, ToolOutput } from "../types.ts";
 import { loadMcpConfig, resolveMcpServer } from "./config.ts";
 
@@ -23,6 +24,7 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 const CLOSE_DEADLINE_MS = 5_000;
 const MAX_TOOL_NAME_LEN = 128;
+const MCP_OUTPUT_MAX_CHARS = 100_000;
 
 export interface McpMaterializeOptions {
   /** Project cwd — `<cwd>/.fragua/mcp.json` is the server registry. */
@@ -35,10 +37,13 @@ export interface McpMaterializeOptions {
   callTimeoutMs?: number;
 }
 
-/** A server that was requested but produced no tools. */
+/** A requested server that produced no tools (`unavailable`), or one whose
+ * tool was dropped by the first-wins name dedup (`collision` — the server is
+ * still live and its other tools materialised). */
 export interface McpServerError {
   server: string;
   message: string;
+  kind: "unavailable" | "collision";
 }
 
 export interface McpToolset {
@@ -92,26 +97,25 @@ function renderContent(content: unknown): string {
   return parts.join("\n");
 }
 
-// XML boundary marking MCP output as untrusted third-party data (prompt-
-// injection defence); forged closers are escaped so output can't break out.
-function labelMcpOutput(server: string, tool: string, body: string): string {
-  const attr = (s: string) => s.replace(/[<>"]/g, "");
+// XML boundary labelling MCP output as external data. Attributes use the
+// slugged names (never malformed XML); an embedded closer is escaped so tool
+// output that happens to contain the tag can't close the envelope early.
+export function labelMcpOutput(server: string, tool: string, body: string): string {
   const safe = body.replaceAll("</mcp_output>", "&lt;/mcp_output&gt;");
-  return `<mcp_output server="${attr(server)}" tool="${attr(tool)}" trust="untrusted">\n${safe}\n</mcp_output>`;
+  return `<mcp_output server="${slug(server)}" tool="${slug(tool)}" trust="untrusted">\n${safe}\n</mcp_output>`;
 }
 
 function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client, callTimeoutMs: number): AnyTool {
-  const inputSchema = mcpTool.inputSchema ?? { type: "object" };
   return {
     name: mcpToolName(server, mcpTool.name),
     description: mcpTool.description ?? `MCP tool "${mcpTool.name}" from server "${server}".`,
     // MCP hands us a raw JSON Schema; pi-ai's tool-argument validator has a
     // plain-JSON-Schema fallback (it only reaches for TypeBox compilation when
     // the schema carries the TypeBox Kind symbol), so no translation is needed.
-    parameters: inputSchema as unknown as TSchema,
+    parameters: mcpParameters(mcpTool.inputSchema),
     // Side-effecting like `bash` — never re-run by the rehydrate sanitiser.
     idempotent: false,
-    truncation: { max_chars: 100_000, mode: "tail" },
+    truncation: { max_chars: MCP_OUTPUT_MAX_CHARS, mode: "tail" },
     async execute(args, _env, opts): Promise<ToolOutput> {
       const requestOptions: { timeout: number; signal?: AbortSignal } = { timeout: callTimeoutMs };
       if (opts?.signal) requestOptions.signal = opts.signal;
@@ -120,13 +124,27 @@ function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client
         undefined,
         requestOptions,
       );
-      const text = labelMcpOutput(server, mcpTool.name, renderContent((result as { content?: unknown }).content));
-      const isError = (result as { isError?: boolean }).isError === true;
-      const out: ToolOutput = { text };
-      if (isError) out.is_error = true;
+      // Bound the body BEFORE wrapping so the envelope's own truncation (tail
+      // mode) can't drop the opening tag and strip the label on large output.
+      const body = truncate(renderContent((result as { content?: unknown }).content), {
+        max_chars: MCP_OUTPUT_MAX_CHARS - 256,
+        mode: "tail",
+      });
+      const out: ToolOutput = { text: labelMcpOutput(server, mcpTool.name, body) };
+      if ((result as { isError?: boolean }).isError === true) out.is_error = true;
       return out;
     },
   };
+}
+
+// A plain-object JSON Schema passes through; anything else (missing, a $ref, a
+// non-object) falls back to an open object so a malformed schema can't wedge
+// pi-ai's validator — no attempt to police a well-formed one.
+function mcpParameters(inputSchema: unknown): TSchema {
+  if (inputSchema && typeof inputSchema === "object" && !Array.isArray(inputSchema) && !("$ref" in inputSchema)) {
+    return inputSchema as unknown as TSchema;
+  }
+  return { type: "object" } as unknown as TSchema;
 }
 
 interface McpToolDescriptor {
@@ -206,23 +224,27 @@ export function createMcpConnector(): McpConnector {
       const config = loadMcpConfig(opts.cwd);
       if (!config.ok) {
         const message = config.error ?? `no mcp.json found at ${config.path}`;
-        for (const name of requested) errors.push({ server: name, message });
+        for (const name of requested) errors.push({ server: name, message, kind: "unavailable" });
         return { tools, errors, dispose: async () => {} };
       }
 
       for (const name of requested) {
         if (opts.signal?.aborted) {
-          errors.push({ server: name, message: "run aborted before connect" });
+          errors.push({ server: name, message: "run aborted before connect", kind: "unavailable" });
           continue;
         }
         const raw = config.servers[name];
         if (raw === undefined) {
-          errors.push({ server: name, message: `not defined in ${config.path}` });
+          errors.push({ server: name, message: `not defined in ${config.path}`, kind: "unavailable" });
           continue;
         }
         const resolved = resolveMcpServer(raw, env);
         if (!resolved.ok) {
-          errors.push({ server: name, message: `missing environment variable(s): ${resolved.missing.join(", ")}` });
+          errors.push({
+            server: name,
+            message: `missing environment variable(s): ${resolved.missing.join(", ")}`,
+            kind: "unavailable",
+          });
           continue;
         }
         try {
@@ -230,7 +252,7 @@ export function createMcpConnector(): McpConnector {
             name,
             resolved.server,
             connectTimeoutMs,
-            connectTimeoutMs,
+            callTimeoutMs,
             opts.signal,
           );
           open.push(connection);
@@ -240,6 +262,7 @@ export function createMcpConnector(): McpConnector {
               errors.push({
                 server: name,
                 message: `tool "${tool.name}" collides with an earlier tool of the same name; skipped`,
+                kind: "collision",
               });
               continue;
             }
@@ -247,7 +270,7 @@ export function createMcpConnector(): McpConnector {
             tools.push(tool);
           }
         } catch (err) {
-          errors.push({ server: name, message: `failed to connect: ${(err as Error).message}` });
+          errors.push({ server: name, message: `failed to connect: ${(err as Error).message}`, kind: "unavailable" });
         }
       }
 

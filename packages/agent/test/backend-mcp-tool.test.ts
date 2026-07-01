@@ -146,7 +146,7 @@ describe("PiLlmBackend MCP materialisation", () => {
     const disposed = { n: 0 };
     const connector = stubConnector({
       tools: [],
-      errors: [{ server: "broken", message: "boom" }],
+      errors: [{ server: "broken", message: "boom", kind: "unavailable" }],
       disposed,
     });
     const { events } = await runMcp({
@@ -180,6 +180,19 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(outcome.status).not.toBe("fail");
     const ends = events.filter((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "mcp:srv:echo");
     expect(ends.length).toBe(1);
+  });
+
+  test("allowlisting an mcp__ tool but forgetting mcp-servers still fails loudly", async () => {
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [], errors: [], disposed });
+    const { outcome } = await runMcp({
+      // No mcp_servers → the mcp__ tool can never materialise, so the empty
+      // allowlist must trip the gate rather than run silently tool-less.
+      attrs: { allowed_tools: ["mcp__srv__echo"] },
+      connector,
+      script: [stop],
+    });
+    expect(outcome.status).toBe("fail");
   });
 
   test("no mcpConnector wired → node runs without MCP, no crash", async () => {
