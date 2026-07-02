@@ -14,6 +14,7 @@ import {
   type BundleManifest,
   buildExportRegistry,
   canonicalJson,
+  extractMcpOAuthLiterals,
   type FactEvent,
   type IntentEvent,
   isBlobRef,
@@ -125,6 +126,55 @@ describe("exportRunBundle", () => {
     // The artifact blob bytes physically travel.
     const blob = entries.find((e) => e.name.startsWith("blobs/"));
     expect(new TextDecoder().decode(blob!.data)).toBe("artifact-bytes");
+    store.close();
+  });
+
+  test("extractMcpOAuthLiterals picks tokens + client_secret, skips token-less/malformed", () => {
+    expect(
+      extractMcpOAuthLiterals(
+        JSON.stringify({
+          tokens: { access_token: "AT", refresh_token: "RT" },
+          clientInformation: { client_id: "public", client_secret: "CS" },
+        }),
+      ).sort(),
+    ).toEqual(["AT", "CS", "RT"]);
+    expect(extractMcpOAuthLiterals(JSON.stringify({ clientInformation: { client_id: "public" } }))).toEqual([]);
+    expect(extractMcpOAuthLiterals("not json{")).toEqual([]);
+  });
+
+  test("redacts an mcp_oauth token that appears in an exported run's payloads", async () => {
+    const store = freshStore();
+    const TOKEN = "mcp-oauth-access-DO-NOT-LEAK-0123456789abcdef";
+    store.upsertMcpOAuth("https://mcp.example.com/mcp", JSON.stringify({ tokens: { access_token: TOKEN } }));
+    // A run whose routing input embeds the token (a scrubbed export surface).
+    const sha = await seedWorkflow(store, "b".repeat(64));
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      priority: 3,
+      cwd: "/home/dev/proj",
+      projectId: "p",
+      projectName: "p",
+      workflowName: "wf",
+      workflowScope: "local",
+      initialRouting: { input: `token is ${TOKEN}` },
+    });
+    let v = store.getState(runId)!.version;
+    v = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: sha, contractVersion: 1, startNode: "work", baseGitSha: "b", baseGitRef: "main" },
+        },
+      ],
+      v,
+    ).newVersion;
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
+
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "x" });
+    expect(Buffer.from(bytes).includes(TOKEN)).toBe(false);
     store.close();
   });
 });

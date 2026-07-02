@@ -343,11 +343,12 @@ steps:
                   "headers": { "Authorization": "Bearer ${GITHUB_PAT}" } } } }
   ```
 
-  `${VAR}` is resolved from the daemon's environment. A server whose credential is unset — or that fails to connect — is **skipped with a warning**, and the step runs with whatever tools did materialise; it never hangs or fails the step for a missing server.
+  `${VAR}` is resolved from the project's `.env`/`.env.local` overlaid by the process environment (a token in `.env.local` works without exporting it or restarting the daemon). A server whose credential is unset — or that fails to connect — is **skipped with a warning**, and the step runs with whatever tools did materialise; it never hangs or fails the step for a missing server.
+- **Transports:** **stdio** (`command`/`args`) and **Streamable HTTP** (`{ "type": "http", "url", "headers" }`). A remote HTTP server with no static `Authorization` header authenticates via stored OAuth — `fragua mcp login <server>` runs the browser flow once, then the daemon reads the token headlessly (a static bearer over plaintext `http://` is refused; use `https`).
 - **`llm` only.** `mcp-servers` on a `tool`/`human` step is a parse error. Connections open lazily when the step runs and close when it finishes.
-- **Inspect before you author:** `fragua mcp ls` lists the project's servers and their credential state; `fragua mcp check [server]` connects and prints the exact tool names to reference in `denied-tools`.
+- **Inspect before you author:** `fragua mcp ls` lists the project's servers with their credential/OAuth state; `fragua mcp check [server]` connects and prints the exact tool names to reference in `allowed-tools`/`denied-tools`.
 
-Not yet supported: OAuth servers (skipped like any missing-credential server for now), HTTP transport, and progressive disclosure — see `docs/proposals/mcp-tools.md`.
+Not yet supported: progressive disclosure and a web server-state UI — see `docs/proposals/mcp-tools.md §7`.
 
 ### Tool steps
 

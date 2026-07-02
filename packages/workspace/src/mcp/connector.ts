@@ -106,6 +106,14 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }
 
+/** A loopback hostname — traffic to it never leaves the machine, so plaintext
+ * http to it doesn't expose credentials to an on-path observer. Covers the
+ * 127.0.0.0/8 range, IPv6 `::1` (with or without URL brackets), and `localhost`. */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === "localhost" || h === "::1" || h === "[::1]" || h.startsWith("127.");
+}
+
 export function mcpToolName(server: string, tool: string): string {
   // Cap the server slug first — same bound `mcpToolPrefix` uses — then the tool
   // slug at whatever room is left, so the result is always a valid
@@ -238,14 +246,17 @@ async function connectServer(
       if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
         throw new Error(`unsupported url scheme "${parsedUrl.protocol}" (http/https only)`);
       }
-      // A static bearer/credential header over plaintext http leaks the token to
-      // any on-path observer — refuse it (a `.mcp.json` copied with `http://` for
-      // local/proxy dev is the likely footgun). https or no static auth only.
-      if (
-        parsedUrl.protocol === "http:" &&
-        Object.keys(server.headers).some((k) => k.toLowerCase() === "authorization")
-      ) {
-        throw new Error("refusing to send an Authorization header over plaintext http — use https");
+      // Any credential over plaintext http to a NON-loopback host leaks it to an
+      // on-path observer, in BOTH auth branches: a static `Authorization` header,
+      // or the OAuth path where the SDK attaches `Bearer <access_token>` to every
+      // request. Refuse it (a `.mcp.json` copied with `http://` for a remote
+      // server is the footgun). Loopback (127.0.0.0/8, ::1, localhost) is exempt —
+      // that traffic never leaves the machine, and local dev/proxy servers use it.
+      if (parsedUrl.protocol === "http:" && !isLoopbackHost(parsedUrl.hostname)) {
+        const hasStaticAuth = Object.keys(server.headers).some((k) => k.toLowerCase() === "authorization");
+        if (hasStaticAuth || needsOAuthProvider(server, oauthProviderFor)) {
+          throw new Error("refusing to send credentials over plaintext http to a non-loopback host — use https");
+        }
       }
       // No static `Authorization` header + an injected factory → authenticate
       // through the OAuth provider. A provider persists tokens across runs and

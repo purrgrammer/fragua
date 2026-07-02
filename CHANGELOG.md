@@ -21,9 +21,10 @@ guarantee.
   Both **stdio** (`command`/`args`) and **Streamable HTTP**
   (`{ "type": "http", "url", "headers" }`) transports are supported — HTTP with
   static header auth (`"Authorization": "Bearer ${TOKEN}"`) covers remote
-  servers like GitHub; the legacy SSE transport is tolerated-but-skipped. A
-  static `Authorization` header over a plaintext `http://` URL is refused (the
-  token would leak on the wire) — use `https`.
+  servers like GitHub; the legacy SSE transport is tolerated-but-skipped.
+  Credentials (a static `Authorization` header, or an OAuth bearer token) over a
+  plaintext `http://` URL to a non-loopback host are refused — they'd leak on the
+  wire; use `https` (loopback dev servers are exempt).
   `${VAR}` in a server's command/args/env/url/headers is resolved against the
   project's `.env`/`.env.local` overlaid by the process environment (so a token
   in `.env.local` works without exporting it or restarting the daemon), and a
@@ -44,7 +45,9 @@ guarantee.
   cover confidential servers like Slack that forbid dynamic registration.
   `fragua mcp logout <server>` forgets a server's stored tokens. When no token
   is stored a run skips the server with a message to authenticate it rather than
-  hanging startup. Progressive disclosure is not yet supported.
+  hanging startup. Stored OAuth tokens and `client_secret` are redacted from
+  exported run bundles like provider credentials. Progressive disclosure is not
+  yet supported.
 - Quarantined runs now get a first-class operator surface. In the web UI a
   banner on the run detail page explains the quarantine reason, lists the
   orphaned intent seqs, and offers the three resolutions (`treat as done`,

@@ -14,6 +14,7 @@ import { createServer } from "node:http";
 import {
   createMcpConnector,
   loadMcpConfig,
+  loadProjectEnv,
   MCP_OAUTH_CALLBACK_URL,
   type McpHttpServerConfig,
   type McpServerConfig,
@@ -82,12 +83,16 @@ export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
     return Promise.resolve(0);
   }
 
+  // Mirror the connector's env view (project `.env`/`.env.local` ⊕ process.env)
+  // so a `.env.local` token doesn't show as `missing env` here while the daemon
+  // resolves it fine. Read once, not per server row.
+  const projectEnv = { ...loadProjectEnv(cwd), ...process.env };
   const render = (loggedIn?: (url: string) => boolean): number => {
     for (const name of names) {
       const server = load.servers[name];
       if (!server) continue;
       const target = server.transport === "http" ? server.url : server.command;
-      const resolved = resolveMcpServer(server, process.env);
+      const resolved = resolveMcpServer(server, projectEnv);
       const status = resolved.ok ? chalk.green("ready") : chalk.yellow(`missing env: ${resolved.missing.join(", ")}`);
       // OAuth column only when the row itself resolved — a missing-env row shows
       // `missing env: …` and nothing more (never a false `ready`).
@@ -228,7 +233,10 @@ function resolveOAuthTarget(
     console.error(chalk.yellow(`mcp: "${server}" already uses static auth (Authorization header) — no login needed`));
     return { ok: false, code: 1 };
   }
-  const resolved = resolveMcpServer(config, process.env);
+  // Resolve `${VAR}` the same way the connector does — project `.env`/`.env.local`
+  // overlaid by process.env — so the CLI doesn't report a `.env.local` token as
+  // missing when the daemon would resolve it fine.
+  const resolved = resolveMcpServer(config, { ...loadProjectEnv(cwd), ...process.env });
   if (!resolved.ok || resolved.server.transport !== "http") {
     const missing = resolved.ok ? "" : resolved.missing.join(", ");
     console.error(chalk.red(`mcp: cannot resolve url for "${server}"${missing ? ` (missing env: ${missing})` : ""}`));
@@ -390,7 +398,9 @@ async function runLoginFlow(
     const code = reqUrl.searchParams.get("code");
     const state = reqUrl.searchParams.get("state");
     const fail = (msg: string): void => {
-      resp.writeHead(400, { "content-type": "text/html" });
+      // `Connection: close` so `httpServer.close()` in the finally block doesn't
+      // wait out the browser's HTTP/1.1 keep-alive (~5s) before resolving.
+      resp.writeHead(400, { "content-type": "text/html", connection: "close" });
       resp.end(htmlPage("Authorization failed — return to your terminal for details."));
       rejectCode(new Error(msg));
     };
@@ -403,7 +413,7 @@ async function runLoginFlow(
           ? `authorization failed: ${sanitizeErrorParam(error)}`
           : "callback received without an authorization code",
       );
-    resp.writeHead(200, { "content-type": "text/html" });
+    resp.writeHead(200, { "content-type": "text/html", connection: "close" });
     resp.end(htmlPage("Authorization complete — you can close this tab and return to your terminal."));
     resolveCode(code);
   });

@@ -211,7 +211,13 @@ import {
   updateScheduleResumed,
   updateScheduleSkip,
 } from "./schedule-queries.ts";
-import { buildExportRegistry, isTextMime, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
+import {
+  buildExportRegistry,
+  extractMcpOAuthLiterals,
+  isTextMime,
+  scrubEventPayload,
+  scrubJsonStrings,
+} from "./scrub/export-registry.ts";
 import { type ScrubOptions, scrubText } from "./scrub/scrub.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
@@ -1698,10 +1704,16 @@ export class SqliteStore implements IEventStore {
     const events = allEvents.filter((e) => !EXPORT_DENYLIST.has(e.type));
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
 
+    // mcp_oauth tokens + client_secret are secret-bearing like provider creds and
+    // must be redacted from the bundle if they appear verbatim anywhere.
+    const mcpOAuthLiterals = this.listMcpOAuth().flatMap((r) =>
+      extractMcpOAuthLiterals(r.payload).map((value) => ({ value, source: "mcp_oauth" })),
+    );
+    const extraLiterals = [...mcpOAuthLiterals, ...(opts.extraLiterals ?? [])];
     const { registry, literalValues } = buildExportRegistry({
       providerCredentials: this.listProviderCredentials(),
       cwd: run.cwd,
-      ...(opts.extraLiterals !== undefined ? { extraLiterals: opts.extraLiterals } : {}),
+      ...(extraLiterals.length > 0 ? { extraLiterals } : {}),
     });
     const artifacts = this.listArtifacts(runId).sort(
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),

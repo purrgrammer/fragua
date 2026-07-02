@@ -93,15 +93,29 @@ describe("createMcpConnector.materialize — error paths", () => {
     await set.dispose();
   });
 
-  test("http server with a static Authorization header over plaintext http → refused, no token leak", async () => {
+  test("static Authorization header over plaintext http to a non-loopback host → refused, no token leak", async () => {
     const cwd = projectWith({
       mcpServers: {
-        proxy: { type: "http", url: "http://localhost:9/mcp", headers: { Authorization: "Bearer secret" } },
+        proxy: { type: "http", url: "http://insecure.example.com/mcp", headers: { Authorization: "Bearer secret" } },
       },
     });
     const set = await createMcpConnector().materialize(["proxy"], { cwd });
     expect(set.tools).toEqual([]);
     expect(set.errors[0]?.message).toMatch(/plaintext http/i);
+    await set.dispose();
+  });
+
+  test("OAuth over plaintext http to a non-loopback host → refused before any provider call", async () => {
+    const cwd = projectWith({ mcpServers: { remote: { type: "http", url: "http://insecure.example.com/mcp" } } });
+    let asked = false;
+    const oauthProviderFor = (): OAuthClientProvider | undefined => {
+      asked = true;
+      return undefined;
+    };
+    const set = await createMcpConnector({ oauthProviderFor }).materialize(["remote"], { cwd, connectTimeoutMs: 500 });
+    expect(set.tools).toEqual([]);
+    expect(set.errors[0]?.message).toMatch(/plaintext http/i);
+    expect(asked).toBe(false); // refused before the token would be attached
     await set.dispose();
   });
 

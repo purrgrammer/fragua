@@ -84,6 +84,18 @@ describe("mcp ls", () => {
     expect(await mcpLsCommand({ cwd })).toBe(1);
   });
 
+  test("a ${VAR} supplied only via .env.local resolves as ready (mirrors the connector's env view)", async () => {
+    const cwd = project({
+      mcpServers: { gh: { command: "true", env: { TOK: "${FRAGUA_DOTENV_ONLY_VAR}" } } },
+    });
+    // Not exported to process.env — only the project's .env.local carries it. The
+    // CLI must resolve it like the daemon does, not report "missing env".
+    writeFileSync(join(cwd, ".env.local"), "FRAGUA_DOTENV_ONLY_VAR=present\n");
+    expect(await mcpLsCommand({ cwd })).toBe(0);
+    expect(out()).toContain("ready");
+    expect(out()).not.toContain("missing env");
+  });
+
   test("stdio-only project lists without touching the store (works before any store exists)", async () => {
     const cwd = project({
       mcpServers: {
