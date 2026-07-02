@@ -142,6 +142,22 @@ describe("exportRunBundle", () => {
     expect(extractMcpOAuthLiterals("not json{")).toEqual([]);
   });
 
+  test("scrubEventPayload redacts a secret in an agent.warning message, leaving structural fields", () => {
+    const SECRET = "xoxp-DO-NOT-LEAK-0123456789abcdef";
+    const { registry } = buildExportRegistry({
+      providerCredentials: [],
+      cwd: null,
+      extraLiterals: [{ value: SECRET, source: "mcp_oauth" }],
+    });
+    const scrubbed = scrubEventPayload(
+      "agent.warning",
+      { message: `mcp server "x" skipped: failed to connect (server stderr: token=${SECRET})`, nodeId: "probe" },
+      registry,
+    ) as { message: string; nodeId: string };
+    expect(scrubbed.message).not.toContain(SECRET);
+    expect(scrubbed.nodeId).toBe("probe"); // structural field untouched
+  });
+
   test("redacts an mcp_oauth token that appears in an exported run's payloads", async () => {
     const store = freshStore();
     const TOKEN = "mcp-oauth-access-DO-NOT-LEAK-0123456789abcdef";

@@ -43,7 +43,12 @@ guarantee.
   authorization URL, catching the redirect on a fixed localhost callback, and
   persisting client registration + tokens) — `--client-id` / `--client-secret`
   cover confidential servers like Slack that forbid dynamic registration.
-  `fragua mcp logout <server>` forgets a server's stored tokens. When no token
+  `fragua mcp logout <server>` forgets a server's stored tokens. Confidential
+  client credentials can be supplied via `FRAGUA_MCP_CLIENT_ID` /
+  `FRAGUA_MCP_CLIENT_SECRET` env vars instead of `--client-id`/`--client-secret`,
+  keeping the secret out of the process argument list, and are persisted only
+  after the login succeeds (a failed attempt no longer leaves unvalidated
+  credentials the daemon would inherit). When no token
   is stored a run skips the server with a message to authenticate it rather than
   hanging startup. Stored OAuth tokens and `client_secret` are redacted from
   exported run bundles like provider credentials. Progressive disclosure is not

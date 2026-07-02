@@ -11,7 +11,8 @@
     },
     "slack": {
       "type": "http",
-      "url": "https://mcp.slack.com/mcp"
+      "url": "https://mcp.slack.com/mcp",
+      "headers": { "Authorization": "Bearer ${SLACK_USER_TOKEN}" }
     }
   }
 }

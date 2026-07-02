@@ -272,6 +272,20 @@ export function scrubEventPayload(
     }
   }
 
+  // Rule 1d: scrub the free-text `message` on agent.warning / agent.info. A
+  // skipped-MCP-server warning appends up to ~500 bytes of the server's stderr,
+  // which can echo a bearer token on a failed start — it must not survive export.
+  if (type === "agent.warning" || type === "agent.info") {
+    const val = src["message"];
+    if (typeof val === "string") {
+      const scrubbed = scrubText(val, registry, opts);
+      if (scrubbed !== val) {
+        if (out == null) out = { ...src };
+        out["message"] = scrubbed;
+      }
+    }
+  }
+
   // Rule 2: deep-scrub routing string values for the genesis event.
   if (type === "intent.run_enqueued") {
     const routing = src["routing"];

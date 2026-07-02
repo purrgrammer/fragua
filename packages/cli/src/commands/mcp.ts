@@ -10,6 +10,7 @@
 // See docs/proposals/mcp-tools.md.
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import {
   createMcpConnector,
@@ -31,7 +32,7 @@ import type { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/au
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import chalk from "chalk";
 import { makeMcpOAuthStore } from "../mcp-oauth-store.ts";
-import { type StoreClient, withStoreClient } from "../store-client.ts";
+import { resolveStorePath, type StoreClient, withStoreClient } from "../store-client.ts";
 
 export interface McpOptions {
   /** Project directory whose `.mcp.json` to read. Default `process.cwd()`. */
@@ -121,6 +122,11 @@ export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
     return Promise.resolve(render());
   }
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
+  // No store yet (fresh checkout) → nothing can be logged in. Render OAuth servers
+  // as "login required" directly instead of hard-failing on the missing DB.
+  if (!existsSync(resolveStorePath(clientOpts))) {
+    return Promise.resolve(render(() => false));
+  }
   // "logged in" means a usable token, not merely a row: `runLoginFlow` writes the
   // client-registration row before the browser redirect and only writes tokens on
   // callback, so a Ctrl-C in between leaves a token-less row. Report that as
@@ -222,7 +228,12 @@ function resolveOAuthTarget(
   }
   const config: McpServerConfig | undefined = load.servers[server];
   if (!config) {
-    console.error(chalk.red(`mcp: server "${server}" not found in ${mcpConfigPath(cwd)}`));
+    const unsupported = load.unsupported[server];
+    if (unsupported !== undefined) {
+      console.error(chalk.yellow(`mcp: "${server}" uses an unsupported transport: ${unsupported}`));
+    } else {
+      console.error(chalk.red(`mcp: server "${server}" not found in ${mcpConfigPath(cwd)}`));
+    }
     return { ok: false, code: 1 };
   }
   if (config.transport !== "http") {
@@ -296,9 +307,16 @@ export function mcpLoginCommand(
   const target = resolveOAuthTarget(server, cwd, true);
   if (!target.ok) return Promise.resolve(target.code);
   const factory = deps.transportFactory ?? defaultLoginTransport;
+  // Prefer env for the secret (and id) so it isn't exposed in the process arg
+  // list (`ps`/`/proc/PID/cmdline`); the flag stays a last resort.
+  const resolvedCreds: { clientId?: string; clientSecret?: string } = {};
+  const clientId = creds.clientId ?? process.env["FRAGUA_MCP_CLIENT_ID"];
+  const clientSecret = creds.clientSecret ?? process.env["FRAGUA_MCP_CLIENT_SECRET"];
+  if (clientId !== undefined) resolvedCreds.clientId = clientId;
+  if (clientSecret !== undefined) resolvedCreds.clientSecret = clientSecret;
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
   return withStoreClient(clientOpts, (client) =>
-    runLoginFlow(server, target.url, target.headers, creds, client, factory),
+    runLoginFlow(server, target.url, target.headers, resolvedCreds, client, factory),
   );
 }
 
@@ -449,11 +467,15 @@ async function runLoginFlow(
     // provider without these flags — can read client_id/secret to refresh tokens.
     // (With a preset, `clientInformation()` returns it in-memory and the SDK never
     // calls `saveClientInformation`, so it would otherwise never reach the store.)
-    if (creds.clientId !== undefined) {
+    // Deferred to AFTER a successful login: persisting up front writes an
+    // UNVALIDATED client_id/secret, and a wrong one then silently poisons every
+    // daemon run (which reads the stored row) with no hint to `logout`.
+    const persistConfidentialClient = (): void => {
+      if (creds.clientId === undefined) return;
       const info: OAuthClientInformation = { client_id: creds.clientId };
       if (creds.clientSecret !== undefined) info.client_secret = creds.clientSecret;
       authProvider.saveClientInformation(info);
-    }
+    };
 
     transport = transportFactory(url, headers, authProvider);
 
@@ -463,6 +485,7 @@ async function runLoginFlow(
       // is the other blocking leg). Mirrors the connector's connect timeout.
       await withTimeout(transport.connect(), 30_000, `timed out connecting to ${server}`);
       // Stored tokens were still valid — no interactive step required.
+      persistConfidentialClient();
       console.log(chalk.green(`Logged in to ${server}.`));
       return 0;
     } catch (e) {
@@ -477,7 +500,10 @@ async function runLoginFlow(
       300_000,
       "timed out after 300s waiting for the browser authorization callback",
     );
-    await transport.finishAuth(code);
+    // Bound the token exchange too — an auth server that goes unreachable between
+    // the redirect and this call would otherwise hang the CLI indefinitely.
+    await withTimeout(transport.finishAuth(code), 30_000, `timed out exchanging the auth code with ${server}`);
+    persistConfidentialClient();
     console.log(chalk.green(`Logged in to ${server}.`));
     return 0;
   } catch (e) {

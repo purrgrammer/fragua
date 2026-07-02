@@ -62,8 +62,6 @@ interface PersistedOAuthState {
   clientInformation?: OAuthClientInformation;
   tokens?: OAuthTokens;
   codeVerifier?: string;
-  /** CSRF `state` for the in-flight authorization, validated on the callback. */
-  authState?: string;
 }
 
 export class StoredOAuthProvider implements OAuthClientProvider {
@@ -77,6 +75,12 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   // each time. Distinct instances (login vs daemon) don't share it — correct,
   // they operate independently.
   private cache: PersistedOAuthState | undefined;
+  // The CSRF `state` is per-login and per-instance — it only has to survive the
+  // in-process browser round-trip (same provider instance handles both the
+  // authorize-URL build and the callback). Kept in memory, NOT in the shared
+  // store row, so a concurrent `mcp check`/second login for the same server can't
+  // clobber it (and read-only `check` never mutates the persisted row).
+  private pendingState: string | undefined;
 
   constructor(opts: StoredOAuthProviderOptions) {
     this.url = opts.url;
@@ -132,7 +136,7 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   // redirect, and validated against `expectedAuthState()` by the login callback.
   state(): string {
     const value = randomUUID();
-    this.write({ authState: value });
+    this.pendingState = value;
     return value;
   }
 
@@ -140,7 +144,7 @@ export class StoredOAuthProvider implements OAuthClientProvider {
    * progress. The interactive login server compares the returned `state`
    * against this before accepting the code. */
   expectedAuthState(): string | undefined {
-    return this.read().authState;
+    return this.pendingState;
   }
 
   clientInformation(): OAuthClientInformation | undefined {

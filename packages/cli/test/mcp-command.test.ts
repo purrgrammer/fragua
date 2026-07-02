@@ -84,6 +84,14 @@ describe("mcp ls", () => {
     expect(await mcpLsCommand({ cwd })).toBe(1);
   });
 
+  test("OAuth server on a fresh checkout (no store) → login required, exit 0, no db error", async () => {
+    const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });
+    const absentDb = join(mkdtempSync(join(tmpdir(), "fragua-cli-mcp-nostore-")), "absent.db");
+    expect(await mcpLsCommand({ cwd, dbPath: absentDb })).toBe(0);
+    expect(out()).toContain("login required");
+    expect(out()).not.toContain("no fragua store");
+  });
+
   test("a ${VAR} supplied only via .env.local resolves as ready (mirrors the connector's env view)", async () => {
     const cwd = project({
       mcpServers: { gh: { command: "true", env: { TOK: "${FRAGUA_DOTENV_ONLY_VAR}" } } },
@@ -196,6 +204,38 @@ describe("mcp login error paths (no listener / browser)", () => {
     });
     expect(await mcpLoginCommand("remote", {}, { cwd, dbPath })).toBe(1);
     expect(out()).toContain("no login needed");
+  });
+
+  test("SSE (unsupported) server → exit 1, unsupported-transport message (not 'not found')", async () => {
+    const dbPath = tempStore();
+    const cwd = project({ mcpServers: { legacy: { type: "sse", url: "https://x.example.com/sse" } } });
+    expect(await mcpLoginCommand("legacy", {}, { cwd, dbPath })).toBe(1);
+    expect(out()).toContain("unsupported transport");
+  });
+
+  test("a FAILED login does not persist the (unvalidated) client credentials", async () => {
+    const dbPath = tempStore();
+    const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });
+    const code = await mcpLoginCommand(
+      "remote",
+      { clientId: "1.2", clientSecret: "shh" },
+      { cwd, dbPath },
+      {
+        transportFactory: () => ({
+          connect: async () => {
+            throw new Error("boom — server unreachable");
+          },
+          finishAuth: async () => {},
+          close: async () => {},
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    // The bad client_id/secret must NOT reach the store — else the daemon inherits
+    // it and every run fails silently against the wrong credentials.
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    expect(store.getMcpOAuth("https://x.example.com/mcp")).toBeUndefined();
+    store.close();
   });
 
   test("valid stored token → fast-path connect resolves → exit 0, transport closed", async () => {

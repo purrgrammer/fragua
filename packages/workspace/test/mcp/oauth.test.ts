@@ -180,7 +180,7 @@ describe("StoredOAuthProvider", () => {
     expect(provider.tokens()).toEqual(tokens());
   });
 
-  test("state() persists a CSRF value a fresh instance reads back via expectedAuthState()", () => {
+  test("state() is per-instance in memory — never persisted, so a concurrent instance can't clobber it", () => {
     const store = fakeStore();
     const p1 = new StoredOAuthProvider({
       url: URL_A,
@@ -191,14 +191,21 @@ describe("StoredOAuthProvider", () => {
     const s = p1.state();
     expect(typeof s).toBe("string");
     expect(s.length).toBeGreaterThan(0);
+    // The SAME instance (which handles both the authorize build and the in-process
+    // callback) reads it back.
     expect(p1.expectedAuthState()).toBe(s);
-    // Must survive across the redirect (persisted, not in-memory).
+    // A DISTINCT instance (a concurrent `mcp check` / second login) does NOT share
+    // it and — crucially — did not overwrite p1's state in the store.
     const p2 = new StoredOAuthProvider({
       url: URL_A,
       store,
       redirectUrl: "http://localhost:8888/callback",
       onRedirect: () => {},
     });
-    expect(p2.expectedAuthState()).toBe(s);
+    expect(p2.expectedAuthState()).toBeUndefined();
+    p2.state();
+    expect(p1.expectedAuthState()).toBe(s); // p2's state didn't touch p1
+    // And nothing CSRF-related was written to the shared store row.
+    expect(store.load(URL_A)).toBeUndefined();
   });
 });
