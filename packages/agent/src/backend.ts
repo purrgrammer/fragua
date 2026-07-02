@@ -259,6 +259,11 @@ export class PiLlmBackend implements LlmBackend {
           "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
       );
     }
+    // `allowed_tools` names ONLY `mcp__*` tools and no core tool was selected — so
+    // the step's entire toolset hinges on MCP materialisation. Used by two gates
+    // below (no connector wired vs connector present but nothing materialised).
+    const mcpOnlyAllowlist =
+      allow !== undefined && allow.length > 0 && allow.every(isMcpToolName) && selectedTools.length === 0;
     // `willMaterialise` exempts `mcp__*` allow entries from the gate above so it
     // doesn't fire before materialisation — but with no connector wired they can
     // NEVER materialise, and the post-materialisation re-check below lives inside
@@ -266,9 +271,9 @@ export class PiLlmBackend implements LlmBackend {
     // a tool-less run. Catch that here. (A connector-present-but-servers-fail case
     // is caught after materialise; a connector present with no `mcp-servers:` makes
     // `willMaterialise` false, so the standard gate above already fires.)
-    if (!this.mcpConnector && allow && allow.length > 0 && allow.every(isMcpToolName) && selectedTools.length === 0) {
+    if (!this.mcpConnector && mcpOnlyAllowlist) {
       return fail(
-        `allowed_tools listed only MCP tools ([${allow.join(", ")}]) but no MCP connector is configured to materialise them.`,
+        `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but no MCP connector is configured to materialise them.`,
         { non_retryable: true },
       );
     }
@@ -376,15 +381,9 @@ export class PiLlmBackend implements LlmBackend {
       // the step would run tool-less but "successful", the exact silent-empty-tools
       // footgun the gate exists to prevent. Fail loudly instead. Config error, so
       // non-retryable; `dispose` still runs via the outer `finally`.
-      if (
-        mcpTools.length === 0 &&
-        selectedTools.length === 0 &&
-        allow &&
-        allow.length > 0 &&
-        allow.every(isMcpToolName)
-      ) {
+      if (mcpOnlyAllowlist && mcpTools.length === 0) {
         return fail(
-          `allowed_tools listed only MCP tools ([${allow.join(", ")}]) but none materialised from mcp-servers [${mcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
+          `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${mcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
           { non_retryable: true },
         );
       }

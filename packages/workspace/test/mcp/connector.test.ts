@@ -105,6 +105,20 @@ describe("createMcpConnector.materialize — error paths", () => {
     await set.dispose();
   });
 
+  test("a custom credential header (X-Api-Key) over plaintext http to a non-loopback host → refused", async () => {
+    // No Authorization header and no OAuth factory (the `mcp check` path) — the
+    // guard must still refuse, since any header over plaintext leaks.
+    const cwd = projectWith({
+      mcpServers: {
+        proxy: { type: "http", url: "http://insecure.example.com/mcp", headers: { "X-Api-Key": "sk-secret" } },
+      },
+    });
+    const set = await createMcpConnector().materialize(["proxy"], { cwd });
+    expect(set.tools).toEqual([]);
+    expect(set.errors[0]?.message).toMatch(/plaintext http/i);
+    await set.dispose();
+  });
+
   test("OAuth over plaintext http to a non-loopback host → refused before any provider call", async () => {
     const cwd = projectWith({ mcpServers: { remote: { type: "http", url: "http://insecure.example.com/mcp" } } });
     let asked = false;

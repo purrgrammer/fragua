@@ -247,14 +247,14 @@ async function connectServer(
         throw new Error(`unsupported url scheme "${parsedUrl.protocol}" (http/https only)`);
       }
       // Any credential over plaintext http to a NON-loopback host leaks it to an
-      // on-path observer, in BOTH auth branches: a static `Authorization` header,
-      // or the OAuth path where the SDK attaches `Bearer <access_token>` to every
-      // request. Refuse it (a `.mcp.json` copied with `http://` for a remote
-      // server is the footgun). Loopback (127.0.0.0/8, ::1, localhost) is exempt —
-      // that traffic never leaves the machine, and local dev/proxy servers use it.
+      // on-path observer: ANY request header (not just `Authorization` — a custom
+      // `X-Api-Key` is just as sensitive), or the OAuth path where the SDK attaches
+      // `Bearer <access_token>` to every request. Refuse it (a `.mcp.json` copied
+      // with `http://` for a remote server is the footgun). Loopback (127.0.0.0/8,
+      // ::1, localhost) is exempt — that traffic never leaves the machine, and
+      // local dev/proxy servers use it.
       if (parsedUrl.protocol === "http:" && !isLoopbackHost(parsedUrl.hostname)) {
-        const hasStaticAuth = Object.keys(server.headers).some((k) => k.toLowerCase() === "authorization");
-        if (hasStaticAuth || needsOAuthProvider(server, oauthProviderFor)) {
+        if (Object.keys(server.headers).length > 0 || needsOAuthProvider(server, oauthProviderFor)) {
           throw new Error("refusing to send credentials over plaintext http to a non-loopback host — use https");
         }
       }
