@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadMcpConfig, mcpConfigPath, resolveMcpServer } from "../../src/mcp/config.ts";
+import { loadMcpConfig, loadProjectEnv, mcpConfigPath, resolveMcpServer } from "../../src/mcp/config.ts";
 
 function projectWith(json: string): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-cfg-"));
@@ -78,6 +78,24 @@ describe("loadMcpConfig", () => {
     expect(load.servers["github"]?.transport).toBe("http");
     expect(load.servers["bare"]?.transport).toBe("http");
     expect(load.unsupported["legacy"]).toContain("sse");
+  });
+});
+
+describe("loadProjectEnv", () => {
+  test(".env.local overrides .env; comments / export / quotes handled", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-env-"));
+    writeFileSync(join(cwd, ".env"), '# base config\nFOO=base\nexport BAR="quoted"\nBAZ=only-in-env\n');
+    writeFileSync(join(cwd, ".env.local"), "FOO=local\nTOK='sek ret'\n");
+    const env = loadProjectEnv(cwd);
+    expect(env["FOO"]).toBe("local"); // .env.local overrides .env
+    expect(env["BAR"]).toBe("quoted"); // export prefix + double quotes stripped
+    expect(env["BAZ"]).toBe("only-in-env");
+    expect(env["TOK"]).toBe("sek ret"); // single quotes preserve the space
+  });
+
+  test("absent files → empty record", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-env-none-"));
+    expect(loadProjectEnv(cwd)).toEqual({});
   });
 });
 

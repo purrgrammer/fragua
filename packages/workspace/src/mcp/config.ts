@@ -64,6 +64,43 @@ export function mcpConfigPath(cwd: string): string {
   return join(cwd, MCP_CONFIG_RELPATH);
 }
 
+/** Parse `KEY=VALUE` lines from a dotenv-style file; `{}` if absent/unreadable.
+ * Minimal by design (no dependency): `#` comments, optional `export `, and
+ * surrounding matching quotes are handled; anything else is a literal value. */
+function parseEnvFile(path: string): Record<string, string> {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    let key = trimmed.slice(0, eq).trim();
+    if (key.startsWith("export ")) key = key.slice(7).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let val = trimmed.slice(eq + 1).trim();
+    if (val.length >= 2 && ((val[0] === '"' && val.endsWith('"')) || (val[0] === "'" && val.endsWith("'")))) {
+      val = val.slice(1, -1);
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
+/** Project-scoped `${VAR}` sources for MCP config: `<cwd>/.env` then
+ * `<cwd>/.env.local` (local overrides base). Callers merge `process.env` OVER
+ * this so an explicitly-exported var always wins — and so this works for the
+ * compiled binary + a long-lived daemon without relying on bun's implicit,
+ * start-time dotenv load. */
+export function loadProjectEnv(cwd: string): Record<string, string> {
+  return { ...parseEnvFile(join(cwd, ".env")), ...parseEnvFile(join(cwd, ".env.local")) };
+}
+
 type ServerClass =
   | { kind: "server"; config: McpServerConfig }
   | { kind: "unsupported"; reason: string }

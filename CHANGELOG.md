@@ -20,9 +20,11 @@ guarantee.
   (`{ "type": "http", "url", "headers" }`) transports are supported — HTTP with
   static header auth (`"Authorization": "Bearer ${TOKEN}"`) covers remote
   servers like GitHub; the legacy SSE transport is tolerated-but-skipped.
-  `${VAR}` in a server's command/args/env/url/headers is resolved from the
-  environment, and a server whose credential is missing or that fails to connect
-  is skipped with a warning rather than hanging or failing the step.
+  `${VAR}` in a server's command/args/env/url/headers is resolved against the
+  project's `.env`/`.env.local` overlaid by the process environment (so a token
+  in `.env.local` works without exporting it or restarting the daemon), and a
+  server whose credential is missing or that fails to connect is skipped with a
+  warning rather than hanging or failing the step.
   Connections are opened lazily per step and torn down when it finishes. New
   `fragua mcp ls` lists configured servers with their credential and OAuth state
   (`ready` / `logged in` / `login required`); `fragua mcp check [server]`

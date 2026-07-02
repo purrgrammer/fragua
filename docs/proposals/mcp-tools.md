@@ -70,11 +70,14 @@ for MCP works with fragua unchanged:
       "type": "http", "url": "https://api.githubcopilot.com/mcp/",
       "headers": { "Authorization": "Bearer ${GITHUB_PAT}" } } } }
   ```
-- **Secrets:** `${VAR}` in `command` / `args` / `env` values is substituted from
-  the daemon's `process.env`. **If any referenced `${VAR}` is unset, the server
-  is skipped with an error** — never a connection that hangs waiting on a
-  half-configured server. No `.env` file loading in the MVP; the operator
-  exports vars before starting the harness.
+- **Secrets:** `${VAR}` in `command` / `args` / `env` / `url` / `headers` values
+  is resolved against the project's `<cwd>/.env` then `.env.local` (local
+  overrides base), overlaid by `process.env` (an exported var always wins). This
+  is loaded per-resolve from the run's project dir, so a token in `.env.local`
+  reaches a workflow run without exporting it or restarting the daemon, and it
+  works for the compiled binary (not just `bun run`'s implicit dotenv).
+  **If any referenced `${VAR}` is unset, the server is skipped with an error** —
+  never a connection that hangs waiting on a half-configured server.
 - **Scope:** project root only for the MVP. A user-level `~/.mcp.json` cascade
   (mirroring the config.yaml cascade) is a later addition.
 

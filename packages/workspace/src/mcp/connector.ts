@@ -21,7 +21,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TSchema } from "@sinclair/typebox";
 import { truncate } from "../truncate.ts";
 import type { AnyTool, ToolOutput } from "../types.ts";
-import { loadMcpConfig, type ResolvedMcpServer, resolveMcpServer } from "./config.ts";
+import { loadMcpConfig, loadProjectEnv, type ResolvedMcpServer, resolveMcpServer } from "./config.ts";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 // `tools/list` is metadata enumeration, not a tool call — give it a moderate
@@ -294,7 +294,10 @@ async function closeWithDeadline(client: Client): Promise<void> {
 export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
   return {
     async materialize(serverNames, opts): Promise<McpToolset> {
-      const env = opts.env ?? process.env;
+      // Resolve `${VAR}` against the project's .env/.env.local overlaid by
+      // process.env (exported vars win) — so a token in .env.local reaches a
+      // workflow run's MCP config without exporting it or restarting the daemon.
+      const env = opts.env ?? { ...loadProjectEnv(opts.cwd), ...process.env };
       const connectTimeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
       const callTimeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
       const requested = [...new Set(serverNames)];
