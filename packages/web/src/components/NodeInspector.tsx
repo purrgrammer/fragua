@@ -69,6 +69,7 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
   const skills = (attrs.skills as string[] | undefined) ?? [];
   const allowedTools = (attrs.allowed_tools as string[] | undefined) ?? [];
   const deniedTools = (attrs.denied_tools as string[] | undefined) ?? [];
+  const mcpServers = (attrs.mcp_servers as string[] | undefined) ?? [];
   const routes = Array.isArray(attrs.routes) ? (attrs.routes as string[]) : [];
   const isHumanNode = node.type === "human";
 
@@ -148,6 +149,17 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         <Section title="tools">
           {allowedTools.length > 0 && <ListField label="allowed" items={allowedTools} />}
           {deniedTools.length > 0 && <ListField label="denied" items={deniedTools} />}
+        </Section>
+      )}
+
+      {/* MCP servers — the servers this llm step opts into. Their tools
+       *  materialise as `mcp__<server>__<tool>`; `allowed`/`denied` above
+       *  narrow that set. */}
+      {mcpServers.length > 0 && (
+        <Section title="mcp servers">
+          <div data-testid="node-inspector-mcp-servers">
+            <ListField label="servers" items={mcpServers} />
+          </div>
         </Section>
       )}
 
@@ -305,8 +317,8 @@ function ListField({ label, items }: { label: string; items: readonly string[] }
       <span className="w-24 shrink-0 text-sw-xs uppercase tracking-[0.06em] text-sw-muted">{label}</span>
       <ul className="flex min-w-0 flex-1 flex-wrap gap-1">
         {items.map((item) => (
-          <li key={item}>
-            <code className="rounded-sw-default border border-sw-border px-1 py-0.5 text-sw-xs text-sw-text">
+          <li key={item} className="min-w-0 max-w-full">
+            <code className="block break-all whitespace-normal rounded-sw-default border border-sw-border px-1 py-0.5 text-sw-xs text-sw-text">
               {item}
             </code>
           </li>

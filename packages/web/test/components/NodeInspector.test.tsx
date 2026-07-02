@@ -70,6 +70,25 @@ describe("NodeInspector", () => {
     expect(text).toContain("ast_search");
   });
 
+  it("lists mcp-servers a llm node opts into", () => {
+    const src = `name: demo
+steps:
+  probe:
+    type: llm
+    mcp-servers: [github, clickup]
+    allowed-tools: [mcp__github__search_repositories]
+    prompt: probe
+`;
+    const probe = parseWorkflow(src).nodes["probe"];
+    expect(probe).toBeTruthy();
+    if (!probe) return;
+    const { container } = render(<NodeInspector node={probe} />);
+    const section = within(container).getByTestId("node-inspector-mcp-servers");
+    const text = section.textContent ?? "";
+    expect(text).toContain("github");
+    expect(text).toContain("clickup");
+  });
+
   it("shows live state when a NodeState entry is supplied", () => {
     const a = nodes()["a"];
     if (!a) return;
