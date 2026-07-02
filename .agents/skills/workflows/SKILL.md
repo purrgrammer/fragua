@@ -333,7 +333,7 @@ steps:
     prompt: Summarise the open issues and file a report.
 ```
 
-- **Additive, not a whitelist.** Declaring a server exposes *all* of its tools *on top of* `allowed-tools` — you opt into a server, not into each tool (MCP tool names are only known at connect time). `denied-tools` can still drop an individual materialised tool by its full name (`mcp__github__delete_repo`).
+- **Declaring a server adds all its tools; `allowed-tools` narrows only if it names MCP tools.** `mcp-servers: [github]` exposes every github tool. Listing specific `mcp__*` tools in `allowed-tools` narrows the MCP set to those (pin a step to, e.g., read-only tools; names come from `fragua mcp check`); listing only *core* tools in `allowed-tools` leaves the MCP set untouched. `denied-tools` drops individual tools by full name (`mcp__github__delete_repo`).
 - **Servers are declared** in `<project>/.mcp.json` at the repo root — the same file and shape Claude Code reads, so an MCP-configured repo just works. Both stdio and Streamable-HTTP servers are supported (legacy SSE is skipped):
 
   ```json

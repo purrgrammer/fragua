@@ -29,12 +29,13 @@ steps:
       Look at the open issues and file a summary.
 ```
 
-`mcp-servers` is **additive**: declaring a server exposes *all* of its tools to
-the step, on top of whatever `allowed-tools` selects. `denied-tools` can still
-remove individual materialised tools by name (`mcp__github__delete_repo`). This
-matches "materialise all tools, no progressive disclosure" — an author opts into
-a *server*, not into each tool by name (MCP tool names are only known at connect
-time, so an allowlist would be unauthorable).
+Declaring a server in `mcp-servers` exposes **all** of its tools. `allowed-tools`
+narrows the MCP set **only when it names specific `mcp__*` tools** — then only
+those materialise; an `allowed-tools` that lists only core tools leaves the MCP
+set untouched (you narrowed core, not MCP). `denied-tools` always subtracts. So:
+declare a server to get all its tools; to pin a step to specific MCP tools (e.g.
+read-only), also list those tool names in `allowed-tools` (names come from
+`fragua mcp check`).
 
 `mcp-servers` is valid on `llm` steps only — declaring it on a `tool` or
 `human` step is a parse error (not silently ignored).

@@ -324,12 +324,14 @@ export class PiLlmBackend implements LlmBackend {
       finalTools = finalTools.filter((t) => t.name !== "skill");
     }
 
-    // Materialise MCP-server tools for this node. Lazy + additive: declaring a
-    // server exposes all of its tools on top of `allowed_tools`; `denied_tools`
-    // can still remove individual ones by name. A server that can't connect
-    // (missing credential, spawn failure, bad mcp.json) is skipped with an
-    // `agent.warning` — never fatal to the node. Teardown is registered on
-    // `disposers` so the connection is released on every exit path.
+    // Materialise MCP-server tools for this node. Declaring a server in
+    // `mcp-servers` exposes ALL of its tools. `allowed_tools` narrows the MCP set
+    // ONLY when it names specific `mcp__*` tools — then only those materialise;
+    // an `allowed_tools` that lists only core tools leaves the MCP set untouched
+    // (you narrowed core, not MCP). `denied_tools` always subtracts. A server
+    // that can't connect is skipped with an `agent.warning` — never fatal.
+    // Teardown is registered on `disposers` so the connection is released on
+    // every exit path.
     const mcpServers = input.node.attrs.mcp_servers as string[] | undefined;
     if (this.mcpConnector && mcpServers && mcpServers.length > 0) {
       const materializeOpts: Parameters<McpConnector["materialize"]>[1] = { cwd: runProjectCwd };
@@ -337,7 +339,11 @@ export class PiLlmBackend implements LlmBackend {
       const toolset = await this.mcpConnector.materialize(mcpServers, materializeOpts);
       disposers.push(() => toolset.dispose());
       const denied = new Set((input.node.attrs.denied_tools as string[] | undefined) ?? []);
-      const mcpTools = toolset.tools.filter((t) => !denied.has(t.name));
+      const mcpAllow = allow?.filter((a) => isMcpToolName(a));
+      const mcpAllowSet = mcpAllow && mcpAllow.length > 0 ? new Set(mcpAllow) : undefined;
+      const mcpTools = toolset.tools.filter(
+        (t) => !denied.has(t.name) && (mcpAllowSet === undefined || mcpAllowSet.has(t.name)),
+      );
       finalTools = [...finalTools, ...mcpTools];
       if (input.emit) {
         for (const e of toolset.errors) {

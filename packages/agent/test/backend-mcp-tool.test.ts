@@ -1,9 +1,9 @@
 // PiLlmBackend — the MCP materialisation block (backend.ts). A node's
-// `mcp_servers` are materialised through the injected `McpConnector`, appended
-// to the tool set (additive over `allowed_tools`, minus `denied_tools`), their
-// connector `errors` surface as `agent.warning`, and the connection is disposed
-// on run completion. Driven against the faux provider with a stub connector so
-// no real subprocess is spawned.
+// `mcp_servers` are materialised through the injected `McpConnector` and added to
+// the tool set; `allowed_tools` narrows the MCP set only when it names `mcp__*`
+// tools, `denied_tools` subtracts, connector `errors` surface as `agent.warning`,
+// and the connection is disposed on run completion. Driven against the faux
+// provider with a stub connector so no real subprocess is spawned.
 //
 // Note on names: a materialised tool's fragua name is `mcp__<server>__<tool>`;
 // the event `tool_name` is the unsanitised form (`__` → `:`), so the echo tool
@@ -140,6 +140,50 @@ describe("PiLlmBackend MCP materialisation", () => {
     const result = end?.data["result"] as { content?: Array<{ text?: string }> } | undefined;
     expect((result?.content ?? []).some((b) => typeof b.text === "string" && b.text.includes("not found"))).toBe(true);
     expect(disposed.n).toBe(1);
+  });
+
+  test("allowed_tools listing an mcp__ tool restricts MCP tools to those (allowlist)", async () => {
+    const disposed = { n: 0 };
+    const connector = stubConnector({
+      tools: [mcpStubTool("mcp__srv__echo", "echoed!"), mcpStubTool("mcp__srv__danger", "boom")],
+      errors: [],
+      disposed,
+    });
+    // Only echo is allowlisted → danger must not be wired even though its server
+    // is declared; echo runs.
+    const { events, outcome } = await runMcp({
+      attrs: { mcp_servers: ["srv"], allowed_tools: ["mcp__srv__echo"] },
+      connector,
+      script: [
+        fauxAssistantMessage(
+          [fauxToolCall("mcp__srv__echo", {}, { id: "tc1" }), fauxToolCall("mcp__srv__danger", {}, { id: "tc2" })],
+          { stopReason: "toolUse" },
+        ),
+        stop,
+      ],
+    });
+    expect(outcome.status).not.toBe("fail");
+    const echoEnd = events.find((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "mcp:srv:echo");
+    expect(echoEnd?.data["is_error"]).toBeFalsy(); // allowlisted → ran
+    const dangerEnd = events.find((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "mcp:srv:danger");
+    expect(dangerEnd?.data["is_error"]).toBe(true); // not allowlisted → not wired (not-found)
+  });
+
+  test("allowed_tools with only core tools does NOT narrow the MCP set (server tools stay)", async () => {
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "echoed!")], errors: [], disposed });
+    // allowed_tools narrows core to `read` but names no mcp__ tool → the server's
+    // tools are untouched, so echo is still available and runs.
+    const { events } = await runMcp({
+      attrs: { mcp_servers: ["srv"], allowed_tools: ["read"] },
+      connector,
+      script: [
+        fauxAssistantMessage([fauxToolCall("mcp__srv__echo", {}, { id: "tc1" })], { stopReason: "toolUse" }),
+        stop,
+      ],
+    });
+    const end = events.find((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "mcp:srv:echo");
+    expect(end?.data["is_error"]).toBeFalsy(); // mcp set not narrowed → echo ran
   });
 
   test("connector errors surface as agent.warning; dispose still runs", async () => {

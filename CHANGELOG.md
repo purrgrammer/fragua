@@ -12,8 +12,10 @@ guarantee.
 
 - **MCP tools (experimental).** An `llm` step can now opt into Model Context
   Protocol servers with `mcp-servers: [name, …]`. Every tool the servers expose
-  is materialised as an ordinary tool named `mcp__<server>__<tool>`, added on
-  top of `allowed-tools` (`denied-tools` can still remove individual ones).
+  is materialised as an ordinary tool named `mcp__<server>__<tool>`. Declaring a
+  server adds all its tools; naming specific `mcp__*` tools in `allowed-tools`
+  narrows the MCP set to those (listing only core tools leaves it untouched), and
+  `denied-tools` removes individual ones.
   Servers are declared in `<project>/.mcp.json` (the same file and `mcpServers`
   shape Claude Code reads, so an existing MCP-configured repo just works).
   Both **stdio** (`command`/`args`) and **Streamable HTTP**
