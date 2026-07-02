@@ -19,7 +19,6 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TSchema } from "@sinclair/typebox";
-import { truncate } from "../truncate.ts";
 import type { AnyTool, ToolOutput } from "../types.ts";
 import { loadMcpConfig, loadProjectEnv, type ResolvedMcpServer, resolveMcpServer } from "./config.ts";
 
@@ -140,17 +139,6 @@ function renderContent(content: unknown): string {
   return parts.join("\n");
 }
 
-// XML boundary labelling MCP output as external data. Attributes use the
-// slugged names (never malformed XML); an embedded closer is escaped so tool
-// output that happens to contain the tag can't close the envelope early.
-export function labelMcpOutput(server: string, tool: string, body: string): string {
-  // Cap the attribute slugs so a pathologically long tool name can't inflate the
-  // opening tag past the body's truncation headroom and strip the label.
-  const cap = (s: string): string => slug(s).slice(0, 64);
-  const safe = body.replaceAll("</mcp_output>", "&lt;/mcp_output&gt;");
-  return `<mcp_output server="${cap(server)}" tool="${cap(tool)}" trust="untrusted">\n${safe}\n</mcp_output>`;
-}
-
 function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client, callTimeoutMs: number): AnyTool {
   return {
     name: mcpToolName(server, mcpTool.name),
@@ -177,13 +165,10 @@ function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client
         // the LLM can react to, not an uncaught throw that halts the whole run.
         return { text: `MCP tool "${mcpTool.name}" failed: ${(err as Error).message}`, is_error: true };
       }
-      // Bound the body BEFORE wrapping so the envelope's own truncation (tail
-      // mode) can't drop the opening tag and strip the label on large output.
-      const body = truncate(renderContent((result as { content?: unknown }).content), {
-        max_chars: MCP_OUTPUT_MAX_CHARS - 256,
-        mode: "tail",
-      });
-      const out: ToolOutput = { text: labelMcpOutput(server, mcpTool.name, body) };
+      // MCP servers are operator opt-in (declared in .mcp.json), so their output
+      // is trusted like any first-party tool — returned as-is (the `truncation`
+      // policy above caps it downstream), no untrusted-content envelope.
+      const out: ToolOutput = { text: renderContent((result as { content?: unknown }).content) };
       if ((result as { isError?: boolean }).isError === true) out.is_error = true;
       return out;
     },
