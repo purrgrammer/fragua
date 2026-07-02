@@ -113,11 +113,22 @@ export function mcpToolName(server: string, tool: string): string {
 }
 
 /** The prefix every tool from `server` shares — the single source of the slug
- * rule for callers filtering tools by server (e.g. the CLI's `mcp check`).
- * Capped at the same length bound as `mcpToolName` so `startsWith` still holds
- * for very long server slugs. */
+ * rule for callers filtering tools by server (e.g. the CLI's `mcp check`). The
+ * server slug is capped so the trailing `__` separator always survives; capping
+ * the whole string could chop it and let one server's prefix match another
+ * server's tool names. */
 export function mcpToolPrefix(server: string): string {
-  return `${MCP_TOOL_NAMESPACE}${slug(server)}__`.slice(0, MAX_TOOL_NAME_LEN);
+  const cap = MAX_TOOL_NAME_LEN - MCP_TOOL_NAMESPACE.length - 2;
+  return `${MCP_TOOL_NAMESPACE}${slug(server).slice(0, cap)}__`;
+}
+
+/** Fold an author-written MCP tool reference (an `allowed-tools` / `denied-tools`
+ * entry) to the materialised name form. Materialised names are slug-lowercased,
+ * so `mcp__My-Server__DeleteRepo` must normalise to `mcp__my_server__deleterepo`
+ * to match — otherwise the allow/deny silently has no effect. Non-MCP names pass
+ * through untouched (core tool names are compared verbatim). */
+export function normalizeMcpToolRef(name: string): string {
+  return isMcpToolName(name) ? slug(name) : name;
 }
 
 interface McpContentBlock {

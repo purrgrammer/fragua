@@ -169,6 +169,59 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(dangerEnd?.data["is_error"]).toBe(true); // not allowlisted → not wired (not-found)
   });
 
+  test("mcp-only allowlist fails loudly when the declared servers materialise no tools", async () => {
+    // Server is declared + allowlisted, but the connector returns no tools (every
+    // declared server failed to connect / bad creds). The step would otherwise run
+    // tool-less but "successful" — the silent-empty-tools footgun. Must fail.
+    const disposed = { n: 0 };
+    const connector = stubConnector({
+      tools: [],
+      errors: [{ server: "srv", message: "failed to connect: missing GITHUB_PAT", kind: "unavailable" }],
+      disposed,
+    });
+    const { outcome } = await runMcp({
+      attrs: { mcp_servers: ["srv"], allowed_tools: ["mcp__srv__echo"] },
+      connector,
+      script: [stop],
+    });
+    expect(outcome.status).toBe("fail");
+    expect(disposed.n).toBe(1); // dispose still runs on the fail path
+  });
+
+  test("allowed_tools MCP entry is slug-normalised to match the materialised name", async () => {
+    // Materialised names are slug-lowercased; an author writing a case/hyphen
+    // variant in allowed-tools must still match, not silently drop the tool.
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "echoed!")], errors: [], disposed });
+    const { events, outcome } = await runMcp({
+      attrs: { mcp_servers: ["srv"], allowed_tools: ["mcp__Srv__Echo"] },
+      connector,
+      script: [
+        fauxAssistantMessage([fauxToolCall("mcp__srv__echo", {}, { id: "tc1" })], { stopReason: "toolUse" }),
+        stop,
+      ],
+    });
+    expect(outcome.status).not.toBe("fail");
+    const end = events.find((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "mcp:srv:echo");
+    expect(end?.data["is_error"]).toBeFalsy(); // normalised allow matched → echo ran
+  });
+
+  test("denied_tools MCP entry is slug-normalised so a case/hyphen variant still subtracts", async () => {
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__deleterepo", "boom")], errors: [], disposed });
+    const { events } = await runMcp({
+      // Author denies with a non-canonical spelling; it must still remove the tool.
+      attrs: { mcp_servers: ["srv"], denied_tools: ["mcp__Srv__DeleteRepo"] },
+      connector,
+      script: [
+        fauxAssistantMessage([fauxToolCall("mcp__srv__deleterepo", {}, { id: "tc1" })], { stopReason: "toolUse" }),
+        stop,
+      ],
+    });
+    const end = events.find((e) => e.type === "tool.execution_end" && e.data["tool_name"] === "mcp:srv:deleterepo");
+    expect(end?.data["is_error"]).toBe(true); // normalised deny removed it → not-found
+  });
+
   test("allowed_tools with only core tools does NOT narrow the MCP set (server tools stay)", async () => {
     const disposed = { n: 0 };
     const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "echoed!")], errors: [], disposed });

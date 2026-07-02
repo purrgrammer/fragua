@@ -35,6 +35,7 @@ import {
   filterSkillsForNode,
   isMcpToolName,
   mcpToolPrefix,
+  normalizeMcpToolRef,
   renderSkillsCatalog,
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
@@ -249,7 +250,7 @@ export class PiLlmBackend implements LlmBackend {
     const declaredMcpServers = (input.node.attrs.mcp_servers as string[] | undefined) ?? [];
     const mcpPrefixes = declaredMcpServers.map((s) => mcpToolPrefix(s));
     const willMaterialise = (name: string): boolean =>
-      isMcpToolName(name) && mcpPrefixes.some((p) => name.startsWith(p));
+      isMcpToolName(name) && mcpPrefixes.some((p) => normalizeMcpToolRef(name).startsWith(p));
     const gateAllow = allow?.filter((a) => !willMaterialise(a));
     if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
       const registered = this.registry.list().map((t) => t.name);
@@ -338,8 +339,8 @@ export class PiLlmBackend implements LlmBackend {
       if (input.signal) materializeOpts.signal = input.signal;
       const toolset = await this.mcpConnector.materialize(mcpServers, materializeOpts);
       disposers.push(() => toolset.dispose());
-      const denied = new Set((input.node.attrs.denied_tools as string[] | undefined) ?? []);
-      const mcpAllow = allow?.filter((a) => isMcpToolName(a));
+      const denied = new Set((input.node.attrs.denied_tools as string[] | undefined)?.map(normalizeMcpToolRef) ?? []);
+      const mcpAllow = allow?.filter((a) => isMcpToolName(a)).map(normalizeMcpToolRef);
       const mcpAllowSet = mcpAllow && mcpAllow.length > 0 ? new Set(mcpAllow) : undefined;
       const mcpTools = toolset.tools.filter(
         (t) => !denied.has(t.name) && (mcpAllowSet === undefined || mcpAllowSet.has(t.name)),
@@ -354,6 +355,25 @@ export class PiLlmBackend implements LlmBackend {
             message: `mcp: ${mcpTools.length} tool(s) from [${mcpServers.join(", ")}]`,
           });
         }
+      }
+      // The empty-tools gate above exempts `mcp__*` allow entries so it doesn't
+      // fire before materialisation. Re-check here: if `allowed_tools` named ONLY
+      // MCP tools (so the step selected no core tools) and none materialised —
+      // every declared server failed to connect, or the named tools don't exist —
+      // the step would run tool-less but "successful", the exact silent-empty-tools
+      // footgun the gate exists to prevent. Fail loudly instead. Config error, so
+      // non-retryable; `dispose` still runs via the outer `finally`.
+      if (
+        mcpTools.length === 0 &&
+        selectedTools.length === 0 &&
+        allow &&
+        allow.length > 0 &&
+        allow.every(isMcpToolName)
+      ) {
+        return fail(
+          `allowed_tools listed only MCP tools ([${allow.join(", ")}]) but none materialised from mcp-servers [${mcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
+          { non_retryable: true },
+        );
       }
     }
     // Per-run fragua context. Built-in I/O tools ignore this field; the

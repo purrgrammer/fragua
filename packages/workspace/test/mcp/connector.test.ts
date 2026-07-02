@@ -5,7 +5,14 @@ import { join } from "node:path";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { LocalEnvironment } from "../../src/local-env.ts";
 import type { ResolvedMcpServer } from "../../src/mcp/config.ts";
-import { createMcpConnector, mcpToolName, needsOAuthProvider } from "../../src/mcp/connector.ts";
+import {
+  createMcpConnector,
+  isMcpToolName,
+  mcpToolName,
+  mcpToolPrefix,
+  needsOAuthProvider,
+  normalizeMcpToolRef,
+} from "../../src/mcp/connector.ts";
 import { type McpOAuthStore, StoredOAuthProvider } from "../../src/mcp/oauth.ts";
 
 const ECHO_SERVER = join(import.meta.dir, "echo-server.ts");
@@ -27,6 +34,32 @@ describe("mcpToolName", () => {
   test("caps at 128 chars", () => {
     const long = mcpToolName("s".repeat(200), "t".repeat(200));
     expect(long.length).toBeLessThanOrEqual(128);
+  });
+});
+
+describe("mcpToolPrefix", () => {
+  test("is a prefix of the server's tool names", () => {
+    const p = mcpToolPrefix("github");
+    expect(p).toBe("mcp__github__");
+    expect(mcpToolName("github", "create_issue").startsWith(p)).toBe(true);
+  });
+
+  test("preserves the trailing __ separator even for an over-long server slug", () => {
+    const p = mcpToolPrefix("s".repeat(200));
+    expect(p.length).toBeLessThanOrEqual(128);
+    expect(p.endsWith("__")).toBe(true); // capping the slug, not the whole string
+  });
+});
+
+describe("normalizeMcpToolRef", () => {
+  test("folds a case/hyphen variant to the materialised slug form", () => {
+    expect(normalizeMcpToolRef("mcp__My-Server__DeleteRepo")).toBe("mcp__my_server__deleterepo");
+    expect(normalizeMcpToolRef("mcp__My-Server__DeleteRepo")).toBe(mcpToolName("My-Server", "DeleteRepo"));
+  });
+
+  test("passes non-MCP (core) names through untouched", () => {
+    expect(normalizeMcpToolRef("read")).toBe("read");
+    expect(isMcpToolName("read")).toBe(false);
   });
 });
 
