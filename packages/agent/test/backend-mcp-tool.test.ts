@@ -292,6 +292,34 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(outcome.status).toBe("fail");
   });
 
+  test("mcp-only allowlist with no connector wired fails loudly (can never materialise)", async () => {
+    const faux = registerFauxProvider();
+    try {
+      const model = faux.getModel();
+      faux.setResponses([stop]);
+      const backend = new PiLlmBackend({
+        registry: withRegistry(),
+        env: new LocalEnvironment({ cwd: process.cwd() }),
+        resolveModel: () => model,
+        defaultModel: { provider: model.provider, model: model.id },
+        // mcpConnector intentionally omitted — the mcp__ tools can't materialise,
+        // so an allowlist naming only them must fail, not run tool-less.
+      });
+      const outcome = await backend.run({
+        node: { id: "n1", type: "llm", attrs: { mcp_servers: ["srv"], allowed_tools: ["mcp__srv__echo"] } },
+        prompt: "hi",
+        thread_id: undefined,
+        signal: new AbortController().signal,
+        run_id: "test-mcp-noconn",
+        workflow_sha: "sha",
+        emit: async () => {},
+      });
+      expect(outcome.status).toBe("fail");
+    } finally {
+      faux.unregister();
+    }
+  });
+
   test("no mcpConnector wired → node runs without MCP, no crash", async () => {
     const faux = registerFauxProvider();
     try {

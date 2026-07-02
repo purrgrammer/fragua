@@ -124,6 +124,17 @@ describe("mcp ls", () => {
     expect(out()).toContain("logged in");
     expect(out()).toContain("login required");
   });
+
+  test("a token-less row (login interrupted after client registration) reads as login required", async () => {
+    const dbPath = tempStore();
+    // `runLoginFlow` writes the client-registration row before the browser
+    // redirect; a Ctrl-C before the callback leaves this token-less row.
+    seedStore(dbPath, "https://reg.example.com/mcp", JSON.stringify({ clientInformation: { client_id: "abc" } }));
+    const cwd = project({ mcpServers: { regonly: { type: "http", url: "https://reg.example.com/mcp" } } });
+    expect(await mcpLsCommand({ cwd, dbPath })).toBe(0);
+    expect(out()).toContain("login required");
+    expect(out()).not.toContain("logged in");
+  });
 });
 
 describe("mcp logout", () => {

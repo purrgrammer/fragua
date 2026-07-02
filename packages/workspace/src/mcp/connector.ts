@@ -107,9 +107,16 @@ function slug(s: string): string {
 }
 
 export function mcpToolName(server: string, tool: string): string {
-  const name = `${MCP_TOOL_NAMESPACE}${slug(server)}__${slug(tool)}`;
-  if (name.length <= MAX_TOOL_NAME_LEN) return name;
-  return name.slice(0, MAX_TOOL_NAME_LEN);
+  // Cap the server slug first — same bound `mcpToolPrefix` uses — then the tool
+  // slug at whatever room is left, so the result is always a valid
+  // `mcp__<server>__<tool>` (the `__` separators survive) AND stays a match for
+  // `mcpToolPrefix(server)`. Slicing the assembled string instead could chop the
+  // separator/suffix and collapse every tool of a long-slugged server to one name.
+  const serverCap = MAX_TOOL_NAME_LEN - MCP_TOOL_NAMESPACE.length - 2;
+  const serverSlug = slug(server).slice(0, serverCap);
+  const toolCap = MAX_TOOL_NAME_LEN - MCP_TOOL_NAMESPACE.length - serverSlug.length - 2;
+  const toolSlug = slug(tool).slice(0, Math.max(0, toolCap));
+  return `${MCP_TOOL_NAMESPACE}${serverSlug}__${toolSlug}`;
 }
 
 /** The prefix every tool from `server` shares — the single source of the slug
@@ -231,6 +238,15 @@ async function connectServer(
       if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
         throw new Error(`unsupported url scheme "${parsedUrl.protocol}" (http/https only)`);
       }
+      // A static bearer/credential header over plaintext http leaks the token to
+      // any on-path observer — refuse it (a `.mcp.json` copied with `http://` for
+      // local/proxy dev is the likely footgun). https or no static auth only.
+      if (
+        parsedUrl.protocol === "http:" &&
+        Object.keys(server.headers).some((k) => k.toLowerCase() === "authorization")
+      ) {
+        throw new Error("refusing to send an Authorization header over plaintext http — use https");
+      }
       // No static `Authorization` header + an injected factory → authenticate
       // through the OAuth provider. A provider persists tokens across runs and
       // (on the daemon) throws on redirect so an un-authed server is skipped
@@ -279,12 +295,21 @@ async function connectServer(
 
 // Deadline-bounded so a dead child's never-draining `close()` can't wedge teardown.
 async function closeWithDeadline(client: Client): Promise<void> {
-  await Promise.race([
-    client.close().catch(() => {}),
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, CLOSE_DEADLINE_MS).unref?.();
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.close().catch(() => {}),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, CLOSE_DEADLINE_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    // Clear the loser: when `close()` wins the race the deadline timer would
+    // otherwise stay live (unref'd, but one per connection per step — noise in
+    // leak-hunts). `dispose()` fans this out over every open connection.
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {

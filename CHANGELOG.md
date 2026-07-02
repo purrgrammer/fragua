@@ -21,7 +21,9 @@ guarantee.
   Both **stdio** (`command`/`args`) and **Streamable HTTP**
   (`{ "type": "http", "url", "headers" }`) transports are supported — HTTP with
   static header auth (`"Authorization": "Bearer ${TOKEN}"`) covers remote
-  servers like GitHub; the legacy SSE transport is tolerated-but-skipped.
+  servers like GitHub; the legacy SSE transport is tolerated-but-skipped. A
+  static `Authorization` header over a plaintext `http://` URL is refused (the
+  token would leak on the wire) — use `https`.
   `${VAR}` in a server's command/args/env/url/headers is resolved against the
   project's `.env`/`.env.local` overlaid by the process environment (so a token
   in `.env.local` works without exporting it or restarting the daemon), and a

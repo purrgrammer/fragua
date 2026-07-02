@@ -116,7 +116,23 @@ export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
     return Promise.resolve(render());
   }
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
-  return withStoreClient(clientOpts, ({ store }) => render((url) => store.getMcpOAuth(url) !== undefined));
+  // "logged in" means a usable token, not merely a row: `runLoginFlow` writes the
+  // client-registration row before the browser redirect and only writes tokens on
+  // callback, so a Ctrl-C in between leaves a token-less row. Report that as
+  // "login required" (what the daemon does with it), not a false "logged in".
+  return withStoreClient(clientOpts, ({ store }) => render((url) => hasStoredTokens(store.getMcpOAuth(url))));
+}
+
+/** True only when the stored OAuth payload actually carries a token set — a row
+ * holding only client-registration (a login interrupted before callback) is not
+ * logged in. */
+function hasStoredTokens(raw: string | undefined): boolean {
+  if (raw === undefined) return false;
+  try {
+    return (JSON.parse(raw) as { tokens?: unknown }).tokens != null;
+  } catch {
+    return false;
+  }
 }
 
 export async function mcpCheckCommand(server: string | undefined, opts: McpOptions = {}): Promise<number> {
@@ -279,13 +295,34 @@ export function mcpLoginCommand(
 }
 
 /** Best-effort platform browser opener — the auth URL is already printed, so a
- * failure to spawn is silently ignored (no new npm dependency). Never uses a
- * shell: the URL comes from the auth-server's metadata, so `shell: true` would
- * be a command-injection vector (`start & calc.exe`). On Windows we invoke
- * `cmd /c start "" <url>` with argument passing, no shell interpolation. */
+ * failure to spawn is silently ignored (no new npm dependency). The URL comes
+ * from the auth-server's `.well-known` metadata (attacker-influenceable), so it
+ * is treated as untrusted: only http/https URLs are opened, and on Windows we
+ * do NOT hand it to `cmd /c start` — cmd.exe re-parses its command line even
+ * without `shell: true`, so a `&` in the URL breaks out (`…?x=1 & calc.exe`).
+ * PowerShell `Start-Process` with a single-quoted argument has no such re-parse. */
 function openInBrowser(url: string): void {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args: string[] = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return; // unparseable — don't hand it to any launcher
+  }
+  if (protocol !== "http:" && protocol !== "https:") return;
+  let cmd: string;
+  let args: string[];
+  if (process.platform === "darwin") {
+    cmd = "open";
+    args = [url];
+  } else if (process.platform === "win32") {
+    cmd = "powershell";
+    // Single-quote the URL and double any embedded single-quote — PowerShell's
+    // literal-string rule — so the whole URL is one inert argument to Start-Process.
+    args = ["-NoProfile", "-NonInteractive", "-Command", `Start-Process '${url.replace(/'/g, "''")}'`];
+  } else {
+    cmd = "xdg-open";
+    args = [url];
+  }
   try {
     const child = spawn(cmd, args, { stdio: "ignore", detached: true });
     child.on("error", () => {});
@@ -411,7 +448,10 @@ async function runLoginFlow(
     transport = transportFactory(url, headers, authProvider);
 
     try {
-      await transport.connect();
+      // Bound the initial connect so an unreachable server / hung TLS can't block
+      // the CLI forever (the browser-callback wait below is already bounded; this
+      // is the other blocking leg). Mirrors the connector's connect timeout.
+      await withTimeout(transport.connect(), 30_000, `timed out connecting to ${server}`);
       // Stored tokens were still valid — no interactive step required.
       console.log(chalk.green(`Logged in to ${server}.`));
       return 0;

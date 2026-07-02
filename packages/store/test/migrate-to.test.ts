@@ -200,6 +200,28 @@ describe("up ∘ down round-trips schema shape and data (non-lossy steps)", () =
   });
 });
 
+describe("lossy-step policy — v5 mcp_oauth", () => {
+  test("a down walk from v5 refuses without allowDataLoss (dropping mcp_oauth needs consent)", () => {
+    // Pins migration 5's `lossy: true`. Without this, silently removing the flag
+    // would drop mcp_oauth (stored tokens) on a downgrade and every other test
+    // still passes — they all cross v5 with `allowDataLoss: true`.
+    const db = freshDb();
+    migrate(db); // up to CURRENT_SCHEMA_VERSION (≥5)
+    migrateTo(db, 5, { allowDataLoss: true }); // land exactly at v5
+    expect(version(db)).toBe(5);
+    expect(() => migrateTo(db, 4)).toThrow(/loses data at v5/i);
+
+    migrateTo(db, 4, { allowDataLoss: true });
+    expect(version(db)).toBe(4);
+    const tables = db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((t) => t.name);
+    expect(tables).not.toContain("mcp_oauth");
+    db.close();
+  });
+});
+
 describe("lossy-step policy — v4 messages.pass", () => {
   test("a down walk crossing v4 refuses without allowDataLoss, drops the column with it", () => {
     const db = freshDb();

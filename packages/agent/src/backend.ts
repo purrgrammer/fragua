@@ -259,6 +259,19 @@ export class PiLlmBackend implements LlmBackend {
           "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
       );
     }
+    // `willMaterialise` exempts `mcp__*` allow entries from the gate above so it
+    // doesn't fire before materialisation — but with no connector wired they can
+    // NEVER materialise, and the post-materialisation re-check below lives inside
+    // the connector-guarded block, so an mcp-only allowlist would slip through to
+    // a tool-less run. Catch that here. (A connector-present-but-servers-fail case
+    // is caught after materialise; a connector present with no `mcp-servers:` makes
+    // `willMaterialise` false, so the standard gate above already fires.)
+    if (!this.mcpConnector && allow && allow.length > 0 && allow.every(isMcpToolName) && selectedTools.length === 0) {
+      return fail(
+        `allowed_tools listed only MCP tools ([${allow.join(", ")}]) but no MCP connector is configured to materialise them.`,
+        { non_retryable: true },
+      );
+    }
 
     // Force-include the built-in `abort` tool. Even when the node pins
     // `allowed_tools` (excluding it) or lists it under `denied_tools`, it
