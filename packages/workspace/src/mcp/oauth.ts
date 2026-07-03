@@ -94,24 +94,31 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   // a garbled row can't wedge the flow — the SDK will re-drive auth from clean.
   private read(): PersistedOAuthState {
     if (this.cache !== undefined) return this.cache;
-    const raw = this.store.load(this.url);
-    let state: PersistedOAuthState = {};
-    if (raw !== undefined) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") state = parsed as PersistedOAuthState;
-      } catch {
-        state = {};
-      }
-    }
+    const state = this.readFromStore();
     this.cache = state;
     return state;
   }
 
-  // Write-through: fold the mutation into the current blob and persist the whole
-  // thing. Every mutator routes through here so the payload stays one object.
+  private readFromStore(): PersistedOAuthState {
+    const raw = this.store.load(this.url);
+    if (raw === undefined) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") return parsed as PersistedOAuthState;
+    } catch {
+      /* fall through to empty */
+    }
+    return {};
+  }
+
+  // Write-through: fold the mutation into the LATEST persisted blob (re-read from
+  // the store, NOT the per-instance cache) and persist the whole thing. Distinct
+  // provider instances (daemon connector vs CLI login, or two concurrent steps)
+  // each hold their own cache; merging into a stale cache would let a later write
+  // clobber tokens another instance just persisted. `load`→merge→`save` runs with
+  // no await between, so on the single-threaded loop it's effectively atomic.
   private write(patch: Partial<PersistedOAuthState>): void {
-    const next = { ...this.read(), ...patch };
+    const next = { ...this.readFromStore(), ...patch };
     this.cache = next;
     this.store.save(this.url, JSON.stringify(next));
   }

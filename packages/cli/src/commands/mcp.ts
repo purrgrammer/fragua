@@ -14,10 +14,12 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import {
   createMcpConnector,
+  isLoopbackHost,
   loadMcpConfig,
   loadProjectEnv,
   MCP_OAUTH_CALLBACK_URL,
   type McpHttpServerConfig,
+  type McpOAuthStore,
   type McpServerConfig,
   type McpToolset,
   mcpConfigPath,
@@ -196,20 +198,23 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
   ) {
     return runCheck();
   }
+  const throwingProvider = (store: McpOAuthStore) => (url: string) =>
+    new StoredOAuthProvider({
+      url,
+      store,
+      redirectUrl: MCP_OAUTH_CALLBACK_URL,
+      onRedirect: () => {
+        throw new Error(`not logged in — run \`fragua mcp login\` for ${url}`);
+      },
+    });
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
-  return withStoreClient(clientOpts, ({ store }) =>
-    runCheck(
-      (url) =>
-        new StoredOAuthProvider({
-          url,
-          store: makeMcpOAuthStore(store),
-          redirectUrl: MCP_OAUTH_CALLBACK_URL,
-          onRedirect: () => {
-            throw new Error(`not logged in — run \`fragua mcp login\` for ${url}`);
-          },
-        }),
-    ),
-  );
+  // Fresh checkout, no store → no tokens can exist. Check with a token-less
+  // provider so an OAuth server reports "not logged in" (parity with `mcp ls`),
+  // not a raw "no fragua store" db error.
+  if (!existsSync(resolveStorePath(clientOpts))) {
+    return runCheck(throwingProvider({ load: () => undefined, save: () => {}, clear: () => {} }));
+  }
+  return withStoreClient(clientOpts, ({ store }) => runCheck(throwingProvider(makeMcpOAuthStore(store))));
 }
 
 /** Locate a server in mcp.json and validate it as an http OAuth target. `login`
@@ -390,6 +395,16 @@ async function runLoginFlow(
   client: StoreClient,
   transportFactory: LoginTransportFactory,
 ): Promise<number> {
+  // Same guard the connector applies at runtime — the login flow builds its own
+  // transport, so without this the metadata fetch, PKCE code POST, and token
+  // receipt would all cross plaintext http to a remote host in the clear.
+  const parsed = new URL(url);
+  if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
+    console.error(
+      chalk.red(`mcp: refusing to run OAuth over plaintext http to a non-loopback host (${server}) — use https`),
+    );
+    return 1;
+  }
   const callbackPath = new URL(MCP_OAUTH_CALLBACK_URL).pathname;
   // Confidential clients pre-register a fixed redirect URI, so they MUST use the
   // fixed callback port. DCR / public clients register the redirect at auth time,
@@ -510,6 +525,10 @@ async function runLoginFlow(
     console.error(chalk.red(`mcp: login failed: ${(e as Error).message}`));
     return 1;
   } finally {
+    // Force any lingering keep-alive browser socket shut so `close()` resolves
+    // promptly instead of waiting out the socket's idle timeout (the callback
+    // already sends `Connection: close`; this covers a client that ignores it).
+    httpServer.closeAllConnections?.();
     await new Promise<void>((res) => httpServer.close(() => res()));
     await transport?.close().catch(() => {});
   }

@@ -25,7 +25,7 @@ export const BUNDLE_VERSION = 2;
 
 /** Scrubber version stamp. Bumped when the registry/pattern-set/encoding-set
  *  changes so an auditor knows which detector ran (secret-scrubbing.md §8). */
-export const SCRUBBER_VERSION = "1";
+export const SCRUBBER_VERSION = "2";
 
 export interface BundleManifest {
   bundleVersion: number;

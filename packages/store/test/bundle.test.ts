@@ -1112,7 +1112,7 @@ describe("exportRunBundle - message transcript scrubbing", () => {
     expect(row.iteration).toBe(0);
   });
 
-  test("(f) manifest carries bundleVersion 2 and scrubberVersion '1'", async () => {
+  test("(f) manifest carries bundleVersion 2 and scrubberVersion '2'", async () => {
     const store = freshStore();
     const runId = await seedRunWithSecrets(store);
     const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
@@ -1125,7 +1125,7 @@ describe("exportRunBundle - message transcript scrubbing", () => {
     expect(manifest.bundleVersion).toBe(BUNDLE_VERSION);
     expect(manifest.bundleVersion).toBe(2);
     expect(manifest.scrubberVersion).toBe(SCRUBBER_VERSION);
-    expect(manifest.scrubberVersion).toBe("1");
+    expect(manifest.scrubberVersion).toBe("2");
   });
 
   test("(g) importRunBundle round-trips a scrubbed run - status derives, messages present but redacted", async () => {

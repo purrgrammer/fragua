@@ -382,8 +382,14 @@ export class PiLlmBackend implements LlmBackend {
       // footgun the gate exists to prevent. Fail loudly instead. Config error, so
       // non-retryable; `dispose` still runs via the outer `finally`.
       if (mcpOnlyAllowlist && mcpTools.length === 0) {
+        // Distinguish the two causes: if the server(s) materialised tools but the
+        // allowlist matched none, it's a tool-NAME mismatch, not connectivity —
+        // point the operator at the actual names instead of debugging creds.
+        const available = toolset.tools.map((t) => t.name);
         return fail(
-          `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${mcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
+          available.length > 0
+            ? `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none match the tools materialised from [${mcpServers.join(", ")}] — available: [${available.join(", ")}]. Check the tool names.`
+            : `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${mcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
           { non_retryable: true },
         );
       }

@@ -181,14 +181,9 @@ export function loadMcpConfig(cwd: string): McpConfigLoad {
     const cls = classifyServer(entry);
     if (cls.kind === "server") servers[name] = cls.config;
     else if (cls.kind === "unsupported") unsupported[name] = cls.reason;
-    else
-      return {
-        path,
-        ok: false,
-        servers: {},
-        unsupported: {},
-        error: `mcp server "${name}" is malformed (need a string "command" for stdio, or a "url" for http)`,
-      };
+    // A single malformed entry must NOT disable every valid server in the file —
+    // record it like an unsupported one and carry on, so the rest still load.
+    else unsupported[name] = 'malformed (need a string "command" for stdio, or a "url" for http)';
   }
   return { path, ok: true, servers, unsupported };
 }

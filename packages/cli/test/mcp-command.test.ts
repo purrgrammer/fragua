@@ -206,6 +206,13 @@ describe("mcp login error paths (no listener / browser)", () => {
     expect(out()).toContain("no login needed");
   });
 
+  test("OAuth login over plaintext http to a non-loopback host → refused (exit 1)", async () => {
+    const dbPath = tempStore();
+    const cwd = project({ mcpServers: { remote: { type: "http", url: "http://remote.example.com/mcp" } } });
+    expect(await mcpLoginCommand("remote", {}, { cwd, dbPath })).toBe(1);
+    expect(out()).toContain("plaintext http");
+  });
+
   test("SSE (unsupported) server → exit 1, unsupported-transport message (not 'not found')", async () => {
     const dbPath = tempStore();
     const cwd = project({ mcpServers: { legacy: { type: "sse", url: "https://x.example.com/sse" } } });

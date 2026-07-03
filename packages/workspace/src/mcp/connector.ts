@@ -108,32 +108,36 @@ function slug(s: string): string {
 
 /** A loopback hostname — traffic to it never leaves the machine, so plaintext
  * http to it doesn't expose credentials to an on-path observer. Covers the
- * 127.0.0.0/8 range, IPv6 `::1` (with or without URL brackets), and `localhost`. */
-function isLoopbackHost(hostname: string): boolean {
+ * 127.0.0.0/8 range, IPv6 `::1` (with or without URL brackets), and `localhost`.
+ * Exported so the CLI login flow guards `http://` with the SAME rule the
+ * connector uses. */
+export function isLoopbackHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   return h === "localhost" || h === "::1" || h === "[::1]" || h.startsWith("127.");
 }
 
+// The server slug is capped low enough that EVERY tool keeps a non-empty suffix:
+// reserve MCP_MIN_TOOL_SLUG chars for the tool segment. Without this, a server
+// slug that fills the 121-char budget leaves `toolCap = 0`, so every tool from
+// that server collapses to the identical `mcp__<slug>__` and first-wins dedup
+// silently drops all but one. Both `mcpToolName` and `mcpToolPrefix` use the same
+// cap so a name always begins with its server's prefix.
+const MCP_MIN_TOOL_SLUG = 16;
+const MCP_SERVER_SLUG_MAX = MAX_TOOL_NAME_LEN - MCP_TOOL_NAMESPACE.length - 2 - MCP_MIN_TOOL_SLUG;
+
 export function mcpToolName(server: string, tool: string): string {
-  // Cap the server slug first — same bound `mcpToolPrefix` uses — then the tool
-  // slug at whatever room is left, so the result is always a valid
-  // `mcp__<server>__<tool>` (the `__` separators survive) AND stays a match for
-  // `mcpToolPrefix(server)`. Slicing the assembled string instead could chop the
-  // separator/suffix and collapse every tool of a long-slugged server to one name.
-  const serverCap = MAX_TOOL_NAME_LEN - MCP_TOOL_NAMESPACE.length - 2;
-  const serverSlug = slug(server).slice(0, serverCap);
+  const serverSlug = slug(server).slice(0, MCP_SERVER_SLUG_MAX);
   const toolCap = MAX_TOOL_NAME_LEN - MCP_TOOL_NAMESPACE.length - serverSlug.length - 2;
-  const toolSlug = slug(tool).slice(0, Math.max(0, toolCap));
+  const toolSlug = slug(tool).slice(0, toolCap);
   return `${MCP_TOOL_NAMESPACE}${serverSlug}__${toolSlug}`;
 }
 
 /** The prefix every tool from `server` shares — the single source of the slug
- * rule for callers filtering tools by server (e.g. the CLI's `mcp check`). The
- * server slug is capped so the trailing `__` separator always survives; capping
- * the whole string could chop it and let one server's prefix match another
- * server's tool names. */
+ * rule for callers filtering tools by server (e.g. the CLI's `mcp check`). Uses
+ * the same server-slug cap as `mcpToolName` so the trailing `__` separator always
+ * survives and a tool name always starts with its server's prefix. */
 export function mcpToolPrefix(server: string): string {
-  const cap = MAX_TOOL_NAME_LEN - MCP_TOOL_NAMESPACE.length - 2;
+  const cap = MCP_SERVER_SLUG_MAX;
   return `${MCP_TOOL_NAMESPACE}${slug(server).slice(0, cap)}__`;
 }
 
@@ -297,11 +301,28 @@ async function connectServer(
     return { connection: { client }, tools: listed.tools ?? [] };
   } catch (err) {
     await closeWithDeadline(client);
-    const tail = stderrTail.trim().slice(-500);
+    // Redact resolved `server.env` values from the stderr tail BEFORE it becomes
+    // the diagnostic — a stdio server that echoes its environment on a failed
+    // start would otherwise write a credential (a token supplied via env, whose
+    // shape the export scrubber's patterns may not match) verbatim into the
+    // `agent.warning` event and any export bundle. Redact at the source instead.
+    const tail = redactSecrets(stderrTail.trim(), server).slice(-500);
     const e = err instanceof Error ? err : new Error(String(err));
     if (tail) e.message = `${e.message} (server stderr: ${tail})`;
     throw e;
   }
+}
+
+/** Replace any resolved `server.env` value (stdio only) that appears in `text`
+ * with a placeholder. Values shorter than 8 chars are left alone — too short to
+ * be a meaningful secret and likely to over-match innocuous output. */
+function redactSecrets(text: string, server: ResolvedMcpServer): string {
+  if (server.transport !== "stdio" || text.length === 0) return text;
+  let out = text;
+  for (const v of Object.values(server.env ?? {})) {
+    if (typeof v === "string" && v.length >= 8) out = out.split(v).join("«redacted»");
+  }
+  return out;
 }
 
 // Deadline-bounded so a dead child's never-draining `close()` can't wedge teardown.

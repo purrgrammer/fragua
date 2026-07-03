@@ -34,11 +34,20 @@ describe("loadMcpConfig", () => {
     expect(load.error).toContain("mcpServers");
   });
 
-  test("server without command → error naming the server", () => {
+  test("a malformed entry is recorded as unsupported, not fatal to the file", () => {
     const cwd = projectWith(JSON.stringify({ mcpServers: { github: { args: ["x"] } } }));
     const load = loadMcpConfig(cwd);
-    expect(load.ok).toBe(false);
-    expect(load.error).toContain("github");
+    expect(load.ok).toBe(true);
+    expect(load.servers["github"]).toBeUndefined();
+    expect(load.unsupported["github"]).toMatch(/malformed/);
+  });
+
+  test("one malformed entry does NOT disable the valid servers alongside it", () => {
+    const cwd = projectWith(JSON.stringify({ mcpServers: { good: { command: "true" }, bad: { nonsense: 1 } } }));
+    const load = loadMcpConfig(cwd);
+    expect(load.ok).toBe(true);
+    expect(load.servers["good"]).toBeDefined();
+    expect(load.unsupported["bad"]).toMatch(/malformed/);
   });
 
   test("valid config parses into servers", () => {

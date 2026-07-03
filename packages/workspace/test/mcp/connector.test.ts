@@ -31,13 +31,17 @@ describe("mcpToolName", () => {
     expect(mcpToolName("My-Server", "Do.Thing")).toBe("mcp__my_server__do_thing");
   });
 
-  test("caps at 128 chars and stays a match for its server prefix", () => {
+  test("caps at 128 chars, keeps a non-empty tool suffix, and matches its server prefix", () => {
     const long = mcpToolName("s".repeat(200), "t".repeat(200));
     expect(long.length).toBeLessThanOrEqual(128);
     // Segment-capped, not string-sliced: the `__` separator survives and the
     // name still begins with the server's prefix (so willMaterialise matches).
-    expect(long).toContain("__");
     expect(long.startsWith(mcpToolPrefix("s".repeat(200)))).toBe(true);
+    // A reserved tool-slug budget means an over-long server name can't collapse
+    // every tool to the identical `mcp__<slug>__` (which dedup would drop).
+    const toolSuffix = long.slice(mcpToolPrefix("s".repeat(200)).length);
+    expect(toolSuffix.length).toBeGreaterThan(0);
+    expect(mcpToolName("s".repeat(200), "alpha")).not.toBe(mcpToolName("s".repeat(200), "beta"));
   });
 });
 

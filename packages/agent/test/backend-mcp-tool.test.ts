@@ -222,6 +222,23 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(end?.data["is_error"]).toBe(true); // normalised deny removed it → not-found
   });
 
+  test("mcp-only allowlist naming a nonexistent tool on a CONNECTED server → fails with a name hint", async () => {
+    // Server materialised `echo`, but the allowlist names a tool that doesn't
+    // exist → the failure is a name mismatch, not connectivity; the message must
+    // list the available names rather than sending the operator to debug creds.
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "hi")], errors: [], disposed });
+    const { outcome } = await runMcp({
+      attrs: { mcp_servers: ["srv"], allowed_tools: ["mcp__srv__nonexistent"] },
+      connector,
+      script: [stop],
+    });
+    expect(outcome.status).toBe("fail");
+    const reason = (outcome as { failure_reason?: string }).failure_reason ?? "";
+    expect(reason).toContain("mcp__srv__echo"); // available names surfaced
+    expect(reason.toLowerCase()).not.toContain("connectivity");
+  });
+
   test("allowed_tools with only core tools does NOT narrow the MCP set (server tools stay)", async () => {
     const disposed = { n: 0 };
     const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "echoed!")], errors: [], disposed });
