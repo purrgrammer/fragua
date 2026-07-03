@@ -199,6 +199,24 @@ authProvider and the SDK negotiates auth (token → refresh → skip-if-absent).
 (interactive browser flow), `logout <server>` (drop stored client + tokens), and
 `ls` shows a per-server auth state (`ready` / `login required` / `missing env`).
 
+## Trust model — no untrusted-content envelope
+
+MCP tool results are returned to the LLM verbatim, **not** wrapped in an
+`[EXTERNAL CONTENT]` / untrusted-data envelope. This is a deliberate decision,
+not an oversight: MCP servers are operator opt-in (declared in `.mcp.json`),
+their output is treated like any first-party tool's, and an envelope on every
+call adds system-prompt weight and output noise for a boundary the prompt can't
+robustly enforce anyway.
+
+> **Known limitation.** This does *not* neutralise indirect prompt injection: a
+> trusted *server* can still relay attacker-authored *content* (a GitHub issue
+> body, a Slack message) into a context that also holds `bash`/`edit`. Treat MCP
+> tools as you would any tool that reads external text — scope `allowed-tools`,
+> keep write-capable tools off steps that fetch untrusted content, and don't
+> point MCP-enabled steps at attacker-controlled data you wouldn't paste into a
+> prompt yourself. Revisit an envelope (or per-server trust flags) if the threat
+> model tightens.
+
 ## Deferred (§7)
 
 - **Server-state UI** — the web dashboard equivalent of `fragua mcp ls` + a

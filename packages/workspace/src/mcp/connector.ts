@@ -20,7 +20,13 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TSchema } from "@sinclair/typebox";
 import type { AnyTool, ToolOutput } from "../types.ts";
-import { loadMcpConfig, loadProjectEnv, type ResolvedMcpServer, resolveMcpServer } from "./config.ts";
+import {
+  hasStaticAuthHeader,
+  loadMcpConfig,
+  type ResolvedMcpServer,
+  resolveMcpServer,
+  resolveProjectEnv,
+} from "./config.ts";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 // `tools/list` is metadata enumeration, not a tool call — give it a moderate
@@ -88,8 +94,7 @@ export function needsOAuthProvider(
 ): boolean {
   if (server.transport !== "http") return false;
   if (oauthProviderFor === undefined) return false;
-  const hasStaticAuth = Object.keys(server.headers).some((k) => k.toLowerCase() === "authorization");
-  return !hasStaticAuth;
+  return hasStaticAuthHeader(server.headers) === undefined;
 }
 
 /** Namespace every materialised MCP tool name carries. Callers that need to
@@ -112,8 +117,8 @@ function slug(s: string): string {
  * Exported so the CLI login flow guards `http://` with the SAME rule the
  * connector uses. */
 export function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === "localhost" || h === "::1" || h === "[::1]" || h.startsWith("127.");
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || h.startsWith("127.") || h.startsWith("::ffff:127.");
 }
 
 // The server slug is capped low enough that EVERY tool keeps a non-empty suffix:
@@ -359,7 +364,7 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
       // Resolve `${VAR}` against the project's .env/.env.local overlaid by
       // process.env (exported vars win) — so a token in .env.local reaches a
       // workflow run's MCP config without exporting it or restarting the daemon.
-      const env = opts.env ?? { ...loadProjectEnv(opts.cwd), ...process.env };
+      const env = opts.env ?? resolveProjectEnv(opts.cwd);
       const connectTimeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
       const callTimeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
       const requested = [...new Set(serverNames)];

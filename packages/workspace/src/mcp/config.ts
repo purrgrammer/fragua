@@ -101,6 +101,25 @@ export function loadProjectEnv(cwd: string): Record<string, string> {
   return { ...parseEnvFile(join(cwd, ".env")), ...parseEnvFile(join(cwd, ".env.local")) };
 }
 
+/** The effective env for `${VAR}` resolution: project `.env`/`.env.local` overlaid
+ * by `process.env` (an exported var always wins). Single source of the precedence
+ * order — the connector and every CLI verb resolve against exactly this, so their
+ * view of what's configured can't diverge. */
+export function resolveProjectEnv(cwd: string): Record<string, string | undefined> {
+  return { ...loadProjectEnv(cwd), ...process.env };
+}
+
+/** The value of the case-insensitive `Authorization` header on an http server's
+ * headers, if present. The one owner of the "static auth" rule — callers deciding
+ * whether a server carries its own credentials (skip OAuth) use this, not a
+ * re-inlined scan, so they can't drift. */
+export function hasStaticAuthHeader(headers: Record<string, string>): string | undefined {
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === "authorization") return v;
+  }
+  return undefined;
+}
+
 type ServerClass =
   | { kind: "server"; config: McpServerConfig }
   | { kind: "unsupported"; reason: string }

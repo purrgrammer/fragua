@@ -362,11 +362,10 @@ export class PiLlmBackend implements LlmBackend {
     // that can't connect is skipped with an `agent.warning` — never fatal.
     // Teardown is registered on `disposers` so the connection is released on
     // every exit path.
-    const mcpServers = input.node.attrs.mcp_servers as string[] | undefined;
-    if (this.mcpConnector && mcpServers && mcpServers.length > 0) {
+    if (this.mcpConnector && declaredMcpServers.length > 0) {
       const materializeOpts: Parameters<McpConnector["materialize"]>[1] = { cwd: runProjectCwd };
       if (input.signal) materializeOpts.signal = input.signal;
-      const toolset = await this.mcpConnector.materialize(mcpServers, materializeOpts);
+      const toolset = await this.mcpConnector.materialize(declaredMcpServers, materializeOpts);
       disposers.push(() => toolset.dispose());
       const denied = new Set((input.node.attrs.denied_tools as string[] | undefined)?.map(normalizeMcpToolRef) ?? []);
       const mcpAllow = allow?.filter((a) => isMcpToolName(a)).map(normalizeMcpToolRef);
@@ -387,7 +386,7 @@ export class PiLlmBackend implements LlmBackend {
         }
         if (mcpTools.length > 0) {
           await input.emit("agent.info", {
-            message: `mcp: ${mcpTools.length} tool(s) from [${mcpServers.join(", ")}]`,
+            message: `mcp: ${mcpTools.length} tool(s) from [${declaredMcpServers.join(", ")}]`,
           });
         }
       }
@@ -405,8 +404,8 @@ export class PiLlmBackend implements LlmBackend {
         const available = toolset.tools.map((t) => t.name);
         return fail(
           available.length > 0
-            ? `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none match the tools materialised from [${mcpServers.join(", ")}] — available: [${available.join(", ")}]. Check the tool names.`
-            : `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${mcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
+            ? `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none match the tools materialised from [${declaredMcpServers.join(", ")}] — available: [${available.join(", ")}]. Check the tool names.`
+            : `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${declaredMcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
           { non_retryable: true },
         );
       }

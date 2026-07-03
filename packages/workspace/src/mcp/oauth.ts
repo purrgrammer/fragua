@@ -198,3 +198,18 @@ export class StoredOAuthProvider implements OAuthClientProvider {
     return verifier;
   }
 }
+
+/** A headless provider for non-interactive contexts (the daemon connector, and
+ * `mcp check`): it reads stored tokens and refreshes silently, but a flow that
+ * would need a browser throws instead of opening one. Single source of the
+ * "not logged in" message so the daemon and CLI can't drift. */
+export function makeHeadlessMcpProvider(url: string, store: McpOAuthStore): StoredOAuthProvider {
+  return new StoredOAuthProvider({
+    url,
+    store,
+    redirectUrl: MCP_OAUTH_CALLBACK_URL,
+    onRedirect: () => {
+      throw new Error(`not logged in — run \`fragua mcp login\` for ${url}`);
+    },
+  });
+}

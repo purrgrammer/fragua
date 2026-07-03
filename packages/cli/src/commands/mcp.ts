@@ -14,17 +14,19 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import {
   createMcpConnector,
+  hasStaticAuthHeader,
   isLoopbackHost,
   loadMcpConfig,
-  loadProjectEnv,
   MCP_OAUTH_CALLBACK_URL,
   type McpHttpServerConfig,
   type McpOAuthStore,
   type McpServerConfig,
   type McpToolset,
+  makeHeadlessMcpProvider,
   mcpConfigPath,
   mcpToolPrefix,
   resolveMcpServer,
+  resolveProjectEnv,
   StoredOAuthProvider,
 } from "@fragua/workspace";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -55,12 +57,11 @@ export function mcpHelp(): number {
   return 0;
 }
 
-/** The static Authorization header on an http server, if any (case-insensitive). */
+/** The static Authorization header on an http server, if any (case-insensitive).
+ * Delegates to the shared `hasStaticAuthHeader` so the CLI and the connector agree
+ * on what counts as static auth. */
 function staticAuthHeader(server: McpHttpServerConfig): string | undefined {
-  for (const [k, v] of Object.entries(server.headers ?? {})) {
-    if (k.toLowerCase() === "authorization") return v;
-  }
-  return undefined;
+  return hasStaticAuthHeader(server.headers ?? {});
 }
 
 /** An http server that could carry stored OAuth state — no static Authorization
@@ -89,7 +90,7 @@ export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
   // Mirror the connector's env view (project `.env`/`.env.local` ⊕ process.env)
   // so a `.env.local` token doesn't show as `missing env` here while the daemon
   // resolves it fine. Read once, not per server row.
-  const projectEnv = { ...loadProjectEnv(cwd), ...process.env };
+  const projectEnv = resolveProjectEnv(cwd);
   const render = (loggedIn?: (url: string) => boolean): number => {
     for (const name of names) {
       const server = load.servers[name];
@@ -198,15 +199,7 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
   ) {
     return runCheck();
   }
-  const throwingProvider = (store: McpOAuthStore) => (url: string) =>
-    new StoredOAuthProvider({
-      url,
-      store,
-      redirectUrl: MCP_OAUTH_CALLBACK_URL,
-      onRedirect: () => {
-        throw new Error(`not logged in — run \`fragua mcp login\` for ${url}`);
-      },
-    });
+  const throwingProvider = (store: McpOAuthStore) => (url: string) => makeHeadlessMcpProvider(url, store);
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
   // Fresh checkout, no store → no tokens can exist. Check with a token-less
   // provider so an OAuth server reports "not logged in" (parity with `mcp ls`),
@@ -252,7 +245,7 @@ function resolveOAuthTarget(
   // Resolve `${VAR}` the same way the connector does — project `.env`/`.env.local`
   // overlaid by process.env — so the CLI doesn't report a `.env.local` token as
   // missing when the daemon would resolve it fine.
-  const resolved = resolveMcpServer(config, { ...loadProjectEnv(cwd), ...process.env });
+  const resolved = resolveMcpServer(config, resolveProjectEnv(cwd));
   if (!resolved.ok || resolved.server.transport !== "http") {
     const missing = resolved.ok ? "" : resolved.missing.join(", ");
     console.error(chalk.red(`mcp: cannot resolve url for "${server}"${missing ? ` (missing env: ${missing})` : ""}`));

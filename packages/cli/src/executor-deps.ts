@@ -39,8 +39,7 @@ import {
   CORE_TOOLS,
   createMcpConnector,
   discoverSkills,
-  MCP_OAUTH_CALLBACK_URL,
-  StoredOAuthProvider,
+  makeHeadlessMcpProvider,
   ToolRegistry,
 } from "@fragua/workspace";
 import chalk from "chalk";
@@ -257,15 +256,7 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
       // so an un-authed server is skipped via the connect-failure path with a
       // clear "run `fragua mcp login`" message rather than hanging startup.
       mcpConnector: createMcpConnector({
-        oauthProviderFor: (url) =>
-          new StoredOAuthProvider({
-            url,
-            store: makeMcpOAuthStore(store),
-            redirectUrl: MCP_OAUTH_CALLBACK_URL,
-            onRedirect: () => {
-              throw new Error(`MCP server ${url} requires OAuth — run \`fragua mcp login\` for it`);
-            },
-          }),
+        oauthProviderFor: (url) => makeHeadlessMcpProvider(url, makeMcpOAuthStore(store)),
       }),
       ...(summariser.backend ? { summariser: summariser.backend } : {}),
     };
