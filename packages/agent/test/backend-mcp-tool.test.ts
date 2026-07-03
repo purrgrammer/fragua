@@ -222,6 +222,22 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(end?.data["is_error"]).toBe(true); // normalised deny removed it → not-found
   });
 
+  test("allowlist names an mcp__ tool for an UNDECLARED server → fails naming that cause, not the registry", async () => {
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [mcpStubTool("mcp__github__x", "hi")], errors: [], disposed });
+    const { outcome } = await runMcp({
+      // github is declared; slack is NOT — the slack entry can never materialise.
+      attrs: { mcp_servers: ["github"], allowed_tools: ["mcp__slack__search"] },
+      connector,
+      script: [stop],
+    });
+    expect(outcome.status).toBe("fail");
+    const reason = (outcome as { failure_reason?: string }).failure_reason ?? "";
+    expect(reason).toContain("mcp__slack__search");
+    expect(reason).toContain("mcp-servers"); // points at the missing declaration
+    expect(reason).not.toContain("registry"); // not the misleading registry message
+  });
+
   test("mcp-only allowlist naming a nonexistent tool on a CONNECTED server → fails with a name hint", async () => {
     // Server materialised `echo`, but the allowlist names a tool that doesn't
     // exist → the failure is a name mismatch, not connectivity; the message must

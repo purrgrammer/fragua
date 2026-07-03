@@ -285,11 +285,12 @@ async function connectServer(
         stderr: "pipe",
       });
       // Listener stays attached for the connection's lifetime: it drains the pipe
-      // continuously (a paused pipe would fill its OS buffer and stall the child);
-      // the cap only stops the tail string from growing, not the drain.
+      // continuously (a paused pipe would fill its OS buffer and stall the child).
+      // Keep the rolling TAIL, not the head — the last lines before a crash are the
+      // useful diagnostic; a verbose-then-crashing server would otherwise show only
+      // its startup banner.
       stdio.stderr?.on("data", (chunk: unknown) => {
-        if (stderrTail.length < STDERR_TAIL_MAX)
-          stderrTail += String(chunk).slice(0, STDERR_TAIL_MAX - stderrTail.length);
+        stderrTail = (stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX);
       });
       transport = stdio;
     }
@@ -313,13 +314,21 @@ async function connectServer(
   }
 }
 
-/** Replace any resolved `server.env` value (stdio only) that appears in `text`
- * with a placeholder. Values shorter than 8 chars are left alone — too short to
- * be a meaningful secret and likely to over-match innocuous output. */
+/** Replace any resolved secret value (stdio only) that appears in `text` with a
+ * placeholder: every `server.env` value, plus the value half of a `key=value`
+ * `server.arg` (`${VAR}` substitutes into args too, so `--token=ghp_…` carries a
+ * live credential). Values shorter than 8 chars are left alone — too short to be a
+ * meaningful secret and likely to over-match innocuous output. Only arg VALUES are
+ * redacted, not whole args, so package names / flags stay legible in the tail. */
 function redactSecrets(text: string, server: ResolvedMcpServer): string {
   if (server.transport !== "stdio" || text.length === 0) return text;
+  const secrets: string[] = [...Object.values(server.env ?? {})];
+  for (const arg of server.args ?? []) {
+    const eq = arg.indexOf("=");
+    if (eq >= 0) secrets.push(arg.slice(eq + 1));
+  }
   let out = text;
-  for (const v of Object.values(server.env ?? {})) {
+  for (const v of secrets) {
     if (typeof v === "string" && v.length >= 8) out = out.split(v).join("«redacted»");
   }
   return out;

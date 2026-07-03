@@ -24,6 +24,22 @@ function tokens(): OAuthTokens {
 }
 
 describe("StoredOAuthProvider", () => {
+  test("saveTokens clears the single-use PKCE verifier from the persisted blob", () => {
+    const store = fakeStore();
+    const provider = new StoredOAuthProvider({
+      url: URL_A,
+      store,
+      redirectUrl: "http://localhost:8888/callback",
+      onRedirect: () => {},
+    });
+    provider.saveCodeVerifier("verifier-abc");
+    expect(provider.codeVerifier()).toBe("verifier-abc");
+    provider.saveTokens(tokens());
+    // Verifier gone from the persisted row; tokens remain.
+    expect(JSON.parse(store.dump().get(URL_A) ?? "{}").codeVerifier).toBeUndefined();
+    expect(provider.tokens()).toEqual(tokens());
+  });
+
   test("saveTokens round-trips and persists across a fresh provider instance", () => {
     const store = fakeStore();
     const provider = new StoredOAuthProvider({

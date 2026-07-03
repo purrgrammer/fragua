@@ -112,6 +112,10 @@ export function extractMcpOAuthLiterals(payload: string): string[] {
   if (client != null && typeof client === "object") {
     push((client as Record<string, unknown>)["client_secret"]);
   }
+  // Belt-and-suspenders: the single-use PKCE verifier is cleared on token save,
+  // but scrub it if a pre-fix blob still carries one (it's a random base64url
+  // string BASE_PATTERNS won't match).
+  push(obj["codeVerifier"]);
   return out;
 }
 

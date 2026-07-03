@@ -317,6 +317,15 @@ export function mcpLoginCommand(
   const resolvedCreds: { clientId?: string; clientSecret?: string } = {};
   const clientId = creds.clientId ?? process.env["FRAGUA_MCP_CLIENT_ID"];
   const clientSecret = creds.clientSecret ?? process.env["FRAGUA_MCP_CLIENT_SECRET"];
+  // A secret with no id can't select the confidential-client path — the provider
+  // would silently treat it as a public client and fall back to DCR, which then
+  // fails opaquely. Fail loudly on the mismatch instead.
+  if (clientSecret !== undefined && clientId === undefined) {
+    console.error(
+      chalk.red("mcp: a client secret was provided without a client id — set --client-id / FRAGUA_MCP_CLIENT_ID too"),
+    );
+    return Promise.resolve(1);
+  }
   if (clientId !== undefined) resolvedCreds.clientId = clientId;
   if (clientSecret !== undefined) resolvedCreds.clientSecret = clientSecret;
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};

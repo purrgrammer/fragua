@@ -96,6 +96,14 @@ whatever tools did materialise.
 Failure is never fatal to the run: a step that asked for a server it couldn't get
 proceeds without those tools rather than halting.
 
+**Exception — an MCP-only `allowed-tools`.** If `allowed-tools` names *only*
+`mcp__*` tools (so no core tool is selected) and none of them materialise — every
+declared server failed, or the named tools don't exist — the step **fails**
+(non-retryable) rather than running with an empty toolset. This is deliberate: a
+step pinned exclusively to MCP tools that all vanished would otherwise "succeed"
+having done nothing, the silent-empty-toolset footgun. Give the step a core tool
+(or a reachable server) if you want the never-fatal behaviour.
+
 ## Replay & determinism
 
 Materialised MCP tools are marked `idempotent: false` / no

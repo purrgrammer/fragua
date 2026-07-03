@@ -253,9 +253,20 @@ export class PiLlmBackend implements LlmBackend {
       isMcpToolName(name) && mcpPrefixes.some((p) => normalizeMcpToolRef(name).startsWith(p));
     const gateAllow = allow?.filter((a) => !willMaterialise(a));
     if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
+      // The offending entries are `gateAllow`, not the whole `allow` list. An
+      // `mcp__*` entry lands here only when its server ISN'T in `mcp-servers:`
+      // (a declared server's tools are exempted via `willMaterialise`), so name
+      // that specific cause instead of blaming the registry.
+      const mcpUndeclared = gateAllow.filter((a) => isMcpToolName(a));
+      if (mcpUndeclared.length > 0) {
+        return fail(
+          `allowed_tools names MCP tools [${mcpUndeclared.join(", ")}] whose server is not listed in mcp-servers: — add the server to mcp-servers, or fix the tool name.`,
+          { non_retryable: true },
+        );
+      }
       const registered = this.registry.list().map((t) => t.name);
       return fail(
-        `allowed_tools=[${allow?.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
+        `allowed_tools=[${gateAllow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
           "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
       );
     }
@@ -366,7 +377,13 @@ export class PiLlmBackend implements LlmBackend {
       finalTools = [...finalTools, ...mcpTools];
       if (input.emit) {
         for (const e of toolset.errors) {
-          await input.emit("agent.warning", { message: `mcp server "${e.server}" skipped: ${e.message}` });
+          // A collision means the server IS live (its other tools materialised) —
+          // don't word it as "skipped", which sends operators to debug connectivity.
+          const message =
+            e.kind === "collision"
+              ? `mcp tool from "${e.server}" dropped: ${e.message}`
+              : `mcp server "${e.server}" skipped: ${e.message}`;
+          await input.emit("agent.warning", { message });
         }
         if (mcpTools.length > 0) {
           await input.emit("agent.info", {

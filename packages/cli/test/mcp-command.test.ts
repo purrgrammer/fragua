@@ -206,6 +206,13 @@ describe("mcp login error paths (no listener / browser)", () => {
     expect(out()).toContain("no login needed");
   });
 
+  test("a client secret with no client id → exit 1 (won't silently fall back to DCR)", async () => {
+    const dbPath = tempStore();
+    const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });
+    expect(await mcpLoginCommand("remote", { clientSecret: "shh" }, { cwd, dbPath })).toBe(1);
+    expect(out()).toContain("without a client id");
+  });
+
   test("OAuth login over plaintext http to a non-loopback host → refused (exit 1)", async () => {
     const dbPath = tempStore();
     const cwd = project({ mcpServers: { remote: { type: "http", url: "http://remote.example.com/mcp" } } });

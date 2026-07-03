@@ -117,8 +117,13 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   // each hold their own cache; merging into a stale cache would let a later write
   // clobber tokens another instance just persisted. `load`→merge→`save` runs with
   // no await between, so on the single-threaded loop it's effectively atomic.
-  private write(patch: Partial<PersistedOAuthState>): void {
-    const next = { ...this.readFromStore(), ...patch };
+  private write(patch: { [K in keyof PersistedOAuthState]?: PersistedOAuthState[K] | undefined }): void {
+    // Explicit `undefined` in the patch DELETES a key — used to clear the
+    // single-use PKCE verifier on token save. Prune undefined entries so the
+    // merged blob is a clean `PersistedOAuthState` (exactOptionalPropertyTypes).
+    const merged = { ...this.readFromStore(), ...patch } as Record<string, unknown>;
+    for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];
+    const next = merged as PersistedOAuthState;
     this.cache = next;
     this.store.save(this.url, JSON.stringify(next));
   }
@@ -172,7 +177,9 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   }
 
   saveTokens(tokens: OAuthTokens): void {
-    this.write({ tokens });
+    // Clear the single-use PKCE verifier on success — it has served its purpose
+    // and shouldn't linger in the persisted blob (or any export of it).
+    this.write({ tokens, codeVerifier: undefined });
   }
 
   redirectToAuthorization(authorizationUrl: URL): void | Promise<void> {

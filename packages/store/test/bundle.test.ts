@@ -135,9 +135,10 @@ describe("exportRunBundle", () => {
         JSON.stringify({
           tokens: { access_token: "AT", refresh_token: "RT" },
           clientInformation: { client_id: "public", client_secret: "CS" },
+          codeVerifier: "CV",
         }),
       ).sort(),
-    ).toEqual(["AT", "CS", "RT"]);
+    ).toEqual(["AT", "CS", "CV", "RT"]);
     expect(extractMcpOAuthLiterals(JSON.stringify({ clientInformation: { client_id: "public" } }))).toEqual([]);
     expect(extractMcpOAuthLiterals("not json{")).toEqual([]);
   });
