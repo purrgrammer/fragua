@@ -152,7 +152,15 @@ export function mcpToolPrefix(server: string): string {
  * to match — otherwise the allow/deny silently has no effect. Non-MCP names pass
  * through untouched (core tool names are compared verbatim). */
 export function normalizeMcpToolRef(name: string): string {
-  return isMcpToolName(name) ? slug(name) : name;
+  if (!isMcpToolName(name)) return name;
+  // Split off the server segment and rebuild via `mcpToolName` so the SAME
+  // server-slug cap applies — otherwise a >105-char server name normalises to an
+  // uncapped slug that never matches the (capped) materialised tool name, and the
+  // allow/deny silently misses the whole toolset.
+  const rest = name.slice(MCP_TOOL_NAMESPACE.length);
+  const sep = rest.indexOf("__");
+  if (sep < 0) return slug(name);
+  return mcpToolName(rest.slice(0, sep), rest.slice(sep + 2));
 }
 
 interface McpContentBlock {
@@ -328,9 +336,21 @@ async function connectServer(
 function redactSecrets(text: string, server: ResolvedMcpServer): string {
   if (server.transport !== "stdio" || text.length === 0) return text;
   const secrets: string[] = [...Object.values(server.env ?? {})];
-  for (const arg of server.args ?? []) {
+  const args = server.args ?? [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) continue;
     const eq = arg.indexOf("=");
-    if (eq >= 0) secrets.push(arg.slice(eq + 1));
+    // `--token=SECRET` → the value half.
+    if (eq >= 0) {
+      secrets.push(arg.slice(eq + 1));
+      continue;
+    }
+    // `--token SECRET` → a non-flag arg that FOLLOWS a flag is a candidate value.
+    // (Over-redacting a boolean-flag operand only blanks a token in the stderr
+    // diagnostic — harmless — whereas missing it leaks a live credential.)
+    const prev = args[i - 1];
+    if (i > 0 && prev !== undefined && prev.startsWith("-") && !arg.startsWith("-")) secrets.push(arg);
   }
   let out = text;
   for (const v of secrets) {

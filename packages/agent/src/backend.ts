@@ -252,18 +252,20 @@ export class PiLlmBackend implements LlmBackend {
     const willMaterialise = (name: string): boolean =>
       isMcpToolName(name) && mcpPrefixes.some((p) => normalizeMcpToolRef(name).startsWith(p));
     const gateAllow = allow?.filter((a) => !willMaterialise(a));
+    // An `mcp__*` allow entry lands in `gateAllow` only when its server ISN'T in
+    // `mcp-servers:` (a declared server's tools are exempted via `willMaterialise`),
+    // so it can NEVER resolve. Trip on that regardless of whether a core tool was
+    // also selected — otherwise `['read', 'mcp__missing__x']` would silently run
+    // with just `read`, dropping the typo'd MCP entry with no signal.
+    const mcpUndeclared = gateAllow?.filter((a) => isMcpToolName(a)) ?? [];
+    if (mcpUndeclared.length > 0) {
+      return fail(
+        `allowed_tools names MCP tools [${mcpUndeclared.join(", ")}] whose server is not listed in mcp-servers: — add the server to mcp-servers, or fix the tool name.`,
+        { non_retryable: true },
+      );
+    }
     if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
-      // The offending entries are `gateAllow`, not the whole `allow` list. An
-      // `mcp__*` entry lands here only when its server ISN'T in `mcp-servers:`
-      // (a declared server's tools are exempted via `willMaterialise`), so name
-      // that specific cause instead of blaming the registry.
-      const mcpUndeclared = gateAllow.filter((a) => isMcpToolName(a));
-      if (mcpUndeclared.length > 0) {
-        return fail(
-          `allowed_tools names MCP tools [${mcpUndeclared.join(", ")}] whose server is not listed in mcp-servers: — add the server to mcp-servers, or fix the tool name.`,
-          { non_retryable: true },
-        );
-      }
+      // The offending entries are `gateAllow`, not the whole `allow` list.
       const registered = this.registry.list().map((t) => t.name);
       return fail(
         `allowed_tools=[${gateAllow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +

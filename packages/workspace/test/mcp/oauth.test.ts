@@ -24,6 +24,18 @@ function tokens(): OAuthTokens {
 }
 
 describe("StoredOAuthProvider", () => {
+  test("state() is idempotent within a flow — repeated calls return the first value", () => {
+    const p = new StoredOAuthProvider({
+      url: URL_A,
+      store: fakeStore(),
+      redirectUrl: "http://localhost:8888/callback",
+      onRedirect: () => {},
+    });
+    const first = p.state();
+    expect(p.state()).toBe(first); // not regenerated
+    expect(p.expectedAuthState()).toBe(first);
+  });
+
   test("saveTokens clears the single-use PKCE verifier from the persisted blob", () => {
     const store = fakeStore();
     const provider = new StoredOAuthProvider({

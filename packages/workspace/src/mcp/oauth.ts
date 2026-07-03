@@ -147,9 +147,12 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   // echoed back on the callback. Generated fresh + persisted so it survives the
   // redirect, and validated against `expectedAuthState()` by the login callback.
   state(): string {
-    const value = randomUUID();
-    this.pendingState = value;
-    return value;
+    // Idempotent within a flow: the SDK may call `state()` more than once, but the
+    // browser echoes back the FIRST value — regenerating would make
+    // `expectedAuthState()` reject the valid callback as a state mismatch.
+    if (this.pendingState !== undefined) return this.pendingState;
+    this.pendingState = randomUUID();
+    return this.pendingState;
   }
 
   /** The CSRF `state` expected on the authorization callback, if a flow is in

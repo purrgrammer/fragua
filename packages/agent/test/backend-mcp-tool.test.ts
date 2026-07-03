@@ -222,6 +222,22 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(end?.data["is_error"]).toBe(true); // normalised deny removed it → not-found
   });
 
+  test("an undeclared mcp__ server in a MIXED allow-list (alongside a core tool) still fails loudly", async () => {
+    // `read` selects fine, so the old gate (which required selectedTools===0) would
+    // silently drop the mcp entry and run with just `read`. It must fail instead.
+    const disposed = { n: 0 };
+    const connector = stubConnector({ tools: [], errors: [], disposed });
+    const { outcome } = await runMcp({
+      attrs: { allowed_tools: ["read", "mcp__missing__x"] }, // no mcp-servers → 'missing' undeclared
+      connector,
+      script: [stop],
+    });
+    expect(outcome.status).toBe("fail");
+    const reason = (outcome as { failure_reason?: string }).failure_reason ?? "";
+    expect(reason).toContain("mcp__missing__x");
+    expect(reason).toContain("mcp-servers");
+  });
+
   test("allowlist names an mcp__ tool for an UNDECLARED server → fails naming that cause, not the registry", async () => {
     const disposed = { n: 0 };
     const connector = stubConnector({ tools: [mcpStubTool("mcp__github__x", "hi")], errors: [], disposed });

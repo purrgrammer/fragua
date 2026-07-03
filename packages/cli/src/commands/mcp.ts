@@ -157,10 +157,23 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
     return 1;
   }
   const targets = server ? [server] : Object.keys(load.servers);
-  if (targets.length === 0) {
+  // Unsupported (SSE / malformed) entries must be REPORTED as failures, not
+  // silently omitted — otherwise `mcp check` on an all-SSE project prints "no
+  // servers defined" and exits 0, letting a misconfigured repo pass CI.
+  const unsupportedEntries: Array<[string, string]> = server
+    ? load.unsupported[server] !== undefined
+      ? [[server, load.unsupported[server] as string]]
+      : []
+    : Object.entries(load.unsupported);
+  if (targets.length === 0 && unsupportedEntries.length === 0) {
     console.log(chalk.yellow("no servers defined"));
     return 0;
   }
+  for (const [name, reason] of unsupportedEntries) {
+    console.log(`${chalk.cyan(name)}  ${chalk.red(reason)}`);
+  }
+  const unsupportedCode = unsupportedEntries.length > 0 ? 1 : 0;
+  if (targets.length === 0) return unsupportedCode;
 
   const runCheck = async (oauthProviderFor?: (url: string) => StoredOAuthProvider): Promise<number> => {
     let set: McpToolset | undefined;
@@ -197,7 +210,7 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
       return s !== undefined && needsOAuthState(s);
     })
   ) {
-    return runCheck();
+    return (await runCheck()) || unsupportedCode;
   }
   const throwingProvider = (store: McpOAuthStore) => (url: string) => makeHeadlessMcpProvider(url, store);
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
@@ -205,9 +218,14 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
   // provider so an OAuth server reports "not logged in" (parity with `mcp ls`),
   // not a raw "no fragua store" db error.
   if (!existsSync(resolveStorePath(clientOpts))) {
-    return runCheck(throwingProvider({ load: () => undefined, save: () => {}, clear: () => {} }));
+    return (
+      (await runCheck(throwingProvider({ load: () => undefined, save: () => {}, clear: () => {} }))) || unsupportedCode
+    );
   }
-  return withStoreClient(clientOpts, ({ store }) => runCheck(throwingProvider(makeMcpOAuthStore(store))));
+  return (
+    (await withStoreClient(clientOpts, ({ store }) => runCheck(throwingProvider(makeMcpOAuthStore(store))))) ||
+    unsupportedCode
+  );
 }
 
 /** Locate a server in mcp.json and validate it as an http OAuth target. `login`
@@ -422,8 +440,15 @@ async function runLoginFlow(
   const htmlPage = (body: string): string => `<!doctype html><html><body><p>${body}</p></body></html>`;
   // Assigned after we know the port; the handler only runs on a browser request,
   // by which time it's set.
-  let authProvider: StoredOAuthProvider;
+  let authProvider: StoredOAuthProvider | undefined;
   const httpServer = createServer((req, resp) => {
+    // A request can arrive after `listen()` binds but before `authProvider` is
+    // assigned (port scan, browser preconnect, a stray tab). Reject it rather than
+    // dereferencing `undefined` and crashing the CLI in the request listener.
+    if (authProvider === undefined) {
+      resp.writeHead(503).end();
+      return;
+    }
     const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
     if (reqUrl.pathname !== callbackPath) {
       resp.writeHead(404).end();
@@ -491,7 +516,7 @@ async function runLoginFlow(
       if (creds.clientId === undefined) return;
       const info: OAuthClientInformation = { client_id: creds.clientId };
       if (creds.clientSecret !== undefined) info.client_secret = creds.clientSecret;
-      authProvider.saveClientInformation(info);
+      authProvider?.saveClientInformation(info);
     };
 
     transport = transportFactory(url, headers, authProvider);
@@ -501,8 +526,11 @@ async function runLoginFlow(
       // the CLI forever (the browser-callback wait below is already bounded; this
       // is the other blocking leg). Mirrors the connector's connect timeout.
       await withTimeout(transport.connect(), 30_000, `timed out connecting to ${server}`);
-      // Stored tokens were still valid — no interactive step required.
-      persistConfidentialClient();
+      // Stored tokens were still valid — no interactive step required. Do NOT
+      // persist the CLI-supplied client creds here: the server accepted the bearer
+      // token WITHOUT validating client identity, so a wrong --client-id/secret
+      // would overwrite the working stored row. A prior successful login already
+      // persisted the real client info (that's why a valid token exists).
       console.log(chalk.green(`Logged in to ${server}.`));
       return 0;
     } catch (e) {

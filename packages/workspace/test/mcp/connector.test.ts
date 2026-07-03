@@ -69,6 +69,11 @@ describe("normalizeMcpToolRef", () => {
     expect(normalizeMcpToolRef("read")).toBe("read");
     expect(isMcpToolName("read")).toBe(false);
   });
+
+  test("caps the server slug so a long-named allow entry still matches its tool name", () => {
+    const longServer = "s".repeat(200);
+    expect(normalizeMcpToolRef(`mcp__${longServer}__echo`)).toBe(mcpToolName(longServer, "echo"));
+  });
 });
 
 describe("createMcpConnector.materialize — error paths", () => {

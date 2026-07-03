@@ -282,6 +282,13 @@ describe("mcp check", () => {
     expect(await mcpCheckCommand(undefined, { cwd })).toBe(1);
   });
 
+  test("all-SSE project → reports the unsupported servers and exits 1 (not a silent 'no servers')", async () => {
+    const cwd = project({ mcpServers: { legacy: { type: "sse", url: "https://x.example.com/sse" } } });
+    expect(await mcpCheckCommand(undefined, { cwd })).toBe(1);
+    expect(out()).toContain("legacy");
+    expect(out()).not.toContain("no servers defined");
+  });
+
   test("missing-credential server → reported, exit 1, never connects", async () => {
     const cwd = project({ mcpServers: { needs: { command: "true", env: { TOK: "${FRAGUA_TEST_ABSENT_VAR}" } } } });
     expect(await mcpCheckCommand("needs", { cwd })).toBe(1);
