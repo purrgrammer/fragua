@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { type McpOAuthStore, StoredOAuthProvider } from "../../src/mcp/oauth.ts";
+import { type McpOAuthStore, parseOAuthBlob, StoredOAuthProvider } from "../../src/mcp/oauth.ts";
 
 /** In-memory fake port — one payload string per URL, like the real store row. */
 function fakeStore(): McpOAuthStore & { dump(): Map<string, string> } {
@@ -235,5 +235,14 @@ describe("StoredOAuthProvider", () => {
     expect(p1.expectedAuthState()).toBe(s); // p2's state didn't touch p1
     // And nothing CSRF-related was written to the shared store row.
     expect(store.load(URL_A)).toBeUndefined();
+  });
+});
+
+describe("parseOAuthBlob", () => {
+  test("decodes a valid blob; folds absent/corrupt to undefined", () => {
+    expect(parseOAuthBlob(JSON.stringify({ tokens: { access_token: "x" } }))?.tokens?.access_token).toBe("x");
+    expect(parseOAuthBlob(undefined)).toBeUndefined();
+    expect(parseOAuthBlob("not json{")).toBeUndefined();
+    expect(parseOAuthBlob(JSON.stringify(["array"]))).toBeUndefined();
   });
 });

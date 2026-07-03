@@ -236,6 +236,8 @@ interface McpToolDescriptor {
 
 interface OpenConnection {
   client: Client;
+  /** Kept so teardown can SIGKILL a hung stdio child (http transports have no pid). */
+  transport: Transport;
 }
 
 type ServerResult =
@@ -254,10 +256,12 @@ async function connectServer(
   const client = new Client({ name: `fragua-${name}`, version: "0.1.0" }, { capabilities: {} });
   // Only stdio carries a child + stderr; http has neither.
   let stderrTail = "";
+  // Hoisted out of the try so the catch's `closeWithDeadline` can reach the
+  // transport (to SIGKILL a hung stdio child).
+  let transport: Transport | undefined;
   // Close on ANY failure — a post-connect listTools throw would otherwise leak
   // an stdio child (or a dangling http session) for the daemon's lifetime.
   try {
-    let transport: Transport;
     if (server.transport === "http") {
       const parsedUrl = new URL(server.url);
       if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
@@ -312,9 +316,9 @@ async function connectServer(
       timeout: listTimeoutMs,
       ...(signal ? { signal } : {}),
     })) as { tools?: McpToolDescriptor[] };
-    return { connection: { client }, tools: listed.tools ?? [] };
+    return { connection: { client, transport }, tools: listed.tools ?? [] };
   } catch (err) {
-    await closeWithDeadline(client);
+    await closeWithDeadline(client, transport);
     // Redact resolved `server.env` values from the stderr tail BEFORE it becomes
     // the diagnostic — a stdio server that echoes its environment on a failed
     // start would otherwise write a credential (a token supplied via env, whose
@@ -360,13 +364,17 @@ function redactSecrets(text: string, server: ResolvedMcpServer): string {
 }
 
 // Deadline-bounded so a dead child's never-draining `close()` can't wedge teardown.
-async function closeWithDeadline(client: Client): Promise<void> {
+async function closeWithDeadline(client: Client, transport?: Transport): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   try {
     await Promise.race([
       client.close().catch(() => {}),
       new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, CLOSE_DEADLINE_MS);
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, CLOSE_DEADLINE_MS);
         timer.unref?.();
       }),
     ]);
@@ -375,6 +383,19 @@ async function closeWithDeadline(client: Client): Promise<void> {
     // otherwise stay live (unref'd, but one per connection per step — noise in
     // leak-hunts). `dispose()` fans this out over every open connection.
     if (timer) clearTimeout(timer);
+  }
+  // `close()` is still hung on a child that ignored SIGTERM — SIGKILL it so we
+  // don't orphan the process + its pipes + the stderr listener for the daemon's
+  // lifetime. Only stdio transports have a pid; http returns undefined (no-op).
+  if (timedOut) {
+    const pid = (transport as { pid?: number | null } | undefined)?.pid;
+    if (typeof pid === "number") {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // already exited — nothing to kill.
+      }
+    }
   }
 }
 
@@ -460,7 +481,7 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
         dispose: async () => {
           if (disposed) return;
           disposed = true;
-          await Promise.allSettled(open.map((c) => closeWithDeadline(c.client)));
+          await Promise.allSettled(open.map((c) => closeWithDeadline(c.client, c.transport)));
         },
       };
     },

@@ -57,11 +57,27 @@ export interface StoredOAuthProviderOptions {
   client?: McpOAuthClient;
 }
 
-/** The full shape persisted in the port payload for one server URL. */
-interface PersistedOAuthState {
+/** The full shape persisted in the port payload for one server URL. The single
+ * authority for the blob layout — every reader (this provider, the CLI's
+ * `hasStoredTokens`, the export scrubber's literal extraction) must fold to it. */
+export interface PersistedOAuthState {
   clientInformation?: OAuthClientInformation;
   tokens?: OAuthTokens;
   codeVerifier?: string;
+}
+
+/** Parse a stored OAuth payload string into `PersistedOAuthState`. Returns
+ * `undefined` for an absent or corrupt blob (never throws) — the one place the
+ * blob's JSON shape is decoded, so callers don't re-hand-roll `JSON.parse`. */
+export function parseOAuthBlob(raw: string | undefined): PersistedOAuthState | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as PersistedOAuthState;
+  } catch {
+    /* corrupt → undefined */
+  }
+  return undefined;
 }
 
 export class StoredOAuthProvider implements OAuthClientProvider {
@@ -100,15 +116,7 @@ export class StoredOAuthProvider implements OAuthClientProvider {
   }
 
   private readFromStore(): PersistedOAuthState {
-    const raw = this.store.load(this.url);
-    if (raw === undefined) return {};
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed as PersistedOAuthState;
-    } catch {
-      /* fall through to empty */
-    }
-    return {};
+    return parseOAuthBlob(this.store.load(this.url)) ?? {};
   }
 
   // Write-through: fold the mutation into the LATEST persisted blob (re-read from

@@ -143,11 +143,12 @@ cli
   .command("mcp [action] [target]", "Inspect this project's MCP servers (run without args for help)")
   .option("--client-id <id>", "`login` only: preset OAuth client_id (confidential servers that forbid DCR)")
   .option("--client-secret <secret>", "`login` only: preset OAuth client_secret")
+  .option("--url <url>", "`logout` only: the resolved server URL, to clear stored state when its ${VAR} is gone")
   .action(
     async (
       action: string | undefined,
       target: string | undefined,
-      options: { clientId?: string; clientSecret?: string },
+      options: { clientId?: string; clientSecret?: string; url?: string },
     ) => {
       switch (action) {
         case undefined:
@@ -175,7 +176,7 @@ cli
             console.error(chalk.red("mcp logout: a server name is required"));
             process.exit(1);
           }
-          process.exit(await mcpLogoutCommand(target));
+          process.exit(await mcpLogoutCommand(target, {}, options.url));
           break;
         }
         default:

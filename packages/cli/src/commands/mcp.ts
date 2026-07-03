@@ -25,6 +25,7 @@ import {
   makeHeadlessMcpProvider,
   mcpConfigPath,
   mcpToolPrefix,
+  parseOAuthBlob,
   resolveMcpServer,
   resolveProjectEnv,
   StoredOAuthProvider,
@@ -139,14 +140,10 @@ export function mcpLsCommand(opts: McpOptions = {}): Promise<number> {
 
 /** True only when the stored OAuth payload actually carries a token set — a row
  * holding only client-registration (a login interrupted before callback) is not
- * logged in. */
+ * logged in. Decodes through the shared `parseOAuthBlob` so a rename of the blob
+ * shape is a compile error here, not a silently-wrong login status. */
 function hasStoredTokens(raw: string | undefined): boolean {
-  if (raw === undefined) return false;
-  try {
-    return (JSON.parse(raw) as { tokens?: unknown }).tokens != null;
-  } catch {
-    return false;
-  }
+  return parseOAuthBlob(raw)?.tokens != null;
 }
 
 export async function mcpCheckCommand(server: string | undefined, opts: McpOptions = {}): Promise<number> {
@@ -272,14 +269,26 @@ function resolveOAuthTarget(
   return { ok: true, url: resolved.server.url, headers: resolved.server.headers };
 }
 
-export function mcpLogoutCommand(server: string, opts: McpOptions = {}): Promise<number> {
+export function mcpLogoutCommand(server: string, opts: McpOptions = {}, urlOverride?: string): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const target = resolveOAuthTarget(server, cwd, false);
-  if (!target.ok) return Promise.resolve(target.code);
+  // The store row is keyed by the RESOLVED url. If the URL's `${VAR}` is gone (the
+  // exact time you want to clear stale creds), resolution fails — so accept an
+  // explicit `--url` to use as the key directly, bypassing resolution.
+  let url: string;
+  if (urlOverride !== undefined) {
+    url = urlOverride;
+  } else {
+    const target = resolveOAuthTarget(server, cwd, false);
+    if (!target.ok) {
+      console.error(chalk.dim("  (pass --url <resolved-url> to clear it without resolving the config)"));
+      return Promise.resolve(target.code);
+    }
+    url = target.url;
+  }
   const clientOpts = opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {};
   return withStoreClient(clientOpts, ({ store }) => {
-    const existed = store.getMcpOAuth(target.url) !== undefined;
-    store.deleteMcpOAuth(target.url);
+    const existed = store.getMcpOAuth(url) !== undefined;
+    store.deleteMcpOAuth(url);
     if (existed) console.log(chalk.green(`Logged out of ${server}.`));
     else console.log(chalk.dim(`No stored OAuth state for ${server}; nothing to do.`));
     return 0;
@@ -484,6 +493,10 @@ async function runLoginFlow(
       httpServer.once("error", rej);
       httpServer.listen(confidential ? Number(new URL(MCP_OAUTH_CALLBACK_URL).port) : 0, "127.0.0.1", () => res());
     });
+    // The bind-time `once("error")` is consumed; attach a permanent handler so a
+    // later socket error (a client resetting mid-request) can't crash the CLI as
+    // an unhandled 'error' event on the server.
+    httpServer.on("error", () => {});
     const addr = httpServer.address();
     const port = typeof addr === "object" && addr ? addr.port : Number(new URL(MCP_OAUTH_CALLBACK_URL).port);
     const redirectUrl = `http://127.0.0.1:${port}${callbackPath}`;
@@ -524,7 +537,8 @@ async function runLoginFlow(
     try {
       // Bound the initial connect so an unreachable server / hung TLS can't block
       // the CLI forever (the browser-callback wait below is already bounded; this
-      // is the other blocking leg). Mirrors the connector's connect timeout.
+      // is the other blocking leg). ~Double the connector's 15s connect timeout to
+      // absorb interactive browser-redirect latency on a cold auth server.
       await withTimeout(transport.connect(), 30_000, `timed out connecting to ${server}`);
       // Stored tokens were still valid — no interactive step required. Do NOT
       // persist the CLI-supplied client creds here: the server accepted the bearer

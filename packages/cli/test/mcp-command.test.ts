@@ -180,6 +180,20 @@ describe("mcp logout", () => {
   });
 });
 
+describe("mcp logout --url override", () => {
+  test("clears stored state by explicit --url when the config URL can't resolve (env var gone)", async () => {
+    const dbPath = tempStore();
+    const url = "https://gone.example.com/mcp";
+    seedStore(dbPath, url, JSON.stringify({ tokens: { access_token: "x" } }));
+    // The config URL references a missing var → normal resolution would fail.
+    const cwd = project({ mcpServers: { srv: { type: "http", url: "https://${GONE_HOST}/mcp" } } });
+    expect(await mcpLogoutCommand("srv", { cwd, dbPath }, url)).toBe(0);
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    expect(store.getMcpOAuth(url)).toBeUndefined(); // row cleared
+    store.close();
+  });
+});
+
 describe("mcp login error paths (no listener / browser)", () => {
   test("unknown server → exit 1, not found", async () => {
     const dbPath = tempStore();
