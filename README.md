@@ -105,20 +105,24 @@ One bet: the **control plane** is worth making deterministic even when the LLM b
 
 ## Install
 
-**Release binary** — self-contained builds for linux & macOS (x64/arm64), each in a full flavor (web UI embedded) and a headless one (what CI installs). `SHA256SUMS` + Sigstore attestations cover every asset.
+**One line** — detects your OS/arch, downloads the latest release binary (full flavor, web UI embedded), verifies it against the release `SHA256SUMS`, and drops it on your PATH:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/purrgrammer/fragua/main/install.sh | sh
+```
+
+Installs to `~/.local/bin` (override with `FRAGUA_INSTALL_DIR`). Pin a release with `FRAGUA_VERSION=v0.8.0`, or grab the headless build (no web UI, what CI uses) with `FRAGUA_FLAVOR=headless`. Needs only `curl` + `sha256sum`/`shasum` — no `gh`, no build toolchain. linux & macOS (x64/arm64); on Windows, run it under WSL2.
+
+<details>
+<summary><strong>Manual download</strong> — self-contained builds; <code>SHA256SUMS</code> + Sigstore attestations cover every asset</summary>
 
 ```sh
 asset="fragua-bun-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed -e 's/x86_64/x64/' -e 's/aarch64/arm64/')"
-
-# Direct HTTPS (curl) — no extra tooling beyond curl:
 curl -fL -o fragua "https://github.com/purrgrammer/fragua/releases/latest/download/$asset"
-
-# …or with the GitHub CLI, if you have it:
-gh release download --repo purrgrammer/fragua --pattern "$asset" --output fragua
-
 chmod +x fragua && mv fragua ~/.local/bin/   # anywhere on PATH
 fragua --version
 ```
+</details>
 
 **From source** — a first-class path, not contributor-only. Needs Bun ≥ 1.2 and a clone:
 
