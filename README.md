@@ -10,7 +10,7 @@
 *fragua — Spanish for forge.*
 
 [![CI](https://github.com/purrgrammer/fragua/actions/workflows/ci.yml/badge.svg)](https://github.com/purrgrammer/fragua/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.7.0-blue)](https://github.com/purrgrammer/fragua/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.9.0-blue)](https://github.com/purrgrammer/fragua/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 **A durable, steerable, auditable control plane for an AI coding harness.** Wire LLM agents into a YAML state machine; fragua runs it deterministically — survives crashes and provider outages, lets you steer a live run mid-flight, and records every run as a replayable artifact. It's the control plane, not the model — not a replacement for Claude Code or Codex, but the layer that makes an agent loop durable, inspectable, and safe to leave running. On your laptop and in CI.
@@ -111,7 +111,7 @@ One bet: the **control plane** is worth making deterministic even when the LLM b
 curl -fsSL https://raw.githubusercontent.com/purrgrammer/fragua/main/install.sh | sh
 ```
 
-Installs to `~/.local/bin` (override with `FRAGUA_INSTALL_DIR`). Pin a release with `FRAGUA_VERSION=v0.8.0`, or grab the headless build (no web UI, what CI uses) with `FRAGUA_FLAVOR=headless`. Needs only `curl` + `sha256sum`/`shasum` — no `gh`, no build toolchain. linux & macOS (x64/arm64); on Windows, run it under WSL2.
+Installs to `~/.local/bin` (override with `FRAGUA_INSTALL_DIR`). Pin a release with `FRAGUA_VERSION=v0.9.0`, or grab the headless build (no web UI, what CI uses) with `FRAGUA_FLAVOR=headless`. Needs only `curl` + `sha256sum`/`shasum` — no `gh`, no build toolchain. linux & macOS (x64/arm64); on Windows, run it under WSL2.
 
 <details>
 <summary><strong>Manual download</strong> — self-contained builds; <code>SHA256SUMS</code> + Sigstore attestations cover every asset</summary>
@@ -168,7 +168,7 @@ defaults: { provider: openai, model: gpt-5 }
 ## CI
 
 ```yaml
-- uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.7.0
+- uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.9.0
 ```
 
 **[docs/CI.md](docs/CI.md)** covers setup, credentials, passing secrets to tool steps (`--allow-env`), and run bundles.
