@@ -1,6 +1,6 @@
 {
   "name": "@fragua/daemon",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "fragua daemon — executor + supervisor fiber atop @fragua/store",
   "type": "module",

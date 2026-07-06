@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-06
+
 ### Added
 
 - **MCP tools (experimental).** An `llm` step can now opt into Model Context

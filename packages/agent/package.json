@@ -1,6 +1,6 @@
 {
   "name": "@fragua/agent",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "fragua agent layer — thin wrapper on pi-agent-core with fragua middleware",
   "type": "module",
