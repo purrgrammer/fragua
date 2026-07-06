@@ -1,8 +1,8 @@
 ---
 title: Concurrency — parallel fan-out on the log (umbrella + decision record)
 summary: "fragua needs to run N units of work concurrently inside one run and combine them. The hardened conclusion: branches are nodes in one run, and their durable writes linearize through the run's single committer — so a fan-out is N concurrent EXECUTIONS whose COMMITS serialize, exactly the model fragua already runs. This makes per-sub-node durability on one log not just possible but the default: the active set is a lineage-tagged frontier folded from the log, multi-node branches advance independently to a single join barrier, and crash/resume re-dispatches the exact in-flight frontier. The earlier 'N durable concurrent writers are impossible' framing conflated concurrent execution with concurrent commits; a run has one writer fiber, so OCC never contends intra-run. Detailed spec: fan-out-nodes.md. Structured outputs (shipped) are the fail-closed join. A second, cross-run primitive (child runs over a parameter sweep, fan-out-runs.md) is the other end of the recovery-granularity axis and stays future."
-status: proposed
-maturity: designed
+status: implemented
+maturity: shipped
 last-reviewed: 2026-06-07
 supersedes: the off-log recursion addendum (2026-06-01) and the active-set-only single-node MVP — both folded into the on-log frontier below
 ---

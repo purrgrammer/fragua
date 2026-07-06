@@ -1,12 +1,14 @@
 # Typed wrapper struct for `run_state.routing` — DRAFT proposal
 
-> **Status: DESIGN FIRMED UP — ready to implement.** Shape decided (option (c):
-> typed wrapper struct, reserved namespaces) and realised as a **typed
-> accessor layer over unchanged on-disk bytes** (no reshape, no schema
-> migration, no contract bump). §1–§5 are the grounding; **§6 is the concrete
-> design** — it answers Q1–Q5 and folds in all five panel rulings (which are no
-> longer open). The full original `propose` draft + panel transcript persist in
-> that run's event log.
+> **Status: IMPLEMENTED.** Shape decided (option (c): typed wrapper struct,
+> reserved namespaces) and shipped as a **typed accessor layer over unchanged
+> on-disk bytes** (no reshape, no schema migration, no contract bump) at
+> `packages/core/src/routing.ts`. Eight validate-and-degrade accessors
+> (`getInputs`, `getFrontier`, `getBudget`, `getRetry`, `getGoalGate`,
+> `getLimits`, `getTimer`, `getContext`) are the live implementation.
+> §1–§5 are the grounding; **§6 is the concrete design** — it answers Q1–Q5
+> and folds in all five panel rulings. The full original `propose` draft +
+> panel transcript persist in that run's event log.
 
 
 Grounding for the design draft. The author reads this instead of re-deriving the

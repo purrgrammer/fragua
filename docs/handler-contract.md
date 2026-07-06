@@ -165,7 +165,7 @@ return {
 ## The four hard rules
 
 ### 1. Respect `ctx.signal`
-It composes the steer controller + `AbortSignal.timeout(maxMs)` + shutdown. Everything I/O-adjacent must be cancellable:
+It always composes the steer controller + shutdown; when `maxMs` is set on the `HandlerSpec` it additionally includes `AbortSignal.timeout(maxMs)`. (Llm-kind handlers that omit `maxMs` receive only the steer + shutdown pair — see §Timeouts.) Everything I/O-adjacent must be cancellable:
 
 ```typescript
 // ✅ good — ctx.llm already wires the signal
