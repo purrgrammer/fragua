@@ -29,10 +29,13 @@ import {
   validateOutputsValue,
 } from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
-import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
+import type { ExecutionEnvironment, FraguaToolContext, McpConnector, Skill, ToolRegistry } from "@fragua/workspace";
 import {
   filterCatalogueForRun,
   filterSkillsForNode,
+  isMcpToolName,
+  mcpToolPrefix,
+  normalizeMcpToolRef,
   renderSkillsCatalog,
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
@@ -75,6 +78,11 @@ export interface PiLlmBackendOptions {
    * the backend renders a tier-1 catalog into the system prompt and
    * adds a scoped `local:load_skill` tool to the run. */
   skills?: Skill[];
+  /** Materialises MCP-server tools for a node's `mcp_servers`. When wired,
+   * an llm node that lists servers gets each server's tools appended as
+   * `mcp__<server>__<tool>`, connected lazily for the node and torn down when
+   * it finishes. Omit to disable MCP entirely (tests / bare daemons). */
+  mcpConnector?: McpConnector;
   /** Per-run isolation facts — worktree path, run id, bootstrap command.
    * When provided, the backend prepends an `<environment>` block to
    * every node's system prompt so agents know where they are and which
@@ -136,6 +144,7 @@ export class PiLlmBackend implements LlmBackend {
    * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
+  private readonly mcpConnector: McpConnector | undefined;
 
   constructor(opts: PiLlmBackendOptions) {
     this.registry = opts.registry;
@@ -151,6 +160,7 @@ export class PiLlmBackend implements LlmBackend {
     this.runEnv = opts.runEnv;
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
+    this.mcpConnector = opts.mcpConnector;
   }
 
   /** True when we've already persisted `threadId` for `runId` during
@@ -180,6 +190,24 @@ export class PiLlmBackend implements LlmBackend {
   }
 
   async run(input: LlmInput): Promise<Outcome> {
+    // Cleanup callbacks registered during the run (currently MCP connection
+    // teardown). Runs on every exit path so a lazily-connected server is never
+    // left dangling, no matter which of runInner's many returns fires.
+    const disposers: Array<() => Promise<void>> = [];
+    try {
+      return await this.runInner(input, disposers);
+    } finally {
+      for (const dispose of disposers) {
+        try {
+          await dispose();
+        } catch {
+          // best-effort teardown — a failed close must not mask the run outcome.
+        }
+      }
+    }
+  }
+
+  private async runInner(input: LlmInput, disposers: Array<() => Promise<void>>): Promise<Outcome> {
     const provider = input.node.attrs.provider ?? this.defaultModel.provider;
     const modelId = input.node.attrs.model ?? this.defaultModel.model;
     let model: Model<string> | undefined;
@@ -214,11 +242,52 @@ export class PiLlmBackend implements LlmBackend {
     // post-skill-merge `finalTools` below) so the diagnostic still fires
     // when the registry is genuinely empty — a registry that holds only
     // the force-included `skill` is still misconfigured.
-    if (allow && allow.length > 0 && selectedTools.length === 0) {
+    // An `mcp__<srv>__*` allow entry names a tool materialised later (additive,
+    // per mcp-servers), not a registry tool — exclude it from the gate ONLY when
+    // its server is declared in `mcp-servers` (so it can actually resolve). An
+    // `mcp__*` entry for an undeclared server, or with no `mcp-servers:` at all,
+    // can never resolve and must still trip the gate.
+    const declaredMcpServers = (input.node.attrs.mcp_servers as string[] | undefined) ?? [];
+    const mcpPrefixes = declaredMcpServers.map((s) => mcpToolPrefix(s));
+    const willMaterialise = (name: string): boolean =>
+      isMcpToolName(name) && mcpPrefixes.some((p) => normalizeMcpToolRef(name).startsWith(p));
+    const gateAllow = allow?.filter((a) => !willMaterialise(a));
+    // An `mcp__*` allow entry lands in `gateAllow` only when its server ISN'T in
+    // `mcp-servers:` (a declared server's tools are exempted via `willMaterialise`),
+    // so it can NEVER resolve. Trip on that regardless of whether a core tool was
+    // also selected — otherwise `['read', 'mcp__missing__x']` would silently run
+    // with just `read`, dropping the typo'd MCP entry with no signal.
+    const mcpUndeclared = gateAllow?.filter((a) => isMcpToolName(a)) ?? [];
+    if (mcpUndeclared.length > 0) {
+      return fail(
+        `allowed_tools names MCP tools [${mcpUndeclared.join(", ")}] whose server is not listed in mcp-servers: — add the server to mcp-servers, or fix the tool name.`,
+        { non_retryable: true },
+      );
+    }
+    if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
+      // The offending entries are `gateAllow`, not the whole `allow` list.
       const registered = this.registry.list().map((t) => t.name);
       return fail(
-        `allowed_tools=[${allow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
+        `allowed_tools=[${gateAllow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
           "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
+      );
+    }
+    // `allowed_tools` names ONLY `mcp__*` tools and no core tool was selected — so
+    // the step's entire toolset hinges on MCP materialisation. Used by two gates
+    // below (no connector wired vs connector present but nothing materialised).
+    const mcpOnlyAllowlist =
+      allow !== undefined && allow.length > 0 && allow.every(isMcpToolName) && selectedTools.length === 0;
+    // `willMaterialise` exempts `mcp__*` allow entries from the gate above so it
+    // doesn't fire before materialisation — but with no connector wired they can
+    // NEVER materialise, and the post-materialisation re-check below lives inside
+    // the connector-guarded block, so an mcp-only allowlist would slip through to
+    // a tool-less run. Catch that here. (A connector-present-but-servers-fail case
+    // is caught after materialise; a connector present with no `mcp-servers:` makes
+    // `willMaterialise` false, so the standard gate above already fires.)
+    if (!this.mcpConnector && mcpOnlyAllowlist) {
+      return fail(
+        `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but no MCP connector is configured to materialise them.`,
+        { non_retryable: true },
       );
     }
 
@@ -285,6 +354,63 @@ export class PiLlmBackend implements LlmBackend {
       if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
     } else {
       finalTools = finalTools.filter((t) => t.name !== "skill");
+    }
+
+    // Materialise MCP-server tools for this node. Declaring a server in
+    // `mcp-servers` exposes ALL of its tools. `allowed_tools` narrows the MCP set
+    // ONLY when it names specific `mcp__*` tools — then only those materialise;
+    // an `allowed_tools` that lists only core tools leaves the MCP set untouched
+    // (you narrowed core, not MCP). `denied_tools` always subtracts. A server
+    // that can't connect is skipped with an `agent.warning` — never fatal.
+    // Teardown is registered on `disposers` so the connection is released on
+    // every exit path.
+    if (this.mcpConnector && declaredMcpServers.length > 0) {
+      const materializeOpts: Parameters<McpConnector["materialize"]>[1] = { cwd: runProjectCwd };
+      if (input.signal) materializeOpts.signal = input.signal;
+      const toolset = await this.mcpConnector.materialize(declaredMcpServers, materializeOpts);
+      disposers.push(() => toolset.dispose());
+      const denied = new Set((input.node.attrs.denied_tools as string[] | undefined)?.map(normalizeMcpToolRef) ?? []);
+      const mcpAllow = allow?.filter((a) => isMcpToolName(a)).map(normalizeMcpToolRef);
+      const mcpAllowSet = mcpAllow && mcpAllow.length > 0 ? new Set(mcpAllow) : undefined;
+      const mcpTools = toolset.tools.filter(
+        (t) => !denied.has(t.name) && (mcpAllowSet === undefined || mcpAllowSet.has(t.name)),
+      );
+      finalTools = [...finalTools, ...mcpTools];
+      if (input.emit) {
+        for (const e of toolset.errors) {
+          // A collision means the server IS live (its other tools materialised) —
+          // don't word it as "skipped", which sends operators to debug connectivity.
+          const message =
+            e.kind === "collision"
+              ? `mcp tool from "${e.server}" dropped: ${e.message}`
+              : `mcp server "${e.server}" skipped: ${e.message}`;
+          await input.emit("agent.warning", { message });
+        }
+        if (mcpTools.length > 0) {
+          await input.emit("agent.info", {
+            message: `mcp: ${mcpTools.length} tool(s) from [${declaredMcpServers.join(", ")}]`,
+          });
+        }
+      }
+      // The empty-tools gate above exempts `mcp__*` allow entries so it doesn't
+      // fire before materialisation. Re-check here: if `allowed_tools` named ONLY
+      // MCP tools (so the step selected no core tools) and none materialised —
+      // every declared server failed to connect, or the named tools don't exist —
+      // the step would run tool-less but "successful", the exact silent-empty-tools
+      // footgun the gate exists to prevent. Fail loudly instead. Config error, so
+      // non-retryable; `dispose` still runs via the outer `finally`.
+      if (mcpOnlyAllowlist && mcpTools.length === 0) {
+        // Distinguish the two causes: if the server(s) materialised tools but the
+        // allowlist matched none, it's a tool-NAME mismatch, not connectivity —
+        // point the operator at the actual names instead of debugging creds.
+        const available = toolset.tools.map((t) => t.name);
+        return fail(
+          available.length > 0
+            ? `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none match the tools materialised from [${declaredMcpServers.join(", ")}] — available: [${available.join(", ")}]. Check the tool names.`
+            : `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${declaredMcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
+          { non_retryable: true },
+        );
+      }
     }
     // Per-run fragua context. Built-in I/O tools ignore this field; the
     // `skill` tool reads `skillCatalog` for its name lookup. Captured by

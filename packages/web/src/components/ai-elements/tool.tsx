@@ -176,6 +176,19 @@ function lookupTool(toolName: string | undefined): ToolPresentation | undefined 
   return TOOL_PRESENTATION[stripped];
 }
 
+/** MCP tool names surface as `mcp:<server>:<method>` (the event bridge
+ * unsanitises `__`→`:`) or the wire form `mcp__<server>__<method>`. Render them
+ * as "<server> · <method>", dropping the `mcp` namespace, so the header reads
+ * as the server + method rather than "Mcp github search repositories". Returns
+ * `undefined` for a non-MCP name so the caller falls back to the humanizer. */
+export function formatMcpToolName(toolName: string): string | undefined {
+  const sep = toolName.startsWith("mcp__") ? "__" : toolName.startsWith("mcp:") ? ":" : undefined;
+  if (sep === undefined) return undefined;
+  const [server, ...rest] = toolName.slice(`mcp${sep}`.length).split(sep);
+  if (!server || rest.length === 0) return undefined;
+  return `${server} · ${rest.join(sep)}`;
+}
+
 /** Sentence-case an unknown tool's name so `do_thing` renders as
  * "Do thing" instead of leaking the raw slug or producing Title Case
  * (which the skill explicitly forbids). */
@@ -197,7 +210,7 @@ export const ToolHeader = ({ className, title, type, state, toolName, labelOverr
   const raw = title ?? derivedName;
   const entry = lookupTool(raw);
   const Icon = entry?.icon ?? WrenchIcon;
-  const label = labelOverride ?? entry?.label ?? humanizeToolName(raw);
+  const label = labelOverride ?? entry?.label ?? formatMcpToolName(raw) ?? humanizeToolName(raw);
 
   return (
     <CollapsibleTrigger

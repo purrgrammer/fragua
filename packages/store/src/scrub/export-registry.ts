@@ -82,6 +82,47 @@ export function extractCredentialLiterals(row: ProviderCredentialRow): string[] 
   return results;
 }
 
+/**
+ * Extract the secret strings from a stored `mcp_oauth` payload (JSON): the OAuth
+ * token set (`tokens.access_token` / `tokens.refresh_token`) and any confidential
+ * `clientInformation.client_secret`. Returns `[]` on a malformed or token-less
+ * payload. Fed to `buildExportRegistry` as `mcp_oauth`-sourced literals so a token
+ * that appears verbatim in an event/artifact is redacted from an export bundle.
+ */
+// NOTE: this walks the `mcp_oauth` blob shape owned by `PersistedOAuthState` in
+// @fragua/workspace (mcp/oauth.ts) — { tokens, clientInformation, codeVerifier }.
+// @fragua/store can't import across that boundary, so keep the fields below in
+// sync with that type: any field that can hold a secret must be enumerated here.
+export function extractMcpOAuthLiterals(payload: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return [];
+  }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+  const obj = parsed as Record<string, unknown>;
+  const out: string[] = [];
+  const push = (v: unknown): void => {
+    if (typeof v === "string" && v.length > 0) out.push(v);
+  };
+  const tokens = obj["tokens"];
+  if (tokens != null && typeof tokens === "object") {
+    const t = tokens as Record<string, unknown>;
+    push(t["access_token"]);
+    push(t["refresh_token"]);
+  }
+  const client = obj["clientInformation"];
+  if (client != null && typeof client === "object") {
+    push((client as Record<string, unknown>)["client_secret"]);
+  }
+  // Belt-and-suspenders: the single-use PKCE verifier is cleared on token save,
+  // but scrub it if a pre-fix blob still carries one (it's a random base64url
+  // string BASE_PATTERNS won't match).
+  push(obj["codeVerifier"]);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Registry assembly
 // ---------------------------------------------------------------------------
@@ -235,6 +276,20 @@ export function scrubEventPayload(
       if (scrubbed !== val) {
         if (out == null) out = { ...src };
         out["title"] = scrubbed;
+      }
+    }
+  }
+
+  // Rule 1d: scrub the free-text `message` on agent.warning / agent.info. A
+  // skipped-MCP-server warning appends up to ~500 bytes of the server's stderr,
+  // which can echo a bearer token on a failed start — it must not survive export.
+  if (type === "agent.warning" || type === "agent.info") {
+    const val = src["message"];
+    if (typeof val === "string") {
+      const scrubbed = scrubText(val, registry, opts);
+      if (scrubbed !== val) {
+        if (out == null) out = { ...src };
+        out["message"] = scrubbed;
       }
     }
   }

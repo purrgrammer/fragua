@@ -55,6 +55,7 @@ export { newRunId } from "./run-id.ts";
 export {
   buildExportRegistry,
   extractCredentialLiterals,
+  extractMcpOAuthLiterals,
   scrubEventPayload,
   scrubJsonStrings,
 } from "./scrub/export-registry.ts";

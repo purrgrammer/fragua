@@ -5,8 +5,8 @@
 // There is NO projection in a bundle — `run_state` is re-derived on import by
 // replaying the event log. The tar is MANIFEST-FIRST (`manifest.json`, a pure
 // index a reader can pull without unpacking), then per-run logs, workflows, and
-// blobs. No `provider_credentials`/`provider_config` ever — secret-free by
-// construction.
+// blobs. No `provider_credentials`/`provider_config`/`mcp_oauth` ever —
+// secret-free by construction.
 //
 // Layout:
 //   manifest.json                     — index + version stamps only
@@ -25,7 +25,7 @@ export const BUNDLE_VERSION = 2;
 
 /** Scrubber version stamp. Bumped when the registry/pattern-set/encoding-set
  *  changes so an auditor knows which detector ran (secret-scrubbing.md §8). */
-export const SCRUBBER_VERSION = "1";
+export const SCRUBBER_VERSION = "2";
 
 export interface BundleManifest {
   bundleVersion: number;

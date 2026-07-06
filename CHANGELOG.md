@@ -10,6 +10,49 @@ guarantee.
 
 ### Added
 
+- **MCP tools (experimental).** An `llm` step can now opt into Model Context
+  Protocol servers with `mcp-servers: [name, …]`. Every tool the servers expose
+  is materialised as an ordinary tool named `mcp__<server>__<tool>`. Declaring a
+  server adds all its tools; naming specific `mcp__*` tools in `allowed-tools`
+  narrows the MCP set to those (listing only core tools leaves it untouched), and
+  `denied-tools` removes individual ones.
+  Servers are declared in `<project>/.mcp.json` (the same file and `mcpServers`
+  shape Claude Code reads, so an existing MCP-configured repo just works).
+  Both **stdio** (`command`/`args`) and **Streamable HTTP**
+  (`{ "type": "http", "url", "headers" }`) transports are supported — HTTP with
+  static header auth (`"Authorization": "Bearer ${TOKEN}"`) covers remote
+  servers like GitHub; the legacy SSE transport is tolerated-but-skipped.
+  Credentials (a static `Authorization` header, or an OAuth bearer token) over a
+  plaintext `http://` URL to a non-loopback host are refused — they'd leak on the
+  wire; use `https` (loopback dev servers are exempt).
+  `${VAR}` in a server's command/args/env/url/headers is resolved against the
+  project's `.env`/`.env.local` overlaid by the process environment (so a token
+  in `.env.local` works without exporting it or restarting the daemon), and a
+  server whose credential is missing or that fails to connect is skipped with a
+  warning rather than hanging or failing the step — unless `allowed-tools` pinned
+  the step to only MCP tools and none materialised, which fails loudly rather than
+  running tool-less. Case/hyphen variants of a tool name in `allowed-tools` /
+  `denied-tools` are matched against the slugged materialised name.
+  Connections are opened lazily per step and torn down when it finishes. New
+  `fragua mcp ls` lists configured servers with their credential and OAuth state
+  (`ready` / `logged in` / `login required`); `fragua mcp check [server]`
+  connects and lists the tools each exposes. A remote HTTP server with no static
+  `Authorization` header authenticates through a stored OAuth token: the daemon
+  attaches an OAuth provider that reads the token persisted for that server URL,
+  and `fragua mcp login <server>` runs the interactive browser flow (opening the
+  authorization URL, catching the redirect on a fixed localhost callback, and
+  persisting client registration + tokens) — `--client-id` / `--client-secret`
+  cover confidential servers like Slack that forbid dynamic registration.
+  `fragua mcp logout <server>` forgets a server's stored tokens. Confidential
+  client credentials can be supplied via `FRAGUA_MCP_CLIENT_ID` /
+  `FRAGUA_MCP_CLIENT_SECRET` env vars instead of `--client-id`/`--client-secret`,
+  keeping the secret out of the process argument list, and are persisted only
+  after the login succeeds (a failed attempt no longer leaves unvalidated
+  credentials the daemon would inherit). When no token
+  is stored a run skips the server with a message to authenticate it rather than
+  hanging startup. Stored OAuth tokens and `client_secret` are redacted from
+  exported run bundles like provider credentials. Progressive disclosure is not
+  yet supported.
 - Quarantined runs now get a first-class operator surface. In the web UI a
   banner on the run detail page explains the quarantine reason, lists the
   orphaned intent seqs, and offers the three resolutions (`treat as done`,

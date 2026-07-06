@@ -292,6 +292,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 | `outputs` | map | Typed step outputs (`llm` only; mutually exclusive with `routes:`). Read downstream as `${{ outputs.X.f }}` (§6). |
 | `allowed-tools` | string[] | Tool whitelist. Name them — unconstrained is usually wrong. |
 | `denied-tools` | string[] | Subtractive filter. |
+| `mcp-servers` | string[] | MCP servers (from `.mcp.json`) to connect for this `llm` step; their tools materialise as `mcp__<server>__<tool>` (§7 · The toolset). |
 | `effort` | `low\|medium\|high` | Reasoning effort for extended-thinking providers. |
 | `max-cost` | number | Per-step USD ceiling. |
 | `max-tokens` | int | Per-step token ceiling. |
@@ -319,6 +320,35 @@ Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-p
 | `web_fetch` | fetch a URL | opt-in |
 
 Three tools are **force-included** and need not be listed — they're available even if `allowed-tools` omits them (and survive `denied-tools`): `skill` (load a skill), `abort` (fail the step with a reason, §4), and `route` (synthesised per-call on a node that declares `routes:`).
+
+### MCP tools (experimental)
+
+An `llm` step can pull in [Model Context Protocol](https://modelcontextprotocol.io) servers with `mcp-servers:`. Every tool a listed server exposes is materialised as an ordinary tool named `mcp__<server>__<tool>` — the model calls it exactly like `read` or `bash`.
+
+```yaml
+steps:
+  triage:
+    type: llm
+    mcp-servers: [github]          # connect this server for this step
+    prompt: Summarise the open issues and file a report.
+```
+
+- **Declaring a server adds all its tools; `allowed-tools` narrows only if it names MCP tools.** `mcp-servers: [github]` exposes every github tool. Listing specific `mcp__*` tools in `allowed-tools` narrows the MCP set to those (pin a step to, e.g., read-only tools; names come from `fragua mcp check`); listing only *core* tools in `allowed-tools` leaves the MCP set untouched. `denied-tools` drops individual tools by full name (`mcp__github__delete_repo`).
+- **Servers are declared** in `<project>/.mcp.json` at the repo root — the same file and shape Claude Code reads, so an MCP-configured repo just works. Both stdio and Streamable-HTTP servers are supported (legacy SSE is skipped):
+
+  ```json
+  { "mcpServers": {
+      "fs":     { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] },
+      "github": { "type": "http", "url": "https://api.githubcopilot.com/mcp/",
+                  "headers": { "Authorization": "Bearer ${GITHUB_PAT}" } } } }
+  ```
+
+  `${VAR}` is resolved from the project's `.env`/`.env.local` overlaid by the process environment (a token in `.env.local` works without exporting it or restarting the daemon). A server whose credential is unset — or that fails to connect — is **skipped with a warning**, and the step runs with whatever tools did materialise; it never hangs or fails the step for a missing server. **Exception:** if `allowed-tools` names *only* `mcp__*` tools and none materialise, the step fails (non-retryable) instead of running tool-less — keep a core tool in `allowed-tools` for the never-fatal behaviour.
+- **Transports:** **stdio** (`command`/`args`) and **Streamable HTTP** (`{ "type": "http", "url", "headers" }`). A remote HTTP server with no static `Authorization` header authenticates via stored OAuth — `fragua mcp login <server>` runs the browser flow once, then the daemon reads the token headlessly (a static bearer over plaintext `http://` is refused; use `https`).
+- **`llm` only.** `mcp-servers` on a `tool`/`human` step is a parse error. Connections open lazily when the step runs and close when it finishes.
+- **Inspect before you author:** `fragua mcp ls` lists the project's servers with their credential/OAuth state; `fragua mcp check [server]` connects and prints the exact tool names to reference in `allowed-tools`/`denied-tools`.
+
+Not yet supported: progressive disclosure and a web server-state UI — see `docs/proposals/mcp-tools.md §7`.
 
 ### Tool steps
 

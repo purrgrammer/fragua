@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@sinclair/typebox": "0.34.49",
     "@fragua/agent": "workspace:*",
     "@fragua/core": "workspace:*",

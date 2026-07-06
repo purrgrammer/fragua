@@ -8,8 +8,10 @@ import type { Database } from "bun:sqlite";
  * v3 adds the `outputs` index table (structured step outputs, additive).
  * v4 adds `messages.pass` (goal-gate re-entry epoch). The event-payload 4 KiB
  * BYTE cap (I2/I10) is enforced in the store.ts write guard, NOT a SQL CHECK —
- * a byte-exact CHECK can't be applied retroactively over historical rows. */
-export const CURRENT_SCHEMA_VERSION = 4;
+ * a byte-exact CHECK can't be applied retroactively over historical rows.
+ * v5 adds the `mcp_oauth` table (per-server OAuth state for remote MCP
+ * servers, additive). */
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
  * store (the 0.1.0 baseline) migrates to current; nothing older exists. */

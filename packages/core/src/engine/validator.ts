@@ -60,6 +60,7 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "reasoning_effort",
   "allowed_tools",
   "denied_tools",
+  "mcp_servers",
   "retry_target",
   "tool_command",
   "max_cost_usd",

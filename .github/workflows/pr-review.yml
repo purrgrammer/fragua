@@ -40,7 +40,10 @@ jobs:
     # post — skip them. Same-repo PRs only.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The fragua review pipeline (6 concurrent lenses + verify) runs ~15-20m on
+    # a mid-size diff; 20m was too tight and got cancelled mid-review. 35m gives
+    # headroom without letting a genuinely wedged run burn a full hour.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:

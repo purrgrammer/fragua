@@ -99,6 +99,12 @@ import {
   selectUnappliedIntents,
 } from "./event-queries.ts";
 import {
+  deleteMcpOAuth as queryDeleteMcpOAuth,
+  upsertMcpOAuth as queryUpsertMcpOAuth,
+  selectAllMcpOAuth,
+  selectMcpOAuth,
+} from "./mcp-oauth-queries.ts";
+import {
   insertMessage,
   insertMessageOrIgnore,
   selectActiveThreads,
@@ -205,7 +211,13 @@ import {
   updateScheduleResumed,
   updateScheduleSkip,
 } from "./schedule-queries.ts";
-import { buildExportRegistry, isTextMime, scrubEventPayload, scrubJsonStrings } from "./scrub/export-registry.ts";
+import {
+  buildExportRegistry,
+  extractMcpOAuthLiterals,
+  isTextMime,
+  scrubEventPayload,
+  scrubJsonStrings,
+} from "./scrub/export-registry.ts";
 import { type ScrubOptions, scrubText } from "./scrub/scrub.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
@@ -1397,6 +1409,32 @@ export class SqliteStore implements IEventStore {
     });
   }
 
+  // ─────────────── MCP OAuth ───────────────
+
+  getMcpOAuth(url: string): string | undefined {
+    const row = selectMcpOAuth(this.db, url);
+    return row == null ? undefined : row.payload;
+  }
+
+  listMcpOAuth(): { url: string; payload: string }[] {
+    return selectAllMcpOAuth(this.db).map((row) => ({ url: row.url, payload: row.payload }));
+  }
+
+  upsertMcpOAuth(url: string, payload: string): void {
+    // Caller passes a pre-stringified opaque `payload` per invariant I1 —
+    // JSON.stringify must not run inside the write txn.
+    const now = this.now();
+    this.writeTxn(() => {
+      queryUpsertMcpOAuth(this.db, { url, payload, now });
+    });
+  }
+
+  deleteMcpOAuth(url: string): void {
+    this.writeTxn(() => {
+      queryDeleteMcpOAuth(this.db, url);
+    });
+  }
+
   // ─────────────── Provider config ───────────────
 
   getProviderConfig(provider: string): ProviderConfigRow | null {
@@ -1573,7 +1611,8 @@ export class SqliteStore implements IEventStore {
   }
 
   /** Prune the store to the portable, replayable run record, dropping every
-   * other table — the secret-bearing (`provider_credentials`, `provider_config`)
+   * other table — the secret-bearing (`provider_credentials`, `provider_config`,
+   * `mcp_oauth`)
    * and instance-scoped (`daemon_lock`, `server_endpoint`, `daemon_events`,
    * `schedules`) ones — then VACUUM + checkpoint so the dropped bytes are truly
    * gone (no freelist or WAL residue). `fragua ci` calls this before leaving a
@@ -1665,10 +1704,16 @@ export class SqliteStore implements IEventStore {
     const events = allEvents.filter((e) => !EXPORT_DENYLIST.has(e.type));
     const messages = [...this.getMessages(runId)].sort((a, b) => a.ordinal - b.ordinal);
 
+    // mcp_oauth tokens + client_secret are secret-bearing like provider creds and
+    // must be redacted from the bundle if they appear verbatim anywhere.
+    const mcpOAuthLiterals = this.listMcpOAuth().flatMap((r) =>
+      extractMcpOAuthLiterals(r.payload).map((value) => ({ value, source: "mcp_oauth" })),
+    );
+    const extraLiterals = [...mcpOAuthLiterals, ...(opts.extraLiterals ?? [])];
     const { registry, literalValues } = buildExportRegistry({
       providerCredentials: this.listProviderCredentials(),
       cwd: run.cwd,
-      ...(opts.extraLiterals !== undefined ? { extraLiterals: opts.extraLiterals } : {}),
+      ...(extraLiterals.length > 0 ? { extraLiterals } : {}),
     });
     const artifacts = this.listArtifacts(runId).sort(
       (a, b) => a.nodeId.localeCompare(b.nodeId) || a.iteration - b.iteration || a.key.localeCompare(b.key),
