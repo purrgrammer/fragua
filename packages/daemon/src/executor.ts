@@ -695,15 +695,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         },
       ];
       // Seed graph-level routing keys at run start so the agent backend
-      // can pick up the workflow goal/label for system-prompt framing.
-      // Internal plumbing, not user-facing context KV.
+      // can pick up the workflow goal for system-prompt framing.
+      // Internal plumbing, not user-facing context KV. The graph label
+      // (authored `description:`) stays out of routing: nothing reads it
+      // back, it can be arbitrarily long prose, and the routing-patch
+      // write gate rejects keys outside the known vocabulary.
       const startGraph = graphFor(state.workflowSha);
       const startRoutingPatch: Record<string, unknown> = {};
       if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
         startRoutingPatch[GRAPH_GOAL_KEY] = startGraph.attrs.goal;
-      }
-      if (typeof startGraph?.attrs.label === "string" && startGraph.attrs.label !== "") {
-        startRoutingPatch["graph.label"] = startGraph.attrs.label;
       }
       // Advance lastAppliedSeq on run_started so the supervisor doesn't
       // mistake the synthetic `intent.run_enqueued` (the queue marker

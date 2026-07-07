@@ -8,6 +8,16 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-07-07
+
+### Fixed
+
+- A workflow with a `description:` crashed at run start ("routingPatch key
+  \"graph.label\" belongs to no known routing-key family") — the executor seeded
+  the description into run routing, which the 0.9.0 routing-key write gate
+  rejects. The description no longer enters routing (nothing read it back);
+  every workflow with a description runs again.
+
 ## [0.9.0] — 2026-07-06
 
 ### Added
