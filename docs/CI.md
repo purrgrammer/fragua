@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # full history if the workflow diffs against base
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.9.0 # ← pin the tag
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.9.1 # ← pin the tag
       - run: fragua ci my-workflow --input task="…"
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
