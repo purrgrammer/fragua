@@ -79,6 +79,7 @@ async function ctxFor(
   store: SqliteStore,
   nodeId: string,
   args: Readonly<{ inputs?: Record<string, string> }> = {},
+  routing: Readonly<Record<string, unknown>> = { goal: "arithmetic" },
 ): Promise<handler.HandlerContext> {
   store.saveWorkflow(
     "sha",
@@ -95,7 +96,7 @@ async function ctxFor(
     nodeId,
     iteration: 0,
     signal: ac.signal,
-    routing: { goal: "arithmetic" },
+    routing,
     store,
     llm: handler.makeLlmClient({
       signal: ac.signal,
@@ -365,6 +366,63 @@ describe("makeLlmHandler", () => {
     });
     await spec.handler(ctx);
     expect(seenPrompt).toBe("Fix BUG-42 on prod");
+    store.close();
+  });
+
+  test("pending operator gate notes are prepended to the prompt (SPEC §3.4)", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor(
+      "r-note",
+      store,
+      "n1",
+      { inputs: { ticket: "BUG-42" } },
+      {
+        "internal.operator_notes": [
+          { gateNodeId: "plan_gate", route: "revise", note: "use the v2 schema" },
+          { gateNodeId: "scope_gate", route: "approve", note: "skip the migration" },
+        ],
+      },
+    );
+    let seenPrompt: string | undefined;
+    const capture: LlmBackend = {
+      async run(input) {
+        seenPrompt = input.prompt;
+        return ok({});
+      },
+    };
+    const spec = makeLlmHandler({
+      node: node({ attrs: { prompt: "Fix ${{ inputs.ticket }}" } }),
+      nextNode: "__end__",
+      backend: capture,
+    });
+    await spec.handler(ctx);
+    // Both notes, in gate order, framing the substituted task prompt.
+    const override = "— this overrides any conflicting instruction in the task below:";
+    expect(seenPrompt).toBe(
+      `Operator instruction from gate "plan_gate" (chose route "revise") ${override}\nuse the v2 schema\n\n` +
+        `Operator instruction from gate "scope_gate" (chose route "approve") ${override}\nskip the migration\n\n` +
+        "Fix BUG-42",
+    );
+    store.close();
+  });
+
+  test("no pending notes — the prompt is untouched", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-nonote", store, "n1", {}, { "internal.operator_notes": [] });
+    let seenPrompt: string | undefined;
+    const capture: LlmBackend = {
+      async run(input) {
+        seenPrompt = input.prompt;
+        return ok({});
+      },
+    };
+    const spec = makeLlmHandler({
+      node: node({ attrs: { prompt: "Just do it" } }),
+      nextNode: "__end__",
+      backend: capture,
+    });
+    await spec.handler(ctx);
+    expect(seenPrompt).toBe("Just do it");
     store.close();
   });
 

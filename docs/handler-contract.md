@@ -90,6 +90,7 @@ return {
   cacheWriteTokens?: 0,
   modelName?: "gemini-1.5-pro",         // for per-model rollups
   outputs?: Record<string, unknown>,    // structured outputs from emit_output (llm steps with `outputs:` declared); present iff the node emitted a valid struct
+  operatorNote?: "use the v2 schema",   // human handler only: the non-empty note from ctx.humanInput, forwarded for delivery to the next llm step (see yield_human)
 };
 ```
 
@@ -102,7 +103,7 @@ Handler needs an operator to choose one of a closed set of routes. Run transitio
 
 When an operator writes `intent.human_input { route, note? }` the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
 
-On resume the handler emits **no routing writes** — the operator's chosen route and optional `note` from `intent.human_input` are preserved verbatim in the resume event's payload for audit. The handler returns `route: <chosen>` so the engine's route-case edge selector fires the edge whose `attrs.route` equals the operator's choice.
+On resume the handler returns `route: <chosen>` so the engine's route-case edge selector fires the edge whose `attrs.route` equals the operator's choice. A non-empty `note` is returned alongside as `operatorNote` — the transition planner appends it to `routing.internal.operator_notes` (in the same commit as the human node's `fact.node_completed`, so replay reproduces it), the next `llm` step to dispatch prepends it to its substituted prompt (it persists as that step's user message and rehydrates with the thread), and the planner clears the key once an `llm` step that saw it completes and advances. The note stored in routing is truncated to fit the routing column; the full text stays on `intent.human_input` for audit. An absent or empty note is a pure route choice — no routing write.
 
 ```typescript
 return {
@@ -117,7 +118,7 @@ return {
 ```typescript
 interface HumanInput {
   route: string;        // must be one of the declared routes
-  note?: string;        // free-form audit text, ignored by routing
+  note?: string;        // operator correction; delivered to the next llm step's prompt, never a routing input
 }
 ```
 

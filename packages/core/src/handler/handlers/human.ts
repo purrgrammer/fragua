@@ -15,7 +15,9 @@
 // enum, but a hand-crafted intent could bypass that) and returns a
 // transition with `route` set to the chosen route name. The engine's
 // route-case edge selector (packages/core/src/engine/edge-selection.ts)
-// fires the edge whose `attrs.route` matches the chosen value.
+// fires the edge whose `attrs.route` matches the chosen value. A
+// non-empty note rides the transition as `operatorNote`; the planner
+// stages it in routing for the next llm step's prompt (SPEC §3.4).
 //
 // Per D6 the per-edge `label=` is pure UX (button text) and never
 // participates in selection.
@@ -92,9 +94,11 @@ export function makeHumanHandler(cfg: HumanHandlerConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
+    const note = typeof ctx.humanInput === "object" ? ctx.humanInput.note : undefined;
     return {
       kind: "transition",
       route,
+      ...(note !== undefined && note.length > 0 ? { operatorNote: note } : {}),
       tokens: 0,
       costUsd: 0,
     } satisfies HandlerResult;

@@ -26,10 +26,14 @@ import {
   MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY,
   MAX_LOOPS_OVERRIDE_KEY,
   maxRetriesOverrideKey,
+  OPERATOR_NOTE_MAX_CHARS,
+  OPERATOR_NOTES_KEY,
   PROVIDER_RETRY_ATTEMPT_KEY,
   PROVIDER_RETRY_CUMULATIVE_MS_KEY,
+  readOperatorNotes,
   retryCountKey,
   timeoutRetriesKey,
+  truncateOperatorNote,
 } from "../src/routing.ts";
 
 /** Verbatim copy of the pre-wrapper `executor-helpers.readInputMap` — the
@@ -140,6 +144,33 @@ describe("routing accessors", () => {
     expect([...g.outcomes.keys()].sort()).toEqual(["review", "verify"]);
     expect(g.retries).toBe(2);
     expect(getGoalGate({ [GOAL_GATE_RETRIES_KEY]: "two" }).retries).toBe(0);
+  });
+
+  test("readOperatorNotes element-validates and drops empty notes", () => {
+    const good = { gateNodeId: "plan_gate", route: "revise", note: "use the v2 schema" };
+    const r = {
+      [OPERATOR_NOTES_KEY]: [
+        good,
+        { gateNodeId: "g2", route: "approve", note: "" }, // empty note → dropped
+        { gateNodeId: "g3", route: "approve" }, // missing note → dropped
+        { gateNodeId: 7, route: "x", note: "y" }, // wrong type → dropped
+        "junk",
+        null,
+      ],
+    };
+    expect(readOperatorNotes(r)).toEqual([good]);
+    expect(readOperatorNotes({ [OPERATOR_NOTES_KEY]: "junk" })).toEqual([]);
+    expect(readOperatorNotes({})).toEqual([]);
+  });
+
+  test("truncateOperatorNote bounds the routing-stored text and marks the cut", () => {
+    const short = "fits";
+    expect(truncateOperatorNote(short)).toBe(short);
+    const long = "x".repeat(OPERATOR_NOTE_MAX_CHARS + 50);
+    const cut = truncateOperatorNote(long);
+    expect(cut.length).toBeLessThan(long.length);
+    expect(cut).toEndWith("…[truncated]");
+    expect(cut.startsWith("x".repeat(OPERATOR_NOTE_MAX_CHARS))).toBe(true);
   });
 
   test("reads legacy flat-dotted bytes without bricking", () => {

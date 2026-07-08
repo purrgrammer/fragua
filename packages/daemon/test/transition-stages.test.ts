@@ -553,6 +553,7 @@ describe("buildRoutingPatch", () => {
       graph: spine(),
       effectiveRouting: {},
       budgetWarnedTags: [],
+      facts: [],
       retryCounterPatch: { [retryCountKey("n1")]: 1 },
     });
     expect(patch).toMatchObject({ foo: "bar", [retryCountKey("n1")]: 1 });
@@ -567,6 +568,7 @@ describe("buildRoutingPatch", () => {
       graph: gateGraph({ retryTarget: "fix" }),
       effectiveRouting: {},
       budgetWarnedTags: [],
+      facts: [],
     });
     expect(patch).toBeDefined();
     expect(Object.keys(patch ?? {}).some((k) => k.includes("g0"))).toBe(true);
@@ -581,8 +583,118 @@ describe("buildRoutingPatch", () => {
       graph: spine(),
       effectiveRouting: {},
       budgetWarnedTags: [],
+      facts: [],
     });
     expect(patch).toBeUndefined();
+  });
+
+  describe("operator gate notes", () => {
+    /** start → gate(human) → n1(llm) → n2(llm) → exit. */
+    function gatedSpine(): Graph {
+      const nodes: Record<string, Node> = {
+        start: node("start", "start"),
+        gate: node("gate", "human", { routes: ["approve", "revise"] }),
+        n1: node("n1", "llm"),
+        n2: node("n2", "llm"),
+        exit: node("exit", "exit"),
+      };
+      const edges: Edge[] = [
+        { from: "start", to: "gate", attrs: {} },
+        { from: "gate", to: "n1", attrs: { route: "approve" } },
+        { from: "gate", to: "n1", attrs: { route: "revise" } },
+        { from: "n1", to: "n2", attrs: {} },
+        { from: "n2", to: "exit", attrs: {} },
+      ];
+      return { id: "g", directed: true, attrs: {}, nodes, edges };
+    }
+    const pendingNote = { gateNodeId: "gate", route: "revise", note: "use the v2 schema" };
+
+    test("a human transition with operatorNote appends to internal.operator_notes", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", route: "revise", operatorNote: "use the v2 schema" }),
+        decision: emptyDecision,
+        state: mkState("gate"),
+        currentNode: "gate",
+        graph: gatedSpine(),
+        effectiveRouting: {},
+        budgetWarnedTags: [],
+        facts: [{ type: "fact.node_started", payload: { nodeId: "n1", pass: 0 } } as FactEvent],
+      });
+      expect(patch?.["internal.operator_notes"]).toEqual([pendingNote]);
+    });
+
+    test("a second gate note accumulates instead of clobbering the first", () => {
+      const prior = { gateNodeId: "earlier_gate", route: "approve", note: "watch the flag default" };
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", route: "revise", operatorNote: "use the v2 schema" }),
+        decision: emptyDecision,
+        state: mkState("gate"),
+        currentNode: "gate",
+        graph: gatedSpine(),
+        effectiveRouting: { "internal.operator_notes": [prior] },
+        budgetWarnedTags: [],
+        facts: [],
+      });
+      expect(patch?.["internal.operator_notes"]).toEqual([prior, pendingNote]);
+    });
+
+    test("an llm node that advanced with pending notes clears them", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: { "internal.operator_notes": [pendingNote] },
+        budgetWarnedTags: [],
+        facts: [{ type: "fact.node_started", payload: { nodeId: "n2", pass: 0 } } as FactEvent],
+      });
+      expect(patch?.["internal.operator_notes"]).toEqual([]);
+    });
+
+    test("an llm node completing to a terminal clears pending notes", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "__end__", outcomeStatus: "success" }),
+        decision: emptyDecision,
+        state: mkState("n2"),
+        currentNode: "n2",
+        graph: gatedSpine(),
+        effectiveRouting: { "internal.operator_notes": [pendingNote] },
+        budgetWarnedTags: [],
+        facts: [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "exit" } } as FactEvent],
+      });
+      expect(patch?.["internal.operator_notes"]).toEqual([]);
+    });
+
+    test("a pause that re-dispatches the same node keeps the notes", () => {
+      // Stage 6 stripped node_started (budget / retry / operator pause) —
+      // the re-entry must rebuild the identical prompt, so no clear.
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: { "internal.operator_notes": [pendingNote] },
+        budgetWarnedTags: [],
+        facts: [{ type: "fact.run_paused", payload: { reason: "budget" } } as FactEvent],
+      });
+      expect(patch?.["internal.operator_notes"]).toBeUndefined();
+    });
+
+    test("a non-llm node advancing does not consume the notes", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", route: "approve" }),
+        decision: emptyDecision,
+        state: mkState("gate"),
+        currentNode: "gate",
+        graph: gatedSpine(),
+        effectiveRouting: { "internal.operator_notes": [pendingNote] },
+        budgetWarnedTags: [],
+        facts: [{ type: "fact.node_started", payload: { nodeId: "n1", pass: 0 } } as FactEvent],
+      });
+      expect(patch?.["internal.operator_notes"]).toBeUndefined();
+    });
   });
 });
 

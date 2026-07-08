@@ -8,6 +8,18 @@ guarantee.
 
 ## [Unreleased]
 
+### Changed
+
+- **HITL gate notes now reach the agent.** Answering a `human` step with a
+  free-text note no longer files it as audit-only text: the note is delivered
+  to the next `llm` step, prepended to its prompt as an operator correction
+  (attributed to the gate and the chosen route), and persists in that step's
+  thread — so later same-thread steps and resumes see it too. Multiple gate
+  answers before an `llm` step accumulate in order. Notes are truncated to
+  2000 characters for delivery; the full text stays on the run's event log.
+  No workflow changes needed — any `routes:` gate answered with a note gets
+  the behaviour.
+
 ## [0.9.1] — 2026-07-07
 
 ### Fixed

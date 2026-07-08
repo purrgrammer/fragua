@@ -134,7 +134,7 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
 
 - **`queued`** — enqueued; ready to be claimed.
 - **`running`** — a daemon has claimed it and is dispatching handlers.
-- **`paused_human`** — a `human` node yielded. `fact.run_paused{reason:"human"}` carries `text` + `routes: string[]`; awaits `intent.human_input { route, note? }` or `intent.resume`.
+- **`paused_human`** — a `human` node yielded. `fact.run_paused{reason:"human"}` carries `text` + `routes: string[]`; awaits `intent.human_input { route, note? }` or `intent.resume`. A non-empty `note` is a conversational turn, not just audit text: the resumed human node carries it into `routing.internal.operator_notes` (truncated to fit the routing column; the full text stays on the intent for audit), and the next `llm` step to dispatch prepends it to its prompt — so the operator's correction lands in the thread as a real user message and rehydrates with it thereafter. The note is cleared once an `llm` step that saw it completes and advances; a route that never reaches an `llm` step leaves it unconsumed.
 - **`paused`** — operator-resumable pause. `fact.run_paused.payload.reason` discriminates the action shape. All wake on `intent.resume`; some pauses pair `intent.resume` with a cap-adjustment intent. The full reason set:
 
   | Reason | Trigger | Operator action |
@@ -174,7 +174,7 @@ All operator actions are intent writes. Every endpoint validates its body and re
 | `POST /runs/:id/steer` | `{ text: string }` (length > 0) | Injects steering text; aborts the current handler so the next dispatch sees it. |
 | `POST /runs/:id/pause` | `{}` | Abort + transition to `paused{reason:"operator"}`. |
 | `POST /runs/:id/cancel` | `{ reason?: string }` | Abort + transition to `cancelled`. |
-| `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be one of the node's declared `routes=` names (surfaced on `fact.run_paused{reason:"human"}`). |
+| `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be one of the node's declared `routes=` names (surfaced on `fact.run_paused{reason:"human"}`). A non-empty `note` is delivered to the next `llm` step's prompt (§3.4). |
 | `POST /runs/:id/resume` | `{ note?: string }` | Generic wake for any `paused_*` run. |
 | `POST /runs/:id/unquarantine` | `{ resolution: "treat_as_done" \| "retry" \| "cancel", note?: string }` | Operator decision on a quarantined run. |
 | `POST /runs/:id/priority` | `{ newPriority: number, note?: string }` | Appends `intent.priority_adjusted`; bumps queue priority. |

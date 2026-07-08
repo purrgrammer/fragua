@@ -186,16 +186,31 @@ describe("human handler", () => {
     }
   });
 
-  test("note is preserved into the audit envelope but ignored by routing", async () => {
-    // The note rides inside intent.human_input's payload; the handler
-    // sees it on `ctx.humanInput` but doesn't consume it. Sanity-check
-    // that a populated note doesn't break the resume path.
+  test("a non-empty note rides the transition as operatorNote, never as a routing input", async () => {
     const spec = makeHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ humanInput: { route: "apply", note: "lgtm" } }));
+    const result = await spec.handler(stubCtx({ humanInput: { route: "apply", note: "use the v2 schema" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.route).toBe("apply");
+      expect(result.operatorNote).toBe("use the v2 schema");
     }
+  });
+
+  test("an absent or empty note is a pure route choice — no operatorNote", async () => {
+    const spec = makeHumanHandler(cfg);
+    for (const humanInput of [{ route: "apply" }, { route: "apply", note: "" }, "apply"] as const) {
+      const result = await spec.handler(stubCtx({ humanInput }));
+      expect(result.kind).toBe("transition");
+      if (result.kind === "transition") {
+        expect(result.operatorNote).toBeUndefined();
+      }
+    }
+  });
+
+  test("an unknown route with a note halts — the note is not staged", async () => {
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: { route: "ship", note: "please" } }));
+    expect(result.kind).toBe("halt");
   });
 
   test("construction throws when routes is empty", () => {

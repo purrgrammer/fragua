@@ -94,6 +94,13 @@ export const GRAPH_RUN_ID_KEY = "graph.run_id";
 /** Operator-supplied dispatch priority, folded from `intent.priority_adjusted`. */
 export const PRIORITY_KEY = "priority";
 
+/** Operator gate notes awaiting delivery to the next llm step. Appended by the
+ * transition planner when a human node consumes `intent.human_input` with a
+ * non-empty note; cleared once an llm step that saw them completes and
+ * advances. Notes are truncated at write time (see {@link truncateOperatorNote})
+ * — the full text stays on the intent event for audit. */
+export const OPERATOR_NOTES_KEY = "internal.operator_notes";
+
 // ── Value-checked union + documentary schema ─────────────────────────────────
 
 /** The goal-gate outcome union. A value-checked TypeBox union exercised by
@@ -119,7 +126,7 @@ function isOutcomeStatus(v: unknown): v is OutcomeStatus {
 // the writer is allowed to spread into `run_state.routing`.
 
 /** The value shape a routing-key family expects. */
-type RoutingValueKind = "number" | "string" | "string-array" | "object" | "outcome-status";
+type RoutingValueKind = "number" | "string" | "string-array" | "object" | "outcome-status" | "operator-notes";
 
 const BUDGET_SCOPES = ["run", "node"] as const;
 const BUDGET_METRICS = ["cost", "tokens"] as const;
@@ -145,6 +152,7 @@ const EXACT_ROUTING_KINDS = new Map<string, RoutingValueKind>([
   [GRAPH_GOAL_KEY, "string"],
   [GRAPH_RUN_ID_KEY, "string"],
   [PRIORITY_KEY, "number"],
+  [OPERATOR_NOTES_KEY, "operator-notes"],
 ]);
 
 /** Resolve a routing key to its expected value kind, or `undefined` when the key
@@ -175,6 +183,8 @@ function matchesRoutingKind(value: unknown, kind: RoutingValueKind): boolean {
       return value !== null && typeof value === "object" && !Array.isArray(value);
     case "outcome-status":
       return isOutcomeStatus(value);
+    case "operator-notes":
+      return Array.isArray(value) && value.every(isOperatorNote);
   }
 }
 
@@ -239,6 +249,7 @@ export const RoutingStruct = Type.Object({
   }),
   timer: Type.Object({ autoResumeAt: Type.Optional(Type.Number()) }),
   context: Type.Object({ goal: Type.Optional(Type.String()), runId: Type.Optional(Type.String()) }),
+  operatorNotes: Type.Array(Type.Object({ gateNodeId: Type.String(), route: Type.String(), note: Type.String() })),
 });
 export type RoutingStruct = Static<typeof RoutingStruct>;
 
@@ -419,4 +430,38 @@ export function getContext(routing: Record<string, unknown>): ContextView {
     goal: routingString(routing, GRAPH_GOAL_KEY),
     runId: routingString(routing, GRAPH_RUN_ID_KEY),
   };
+}
+
+/** One operator gate note awaiting delivery (SPEC §3.4). */
+export interface OperatorNote {
+  /** The human node whose `intent.human_input` carried the note. */
+  gateNodeId: string;
+  /** The route the operator chose alongside the note. */
+  route: string;
+  note: string;
+}
+
+function isOperatorNote(v: unknown): v is OperatorNote {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o["gateNodeId"] === "string" && typeof o["route"] === "string" && typeof o["note"] === "string";
+}
+
+/** Read the pending operator notes. Element-validated; malformed entries and
+ * empty notes degrade to absent — a tampered bundle loses a note (the intent
+ * still has it), never breaks a dispatch. */
+export function readOperatorNotes(routing: Record<string, unknown>): OperatorNote[] {
+  const v = routing[OPERATOR_NOTES_KEY];
+  if (!Array.isArray(v)) return [];
+  return v.filter(isOperatorNote).filter((n) => n.note.length > 0);
+}
+
+/** Routing-column budget for a stored note. `run_state.routing` carries a hard
+ * `length < 8192` CHECK shared with every other key, so an unbounded operator
+ * note could brick the human node's commit. The full text stays on
+ * `intent.human_input` for audit. */
+export const OPERATOR_NOTE_MAX_CHARS = 2000;
+
+export function truncateOperatorNote(note: string): string {
+  return note.length <= OPERATOR_NOTE_MAX_CHARS ? note : `${note.slice(0, OPERATOR_NOTE_MAX_CHARS)} …[truncated]`;
 }

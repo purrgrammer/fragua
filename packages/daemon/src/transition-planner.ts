@@ -19,12 +19,15 @@ import {
   getRetry,
   goalGateOutcomeKey,
   goalGateStep,
+  OPERATOR_NOTES_KEY,
   readGateOutcomes,
   readGoalGateRetries,
+  readOperatorNotes,
   resolveFailRetarget,
   retryCountKey,
   retryStep,
   selectEdge,
+  truncateOperatorNote,
 } from "@fragua/core";
 import type { HandlerResult, IntentDecision } from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
@@ -875,7 +878,10 @@ export function rewriteTerminalFacts(args: {
 
 /** Stage 7 — the routing patch. Merges the intent fold delta + result with
  * every per-turn override patch (budget-warned tags, retry counter / wake
- * timestamp, provider-retry chain counter, goal-gate outcome + epoch). */
+ * timestamp, provider-retry chain counter, goal-gate outcome + epoch,
+ * operator gate notes). `facts` is the post-rewrite stage-6 output — the
+ * note-consumption arm inspects it to tell an actual advance from a pause
+ * that re-dispatches the same node. */
 export function buildRoutingPatch(args: {
   result: HandlerResult;
   decision: ProceedDecision;
@@ -884,6 +890,7 @@ export function buildRoutingPatch(args: {
   graph: Graph | null;
   effectiveRouting: Readonly<Record<string, unknown>>;
   budgetWarnedTags: readonly string[];
+  facts: readonly FactEvent[];
   retryCounterPatch?: Record<string, number>;
   retryPause?: RetryPause;
   providerRetryDecision?: ProviderRetryDecision;
@@ -898,6 +905,7 @@ export function buildRoutingPatch(args: {
     graph,
     effectiveRouting,
     budgetWarnedTags,
+    facts,
     retryCounterPatch,
     retryPause,
     providerRetryDecision,
@@ -963,6 +971,36 @@ export function buildRoutingPatch(args: {
         [GOAL_GATE_RETRIES_KEY]: goalGateRetriesPatch,
       };
     }
+  }
+  // Operator gate notes (SPEC §3.4). A human node consuming a note stages it
+  // for the next llm step; an llm step that dispatched with pending notes
+  // consumes them — but only when the turn actually advanced (a node_started
+  // for another node, or a completed terminal, survived the stage-6
+  // rewrites). A pause that re-dispatches the same node (budget, retry,
+  // operator) keeps the notes so the re-entry rebuilds a byte-identical
+  // prompt and the persist-dedup memo holds.
+  if (result.kind === "transition" && result.operatorNote !== undefined) {
+    routingPatch = {
+      ...(routingPatch ?? {}),
+      [OPERATOR_NOTES_KEY]: [
+        ...readOperatorNotes(effectiveRouting),
+        {
+          gateNodeId: currentNode,
+          route: result.route ?? "",
+          note: truncateOperatorNote(result.operatorNote),
+        },
+      ],
+    };
+  } else if (
+    graph?.nodes[currentNode]?.type === "llm" &&
+    readOperatorNotes(effectiveRouting).length > 0 &&
+    facts.some(
+      (f) =>
+        (f.type === "fact.node_started" && f.payload.nodeId !== currentNode) ||
+        (f.type === "fact.run_terminated" && f.payload.status === "completed"),
+    )
+  ) {
+    routingPatch = { ...(routingPatch ?? {}), [OPERATOR_NOTES_KEY]: [] };
   }
   return routingPatch;
 }
@@ -1098,6 +1136,7 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     graph,
     effectiveRouting,
     budgetWarnedTags: budget.budgetWarnedTags,
+    facts,
     ...(retry.retryCounterPatch !== undefined ? { retryCounterPatch: retry.retryCounterPatch } : {}),
     ...(retry.retryPause !== undefined ? { retryPause: retry.retryPause } : {}),
     ...(provider.providerRetryDecision !== undefined ? { providerRetryDecision: provider.providerRetryDecision } : {}),
