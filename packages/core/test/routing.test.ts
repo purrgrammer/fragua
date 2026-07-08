@@ -10,6 +10,7 @@ import {
   ACTIVE_NODES_KEY,
   AUTO_RESUME_AT_KEY,
   budgetOverrideKey,
+  capOperatorNotes,
   GOAL_GATE_RETRIES_KEY,
   GRAPH_GOAL_KEY,
   GRAPH_RUN_ID_KEY,
@@ -26,8 +27,9 @@ import {
   MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY,
   MAX_LOOPS_OVERRIDE_KEY,
   maxRetriesOverrideKey,
-  OPERATOR_NOTE_MAX_CHARS,
+  OPERATOR_NOTE_MAX_BYTES,
   OPERATOR_NOTES_KEY,
+  OPERATOR_NOTES_MAX_BYTES,
   PROVIDER_RETRY_ATTEMPT_KEY,
   PROVIDER_RETRY_CUMULATIVE_MS_KEY,
   readOperatorNotes,
@@ -35,6 +37,8 @@ import {
   timeoutRetriesKey,
   truncateOperatorNote,
 } from "../src/routing.ts";
+
+const utf8Len = (s: string): number => new TextEncoder().encode(s).length;
 
 /** Verbatim copy of the pre-wrapper `executor-helpers.readInputMap` — the
  * golden reference the relocated `getInputs` guards must match exactly. */
@@ -163,14 +167,43 @@ describe("routing accessors", () => {
     expect(readOperatorNotes({})).toEqual([]);
   });
 
-  test("truncateOperatorNote bounds the routing-stored text and marks the cut", () => {
-    const short = "fits";
-    expect(truncateOperatorNote(short)).toBe(short);
-    const long = "x".repeat(OPERATOR_NOTE_MAX_CHARS + 50);
+  test("truncateOperatorNote bounds by UTF-8 bytes and marks the cut", () => {
+    expect(truncateOperatorNote("fits")).toBe("fits");
+    const long = "x".repeat(OPERATOR_NOTE_MAX_BYTES + 50);
     const cut = truncateOperatorNote(long);
-    expect(cut.length).toBeLessThan(long.length);
-    expect(cut).toEndWith("…[truncated]");
-    expect(cut.startsWith("x".repeat(OPERATOR_NOTE_MAX_CHARS))).toBe(true);
+    expect(utf8Len(cut)).toBeLessThanOrEqual(OPERATOR_NOTE_MAX_BYTES);
+    expect(cut).toEndWith(" [truncated]");
+  });
+
+  test("truncateOperatorNote caps multibyte notes by bytes, not char count, on a codepoint boundary", () => {
+    // A 2000-char CJK note is ~6KB; a char-only cap would breach the routing column.
+    const cjk = "験".repeat(OPERATOR_NOTE_MAX_BYTES); // 3 bytes each
+    const cut = truncateOperatorNote(cjk);
+    expect(utf8Len(cut)).toBeLessThanOrEqual(OPERATOR_NOTE_MAX_BYTES);
+    // No U+FFFD from a split multibyte sequence.
+    expect(cut.replace(" [truncated]", "")).not.toContain("�");
+
+    const emoji = "😀".repeat(600); // surrogate pairs, 4 bytes each
+    const cutE = truncateOperatorNote(emoji);
+    expect(utf8Len(cutE)).toBeLessThanOrEqual(OPERATOR_NOTE_MAX_BYTES);
+    expect(cutE.replace(" [truncated]", "")).not.toContain("�");
+  });
+
+  test("capOperatorNotes drops oldest until the serialized array fits, keeping the newest", () => {
+    const notes = Array.from({ length: 30 }, (_, i) => ({
+      gateNodeId: `g${i}`,
+      route: "approve",
+      note: "x".repeat(500),
+    }));
+    const capped = capOperatorNotes(notes);
+    expect(capped.length).toBeLessThan(notes.length);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(OPERATOR_NOTES_MAX_BYTES);
+    // Newest preserved; oldest dropped.
+    expect(capped.at(-1)).toEqual(notes.at(-1)!);
+    expect(capped[0]).not.toEqual(notes[0]);
+    // A single small note is never dropped.
+    const one = notes[0]!;
+    expect(capOperatorNotes([one])).toEqual([one]);
   });
 
   test("reads legacy flat-dotted bytes without bricking", () => {

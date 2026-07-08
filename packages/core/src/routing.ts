@@ -96,9 +96,9 @@ export const PRIORITY_KEY = "priority";
 
 /** Operator gate notes awaiting delivery to the next llm step. Appended by the
  * transition planner when a human node consumes `intent.human_input` with a
- * non-empty note; cleared once an llm step that saw them completes and
- * advances. Notes are truncated at write time (see {@link truncateOperatorNote})
- * — the full text stays on the intent event for audit. */
+ * non-empty note; cleared once an llm step consumes them (completes with a
+ * success outcome). Notes are byte-truncated at write time (see
+ * {@link truncateOperatorNote}); the full text stays on the intent for audit. */
 export const OPERATOR_NOTES_KEY = "internal.operator_notes";
 
 // ── Value-checked union + documentary schema ─────────────────────────────────
@@ -448,20 +448,42 @@ function isOperatorNote(v: unknown): v is OperatorNote {
 }
 
 /** Read the pending operator notes. Element-validated; malformed entries and
- * empty notes degrade to absent — a tampered bundle loses a note (the intent
- * still has it), never breaks a dispatch. */
+ * empty notes degrade to absent, so a tampered bundle loses a note (the intent
+ * still has it) rather than breaking a dispatch. */
 export function readOperatorNotes(routing: Record<string, unknown>): OperatorNote[] {
   const v = routing[OPERATOR_NOTES_KEY];
   if (!Array.isArray(v)) return [];
   return v.filter(isOperatorNote).filter((n) => n.note.length > 0);
 }
 
-/** Routing-column budget for a stored note. `run_state.routing` carries a hard
- * `length < 8192` CHECK shared with every other key, so an unbounded operator
- * note could brick the human node's commit. The full text stays on
- * `intent.human_input` for audit. */
-export const OPERATOR_NOTE_MAX_CHARS = 2000;
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
+// Byte budgets, not char: the routing column's CHECK is UTF-8 `length < 8192`,
+// so a 2000-char CJK/emoji note (~4-6 KB) would breach a char-only cap.
+export const OPERATOR_NOTE_MAX_BYTES = 2000;
+export const OPERATOR_NOTES_MAX_BYTES = 4096;
+
+const TRUNCATION_MARKER = " [truncated]";
+
+/** Truncate to {@link OPERATOR_NOTE_MAX_BYTES} UTF-8 bytes on a codepoint boundary. */
 export function truncateOperatorNote(note: string): string {
-  return note.length <= OPERATOR_NOTE_MAX_CHARS ? note : `${note.slice(0, OPERATOR_NOTE_MAX_CHARS)} …[truncated]`;
+  if (utf8Bytes(note) <= OPERATOR_NOTE_MAX_BYTES) return note;
+  const budget = OPERATOR_NOTE_MAX_BYTES - utf8Bytes(TRUNCATION_MARKER);
+  let end = note.length;
+  while (end > 0 && utf8Bytes(note.slice(0, end)) > budget) end--;
+  if (end > 0 && end < note.length) {
+    const code = note.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff) end--; // don't split a surrogate pair
+  }
+  return note.slice(0, end) + TRUNCATION_MARKER;
+}
+
+/** Bound the serialized array to {@link OPERATOR_NOTES_MAX_BYTES}, dropping
+ * oldest first; always keeps the newest note. */
+export function capOperatorNotes(notes: OperatorNote[]): OperatorNote[] {
+  const out = [...notes];
+  while (out.length > 1 && utf8Bytes(JSON.stringify(out)) > OPERATOR_NOTES_MAX_BYTES) {
+    out.shift();
+  }
+  return out;
 }

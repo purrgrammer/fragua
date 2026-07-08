@@ -16,7 +16,8 @@ guarantee.
   (attributed to the gate and the chosen route), and persists in that step's
   thread — so later same-thread steps and resumes see it too. Multiple gate
   answers before an `llm` step accumulate in order. Notes are truncated to
-  2000 characters for delivery; the full text stays on the run's event log.
+  2000 bytes for delivery (with an overall cap that drops the oldest); the full
+  text stays on the run's event log.
   No workflow changes needed — any `routes:` gate answered with a note gets
   the behaviour.
 

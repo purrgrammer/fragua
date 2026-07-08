@@ -553,7 +553,6 @@ describe("buildRoutingPatch", () => {
       graph: spine(),
       effectiveRouting: {},
       budgetWarnedTags: [],
-      facts: [],
       retryCounterPatch: { [retryCountKey("n1")]: 1 },
     });
     expect(patch).toMatchObject({ foo: "bar", [retryCountKey("n1")]: 1 });
@@ -568,7 +567,6 @@ describe("buildRoutingPatch", () => {
       graph: gateGraph({ retryTarget: "fix" }),
       effectiveRouting: {},
       budgetWarnedTags: [],
-      facts: [],
     });
     expect(patch).toBeDefined();
     expect(Object.keys(patch ?? {}).some((k) => k.includes("g0"))).toBe(true);
@@ -583,7 +581,6 @@ describe("buildRoutingPatch", () => {
       graph: spine(),
       effectiveRouting: {},
       budgetWarnedTags: [],
-      facts: [],
     });
     expect(patch).toBeUndefined();
   });
@@ -608,6 +605,7 @@ describe("buildRoutingPatch", () => {
       return { id: "g", directed: true, attrs: {}, nodes, edges };
     }
     const pendingNote = { gateNodeId: "gate", route: "revise", note: "use the v2 schema" };
+    const withNotes = (notes: unknown[]): Record<string, unknown> => ({ "internal.operator_notes": notes });
 
     test("a human transition with operatorNote appends to internal.operator_notes", () => {
       const patch = buildRoutingPatch({
@@ -618,7 +616,6 @@ describe("buildRoutingPatch", () => {
         graph: gatedSpine(),
         effectiveRouting: {},
         budgetWarnedTags: [],
-        facts: [{ type: "fact.node_started", payload: { nodeId: "n1", pass: 0 } } as FactEvent],
       });
       expect(patch?.["internal.operator_notes"]).toEqual([pendingNote]);
     });
@@ -631,53 +628,83 @@ describe("buildRoutingPatch", () => {
         state: mkState("gate"),
         currentNode: "gate",
         graph: gatedSpine(),
-        effectiveRouting: { "internal.operator_notes": [prior] },
+        effectiveRouting: withNotes([prior]),
         budgetWarnedTags: [],
-        facts: [],
       });
       expect(patch?.["internal.operator_notes"]).toEqual([prior, pendingNote]);
     });
 
-    test("an llm node that advanced with pending notes clears them", () => {
+    test("append drops the oldest note when the array exceeds its byte budget", () => {
+      // 40 prior 500-char notes would blow the 8KB routing column; the cap
+      // drops oldest so the newest survives.
+      const prior = Array.from({ length: 40 }, (_, i) => ({
+        gateNodeId: `g${i}`,
+        route: "approve",
+        note: "x".repeat(500),
+      }));
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", route: "revise", operatorNote: "the newest note" }),
+        decision: emptyDecision,
+        state: mkState("gate"),
+        currentNode: "gate",
+        graph: gatedSpine(),
+        effectiveRouting: withNotes(prior),
+        budgetWarnedTags: [],
+      });
+      const notes = patch?.["internal.operator_notes"] as Array<{ note: string }>;
+      expect(notes.length).toBeLessThan(41);
+      expect(notes.at(-1)?.note).toBe("the newest note");
+      expect(JSON.stringify(notes).length).toBeLessThanOrEqual(4096);
+    });
+
+    test("an llm node completing with success consumes (clears) the notes", () => {
       const patch = buildRoutingPatch({
         result: transition({ nextNode: "n2", outcomeStatus: "success" }),
         decision: emptyDecision,
         state: mkState("n1"),
         currentNode: "n1",
         graph: gatedSpine(),
-        effectiveRouting: { "internal.operator_notes": [pendingNote] },
+        effectiveRouting: withNotes([pendingNote]),
         budgetWarnedTags: [],
-        facts: [{ type: "fact.node_started", payload: { nodeId: "n2", pass: 0 } } as FactEvent],
       });
       expect(patch?.["internal.operator_notes"]).toEqual([]);
     });
 
-    test("an llm node completing to a terminal clears pending notes", () => {
+    test("a self-loop success clears the notes (no re-delivery next iteration)", () => {
       const patch = buildRoutingPatch({
-        result: transition({ nextNode: "__end__", outcomeStatus: "success" }),
-        decision: emptyDecision,
-        state: mkState("n2"),
-        currentNode: "n2",
-        graph: gatedSpine(),
-        effectiveRouting: { "internal.operator_notes": [pendingNote] },
-        budgetWarnedTags: [],
-        facts: [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "exit" } } as FactEvent],
-      });
-      expect(patch?.["internal.operator_notes"]).toEqual([]);
-    });
-
-    test("a pause that re-dispatches the same node keeps the notes", () => {
-      // Stage 6 stripped node_started (budget / retry / operator pause) —
-      // the re-entry must rebuild the identical prompt, so no clear.
-      const patch = buildRoutingPatch({
-        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        result: transition({ nextNode: "n1", outcomeStatus: "success" }),
         decision: emptyDecision,
         state: mkState("n1"),
         currentNode: "n1",
         graph: gatedSpine(),
-        effectiveRouting: { "internal.operator_notes": [pendingNote] },
+        effectiveRouting: withNotes([pendingNote]),
         budgetWarnedTags: [],
-        facts: [{ type: "fact.run_paused", payload: { reason: "budget" } } as FactEvent],
+      });
+      expect(patch?.["internal.operator_notes"]).toEqual([]);
+    });
+
+    test("a fail outcome keeps the notes (recovery path still needs the correction)", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "redo", outcomeStatus: "fail" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withNotes([pendingNote]),
+        budgetWarnedTags: [],
+      });
+      expect(patch?.["internal.operator_notes"]).toBeUndefined();
+    });
+
+    test("a retry outcome keeps the notes (the same dispatch re-delivers)", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", outcomeStatus: "retry" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withNotes([pendingNote]),
+        budgetWarnedTags: [],
       });
       expect(patch?.["internal.operator_notes"]).toBeUndefined();
     });
@@ -689,9 +716,8 @@ describe("buildRoutingPatch", () => {
         state: mkState("gate"),
         currentNode: "gate",
         graph: gatedSpine(),
-        effectiveRouting: { "internal.operator_notes": [pendingNote] },
+        effectiveRouting: withNotes([pendingNote]),
         budgetWarnedTags: [],
-        facts: [{ type: "fact.node_started", payload: { nodeId: "n1", pass: 0 } } as FactEvent],
       });
       expect(patch?.["internal.operator_notes"]).toBeUndefined();
     });

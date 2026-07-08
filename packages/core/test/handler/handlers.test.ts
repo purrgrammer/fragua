@@ -196,14 +196,37 @@ describe("human handler", () => {
     }
   });
 
-  test("an absent or empty note is a pure route choice — no operatorNote", async () => {
+  test("an absent, empty, or whitespace-only note is a pure route choice (no operatorNote)", async () => {
     const spec = makeHumanHandler(cfg);
-    for (const humanInput of [{ route: "apply" }, { route: "apply", note: "" }, "apply"] as const) {
+    for (const humanInput of [
+      { route: "apply" },
+      { route: "apply", note: "" },
+      { route: "apply", note: "   \n\t " },
+      "apply",
+    ] as const) {
       const result = await spec.handler(stubCtx({ humanInput }));
       expect(result.kind).toBe("transition");
       if (result.kind === "transition") {
         expect(result.operatorNote).toBeUndefined();
       }
+    }
+  });
+
+  test("a note is trimmed before it becomes operatorNote", async () => {
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: { route: "apply", note: "  use v2  " } }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") expect(result.operatorNote).toBe("use v2");
+  });
+
+  test("a non-string note (hand-crafted intent) is ignored, not staged", async () => {
+    const spec = makeHumanHandler(cfg);
+    // A direct store write could bypass the intent-plane string schema.
+    const result = await spec.handler(stubCtx({ humanInput: { route: "apply", note: ["x"] } as never }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.route).toBe("apply");
+      expect(result.operatorNote).toBeUndefined();
     }
   });
 

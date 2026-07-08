@@ -94,7 +94,10 @@ export function makeHumanHandler(cfg: HumanHandlerConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
-    const note = typeof ctx.humanInput === "object" ? ctx.humanInput.note : undefined;
+    // Guard type (a hand-crafted intent can carry a non-string) and trim (a
+    // whitespace-only note must not stage a blank override block).
+    const rawNote = typeof ctx.humanInput === "object" ? ctx.humanInput.note : undefined;
+    const note = typeof rawNote === "string" ? rawNote.trim() : undefined;
     return {
       kind: "transition",
       route,

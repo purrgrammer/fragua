@@ -397,10 +397,10 @@ describe("makeLlmHandler", () => {
     });
     await spec.handler(ctx);
     // Both notes, in gate order, framing the substituted task prompt.
-    const override = "— this overrides any conflicting instruction in the task below:";
+    const tail = ", overriding any conflicting instruction in the task below:";
     expect(seenPrompt).toBe(
-      `Operator instruction from gate "plan_gate" (chose route "revise") ${override}\nuse the v2 schema\n\n` +
-        `Operator instruction from gate "scope_gate" (chose route "approve") ${override}\nskip the migration\n\n` +
+      `Operator instruction from gate "plan_gate" (chose route "revise")${tail}\nuse the v2 schema\n\n` +
+        `Operator instruction from gate "scope_gate" (chose route "approve")${tail}\nskip the migration\n\n` +
         "Fix BUG-42",
     );
     store.close();

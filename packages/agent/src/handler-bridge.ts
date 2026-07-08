@@ -92,24 +92,16 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       }
       throw err;
     }
-    // Operator gate notes (SPEC §3.4): a HITL gate answered with a note
-    // stages it in routing; this node is the first llm step to dispatch
-    // since, so the note becomes part of its user message — persisted with
-    // the transcript, rehydrated on resume and by later same-thread nodes.
-    // Prepended (not appended) so the correction frames the task prompt.
-    // Deterministic given routing, so a re-dispatch after a pause rebuilds
-    // the identical prompt and the persist-dedup memo still holds; the
-    // planner clears the notes only once this node completes and advances.
-    const operatorNotes = readOperatorNotes(ctx.routing as Record<string, unknown>);
+    // Operator gate notes (SPEC §3.4): prepend so the correction frames the
+    // task prompt and persists as this node's user message. "Instruction ...
+    // overriding" framing, not "note": a model otherwise sides with the
+    // imperative task prompt below it (observed in smoke testing).
+    const operatorNotes = readOperatorNotes(ctx.routing);
     if (operatorNotes.length > 0) {
-      // "Instruction … overrides" framing, not "note": smoke-testing showed a
-      // model weighing an advisory-sounding note against the imperative task
-      // prompt below it and siding with the task verbatim.
-      const blocks = operatorNotes.map(
-        (n) =>
-          `Operator instruction from gate "${n.gateNodeId}" (chose route "${n.route}") — ` +
-          `this overrides any conflicting instruction in the task below:\n${n.note}`,
-      );
+      const blocks = operatorNotes.map((n) => {
+        const gate = n.route ? `gate "${n.gateNodeId}" (chose route "${n.route}")` : `gate "${n.gateNodeId}"`;
+        return `Operator instruction from ${gate}, overriding any conflicting instruction in the task below:\n${n.note}`;
+      });
       prompt = `${blocks.join("\n\n")}\n\n${prompt}`;
     }
     const graphGoal = getContext(ctx.routing).goal;
