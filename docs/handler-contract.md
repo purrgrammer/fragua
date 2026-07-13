@@ -437,7 +437,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
     sideEffect: "none",
     maxMs: 30_000,
     handler: async (ctx) => {
-      const name = typeof ctx.routing.name === "string" ? ctx.routing.name : "friend";
+      const name = typeof ctx.args.inputs?.name === "string" ? ctx.args.inputs.name : "friend";
       const sentAt = Date.now();
       const res = await ctx.llm.call({
         model: "claude-haiku-4-5",

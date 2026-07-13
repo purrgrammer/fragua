@@ -148,6 +148,7 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
   | `max_loops` | Per-run dispatch ceiling reached | `intent.max_loops_adjusted { newLimit }` → `intent.resume` |
   | `abort_loop` | LLM agent called `abort` repeatedly within the same node | `intent.resume` (operator decision) |
   | `provider_exhausted` | All configured providers in the model's fallback chain refused | `intent.resume` after fixing provider config |
+  | `engine_incompatible` | Run's `contract_version` pin is outside this daemon's `[supportedMin, supportedMax]` fold window (too-new: downgraded binary / newer-producer import; too-old: floor ratcheted past it) | Too-new: start a daemon that supports the pinned version, then `intent.resume`. Too-old: cancel or rebuild-from-source. Capability-gated auto-wake for the too-new arm is deferred — both arms sit in `paused` until operator acts. See §5. |
 
 - **`paused_auto`** — daemon owes a clock tick. `fact.run_paused.payload.reason` discriminates the source:
 
