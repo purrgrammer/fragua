@@ -1,3 +1,10 @@
+---
+title: MCP tools — materialise MCP server tools as first-class fragua tools
+status: implemented-experimental
+maturity: experimental
+last-reviewed: 2026-07-20
+---
+
 # MCP tools
 
 > Status: MVP — env-var credentials, stdio + HTTP transport, step-level opt-in,
