@@ -1,8 +1,8 @@
 ---
 title: Workflow IR — store the canonical graph, hash the IR, version it for conversion
 summary: "Stop treating raw YAML as the unit of execution. (C) Parse once at a boundary into a typed Graph — DONE. (A) Persist that Graph as a canonical, versioned IR (`ir` + `ir_version`), loc stripped (validator-only), `source` demoted to provenance — DONE; sha stays source-hash. (B) Make `workflows.sha` a stable hash of the canonical IR core — DEFERRED until the IR has had a full cleanup pass AND the graph feature set is complete (you don't hash a shape you're still growing); the resulting FK migration is the accepted cost. This doc now exists for (B): the freeze gate and the canonicalization spec."
-status: accepted
-maturity: designed
+status: in-progress
+maturity: partial
 last-reviewed: 2026-05-28
 ---
 
