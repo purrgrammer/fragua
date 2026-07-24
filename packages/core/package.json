@@ -1,6 +1,6 @@
 {
   "name": "@fragua/core",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "description": "fragua orchestrator core — pure reducer, zero I/O",
   "type": "module",

@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-24
+
 ### Changed
 
 - **HITL gate notes now reach the agent.** Answering a `human` step with a
