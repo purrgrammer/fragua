@@ -202,7 +202,8 @@ export interface HandlerContext {
 
 /** Operator-supplied input to a paused human node. The structured
  * handler reads `ctx.humanInput.route` and routes to the matching
- * outgoing edge. */
+ * outgoing edge; a non-empty `note` is returned on the transition as
+ * `operatorNote` for delivery to the next llm step. */
 export interface HumanInput {
   route: string;
   note?: string;
@@ -269,6 +270,12 @@ export type HandlerResult =
        * the blob CAS — and written to the `outputs` index table in the same
        * transaction. */
       outputs?: OutputsValue;
+      /** Set by the human handler when `ctx.humanInput` carried a non-empty
+       * `note`. The transition planner appends it to
+       * `routing.internal.operator_notes` (same commit as this node's
+       * `fact.node_completed`) so the next llm step delivers it as
+       * conversational input — see handler-contract.md § yield_human. */
+      operatorNote?: string;
     }
   | {
       kind: "yield_human";

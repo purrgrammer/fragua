@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { OPERATOR_NOTES_KEY, type OperatorNote, readOperatorNotes } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { buildSubstitutionArgs, runOne } from "../src/executor.ts";
@@ -680,6 +681,69 @@ describe("executor — HITL yield and resume", () => {
     await runOne("run3", runOpts);
     state = r.store.getState("run3")!;
     expect(state.status).toBe("completed");
+    r.store.close();
+  });
+
+  test("a gate note is delivered to the next llm dispatch and consumed on advance", async () => {
+    const yaml = [
+      "name: t",
+      "steps:",
+      "  ask:",
+      "    type: human",
+      "    text: ok?",
+      "    routes: {go: impl}",
+      "  impl: {type: llm, prompt: work, next: exit}",
+    ].join("\n");
+    const r = rig({ yaml });
+    r.dispatcher.register(
+      r.workflowSha,
+      "ask",
+      handler.makeHumanHandler({ nodeId: "ask", text: "ok?", routes: ["go"], edges: [{ route: "go", to: "impl" }] }),
+    );
+    // Stands in for the llm bridge: reads the pending notes off ctx.routing
+    // exactly the way makeLlmHandler does before building the prompt.
+    let seenNotes: OperatorNote[] | undefined;
+    r.dispatcher.register(r.workflowSha, "impl", {
+      kind: "llm",
+      sideEffect: "none",
+      maxMs: 1_000,
+      handler: async (ctx) => {
+        seenNotes = readOperatorNotes(ctx.routing as Record<string, unknown>);
+        return { kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 };
+      },
+    });
+    enqueue(r, "run-note", "ask");
+    r.store.claimNextRun(1);
+
+    const ac = new AbortController();
+    const runOpts = {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: ac.signal,
+    };
+
+    await runOne("run-note", runOpts);
+    expect(r.store.getState("run-note")!.status).toBe("paused_human");
+
+    r.store.appendIntent("run-note", {
+      type: "intent.human_input",
+      payload: { route: "go", note: "use the v2 schema" },
+    });
+    expect(wakePending(r.store).humanWoken).toContain("run-note");
+
+    r.store.claimNextRun(1);
+    await runOne("run-note", runOpts);
+
+    const state = r.store.getState("run-note")!;
+    expect(state.status).toBe("completed");
+    expect(seenNotes).toEqual([{ gateNodeId: "ask", route: "go", note: "use the v2 schema" }]);
+    // Consumed: the llm step advanced to the terminal, so the key is cleared.
+    expect(state.routing[OPERATOR_NOTES_KEY]).toEqual([]);
     r.store.close();
   });
 });

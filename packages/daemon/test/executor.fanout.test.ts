@@ -5,6 +5,8 @@
 // stop resumes by re-dispatching only the unfinished sub-nodes.
 
 import { describe, expect, test } from "bun:test";
+import { OPERATOR_NOTES_KEY, type OperatorNote, readOperatorNotes } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
 import { ConcurrencyError, deriveRunState, getFrontier } from "@fragua/store";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
@@ -1681,6 +1683,105 @@ steps:
     // outcome stamp.
     expect(final.routing["budget_override.node.cost"]).toBe(0.5);
     expect(final.routing["goal_gates.a_verify"]).toBe("success");
+    r.store.close();
+  });
+});
+
+describe("executor — fan-out and operator gate notes (SPEC §3.4)", () => {
+  /** `ask(human) → fan[a_scan → a_verify, b_scan] → synth`. The gate answer's
+   * note is addressed to the region; the branch closure is where the delivery
+   * rule has to hold. */
+  const GATED_FANOUT_YAML = `name: gatefan
+defaults: { provider: anthropic, model: m }
+steps:
+  ask:
+    type: human
+    text: ok?
+    routes: {go: fan}
+  fan: { type: parallel, branches: [a_scan, b_scan], next: synth }
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: a_verify }
+  a_verify: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+
+  test("a gate note reaches every branch ENTRY and no deeper sub-node", async () => {
+    const r = rig({ yaml: GATED_FANOUT_YAML });
+    r.dispatcher.register(
+      r.workflowSha,
+      "ask",
+      handler.makeHumanHandler({ nodeId: "ask", text: "ok?", routes: ["go"], edges: [{ route: "go", to: "fan" }] }),
+    );
+    // Stands in for the llm bridge: reads the pending notes off ctx.routing
+    // exactly the way makeLlmHandler does before it builds the prompt.
+    const seen: Record<string, OperatorNote[]> = {};
+    for (const id of ["a_scan", "a_verify", "b_scan", "synth"]) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seen[id] = readOperatorNotes(ctx.routing as Record<string, unknown>);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    enqueue(r, "gf1", "ask");
+    await drive(r, "gf1");
+    expect(r.store.getState("gf1")!.status).toBe("paused_human");
+
+    r.store.appendIntent("gf1", { type: "intent.human_input", payload: { route: "go", note: "use the v2 schema" } });
+    expect(wakePending(r.store).humanWoken).toContain("gf1");
+    await drive(r, "gf1");
+
+    const state = r.store.getState("gf1")!;
+    expect(state.status).toBe("completed");
+
+    const note = { gateNodeId: "ask", route: "go", note: "use the v2 schema" };
+    // Both branch ENTRIES see it — the correction is addressed to the region,
+    // and which branch happens to settle first must not decide who hears it.
+    expect(seen["a_scan"]).toEqual([note]);
+    expect(seen["b_scan"]).toEqual([note]);
+    // `a_verify` is branch A's SECOND node. It dispatches inside the same
+    // runFanout turn, off a `liveRouting` that never folds the clear a settled
+    // sibling committed — so without the strip it re-received the note and
+    // re-applied "overriding any conflicting instruction" to a step whose job
+    // was to JUDGE a_scan's output, not redo it.
+    expect(seen["a_verify"]).toEqual([]);
+    // The join, past the region, reads committed routing: already consumed.
+    expect(seen["synth"]).toEqual([]);
+    expect(state.routing[OPERATOR_NOTES_KEY]).toEqual([]);
+    r.store.close();
+  });
+
+  test("no pending note — a fan-out region dispatches unchanged", async () => {
+    const r = rig({ yaml: GATED_FANOUT_YAML });
+    r.dispatcher.register(
+      r.workflowSha,
+      "ask",
+      handler.makeHumanHandler({ nodeId: "ask", text: "ok?", routes: ["go"], edges: [{ route: "go", to: "fan" }] }),
+    );
+    const seen: Record<string, OperatorNote[]> = {};
+    for (const id of ["a_scan", "a_verify", "b_scan", "synth"]) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seen[id] = readOperatorNotes(ctx.routing as Record<string, unknown>);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    enqueue(r, "gf2", "ask");
+    await drive(r, "gf2");
+    // A pure route choice: no note staged, nothing to strip.
+    r.store.appendIntent("gf2", { type: "intent.human_input", payload: { route: "go" } });
+    wakePending(r.store);
+    await drive(r, "gf2");
+
+    expect(r.store.getState("gf2")!.status).toBe("completed");
+    expect(seen).toEqual({ a_scan: [], b_scan: [], a_verify: [], synth: [] });
     r.store.close();
   });
 });

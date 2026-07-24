@@ -80,4 +80,35 @@ describe("appendFact routing-patch gate", () => {
     expect(state.version).toBe(version);
     expect("internal.retry_count.work" in state.routing).toBe(false);
   });
+
+  test("accepts an operator-notes patch (well-formed entries + the clear write)", async () => {
+    const { store, runId, version } = await startedRun();
+    const notes = [{ gateNodeId: "plan_gate", route: "revise", note: "use the v2 schema" }];
+
+    const res = store.appendFact(runId, [noop], version, {
+      routingPatch: { "internal.operator_notes": notes },
+    });
+    expect(store.getState(runId)!.routing["internal.operator_notes"]).toEqual(notes);
+
+    // The consumption write is an empty list, not a delete — must also pass.
+    store.appendFact(runId, [noop], res.newVersion, {
+      routingPatch: { "internal.operator_notes": [] },
+    });
+    expect(store.getState(runId)!.routing["internal.operator_notes"]).toEqual([]);
+  });
+
+  test("rejects a malformed operator-notes entry", async () => {
+    const { store, runId, version } = await startedRun();
+
+    let thrown: unknown;
+    try {
+      store.appendFact(runId, [noop], version, {
+        routingPatch: { "internal.operator_notes": [{ gateNodeId: "g", route: "r" }] },
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(RoutingPatchError);
+    expect((thrown as RoutingPatchError).violation).toBe("wrong-type");
+  });
 });
