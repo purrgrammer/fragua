@@ -206,6 +206,54 @@ describe("routing accessors", () => {
     expect(capOperatorNotes([one])).toEqual([one]);
   });
 
+  test("capOperatorNotes honours an explicit budget tighter than the ceiling", () => {
+    // The planner budgets against what the rest of routing already costs, so the
+    // 4096 ceiling is not the operative bound on a run with a large routing.
+    const notes = Array.from({ length: 6 }, (_, i) => ({
+      gateNodeId: `g${i}`,
+      route: "approve",
+      note: "x".repeat(200),
+    }));
+    const capped = capOperatorNotes(notes, 700);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(700);
+    expect(capped.at(-1)).toEqual(notes.at(-1)!);
+    expect(capped.length).toBeLessThan(notes.length);
+  });
+
+  test("the newest note is truncated, not dropped, when it alone overruns the budget", () => {
+    const only = { gateNodeId: "plan_gate", route: "revise", note: "u".repeat(1500) };
+    const capped = capOperatorNotes([only], 300);
+    expect(capped).toHaveLength(1);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(300);
+    expect(capped[0]!.gateNodeId).toBe("plan_gate");
+    expect(capped[0]!.note.length).toBeGreaterThan(0);
+    expect(capped[0]!.note).toEndWith(" [truncated]");
+  });
+
+  test("a note that JSON-escaping inflates still lands inside the budget", () => {
+    // Every char doubles under JSON.stringify — the naive room calculation
+    // overshoots and the halving retry is what keeps the write legal.
+    const only = { gateNodeId: "g", route: "r", note: '"\n'.repeat(400) };
+    const capped = capOperatorNotes([only], 200);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(200);
+  });
+
+  test("a budget too small to seat any note yields an empty list, never a breach", () => {
+    const only = { gateNodeId: "some_rather_long_gate_node_id", route: "approve", note: "x".repeat(100) };
+    expect(capOperatorNotes([only], 10)).toEqual([]);
+    expect(capOperatorNotes([only], 0)).toEqual([]);
+  });
+
+  test("truncateOperatorNote honours an explicit budget and drops the marker when it can't pay for it", () => {
+    expect(utf8Len(truncateOperatorNote("y".repeat(500), 100))).toBeLessThanOrEqual(100);
+    expect(truncateOperatorNote("y".repeat(500), 100)).toEndWith(" [truncated]");
+    // Below ~2x the marker, spending 12 bytes on it would cost more than it says.
+    const tight = truncateOperatorNote("y".repeat(500), 20);
+    expect(utf8Len(tight)).toBeLessThanOrEqual(20);
+    expect(tight).not.toContain("[truncated]");
+    expect(truncateOperatorNote("y".repeat(500), 0)).toBe("");
+  });
+
   test("reads legacy flat-dotted bytes without bricking", () => {
     // A hand-built pre-wrapper routing blob (exactly the flat dotted shape live
     // runs carry). Every accessor reads it; none throws.

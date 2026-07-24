@@ -6,9 +6,16 @@
 // the success arm, halt, pause, retarget, provider-retry, and graph=null.
 
 import { describe, expect, test } from "bun:test";
-import { type Edge, GOAL_GATE_RETRIES_KEY, type Graph, type Node, retryCountKey } from "@fragua/core";
+import {
+  type Edge,
+  GOAL_GATE_RETRIES_KEY,
+  type Graph,
+  type Node,
+  OPERATOR_NOTES_MAX_BYTES,
+  retryCountKey,
+} from "@fragua/core";
 import type { HandlerResult } from "@fragua/core/handler";
-import type { FactEvent, RunState } from "@fragua/store";
+import { type FactEvent, MAX_ROUTING_BYTES, type RunState, utf8ByteLength as utf8Len } from "@fragua/store";
 import {
   PROVIDER_RETRY_ATTEMPT_KEY,
   PROVIDER_RETRY_CUMULATIVE_MS_KEY,
@@ -655,6 +662,44 @@ describe("buildRoutingPatch", () => {
       expect(notes.length).toBeLessThan(41);
       expect(notes.at(-1)?.note).toBe("the newest note");
       expect(JSON.stringify(notes).length).toBeLessThanOrEqual(4096);
+    });
+
+    test("the cap is budgeted against the REST of routing, not the 4096 ceiling alone", () => {
+      // The notes array is structural — `spillRoutingInputs` only moves
+      // `routing.inputs` strings to the CAS — so it competes with every other key
+      // for MAX_ROUTING_BYTES. A wide graph's retry counters plus a long
+      // `graph.goal` plus a ceiling-legal notes array used to breach the column,
+      // and the breach surfaced as a PayloadTooLargeError out of the appendFact
+      // committing the gate answer.
+      const bulk: Record<string, unknown> = { "graph.goal": "g".repeat(1500) };
+      for (let i = 0; i < 32; i++) {
+        bulk[`internal.retry_count.node_number_${i}_with_a_realistic_name`] = i;
+        bulk[`goal_gates.gate_number_${i}_named`] = "success";
+      }
+      const prior = Array.from({ length: 20 }, (_, i) => ({
+        gateNodeId: `g${i}`,
+        route: "approve",
+        note: "x".repeat(400),
+      }));
+      // Sanity: this routing genuinely has no room for a ceiling-sized array.
+      expect(utf8Len(JSON.stringify(bulk)) + OPERATOR_NOTES_MAX_BYTES).toBeGreaterThan(MAX_ROUTING_BYTES);
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", route: "revise", operatorNote: "the newest note" }),
+        decision: emptyDecision,
+        state: mkState("gate"),
+        currentNode: "gate",
+        graph: gatedSpine(),
+        effectiveRouting: { ...bulk, "internal.operator_notes": prior },
+        budgetWarnedTags: [],
+      });
+      const notes = patch?.["internal.operator_notes"] as Array<{ note: string }>;
+      // The operator's newest correction survives...
+      expect(notes.at(-1)?.note).toBe("the newest note");
+      // ...and the routing this patch produces fits the column it has to land in.
+      const committed = { ...bulk, "internal.operator_notes": notes };
+      expect(utf8Len(JSON.stringify(committed))).toBeLessThan(MAX_ROUTING_BYTES);
+      // Proof the budget actually bit: the ceiling alone would have kept more.
+      expect(utf8Len(JSON.stringify(notes))).toBeLessThan(OPERATOR_NOTES_MAX_BYTES);
     });
 
     test("an llm node completing with success consumes (clears) the notes", () => {

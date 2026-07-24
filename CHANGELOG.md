@@ -16,8 +16,13 @@ guarantee.
   (attributed to the gate and the chosen route), and persists in that step's
   thread — so later same-thread steps and resumes see it too. Multiple gate
   answers before an `llm` step accumulate in order. Notes are truncated to
-  2000 bytes for delivery (with an overall cap that drops the oldest); the full
-  text stays on the run's event log.
+  2000 bytes for delivery, and the accumulated list is bounded by what the rest
+  of the run's routing leaves free — a long-running wide graph drops or shortens
+  a note rather than overrunning the routing column and failing the very commit
+  that answers the gate. The full text always stays on the run's event log.
+  A note answered into a `parallel` region reaches every branch entry and no
+  deeper sub-node, so a correction can't be re-applied by the step that was
+  meant to judge the work it corrected.
   No workflow changes needed — any `routes:` gate answered with a note gets
   the behaviour.
 

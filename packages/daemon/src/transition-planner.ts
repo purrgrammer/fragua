@@ -21,6 +21,7 @@ import {
   goalGateOutcomeKey,
   goalGateStep,
   OPERATOR_NOTES_KEY,
+  OPERATOR_NOTES_MAX_BYTES,
   readGateOutcomes,
   readGoalGateRetries,
   readOperatorNotes,
@@ -31,7 +32,7 @@ import {
   truncateOperatorNote,
 } from "@fragua/core";
 import type { HandlerResult, IntentDecision } from "@fragua/core/handler";
-import type { FactEvent, RunState } from "@fragua/store";
+import { type FactEvent, MAX_ROUTING_BYTES, type RunState, utf8ByteLength } from "@fragua/store";
 import {
   BUDGET_WARNED_KEY,
   mergeRoutingPatches,
@@ -877,6 +878,32 @@ export function rewriteTerminalFacts(args: {
   return facts;
 }
 
+/** Bytes of the routing column held back for the rest of THIS turn's patch —
+ * retry counters, budget-warned tags, goal-gate outcome + epoch — which land
+ * alongside the notes but aren't in `effectiveRouting` yet. */
+const OPERATOR_NOTES_PATCH_HEADROOM_BYTES = 512;
+
+/** How many bytes the operator-notes array may occupy in this run's routing.
+ *
+ * `capOperatorNotes`'s own ceiling is absolute; `MAX_ROUTING_BYTES` is shared
+ * with every other key, and a notes array is structural — `spillRoutingInputs`
+ * only moves `routing.inputs` strings to the blob CAS, so it can never relieve
+ * this pressure. Budget subtractively or a run with a large routing (a wide
+ * graph's retry counters + a long `graph.goal`) breaks on the appendFact that
+ * commits the gate answer, which is exactly the moment an operator is watching.
+ *
+ * Deliberately conservative: `effectiveRouting` carries MATERIALIZED inputs,
+ * larger than the spilled form that actually commits, so this over-charges and
+ * errs toward truncating a note rather than breaching the column. */
+function operatorNotesBudget(effectiveRouting: Record<string, unknown>): number {
+  const withoutNotes = { ...effectiveRouting, [OPERATOR_NOTES_KEY]: [] };
+  const otherBytes = utf8ByteLength(JSON.stringify(withoutNotes));
+  const available = MAX_ROUTING_BYTES - OPERATOR_NOTES_PATCH_HEADROOM_BYTES - otherBytes;
+  // The ceiling still binds when routing is small — notes must not crowd out the
+  // run's own state just because there is room today.
+  return Math.max(0, Math.min(OPERATOR_NOTES_MAX_BYTES, available));
+}
+
 /** Stage 7 — the routing patch. Merges the intent fold delta + result with
  * every per-turn override patch (budget-warned tags, retry counter / wake
  * timestamp, provider-retry chain counter, goal-gate outcome + epoch,
@@ -979,7 +1006,10 @@ export function buildRoutingPatch(args: {
       ...readOperatorNotes(effectiveRouting),
       { gateNodeId: currentNode, route: result.route ?? "", note: truncateOperatorNote(result.operatorNote) },
     ];
-    routingPatch = { ...(routingPatch ?? {}), [OPERATOR_NOTES_KEY]: capOperatorNotes(staged) };
+    routingPatch = {
+      ...(routingPatch ?? {}),
+      [OPERATOR_NOTES_KEY]: capOperatorNotes(staged, operatorNotesBudget(effectiveRouting)),
+    };
   } else if (
     result.kind === "transition" &&
     result.outcomeStatus !== "fail" &&

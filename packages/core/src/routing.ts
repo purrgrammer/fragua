@@ -465,25 +465,58 @@ export const OPERATOR_NOTES_MAX_BYTES = 4096;
 
 const TRUNCATION_MARKER = " [truncated]";
 
-/** Truncate to {@link OPERATOR_NOTE_MAX_BYTES} UTF-8 bytes on a codepoint boundary. */
-export function truncateOperatorNote(note: string): string {
-  if (utf8Bytes(note) <= OPERATOR_NOTE_MAX_BYTES) return note;
-  const budget = OPERATOR_NOTE_MAX_BYTES - utf8Bytes(TRUNCATION_MARKER);
+/** Truncate to `maxBytes` UTF-8 bytes on a codepoint boundary. Defaults to
+ * {@link OPERATOR_NOTE_MAX_BYTES}; {@link capOperatorNotes} passes a tighter
+ * budget when the routing column can't seat a full-size note. The marker is
+ * dropped when the budget is too small to be worth spending on it.
+ *
+ * The loop is O(n²) in the note length. That is bounded, not overlooked: a note
+ * only reaches here off `intent.human_input`, and `appendIntent` rejects any
+ * payload at or above `MAX_EVENT_PAYLOAD_BYTES` (4 KiB), so `note` is always a
+ * few thousand bytes. Do not call this on unbounded input. */
+export function truncateOperatorNote(note: string, maxBytes: number = OPERATOR_NOTE_MAX_BYTES): string {
+  if (utf8Bytes(note) <= maxBytes) return note;
+  const marker = maxBytes > utf8Bytes(TRUNCATION_MARKER) * 2 ? TRUNCATION_MARKER : "";
+  const budget = maxBytes - utf8Bytes(marker);
+  if (budget <= 0) return "";
   let end = note.length;
   while (end > 0 && utf8Bytes(note.slice(0, end)) > budget) end--;
   if (end > 0 && end < note.length) {
     const code = note.charCodeAt(end - 1);
     if (code >= 0xd800 && code <= 0xdbff) end--; // don't split a surrogate pair
   }
-  return note.slice(0, end) + TRUNCATION_MARKER;
+  if (end === 0) return "";
+  return note.slice(0, end) + marker;
 }
 
-/** Bound the serialized array to {@link OPERATOR_NOTES_MAX_BYTES}, dropping
- * oldest first; always keeps the newest note. */
-export function capOperatorNotes(notes: OperatorNote[]): OperatorNote[] {
+/** Bound the serialized array to `maxBytes`, dropping oldest first. Defaults to
+ * {@link OPERATOR_NOTES_MAX_BYTES}, which is an ABSOLUTE ceiling — callers that
+ * write into `run_state.routing` must pass a budget computed against what the
+ * rest of that run's routing already costs. The routing column's cap is shared
+ * with every other key and a notes array is structural, so the blob spiller
+ * (which only moves `routing.inputs` strings) can never relieve it.
+ *
+ * The newest note is never dropped: if it alone overruns the budget it is
+ * truncated further instead, so an operator correction degrades rather than
+ * vanishing silently or breaching the column. Returns `[]` only when the budget
+ * cannot seat even a one-character note. The full text always stays on
+ * `intent.human_input` for audit. */
+export function capOperatorNotes(notes: OperatorNote[], maxBytes: number = OPERATOR_NOTES_MAX_BYTES): OperatorNote[] {
+  const fits = (list: OperatorNote[]): boolean => utf8Bytes(JSON.stringify(list)) <= maxBytes;
   const out = [...notes];
-  while (out.length > 1 && utf8Bytes(JSON.stringify(out)) > OPERATOR_NOTES_MAX_BYTES) {
-    out.shift();
+  while (out.length > 1 && !fits(out)) out.shift();
+  if (out.length === 0 || fits(out)) return out;
+
+  // One note left and it still overruns. Shrink the note itself against the room
+  // its envelope leaves. Halve on each miss: JSON escaping (a note of quotes or
+  // newlines doubles in the serialized form) can make the truncated text still
+  // not fit, and halving guarantees the loop reaches 0 rather than spinning.
+  const newest = out[0]!;
+  let room = maxBytes - utf8Bytes(JSON.stringify([{ ...newest, note: "" }]));
+  while (room > 0) {
+    const candidate = truncateOperatorNote(newest.note, room);
+    if (candidate.length > 0 && fits([{ ...newest, note: candidate }])) return [{ ...newest, note: candidate }];
+    room = Math.floor(room / 2);
   }
-  return out;
+  return [];
 }
