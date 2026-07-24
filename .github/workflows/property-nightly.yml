@@ -3,10 +3,19 @@ name: Property tests (nightly)
 # Goes deeper than the per-PR CI: FRAGUA_PBT_RUNS multiplies every property's
 # baseline numRuns (×20 here) so rare-branch coverage of the store / daemon /
 # agent invariants (OCC, sweep, HITL durability, abort loop) gets a hard
-# nightly stress pass. The matrix shards the suite N ways for wall-clock; each
-# shard picks a fresh fast-check seed, so coverage of the long tail accumulates
-# across nights rather than re-testing one frozen seed. Runs once a day; also
-# available via workflow_dispatch for manual kicks.
+# nightly stress pass.
+#
+# The matrix does NOT partition the suite — `matrix.shard` names the step and
+# nothing else, so all five jobs run the same four packages end to end. What it
+# buys is seed diversity: each job picks a fresh fast-check seed, so five
+# independent samples of the long tail accumulate per night instead of one.
+# Wall-clock per job is therefore the FULL suite, not a fifth of it — which is
+# what `timeout-minutes` has to cover. Renaming the axis (or making it a real
+# `--shard` split) is a separate call; the "shards for wall-clock" claim that
+# used to be here was wrong, and budgeting for a fifth of the work from it is
+# how the per-test allowance ended up undersized.
+#
+# Runs once a day; also available via workflow_dispatch for manual kicks.
 
 on:
   schedule:
@@ -32,7 +41,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Property suite — shard ${{ matrix.shard }} (FRAGUA_PBT_RUNS=20×)
+      # Per-test allowance sized for THIS multiplier: at 20x the heaviest driven
+      # properties (executor-faults OCC/hang) run ~30 s locally and ~60-90 s on
+      # a runner, so 300 s is several times the real cost while still failing
+      # fast on a genuine wedge. It is the operative limit only because the
+      # tests no longer carry `test(name, fn, 60_000)` literals — that form
+      # overrides this flag, which is why raising it alone never took effect.
+      - name: Property suite — seed ${{ matrix.shard }} of 5 (FRAGUA_PBT_RUNS=20×)
         env:
           FRAGUA_PBT_RUNS: "20"
-        run: bun test --timeout 120000 ./packages/store ./packages/daemon ./packages/core ./packages/agent
+        run: bun test --timeout 300000 ./packages/store ./packages/daemon ./packages/core ./packages/agent

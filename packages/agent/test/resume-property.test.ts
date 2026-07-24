@@ -206,7 +206,7 @@ describe("threaded transcript is content-invariant across daemon restart pattern
       ),
       { numRuns: pbtRuns(20) },
     );
-  }, 60_000);
+  });
 });
 
 // ───── Property 2 — boot reconstruction matches live Set ────────────────
@@ -254,7 +254,7 @@ describe("inProcessWrites boot reconstruction matches live in-process state", ()
       ),
       { numRuns: pbtRuns(25) },
     );
-  }, 60_000);
+  });
 });
 
 // ───── Property 3 — no false-positive resume within one daemon life ────
@@ -299,7 +299,7 @@ describe("resume detection never false-positives within a live daemon", () => {
       ),
       { numRuns: pbtRuns(25) },
     );
-  }, 60_000);
+  });
 });
 
 // ───── Property 4 — restart at an arbitrary turn preserves transcript ──
@@ -362,7 +362,7 @@ describe("restart-at-turn-k preserves the final transcript byte-for-byte", () =>
       }),
       { numRuns: pbtRuns(15) },
     );
-  }, 60_000);
+  });
 });
 
 // ───── Example-based anchors ────────────────────────────────────────────

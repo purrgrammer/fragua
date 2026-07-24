@@ -22,7 +22,21 @@ const dirs = readdirSync("packages", { withFileTypes: true })
 const passthrough = process.argv.slice(2);
 const args = passthrough.length > 0 ? passthrough : dirs;
 
-const res = spawnSync("bun", ["test", ...args], { stdio: "inherit" });
+// Default per-test timeout. bun's built-in default is 5s, which the heaviest
+// driven properties (executor-faults, agent resume) can brush even at the 1x
+// baseline on a loaded machine. bunfig.toml has no `[test] timeout` key in bun
+// 1.2.17 — verified: it is ignored and the 5s default applies — so the floor
+// has to be set here, on the one command CLAUDE.md tells contributors to run.
+//
+// It must NOT be a per-test `test(name, fn, ms)` literal: that form OVERRIDES
+// `bun test --timeout`, so the CI workflows' larger allowances were silently
+// capped at whatever the literal said. That is what timed out the nightly.
+// Keep the wall clock a command-line concern so the workflow that scales
+// FRAGUA_PBT_RUNS can scale the time budget with it.
+const hasTimeout = args.some((a) => a === "--timeout" || a.startsWith("--timeout="));
+const timeout = hasTimeout ? [] : ["--timeout", "60000"];
+
+const res = spawnSync("bun", ["test", ...timeout, ...args], { stdio: "inherit" });
 // status is null when the child was killed by a signal (e.g. Ctrl-C) — re-raise
 // it so a SIGINT isn't reported as a generic test failure.
 if (res.signal) process.kill(process.pid, res.signal);
