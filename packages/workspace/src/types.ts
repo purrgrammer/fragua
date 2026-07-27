@@ -178,8 +178,8 @@ export class ToolRegistry {
    *
    * The `defaultDisabled` carve-out is the opt-in mechanism for tools
    * that shouldn't leak into every node by default (e.g. `web_fetch`
-   * makes outbound HTTP and burns summariser tokens — workflows that
-   * want it must list it explicitly). */
+   * makes outbound HTTP — workflows that want it must list it
+   * explicitly). */
   select(opts: { allow?: string[]; deny?: string[] } = {}): AnyTool[] {
     return this.list().filter((t) => {
       if (opts.deny?.includes(t.name)) return false;

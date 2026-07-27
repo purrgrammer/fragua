@@ -9,23 +9,15 @@ import type { JSX, ReactNode } from "react";
 
 interface WebFetchParams {
   url: string;
-  prompt: string;
 }
 
 interface WebFetchData {
   url?: string;
-  mode?: "raw" | "summarise";
   cached?: boolean;
   upgraded_from_http?: boolean;
   truncated?: boolean;
   cross_host_redirect?: string;
   error?: string;
-  provider?: string;
-  model?: string;
-  input_tokens?: number;
-  output_tokens?: number;
-  cost_usd?: number;
-  duration_ms?: number;
   input_chars?: number;
 }
 
@@ -43,23 +35,6 @@ function firstText(content: unknown): string {
     }
   }
   return "";
-}
-
-function formatCost(usd: number | undefined): string | null {
-  if (typeof usd !== "number" || usd === 0) return null;
-  if (usd < 0.001) return `$${(usd * 1000).toFixed(2)}m`;
-  return `$${usd.toFixed(4)}`;
-}
-
-function formatDuration(ms: number | undefined): string | null {
-  if (typeof ms !== "number") return null;
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatTokens(input: number | undefined, output: number | undefined): string | null {
-  if (typeof input !== "number" && typeof output !== "number") return null;
-  return `${input ?? 0}↑ ${output ?? 0}↓ tok`;
 }
 
 function truncateMid(s: string, max: number): string {
@@ -87,12 +62,6 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
             fetching {truncateMid(url ?? "…", 80)}
           </span>
         </div>
-        {params?.prompt ? (
-          <div className="mt-[var(--sw-space-1)] text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">
-            <span className="opacity-70">prompt: </span>
-            {params.prompt}
-          </div>
-        ) : null}
       </div>
     );
   }
@@ -165,17 +134,10 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
       <div className="flex flex-wrap items-center gap-[var(--sw-space-2)]">
         <h4 className={SECTION_LABEL}>Result</h4>
         {url ? <UrlPill url={url} /> : null}
-        {data.mode === "raw" ? <Badge tone="muted">raw markdown</Badge> : null}
         {data.cached ? <Badge tone="muted">cached</Badge> : null}
         {data.upgraded_from_http ? <Badge tone="muted">https↑</Badge> : null}
         {data.truncated ? <Badge tone="warn">truncated</Badge> : null}
       </div>
-      {params?.prompt ? (
-        <div className="text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">
-          <span className="opacity-70">prompt: </span>
-          {params.prompt}
-        </div>
-      ) : null}
       <div className={PANEL}>
         <div className="whitespace-pre-wrap text-[length:var(--sw-text)] text-[var(--sw-text)]">{text}</div>
       </div>
@@ -221,13 +183,6 @@ function Badge({ tone, children }: { tone: "muted" | "warn"; children: ReactNode
 
 function Footer({ data }: { data: WebFetchData }): JSX.Element | null {
   const parts: string[] = [];
-  if (data.provider && data.model) parts.push(`${data.provider}/${data.model}`);
-  const tok = formatTokens(data.input_tokens, data.output_tokens);
-  if (tok) parts.push(tok);
-  const dur = formatDuration(data.duration_ms);
-  if (dur) parts.push(dur);
-  const cost = formatCost(data.cost_usd);
-  if (cost) parts.push(cost);
   if (typeof data.input_chars === "number" && data.input_chars > 0) {
     parts.push(`${Math.round(data.input_chars / 1024)}KB md`);
   }
