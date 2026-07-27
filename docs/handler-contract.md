@@ -101,7 +101,7 @@ return {
 ### `yield_human`
 Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused{reason:"human"}` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. A human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
 
-When an operator writes `intent.human_input { route, note? }` the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
+When an operator writes `intent.human_input { route, note? }` the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `HumanInput | string` (the `string` variant is a legacy compatibility path carrying only the route name; the structured form is the current contract).
 
 On resume the handler returns `route: <chosen>` so the engine's route-case edge selector fires the edge whose `attrs.route` equals the operator's choice. A non-empty `note` is returned alongside as `operatorNote`, and the transition planner appends it to `routing.internal.operator_notes` in the same commit as the human node's `fact.node_completed` (so replay reproduces it). The next `llm` step to dispatch prepends it to its substituted prompt, where it persists as that step's user message and rehydrates with the thread. Delivery is keyed on the receiving step's outcome: the planner clears the note once an `llm` step consumes it (completes with a success outcome); a `fail` keeps it for the recovery path and a `retry` keeps it for the re-dispatch. The note in routing is byte-truncated, with an overall oldest-dropped cap across accumulated gate notes; the full text stays on `intent.human_input` for audit. That cap is **subtractive**, not a fixed slice: a notes array is structural, so `spillRoutingInputs` (which only moves `routing.inputs` strings to the blob CAS) can never relieve it, and the planner budgets it against what the rest of that run's routing already costs against `MAX_ROUTING_BYTES`. When the budget can't seat even the newest note in full, that note is shortened rather than dropped — the correction degrades instead of vanishing, and the gate answer never fails its own commit. An absent, empty, or whitespace-only note is a pure route choice with no routing write.
 
@@ -440,7 +440,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
     sideEffect: "none",
     maxMs: 30_000,
     handler: async (ctx) => {
-      const name = typeof ctx.routing.name === "string" ? ctx.routing.name : "friend";
+      const name = typeof ctx.args.inputs?.["name"] === "string" ? ctx.args.inputs["name"] : "friend";
       const sentAt = Date.now();
       const res = await ctx.llm.call({
         model: "claude-haiku-4-5",
