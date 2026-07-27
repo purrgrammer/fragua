@@ -12,8 +12,11 @@
 //     instead. For GitHub specifically, prefer `gh` CLI via bash.
 //   - 15-minute in-memory cache keyed by URL.
 //   - HTML → markdown via turndown with a heuristic extraction pass
-//     (nav / header / footer / aside / forms / data: URIs dropped)
-//     so the character cap buys real content, not chrome.
+//     (nav / aside / forms / data: URIs dropped; header / footer
+//     dropped only when NOT inside an article/main/section, so
+//     titles and bylines survive) so the character cap buys real
+//     content, not chrome. Pages the full pass zeroes out are retried
+//     with a minimal strip set before erroring.
 //   - Non-HTML bodies (JSON, plain text) pass through unconverted.
 //   - Output is head-truncated to RAW_MAX_CHARS; `truncated: true`
 //     tells the caller the tail was dropped.
@@ -48,6 +51,13 @@ export function _resetWebFetchCacheForTests(): void {
   cache.clear();
 }
 
+/** Test-only: exposes the junk-line predicate so the narrowing (empty
+ *  `*`/`+` bullet markers are junk; a bare `-` paragraph is not) is
+ *  pinned without depending on turndown's dash-escaping. */
+export function _isJunkLineForTests(line: string): boolean {
+  return isJunkLine(line);
+}
+
 interface WebFetchArgs {
   url: string;
 }
@@ -69,7 +79,6 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
   // read-only by design, so idempotent=true keeps dangling-call resume
   // from forcing human approval.
   idempotent: true,
-  truncation: { max_chars: RAW_MAX_CHARS, mode: "head_tail" },
   defaultDisabled: true,
 
   async execute(args, _env, opts = {}) {
@@ -184,9 +193,16 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     }
 
     const isHtml = /text\/html|application\/xhtml/i.test(contentType) || html.trim().startsWith("<");
-    const fullMarkdown = isHtml ? htmlToMarkdown(html) : html;
+    let fullMarkdown = isHtml ? htmlToMarkdown(html, "full") : html;
+    // The full extraction pass can zero out SPA shells and nav-only
+    // landing pages. Retry once with a minimal strip set before giving
+    // up, so those pages return their residual text instead of a hard
+    // error.
+    if (isHtml && fullMarkdown.trim().length === 0) {
+      fullMarkdown = htmlToMarkdown(html, "minimal");
+    }
     if (fullMarkdown.trim().length === 0) {
-      return errorResult(`${resolvedUrl} returned empty content after HTML→markdown conversion`);
+      return errorResult(`${resolvedUrl} returned empty content${isHtml ? " after HTML→markdown conversion" : ""}`);
     }
 
     const truncated = fullMarkdown.length > RAW_MAX_CHARS;
@@ -210,39 +226,72 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
   },
 };
 
-const REMOVE_TAGS = new Set([
-  "script",
-  "style",
-  "noscript",
-  "iframe",
-  "nav",
-  "header",
-  "footer",
-  "aside",
-  "form",
-  "svg",
-  "button",
-  "head",
-  "link",
-  "meta",
-  "title",
-]);
+// Always dropped, in every strip mode — never real content.
+const MINIMAL_REMOVE_TAGS = new Set(["script", "style", "noscript", "iframe", "head", "link", "meta", "title"]);
+// Site chrome dropped by the full extraction pass. `header`/`footer` are
+// NOT here: they're removed conditionally (see hasContentAncestor) so a
+// title/byline block inside an <article>/<main>/<section> survives.
+const FULL_REMOVE_TAGS = new Set([...MINIMAL_REMOVE_TAGS, "nav", "aside", "form", "svg", "button"]);
 const REMOVE_ROLES = new Set(["navigation", "banner", "contentinfo"]);
+const CONTENT_ANCESTORS = new Set(["article", "main", "section"]);
 
-function htmlToMarkdown(html: string): string {
+interface DomNodeLike {
+  nodeName?: unknown;
+  parentNode?: DomNodeLike | null;
+  getAttribute?: (name: string) => string | null;
+}
+
+function nodeName(node: DomNodeLike): string {
+  return typeof node.nodeName === "string" ? node.nodeName.toLowerCase() : "";
+}
+
+/** True when the node sits inside an <article>/<main>/<section>. A
+ *  header/footer there is structural page content (title, byline,
+ *  footnotes), not site chrome, so it must survive. */
+function hasContentAncestor(node: DomNodeLike): boolean {
+  let p = node.parentNode ?? null;
+  while (p) {
+    if (CONTENT_ANCESTORS.has(nodeName(p))) return true;
+    p = p.parentNode ?? null;
+  }
+  return false;
+}
+
+function attrStartsWithData(node: DomNodeLike, attr: string): boolean {
+  if (typeof node.getAttribute !== "function") return false;
+  const v = node.getAttribute(attr);
+  return typeof v === "string" && v.trim().toLowerCase().startsWith("data:");
+}
+
+function htmlToMarkdown(html: string, strip: "full" | "minimal"): string {
   const td = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
     bulletListMarker: "-",
   });
+  const removeTags = strip === "full" ? FULL_REMOVE_TAGS : MINIMAL_REMOVE_TAGS;
   td.remove((node) => {
-    const name = typeof node.nodeName === "string" ? node.nodeName.toLowerCase() : "";
-    if (REMOVE_TAGS.has(name)) return true;
+    const name = nodeName(node);
+    if (removeTags.has(name)) return true;
+    if (strip !== "full") return false;
+    if ((name === "header" || name === "footer") && !hasContentAncestor(node)) return true;
     if (typeof node.getAttribute !== "function") return false;
     const role = node.getAttribute("role");
     if (role && REMOVE_ROLES.has(role.toLowerCase())) return true;
     if (node.getAttribute("aria-hidden") === "true") return true;
     return false;
+  });
+  // Drop data: URI images and unwrap data: URI anchors at the DOM layer
+  // (via addRule, which outranks turndown's built-in image/link rules) —
+  // regexing them out of the markdown after the fact mishandles URIs
+  // containing a literal `)` (inline SVG, CSS url(...)).
+  td.addRule("stripDataImg", {
+    filter: (node) => nodeName(node) === "img" && attrStartsWithData(node, "src"),
+    replacement: () => "",
+  });
+  td.addRule("stripDataHref", {
+    filter: (node) => nodeName(node) === "a" && attrStartsWithData(node, "href"),
+    replacement: (content) => content,
   });
   return cleanMarkdown(td.turndown(html));
 }
@@ -250,7 +299,10 @@ function htmlToMarkdown(html: string): string {
 function isJunkLine(line: string): boolean {
   const t = line.trim();
   if (t === "") return false;
-  if (/^[-*+]$/.test(t)) return true;
+  // Empty `*`/`+` list markers are junk. A bare `-` is NOT junk here —
+  // it's a legitimate lone paragraph (a "not applicable" table cell
+  // rendered on its own line).
+  if (/^[*+]$/.test(t)) return true;
   if (/^!?\[\s*\]\(\s*\)$/.test(t)) return true;
   if (/^\[\s*\]$/.test(t)) return true;
   if (/^\(\s*\)$/.test(t)) return true;
@@ -260,8 +312,6 @@ function isJunkLine(line: string): boolean {
 
 function cleanMarkdown(md: string): string {
   return md
-    .replace(/!\[[^\]]*\]\(\s*data:[^)]*\)/gi, "")
-    .replace(/\[([^\]]*)\]\(\s*data:[^)]*\)/gi, "$1")
     .split("\n")
     .filter((line) => !isJunkLine(line))
     .join("\n")

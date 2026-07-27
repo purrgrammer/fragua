@@ -1288,16 +1288,10 @@ function RichToolResult({
   params?: Record<string, unknown> | undefined;
 }): JSX.Element | null {
   // web_fetch is a core tool but worth its own dedicated renderer
-  // (URL pill, cache/redirect/error variants, model+cost footer).
-  // Mirrors the bash/edit branches below.
+  // (URL pill, cache/redirect/error variants). Mirrors the bash/edit
+  // branches below.
   if (toolName === "web_fetch") {
-    return (
-      <WebFetchResult
-        params={params as { url?: string; prompt?: string } | undefined}
-        result={result}
-        isStreaming={!result}
-      />
-    );
+    return <WebFetchResult params={params as { url?: string } | undefined} result={result} isStreaming={!result} />;
   }
   // skill: built-in tool that loads a SKILL.md by catalogue name and
   // substitutes $ARGUMENTS. The structured payload (name, description,

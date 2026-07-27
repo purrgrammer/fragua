@@ -418,7 +418,6 @@ export class PiLlmBackend implements LlmBackend {
     // built per `backend.run()`, so closure values are correct for that
     // run.
     const fraguaEmit = input.emit;
-    const summariser = this.summariser;
     // `skillCatalog` isn't ready until after context-file loading below.
     // Stage fraguaContext as a `let` and patch it in once resolved.
     // Tools captured by `toAgentTool` close over the SAME object
@@ -435,7 +434,6 @@ export class PiLlmBackend implements LlmBackend {
             void fraguaEmit(type as EventType, payload);
           }
         : () => {},
-      ...(summariser ? { summarise: (i) => summariser.summarise(i) } : {}),
     };
     const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
 

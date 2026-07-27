@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { ExecutionEnvironment, FraguaToolContext } from "../src/types.ts";
-import { _resetWebFetchCacheForTests, webFetchTool } from "../src/web-fetch.ts";
+import { _isJunkLineForTests, _resetWebFetchCacheForTests, webFetchTool } from "../src/web-fetch.ts";
 
 interface StubSpec {
   status?: number;
@@ -55,6 +55,64 @@ describe("web_fetch", () => {
     expect(res.text).not.toContain("Sidebar promo links");
     expect(res.text).not.toContain("Copyright 2024 Example Corp");
     expect(res.text).not.toContain("About Us");
+  });
+
+  test("keeps a header inside an article (title/byline survive)", async () => {
+    const url = "https://structured.example/post";
+    const html =
+      "<html><body>" +
+      "<article><header><h1>Real Article Title</h1><span>by Jane Byline</span></header>" +
+      "<p>The genuine article body paragraph.</p></article>" +
+      "</body></html>";
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
+
+    expect(res.is_error).toBeUndefined();
+    expect(res.text).toContain("Real Article Title");
+    expect(res.text).toContain("Jane Byline");
+  });
+
+  test("strips a page-level header/footer outside any article", async () => {
+    const url = "https://chrome.example/landing";
+    const html =
+      "<html><body>" +
+      "<header>Global Site Banner</header>" +
+      "<main><p>The genuine main content.</p></main>" +
+      "<footer>Global Site Footer</footer>" +
+      "</body></html>";
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
+
+    expect(res.is_error).toBeUndefined();
+    expect(res.text).toContain("genuine main content");
+    expect(res.text).not.toContain("Global Site Banner");
+    expect(res.text).not.toContain("Global Site Footer");
+  });
+
+  test("falls back to a minimal strip pass instead of erroring on chrome-only pages", async () => {
+    const url = "https://spa.example/shell";
+    // Everything real is site chrome the full pass drops; the only text
+    // lives inside a <nav>, so the full extraction pass zeroes out.
+    const html = "<html><body><nav><p>App shell loading indicator text.</p></nav></body></html>";
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
+
+    expect(res.is_error).toBeUndefined();
+    expect(res.text).toContain("App shell loading indicator text.");
+  });
+
+  test("errors with an HTML-specific message only for HTML bodies", async () => {
+    const url = "https://empty.example/blank";
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/plain", body: "   " } }));
+
+    expect(res.is_error).toBe(true);
+    expect(res.text).toContain("empty content");
+    expect(res.text).not.toContain("HTML\u2192markdown");
+  });
+
+  test("isJunkLine drops empty bullet markers but keeps a bare dash paragraph", () => {
+    expect(_isJunkLineForTests("-")).toBe(false);
+    expect(_isJunkLineForTests("*")).toBe(true);
+    expect(_isJunkLineForTests("+")).toBe(true);
+    expect(_isJunkLineForTests("- real bullet content")).toBe(false);
+    expect(_isJunkLineForTests("actual paragraph")).toBe(false);
   });
 
   test("drops a data: URI image from the output", async () => {

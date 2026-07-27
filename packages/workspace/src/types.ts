@@ -5,14 +5,7 @@
 // See docs/SPEC.md §3.4.
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type {
-  ContextValue,
-  DirEntry,
-  ExecResult,
-  ExecutionEnvironment,
-  SummariseInput,
-  SummariseOutput,
-} from "@fragua/core";
+import type { ContextValue, DirEntry, ExecResult, ExecutionEnvironment } from "@fragua/core";
 import type { HttpClient } from "@fragua/core/handler";
 import type { Skill } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
@@ -29,7 +22,6 @@ export interface FraguaToolContext {
   readonly iteration: number;
   readonly http: HttpClient;
   readonly emit: (type: string, payload: Record<string, unknown>) => void;
-  readonly summarise?: (input: SummariseInput) => Promise<SummariseOutput>;
   /** The run's resolved skill catalog. The `skill` tool resolves its
    *  `name` argument against this set. */
   readonly skillCatalog?: readonly Skill[];
@@ -87,8 +79,10 @@ export interface Tool<TArgs = unknown, TResult = ContextValue> {
    *  potentially destructive operation — the LLM decides whether to
    *  retry. */
   idempotentOnReplay?: boolean;
-  /** Truncation applied to the stringified result before it reaches the LLM. */
-  truncation: TruncationPolicy;
+  /** Truncation applied to the stringified `text` fallback before it
+   *  reaches the LLM. Optional: tools that emit rich `content[]` blocks
+   *  (never truncated) and cap their own `text` can omit it. */
+  truncation?: TruncationPolicy;
   /** Optional compatibility shim for raw tool-call arguments before
    * schema validation. Used to recover from common provider quirks
    * (e.g. Opus 4.6 / GLM-5.1 sending `edits` as a JSON string instead
