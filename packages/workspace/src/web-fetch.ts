@@ -18,8 +18,9 @@
 //     content, not chrome. Pages the full pass zeroes out are retried
 //     with a minimal strip set before erroring.
 //   - Non-HTML bodies (JSON, plain text) pass through unconverted.
-//   - Output is head-truncated to RAW_MAX_CHARS; `truncated: true`
-//     tells the caller the tail was dropped.
+//   - The response body is read streamingly and the stream cancelled at
+//     BODY_MAX_CHARS; output is then head-truncated to RAW_MAX_CHARS and
+//     `truncated: true` tells the caller the tail was dropped.
 
 import { Type } from "@sinclair/typebox";
 import TurndownService from "turndown";
@@ -29,12 +30,19 @@ import type { Tool, ToolOutput } from "./types.ts";
 // burst of fetches from blowing downstream context while still
 // returning the full head of most pages.
 const RAW_MAX_CHARS = 50_000;
+// Hard cap on how much of the response body we read at all — comfortably
+// above any real article, far below a heap risk. The stream is cancelled
+// once it's reached, so an endless or oversized body neither buffers nor
+// keeps downloading. Not `truncated`: that stays "the returned markdown
+// was cut", computed downstream against RAW_MAX_CHARS.
+const BODY_MAX_CHARS = 2_000_000;
 const MAX_REDIRECTS = 5;
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
 interface CacheEntry {
   ts: number;
-  result: ToolOutput<unknown>;
+  text: string;
+  data: Record<string, unknown>;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -43,19 +51,6 @@ function pruneCache(now: number): void {
   for (const [k, v] of cache) {
     if (now - v.ts > CACHE_TTL_MS) cache.delete(k);
   }
-}
-
-/** Test-only: the module-level cache is process-global, so suites that
- *  reuse a URL must clear it between cases. */
-export function _resetWebFetchCacheForTests(): void {
-  cache.clear();
-}
-
-/** Test-only: exposes the junk-line predicate so the narrowing (empty
- *  `*`/`+` bullet markers are junk; a bare `-` paragraph is not) is
- *  pinned without depending on turndown's dash-escaping. */
-export function _isJunkLineForTests(line: string): boolean {
-  return isJunkLine(line);
 }
 
 interface WebFetchArgs {
@@ -107,12 +102,11 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     const hit = cache.get(cacheKey);
     if (hit) {
       const ageSec = Math.round((now - hit.ts) / 1000);
-      const cachedText =
-        hit.result.content?.[0]?.type === "text" ? `${hit.result.content[0].text}\n\n[cached ${ageSec}s ago]` : "";
+      const text = `${hit.text}\n\n[cached ${ageSec}s ago]`;
       return {
-        text: cachedText,
-        content: [{ type: "text", text: cachedText }],
-        data: { ...((hit.result.data as Record<string, unknown>) ?? {}), cached: true, age_seconds: ageSec },
+        text,
+        content: [{ type: "text", text }],
+        data: { ...hit.data, cached: true, age_seconds: ageSec },
       };
     }
 
@@ -149,6 +143,9 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
         } catch {
           return errorResult(`malformed Location header "${location}" at ${current.toString()}`);
         }
+        if (next.protocol !== "https:") {
+          return errorResult(`unsupported protocol: ${next.protocol}`);
+        }
         if (next.host !== current.host) {
           const text =
             `Cross-host redirect: ${current.host} → ${next.host}.\n\n` +
@@ -169,7 +166,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
       resolvedUrl = current.toString();
       contentType = response.headers.get("content-type") ?? "";
       try {
-        html = await response.text();
+        html = await readBodyCapped(response, BODY_MAX_CHARS);
       } catch (err) {
         return errorResult(
           `failed to read body of ${resolvedUrl}: ${err instanceof Error ? err.message : String(err)}`,
@@ -216,15 +213,32 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
       truncated,
       input_chars: fullMarkdown.length,
     };
-    const result: ToolOutput<Record<string, unknown>> = {
-      text,
-      content: [{ type: "text", text }],
-      data,
-    };
-    cache.set(cacheKey, { ts: now, result });
-    return result;
+    cache.set(cacheKey, { ts: now, text, data });
+    return { text, content: [{ type: "text", text }], data };
   },
 };
+
+/** Read at most `max` characters of the body, then cancel the stream —
+ *  `response.text()` would buffer the whole thing first, so an oversized
+ *  or endless body has to be cut off at the source, not after. */
+async function readBodyCapped(response: Response, max: number): Promise<string> {
+  const body = response.body;
+  if (!body) return (await response.text()).slice(0, max);
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let out = "";
+  try {
+    while (out.length < max) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+    out += decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return out.slice(0, max);
+}
 
 // Always dropped, in every strip mode — never real content.
 const MINIMAL_REMOVE_TAGS = new Set(["script", "style", "noscript", "iframe", "head", "link", "meta", "title"]);
@@ -245,6 +259,12 @@ function nodeName(node: DomNodeLike): string {
   return typeof node.nodeName === "string" ? node.nodeName.toLowerCase() : "";
 }
 
+/** Turndown hands the filter every node, including ones without an
+ *  element API (text, comments), so the accessor has to be guarded. */
+function attr(node: DomNodeLike, name: string): string | null {
+  return typeof node.getAttribute === "function" ? node.getAttribute(name) : null;
+}
+
 /** True when the node sits inside an <article>/<main>/<section>. A
  *  header/footer there is structural page content (title, byline,
  *  footnotes), not site chrome, so it must survive. */
@@ -257,10 +277,8 @@ function hasContentAncestor(node: DomNodeLike): boolean {
   return false;
 }
 
-function attrStartsWithData(node: DomNodeLike, attr: string): boolean {
-  if (typeof node.getAttribute !== "function") return false;
-  const v = node.getAttribute(attr);
-  return typeof v === "string" && v.trim().toLowerCase().startsWith("data:");
+function hasDataUri(node: DomNodeLike, name: string): boolean {
+  return attr(node, name)?.trim().toLowerCase().startsWith("data:") ?? false;
 }
 
 function htmlToMarkdown(html: string, strip: "full" | "minimal"): string {
@@ -275,45 +293,36 @@ function htmlToMarkdown(html: string, strip: "full" | "minimal"): string {
     if (removeTags.has(name)) return true;
     if (strip !== "full") return false;
     if ((name === "header" || name === "footer") && !hasContentAncestor(node)) return true;
-    if (typeof node.getAttribute !== "function") return false;
-    const role = node.getAttribute("role");
-    if (role && REMOVE_ROLES.has(role.toLowerCase())) return true;
-    if (node.getAttribute("aria-hidden") === "true") return true;
-    return false;
+    const role = attr(node, "role")?.toLowerCase();
+    return (role !== undefined && REMOVE_ROLES.has(role)) || attr(node, "aria-hidden") === "true";
   });
   // Drop data: URI images and unwrap data: URI anchors at the DOM layer
   // (via addRule, which outranks turndown's built-in image/link rules) —
   // regexing them out of the markdown after the fact mishandles URIs
   // containing a literal `)` (inline SVG, CSS url(...)).
   td.addRule("stripDataImg", {
-    filter: (node) => nodeName(node) === "img" && attrStartsWithData(node, "src"),
+    filter: (node) => nodeName(node) === "img" && hasDataUri(node, "src"),
     replacement: () => "",
   });
   td.addRule("stripDataHref", {
-    filter: (node) => nodeName(node) === "a" && attrStartsWithData(node, "href"),
+    filter: (node) => nodeName(node) === "a" && hasDataUri(node, "href"),
     replacement: (content) => content,
   });
   return cleanMarkdown(td.turndown(html));
 }
 
-function isJunkLine(line: string): boolean {
-  const t = line.trim();
-  if (t === "") return false;
-  // Empty `*`/`+` list markers are junk. A bare `-` is NOT junk here —
-  // it's a legitimate lone paragraph (a "not applicable" table cell
-  // rendered on its own line).
-  if (/^[*+]$/.test(t)) return true;
-  if (/^!?\[\s*\]\(\s*\)$/.test(t)) return true;
-  if (/^\[\s*\]$/.test(t)) return true;
-  if (/^\(\s*\)$/.test(t)) return true;
-  if (/^[|•·]+$/.test(t)) return true;
-  return false;
-}
+// Lines that survive conversion carrying no readable text: label-less
+// links and images (icon nav rows, alt-less figures), bare separator
+// glyphs, and an orphaned `+` bullet. `-` and `*` are absent because
+// turndown escapes a lone one (`\-`, `\*`); it does not escape `+`.
+// The URL arm is greedy to the line's last `)` so an href containing
+// parens — turndown escapes them, it doesn't drop them — still matches.
+const JUNK_LINE = /^(?:!?\[\s*\](?:\(.*\))?|\(\s*\)|[|•·+]+)+$/;
 
 function cleanMarkdown(md: string): string {
   return md
     .split("\n")
-    .filter((line) => !isJunkLine(line))
+    .filter((line) => !JUNK_LINE.test(line.trim()))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

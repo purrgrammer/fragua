@@ -8,6 +8,20 @@ guarantee.
 
 ## [Unreleased]
 
+### Changed
+
+- **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
+  workflow that passed `prompt` to get a summary now receives raw markdown and
+  must summarise in the consuming step. HTML→markdown conversion strips site
+  chrome (nav/aside/forms, and header/footer outside an article) so the size cap
+  buys real content, not boilerplate.
+
+### Fixed
+
+- `web_fetch` refuses a redirect whose target is not `https:` instead of handing
+  the URL back as a follow-up, and stops reading a response body once it passes
+  2 MB rather than buffering it whole.
+
 ## [0.10.0] — 2026-07-24
 
 ### Changed

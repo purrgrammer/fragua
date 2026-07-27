@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+// The 15-minute result cache is module-global and there is no
+// production reset hook, so every case mints its URL through `freshUrl`
+// — uniqueness is structural, not a convention a copy-pasted test can
+// silently break by reusing a hostname and exercising the cache instead
+// of its stub. Only the cache case reuses a URL, and it does so on
+// purpose.
+
+import { describe, expect, test } from "bun:test";
 import type { ExecutionEnvironment, FraguaToolContext } from "../src/types.ts";
-import { _isJunkLineForTests, _resetWebFetchCacheForTests, webFetchTool } from "../src/web-fetch.ts";
+import { webFetchTool } from "../src/web-fetch.ts";
 
 interface StubSpec {
   status?: number;
@@ -27,17 +34,19 @@ function ctx(fetch: typeof globalThis.fetch): FraguaToolContext {
 
 const env = {} as unknown as ExecutionEnvironment;
 
+let urlCounter = 0;
+function freshUrl(name: string): string {
+  urlCounter += 1;
+  return `https://${name}-${urlCounter}.example/page`;
+}
+
 async function run(url: string, fetch: typeof globalThis.fetch) {
   return webFetchTool.execute({ url }, env, { fraguaContext: ctx(fetch) });
 }
 
 describe("web_fetch", () => {
-  beforeEach(() => {
-    _resetWebFetchCacheForTests();
-  });
-
   test("strips nav/header/footer/aside, keeps the article body", async () => {
-    const url = "https://strip.example/article";
+    const url = freshUrl("strip");
     const html =
       "<html><body>" +
       '<nav><a href="/">Home</a><a href="/about">About Us</a></nav>' +
@@ -58,7 +67,7 @@ describe("web_fetch", () => {
   });
 
   test("keeps a header inside an article (title/byline survive)", async () => {
-    const url = "https://structured.example/post";
+    const url = freshUrl("structured");
     const html =
       "<html><body>" +
       "<article><header><h1>Real Article Title</h1><span>by Jane Byline</span></header>" +
@@ -72,7 +81,7 @@ describe("web_fetch", () => {
   });
 
   test("strips a page-level header/footer outside any article", async () => {
-    const url = "https://chrome.example/landing";
+    const url = freshUrl("chrome");
     const html =
       "<html><body>" +
       "<header>Global Site Banner</header>" +
@@ -88,7 +97,7 @@ describe("web_fetch", () => {
   });
 
   test("falls back to a minimal strip pass instead of erroring on chrome-only pages", async () => {
-    const url = "https://spa.example/shell";
+    const url = freshUrl("spa");
     // Everything real is site chrome the full pass drops; the only text
     // lives inside a <nav>, so the full extraction pass zeroes out.
     const html = "<html><body><nav><p>App shell loading indicator text.</p></nav></body></html>";
@@ -99,7 +108,7 @@ describe("web_fetch", () => {
   });
 
   test("errors with an HTML-specific message only for HTML bodies", async () => {
-    const url = "https://empty.example/blank";
+    const url = freshUrl("empty");
     const res = await run(url, stubFetch({ [url]: { contentType: "text/plain", body: "   " } }));
 
     expect(res.is_error).toBe(true);
@@ -107,16 +116,60 @@ describe("web_fetch", () => {
     expect(res.text).not.toContain("HTML\u2192markdown");
   });
 
-  test("isJunkLine drops empty bullet markers but keeps a bare dash paragraph", () => {
-    expect(_isJunkLineForTests("-")).toBe(false);
-    expect(_isJunkLineForTests("*")).toBe(true);
-    expect(_isJunkLineForTests("+")).toBe(true);
-    expect(_isJunkLineForTests("- real bullet content")).toBe(false);
-    expect(_isJunkLineForTests("actual paragraph")).toBe(false);
+  test("drops label-less link lines but keeps a bare dash paragraph", async () => {
+    const url = freshUrl("junk");
+    const html =
+      "<html><body><article>" +
+      "<p>Body before.</p>" +
+      '<p><a href="/icon"></a></p>' +
+      '<p><img src="/spacer.gif" alt=""></p>' +
+      "<p>-</p>" +
+      "<p>Body after.</p>" +
+      "</article></body></html>";
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
+
+    const lines = res.text.split("\n").map((l) => l.trim());
+    expect(lines).toContain("Body before.");
+    expect(lines).toContain("Body after.");
+    // A lone-dash paragraph survives; turndown escapes it as `\-`.
+    expect(lines).toContain("\\-");
+    expect(res.text).not.toContain("/icon");
+    expect(res.text).not.toContain("spacer.gif");
+  });
+
+  test("drops an orphaned + bullet, keeps an escaped * paragraph", async () => {
+    // The two are asymmetric only because turndown escapes a lone `*`
+    // (to `\*`) and does not escape a lone `+`. Both halves are asserted
+    // so a turndown upgrade that changes either escape rule fails here
+    // rather than silently altering what the filter eats.
+    const url = freshUrl("markers");
+    const html = "<html><body><article><p>A</p><p>+</p><p>*</p><p>B</p></article></body></html>";
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
+
+    const lines = res.text.split("\n").map((l) => l.trim());
+    expect(lines).toContain("A");
+    expect(lines).toContain("B");
+    expect(lines).not.toContain("+");
+    expect(lines).toContain("\\*");
+  });
+
+  test("drops a label-less link whose href contains parentheses", async () => {
+    const url = freshUrl("parens");
+    const html =
+      "<html><body><article>" +
+      "<p>Body before.</p>" +
+      '<p><a href="/wiki/foo_(bar)"></a></p>' +
+      "<p>Body after.</p>" +
+      "</article></body></html>";
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
+
+    expect(res.text).toContain("Body before.");
+    expect(res.text).toContain("Body after.");
+    expect(res.text).not.toContain("wiki");
   });
 
   test("drops a data: URI image from the output", async () => {
-    const url = "https://data-uri.example/page";
+    const url = freshUrl("data-uri");
     const html =
       "<html><body><article>" +
       "<p>Before the image.</p>" +
@@ -132,7 +185,7 @@ describe("web_fetch", () => {
   });
 
   test("truncates content over the cap and keeps the head", async () => {
-    const url = "https://big.example/long";
+    const url = freshUrl("big");
     const filler = "AAAAAAAAAA".repeat(6000); // 60_000 chars > RAW_MAX_CHARS (50_000)
     const html = `<html><body><article><p>HEADMARKER ${filler} TAILMARKER</p></article></body></html>`;
     const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
@@ -146,8 +199,35 @@ describe("web_fetch", () => {
     expect(res.text).not.toContain("TAILMARKER");
   });
 
+  test("stops reading and cancels the stream at the body cap", async () => {
+    const url = freshUrl("endless");
+    const chunk = new TextEncoder().encode("A".repeat(100_000));
+    let cancelled = false;
+    let pulls = 0;
+    const fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls++;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { headers: { "content-type": "text/plain" } },
+      )) as unknown as typeof globalThis.fetch;
+
+    const res = await run(url, fetch);
+
+    expect(cancelled).toBe(true);
+    // BODY_MAX_CHARS is 2_000_000 — the stream would otherwise never end.
+    expect((res.data as Record<string, unknown>)["input_chars"]).toBe(2_000_000);
+    expect(pulls).toBeLessThan(30);
+  });
+
   test("passes JSON through unconverted", async () => {
-    const url = "https://api.example/data.json";
+    const url = freshUrl("api");
     const body = '{"key":"value","nested":{"n":1}}';
     const res = await run(url, stubFetch({ [url]: { contentType: "application/json", body } }));
 
@@ -157,7 +237,7 @@ describe("web_fetch", () => {
   });
 
   test("passes plain text through unconverted", async () => {
-    const url = "https://plain.example/notes.txt";
+    const url = freshUrl("plain");
     const body = "Just plain text.\nSecond line with * asterisk and _underscore_.";
     const res = await run(url, stubFetch({ [url]: { contentType: "text/plain", body } }));
 
@@ -165,7 +245,7 @@ describe("web_fetch", () => {
   });
 
   test("returns a hint for a cross-host redirect rather than following", async () => {
-    const url = "https://a.example/start";
+    const url = freshUrl("a");
     const dest = "https://b.example/landing";
     const res = await run(url, stubFetch({ [url]: { status: 302, location: dest } }));
 
@@ -175,21 +255,41 @@ describe("web_fetch", () => {
     expect(res.text).toContain("Cross-host redirect");
   });
 
+  test("rejects a javascript: redirect Location without populating cross_host_redirect", async () => {
+    const url = freshUrl("evil-redirect");
+    const res = await run(url, stubFetch({ [url]: { status: 302, location: "javascript:alert(document.cookie)" } }));
+
+    expect(res.is_error).toBe(true);
+    const data = res.data as Record<string, unknown>;
+    expect(data["cross_host_redirect"]).toBeUndefined();
+  });
+
+  test("rejects a redirect that downgrades to http, without offering it as a hint", async () => {
+    // The initial target auto-upgrades http→https; a redirect does not.
+    // A hint would just hand the model a downgraded URL to re-call.
+    const url = freshUrl("downgrade");
+    const res = await run(url, stubFetch({ [url]: { status: 302, location: "http://downgrade.example/landing" } }));
+
+    expect(res.is_error).toBe(true);
+    expect(res.text).toContain("unsupported protocol");
+    expect((res.data as Record<string, unknown>)["cross_host_redirect"]).toBeUndefined();
+  });
+
   test("returns the authenticated-URL hint on 401/403", async () => {
-    const url401 = "https://auth.example/private";
+    const url401 = freshUrl("auth");
     const res401 = await run(url401, stubFetch({ [url401]: { status: 401, body: "nope" } }));
     expect(res401.is_error).toBe(true);
     expect(res401.text).toContain("authenticated/private");
     expect(res401.text).toContain("gh");
 
-    const url403 = "https://auth.example/forbidden";
+    const url403 = freshUrl("forbidden");
     const res403 = await run(url403, stubFetch({ [url403]: { status: 403, body: "nope" } }));
     expect(res403.is_error).toBe(true);
     expect(res403.text).toContain("authenticated/private");
   });
 
   test("marks a repeat fetch of the same URL as cached", async () => {
-    const url = "https://cache.example/doc";
+    const url = freshUrl("cache");
     const html = "<html><body><article><p>Cacheable content here.</p></article></body></html>";
     const fetch = stubFetch({ [url]: { contentType: "text/html", body: html } });
 
