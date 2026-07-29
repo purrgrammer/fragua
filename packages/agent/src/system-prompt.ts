@@ -129,25 +129,22 @@ export function mergeSystemPrompt(base: string, extension: string): string {
   return `${extension}\n\n${base}`;
 }
 
-/** Per-run environment facts surfaced to every node's system prompt so
- * agents know their isolation context — cwd and whether the project's
- * bootstrap command ran. `undefined` omits the block entirely (e.g.
- * single-process runs that don't use a worktree). */
+/** Environment facts surfaced to every node's system prompt.
+ *
+ * Deliberately carries NO per-run identifiers. The rendered block is a
+ * prompt-cache prefix: an absolute worktree path or a run id in here
+ * makes the system prompt unique per run, which invalidates the whole
+ * tools+system cache segment on every single run (providers place one
+ * cache breakpoint at the end of the system prompt, so position within
+ * it does not help). Everything the model needs is either static per
+ * project or discoverable with `pwd`.
+ *
+ * `undefined` omits the block entirely (e.g. single-process runs that
+ * don't use a worktree). */
 export interface RunEnvironment {
-  /** Absolute path the agent is working inside — the resolved
-   * `ExecutionEnvironment.cwd()` for this run. Always set; mirrors
-   * whatever env the executor wired (a `WorktreeEnvironment`'s
-   * `worktreePath`, or a bare `LocalEnvironment`'s `cwd`). Surfaced to
-   * the model as `cwd:` so every llm call sees a uniform
-   * `<environment>` block regardless of env implementation — no
-   * brittle structural probe for `worktreePath`. */
-  cwd: string;
-  /** Opaque session id, stable across the whole run. Surfaced to the
-   * agent as `run_id:` so artifacts can cite their producing run. */
-  runId: string;
   /** The bootstrap command that ran (string form only). Omitted when the
    * project didn't configure one. Presence of this field signals "deps
-   * are installed". */
+   * are installed". Static per project, so it is cache-safe. */
   bootstrapCommand?: string | undefined;
 }
 
@@ -167,9 +164,9 @@ export interface BuildSystemPromptInput {
    * before `contextBlock` so skill advertisements frame the whole call —
    * order: skills → project-conventions → base. */
   skillsCatalog?: string;
-  /** Per-run isolation facts (cwd, bootstrap status). Rendered as an
-   * `<environment>` block at the top so agents know where they are
-   * before reading anything else. */
+  /** Environment facts (bootstrap status). Rendered as an
+   * `<environment>` block at the top so agents know the rules they are
+   * working under before reading anything else. */
   runEnv?: RunEnvironment | undefined;
 }
 
@@ -229,28 +226,26 @@ export function buildSystemPrompt({
 /** Render the `<environment>` block. Kept pure + tiny so it can be
  * unit-tested independently.
  *
- * The ❌ examples interpolate the actual cwd: by reflecting the value
- * the model is tempted to echo back, the negative example breaks the
- * cargo-culted `cd <cwd> && cmd` habit on the very token that anchors
- * it. Positive instruction comes first; the ❌ is illustration, not a
- * standalone rule. */
+ * Every byte here is static per project — see `RunEnvironment` for why
+ * that matters. The block states only what the model cannot infer: the
+ * containment rules are enforced by the runtime (`local-env.ts` refuses
+ * `cd` out of cwd before spawning, and rejects file paths that resolve
+ * outside it), so saying them up front converts a failed tool call into
+ * no tool call. Where cwd actually *is* stays out of the prompt; `pwd`
+ * answers that on the rare occasion it matters. */
 export function renderRunEnvironment(env: RunEnvironment): string {
-  const cwd = env.cwd;
   const lines: string[] = [
     "<environment>",
-    `cwd: ${cwd}`,
-    `run_id: ${env.runId}`,
-    "- Bash starts in cwd; run commands directly.",
-    "  ✅ pwd",
-    `  ❌ cd ${cwd} && pwd`,
-    "- File tools resolve paths relative to cwd.",
-    "  ✅ README.md",
-    `  ❌ ${cwd}/README.md`,
-    "- Do NOT `cd` outside cwd — runtime refuses (`cd /elsewhere && …`).",
-    "- Do NOT use absolute paths outside cwd — path-resolver returns a tool error.",
+    "Work inside the working directory: paths resolve relative to it, the runtime refuses `cd` out of it, and file paths that resolve outside it are rejected.",
   ];
-  if (env.bootstrapCommand) {
-    lines.push(`- \`${env.bootstrapCommand}\` ran here. If you edit dep manifests, re-run before tests.`);
+  // Falsy guard, not `!== undefined`: an empty or whitespace-only bootstrap
+  // command has nothing to tell the model, and `backend.ts` only ever
+  // populates the field when it has a real value. Matches the derivation
+  // guard there so `{ bootstrapCommand: "" }` can't become a dead field that
+  // renders nothing.
+  const bootstrap = env.bootstrapCommand ? escapeBootstrapCommand(env.bootstrapCommand) : "";
+  if (bootstrap) {
+    lines.push(`\`${bootstrap}\` ran here. If you edit dep manifests, re-run before tests.`);
   }
   lines.push("</environment>");
   return lines.join("\n");
@@ -258,6 +253,33 @@ export function renderRunEnvironment(env: RunEnvironment): string {
 
 function escapeAttr(value: string): string {
   return value.replace(/"/g, "&quot;");
+}
+
+/** Make `bootstrapCommand` safe to embed in the `<environment>` block.
+ *
+ * The value comes from `<project>/.fragua/config.yaml`, whose `bootstrap` key
+ * is an unconstrained string, and it lands inside a backtick code span between
+ * the literal `<environment>` / `</environment>` delimiters. Two hazards:
+ *
+ *  - `<` — a value containing `</environment>` would close the block early and
+ *    everything after it would read as top-level system-prompt text.
+ *  - newlines — a YAML block scalar (`bootstrap: |`) is a legal multiline
+ *    string, and its second line lands outside the opening backtick, so the
+ *    tail renders as bare prose inside the block.
+ *
+ * `>` and `"` are deliberately NOT escaped. This block is delivered as text,
+ * never parsed as XML, and in element-text position only `&` and `<` are
+ * structurally significant. Escaping `>` would render the extremely ordinary
+ * `npm run build > /dev/null` as `... &gt; /dev/null` — misdescribing to the
+ * model what actually ran, to buy nothing. (`skills/catalog.ts` has its own
+ * escaper that does escape both; it writes structured markup for skill names,
+ * where neither character is realistic, so the two intentionally differ.) */
+function escapeBootstrapCommand(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
 }
 
 function sha256Hex(contents: string): string {

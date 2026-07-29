@@ -6,22 +6,23 @@ describe("formatCacheHitRate", () => {
 
   test("returns — when all inputs are 0", () => {
     expect(formatCacheHitRate(0, 0, 0)).toBe("—");
-    // Default cacheWrite=0 path.
-    expect(formatCacheHitRate(0, 0)).toBe("—");
+    // cacheWrite is required now — an omitted third argument used to
+    // default to 0 and silently produce the warm-thread ~100% reading.
+    expect(formatCacheHitRate(0, 0, undefined)).toBe("—");
   });
 
   // ── null / undefined inputs ─────────────────────────────────────
 
   test("returns — when cacheRead is null", () => {
-    expect(formatCacheHitRate(null, 100)).toBe("—");
+    expect(formatCacheHitRate(null, 100, 0)).toBe("—");
   });
 
   test("returns — when inputTokens is undefined", () => {
-    expect(formatCacheHitRate(50, undefined)).toBe("—");
+    expect(formatCacheHitRate(50, undefined, 0)).toBe("—");
   });
 
   test("returns — when both arguments are undefined", () => {
-    expect(formatCacheHitRate(undefined, undefined)).toBe("—");
+    expect(formatCacheHitRate(undefined, undefined, 0)).toBe("—");
   });
 
   test("returns — when cacheWriteTokens is null", () => {
@@ -35,19 +36,19 @@ describe("formatCacheHitRate", () => {
   // ── non-finite guards ───────────────────────────────────────────
 
   test("returns — for Infinity cacheRead", () => {
-    expect(formatCacheHitRate(Number.POSITIVE_INFINITY, 0)).toBe("—");
+    expect(formatCacheHitRate(Number.POSITIVE_INFINITY, 0, 0)).toBe("—");
   });
 
   test("returns — for negative Infinity input", () => {
-    expect(formatCacheHitRate(100, Number.NEGATIVE_INFINITY)).toBe("—");
+    expect(formatCacheHitRate(100, Number.NEGATIVE_INFINITY, 0)).toBe("—");
   });
 
   test("returns — for NaN cacheRead", () => {
-    expect(formatCacheHitRate(Number.NaN, 100)).toBe("—");
+    expect(formatCacheHitRate(Number.NaN, 100, 0)).toBe("—");
   });
 
   test("returns — for NaN inputTokens", () => {
-    expect(formatCacheHitRate(50, Number.NaN)).toBe("—");
+    expect(formatCacheHitRate(50, Number.NaN, 0)).toBe("—");
   });
 
   // ── new three-argument formula ──────────────────────────────────

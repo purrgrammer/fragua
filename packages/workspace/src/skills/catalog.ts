@@ -5,6 +5,7 @@
 // $ARGUMENTS, and returns the rendered body — work the model would
 // otherwise spend tokens doing inline against a `read` result.
 
+import { byName } from "@fragua/core";
 import type { Skill, SkillCatalogRecord } from "./types.ts";
 
 const BEHAVIORAL_INSTRUCTIONS = [
@@ -19,7 +20,14 @@ const BEHAVIORAL_INSTRUCTIONS = [
 ].join(" ");
 
 export function renderSkillsCatalog(skills: readonly Skill[]): string {
-  const visible = skills.filter((s) => !s.disabled_reason);
+  // Sort at the point of RENDER, not only at discovery. This block is part of
+  // the provider's prompt-cache prefix, so its bytes must be a function of the
+  // effective skill set alone — not of how the caller happened to assemble the
+  // list. `discoverSkills` already sorts, but that only covers callers that
+  // came through discovery; filtering, merging, or any future assembly path
+  // would otherwise reintroduce an order dependency here with nothing to catch
+  // it. Same reasoning as the backend's final `tools.sort(byName)`.
+  const visible = skills.filter((s) => !s.disabled_reason).sort(byName);
   if (visible.length === 0) return "";
   const entries = visible.map((s) => {
     const lines = [
@@ -57,7 +65,12 @@ export function filterSkillsForNode(
  *      records shadow user-scope records by name. Discovery emits both;
  *      this is where the "project beats user" rule materialises.
  *
- * Returns a fresh array; callers may sort it for deterministic output.
+ * Returns a fresh array in discovery order — **do not re-sort it**. Discovery
+ * already orders byte-wise (`discover.ts`), `filter` preserves that order, and
+ * this catalogue renders into the `<available_skills>` block of the system
+ * prompt, which is part of the provider's prompt-cache prefix. A well-meaning
+ * `localeCompare` here would make that prefix machine-dependent with no type
+ * or lint error to catch it.
  */
 export function filterCatalogueForRun(skills: readonly Skill[], runCwd: string): Skill[] {
   const slice = skills.filter((s) => s.scope === "user" || s.project_cwd === runCwd);

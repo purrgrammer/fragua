@@ -15,6 +15,8 @@
 // defensive (non-number → 0) so the aggregator never NaNs on partial
 // or future-shaped payloads.
 
+import { cacheHitRate } from "./cache-hit-rate.ts";
+
 /** A single `cost.recorded` payload tagged with its event seq. The seq
  * lets `aggregateLiveFrames` drop frames the snapshot already covered
  * once it advances. */
@@ -89,14 +91,13 @@ export function aggregateLiveFrames(frames: ReadonlyArray<LiveCostFrame>, cutoff
     totalCacheReadTokens += f.cacheReadTokens;
     totalCacheWriteTokens += f.cacheWriteTokens;
   }
-  // Denominator includes cacheWrite — see lib/format.ts formatCacheHitRate.
-  const readDenom = totalInputTokens + totalCacheReadTokens + totalCacheWriteTokens;
   return {
     totalCostUsd,
     totalInputTokens,
     totalOutputTokens,
     totalCacheReadTokens,
     totalCacheWriteTokens,
-    cacheHitRate: readDenom > 0 ? totalCacheReadTokens / readDenom : undefined,
+    // See lib/cache-hit-rate.ts for what this counts and why.
+    cacheHitRate: cacheHitRate(totalInputTokens, totalCacheReadTokens, totalCacheWriteTokens),
   };
 }

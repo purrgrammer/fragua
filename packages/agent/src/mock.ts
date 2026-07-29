@@ -3,6 +3,7 @@
 
 import { type FauxResponseStep, fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
 import type { SummariserBackend } from "@fragua/core";
+import type { Skill } from "@fragua/types";
 import type { ExecutionEnvironment, ToolRegistry } from "@fragua/workspace";
 import { PiLlmBackend } from "./backend.ts";
 
@@ -15,6 +16,10 @@ export interface PiMockBackendOptions {
   /** Inject a summariser stub so integration tests can exercise the
    * summary:medium/high path without live pi-ai calls. */
   summariser?: SummariserBackend;
+  /** Discovery superset the backend filters per run. Needed by tests that
+   * assert on the rendered skills catalogue — without it the catalogue is
+   * empty and the skills path is never exercised. */
+  skills?: Skill[];
 }
 
 export interface PiMockBackendHandle {
@@ -41,6 +46,7 @@ export function createPiMockBackend(opts: PiMockBackendOptions): PiMockBackendHa
     defaultModel: { provider: model.provider, model: model.id },
     ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
     ...(opts.summariser !== undefined ? { summariser: opts.summariser } : {}),
+    ...(opts.skills !== undefined ? { skills: opts.skills } : {}),
   });
 
   return {

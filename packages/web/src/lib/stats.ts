@@ -15,6 +15,7 @@
 //      stats route — keeping the two implementations honest.
 
 import type { RunSummary } from "./api.ts";
+import { cacheHitRate } from "./cache-hit-rate.ts";
 
 export interface DashboardStats {
   /** Total number of runs in the input. */
@@ -60,11 +61,9 @@ export interface DashboardStats {
   /** Sum of `cacheWriteTokens` — cache priming across every run. */
   totalCacheWriteTokens: number;
   /**
-   * Prompt-cache hit rate: `totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens)`.
-   * Undefined when there's nothing to divide (no input tokens at all).
-   * Fresh `inputTokens` excludes cache hits on providers that track
-   * them separately (Anthropic), so this ratio approximates how much
-   * of the read context came from cache.
+   * Prompt-cache hit rate — see `lib/cache-hit-rate.ts` for the definition
+   * and why cache writes are in the denominator while output tokens are not.
+   * Undefined when there is nothing to divide.
    */
   cacheHitRate?: number;
   /**
@@ -118,13 +117,8 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
 
   const terminal = succeeded + failed;
   const successRate = terminal === 0 ? 0 : succeeded / terminal;
-  // Cache hit rate denominator includes cacheWrite so the rate reflects the
-  // share of prompt-token-equivalents that came from cache (not just the
-  // share that wasn't fresh input). Without cacheWrite, a warm thread
-  // collapses to ~99.99% — the tile shows a misleading "100%". See
-  // packages/web/src/lib/format.ts → formatCacheHitRate for the rationale.
-  const readDenom = totalInputTokens + totalCacheReadTokens + totalCacheWriteTokens;
-  const cacheHitRate = readDenom > 0 ? totalCacheReadTokens / readDenom : undefined;
+  // See lib/cache-hit-rate.ts for what this counts and why.
+  const cacheHitRateValue = cacheHitRate(totalInputTokens, totalCacheReadTokens, totalCacheWriteTokens);
 
   return {
     totalRuns: runs.length,
@@ -141,7 +135,7 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
     billedTokens: totalInputTokens + totalOutputTokens + totalCacheReadTokens + totalCacheWriteTokens,
     totalCacheReadTokens,
     totalCacheWriteTokens,
-    ...(cacheHitRate !== undefined ? { cacheHitRate } : {}),
+    ...(cacheHitRateValue !== undefined ? { cacheHitRate: cacheHitRateValue } : {}),
     ...(durationCount > 0 ? { avgDurationMs: durationSum / durationCount } : {}),
   };
 }

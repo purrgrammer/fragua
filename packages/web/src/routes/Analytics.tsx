@@ -37,6 +37,7 @@ import { filterWindowOptions, WindowSelector } from "../components/analytics/Win
 import { type WorkflowSelection, WorkflowSelector } from "../components/analytics/WorkflowSelector.tsx";
 import { resolveWindow, type WindowKey } from "../lib/analytics.ts";
 import type { AnalyticsRequest } from "../lib/api.ts";
+import { cacheHitRate } from "../lib/cache-hit-rate.ts";
 import { categoryLabel, formatBucketTooltip } from "../lib/humanize.ts";
 import { useLocale } from "../lib/locale.ts";
 import { queries } from "../lib/queries.ts";
@@ -106,8 +107,8 @@ export function Analytics(): JSX.Element {
       : null,
   };
   const cacheTotal = {
-    current: cacheHitRate(current) ?? undefined,
-    previous: cacheHitRate(previous),
+    current: totalsCacheHitRate(current) ?? undefined,
+    previous: totalsCacheHitRate(previous),
   };
 
   // Build a slice from a clicked time bucket. The bucket spans
@@ -235,13 +236,10 @@ export function Analytics(): JSX.Element {
   );
 }
 
-function cacheHitRate(totals: AnalyticsTotals | null): number | null {
+function totalsCacheHitRate(totals: AnalyticsTotals | null): number | null {
   if (!totals) return null;
-  // Include cacheWrite — see lib/format.ts formatCacheHitRate for rationale.
-  // Without it the rate collapses to ~100% in any run with a warm cache.
-  const denom = totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
-  if (!Number.isFinite(denom) || denom <= 0) return null;
-  return totals.cacheReadTokens / denom;
+  // See lib/cache-hit-rate.ts for what this counts and why.
+  return cacheHitRate(totals.inputTokens, totals.cacheReadTokens, totals.cacheWriteTokens) ?? null;
 }
 
 function nextBucketStart(bucketMs: number, bucket: "hour" | "day" | "month"): number {
