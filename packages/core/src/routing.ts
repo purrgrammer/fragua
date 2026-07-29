@@ -94,6 +94,13 @@ export const GRAPH_RUN_ID_KEY = "graph.run_id";
 /** Operator-supplied dispatch priority, folded from `intent.priority_adjusted`. */
 export const PRIORITY_KEY = "priority";
 
+/** Operator gate notes awaiting delivery to the next llm step. Appended by the
+ * transition planner when a human node consumes `intent.human_input` with a
+ * non-empty note; cleared once an llm step consumes them (completes with a
+ * success outcome). Notes are byte-truncated at write time (see
+ * {@link truncateOperatorNote}); the full text stays on the intent for audit. */
+export const OPERATOR_NOTES_KEY = "internal.operator_notes";
+
 // ── Value-checked union + documentary schema ─────────────────────────────────
 
 /** The goal-gate outcome union. A value-checked TypeBox union exercised by
@@ -119,7 +126,7 @@ function isOutcomeStatus(v: unknown): v is OutcomeStatus {
 // the writer is allowed to spread into `run_state.routing`.
 
 /** The value shape a routing-key family expects. */
-type RoutingValueKind = "number" | "string" | "string-array" | "object" | "outcome-status";
+type RoutingValueKind = "number" | "string" | "string-array" | "object" | "outcome-status" | "operator-notes";
 
 const BUDGET_SCOPES = ["run", "node"] as const;
 const BUDGET_METRICS = ["cost", "tokens"] as const;
@@ -145,6 +152,7 @@ const EXACT_ROUTING_KINDS = new Map<string, RoutingValueKind>([
   [GRAPH_GOAL_KEY, "string"],
   [GRAPH_RUN_ID_KEY, "string"],
   [PRIORITY_KEY, "number"],
+  [OPERATOR_NOTES_KEY, "operator-notes"],
 ]);
 
 /** Resolve a routing key to its expected value kind, or `undefined` when the key
@@ -175,6 +183,8 @@ function matchesRoutingKind(value: unknown, kind: RoutingValueKind): boolean {
       return value !== null && typeof value === "object" && !Array.isArray(value);
     case "outcome-status":
       return isOutcomeStatus(value);
+    case "operator-notes":
+      return Array.isArray(value) && value.every(isOperatorNote);
   }
 }
 
@@ -239,6 +249,7 @@ export const RoutingStruct = Type.Object({
   }),
   timer: Type.Object({ autoResumeAt: Type.Optional(Type.Number()) }),
   context: Type.Object({ goal: Type.Optional(Type.String()), runId: Type.Optional(Type.String()) }),
+  operatorNotes: Type.Array(Type.Object({ gateNodeId: Type.String(), route: Type.String(), note: Type.String() })),
 });
 export type RoutingStruct = Static<typeof RoutingStruct>;
 
@@ -419,4 +430,93 @@ export function getContext(routing: Record<string, unknown>): ContextView {
     goal: routingString(routing, GRAPH_GOAL_KEY),
     runId: routingString(routing, GRAPH_RUN_ID_KEY),
   };
+}
+
+/** One operator gate note awaiting delivery (SPEC §3.4). */
+export interface OperatorNote {
+  /** The human node whose `intent.human_input` carried the note. */
+  gateNodeId: string;
+  /** The route the operator chose alongside the note. */
+  route: string;
+  note: string;
+}
+
+function isOperatorNote(v: unknown): v is OperatorNote {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o["gateNodeId"] === "string" && typeof o["route"] === "string" && typeof o["note"] === "string";
+}
+
+/** Read the pending operator notes. Element-validated; malformed entries and
+ * empty notes degrade to absent, so a tampered bundle loses a note (the intent
+ * still has it) rather than breaking a dispatch. */
+export function readOperatorNotes(routing: Record<string, unknown>): OperatorNote[] {
+  const v = routing[OPERATOR_NOTES_KEY];
+  if (!Array.isArray(v)) return [];
+  return v.filter(isOperatorNote).filter((n) => n.note.length > 0);
+}
+
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
+
+// Byte budgets, not char: the routing column's CHECK is UTF-8 `length < 8192`,
+// so a 2000-char CJK/emoji note (~4-6 KB) would breach a char-only cap.
+export const OPERATOR_NOTE_MAX_BYTES = 2000;
+export const OPERATOR_NOTES_MAX_BYTES = 4096;
+
+const TRUNCATION_MARKER = " [truncated]";
+
+/** Truncate to `maxBytes` UTF-8 bytes on a codepoint boundary. Defaults to
+ * {@link OPERATOR_NOTE_MAX_BYTES}; {@link capOperatorNotes} passes a tighter
+ * budget when the routing column can't seat a full-size note. The marker is
+ * dropped when the budget is too small to be worth spending on it.
+ *
+ * The loop is O(n²) in the note length. That is bounded, not overlooked: a note
+ * only reaches here off `intent.human_input`, and `appendIntent` rejects any
+ * payload at or above `MAX_EVENT_PAYLOAD_BYTES` (4 KiB), so `note` is always a
+ * few thousand bytes. Do not call this on unbounded input. */
+export function truncateOperatorNote(note: string, maxBytes: number = OPERATOR_NOTE_MAX_BYTES): string {
+  if (utf8Bytes(note) <= maxBytes) return note;
+  const marker = maxBytes > utf8Bytes(TRUNCATION_MARKER) * 2 ? TRUNCATION_MARKER : "";
+  const budget = maxBytes - utf8Bytes(marker);
+  if (budget <= 0) return "";
+  let end = note.length;
+  while (end > 0 && utf8Bytes(note.slice(0, end)) > budget) end--;
+  if (end > 0 && end < note.length) {
+    const code = note.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff) end--; // don't split a surrogate pair
+  }
+  if (end === 0) return "";
+  return note.slice(0, end) + marker;
+}
+
+/** Bound the serialized array to `maxBytes`, dropping oldest first. Defaults to
+ * {@link OPERATOR_NOTES_MAX_BYTES}, which is an ABSOLUTE ceiling — callers that
+ * write into `run_state.routing` must pass a budget computed against what the
+ * rest of that run's routing already costs. The routing column's cap is shared
+ * with every other key and a notes array is structural, so the blob spiller
+ * (which only moves `routing.inputs` strings) can never relieve it.
+ *
+ * The newest note is never dropped: if it alone overruns the budget it is
+ * truncated further instead, so an operator correction degrades rather than
+ * vanishing silently or breaching the column. Returns `[]` only when the budget
+ * cannot seat even a one-character note. The full text always stays on
+ * `intent.human_input` for audit. */
+export function capOperatorNotes(notes: OperatorNote[], maxBytes: number = OPERATOR_NOTES_MAX_BYTES): OperatorNote[] {
+  const fits = (list: OperatorNote[]): boolean => utf8Bytes(JSON.stringify(list)) <= maxBytes;
+  const out = [...notes];
+  while (out.length > 1 && !fits(out)) out.shift();
+  if (out.length === 0 || fits(out)) return out;
+
+  // One note left and it still overruns. Shrink the note itself against the room
+  // its envelope leaves. Halve on each miss: JSON escaping (a note of quotes or
+  // newlines doubles in the serialized form) can make the truncated text still
+  // not fit, and halving guarantees the loop reaches 0 rather than spinning.
+  const newest = out[0]!;
+  let room = maxBytes - utf8Bytes(JSON.stringify([{ ...newest, note: "" }]));
+  while (room > 0) {
+    const candidate = truncateOperatorNote(newest.note, room);
+    if (candidate.length > 0 && fits([{ ...newest, note: candidate }])) return [{ ...newest, note: candidate }];
+    room = Math.floor(room / 2);
+  }
+  return [];
 }

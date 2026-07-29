@@ -10,6 +10,7 @@ import {
   ACTIVE_NODES_KEY,
   AUTO_RESUME_AT_KEY,
   budgetOverrideKey,
+  capOperatorNotes,
   GOAL_GATE_RETRIES_KEY,
   GRAPH_GOAL_KEY,
   GRAPH_RUN_ID_KEY,
@@ -26,11 +27,18 @@ import {
   MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY,
   MAX_LOOPS_OVERRIDE_KEY,
   maxRetriesOverrideKey,
+  OPERATOR_NOTE_MAX_BYTES,
+  OPERATOR_NOTES_KEY,
+  OPERATOR_NOTES_MAX_BYTES,
   PROVIDER_RETRY_ATTEMPT_KEY,
   PROVIDER_RETRY_CUMULATIVE_MS_KEY,
+  readOperatorNotes,
   retryCountKey,
   timeoutRetriesKey,
+  truncateOperatorNote,
 } from "../src/routing.ts";
+
+const utf8Len = (s: string): number => new TextEncoder().encode(s).length;
 
 /** Verbatim copy of the pre-wrapper `executor-helpers.readInputMap` — the
  * golden reference the relocated `getInputs` guards must match exactly. */
@@ -140,6 +148,110 @@ describe("routing accessors", () => {
     expect([...g.outcomes.keys()].sort()).toEqual(["review", "verify"]);
     expect(g.retries).toBe(2);
     expect(getGoalGate({ [GOAL_GATE_RETRIES_KEY]: "two" }).retries).toBe(0);
+  });
+
+  test("readOperatorNotes element-validates and drops empty notes", () => {
+    const good = { gateNodeId: "plan_gate", route: "revise", note: "use the v2 schema" };
+    const r = {
+      [OPERATOR_NOTES_KEY]: [
+        good,
+        { gateNodeId: "g2", route: "approve", note: "" }, // empty note → dropped
+        { gateNodeId: "g3", route: "approve" }, // missing note → dropped
+        { gateNodeId: 7, route: "x", note: "y" }, // wrong type → dropped
+        "junk",
+        null,
+      ],
+    };
+    expect(readOperatorNotes(r)).toEqual([good]);
+    expect(readOperatorNotes({ [OPERATOR_NOTES_KEY]: "junk" })).toEqual([]);
+    expect(readOperatorNotes({})).toEqual([]);
+  });
+
+  test("truncateOperatorNote bounds by UTF-8 bytes and marks the cut", () => {
+    expect(truncateOperatorNote("fits")).toBe("fits");
+    const long = "x".repeat(OPERATOR_NOTE_MAX_BYTES + 50);
+    const cut = truncateOperatorNote(long);
+    expect(utf8Len(cut)).toBeLessThanOrEqual(OPERATOR_NOTE_MAX_BYTES);
+    expect(cut).toEndWith(" [truncated]");
+  });
+
+  test("truncateOperatorNote caps multibyte notes by bytes, not char count, on a codepoint boundary", () => {
+    // A 2000-char CJK note is ~6KB; a char-only cap would breach the routing column.
+    const cjk = "験".repeat(OPERATOR_NOTE_MAX_BYTES); // 3 bytes each
+    const cut = truncateOperatorNote(cjk);
+    expect(utf8Len(cut)).toBeLessThanOrEqual(OPERATOR_NOTE_MAX_BYTES);
+    // No U+FFFD from a split multibyte sequence.
+    expect(cut.replace(" [truncated]", "")).not.toContain("�");
+
+    const emoji = "😀".repeat(600); // surrogate pairs, 4 bytes each
+    const cutE = truncateOperatorNote(emoji);
+    expect(utf8Len(cutE)).toBeLessThanOrEqual(OPERATOR_NOTE_MAX_BYTES);
+    expect(cutE.replace(" [truncated]", "")).not.toContain("�");
+  });
+
+  test("capOperatorNotes drops oldest until the serialized array fits, keeping the newest", () => {
+    const notes = Array.from({ length: 30 }, (_, i) => ({
+      gateNodeId: `g${i}`,
+      route: "approve",
+      note: "x".repeat(500),
+    }));
+    const capped = capOperatorNotes(notes);
+    expect(capped.length).toBeLessThan(notes.length);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(OPERATOR_NOTES_MAX_BYTES);
+    // Newest preserved; oldest dropped.
+    expect(capped.at(-1)).toEqual(notes.at(-1)!);
+    expect(capped[0]).not.toEqual(notes[0]);
+    // A single small note is never dropped.
+    const one = notes[0]!;
+    expect(capOperatorNotes([one])).toEqual([one]);
+  });
+
+  test("capOperatorNotes honours an explicit budget tighter than the ceiling", () => {
+    // The planner budgets against what the rest of routing already costs, so the
+    // 4096 ceiling is not the operative bound on a run with a large routing.
+    const notes = Array.from({ length: 6 }, (_, i) => ({
+      gateNodeId: `g${i}`,
+      route: "approve",
+      note: "x".repeat(200),
+    }));
+    const capped = capOperatorNotes(notes, 700);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(700);
+    expect(capped.at(-1)).toEqual(notes.at(-1)!);
+    expect(capped.length).toBeLessThan(notes.length);
+  });
+
+  test("the newest note is truncated, not dropped, when it alone overruns the budget", () => {
+    const only = { gateNodeId: "plan_gate", route: "revise", note: "u".repeat(1500) };
+    const capped = capOperatorNotes([only], 300);
+    expect(capped).toHaveLength(1);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(300);
+    expect(capped[0]!.gateNodeId).toBe("plan_gate");
+    expect(capped[0]!.note.length).toBeGreaterThan(0);
+    expect(capped[0]!.note).toEndWith(" [truncated]");
+  });
+
+  test("a note that JSON-escaping inflates still lands inside the budget", () => {
+    // Every char doubles under JSON.stringify — the naive room calculation
+    // overshoots and the halving retry is what keeps the write legal.
+    const only = { gateNodeId: "g", route: "r", note: '"\n'.repeat(400) };
+    const capped = capOperatorNotes([only], 200);
+    expect(utf8Len(JSON.stringify(capped))).toBeLessThanOrEqual(200);
+  });
+
+  test("a budget too small to seat any note yields an empty list, never a breach", () => {
+    const only = { gateNodeId: "some_rather_long_gate_node_id", route: "approve", note: "x".repeat(100) };
+    expect(capOperatorNotes([only], 10)).toEqual([]);
+    expect(capOperatorNotes([only], 0)).toEqual([]);
+  });
+
+  test("truncateOperatorNote honours an explicit budget and drops the marker when it can't pay for it", () => {
+    expect(utf8Len(truncateOperatorNote("y".repeat(500), 100))).toBeLessThanOrEqual(100);
+    expect(truncateOperatorNote("y".repeat(500), 100)).toEndWith(" [truncated]");
+    // Below ~2x the marker, spending 12 bytes on it would cost more than it says.
+    const tight = truncateOperatorNote("y".repeat(500), 20);
+    expect(utf8Len(tight)).toBeLessThanOrEqual(20);
+    expect(tight).not.toContain("[truncated]");
+    expect(truncateOperatorNote("y".repeat(500), 0)).toBe("");
   });
 
   test("reads legacy flat-dotted bytes without bricking", () => {

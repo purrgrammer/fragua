@@ -13,6 +13,7 @@ import {
   type Node,
   type Outcome,
   readGoalGateRetries,
+  readOperatorNotes,
   substitute,
   UnpopulatedOutputError,
 } from "@fragua/core";
@@ -90,6 +91,18 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
         return { kind: "transition", outcomeStatus: "fail", failureReason: err.message, tokens: 0, costUsd: 0 };
       }
       throw err;
+    }
+    // Operator gate notes (SPEC §3.4): prepend so the correction frames the
+    // task prompt and persists as this node's user message. "Instruction ...
+    // overriding" framing, not "note": a model otherwise sides with the
+    // imperative task prompt below it (observed in smoke testing).
+    const operatorNotes = readOperatorNotes(ctx.routing);
+    if (operatorNotes.length > 0) {
+      const blocks = operatorNotes.map((n) => {
+        const gate = n.route ? `gate "${n.gateNodeId}" (chose route "${n.route}")` : `gate "${n.gateNodeId}"`;
+        return `Operator instruction from ${gate}, overriding any conflicting instruction in the task below:\n${n.note}`;
+      });
+      prompt = `${blocks.join("\n\n")}\n\n${prompt}`;
     }
     const graphGoal = getContext(ctx.routing).goal;
 

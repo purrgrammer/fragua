@@ -17,8 +17,10 @@ import {
   getFrontier,
   getInputs,
   getLimits,
+  OPERATOR_NOTES_KEY,
   type OutputsValue,
   readGoalGateRetries,
+  readOperatorNotes,
   retryCountKey,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
@@ -1671,6 +1673,21 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (next !== undefined) liveRouting = next;
     };
 
+    // Operator gate notes (SPEC §3.4) address the REGION, not one sub-node: every
+    // branch ENTRY sees the notes pending at turn start, no deeper sub-node ever
+    // does. `liveRouting` deliberately never folds the `internal.operator_notes: []`
+    // clear a settled branch commits (only retry counts fold — see above), so
+    // without this strip the override is re-injected into every node of the
+    // closure: a correction aimed at a scan step gets re-applied by the verify
+    // step that was supposed to JUDGE its output. The turn-start value doubles as
+    // the region snapshot, so entries see the same notes whatever the settle order.
+    const branchEntries = new Set(branches);
+    const routingForBranch = (nodeId: string): Readonly<Record<string, unknown>> => {
+      if (branchEntries.has(nodeId)) return liveRouting;
+      if (readOperatorNotes(liveRouting as Record<string, unknown>).length === 0) return liveRouting;
+      return { ...liveRouting, [OPERATOR_NOTES_KEY]: [] };
+    };
+
     // Once a run-level disposition is captured we stop dispatching new
     // successors but keep draining the in-flight pool — bounding overshoot to
     // the branches already running — then commit the disposition at drain.
@@ -1723,8 +1740,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             if (poolBailed) return { nodeId, outcome: { kind: "skipped", nodeId } satisfies BranchOutcome };
             // `liveRouting` read at execution time (not dispatch time) so a
             // successor queued behind the semaphore still sees every
-            // retry-count bump committed while it waited.
-            return { nodeId, outcome: await executeBranchNode(nodeId, freshState, liveRouting, branchTimeoutMs) };
+            // retry-count bump committed while it waited. `routingForBranch`
+            // strips pending operator notes for non-entry sub-nodes.
+            return {
+              nodeId,
+              outcome: await executeBranchNode(nodeId, freshState, routingForBranch(nodeId), branchTimeoutMs),
+            };
           } finally {
             sem.release();
           }

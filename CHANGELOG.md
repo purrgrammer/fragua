@@ -46,6 +46,25 @@ guarantee.
 - MCP tool-name collision errors now name the surviving descriptor and its
   server, not just the dropped one. Both sides share the slugged name, so the
   previous message could not answer "which tool am I actually calling?".
+## [0.10.0] — 2026-07-24
+
+### Changed
+
+- **HITL gate notes now reach the agent.** Answering a `human` step with a
+  free-text note no longer files it as audit-only text: the note is delivered
+  to the next `llm` step, prepended to its prompt as an operator correction
+  (attributed to the gate and the chosen route), and persists in that step's
+  thread — so later same-thread steps and resumes see it too. Multiple gate
+  answers before an `llm` step accumulate in order. Notes are truncated to
+  2000 bytes for delivery, and the accumulated list is bounded by what the rest
+  of the run's routing leaves free — a long-running wide graph drops or shortens
+  a note rather than overrunning the routing column and failing the very commit
+  that answers the gate. The full text always stays on the run's event log.
+  A note answered into a `parallel` region reaches every branch entry and no
+  deeper sub-node, so a correction can't be re-applied by the step that was
+  meant to judge the work it corrected.
+  No workflow changes needed — any `routes:` gate answered with a note gets
+  the behaviour.
 
 ## [0.9.1] — 2026-07-07
 
