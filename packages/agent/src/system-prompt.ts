@@ -245,7 +245,7 @@ export function renderRunEnvironment(env: RunEnvironment): string {
   // renders nothing.
   const bootstrap = env.bootstrapCommand ? escapeBootstrapCommand(env.bootstrapCommand) : "";
   if (bootstrap) {
-    lines.push(`\`${bootstrap}\` ran here. If you edit dep manifests, re-run before tests.`);
+    lines.push(`${codeSpan(bootstrap)} ran here. If you edit dep manifests, re-run before tests.`);
   }
   lines.push("</environment>");
   return lines.join("\n");
@@ -267,6 +267,10 @@ function escapeAttr(value: string): string {
  *    string, and its second line lands outside the opening backtick, so the
  *    tail renders as bare prose inside the block.
  *
+ * Backticks are the third hazard, and are handled by `codeSpan` at the render
+ * site rather than here: the fix is to widen the delimiter, not to alter the
+ * value.
+ *
  * `>` and `"` are deliberately NOT escaped. This block is delivered as text,
  * never parsed as XML, and in element-text position only `&` and `<` are
  * structurally significant. Escaping `>` would render the extremely ordinary
@@ -280,6 +284,26 @@ function escapeBootstrapCommand(value: string): string {
     .replace(/</g, "&lt;")
     .replace(/[\r\n]+/g, " ")
     .trim();
+}
+
+/** Wrap `value` in a code span that `value` itself cannot break out of.
+ *
+ * A bare `` ` `` delimiter is closed by the first backtick in the value, so the
+ * tail renders as unframed prose. CommonMark delimits a code span with a run of
+ * N backticks and permits runs of fewer than N inside it, so widening the fence
+ * to one longer than the value's longest run keeps the span unbroken *without
+ * touching the value* — backticks are ordinary shell syntax (`` `date` ``
+ * substitution, quoted paths), and this span is quoted to the model as what
+ * actually ran, so escaping or stripping them would misdescribe the command the
+ * same way escaping `>` would. A value that starts or ends with a backtick also
+ * needs one space of padding, which CommonMark strips back off.
+ *
+ * Pure function of `value`, so this stays byte-stable across runs. */
+function codeSpan(value: string): string {
+  const longestRun = Math.max(0, ...[...value.matchAll(/`+/g)].map((run) => run[0].length));
+  const fence = "`".repeat(longestRun + 1);
+  const pad = value.startsWith("`") || value.endsWith("`") ? " " : "";
+  return `${fence}${pad}${value}${pad}${fence}`;
 }
 
 function sha256Hex(contents: string): string {

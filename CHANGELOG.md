@@ -42,10 +42,15 @@ guarantee.
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`
   previously closed the block early and had the remainder read as top-level
-  system-prompt text.
+  system-prompt text. A multiline value (`bootstrap: |`) is collapsed onto one
+  line, and the code span around the value now uses a delimiter wider than the
+  longest backtick run inside it, so neither a newline nor a backtick can leave
+  the span and read as unframed prose. The command itself is never altered —
+  `>`, `"` and backticks all reach the model verbatim.
 - MCP tool-name collision errors now name the surviving descriptor and its
   server, not just the dropped one. Both sides share the slugged name, so the
   previous message could not answer "which tool am I actually calling?".
+
 ## [0.10.0] — 2026-07-24
 
 ### Changed
