@@ -546,7 +546,9 @@ export const StatsStrip = memo(function StatsStrip({
   // being undefined means the server reported no cache data at all, which is
   // distinct from a real 0% — keep rendering "—" in that case.
   const cacheHitRateValue: number | undefined =
-    cacheReadTokens === undefined ? undefined : cacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens ?? 0);
+    cacheReadTokens === undefined
+      ? undefined
+      : cacheHitRate({ inputTokens, cacheReadTokens, cacheWriteTokens: cacheWriteTokens ?? 0 });
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="detail-stats">

@@ -239,7 +239,13 @@ export function Analytics(): JSX.Element {
 function totalsCacheHitRate(totals: AnalyticsTotals | null): number | null {
   if (!totals) return null;
   // See lib/cache-hit-rate.ts for what this counts and why.
-  return cacheHitRate(totals.inputTokens, totals.cacheReadTokens, totals.cacheWriteTokens) ?? null;
+  return (
+    cacheHitRate({
+      inputTokens: totals.inputTokens,
+      cacheReadTokens: totals.cacheReadTokens,
+      cacheWriteTokens: totals.cacheWriteTokens,
+    }) ?? null
+  );
 }
 
 function nextBucketStart(bucketMs: number, bucket: "hour" | "day" | "month"): number {

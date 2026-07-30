@@ -101,11 +101,15 @@ describe("aggregateLiveFrames", () => {
     expect(agg.totalOutputTokens).toBe(150);
   });
 
-  test("computes cacheHitRate as cacheReadTokens / (inputTokens + cacheReadTokens)", () => {
-    const frames = [frame(1, 0.01, 200, 50, 100, 0)];
+  test("computes cacheHitRate as cacheRead / (input + cacheRead + cacheWrite)", () => {
+    // cacheWriteTokens must be non-zero, or the two-term and three-term
+    // formulas agree numerically and the test stops discriminating between
+    // them — it would stay green if the write bucket were dropped again.
+    const frames = [frame(1, 0.01, 200, 50, 100, 50)];
     const agg = aggregateLiveFrames(frames, 0);
-    // cacheReadTokens=100, inputTokens=200 → 100 / (200 + 100)
-    expect(agg.cacheHitRate).toBeCloseTo(100 / 300, 6);
+    expect(agg.cacheHitRate).toBeCloseTo(100 / 350, 6);
+    // The two-term reading this denominator exists to reject.
+    expect(100 / 300).not.toBeCloseTo(100 / 350, 6);
   });
 
   test("cacheHitRate is undefined when no input or cache-read tokens are seen", () => {

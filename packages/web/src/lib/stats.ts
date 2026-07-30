@@ -118,7 +118,11 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
   const terminal = succeeded + failed;
   const successRate = terminal === 0 ? 0 : succeeded / terminal;
   // See lib/cache-hit-rate.ts for what this counts and why.
-  const cacheHitRateValue = cacheHitRate(totalInputTokens, totalCacheReadTokens, totalCacheWriteTokens);
+  const cacheHitRateValue = cacheHitRate({
+    inputTokens: totalInputTokens,
+    cacheReadTokens: totalCacheReadTokens,
+    cacheWriteTokens: totalCacheWriteTokens,
+  });
 
   return {
     totalRuns: runs.length,

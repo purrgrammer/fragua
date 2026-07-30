@@ -7,6 +7,19 @@
 // exactly the drift that lets four copies quietly stop agreeing.
 
 /**
+ * The three prompt-token buckets, passed as a record rather than positionally.
+ * They share a type, so a transposition is invisible to TypeScript and yields
+ * a plausible-looking wrong percentage; naming them at every call site is the
+ * only thing that makes the mistake impossible. Every field is required —
+ * omitting `cacheWriteTokens` used to be a silent ~100% reading.
+ */
+export interface CacheTokenCounts {
+  inputTokens: number | null | undefined;
+  cacheReadTokens: number | null | undefined;
+  cacheWriteTokens: number | null | undefined;
+}
+
+/**
  * Share of prompt-token-equivalents served from cache:
  *
  *   cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)
@@ -31,23 +44,24 @@
  * base rate and output is untouched by caching, so the dollar figure is
  * materially lower than this number suggests.
  *
- * Returns `undefined` when any argument is non-finite or the denominator is
- * zero, so callers can distinguish "no data" from a real 0%.
+ * Returns `undefined` when any bucket is missing, non-finite or negative, or
+ * the denominator is zero, so callers can distinguish "no data" from a real
+ * 0%.
  */
-export function cacheHitRate(
-  inputTokens: number | null | undefined,
-  cacheReadTokens: number | null | undefined,
-  cacheWriteTokens: number | null | undefined,
-): number | undefined {
-  if (!isFiniteNumber(inputTokens) || !isFiniteNumber(cacheReadTokens) || !isFiniteNumber(cacheWriteTokens)) {
+export function cacheHitRate(tokens: CacheTokenCounts): number | undefined {
+  const { inputTokens, cacheReadTokens, cacheWriteTokens } = tokens;
+  if (!isTokenCount(inputTokens) || !isTokenCount(cacheReadTokens) || !isTokenCount(cacheWriteTokens)) {
     return undefined;
   }
   const denom = inputTokens + cacheReadTokens + cacheWriteTokens;
   if (denom <= 0) return undefined;
-  const rate = cacheReadTokens / denom;
-  return Number.isFinite(rate) ? rate : undefined;
+  return cacheReadTokens / denom;
 }
 
-function isFiniteNumber(value: number | null | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+/** A token bucket: finite and non-negative. Rejecting negatives here rather
+ *  than checking the computed rate covers the asymmetric case too — one
+ *  negative bucket with a still-positive denominator would otherwise yield a
+ *  negative percentage a tile would happily render. */
+function isTokenCount(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }

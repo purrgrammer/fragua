@@ -37,8 +37,10 @@ export interface CostAggregate {
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
   /**
-   * `totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens)`.
-   * `undefined` when the denominator is zero (no tokens seen yet).
+   * `totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens +
+   * totalCacheWriteTokens)` — see `lib/cache-hit-rate.ts` for why writes are
+   * in the denominator. `undefined` when the denominator is zero (no tokens
+   * seen yet).
    */
   cacheHitRate: number | undefined;
 }
@@ -98,6 +100,10 @@ export function aggregateLiveFrames(frames: ReadonlyArray<LiveCostFrame>, cutoff
     totalCacheReadTokens,
     totalCacheWriteTokens,
     // See lib/cache-hit-rate.ts for what this counts and why.
-    cacheHitRate: cacheHitRate(totalInputTokens, totalCacheReadTokens, totalCacheWriteTokens),
+    cacheHitRate: cacheHitRate({
+      inputTokens: totalInputTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      cacheWriteTokens: totalCacheWriteTokens,
+    }),
   };
 }

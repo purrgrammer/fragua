@@ -6,7 +6,7 @@
 // in the list + detail header. We keep the API tiny and add helpers as
 // new call sites appear rather than pre-building a library.
 
-import { cacheHitRate } from "./cache-hit-rate.ts";
+import { type CacheTokenCounts, cacheHitRate } from "./cache-hit-rate.ts";
 import { defaultLocale } from "./locale.ts";
 import { type TimeInput, toDate } from "./time.ts";
 
@@ -132,24 +132,15 @@ export function formatTokensLong(value: number | null | undefined, opts: NumberF
  * arithmetic lives in one place so the four tiles that show this number
  * cannot drift apart.
  *
- * Note the argument order is `(read, input, write)`, matching the existing
- * call convention rather than the helper's `(input, read, write)`.
+ * Takes the same named record as `cacheHitRate` — all three buckets are
+ * required, and none can be transposed for another.
  *
- * `cacheWriteTokens` is required on purpose. It used to default to `0`, which
- * silently produced the warm-thread ~100% reading that the denominator exists
- * to avoid — a caller that forgot the argument got a plausible, wrong number
- * instead of a type error.
- *
- * Returns `'—'` when any argument is `null` / `undefined` / `NaN` /
- * non-finite, or the denominator is zero. Otherwise a percentage string with
+ * Returns `'—'` for anything the helper can't rate (a missing, non-finite or
+ * negative bucket, or a zero denominator). Otherwise a percentage string with
  * up to one decimal of precision (e.g. `'42%'`, `'42.5%'`, `'100%'`).
  */
-export function formatCacheHitRate(
-  cacheReadTokens: number | null | undefined,
-  inputTokens: number | null | undefined,
-  cacheWriteTokens: number | null | undefined,
-): string {
-  const rate = cacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens);
+export function formatCacheHitRate(tokens: CacheTokenCounts): string {
+  const rate = cacheHitRate(tokens);
   return rate === undefined ? "—" : new Intl.NumberFormat(defaultLocale(), percentFormatOptions()).format(rate);
 }
 
