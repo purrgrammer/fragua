@@ -71,3 +71,30 @@ describe("WebFetchResult cross-host redirect rendering", () => {
     expect(container.textContent).toContain(evil);
   });
 });
+
+describe("WebFetchResult footer", () => {
+  afterEach(() => cleanup());
+
+  function okResult(inputChars: number): ToolResultMessage {
+    return {
+      role: "toolResult",
+      toolCallId: "tc1",
+      toolName: "web_fetch",
+      content: [{ type: "text", text: "# Example Domain" }],
+      details: adapterDetails({ url: "https://ok.example/p", input_chars: inputChars }),
+      isError: false,
+      timestamp: 0,
+    };
+  }
+
+  test("shows a character count for a sub-KB page rather than 0KB", () => {
+    const { container } = render(<WebFetchResult result={okResult(180)} isStreaming={false} />);
+    expect(container.textContent).toContain("180 chars md");
+    expect(container.textContent).not.toContain("0KB");
+  });
+
+  test("shows KB once the page is large enough to round", () => {
+    const { container } = render(<WebFetchResult result={okResult(48_000)} isStreaming={false} />);
+    expect(container.textContent).toContain("47KB md");
+  });
+});

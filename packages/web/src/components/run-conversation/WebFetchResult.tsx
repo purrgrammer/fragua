@@ -198,7 +198,10 @@ function Badge({ tone, children }: { tone: "muted" | "warn"; children: ReactNode
 function Footer({ data }: { data: WebFetchData }): JSX.Element | null {
   const parts: string[] = [];
   if (typeof data.input_chars === "number" && data.input_chars > 0) {
-    parts.push(`${Math.round(data.input_chars / 1024)}KB md`);
+    // Sub-KB pages round to "0KB md", which reads as an empty fetch. Show the
+    // character count instead — example.com is ~180 chars and a real result.
+    const chars = data.input_chars;
+    parts.push(chars < 1024 ? `${chars} chars md` : `${Math.round(chars / 1024)}KB md`);
   }
   if (parts.length === 0) return null;
   return <div className="font-mono text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">{parts.join("  ·  ")}</div>;
