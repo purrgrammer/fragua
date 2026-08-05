@@ -331,4 +331,24 @@ ${Array.from({ length: 600 }, (_, i) => `line ${i}`).join("\n")}`;
     expect(skills[0]!.scope).toBe("user");
     expect(skills[0]!.project_cwd).toBeUndefined();
   });
+
+  // This catalogue renders into the <available_skills> block of the system
+  // prompt, which is part of the provider's prompt-cache prefix. The order
+  // therefore has to be byte-wise and identical on every machine, not
+  // locale-dependent.
+  test("orders by byte value, not locale — uppercase sorts before lowercase", async () => {
+    const cwd = tmp;
+    // `Backend` / `api` is the discriminating pair: byte order puts `B`
+    // (0x42) before `a` (0x61), while `localeCompare` folds case at the
+    // primary level and returns the opposite. A locale-dependent comparator
+    // fails this test; a byte-wise one passes it on every machine.
+    await writeSkill(cwd, ".agents/skills/backend", "Backend", "Server work.");
+    await writeSkill(cwd, ".agents/skills/api", "api", "HTTP surface.");
+
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: "" });
+    expect(skills.map((s) => s.name)).toEqual(["Backend", "api"]);
+    // Guard the guard: if this ever stops disagreeing with locale order the
+    // test has stopped discriminating and needs a new pair.
+    expect(["Backend", "api"].slice().sort((a, b) => a.localeCompare(b))).toEqual(["api", "Backend"]);
+  });
 });

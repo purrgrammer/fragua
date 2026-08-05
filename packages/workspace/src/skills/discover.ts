@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
+import { byName, byString } from "@fragua/core";
 import { parseSkillMd } from "./parse.ts";
 import type { DiscoverOptions, Skill, SkillScope, SkillsConfig } from "./types.ts";
 
@@ -87,11 +88,15 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverRes
   for (const inner of projectByCwdName.values()) for (const s of inner.values()) out.push(s);
   for (const s of userByName.values()) out.push(s);
   // Stable sort: name, then user-before-project, then project_cwd asc.
+  // Byte-wise, NOT `localeCompare`: this catalogue renders into the
+  // `<available_skills>` block of the system prompt, which is part of the
+  // provider's prompt-cache prefix. A locale- or ICU-version-dependent order
+  // would make that prefix differ between machines for the same project.
   out.sort((a, b) => {
-    const byName = a.name.localeCompare(b.name);
-    if (byName !== 0) return byName;
+    const name = byName(a, b);
+    if (name !== 0) return name;
     if (a.scope !== b.scope) return a.scope === "user" ? -1 : 1;
-    return (a.project_cwd ?? "").localeCompare(b.project_cwd ?? "");
+    return byString(a.project_cwd ?? "", b.project_cwd ?? "");
   });
   return { skills: out, warnings };
 }

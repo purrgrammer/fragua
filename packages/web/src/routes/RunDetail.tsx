@@ -39,6 +39,7 @@ import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import { ApiError, type RunDetail as RunDetailT } from "../lib/api.ts";
+import { cacheHitRate } from "../lib/cache-hit-rate.ts";
 import { cn } from "../lib/cn.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { mapStatus } from "../lib/humanize.ts";
@@ -541,11 +542,13 @@ export const StatsStrip = memo(function StatsStrip({
   const cacheWriteTokens: number | undefined =
     detail?.cacheWriteTokens === undefined ? undefined : detail.cacheWriteTokens + liveCacheWriteTokens;
   const billedTokens = inputTokens + outputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
-  // Denominator includes cacheWrite — see lib/format.ts formatCacheHitRate.
-  // A warm thread otherwise reads as ~100% on a single-turn re-dispatch.
-  const cacheHitDenom = inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
-  const cacheHitRate: number | undefined =
-    cacheReadTokens !== undefined && cacheHitDenom > 0 ? cacheReadTokens / cacheHitDenom : undefined;
+  // See lib/cache-hit-rate.ts for what this counts and why. `cacheReadTokens`
+  // being undefined means the server reported no cache data at all, which is
+  // distinct from a real 0% — keep rendering "—" in that case.
+  const cacheHitRateValue: number | undefined =
+    cacheReadTokens === undefined
+      ? undefined
+      : cacheHitRate({ inputTokens, cacheReadTokens, cacheWriteTokens: cacheWriteTokens ?? 0 });
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="detail-stats">
@@ -581,7 +584,7 @@ export const StatsStrip = memo(function StatsStrip({
       <StatTile
         label="Cache"
         loading={loading}
-        numericValue={cacheHitRate}
+        numericValue={cacheHitRateValue}
         format={percentFormatOptions()}
         testId="detail-cache-tile"
         icon={<Database className="size-4" />}

@@ -13,6 +13,7 @@
 //
 // See docs/proposals/mcp-tools.md.
 
+import { byName } from "@fragua/core";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -452,24 +453,53 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
       );
 
       // First-wins dedup: two tools slugging to one name would route ambiguously.
-      const seenNames = new Set<string>();
+      // Maps the slugged name to the server + RAW descriptor name that claimed
+      // it. A bare `Set` can only say "taken" — and both sides of a collision
+      // share the slug, so the error would name the loser twice and leave
+      // "which descriptor am I actually calling?" unanswerable from the log.
+      // Scoped across ALL servers, not per server: two server names that slug
+      // alike (`my-server` / `my_server`) collide in the same namespace.
+      const claimedBy = new Map<string, { server: string; tool: string }>();
       for (const r of connected) {
         if (r.error !== undefined) {
           errors.push({ server: r.name, message: r.error, kind: "unavailable" });
           continue;
         }
         open.push(r.connection);
-        for (const d of r.descriptors) {
+        // Sort before materialising, so the first-wins dedup below is
+        // deterministic: `tools/list` order is the server's choice and can
+        // change under us (a version bump inserting a tool mid-list is
+        // enough), and without a sort here *which* of two colliding names
+        // survives would depend on the server's response order. Cache-prefix
+        // stability is already guaranteed downstream by the backend's final
+        // `tools.sort(byName)`; this sort is what makes the surviving SET
+        // stable, not just its order.
+        //
+        // Sort key is the SLUGGED name — the same space the dedup below keys
+        // on — with the raw name as tiebreaker. Slugging alone is not enough:
+        // colliding descriptors slug to equal keys, so a slug-only comparator
+        // returns 0 for exactly the pairs that matter and a stable sort then
+        // falls back to the server's response order, reintroducing the
+        // non-determinism this sort exists to remove. The raw-name tiebreak
+        // is what actually pins the winner.
+        const descriptors = [...r.descriptors].sort((a, b) => {
+          const sa = mcpToolName(r.name, a.name);
+          const sb = mcpToolName(r.name, b.name);
+          if (sa !== sb) return sa < sb ? -1 : 1;
+          return byName(a, b);
+        });
+        for (const d of descriptors) {
           const tool = toFraguaTool(r.name, d, r.connection.client, callTimeoutMs);
-          if (seenNames.has(tool.name)) {
+          const winner = claimedBy.get(tool.name);
+          if (winner !== undefined) {
             errors.push({
               server: r.name,
-              message: `tool "${tool.name}" collides with an earlier tool of the same name; skipped`,
+              message: `tool "${d.name}" slugs to "${tool.name}", already claimed by "${winner.tool}" from server "${winner.server}"; skipped`,
               kind: "collision",
             });
             continue;
           }
-          seenNames.add(tool.name);
+          claimedBy.set(tool.name, { server: r.name, tool: d.name });
           tools.push(tool);
         }
       }

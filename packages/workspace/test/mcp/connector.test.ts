@@ -18,6 +18,7 @@ import { type McpOAuthStore, StoredOAuthProvider } from "../../src/mcp/oauth.ts"
 const ECHO_SERVER = join(import.meta.dir, "echo-server.ts");
 const BAD_LIST_SERVER = join(import.meta.dir, "bad-list-server.ts");
 const COLLIDE_SERVER = join(import.meta.dir, "collide-server.ts");
+const UNSORTED_SERVER = join(import.meta.dir, "unsorted-server.ts");
 
 function projectWith(config: unknown): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-conn-"));
@@ -215,14 +216,44 @@ describe("createMcpConnector.materialize — live stdio server", () => {
     }
   }, 30_000);
 
+  test("a server's tools/list order does not leak — tools are name-sorted", async () => {
+    // Tool definitions are the first segment of the provider's prompt-cache
+    // prefix, so an order chosen by the server (and free to change on any
+    // version bump) would silently invalidate every downstream segment.
+    const cwd = projectWith({ mcpServers: { u: { command: process.execPath, args: [UNSORTED_SERVER] } } });
+    const set = await createMcpConnector().materialize(["u"], { cwd });
+    try {
+      expect(set.errors).toEqual([]);
+      // Server advertises zebra, apple, mango, banana — in that order.
+      expect(set.tools.map((t) => t.name)).toEqual([
+        "mcp__u__apple",
+        "mcp__u__banana",
+        "mcp__u__mango",
+        "mcp__u__zebra",
+      ]);
+    } finally {
+      await set.dispose();
+    }
+  }, 30_000);
+
   test("two tools slugging to the same name → first wins, collision reported", async () => {
     const cwd = projectWith({ mcpServers: { collide: { command: process.execPath, args: [COLLIDE_SERVER] } } });
     const set = await createMcpConnector().materialize(["collide"], { cwd });
     try {
       expect(set.tools.map((t) => t.name)).toEqual(["mcp__collide__a_b"]);
+      // WHICH descriptor wins is decided by the sort, not by the server's
+      // response order. Both slug to `mcp__collide__a_b`, so the slug keys
+      // tie and the raw-name tiebreak decides: `a-b` (0x2D) sorts before
+      // `a.b` (0x2E), making the second-advertised tool the survivor. Pinned
+      // because the winner is otherwise invisible from the tool name alone.
+      expect(set.tools[0]?.description).toBe("second (collides)");
       expect(set.errors).toHaveLength(1);
       expect(set.errors[0]?.kind).toBe("collision");
-      expect(set.errors[0]?.message).toContain("collides");
+      // The error names BOTH sides — the dropped raw name and the survivor —
+      // so "which descriptor am I actually calling?" is answerable from the log.
+      expect(set.errors[0]?.message).toContain('"a.b"');
+      expect(set.errors[0]?.message).toContain('"a-b"');
+      expect(set.errors[0]?.message).toContain("mcp__collide__a_b");
     } finally {
       await set.dispose();
     }
