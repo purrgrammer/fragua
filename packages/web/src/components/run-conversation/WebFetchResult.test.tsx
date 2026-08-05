@@ -3,13 +3,20 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebFetchResult } from "./WebFetchResult.tsx";
 
+/** The exact envelope `toAgentTool` puts on every tool result. Fixtures build
+ *  it through here so a card that reads `details` at the wrong depth fails
+ *  these tests instead of passing against a shape production never emits. */
+function adapterDetails(data: Record<string, unknown>): Record<string, unknown> {
+  return { fragua_tool: "web_fetch", is_error: false, data, truncated: false, original_length: 0 };
+}
+
 function redirectResult(redirect: string): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId: "tc1",
     toolName: "web_fetch",
     content: [{ type: "text", text: "Cross-host redirect" }],
-    details: { url: "https://a.example/start", cross_host_redirect: redirect },
+    details: adapterDetails({ url: "https://a.example/start", cross_host_redirect: redirect }),
     isError: false,
     timestamp: 0,
   };
@@ -23,7 +30,7 @@ function errorResult(): ToolResultMessage {
     toolCallId: "tc1",
     toolName: "web_fetch",
     content: [{ type: "text", text: "unsupported protocol: javascript:" }],
-    details: { error: "unsupported protocol: javascript:" },
+    details: adapterDetails({ error: "unsupported protocol: javascript:" }),
     isError: true,
     timestamp: 0,
   };

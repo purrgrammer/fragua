@@ -6,7 +6,7 @@
 import type { ToolResultMessage } from "@fragua/types";
 import { CircleAlertIcon, ExternalLinkIcon, Globe } from "lucide-react";
 import type { JSX, ReactNode } from "react";
-import { firstText, PANEL, SECTION_LABEL } from "./tool-result-helpers.ts";
+import { firstText, PANEL, SECTION_LABEL, toolData } from "./tool-result-helpers.ts";
 
 interface WebFetchData {
   url?: string;
@@ -44,7 +44,7 @@ export interface WebFetchResultProps {
 }
 
 export function WebFetchResult({ params, result, isStreaming }: WebFetchResultProps): JSX.Element {
-  const url = (result?.details as WebFetchData | undefined)?.url ?? params?.url;
+  const url = toolData<WebFetchData>(result).url ?? params?.url;
 
   if (isStreaming || !result) {
     return (
@@ -59,10 +59,10 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
     );
   }
 
-  const data = (result.details ?? {}) as WebFetchData;
+  const data = toolData<WebFetchData>(result);
   const text = firstText(result.content);
   const isError = result.isError === true || (data.error !== undefined && data.error !== null);
-  const isRedirect = typeof data.cross_host_redirect === "string";
+  const redirect = data.cross_host_redirect;
 
   if (isError) {
     return (
@@ -88,7 +88,7 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
     );
   }
 
-  if (isRedirect && typeof data.cross_host_redirect === "string") {
+  if (typeof redirect === "string") {
     return (
       <div
         className={
@@ -109,22 +109,22 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
           {url ? <UrlPill url={url} /> : null}
         </div>
         <div className="text-[var(--sw-muted)]">Re-call web_fetch with this URL to follow:</div>
-        {isHttpUrl(data.cross_host_redirect) ? (
+        {isHttpUrl(redirect) ? (
           <a
-            href={data.cross_host_redirect}
+            href={redirect}
             target="_blank"
             rel="noreferrer noopener"
             className="mt-[var(--sw-space-1)] block break-all font-mono text-[length:var(--sw-text-xs)] hover:underline"
             style={{ color: "var(--sw-accent-warn)" }}
           >
-            {data.cross_host_redirect}
+            {redirect}
           </a>
         ) : (
           <div
             className="mt-[var(--sw-space-1)] block break-all font-mono text-[length:var(--sw-text-xs)]"
             style={{ color: "var(--sw-accent-warn)" }}
           >
-            {data.cross_host_redirect}
+            {redirect}
           </div>
         )}
       </div>

@@ -323,4 +323,22 @@ describe("web_fetch", () => {
     expect(typeof data["age_seconds"]).toBe("number");
     expect(second.text).toContain("Cacheable content here.");
   });
+
+  test("a cache hit on a truncated page carries one truncation notice, not two", async () => {
+    // The cache stores the clean head; the notices are re-applied at return
+    // time. Storing the rendered text instead stacked a second footer onto an
+    // already-annotated string, so a hit read "…truncated…" twice.
+    const url = freshUrl("cache-trunc");
+    const body = `<html><body><article><p>${"x".repeat(60_000)}</p></article></body></html>`;
+    const fetch = stubFetch({ [url]: { contentType: "text/html", body } });
+
+    const first = await run(url, fetch);
+    expect((first.data as Record<string, unknown>)["truncated"]).toBe(true);
+    expect(first.text.match(/omitted from tail/g)).toHaveLength(1);
+
+    const second = await run(url, fetch);
+    expect((second.data as Record<string, unknown>)["cached"]).toBe(true);
+    expect(second.text.match(/omitted from tail/g)).toHaveLength(1);
+    expect(second.text).toContain("[cached");
+  });
 });

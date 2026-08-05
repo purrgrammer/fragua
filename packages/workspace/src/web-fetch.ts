@@ -41,8 +41,22 @@ const CACHE_TTL_MS = 15 * 60 * 1000;
 
 interface CacheEntry {
   ts: number;
-  text: string;
+  /** The markdown head with NO notices appended. Caching the rendered text
+   *  instead would stack a second footer onto an already-annotated string on
+   *  every hit, so the head is stored clean and the notices re-applied at
+   *  return time. */
+  head: string;
+  /** Characters dropped from the tail; 0 when the page fit under the cap. */
+  omitted: number;
   data: Record<string, unknown>;
+}
+
+/** Compose the returned text: the markdown head plus whichever notices apply. */
+function renderText(head: string, omitted: number, ageSec?: number): string {
+  const notes: string[] = [];
+  if (omitted > 0) notes.push(`[…truncated, ${omitted} chars omitted from tail]`);
+  if (ageSec !== undefined) notes.push(`[cached ${ageSec}s ago]`);
+  return notes.length > 0 ? `${head}\n\n${notes.join("\n")}` : head;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -102,7 +116,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     const hit = cache.get(cacheKey);
     if (hit) {
       const ageSec = Math.round((now - hit.ts) / 1000);
-      const text = `${hit.text}\n\n[cached ${ageSec}s ago]`;
+      const text = renderText(hit.head, hit.omitted, ageSec);
       return {
         text,
         content: [{ type: "text", text }],
@@ -203,9 +217,9 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     }
 
     const truncated = fullMarkdown.length > RAW_MAX_CHARS;
-    const text = truncated
-      ? `${fullMarkdown.slice(0, RAW_MAX_CHARS)}\n\n[…truncated, ${fullMarkdown.length - RAW_MAX_CHARS} chars omitted from tail]`
-      : fullMarkdown;
+    const omitted = truncated ? fullMarkdown.length - RAW_MAX_CHARS : 0;
+    const head = truncated ? fullMarkdown.slice(0, RAW_MAX_CHARS) : fullMarkdown;
+    const text = renderText(head, omitted);
     const data: Record<string, unknown> = {
       url: resolvedUrl,
       cached: false,
@@ -213,7 +227,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
       truncated,
       input_chars: fullMarkdown.length,
     };
-    cache.set(cacheKey, { ts: now, text, data });
+    cache.set(cacheKey, { ts: now, head, omitted, data });
     return { text, content: [{ type: "text", text }], data };
   },
 };
@@ -328,6 +342,9 @@ function htmlToMarkdown(html: string, strip: "full" | "minimal"): string {
 // greedy tokenisation has no such cliff: the arms are disjoint on their
 // first character, so each position matches at most one and the scan is
 // linear.
+// `replace()`-only. A `/g` regex carries `lastIndex`, but `String.replace`
+// always scans from 0 and resets it — reaching for `.test()` or `.exec()` here
+// instead would make consecutive calls skip lines.
 const JUNK_TOKEN = /!?\[\s*\](?:\((?:\\.|[^)\\])*\))?|\(\s*\)|[|•·+]|\s+/g;
 
 function isJunkLine(line: string): boolean {
