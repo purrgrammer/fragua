@@ -56,6 +56,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { EmptyState } from "@/components/ui/empty-state";
 import type { NodeState, RunDetail, RunMessageRow } from "@/lib/api";
 import { type FanoutTopology, fanoutTopology } from "@/lib/fanout-topology";
+import { stripOutputEnvelopes } from "@/lib/output-envelope";
 import { type StreamingBlock, type StreamingMessage, type ToolStream, UNSCOPED_NODE } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
 
@@ -1100,7 +1101,11 @@ function UserMessageRow({
   message: { content: string | Array<TextContent | { type: string }> };
   testid: string;
 }): JSX.Element | null {
-  const text = flattenText(message.content);
+  // A step's prompt reaches the thread as a user message with every
+  // `${{ outputs.X.f }}` value wrapped in its boundary tags. They are part of
+  // what was sent and stay on the event log; the operator just shouldn't read
+  // 64 hex characters around every interpolated value.
+  const text = stripOutputEnvelopes(flattenText(message.content));
   if (text.length === 0) return null;
   return (
     <AIMessage from="user" data-testid={testid}>
