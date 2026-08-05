@@ -311,18 +311,33 @@ function htmlToMarkdown(html: string, strip: "full" | "minimal"): string {
   return cleanMarkdown(td.turndown(html));
 }
 
-// Lines that survive conversion carrying no readable text: label-less
-// links and images (icon nav rows, alt-less figures), bare separator
-// glyphs, and an orphaned `+` bullet. `-` and `*` are absent because
-// turndown escapes a lone one (`\-`, `\*`); it does not escape `+`.
-// The URL arm is greedy to the line's last `)` so an href containing
-// parens — turndown escapes them, it doesn't drop them — still matches.
-const JUNK_LINE = /^(?:!?\[\s*\](?:\(.*\))?|\(\s*\)|[|•·+]+)+$/;
+// One junk token: a label-less link or image (icon nav rows, alt-less
+// figures), an empty paren pair, a bare separator glyph, or run of
+// whitespace. `-` and `*` are absent because turndown escapes a lone one
+// (`\-`, `\*`); it does not escape `+`. The href arm accepts an escaped
+// paren (`\(`) because turndown escapes parens inside a URL rather than
+// dropping them.
+//
+// Matched as a repeated *token* rather than as one whole-line regex. The
+// whole-line form needs a `+` over an alternation whose arms are
+// individually quantified and mutually ambiguous (`[]()` parses as either
+// the link arm or the empty-paren arm), which backtracks exponentially —
+// and every byte here comes from a fetched page. A line of ~30 `+`
+// characters cost ~800ms, so a 31 KB page of them blocked the event loop
+// for ~13 minutes, synchronously and past any abort signal. Leftmost-
+// greedy tokenisation has no such cliff: the arms are disjoint on their
+// first character, so each position matches at most one and the scan is
+// linear.
+const JUNK_TOKEN = /!?\[\s*\](?:\((?:\\.|[^)\\])*\))?|\(\s*\)|[|•·+]|\s+/g;
+
+function isJunkLine(line: string): boolean {
+  return line.length > 0 && line.replace(JUNK_TOKEN, "").length === 0;
+}
 
 function cleanMarkdown(md: string): string {
   return md
     .split("\n")
-    .filter((line) => !JUNK_LINE.test(line.trim()))
+    .filter((line) => !isJunkLine(line.trim()))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

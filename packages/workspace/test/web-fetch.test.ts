@@ -137,6 +137,27 @@ describe("web_fetch", () => {
     expect(res.text).not.toContain("spacer.gif");
   });
 
+  test("stays linear on a page built to blow up the junk-line filter", async () => {
+    // The filter runs over attacker-controlled bytes, so it must have no
+    // backtracking cliff. Every line here is one character short of junk:
+    // the trailing `X` forces the filter to reject only after exploring
+    // the line. Under the previous whole-line regex each cost ~800ms, so
+    // these 200 lines took ~2.5 minutes; tokenised they are instant. The
+    // budget is loose enough not to flake on a loaded CI box and still
+    // three orders of magnitude below the regression.
+    const url = freshUrl("redos");
+    const line = `${"+".repeat(40)}X`;
+    const html = `<html><body><article>${`<p>${line}</p>`.repeat(200)}<p>Real body.</p></article></body></html>`;
+
+    const started = performance.now();
+    const res = await run(url, stubFetch({ [url]: { contentType: "text/html", body: html } }));
+    const elapsed = performance.now() - started;
+
+    expect(res.is_error).toBeUndefined();
+    expect(res.text).toContain("Real body.");
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
   test("drops an orphaned + bullet, keeps an escaped * paragraph", async () => {
     // The two are asymmetric only because turndown escapes a lone `*`
     // (to `\*`) and does not escape a lone `+`. Both halves are asserted
