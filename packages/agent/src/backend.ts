@@ -20,6 +20,7 @@ import type {
 } from "@fragua/core";
 import {
   ANTHROPIC_OVERLOADED_STATUS,
+  byName,
   compileOutputsToTypeBox,
   fail,
   failHalt,
@@ -83,11 +84,12 @@ export interface PiLlmBackendOptions {
    * `mcp__<server>__<tool>`, connected lazily for the node and torn down when
    * it finishes. Omit to disable MCP entirely (tests / bare daemons). */
   mcpConnector?: McpConnector;
-  /** Per-run isolation facts — worktree path, run id, bootstrap command.
-   * When provided, the backend prepends an `<environment>` block to
-   * every node's system prompt so agents know where they are and which
-   * dependencies are installed. Omit for bare LocalEnvironment runs
-   * that don't need the preamble. */
+  /** Construction-time fallback for the `<environment>` block's bootstrap
+   * line, for callers that know the bootstrap command but wire an env that
+   * doesn't carry it. Only consulted when `deriveRunEnv` finds nothing on
+   * the env; omitting it does NOT suppress the block, which every llm call
+   * renders. Deliberately carries nothing per-run: the block heads the
+   * prompt-cache prefix. */
   runEnv?: RunEnvironment;
   /** Shared "threads we've written to" registry, keyed by `runId::threadId`.
    * Each llm node builds its own `PiLlmBackend` (see
@@ -459,6 +461,17 @@ export class PiLlmBackend implements LlmBackend {
       tools.push(buildEmitOutputTool(outputsDecl));
     }
 
+    // Canonical tool order. Tool definitions are the FIRST segment of the
+    // provider's prompt-cache prefix, so their byte order decides whether
+    // everything after them (system prompt, messages) can be reused at all.
+    // Assembled order is not stable on its own: `allowed_tools` is applied
+    // in the author's order, `abort` / `skill` are force-appended out of
+    // their registry position, and MCP tools arrive per server. Sorting by
+    // name makes the segment a pure function of the effective tool SET, so
+    // two runs that expose the same tools serialise identically no matter
+    // how they got there.
+    tools.sort(byName);
+
     const contextFiles = applyDefaultContextFiles([]);
     const {
       text: contextBlock,
@@ -470,17 +483,13 @@ export class PiLlmBackend implements LlmBackend {
     }
     const perNodeSystemPrompt = input.node.attrs.system_prompt;
     // Derive the per-call RunEnvironment from the resolved env.
-    // `deriveRunEnv` always returns a value (every env has `cwd()`),
-    // so every llm call sees an `<environment>` block in its
-    // system prompt regardless of env implementation. The
-    // construction-time `this.runEnv` is honoured only as a fallback
-    // for callers that wired it explicitly — it can override the
-    // derived bootstrap line without affecting `cwd` / `runId`, which
-    // must reflect the actual env.
-    const effectiveRunEnv: RunEnvironment = deriveRunEnv(effectiveEnv, input.run_id);
-    if (this.runEnv?.bootstrapCommand !== undefined && effectiveRunEnv.bootstrapCommand === undefined) {
-      effectiveRunEnv.bootstrapCommand = this.runEnv.bootstrapCommand;
-    }
+    // `deriveRunEnv` always returns a value, so every llm call sees an
+    // `<environment>` block in its system prompt regardless of env
+    // implementation. The construction-time `this.runEnv` is honoured
+    // only as a fallback for callers that wired it explicitly.
+    const derivedRunEnv = deriveRunEnv(effectiveEnv);
+    const mergedBootstrap = derivedRunEnv.bootstrapCommand ?? this.runEnv?.bootstrapCommand;
+    const effectiveRunEnv: RunEnvironment = mergedBootstrap !== undefined ? { bootstrapCommand: mergedBootstrap } : {};
     const systemPrompt = buildSystemPrompt({
       global: this.systemPrompt,
       perNode: perNodeSystemPrompt,
@@ -1232,20 +1241,14 @@ export function effectiveProviderHttpStatus(
 }
 
 /** Derive a `RunEnvironment` from the execution env. Always returns a
- *  value — every env has `cwd()`, so every llm call gets a uniform
- *  `<environment>` block (no structural `worktreePath` probe that
- *  silently skipped `LocalEnvironment`). A `WorktreeEnvironment`'s own
- *  `runId` / `bootstrapCommand` are picked up when present so the
- *  block surfaces the bootstrap-ran signal. Exported for unit tests. */
-export function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvironment {
-  const wt = env as unknown as {
-    runId?: unknown;
-    bootstrapCommand?: unknown;
-  };
-  const out: RunEnvironment = {
-    cwd: env.cwd(),
-    runId: typeof wt.runId === "string" ? wt.runId : runId,
-  };
+ *  value, so every llm call gets a uniform `<environment>` block
+ *  regardless of env implementation. A `WorktreeEnvironment`'s own
+ *  `bootstrapCommand` is picked up when present so the block surfaces
+ *  the bootstrap-ran signal; a bare `LocalEnvironment` yields an empty
+ *  object and the rules-only block. Exported for unit tests. */
+export function deriveRunEnv(env: ExecutionEnvironment): RunEnvironment {
+  const wt = env as unknown as { bootstrapCommand?: unknown };
+  const out: RunEnvironment = {};
   if (typeof wt.bootstrapCommand === "string") out.bootstrapCommand = wt.bootstrapCommand;
   return out;
 }

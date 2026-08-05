@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseWorkflow } from "@fragua/core";
+import { byName, parseWorkflow } from "@fragua/core";
 import type { WorkflowDetail, WorkflowReader, WorkflowSummary } from "../ports.ts";
 
 export interface FsWorkflowReaderOptions {
@@ -53,7 +53,7 @@ export function createFsWorkflowReader(opts: FsWorkflowReaderOptions): WorkflowR
         });
       }
       // Stable alphabetical ordering — callers can re-sort client-side.
-      out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      out.sort(byName);
       return out;
     },
 

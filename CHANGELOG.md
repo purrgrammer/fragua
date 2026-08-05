@@ -8,6 +8,49 @@ guarantee.
 
 ## [Unreleased]
 
+### Changed
+
+- The `<environment>` block in every `llm` step's system prompt no longer prints
+  the run id, the worktree path, or the ✅/❌ path examples. It now states the
+  containment rules and the bootstrap status only. Providers cache prompts by
+  prefix with a single breakpoint at the end of the system prompt, so the
+  per-run bytes meant no two runs of the same project could share a cached
+  tools+system segment. Agents needing an absolute path can run `pwd`.
+- Tool definitions sent to the provider are now sorted by name — across core,
+  force-included (`abort` / `skill`), MCP, and the synthesised exit tool — and
+  each MCP server's `tools/list` response is sorted before materialisation. The
+  serialised tool segment is now a function of the effective tool set alone,
+  rather than of `allowed-tools` ordering or a server's response order. The
+  skills catalogue is ordered byte-wise for the same reason.
+- **Which MCP tool survives a name collision is now deterministic, and may
+  differ from previous runs.** When two tools on one server slug to the same
+  `mcp__<server>__<tool>` name, the survivor used to be whichever the server
+  listed first; it is now the lower of the two raw names. Deployments with a
+  colliding pair on one server may see calls route to the other tool on the
+  first run after upgrading. The collision warning now names both the dropped
+  tool and the survivor. Each server's descriptors are sorted on the *slugged* name —
+  the key the dedup itself compares — with the raw name as tiebreaker, so
+  colliding entries cannot fall back to response order.
+- The discovered skills catalogue is now ordered byte-wise rather than with
+  `localeCompare`. It renders into the `<available_skills>` block, so a
+  locale- or ICU-version-dependent order made the cache prefix differ between
+  machines for the same project.
+
+### Fixed
+
+- `bootstrapCommand` is XML-escaped before it is interpolated into the
+  `<environment>` block. It comes from an unconstrained string in
+  `<project>/.fragua/config.yaml`, so a value containing `</environment>`
+  previously closed the block early and had the remainder read as top-level
+  system-prompt text. A multiline value (`bootstrap: |`) is collapsed onto one
+  line, and the code span around the value now uses a delimiter wider than the
+  longest backtick run inside it, so neither a newline nor a backtick can leave
+  the span and read as unframed prose. The command itself is never altered —
+  `>`, `"` and backticks all reach the model verbatim.
+- MCP tool-name collision errors now name the surviving descriptor and its
+  server, not just the dropped one. Both sides share the slugged name, so the
+  previous message could not answer "which tool am I actually calling?".
+
 ## [0.10.0] — 2026-07-24
 
 ### Changed

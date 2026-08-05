@@ -51,6 +51,28 @@ To operate on a file in a subdirectory across multiple calls, either:
 
 ---
 
+## 2b. What the agent is told about its environment
+
+Every `llm` node's system prompt opens with a short `<environment>` block
+(`packages/agent/src/system-prompt.ts` `renderRunEnvironment`). It states the
+containment rules — paths resolve relative to cwd, `cd` out of cwd is refused
+before spawn, file paths resolving outside cwd are rejected — and, when the
+project configures `bootstrap`, that the command already ran.
+
+**The block never names the worktree path or the run id.** That is a prompt-cache
+constraint, not an oversight: providers cache by prefix and place a single cache
+breakpoint at the end of the system prompt, so one per-run byte anywhere in it
+invalidates the entire tools+system segment on every run. Agents that genuinely
+need their absolute path run `pwd`; the run id is on every event envelope.
+
+The same constraint governs tool definitions, which precede the system prompt in
+the cache prefix: the backend sorts the final tool array by name, and the MCP
+connector sorts each server's `tools/list` response, so the serialised tool
+segment is a pure function of the effective tool *set* rather than of assembly
+order, `allowed_tools` order, or server response order.
+
+---
+
 ## 3. Worktree lifecycle
 
 | Phase | What happens |

@@ -186,52 +186,38 @@ describe("mergeSystemPrompt", () => {
 describe("renderRunEnvironment", () => {
   test("with bootstrap command", () => {
     const block = renderRunEnvironment({
-      cwd: "/wt/abc",
-      runId: "abc",
       bootstrapCommand: "bun install --frozen-lockfile",
     });
     expect(block).toContain("<environment>");
-    expect(block).toContain("cwd: /wt/abc");
-    expect(block).toContain("run_id: abc");
-    expect(block).toContain("Bash starts in cwd");
-    // ❌ antipattern interpolates the actual cwd — by reflecting the value
-    // the model is tempted to echo, the example breaks the cargo-culted
-    // `cd <cwd> && cmd` habit.
-    expect(block).toContain("❌ cd /wt/abc && pwd");
-    expect(block).toContain("✅ pwd");
-    expect(block).toContain("File tools resolve paths relative to cwd");
-    expect(block).toContain("✅ README.md");
-    expect(block).toContain("❌ /wt/abc/README.md");
+    expect(block).toContain("Work inside the working directory");
+    expect(block).toContain("refuses `cd` out of it");
     expect(block).toContain("`bun install --frozen-lockfile` ran here");
     expect(block).toContain("</environment>");
   });
 
   test("without bootstrap, omits the bootstrap line", () => {
-    const block = renderRunEnvironment({
-      cwd: "/wt/x",
-      runId: "x",
-    });
-    expect(block).toContain("cwd: /wt/x");
-    expect(block).toContain("run_id: x");
-    expect(block).toContain("Bash starts in cwd");
+    const block = renderRunEnvironment({});
+    expect(block).toContain("Work inside the working directory");
     expect(block).not.toContain("ran here");
   });
 
-  test("surfaces run_id alongside cwd", () => {
-    const block = renderRunEnvironment({
-      cwd: "/wt/x",
-      runId: "01jx-this-id-should-appear",
-    });
-    expect(block).toContain("01jx-this-id-should-appear");
-    expect(block).toContain("run_id: 01jx-this-id-should-appear");
+  test("no `worktree:` label — terminology stays env-agnostic", () => {
+    expect(renderRunEnvironment({})).not.toContain("worktree:");
   });
 
-  test("no `worktree:` label — terminology stays env-agnostic", () => {
-    const block = renderRunEnvironment({
-      cwd: "/some/path",
-      runId: "x",
-    });
-    expect(block).not.toContain("worktree:");
+  // The block is a prompt-cache prefix. A run id or an absolute worktree
+  // path in here makes the system prompt unique per run, which invalidates
+  // the whole tools+system cache segment on every run. These two assertions
+  // are the guard — they are the entire point of the block's shape.
+  test("never emits a run id or an absolute path", () => {
+    const block = renderRunEnvironment({ bootstrapCommand: "bun install" });
+    expect(block).not.toContain("run_id");
+    expect(block).not.toContain("cwd:");
+    // No absolute path anywhere: nothing in the block should start a
+    // path-looking token with `/`, and `.fragua/worktrees/<run-id>` in
+    // particular must never appear.
+    expect(block).not.toContain(".fragua/worktrees");
+    expect(block).not.toMatch(/\s\/[A-Za-z]/);
   });
 });
 
@@ -241,7 +227,7 @@ describe("buildSystemPrompt with runEnv", () => {
       global: "you are the agent",
       perNode: undefined,
       contextBlock: "<project-conventions>rules</project-conventions>",
-      runEnv: { cwd: "/wt/abc", runId: "abc" },
+      runEnv: {},
     });
     const envIdx = out.indexOf("<environment>");
     const conventionsIdx = out.indexOf("<project-conventions>");
@@ -259,5 +245,17 @@ describe("buildSystemPrompt with runEnv", () => {
     });
     expect(out).not.toContain("<environment>");
     expect(out.endsWith("base")).toBe(true);
+  });
+
+  test("whole system prompt is byte-identical across two runs of the same node", () => {
+    const build = () =>
+      buildSystemPrompt({
+        global: "you are the agent",
+        perNode: undefined,
+        contextBlock: "<project-conventions>rules</project-conventions>",
+        skillsCatalog: "<available_skills></available_skills>",
+        runEnv: { bootstrapCommand: "bun install" },
+      });
+    expect(build()).toBe(build());
   });
 });

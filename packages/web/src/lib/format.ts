@@ -6,6 +6,7 @@
 // in the list + detail header. We keep the API tiny and add helpers as
 // new call sites appear rather than pre-building a library.
 
+import { type CacheTokenCounts, cacheHitRate } from "./cache-hit-rate.ts";
 import { defaultLocale } from "./locale.ts";
 import { type TimeInput, toDate } from "./time.ts";
 
@@ -126,39 +127,21 @@ export function formatTokensLong(value: number | null | undefined, opts: NumberF
 }
 
 /**
- * Cache hit rate, expressed as the share of total prompt-token-equivalents
- * that came from a cache read:
+ * Percentage rendering of `cacheHitRate` — see `lib/cache-hit-rate.ts` for
+ * why the denominator is what it is. This is presentation only; the
+ * arithmetic lives in one place so the four tiles that show this number
+ * cannot drift apart.
  *
- *   cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)
+ * Takes the same named record as `cacheHitRate` — all three buckets are
+ * required, and none can be transposed for another.
  *
- * Including `cacheWriteTokens` in the denominator counts the prompt-token
- * cost of *writing* to the cache, not just the prompt-token cost of fresh
- * input. A run that paid cache-write rates on a 100k-token system prompt
- * once and then read it back twice is ~67% effective cache utilisation,
- * not 100% — the previous formula (`cacheRead / (input + cacheRead)`)
- * could push to 99.99%+ for any run after the first turn since fresh
- * input collapses to single-digit tokens once the cache is warm. That
- * displays as a misleading "100%" tile.
- *
- * Returns `'—'` when:
- *   - any argument is `null` / `undefined` / `NaN` / non-finite, or
- *   - the denominator is zero.
- *
- * Otherwise returns a percentage string with up to one decimal of
- * precision (e.g. `'42%'`, `'42.5%'`, `'100%'`).
+ * Returns `'—'` for anything the helper can't rate (a missing, non-finite or
+ * negative bucket, or a zero denominator). Otherwise a percentage string with
+ * up to one decimal of precision (e.g. `'42%'`, `'42.5%'`, `'100%'`).
  */
-export function formatCacheHitRate(
-  cacheReadTokens: number | null | undefined,
-  inputTokens: number | null | undefined,
-  cacheWriteTokens: number | null | undefined = 0,
-): string {
-  if (!isFiniteNumber(cacheReadTokens) || !isFiniteNumber(inputTokens)) return "—";
-  if (!isFiniteNumber(cacheWriteTokens)) return "—";
-  const denom = inputTokens + cacheReadTokens + cacheWriteTokens;
-  if (denom === 0) return "—";
-  const rate = cacheReadTokens / denom;
-  if (!Number.isFinite(rate)) return "—";
-  return new Intl.NumberFormat(defaultLocale(), percentFormatOptions()).format(rate);
+export function formatCacheHitRate(tokens: CacheTokenCounts): string {
+  const rate = cacheHitRate(tokens);
+  return rate === undefined ? "—" : new Intl.NumberFormat(defaultLocale(), percentFormatOptions()).format(rate);
 }
 
 /**
