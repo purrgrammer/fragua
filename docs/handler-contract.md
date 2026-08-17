@@ -9,7 +9,7 @@ How to write a handler for a fragua node. Companion to [ARCHITECTURE.md](./ARCHI
 A handler is a pure async function that takes an immutable `HandlerContext` and returns a `HandlerResult`:
 
 ```typescript
-import type { handler } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
 
 const spec: handler.HandlerSpec = {
   kind: "my-node-kind",
@@ -432,7 +432,7 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 ## Example: minimal LLM handler
 
 ```typescript
-import { handler } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
 
 export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
   return {
@@ -440,7 +440,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
     sideEffect: "none",
     maxMs: 30_000,
     handler: async (ctx) => {
-      const name = typeof ctx.routing.name === "string" ? ctx.routing.name : "friend";
+      const name = typeof ctx.args.inputs?.["name"] === "string" ? ctx.args.inputs["name"] : "friend";
       const sentAt = Date.now();
       const res = await ctx.llm.call({
         model: "claude-haiku-4-5",
