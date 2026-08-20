@@ -20,8 +20,14 @@
 
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ExecutionEnvironment, FraguaToolContext, Tool, ToolOutput } from "@fragua/workspace";
+import type { ExecutionEnvironment, FraguaToolContext, Tool, ToolOutput, TruncationPolicy } from "@fragua/workspace";
 import { PathEscapeError, truncate } from "@fragua/workspace";
+
+// Fallback policy for tools that omit `truncation` (they emit rich
+// `content[]`, which buildContent forwards without ever hitting the
+// text-truncation branch). Inert for those tools; present only so the
+// stringified `text` fallback still has a cap if one is ever reached.
+const DEFAULT_TRUNCATION: TruncationPolicy = { max_chars: 200_000, mode: "head_tail" };
 
 /** Anthropic's tool-name regex is `^[a-zA-Z0-9_-]{1,128}$` — `:` is rejected.
  * We encode namespaces with `__` on the wire and reverse at event-bridge time
@@ -46,7 +52,7 @@ interface AdapterDetails {
 
 function buildContent(
   result: ToolOutput,
-  truncationPolicy: Tool["truncation"],
+  truncationPolicy: TruncationPolicy,
 ): {
   content: (TextContent | ImageContent)[];
   truncated: boolean;
@@ -85,7 +91,7 @@ export function toAgentTool(fraguaTool: Tool, env: ExecutionEnvironment, fraguaC
     ): Promise<AgentToolResult<AdapterDetails>> {
       const adaptedOnUpdate = onUpdate
         ? (partial: ToolOutput) => {
-            const built = buildContent(partial, fraguaTool.truncation);
+            const built = buildContent(partial, fraguaTool.truncation ?? DEFAULT_TRUNCATION);
             const data = partial.data as { full_output_path?: string } | undefined;
             onUpdate({
               content: built.content,
@@ -130,7 +136,7 @@ export function toAgentTool(fraguaTool: Tool, env: ExecutionEnvironment, fraguaC
         }
         throw err;
       }
-      const built = buildContent(result, fraguaTool.truncation);
+      const built = buildContent(result, fraguaTool.truncation ?? DEFAULT_TRUNCATION);
       const data = result.data as { full_output_path?: string } | undefined;
       return {
         content: built.content,

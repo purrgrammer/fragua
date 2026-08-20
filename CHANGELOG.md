@@ -10,6 +10,11 @@ guarantee.
 
 ### Changed
 
+- **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
+  workflow that passed `prompt` to get a summary now receives raw markdown and
+  must summarise in the consuming step. HTML→markdown conversion strips site
+  chrome (nav/aside/forms, and header/footer outside an article) so the size cap
+  buys real content, not boilerplate.
 - The `<environment>` block in every `llm` step's system prompt no longer prints
   the run id, the worktree path, or the ✅/❌ path examples. It now states the
   containment rules and the bootstrap status only. Providers cache prompts by
@@ -50,6 +55,9 @@ guarantee.
 - MCP tool-name collision errors now name the surviving descriptor and its
   server, not just the dropped one. Both sides share the slugged name, so the
   previous message could not answer "which tool am I actually calling?".
+- `web_fetch` refuses a redirect whose target is not `https:` instead of handing
+  the URL back as a follow-up, and stops reading a response body once it passes
+  2 MB rather than buffering it whole.
 
 ## [0.10.0] — 2026-07-24
 

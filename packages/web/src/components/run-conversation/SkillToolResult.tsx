@@ -11,6 +11,7 @@
 import type { ToolResultMessage } from "@fragua/types";
 import { BookOpenIcon } from "lucide-react";
 import type { JSX } from "react";
+import { firstText, PANEL, SECTION_LABEL } from "./tool-result-helpers.ts";
 
 export interface SkillToolParams {
   name?: string;
@@ -23,22 +24,6 @@ export interface SkillToolData {
   path?: string;
   content?: string;
   available?: string[];
-}
-
-const SECTION_LABEL = "font-medium uppercase text-[length:var(--sw-text-xs)] text-[var(--sw-muted)] tracking-[0.06em]";
-const PANEL =
-  "rounded-[var(--sw-radius-default)] border border-[var(--sw-border)] bg-[var(--sw-surface)] " +
-  "px-[var(--sw-space-3)] py-[var(--sw-space-2)] text-[length:var(--sw-text-xs)]";
-
-function firstText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  for (const block of content) {
-    if (block && typeof block === "object") {
-      const b = block as { type?: unknown; text?: unknown };
-      if (b.type === "text" && typeof b.text === "string") return b.text;
-    }
-  }
-  return "";
 }
 
 interface SkillToolResultProps {

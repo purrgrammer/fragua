@@ -6,60 +6,28 @@
 import type { ToolResultMessage } from "@fragua/types";
 import { CircleAlertIcon, ExternalLinkIcon, Globe } from "lucide-react";
 import type { JSX, ReactNode } from "react";
-
-interface WebFetchParams {
-  url: string;
-  prompt: string;
-}
+import { firstText, PANEL, SECTION_LABEL, toolData } from "./tool-result-helpers.ts";
 
 interface WebFetchData {
   url?: string;
-  mode?: "raw" | "summarise";
   cached?: boolean;
   upgraded_from_http?: boolean;
   truncated?: boolean;
   cross_host_redirect?: string;
   error?: string;
-  provider?: string;
-  model?: string;
-  input_tokens?: number;
-  output_tokens?: number;
-  cost_usd?: number;
-  duration_ms?: number;
   input_chars?: number;
 }
 
-const SECTION_LABEL = "font-medium uppercase text-[length:var(--sw-text-xs)] text-[var(--sw-muted)] tracking-[0.06em]";
-const PANEL =
-  "rounded-[var(--sw-radius-default)] border border-[var(--sw-border)] bg-[var(--sw-surface)] " +
-  "px-[var(--sw-space-3)] py-[var(--sw-space-2)] text-[length:var(--sw-text-xs)]";
-
-function firstText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  for (const block of content) {
-    if (block && typeof block === "object") {
-      const b = block as { type?: unknown; text?: unknown };
-      if (b.type === "text" && typeof b.text === "string") return b.text;
-    }
+/** `http:` is accepted alongside `https:` because the log is append-only:
+ *  runs recorded before the tool started rejecting non-https redirects
+ *  still render. Anything else stays inert text, never an href. */
+function isHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
   }
-  return "";
-}
-
-function formatCost(usd: number | undefined): string | null {
-  if (typeof usd !== "number" || usd === 0) return null;
-  if (usd < 0.001) return `$${(usd * 1000).toFixed(2)}m`;
-  return `$${usd.toFixed(4)}`;
-}
-
-function formatDuration(ms: number | undefined): string | null {
-  if (typeof ms !== "number") return null;
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatTokens(input: number | undefined, output: number | undefined): string | null {
-  if (typeof input !== "number" && typeof output !== "number") return null;
-  return `${input ?? 0}↑ ${output ?? 0}↓ tok`;
 }
 
 function truncateMid(s: string, max: number): string {
@@ -70,13 +38,13 @@ function truncateMid(s: string, max: number): string {
 }
 
 export interface WebFetchResultProps {
-  params?: Partial<WebFetchParams> | undefined;
+  params?: { url?: string } | undefined;
   result: ToolResultMessage | undefined;
   isStreaming: boolean;
 }
 
 export function WebFetchResult({ params, result, isStreaming }: WebFetchResultProps): JSX.Element {
-  const url = (result?.details as WebFetchData | undefined)?.url ?? params?.url;
+  const url = toolData<WebFetchData>(result).url ?? params?.url;
 
   if (isStreaming || !result) {
     return (
@@ -87,20 +55,14 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
             fetching {truncateMid(url ?? "…", 80)}
           </span>
         </div>
-        {params?.prompt ? (
-          <div className="mt-[var(--sw-space-1)] text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">
-            <span className="opacity-70">prompt: </span>
-            {params.prompt}
-          </div>
-        ) : null}
       </div>
     );
   }
 
-  const data = (result.details ?? {}) as WebFetchData;
+  const data = toolData<WebFetchData>(result);
   const text = firstText(result.content);
   const isError = result.isError === true || (data.error !== undefined && data.error !== null);
-  const isRedirect = typeof data.cross_host_redirect === "string";
+  const redirect = data.cross_host_redirect;
 
   if (isError) {
     return (
@@ -126,7 +88,7 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
     );
   }
 
-  if (isRedirect && typeof data.cross_host_redirect === "string") {
+  if (typeof redirect === "string") {
     return (
       <div
         className={
@@ -147,15 +109,24 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
           {url ? <UrlPill url={url} /> : null}
         </div>
         <div className="text-[var(--sw-muted)]">Re-call web_fetch with this URL to follow:</div>
-        <a
-          href={data.cross_host_redirect}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="mt-[var(--sw-space-1)] block break-all font-mono text-[length:var(--sw-text-xs)] hover:underline"
-          style={{ color: "var(--sw-accent-warn)" }}
-        >
-          {data.cross_host_redirect}
-        </a>
+        {isHttpUrl(redirect) ? (
+          <a
+            href={redirect}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="mt-[var(--sw-space-1)] block break-all font-mono text-[length:var(--sw-text-xs)] hover:underline"
+            style={{ color: "var(--sw-accent-warn)" }}
+          >
+            {redirect}
+          </a>
+        ) : (
+          <div
+            className="mt-[var(--sw-space-1)] block break-all font-mono text-[length:var(--sw-text-xs)]"
+            style={{ color: "var(--sw-accent-warn)" }}
+          >
+            {redirect}
+          </div>
+        )}
       </div>
     );
   }
@@ -165,17 +136,10 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
       <div className="flex flex-wrap items-center gap-[var(--sw-space-2)]">
         <h4 className={SECTION_LABEL}>Result</h4>
         {url ? <UrlPill url={url} /> : null}
-        {data.mode === "raw" ? <Badge tone="muted">raw markdown</Badge> : null}
         {data.cached ? <Badge tone="muted">cached</Badge> : null}
         {data.upgraded_from_http ? <Badge tone="muted">https↑</Badge> : null}
         {data.truncated ? <Badge tone="warn">truncated</Badge> : null}
       </div>
-      {params?.prompt ? (
-        <div className="text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">
-          <span className="opacity-70">prompt: </span>
-          {params.prompt}
-        </div>
-      ) : null}
       <div className={PANEL}>
         <div className="whitespace-pre-wrap text-[length:var(--sw-text)] text-[var(--sw-text)]">{text}</div>
       </div>
@@ -184,21 +148,33 @@ export function WebFetchResult({ params, result, isStreaming }: WebFetchResultPr
   );
 }
 
+const PILL =
+  "inline-flex items-center gap-[2px] rounded-[var(--sw-radius-default)] border border-[var(--sw-border)] px-[var(--sw-space-1)] py-[1px] font-mono text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]";
+
 function UrlPill({ url }: { url: string }): JSX.Element {
-  const display = (() => {
-    try {
-      const u = new URL(url);
-      return `${u.host}${u.pathname.length > 1 ? u.pathname : ""}`;
-    } catch {
-      return url;
-    }
-  })();
+  // On every error path the tool omits `url` from its result, so this
+  // falls back to the raw argument the model asked for — which the tool
+  // may have rejected precisely because it wasn't http(s). A live href
+  // there would put a `javascript:` URL one click away on every replay.
+  // Such a URL is shown verbatim, scheme included: `new URL()` parses it
+  // happily and host/pathname would render it as bare `alert(…)`, hiding
+  // the very thing an operator is looking at the pill to see.
+  if (!isHttpUrl(url)) {
+    return (
+      <span className={PILL} title={url}>
+        <Globe className="size-3" />
+        {truncateMid(url, 60)}
+      </span>
+    );
+  }
+  const u = new URL(url);
+  const display = `${u.host}${u.pathname.length > 1 ? u.pathname : ""}`;
   return (
     <a
       href={url}
       target="_blank"
       rel="noreferrer noopener"
-      className="inline-flex items-center gap-[2px] rounded-[var(--sw-radius-default)] border border-[var(--sw-border)] px-[var(--sw-space-1)] py-[1px] font-mono text-[length:var(--sw-text-xs)] text-[var(--sw-muted)] hover:text-[var(--sw-text)]"
+      className={`${PILL} hover:text-[var(--sw-text)]`}
       title={url}
     >
       <Globe className="size-3" />
@@ -221,15 +197,11 @@ function Badge({ tone, children }: { tone: "muted" | "warn"; children: ReactNode
 
 function Footer({ data }: { data: WebFetchData }): JSX.Element | null {
   const parts: string[] = [];
-  if (data.provider && data.model) parts.push(`${data.provider}/${data.model}`);
-  const tok = formatTokens(data.input_tokens, data.output_tokens);
-  if (tok) parts.push(tok);
-  const dur = formatDuration(data.duration_ms);
-  if (dur) parts.push(dur);
-  const cost = formatCost(data.cost_usd);
-  if (cost) parts.push(cost);
   if (typeof data.input_chars === "number" && data.input_chars > 0) {
-    parts.push(`${Math.round(data.input_chars / 1024)}KB md`);
+    // Sub-KB pages round to "0KB md", which reads as an empty fetch. Show the
+    // character count instead — example.com is ~180 chars and a real result.
+    const chars = data.input_chars;
+    parts.push(chars < 1024 ? `${chars} chars md` : `${Math.round(chars / 1024)}KB md`);
   }
   if (parts.length === 0) return null;
   return <div className="font-mono text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">{parts.join("  ·  ")}</div>;
