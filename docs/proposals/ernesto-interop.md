@@ -1,9 +1,9 @@
 ---
 title: Ernesto interop — two engines, one contract
 summary: "fragua will NOT be the engine powering Ernesto's workflows. The embedding path explored in embeddable-engine.md (making @fragua/{types,core,store} generic enough to host Ernesto's runtime) is dead: the requirement deltas (async multi-tenant store, worker/pod dispatch with durable re-walk resume, registry-based runtime dispatch, dynamic workflows) are architectural, not parametric, and warrant two implementations. What the two systems share instead is a CONTRACT: (1) the fact.* event taxonomy + envelope — Ernesto already borrowed fragua's names ad hoc and extended them; formalize it as a small versioned spec both implement; (2) one concrete integration point — an Ernesto step kind 'fragua' whose handler executes a whole fragua run as a black-box step, mirroring Ernesto's own dynamic-workflow precedent (a foreign runtime as ONE step). The v1 runner spec is a SUBPROCESS: `fragua ci --json` (ships on main today), spawned per dispatch. The child-process boundary is a feature — it dissolves the three hard problems an in-process embed would have to engineer around: runtime mismatch (fragua runs under its own Bun, zero Node-portability work), env confinement (a fresh parent-constructed child env, so a workflow bash step can't read the pod's secrets — the sharp security risk, gone), and crash isolation (signal→kill). The in-process embed (the @fragua/engine library: packaging pipeline + Bun split + node:sqlite + embed API + injected ExecutionEnvironment) is DEFERRED — earned only if/when subprocess limits bite, not speculatively. The one genuine fragua-side v1 prerequisite: run-level typed outputs (structured-outputs.md §11 — a declared workflow `outputs:` block, typed-partial egress envelope), which `fragua ci` emits as terminal JSON; a step downstream can't bind is a DAG dead-end. Known gap: run-outputs project from llm producers only (tool-terminal workflows can't yet surface typed results — structured-outputs §10#3). (3) Convergence candidates (graph-as-data authoring, pause taxonomy). SKETCH — the taxonomy spec's home and the cross-engine token shape are open."
-status: draft
-maturity: sketch
-last-reviewed: 2026-06-15
+status: in-progress
+maturity: partial
+last-reviewed: 2026-08-24
 ---
 
 # Ernesto interop
