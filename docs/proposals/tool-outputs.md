@@ -11,8 +11,12 @@ last-reviewed: 2026-06-16
 > **Status: proposal, UNREVIEWED.** Produced by a `propose` run that paused on
 > its cost budget at the `feasibility` node before a human read it, and checked
 > in as-is so the design isn't lost. Treat every claim as a candidate, not a
-> settled decision — in particular the `$FRAGUA_OUTPUT` scratch-file lifecycle
-> and the `SIGKILL` leak deferred behind a Door. Tracked by #80.
+> settled decision. Its own arbitration pass returned `revise` from three of
+> five lenses and left four blocking items unresolved, recorded alongside it in
+> [`tool-outputs.critique.md`](tool-outputs.critique.md). B2 is the one to read
+> first: the retained-fd read-back cannot see an atomic save
+> (`cmd > tmp && mv tmp "$FRAGUA_OUTPUT"`), so the most common safe write idiom
+> is misreported as `no_emission`. Tracked by #80.
 >
 > **Status: proposal.** Additive. Adds `outputs:` on `tool` steps and a single
 > emission channel (`$FRAGUA_OUTPUT`, a scratch-file path passed through env,
