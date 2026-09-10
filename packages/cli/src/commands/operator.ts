@@ -368,6 +368,11 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
   // The "why" for a blocked/terminal run — the last relevant fact.
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
+    // A resume CONSUMES the pause it woke from: any `fact.run_paused` earlier in
+    // the log is spent history, not the current "why". Without this stop the scan
+    // walks straight past the resume and reports a long-dead reason on a running
+    // run (a 20h-stale provider_error on a run that re-authenticated and moved on).
+    if (e.type === "fact.run_resumed") break;
     if (e.type === "fact.run_paused") {
       const { reason, ...rest } = e.payload as { reason?: string };
       console.log(`  paused:   ${chalk.yellow(reason ?? "?")} ${chalk.dim(JSON.stringify(rest))}`);
