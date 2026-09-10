@@ -9,7 +9,7 @@ How to write a handler for a fragua node. Companion to [ARCHITECTURE.md](./ARCHI
 A handler is a pure async function that takes an immutable `HandlerContext` and returns a `HandlerResult`:
 
 ```typescript
-import type { handler } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
 
 const spec: handler.HandlerSpec = {
   kind: "my-node-kind",
@@ -89,7 +89,7 @@ return {
   cacheReadTokens?: 0,
   cacheWriteTokens?: 0,
   modelName?: "gemini-1.5-pro",         // for per-model rollups
-  outputs?: Record<string, unknown>,    // structured outputs from emit_output (llm steps with `outputs:` declared); present iff the node emitted a valid struct
+  outputs?: OutputsValue,               // structured outputs from emit_output (llm steps with `outputs:` declared); present iff the node emitted a valid struct. OutputsValue = Record<string, string|number|boolean|null|array|object> — the restricted recursive type from packages/core/src/types/outputs.ts, not arbitrary unknown
   operatorNote?: "use the v2 schema",   // human handler only: the non-empty note from ctx.humanInput, forwarded for delivery to the next llm step (see yield_human)
 };
 ```
@@ -247,7 +247,7 @@ The agent-callable tool surface is deliberately minimal:
 Tool names are bare identifiers — no `local:` prefix, no namespace.
 The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
 
-Less common operations (`git_read` / `apply_patch` / `web_fetch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. The tools are deliberately powerful — streaming output,
+Less common operations (`git_read` / `apply_patch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. `web_fetch` is a distinct registered tool (`packages/workspace/src/web-fetch.ts`) that is **disabled by default** — opt in per node via `allowed-tools: [web_fetch]`; without the explicit opt-in the LLM will not see it. The tools are deliberately powerful — streaming output,
 image content, rich diffs, fuzzy edits, atomic writes, native walks —
 so an agent never has to pick between a dozen tools that all do
 variants of the same thing.
@@ -432,7 +432,7 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 ## Example: minimal LLM handler
 
 ```typescript
-import { handler } from "@fragua/core";
+import * as handler from "@fragua/core/handler";
 
 export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
   return {
@@ -440,7 +440,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
     sideEffect: "none",
     maxMs: 30_000,
     handler: async (ctx) => {
-      const name = typeof ctx.routing.name === "string" ? ctx.routing.name : "friend";
+      const name = typeof ctx.args.inputs?.["name"] === "string" ? ctx.args.inputs["name"] : "friend";
       const sentAt = Date.now();
       const res = await ctx.llm.call({
         model: "claude-haiku-4-5",

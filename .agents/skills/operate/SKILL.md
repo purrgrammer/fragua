@@ -76,7 +76,7 @@ fragua runs inbox                                        # runs awaiting an oper
 fragua runs status <id>                                  # one run: lifecycle + outcome + the why (pause/halt reason, quarantine orphans, HITL gate)
 fragua runs tail <id> [--full]                           # follow an existing run's event log to terminal (live; backfills the last 200 events, --full for the whole log)
 fragua runs wait <id...> | --workflow <name> | --all-running   # block until a SET of runs settles; one line per run per change
-     [--timeout <dur>] [--settle terminal|blocked]       #   exit 0 (all completed) / banded (halt/quarantine) / 60 (blocked) / 75 (timeout)
+     [--timeout <dur>] [--settle terminal|blocked]       #   exit 0 (all completed) / banded (halt 10–18, paused 30–39, quarantine 50–51) / 60 (paused_human) / 75 (timeout)
 fragua runs diff <id> [--against base|previous|<eventIdx>] [--snap <eventIdx>] [--path <p>]   # review the change
 ```
 

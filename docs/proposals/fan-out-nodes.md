@@ -1,8 +1,8 @@
 ---
 title: Fan-out nodes (Model A) — intra-run parallel fan-out on the log
 summary: "A `parallel` node opens a take-all set of branches that run concurrently within one run and converge at a single join. A branch is a sub-pipeline — one node, or several distinct-named read-class nodes routing among themselves to the join. Execution is an on-log reactive frontier: the active set is a lineage-tagged set of in-flight nodes folded from the log; each sub-node completion is a durable fact whose successor the executor dispatches via the existing planTransition; a semaphore bounds in-flight sub-nodes. Commits serialize through the run's single committer (the linearization invariant — concurrency.md), so replay is deterministic over one linear log and resume re-dispatches the exact in-flight frontier (per-sub-node recovery). The join reads each branch terminal's typed outputs fail-closed (structured outputs, shipped). MVP: static sectioning with multi-node read-class branches + a bounded-concurrency semaphore. Deferred-but-sound: map, nested parallel, HITL-in-branch."
-status: proposed
-maturity: designed
+status: shipped
+maturity: shipped
 last-reviewed: 2026-06-07
 ---
 
