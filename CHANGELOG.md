@@ -13,8 +13,9 @@ guarantee.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
-  chrome (nav/aside/forms, and header/footer outside an article) so the size cap
-  buys real content, not boilerplate.
+  chrome (nav/aside/forms, and header/footer outside an article, main, or
+  section) so the size cap buys real content, not boilerplate. Private,
+  loopback and link-local addresses are refused.
 - The `<environment>` block in every `llm` step's system prompt no longer prints
   the run id, the worktree path, or the ✅/❌ path examples. It now states the
   containment rules and the bootstrap status only. Providers cache prompts by

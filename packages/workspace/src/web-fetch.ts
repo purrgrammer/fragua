@@ -59,7 +59,52 @@ function renderText(head: string, omitted: number, ageSec?: number): string {
   return notes.length > 0 ? `${head}\n\n${notes.join("\n")}` : head;
 }
 
+// Hostnames and literal addresses that name the machine fragua runs on, or the
+// network it sits inside. The tool fetches whatever URL a model hands it, and a
+// model reading a fetched page can be talked into handing over another one, so
+// the reachable surface has to stop at the public internet.
+//
+// LIMIT, deliberate: this checks the URL's own hostname. A public name that
+// RESOLVES to a private address still passes — closing that needs the resolved
+// IP checked on every hop, which `fetch` does not expose, and even then races
+// its own DNS lookup. This bars the direct forms (literal IPs, `localhost`,
+// `.internal`); it is not a rebinding defense.
+const PRIVATE_HOST_SUFFIXES = [".local", ".internal", ".localhost"];
+
+function isPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1" || h === "0.0.0.0" || h === "::") return true;
+  if (PRIVATE_HOST_SUFFIXES.some((s) => h.endsWith(s))) return true;
+  // IPv4-mapped IPv6 (::ffff:10.0.0.1) carries the v4 address in its tail.
+  const v4 = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 10 || a === 127 || a === 0) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  }
+  // Unique-local (fc00::/7) and link-local (fe80::/10) v6.
+  return /^f[cd]/.test(h) || /^fe[89ab]/.test(h);
+}
+
+// Bounds the cache so a run fetching many distinct URLs inside the TTL window
+// can't retain them all — each entry holds up to RAW_MAX_CHARS of markdown.
+const MAX_CACHE_ENTRIES = 256;
+
 const cache = new Map<string, CacheEntry>();
+
+/** Drop the oldest entries until there is room for one more. Insertion order is
+ *  Map iteration order and entries are written once, so the first key is the
+ *  oldest — no scan for a minimum. */
+function evictOldest(): void {
+  while (cache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next();
+    if (oldest.done === true) return;
+    cache.delete(oldest.value);
+  }
+}
 
 function pruneCache(now: number): void {
   for (const [k, v] of cache) {
@@ -108,6 +153,9 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     }
     if (target.protocol !== "https:") {
       return errorResult(`unsupported protocol: ${target.protocol}`);
+    }
+    if (isPrivateHost(target.hostname)) {
+      return errorResult(`refusing to fetch ${target.toString()} — private or loopback address`);
     }
 
     const now = Date.now();
@@ -158,7 +206,17 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
           return errorResult(`malformed Location header at ${current.toString()}`);
         }
         if (next.protocol !== "https:") {
+          // Deliberately does NOT name the destination: handing back a
+          // downgraded URL just invites the model to re-call it. Pinned by
+          // "rejects a redirect that downgrades to http, without offering it
+          // as a hint".
           return errorResult(`unsupported protocol: ${next.protocol}`);
+        }
+        if (isPrivateHost(next.hostname)) {
+          // Named, unlike the downgrade above — an https host is not a URL the
+          // model is being nudged to retry, and the operator needs to see which
+          // internal host a page tried to reach.
+          return errorResult(`redirect to ${next.host} refused — private or loopback address`);
         }
         if (next.host !== current.host) {
           const text =
@@ -237,8 +295,13 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
       cached: false,
       upgraded_from_http: upgradedFromHttp,
       truncated,
+      // Pre-cap length: what the page converted to. `returned_chars` is what the
+      // model actually received — on a truncated page the two differ, and it is
+      // the second one that answers "how much context did this cost".
       input_chars: fullMarkdown.length,
+      returned_chars: head.length,
     };
+    evictOldest();
     cache.set(cacheKey, { ts: now, head, omitted, data });
     return { text, content: [{ type: "text", text }], data };
   },
@@ -328,8 +391,11 @@ function htmlToMarkdown(html: string, strip: "full" | "minimal"): string {
     if (removeTags.has(name)) return true;
     if (strip !== "full") return false;
     if ((name === "header" || name === "footer") && !hasContentAncestor(node)) return true;
-    const role = attr(node, "role")?.toLowerCase();
-    return (role !== undefined && REMOVE_ROLES.has(role)) || attr(node, "aria-hidden") === "true";
+    // `role` is a space-separated list and may carry surrounding whitespace, so
+    // a raw `has()` on the whole attribute misses `role=" navigation "` and
+    // `role="navigation main"` — both of which are still site chrome.
+    const roles = attr(node, "role")?.toLowerCase().trim().split(/\s+/) ?? [];
+    return roles.some((r) => REMOVE_ROLES.has(r)) || attr(node, "aria-hidden") === "true";
   });
   // Drop data: URI images and unwrap data: URI anchors at the DOM layer
   // (via addRule, which outranks turndown's built-in image/link rules) —

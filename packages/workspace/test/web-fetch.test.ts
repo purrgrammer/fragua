@@ -342,6 +342,94 @@ describe("web_fetch", () => {
     expect(second.text).toContain("[cached");
   });
 
+  test("refuses private, loopback and link-local targets", async () => {
+    const never = (() => {
+      throw new Error("fetch must not be reached for a private target");
+    }) as unknown as typeof globalThis.fetch;
+
+    for (const host of [
+      "localhost",
+      "127.0.0.1",
+      "10.1.2.3",
+      "192.168.0.1",
+      "172.16.9.9",
+      "169.254.169.254", // cloud instance metadata
+      "[::1]",
+      "[fd00::1]",
+      "wiki.internal",
+      "printer.local",
+    ]) {
+      const res = await webFetchTool.execute({ url: `https://${host}/x` }, env, { fraguaContext: ctx(never) });
+      expect(res.is_error).toBe(true);
+      expect(res.text).toContain("private or loopback");
+    }
+
+    // A public address that merely looks adjacent must still be allowed.
+    for (const host of ["172.32.0.1", "11.0.0.1", "example.com"]) {
+      const url = `https://${host}/ok`;
+      const fetch = stubFetch({ [url]: { contentType: "text/html", body: "<article><p>Public.</p></article>" } });
+      const res = await webFetchTool.execute({ url }, env, { fraguaContext: ctx(fetch) });
+      expect(res.is_error).toBeUndefined();
+    }
+  });
+
+  test("a redirect into a private address is refused and names the host", async () => {
+    const url2 = freshUrl("redir-private");
+    const fetch2 = stubFetch({ [url2]: { status: 302, location: "https://169.254.169.254/latest/meta-data" } });
+    const res2 = await run(url2, fetch2);
+    expect(res2.is_error).toBe(true);
+    expect(res2.text).toContain("private or loopback");
+    expect(res2.text).toContain("169.254.169.254");
+  });
+
+  test("reports the returned length, not the pre-cap length, on a truncated page", async () => {
+    const url = freshUrl("returned-chars");
+    const body = `<html><body><article><p>${"x".repeat(60_000)}</p></article></body></html>`;
+    const fetch = stubFetch({ [url]: { contentType: "text/html", body } });
+
+    const res = await run(url, fetch);
+    const data = res.data as Record<string, unknown>;
+    expect(data["truncated"]).toBe(true);
+    // input_chars is what the page converted to; returned_chars is what the
+    // model saw, and only the second is a fair proxy for context cost.
+    expect(data["returned_chars"]).toBe(50_000);
+    expect(data["input_chars"] as number).toBeGreaterThan(50_000);
+  });
+
+  test("strips chrome whose role is padded or composite", async () => {
+    const url = freshUrl("roles");
+    const body =
+      "<html><body>" +
+      '<div role=" navigation ">Padded nav junk</div>' +
+      '<div role="navigation main">Composite nav junk</div>' +
+      "<article><p>The real body.</p></article>" +
+      "</body></html>";
+    const fetch = stubFetch({ [url]: { contentType: "text/html", body } });
+
+    const res = await run(url, fetch);
+    expect(res.text).toContain("The real body.");
+    expect(res.text).not.toContain("Padded nav junk");
+    expect(res.text).not.toContain("Composite nav junk");
+  });
+
+  test("the cache does not grow past its entry cap", async () => {
+    // Each entry holds up to RAW_MAX_CHARS, so an unbounded map is a slow leak
+    // in a long-running daemon. Fetch more distinct URLs than the cap, then
+    // confirm the earliest is gone by re-fetching it against a stub that would
+    // not be consulted on a hit.
+    const first = freshUrl("cache-cap-first");
+    const body = "<article><p>Cache cap body.</p></article>";
+    await run(first, stubFetch({ [first]: { contentType: "text/html", body } }));
+
+    for (let i = 0; i < 300; i++) {
+      const u = freshUrl("cache-cap-fill");
+      await run(u, stubFetch({ [u]: { contentType: "text/html", body } }));
+    }
+
+    const res = await run(first, stubFetch({ [first]: { contentType: "text/html", body } }));
+    expect((res.data as Record<string, unknown>)["cached"]).toBe(false);
+  });
+
   test("markup nested past the engine's stack depth returns an error, not a throw", async () => {
     // turndown recurses over the parsed tree; 20k nested elements is ~160KB,
     // well under BODY_MAX_CHARS, and overflows the stack. The adapter rethrows

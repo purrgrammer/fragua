@@ -16,6 +16,7 @@ interface WebFetchData {
   cross_host_redirect?: string;
   error?: string;
   input_chars?: number;
+  returned_chars?: number;
 }
 
 /** `http:` is accepted alongside `https:` because the log is append-only:
@@ -197,10 +198,13 @@ function Badge({ tone, children }: { tone: "muted" | "warn"; children: ReactNode
 
 function Footer({ data }: { data: WebFetchData }): JSX.Element | null {
   const parts: string[] = [];
-  if (typeof data.input_chars === "number" && data.input_chars > 0) {
+  // What the model received, not what the page converted to. On a truncated
+  // page `input_chars` is the pre-cap length, so rendering it overstates the
+  // context this fetch cost. Older results carry only `input_chars`.
+  const chars = typeof data.returned_chars === "number" ? data.returned_chars : data.input_chars;
+  if (typeof chars === "number" && chars > 0) {
     // Sub-KB pages round to "0KB md", which reads as an empty fetch. Show the
     // character count instead — example.com is ~180 chars and a real result.
-    const chars = data.input_chars;
     parts.push(chars < 1024 ? `${chars} chars md` : `${Math.round(chars / 1024)}KB md`);
   }
   if (parts.length === 0) return null;
