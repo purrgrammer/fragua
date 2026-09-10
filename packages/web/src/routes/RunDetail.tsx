@@ -41,6 +41,7 @@ import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import { ApiError, type RunDetail as RunDetailT } from "../lib/api.ts";
 import { cacheHitRate } from "../lib/cache-hit-rate.ts";
 import { cn } from "../lib/cn.ts";
+import { diffNeedsRefetch } from "../lib/diffRefresh.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { mapStatus } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
@@ -149,30 +150,13 @@ export function RunDetail(): JSX.Element {
   const prevNodeStatesRef = useRef<typeof detailOverlay.nodeStates>(detailOverlay.nodeStates);
   const prevOverlayStatusRef = useRef<typeof detailOverlay.status>(detailOverlay.status);
   useEffect(() => {
-    const prevNodeStates = prevNodeStatesRef.current;
-    const prevStatus = prevOverlayStatusRef.current;
+    const prev = { nodeStates: prevNodeStatesRef.current, status: prevOverlayStatusRef.current };
     prevNodeStatesRef.current = detailOverlay.nodeStates;
     prevOverlayStatusRef.current = detailOverlay.status;
 
-    const runTerminated =
-      detailOverlay.status !== null &&
-      detailOverlay.status !== prevStatus &&
-      (detailOverlay.status === "success" || detailOverlay.status === "fail" || detailOverlay.status === "canceled");
-
-    let nodeFinished = false;
-    for (const [key, entry] of detailOverlay.nodeStates) {
-      const prev = prevNodeStates.get(key);
-      if (
-        (entry.state === "completed" || entry.state === "failed") &&
-        (prev === undefined || prev.state !== entry.state)
-      ) {
-        nodeFinished = true;
-        break;
-      }
-    }
-
-    if (!runTerminated && !nodeFinished) return;
+    const next = { nodeStates: detailOverlay.nodeStates, status: detailOverlay.status };
     if (!id) return;
+    if (!diffNeedsRefetch(prev, next)) return;
 
     void qc.invalidateQueries({ queryKey: [...queries.runs.all(), id, "snapshots"] });
     void qc.invalidateQueries({ queryKey: [...queries.runs.all(), id, "snapshot-diff"] });
