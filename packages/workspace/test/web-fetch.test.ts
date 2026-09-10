@@ -341,4 +341,41 @@ describe("web_fetch", () => {
     expect(second.text.match(/omitted from tail/g)).toHaveLength(1);
     expect(second.text).toContain("[cached");
   });
+
+  test("markup nested past the engine's stack depth returns an error, not a throw", async () => {
+    // turndown recurses over the parsed tree; 20k nested elements is ~160KB,
+    // well under BODY_MAX_CHARS, and overflows the stack. The adapter rethrows
+    // anything that isn't a PathEscapeError, so an escaping throw would reach
+    // the node as an unstructured failure instead of a tool error.
+    const url = freshUrl("deep-nest");
+    const depth = 20_000;
+    const body = `<html><body>${"<header>".repeat(depth)}x${"</header>".repeat(depth)}</body></html>`;
+    const fetch = stubFetch({ [url]: { contentType: "text/html", body } });
+
+    const res = await run(url, fetch);
+    expect(res.is_error).toBe(true);
+    expect(res.text).toContain("failed to convert");
+  });
+
+  test("a header buried past the ancestor-walk bound is treated as chrome", async () => {
+    // The walk is bounded so its node-count × depth cost can't run away on
+    // hostile markup. The visible tradeoff: past MAX_ANCESTOR_HOPS the walk
+    // gives up and the header is stripped even though an <article> is above
+    // it. The bound sits far above real document nesting, so this is only
+    // reachable with deliberately deep markup.
+    const url = freshUrl("deep-walk");
+    const wrap = 300;
+    const body =
+      "<html><body><article>" +
+      "<div>".repeat(wrap) +
+      "<header>Buried Byline</header><p>Body copy survives.</p>" +
+      "</div>".repeat(wrap) +
+      "</article></body></html>";
+    const fetch = stubFetch({ [url]: { contentType: "text/html", body } });
+
+    const res = await run(url, fetch);
+    expect(res.is_error).toBeUndefined();
+    expect(res.text).toContain("Body copy survives.");
+    expect(res.text).not.toContain("Buried Byline");
+  });
 });

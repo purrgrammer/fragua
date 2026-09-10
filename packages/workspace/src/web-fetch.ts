@@ -155,7 +155,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
         try {
           next = new URL(location, current);
         } catch {
-          return errorResult(`malformed Location header "${location}" at ${current.toString()}`);
+          return errorResult(`malformed Location header at ${current.toString()}`);
         }
         if (next.protocol !== "https:") {
           return errorResult(`unsupported protocol: ${next.protocol}`);
@@ -204,13 +204,25 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
     }
 
     const isHtml = /text\/html|application\/xhtml/i.test(contentType) || html.trim().startsWith("<");
-    let fullMarkdown = isHtml ? htmlToMarkdown(html, "full") : html;
-    // The full extraction pass can zero out SPA shells and nav-only
-    // landing pages. Retry once with a minimal strip set before giving
-    // up, so those pages return their residual text instead of a hard
-    // error.
-    if (isHtml && fullMarkdown.trim().length === 0) {
-      fullMarkdown = htmlToMarkdown(html, "minimal");
+    // Conversion walks attacker-supplied markup: turndown recurses over the
+    // parsed tree, so markup nested past the engine's stack depth throws a
+    // RangeError. Everything else here reports failure as a tool result, and
+    // the adapter rethrows anything that isn't a PathEscapeError — an escaping
+    // throw would surface as an unstructured node failure instead.
+    let fullMarkdown: string;
+    try {
+      fullMarkdown = isHtml ? htmlToMarkdown(html, "full") : html;
+      // The full extraction pass can zero out SPA shells and nav-only
+      // landing pages. Retry once with a minimal strip set before giving
+      // up, so those pages return their residual text instead of a hard
+      // error.
+      if (isHtml && fullMarkdown.trim().length === 0) {
+        fullMarkdown = htmlToMarkdown(html, "minimal");
+      }
+    } catch (err) {
+      return errorResult(
+        `failed to convert ${resolvedUrl} to markdown: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     if (fullMarkdown.trim().length === 0) {
       return errorResult(`${resolvedUrl} returned empty content${isHtml ? " after HTML→markdown conversion" : ""}`);
@@ -279,12 +291,21 @@ function attr(node: DomNodeLike, name: string): string | null {
   return typeof node.getAttribute === "function" ? node.getAttribute(name) : null;
 }
 
+/** Ancestor hops to walk before giving up. The walk runs per header/footer
+ *  node, so on deeply-nested markup its cost is node count × depth: 5000
+ *  nested elements measured ~876ms of synchronous, un-abortable work, against
+ *  ~428ms with this bound. Set far above any real document's nesting so the
+ *  cap only ever engages on pathological markup — a header that genuinely
+ *  sits 256 levels inside an <article> does not occur, and one that deep is
+ *  treated as chrome. */
+const MAX_ANCESTOR_HOPS = 256;
+
 /** True when the node sits inside an <article>/<main>/<section>. A
  *  header/footer there is structural page content (title, byline,
  *  footnotes), not site chrome, so it must survive. */
 function hasContentAncestor(node: DomNodeLike): boolean {
   let p = node.parentNode ?? null;
-  while (p) {
+  for (let hops = 0; p && hops < MAX_ANCESTOR_HOPS; hops++) {
     if (CONTENT_ANCESTORS.has(nodeName(p))) return true;
     p = p.parentNode ?? null;
   }
