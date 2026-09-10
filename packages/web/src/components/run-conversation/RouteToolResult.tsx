@@ -11,6 +11,7 @@
 import type { ToolResultMessage } from "@fragua/types";
 import { SignpostIcon } from "lucide-react";
 import type { JSX } from "react";
+import { toolData } from "./tool-result-helpers.ts";
 
 export interface RouteToolParams {
   name?: string;
@@ -29,7 +30,7 @@ export function RouteToolResult({ params, result }: RouteToolResultProps): JSX.E
   // `data.route` is the canonical echo from the tool's execute(); prefer it
   // over `params.name` so the completed state shows the verified value.
   // When the result is still pending (streaming), fall back to `params.name`.
-  const data = ((result?.details as { data?: RouteToolData } | undefined)?.data ?? {}) as RouteToolData;
+  const data = toolData<RouteToolData>(result);
   const chosen = data.route ?? params?.name ?? "(no route chosen)";
 
   return (

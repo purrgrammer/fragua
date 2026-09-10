@@ -11,7 +11,7 @@
 import type { ToolResultMessage } from "@fragua/types";
 import { BookOpenIcon } from "lucide-react";
 import type { JSX } from "react";
-import { firstText, PANEL, SECTION_LABEL } from "./tool-result-helpers.ts";
+import { firstText, PANEL, SECTION_LABEL, toolData } from "./tool-result-helpers.ts";
 
 export interface SkillToolParams {
   name?: string;
@@ -36,7 +36,7 @@ export function SkillToolResult({ params, result, isStreaming }: SkillToolResult
   // Args can come from either side: `params.name` is what the model
   // requested; `data.name` is what the loader resolved (frontmatter
   // override). Prefer the resolved value, fall back to the requested.
-  const data = ((result?.details as { data?: SkillToolData } | undefined)?.data ?? {}) as SkillToolData;
+  const data = toolData<SkillToolData>(result);
   const isError = result?.isError === true;
   const requestedName = params?.name;
   const resolvedName = data.name ?? requestedName ?? "(unnamed)";
