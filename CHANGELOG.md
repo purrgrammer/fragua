@@ -44,6 +44,9 @@ guarantee.
 
 ### Fixed
 
+- A budget, priority, max-retries, goal-gate, or max-loops raise sent to a
+  running run no longer aborts the step in flight; the new ceiling applies at
+  the next step boundary. "Raise & Resume" no longer costs one wasted LLM call.
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`
