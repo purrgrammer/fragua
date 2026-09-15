@@ -484,6 +484,41 @@ describe("daemonEnvDeny", () => {
     expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
     expect(predicate("ANTHROPIC_API_KEY")).toBe(true);
   });
+
+  test("(daemon-deny-oauth-token) a non-_API_KEY provider credential in passthrough is refused — still stripped", () => {
+    const env: NodeJS.ProcessEnv = { OPENAI_OAUTH_TOKEN: "sk-oai-oauth-value-12345678" };
+    const { names, predicate } = daemonEnvDeny({
+      env,
+      passthrough: new Set(["OPENAI_OAUTH_TOKEN"]),
+    });
+    expect(names.has("OPENAI_OAUTH_TOKEN")).toBe(true);
+    expect(predicate("OPENAI_OAUTH_TOKEN")).toBe(true);
+  });
+
+  test("(daemon-deny-effective-passthrough) returns the post-refusal passthrough set", () => {
+    const { passthrough } = daemonEnvDeny({
+      env: {},
+      passthrough: new Set(["GH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_OAUTH_TOKEN"]),
+    });
+    expect(passthrough.has("GH_TOKEN")).toBe(true);
+    expect(passthrough.has("ANTHROPIC_API_KEY")).toBe(false);
+    expect(passthrough.has("OPENAI_OAUTH_TOKEN")).toBe(false);
+  });
+
+  test("(daemon-deny-warn-refused) refused provider creds warn once naming each and pointing at `fragua providers`", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+    try {
+      daemonEnvDeny({ env: {}, passthrough: new Set(["ANTHROPIC_API_KEY", "OPENAI_OAUTH_TOKEN"]) });
+    } finally {
+      console.warn = origWarn;
+    }
+    const combined = warnings.join(" ");
+    expect(combined).toContain("ANTHROPIC_API_KEY");
+    expect(combined).toContain("OPENAI_OAUTH_TOKEN");
+    expect(combined).toContain("fragua providers");
+  });
 });
 
 describe("unsafeAllowEnvNames (provider-cred rail)", () => {
@@ -497,6 +532,14 @@ describe("unsafeAllowEnvNames (provider-cred rail)", () => {
 
   test("mixed input returns only the provider creds", () => {
     expect(unsafeAllowEnvNames(["GH_TOKEN", "ANTHROPIC_API_KEY"])).toEqual(["ANTHROPIC_API_KEY"]);
+  });
+
+  test("non-_API_KEY provider credentials (OPENAI_OAUTH_TOKEN) are refused via provider-prefix gate", () => {
+    expect(unsafeAllowEnvNames(["OPENAI_OAUTH_TOKEN"])).toContain("OPENAI_OAUTH_TOKEN");
+  });
+
+  test("generic CI platform tokens (GH_TOKEN / GITHUB_TOKEN) still pass the provider-prefix gate", () => {
+    expect(unsafeAllowEnvNames(["GH_TOKEN", "GITHUB_TOKEN"])).toEqual([]);
   });
 });
 

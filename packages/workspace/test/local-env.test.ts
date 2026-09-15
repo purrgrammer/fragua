@@ -339,7 +339,10 @@ describe("LocalEnvironment", () => {
   // This exercises that shape without importing the CLI (dep-direction rule):
   // a var named like a provider key is stripped; a passthrough-listed var
   // survives.
-  describe("daemon-style provider-credential env-strip", () => {
+  // Exercises the _API_KEY / _TOKEN subset only; the full provider-credential
+  // suffix coverage (OAuth tokens, provider-prefix gate, etc.) lives in
+  // packages/cli/test/env-creds.test.ts.
+  describe("daemon-style provider-credential env-strip (_API_KEY / _TOKEN subset)", () => {
     const CRED_VAR = "ANTHROPIC_API_KEY";
     const PASS_VAR = "GH_TOKEN";
     let savedCred: string | undefined;

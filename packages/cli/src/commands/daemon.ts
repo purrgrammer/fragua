@@ -177,10 +177,14 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // provider credentials (API keys, tokens, secrets, plus the env-var names of
   // providers the daemon holds creds for in its store). `bash.env-passthrough`
   // re-admits named non-credential vars (e.g. GH_TOKEN for a `gh` step).
-  const passthrough = resolveEnvPassthrough(config);
-  const { names: envDenyNames, predicate: envDenyPredicate } = daemonEnvDeny({
-    storeProviders: deps.authStorage.list(),
+  const requestedPassthrough = resolveEnvPassthrough(config);
+  const {
+    names: envDenyNames,
+    predicate: envDenyPredicate,
     passthrough,
+  } = daemonEnvDeny({
+    storeProviders: deps.authStorage.list(),
+    passthrough: requestedPassthrough,
   });
   const provisioner: Provisioner = new WorktreeProvisioner({
     resolveRunBootstrap: resolveProjectBootstrap,
@@ -188,7 +192,9 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     envDenyPredicate,
     ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
   });
-  const passthroughLabel = passthrough.size > 0 ? `, passthrough: ${[...passthrough].join(", ")}` : "";
+  // Effective (post-refusal) passthrough, JSON-encoded so operator-controlled
+  // env names can't inject control bytes into the startup log.
+  const passthroughLabel = passthrough.size > 0 ? `, passthrough: ${JSON.stringify([...passthrough])}` : "";
   const provisionerLabel =
     `worktree per-run when run cwd is a git repo, else LocalEnvironment rooted at run cwd ` +
     `(bootstrap: per-run from <project>/.fragua/config.yaml; bash env-strip: provider credentials${passthroughLabel})`;

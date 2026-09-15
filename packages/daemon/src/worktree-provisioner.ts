@@ -78,15 +78,17 @@ export interface WorktreeProvisionerOptions {
    * this run. Lets one daemon honour `<project>/.fragua/config.yaml`
    * for runs from many projects, with no global default leaking in. */
   resolveRunBootstrap?: (cwd: string) => Promise<ResolvedRunBootstrap>;
-  /** Set ONLY by `fragua ci` (proposal §6 unit 9b — perimeter env-strip).
-   * Forwarded into each fresh `LocalEnvironment` / `WorktreeEnvironment` so
-   * the bash-tool subprocess never inherits secret-named env vars. Unset for
-   * the daemon (normal runs) — behavior unchanged. */
+  /** Set by `fragua ci` (proposal §6 unit 9b — full perimeter env-strip +
+   * scrub-needles) and by `fragua daemon` / harness (provider-credential-only
+   * strip, via `daemonEnvDeny`). Forwarded into each fresh `LocalEnvironment` /
+   * `WorktreeEnvironment` so the bash-tool subprocess never inherits the
+   * stripped env vars. */
   envDenyNames?: ReadonlySet<string>;
-  /** Set ONLY by `fragua ci` alongside `envDenyNames`. Applied at SPAWN TIME
-   * over the live merged env so a secret-named var set AFTER `envDenyNames`
-   * was captured is still stripped. `envDenyNames` is the value-capture path
-   * (drives scrub needles); this predicate is the live-rule path. */
+  /** Set alongside `envDenyNames` by the same writers (`fragua ci` and
+   * `fragua daemon` / harness). Applied at SPAWN TIME over the live merged env
+   * so a secret-named var set AFTER `envDenyNames` was captured is still
+   * stripped. `envDenyNames` is the value-capture path (drives scrub needles);
+   * this predicate is the live-rule path. */
   envDenyPredicate?: (name: string) => boolean;
 }
 

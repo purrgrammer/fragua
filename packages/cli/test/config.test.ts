@@ -235,6 +235,22 @@ bash:
     expect(resolveEnvPassthrough(cfg)).toEqual(new Set(["CI"]));
   });
 
+  test("bash.env-passthrough: global-only survives a project config with no bash key", async () => {
+    await writeGlobal(`
+bash:
+  env-passthrough:
+    - GH_TOKEN
+    - GLOBAL_ONLY
+`);
+    await write(`
+defaults:
+  provider: anthropic
+`);
+    const cfg = await load();
+    expect(cfg.bash?.["env-passthrough"]).toEqual(["GH_TOKEN", "GLOBAL_ONLY"]);
+    expect(resolveEnvPassthrough(cfg)).toEqual(new Set(["GH_TOKEN", "GLOBAL_ONLY"]));
+  });
+
   test("hoisted summariser key validates at the top level (not under defaults)", async () => {
     await writeGlobal(`
 summariser:
