@@ -104,6 +104,14 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       });
       prompt = `${blocks.join("\n\n")}\n\n${prompt}`;
     }
+    // A steer folded in before this dispatch (docs/intent-fold.md) — inject it
+    // at the head of the first user turn so the model sees the operator's
+    // redirection ahead of the task prompt. Mid-flight steers ride
+    // pi-agent-core's queue instead (supervisor onSteer); this is the
+    // pre-dispatch delivery path.
+    if (ctx.steering !== undefined && ctx.steering.length > 0) {
+      prompt = `${ctx.steering}\n\n${prompt}`;
+    }
     const graphGoal = getContext(ctx.routing).goal;
 
     let tokens = 0;

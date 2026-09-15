@@ -10,6 +10,15 @@ The fold has three jobs:
 2. **Audit dropped intents** so an operator can debug "why didn't my pause take effect?". Every dropped intent ships out as an `intent.dropped` observability event.
 3. **Advance `last_applied_seq`** past every intent in the batch so dropped + applied intents alike don't refire next turn.
 
+### The run-start turn
+
+The first turn of a freshly-claimed run emits `fact.run_started` before any handler dispatches. It folds the pre-claim intents (those queued while the run was `queued`) and applies their effects two ways:
+
+- **`routingDelta` is committed.** Cap raises queued before the claim (`budget_adjusted` → `budget_override.*`, `priority`, `max_retries_override.*`, …) are merged into the run-start routing patch, so they land in `run_state.routing` instead of being dropped. The graph goal (`graph.goal`) wins where the keys collide.
+- **A pre-claim steer is left UNAPPLIED.** `intent.steering_requested` is deliberately excluded from the run-start `last_applied_seq` advance so the *first node's* dispatch fold re-consumes it and delivers it as `decision.steering` → `ctx.steering`. The llm handler bridge injects `ctx.steering` at the head of the first user turn. Every other pre-claim intent (including the synthetic `intent.run_enqueued` marker) still advances so the supervisor doesn't mistake it for a fresh operator intent mid-handler.
+
+Mid-flight steers (issued while a handler is running) ride pi-agent-core's steering queue via the supervisor's `onSteer` instead; the `ctx.steering` path is the pre-dispatch delivery mechanism.
+
 ---
 
 ## Per-intent table

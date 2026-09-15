@@ -44,6 +44,11 @@ guarantee.
 
 ### Fixed
 
+- Operator intents sent while a run is still `queued` (before the executor
+  claims it) are no longer silently discarded on the run-start turn. A pre-claim
+  budget/priority/retry-cap raise now lands in the run's routing before the
+  first node dispatches, and a pre-claim steer is delivered to the first `llm`
+  step—injected at the head of its first user turn—rather than dropped.
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`

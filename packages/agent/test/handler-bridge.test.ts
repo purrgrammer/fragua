@@ -406,6 +406,51 @@ describe("makeLlmHandler", () => {
     store.close();
   });
 
+  test("ctx.steering is injected at the head of the first user turn", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
+    store.enqueueRun({ runId: "r-steer", workflowSha: "sha" });
+    const ac = new AbortController();
+    const ctx = handler.buildHandlerContext({
+      runId: "r-steer",
+      nodeId: "n1",
+      iteration: 0,
+      signal: ac.signal,
+      routing: {},
+      store,
+      llm: handler.makeLlmClient({
+        signal: ac.signal,
+        call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
+      }),
+      http: handler.makeHttpClient({ signal: ac.signal }),
+      tools: new handler.InMemoryToolRegistry(),
+      args: {},
+      recorder: { recordIntent: () => {}, recordDone: () => {}, recordFailed: () => {} },
+      steering: "focus on the auth module",
+    });
+    let seenPrompt: string | undefined;
+    const capture: LlmBackend = {
+      async run(input) {
+        seenPrompt = input.prompt;
+        return ok({});
+      },
+    };
+    const spec = makeLlmHandler({
+      node: node({ attrs: { prompt: "Do the task" } }),
+      nextNode: "__end__",
+      backend: capture,
+    });
+    await spec.handler(ctx);
+    expect(seenPrompt).toBe("focus on the auth module\n\nDo the task");
+    store.close();
+  });
+
   test("no pending notes — the prompt is untouched", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-nonote", store, "n1", {}, { "internal.operator_notes": [] });

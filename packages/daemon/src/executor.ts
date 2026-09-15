@@ -703,7 +703,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // back, it can be arbitrarily long prose, and the routing-patch
       // write gate rejects keys outside the known vocabulary.
       const startGraph = graphFor(state.workflowSha);
-      const startRoutingPatch: Record<string, unknown> = {};
+      // Carry the fold's routing delta so a pre-claim cap raise
+      // (`intent.budget_adjusted` → `budget_override.*`, `priority`,
+      // `max_retries_override.*`, …) queued while the run was `queued`
+      // lands in `run_state.routing` on run_started instead of being
+      // dropped. The graph goal wins where the keys collide.
+      const startRoutingPatch: Record<string, unknown> = { ...decision.routingDelta };
       if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
         startRoutingPatch[GRAPH_GOAL_KEY] = startGraph.attrs.goal;
       }
@@ -715,7 +720,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // tokens=0), causing a spurious re-dispatch. Fold's `applied`
       // already includes the run_enqueued seq; we just need to actually
       // persist it.
-      const startAdvanceTo = computeAdvanceAppliedTo(decision.appliedSeqs);
+      // Advance past every folded intent EXCEPT a pre-claim steer: leave
+      // `intent.steering_requested` unapplied so the first node's dispatch
+      // fold picks it up and delivers it as `ctx.steering` (the llm handler
+      // bridge injects it into the first user turn). The synthetic
+      // `intent.run_enqueued` marker and every other pre-claim intent still
+      // advance so the supervisor doesn't mistake them for a fresh operator
+      // intent mid-handler.
+      const startSteerSeqs = unapplied.filter((e) => e.type === "intent.steering_requested").map((e) => e.seq);
+      const startAppliedSeqs =
+        startSteerSeqs.length > 0
+          ? decision.appliedSeqs.filter((s) => s < Math.min(...startSteerSeqs))
+          : decision.appliedSeqs;
+      const startAdvanceTo = computeAdvanceAppliedTo(startAppliedSeqs);
       const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
       if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
       if (startAdvanceTo !== undefined) startAppendOpts.advanceAppliedTo = startAdvanceTo;

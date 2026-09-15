@@ -249,12 +249,12 @@ describe("intent.max_retries_adjusted — override read", () => {
       expect(decision.appliedSeqs).toContain(intentSeq);
     }
 
-    // (b) End-to-end. Reset and exercise the executor on a fresh run
-    // so the pre-existing intent doesn't race the run_started bootstrap
-    // (which advances appliedSeqs but doesn't merge the fold's
-    // routingDelta — see executor.ts:520–533). The clean shape:
-    // drive to max_retries pause at cap=1, then operator raises cap,
-    // then resume.
+    // (b) End-to-end on a FRESH run so the pre-claim intent from (a)
+    // doesn't leak in: the run_started bootstrap now correctly merges the
+    // fold's routingDelta, so reusing `mrp3` would land cap=5 at start and
+    // skip the cap=1 pause this half is meant to exercise. Drive to the
+    // max_retries pause at cap=1, then operator raises cap, then resume.
+    enqueue(r, "mrp3b", "start");
     let attempts = 0;
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
@@ -284,25 +284,25 @@ describe("intent.max_retries_adjusted — override read", () => {
     });
 
     // Drive to the cap=1 exhaust pause.
-    await driveUntilSettled(r, "mrp3");
-    const firstPaused = r.store.getState("mrp3")!;
+    await driveUntilSettled(r, "mrp3b");
+    const firstPaused = r.store.getState("mrp3b")!;
     expect(firstPaused.status).toBe("paused");
     expect(attempts).toBe(2);
 
     // Raise the cap, then resume. The override + resume both land as
     // intents; the next fold consumes both and the executor reads the
     // raised cap on subsequent retry-outcomes.
-    r.store.appendIntent("mrp3", {
+    r.store.appendIntent("mrp3b", {
       type: "intent.max_retries_adjusted",
       payload: { nodeId: "work", newLimit: 5 },
     });
-    r.store.appendIntent("mrp3", { type: "intent.resume", payload: {} });
+    r.store.appendIntent("mrp3b", { type: "intent.resume", payload: {} });
     wakePending(r.store);
-    expect(r.store.getState("mrp3")!.status).toBe("queued");
+    expect(r.store.getState("mrp3b")!.status).toBe("queued");
 
-    await driveUntilSettled(r, "mrp3");
+    await driveUntilSettled(r, "mrp3b");
 
-    const finalState = r.store.getState("mrp3")!;
+    const finalState = r.store.getState("mrp3b")!;
     expect(finalState.status).toBe("completed");
     expect(attempts).toBe(5);
     // Routing carries the override so future reads can audit it.
@@ -311,7 +311,7 @@ describe("intent.max_retries_adjusted — override read", () => {
     // Only one max_retries pause occurred — at the original cap=1
     // exhaust. After the override landed, the executor honoured the
     // raised cap and never paused for max_retries again.
-    const maxRetriesPauses = r.store.getEvents("mrp3").filter((e) => {
+    const maxRetriesPauses = r.store.getEvents("mrp3b").filter((e) => {
       if (e.type !== "fact.run_paused") return false;
       const reason = (e.payload as { reason?: string }).reason;
       return reason === "max_retries";
