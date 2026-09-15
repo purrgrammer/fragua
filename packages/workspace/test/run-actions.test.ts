@@ -313,7 +313,7 @@ describe("applyAccept syncs the worktree for renames and deletes", () => {
     expect(existsSync(join(cwd, "docs/proposals/a.md"))).toBe(false);
   });
 
-  test("a failed prune `diff --cached` fails the accept instead of reporting success", async () => {
+  test("a failed prune `diff --cached` refuses the accept and restores a clean tree", async () => {
     const { cwd, base } = await setupTreeMutationRun(async (wt) => {
       await must(wt, ["rm", "-q", "docs/proposals/a.md"]);
     });
@@ -322,7 +322,14 @@ describe("applyAccept syncs the worktree for renames and deletes", () => {
       args[0] === "diff" && args.includes("--diff-filter=D")
         ? Promise.resolve({ stdout: "", stderr: "fatal: corrupt index", exitCode: 128 })
         : git(c, args, opts);
-    await expect(applyAccept(failingGit, gate(cwd, base))).rejects.toThrow();
+    const r = await applyAccept(failingGit, gate(cwd, base));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("conflict");
+      expect(r.detail).toContain("prune failed");
+    }
+    // The post-mutation rollback must leave the operator's tree clean.
+    expect(await porcelain(cwd)).toBe("");
   });
 
   /** Like `setupTreeMutationRun`, but positions HEAD so the run's base is NOT

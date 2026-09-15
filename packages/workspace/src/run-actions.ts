@@ -101,6 +101,24 @@ async function pruneDeletedWorktreePaths(git: GitExec, cwd: string): Promise<voi
   await Promise.all(paths.map((p) => rm(join(cwd, p), { force: true })));
 }
 
+/** Run the post-stage prune and, on failure, roll the index+worktree back to
+ * `target` — mirroring the cherry-pick / apply conflict paths so a prune fault
+ * leaves the operator's tree as clean as any other refusal. Returns a refusal
+ * `AcceptResult` on failure, or `null` when the prune succeeded. */
+async function pruneOrRollback(git: GitExec, cwd: string, target: string): Promise<AcceptResult | null> {
+  try {
+    await pruneDeletedWorktreePaths(git, cwd);
+    return null;
+  } catch (err) {
+    await git(cwd, ["reset", "--hard", target]);
+    return {
+      ok: false,
+      reason: "conflict",
+      detail: `prune failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export type AcceptResult =
   | { ok: true; sha: string; replayed: number; tailStaged: boolean; stashPopConflict?: boolean }
   | { ok: false; reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict"; detail: string };
@@ -208,7 +226,8 @@ async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Prom
       const mergedTree = probe.stdout.trim().split("\n", 1)[0] ?? "";
       await mustGit(git, cwd, ["read-tree", mergedTree]);
       await mustGit(git, cwd, ["checkout-index", "-a", "-f"]);
-      await pruneDeletedWorktreePaths(git, cwd);
+      const pruned = await pruneOrRollback(git, cwd, target);
+      if (pruned != null) return pruned;
       return { ok: true, sha: target, replayed: 0, tailStaged: snapTree !== runTree };
     }
   } else if (runHead === baseGitSha) {
@@ -221,7 +240,8 @@ async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Prom
       await git(cwd, ["reset", "--hard", target]);
       return { ok: false, reason: "conflict", detail: "run does not apply onto HEAD (3-way across squashed base)" };
     }
-    await pruneDeletedWorktreePaths(git, cwd);
+    const pruned = await pruneOrRollback(git, cwd, target);
+    if (pruned != null) return pruned;
     return { ok: true, sha: target, replayed: 0, tailStaged: snapTree !== runTree };
   }
 
@@ -245,7 +265,8 @@ async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Prom
       await git(cwd, ["reset", "--hard", target]);
       return { ok: false, reason: "conflict", detail: "tail does not apply onto the replayed commits" };
     }
-    await pruneDeletedWorktreePaths(git, cwd);
+    const pruned = await pruneOrRollback(git, cwd, target);
+    if (pruned != null) return pruned;
     tailStaged = true;
   }
 
