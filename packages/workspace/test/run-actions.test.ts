@@ -2,7 +2,7 @@
 // Matrix: dirt-only / commits-only / both × target-at-base / moved /
 // conflict, plus author + message preservation and "untouched on conflict".
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAccept, applyDiscard, defaultGitExec, type GitExec, type RunActionGate } from "../src/run-actions.ts";
@@ -246,6 +246,159 @@ describe("applyAccept --autostash", () => {
     if (r.ok) expect(r.stashPopConflict).toBe(true);
     // The stash is preserved, not dropped — the operator can resolve it.
     expect(await stashCount(cwd)).not.toBe("");
+  });
+});
+
+describe("applyAccept syncs the worktree for renames and deletes", () => {
+  /** Seed a repo with several tracked files, then build a dirt-only run whose
+   * uncommitted tail renames some and deletes another. Mirrors the operator's
+   * post-dispose state applyAccept consumes. Returns { cwd, base }. */
+  async function setupTreeMutationRun(mutate: (wt: string) => Promise<void>): Promise<{ cwd: string; base: string }> {
+    const cwd = mkdtempSync(join(tmpdir(), "ra-"));
+    dirs.push(cwd);
+    await must(cwd, ["init", "-q", "-b", "main"]);
+    await must(cwd, ["config", "user.name", "Operator"]);
+    await must(cwd, ["config", "user.email", "op@ex"]);
+    await must(cwd, ["config", "commit.gpgsign", "false"]);
+    for (const p of ["docs/proposals/a.md", "docs/proposals/b.md", "docs/proposals/keep.md"]) {
+      const abs = join(cwd, p);
+      mkdirSync(join(abs, ".."), { recursive: true });
+      writeFileSync(abs, `${p}\n`);
+    }
+    await must(cwd, ["add", "-A"]);
+    await must(cwd, ["commit", "-qm", "base"]);
+    const base = await must(cwd, ["rev-parse", "HEAD"]);
+
+    const wt = mkdtempSync(join(tmpdir(), "ra-wt-"));
+    dirs.push(wt);
+    await must(cwd, ["worktree", "add", "-q", "--detach", wt, base]);
+    await mutate(wt);
+    await must(wt, ["add", "-A"]);
+    const snTree = await must(wt, ["write-tree"]);
+    const runHead = await must(wt, ["rev-parse", "HEAD"]);
+    const snapCommit = await must(cwd, ["commit-tree", snTree, "-p", runHead, "-m", "fragua-snap"]);
+    await must(cwd, ["update-ref", `refs/fragua/snapshots/${RUN}`, snapCommit]);
+    await must(cwd, ["worktree", "remove", "--force", wt]);
+    return { cwd, base };
+  }
+
+  const porcelain = async (cwd: string) => (await git(cwd, ["status", "--porcelain"])).stdout.trim();
+
+  test("renamed tracked files leave no untracked source paths on disk", async () => {
+    const { cwd, base } = await setupTreeMutationRun(async (wt) => {
+      mkdirSync(join(wt, "docs/proposals/archive"), { recursive: true });
+      await must(wt, ["mv", "docs/proposals/a.md", "docs/proposals/archive/a.md"]);
+      await must(wt, ["mv", "docs/proposals/b.md", "docs/proposals/archive/b.md"]);
+    });
+    const r = await applyAccept(git, gate(cwd, base));
+    expect(r.ok).toBe(true);
+    // The tail is staged as renames; nothing untracked (no `??`) must linger.
+    const st = await porcelain(cwd);
+    expect(st.split("\n").some((l) => l.startsWith("??"))).toBe(false);
+    // The old source paths must not remain on disk.
+    expect(existsSync(join(cwd, "docs/proposals/a.md"))).toBe(false);
+    expect(existsSync(join(cwd, "docs/proposals/b.md"))).toBe(false);
+    expect(existsSync(join(cwd, "docs/proposals/archive/a.md"))).toBe(true);
+  });
+
+  test("a plainly deleted tracked file is removed from the worktree", async () => {
+    const { cwd, base } = await setupTreeMutationRun(async (wt) => {
+      await must(wt, ["rm", "-q", "docs/proposals/a.md"]);
+    });
+    const r = await applyAccept(git, gate(cwd, base));
+    expect(r.ok).toBe(true);
+    const st = await porcelain(cwd);
+    expect(st.split("\n").some((l) => l.startsWith("??"))).toBe(false);
+    expect(st).toContain("D  docs/proposals/a.md");
+    expect(existsSync(join(cwd, "docs/proposals/a.md"))).toBe(false);
+  });
+
+  test("a failed prune `diff --cached` refuses the accept and restores a clean tree", async () => {
+    const { cwd, base } = await setupTreeMutationRun(async (wt) => {
+      await must(wt, ["rm", "-q", "docs/proposals/a.md"]);
+    });
+    // Inject a git that fails only the prune's delete-listing diff.
+    const failingGit: GitExec = (c, args, opts) =>
+      args[0] === "diff" && args.includes("--diff-filter=D")
+        ? Promise.resolve({ stdout: "", stderr: "fatal: corrupt index", exitCode: 128 })
+        : git(c, args, opts);
+    const r = await applyAccept(failingGit, gate(cwd, base));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("conflict");
+      expect(r.detail).toContain("prune failed");
+    }
+    // The post-mutation rollback must leave the operator's tree clean.
+    expect(await porcelain(cwd)).toBe("");
+  });
+
+  /** Like `setupTreeMutationRun`, but positions HEAD so the run's base is NOT
+   * an ancestor of it: the run forks off a feature commit F1, then feature is
+   * squash-merged into main. The dirt-only tail lands via `apply --3way
+   * --index` (not `read-tree`+`checkout-index`) — the higher-risk rename path,
+   * where `apply --index` can update the index without unlinking the old
+   * worktree source. Returns { cwd, runBase }. */
+  async function setupSquashRenameRun(
+    mutate: (wt: string) => Promise<void>,
+  ): Promise<{ cwd: string; runBase: string }> {
+    const cwd = mkdtempSync(join(tmpdir(), "ra-"));
+    dirs.push(cwd);
+    await must(cwd, ["init", "-q", "-b", "main"]);
+    await must(cwd, ["config", "user.name", "Operator"]);
+    await must(cwd, ["config", "user.email", "op@ex"]);
+    await must(cwd, ["config", "commit.gpgsign", "false"]);
+    for (const p of ["docs/proposals/a.md", "docs/proposals/b.md", "docs/proposals/keep.md"]) {
+      const abs = join(cwd, p);
+      mkdirSync(join(abs, ".."), { recursive: true });
+      writeFileSync(abs, `${p}\n`);
+    }
+    await must(cwd, ["add", "-A"]);
+    await must(cwd, ["commit", "-qm", "base"]);
+    const base = await must(cwd, ["rev-parse", "HEAD"]);
+
+    // Feature commit F1 the run forks off (touches only keep.md).
+    await must(cwd, ["checkout", "-qb", "feat", base]);
+    writeFileSync(join(cwd, "docs/proposals/keep.md"), "docs/proposals/keep.md\nF1\n");
+    await must(cwd, ["commit", "-qam", "feat: F1"]);
+    const runBase = await must(cwd, ["rev-parse", "HEAD"]);
+
+    // Dirt-only run off F1: rename tracked files as an uncommitted tail.
+    const wt = mkdtempSync(join(tmpdir(), "ra-wt-"));
+    dirs.push(wt);
+    await must(cwd, ["worktree", "add", "-q", "--detach", wt, runBase]);
+    await mutate(wt);
+    await must(wt, ["add", "-A"]);
+    const snTree = await must(wt, ["write-tree"]);
+    const runHead = await must(wt, ["rev-parse", "HEAD"]);
+    const snapCommit = await must(cwd, ["commit-tree", snTree, "-p", runHead, "-m", "fragua-snap"]);
+    await must(cwd, ["update-ref", `refs/fragua/snapshots/${RUN}`, snapCommit]);
+    await must(cwd, ["worktree", "remove", "--force", wt]);
+
+    // Feature moves on, then is squash-merged to main: F1 is no longer an
+    // ancestor of HEAD, but the rename delta still applies cleanly.
+    writeFileSync(join(cwd, "docs/proposals/keep.md"), "docs/proposals/keep.md\nF2\n");
+    await must(cwd, ["commit", "-qam", "feat: F2"]);
+    await must(cwd, ["checkout", "-q", "main"]);
+    await must(cwd, ["merge", "--squash", "-q", "feat"]);
+    await must(cwd, ["commit", "-qm", "squash feat (PR 50)"]);
+    return { cwd, runBase };
+  }
+
+  test("squash-merge (non-ancestor base): renamed files leave no untracked source paths on disk", async () => {
+    const { cwd, runBase } = await setupSquashRenameRun(async (wt) => {
+      mkdirSync(join(wt, "docs/proposals/archive"), { recursive: true });
+      await must(wt, ["mv", "docs/proposals/a.md", "docs/proposals/archive/a.md"]);
+      await must(wt, ["mv", "docs/proposals/b.md", "docs/proposals/archive/b.md"]);
+    });
+    // baseIsAncestor is false here → the tail applies via `apply --3way --index`.
+    expect((await git(cwd, ["merge-base", "--is-ancestor", runBase, "HEAD"])).exitCode).not.toBe(0);
+    const r = await applyAccept(git, gate(cwd, runBase));
+    expect(r).toMatchObject({ ok: true, replayed: 0, tailStaged: true });
+    const st = await porcelain(cwd);
+    expect(st.split("\n").some((l) => l.startsWith("??"))).toBe(false);
+    expect(existsSync(join(cwd, "docs/proposals/a.md"))).toBe(false);
+    expect(existsSync(join(cwd, "docs/proposals/b.md"))).toBe(false);
+    expect(existsSync(join(cwd, "docs/proposals/archive/a.md"))).toBe(true);
   });
 });
 
