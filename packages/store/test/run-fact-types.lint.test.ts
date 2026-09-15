@@ -23,22 +23,20 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { normalizeSource } from "@fragua/test-utils";
+import { RUN_STATE_FACT_TYPES, TERMINAL_RUN_FACT_TYPES } from "@fragua/types";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
+// The daemon is deliberately excluded: as the primary run-fact *writer* it
+// names these literals when constructing the fact events it emits (array
+// literals of event objects), which is emission, not the consumer re-listing
+// this consolidation removed.
 const SCAN_ROOTS = ["core", "server", "cli"].map((pkg) => join(REPO_ROOT, "packages", pkg, "src"));
 
 /** The literals owned by RUN_STATE_FACT_TYPES / TERMINAL_RUN_FACT_TYPES that
- * must not be re-listed in a Set/array literal outside the owning module. */
-const OWNED_LITERALS = [
-  "fact.run_terminated",
-  "fact.run_paused",
-  "fact.run_resumed",
-  "fact.run_quarantined",
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_cancelled",
-  "fact.run_paused_human",
-] as const;
+ * must not be re-listed in a Set/array literal outside the owning module.
+ * Derived from the two exported sets so a newly-added run fact keeps lint
+ * coverage without a third hand-maintained copy. */
+const OWNED_LITERALS = [...new Set([...RUN_STATE_FACT_TYPES, ...TERMINAL_RUN_FACT_TYPES])];
 
 function collectSources(root: string): string[] {
   const out: string[] = [];
@@ -80,5 +78,14 @@ describe("run-fact-type consumers (Set/array literals)", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("the reducer folds every RUN_STATE_FACT_TYPES member in a `case` arm", () => {
+    // The medium defect this consolidation fixed was a run-state fact that
+    // passed the set guard but had no switch arm. Pin the lockstep: every
+    // owned run-state literal must appear as a `case "…"` label in the reducer.
+    const reducerSrc = readFileSync(join(REPO_ROOT, "packages", "store", "src", "reducers.ts"), "utf8");
+    const missing = [...RUN_STATE_FACT_TYPES].filter((lit) => !reducerSrc.includes(`case "${lit}"`));
+    expect(missing).toEqual([]);
   });
 });

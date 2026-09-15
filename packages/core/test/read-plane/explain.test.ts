@@ -251,6 +251,94 @@ describe("read-plane explain", () => {
     }
   });
 
+  test("paused-then-resumed run reports outcome 'running', not 'paused'", () => {
+    const events = [
+      {
+        seq: 1,
+        ts: 1000,
+        type: "fact.run_paused",
+        payload: { reason: "operator" },
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+      {
+        seq: 2,
+        ts: 2000,
+        type: "fact.run_resumed",
+        payload: {},
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+    ];
+    const exp = buildExplanation(baseDetail(), events, [], []);
+    expect(exp.outcome.kind).toBe("running");
+  });
+
+  test("LEGACY fact.run_completed as last run-state event yields 'completed'", () => {
+    const events = [
+      {
+        seq: 1,
+        ts: 1000,
+        type: "fact.run_completed",
+        payload: {},
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+    ];
+    expect(buildExplanation(baseDetail(), events, [], []).outcome.kind).toBe("completed");
+  });
+
+  test("LEGACY fact.run_cancelled as last run-state event yields 'cancelled'", () => {
+    const events = [
+      {
+        seq: 1,
+        ts: 1000,
+        type: "fact.run_cancelled",
+        payload: {},
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+    ];
+    expect(buildExplanation(baseDetail(), events, [], []).outcome.kind).toBe("cancelled");
+  });
+
+  test("LEGACY fact.run_halted as last run-state event yields 'halted' with reason/detail", () => {
+    const events = [
+      {
+        seq: 1,
+        ts: 1000,
+        type: "fact.run_halted",
+        payload: { reason: "loop_cap", detail: "max loops exceeded" },
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+    ];
+    const exp = buildExplanation(baseDetail(), events, [], []);
+    expect(exp.outcome.kind).toBe("halted");
+    if (exp.outcome.kind === "halted") {
+      expect(exp.outcome.reason).toBe("loop_cap");
+      expect(exp.outcome.detail).toBe("max loops exceeded");
+    }
+  });
+
+  test("LEGACY fact.run_paused_human as last run-state event yields 'paused_human' with label", () => {
+    const events = [
+      {
+        seq: 1,
+        ts: 1000,
+        type: "fact.run_paused_human",
+        payload: { text: "Approve?" },
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+    ];
+    const exp = buildExplanation(baseDetail(), events, [], []);
+    expect(exp.outcome.kind).toBe("paused_human");
+    if (exp.outcome.kind === "paused_human") {
+      expect(exp.outcome.label).toBe("Approve?");
+    }
+  });
+
   test("budget.warn events without later budget.stop appear as warnings", () => {
     const events = [
       {

@@ -243,8 +243,8 @@ function deriveOutcome(events: StoredEvent[]): ExplainOutcome {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i]!;
     // Only run-state-changing facts settle the outcome; the canonical set
-    // (owned by the reducer in @fragua/store) is the single source of truth
-    // for which types those are, including the LEGACY (≤v3) fold paths below.
+    // (owned by @fragua/types (`RUN_STATE_FACT_TYPES`)) is the single source of
+    // truth for which types those are, including the LEGACY (≤v3) fold paths below.
     if (!RUN_STATE_FACT_TYPES.has(ev.type)) continue;
     switch (ev.type) {
       case "fact.run_terminated": {
@@ -303,6 +303,8 @@ function deriveOutcome(events: StoredEvent[]): ExplainOutcome {
           ...(typeof p.text === "string" ? { label: p.text } : {}),
         };
       }
+      case "fact.run_resumed":
+        return { kind: "running" };
       default:
         break;
     }

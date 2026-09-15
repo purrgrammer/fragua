@@ -1346,8 +1346,9 @@ export const RUN_STATE_FACT_TYPES: ReadonlySet<string> = new Set([
  * Distinct from {@link TERMINAL_FACT_TYPES} (v4-only, `fact.run_paused`-aware
  * follow/tail set) in that it also folds the LEGACY terminal facts. */
 export const TERMINAL_RUN_FACT_TYPES: ReadonlySet<string> = new Set([
-  "fact.run_terminated",
-  "fact.run_quarantined",
+  ...TERMINAL_FACT_TYPES,
+  // LEGACY (≤v3) terminal facts — inherited v4 members come from
+  // TERMINAL_FACT_TYPES above so this set cannot drift from the settled-status map.
   "fact.run_completed",
   "fact.run_halted",
   "fact.run_cancelled",
