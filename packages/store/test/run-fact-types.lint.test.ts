@@ -4,8 +4,9 @@
 // (≤v3) types `fact.run_completed`, `fact.run_halted`, `fact.run_cancelled`,
 // `fact.run_paused_human` that ground rule 11 keeps folding forever — have a
 // single owner: `RUN_STATE_FACT_TYPES` / `TERMINAL_RUN_FACT_TYPES` in
-// packages/store/src/reducers.ts, next to the reducer switch that folds them.
-// Read-plane consumers import those sets instead of re-listing the literals.
+// packages/types/src/events.ts (re-exported through @fragua/store), which the
+// reducer switch and every read-plane consumer import instead of re-listing
+// the literals.
 //
 // This test pins that: no file under packages/{core,server,cli}/src may
 // declare a Set/array literal that re-lists `"fact.run_terminated"` or a
@@ -30,6 +31,9 @@ const SCAN_ROOTS = ["core", "server", "cli"].map((pkg) => join(REPO_ROOT, "packa
  * must not be re-listed in a Set/array literal outside the owning module. */
 const OWNED_LITERALS = [
   "fact.run_terminated",
+  "fact.run_paused",
+  "fact.run_resumed",
+  "fact.run_quarantined",
   "fact.run_completed",
   "fact.run_halted",
   "fact.run_cancelled",
