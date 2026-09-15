@@ -90,11 +90,14 @@ function checkGate(
  * shapes, `apply --index` update the index for a deleted/renamed source without
  * unlinking its old worktree file, leaving it as an untracked copy that later
  * blocks `git checkout`. `--no-renames` forces rename sources to surface as
- * plain deletions so their old paths are removed too. */
+ * plain deletions so their old paths are removed too.
+ *
+ * A non-zero exit from the delete-listing diff (corrupt index, wrong cwd) is
+ * propagated via `mustGit` rather than swallowed: leaving stale worktree files
+ * silently would let `accept` report success on a possibly inconsistent tree. */
 async function pruneDeletedWorktreePaths(git: GitExec, cwd: string): Promise<void> {
-  const deleted = await git(cwd, ["diff", "--cached", "--no-renames", "--diff-filter=D", "--name-only", "-z"]);
-  if (deleted.exitCode !== 0) return;
-  const paths = deleted.stdout.split("\0").filter((p) => p !== "");
+  const out = await mustGit(git, cwd, ["diff", "--cached", "--no-renames", "--diff-filter=D", "--name-only", "-z"]);
+  const paths = out.split("\0").filter((p) => p !== "");
   await Promise.all(paths.map((p) => rm(join(cwd, p), { force: true })));
 }
 
