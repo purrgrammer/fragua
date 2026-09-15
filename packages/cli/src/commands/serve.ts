@@ -19,7 +19,7 @@ import { AuthStorage, defaultModelPerProvider, ModelRegistry, validateWorkflowMo
 import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@fragua/server";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
-import { loadConfig } from "../config.ts";
+import { loadConfig, loadGlobalConfig } from "../config.ts";
 import { streamSimpleProviderTester } from "../provider-tester.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
@@ -65,7 +65,8 @@ export interface ServeCommandOptions {
   /** Provenance tag stamped onto `server_endpoint.harness_version`. The
    * harness passes its version; a standalone `fragua serve` leaves it null. */
   version?: string | null;
-  /** Address to bind. Resolution: this > `web.host` in config >
+  /** Address to bind. Resolution: this > `web.host` in the GLOBAL config
+   * (`~/.fragua/config.yaml` only — a project file cannot widen it) >
    * `DEFAULT_WEB_HOST` (loopback). Pass `"::"` or `"0.0.0.0"` to expose the
    * unauthenticated API to the network deliberately. */
   hostname?: string;
@@ -177,8 +178,11 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // `--host` or `web.host`. A dual-stack or 0.0.0.0 occupant still trips
   // EADDRINUSE against 127.0.0.1, so port auto-bump keeps working; only an
   // `::1`-only listener slips past, and the printed localhost URL could then
-  // resolve to it.
-  const hostname = opts.hostname ?? cfg.web?.host ?? DEFAULT_WEB_HOST;
+  // resolve to it. The config layer is global-only: a repo's committed
+  // .fragua/config.yaml must not be able to widen the bind for whoever runs
+  // the harness from it.
+  const globalCfg = await loadGlobalConfig(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
+  const hostname = opts.hostname ?? globalCfg.web?.host ?? DEFAULT_WEB_HOST;
   const portExplicit = opts.port !== undefined;
   // Resolution: explicit caller arg > config.web.port > DEFAULT_WEB_PORT.
   // Keeping this here (not in the bin layer) means `fragua serve`,

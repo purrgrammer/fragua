@@ -105,20 +105,29 @@ describe("startServer", () => {
     expect(res.status).toBe(200);
   });
 
-  test("config.web.host widens the bind when --host is omitted", async () => {
+  test("global config.web.host widens the bind when --host is omitted", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    await mkdir(join(scratchHome, ".fragua"), { recursive: true });
+    await writeFile(join(scratchHome, ".fragua/config.yaml"), 'web:\n  host: "::"\n');
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
+    expect(handle.hostname).toBe("::");
+  });
+
+  test("a project-level config.web.host is ignored (a committed file cannot widen the bind)", async () => {
     scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
     scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     await mkdir(join(scratch, ".fragua"), { recursive: true });
     await writeFile(join(scratch, ".fragua/config.yaml"), 'web:\n  host: "::"\n');
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
-    expect(handle.hostname).toBe("::");
+    expect(handle.hostname).toBe(DEFAULT_WEB_HOST);
   });
 
-  test("explicit hostname wins over config.web.host", async () => {
+  test("explicit hostname wins over global config.web.host", async () => {
     scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
     scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
-    await mkdir(join(scratch, ".fragua"), { recursive: true });
-    await writeFile(join(scratch, ".fragua/config.yaml"), 'web:\n  host: "::"\n');
+    await mkdir(join(scratchHome, ".fragua"), { recursive: true });
+    await writeFile(join(scratchHome, ".fragua/config.yaml"), 'web:\n  host: "::"\n');
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, hostname: "127.0.0.1" });
     expect(handle.hostname).toBe("127.0.0.1");
   });

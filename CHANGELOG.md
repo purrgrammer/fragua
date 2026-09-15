@@ -13,7 +13,9 @@ guarantee.
 - **The HTTP server binds loopback (`127.0.0.1`) by default.** The API is
   unauthenticated, so exposing it to the network is now opt-in: pass
   `--host <addr>` to `fragua harness` / `fragua serve`, or set `web.host` in
-  `~/.fragua/config.yaml` (`"::"` for dual-stack). Port auto-bump is unchanged.
+  `~/.fragua/config.yaml` (`"::"` for dual-stack). `web.host` is read from the
+  global config only; a project's `.fragua/config.yaml` cannot widen the bind.
+  Port auto-bump is unchanged.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
