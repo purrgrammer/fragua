@@ -2,7 +2,7 @@
 // Matrix: dirt-only / commits-only / both × target-at-base / moved /
 // conflict, plus author + message preservation and "untouched on conflict".
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAccept, applyDiscard, defaultGitExec, type GitExec, type RunActionGate } from "../src/run-actions.ts";
@@ -246,6 +246,71 @@ describe("applyAccept --autostash", () => {
     if (r.ok) expect(r.stashPopConflict).toBe(true);
     // The stash is preserved, not dropped — the operator can resolve it.
     expect(await stashCount(cwd)).not.toBe("");
+  });
+});
+
+describe("applyAccept syncs the worktree for renames and deletes", () => {
+  /** Seed a repo with several tracked files, then build a dirt-only run whose
+   * uncommitted tail renames some and deletes another. Mirrors the operator's
+   * post-dispose state applyAccept consumes. Returns { cwd, base }. */
+  async function setupTreeMutationRun(mutate: (wt: string) => Promise<void>): Promise<{ cwd: string; base: string }> {
+    const cwd = mkdtempSync(join(tmpdir(), "ra-"));
+    dirs.push(cwd);
+    await must(cwd, ["init", "-q", "-b", "main"]);
+    await must(cwd, ["config", "user.name", "Operator"]);
+    await must(cwd, ["config", "user.email", "op@ex"]);
+    await must(cwd, ["config", "commit.gpgsign", "false"]);
+    for (const p of ["docs/proposals/a.md", "docs/proposals/b.md", "docs/proposals/keep.md"]) {
+      const abs = join(cwd, p);
+      mkdirSync(join(abs, ".."), { recursive: true });
+      writeFileSync(abs, `${p}\n`);
+    }
+    await must(cwd, ["add", "-A"]);
+    await must(cwd, ["commit", "-qm", "base"]);
+    const base = await must(cwd, ["rev-parse", "HEAD"]);
+
+    const wt = mkdtempSync(join(tmpdir(), "ra-wt-"));
+    dirs.push(wt);
+    await must(cwd, ["worktree", "add", "-q", "--detach", wt, base]);
+    await mutate(wt);
+    await must(wt, ["add", "-A"]);
+    const snTree = await must(wt, ["write-tree"]);
+    const runHead = await must(wt, ["rev-parse", "HEAD"]);
+    const snapCommit = await must(cwd, ["commit-tree", snTree, "-p", runHead, "-m", "fragua-snap"]);
+    await must(cwd, ["update-ref", `refs/fragua/snapshots/${RUN}`, snapCommit]);
+    await must(cwd, ["worktree", "remove", "--force", wt]);
+    return { cwd, base };
+  }
+
+  const porcelain = async (cwd: string) => (await git(cwd, ["status", "--porcelain"])).stdout.trim();
+
+  test("renamed tracked files leave no untracked source paths on disk", async () => {
+    const { cwd, base } = await setupTreeMutationRun(async (wt) => {
+      mkdirSync(join(wt, "docs/proposals/archive"), { recursive: true });
+      await must(wt, ["mv", "docs/proposals/a.md", "docs/proposals/archive/a.md"]);
+      await must(wt, ["mv", "docs/proposals/b.md", "docs/proposals/archive/b.md"]);
+    });
+    const r = await applyAccept(git, gate(cwd, base));
+    expect(r.ok).toBe(true);
+    // The tail is staged as renames; nothing untracked (no `??`) must linger.
+    const st = await porcelain(cwd);
+    expect(st.split("\n").some((l) => l.startsWith("??"))).toBe(false);
+    // The old source paths must not remain on disk.
+    expect(existsSync(join(cwd, "docs/proposals/a.md"))).toBe(false);
+    expect(existsSync(join(cwd, "docs/proposals/b.md"))).toBe(false);
+    expect(existsSync(join(cwd, "docs/proposals/archive/a.md"))).toBe(true);
+  });
+
+  test("a plainly deleted tracked file is removed from the worktree", async () => {
+    const { cwd, base } = await setupTreeMutationRun(async (wt) => {
+      await must(wt, ["rm", "-q", "docs/proposals/a.md"]);
+    });
+    const r = await applyAccept(git, gate(cwd, base));
+    expect(r.ok).toBe(true);
+    const st = await porcelain(cwd);
+    expect(st.split("\n").some((l) => l.startsWith("??"))).toBe(false);
+    expect(st).toContain("D  docs/proposals/a.md");
+    expect(existsSync(join(cwd, "docs/proposals/a.md"))).toBe(false);
   });
 });
 

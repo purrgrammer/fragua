@@ -44,6 +44,10 @@ guarantee.
 
 ### Fixed
 
+- Accepting a run whose tail renamed or deleted tracked files no longer leaves
+  the old paths on disk as untracked copies. The worktree is now brought in line
+  with the staged tree after accept, so a following `git checkout` is not blocked
+  by "untracked working tree files would be overwritten".
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`

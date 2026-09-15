@@ -10,6 +10,8 @@
 // history — replayed commits keep their own message/author; the tail is the
 // operator's commit.
 import { execFile } from "node:child_process";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { type InboxStatus, isTerminal, type RunStatus } from "@fragua/types";
 
@@ -81,6 +83,19 @@ function checkGate(
   if (gate.inboxStatus === "discarded") return { ok: false, reason: "discarded", detail: "run already discarded" };
   if (gate.cwd == null) return { ok: false, reason: "no_worktree", detail: "run has no worktree (bare-cwd)" };
   return { ok: true, cwd: gate.cwd };
+}
+
+/** After staging a tree into the index, drop any worktree paths that the index
+ * deletes relative to HEAD. `read-tree`+`checkout-index` and, for some rename
+ * shapes, `apply --index` update the index for a deleted/renamed source without
+ * unlinking its old worktree file, leaving it as an untracked copy that later
+ * blocks `git checkout`. `--no-renames` forces rename sources to surface as
+ * plain deletions so their old paths are removed too. */
+async function pruneDeletedWorktreePaths(git: GitExec, cwd: string): Promise<void> {
+  const deleted = await git(cwd, ["diff", "--cached", "--no-renames", "--diff-filter=D", "--name-only", "-z"]);
+  if (deleted.exitCode !== 0) return;
+  const paths = deleted.stdout.split("\0").filter((p) => p !== "");
+  await Promise.all(paths.map((p) => rm(join(cwd, p), { force: true })));
 }
 
 export type AcceptResult =
@@ -190,6 +205,7 @@ async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Prom
       const mergedTree = probe.stdout.trim().split("\n", 1)[0] ?? "";
       await mustGit(git, cwd, ["read-tree", mergedTree]);
       await mustGit(git, cwd, ["checkout-index", "-a", "-f"]);
+      await pruneDeletedWorktreePaths(git, cwd);
       return { ok: true, sha: target, replayed: 0, tailStaged: snapTree !== runTree };
     }
   } else if (runHead === baseGitSha) {
@@ -202,6 +218,7 @@ async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Prom
       await git(cwd, ["reset", "--hard", target]);
       return { ok: false, reason: "conflict", detail: "run does not apply onto HEAD (3-way across squashed base)" };
     }
+    await pruneDeletedWorktreePaths(git, cwd);
     return { ok: true, sha: target, replayed: 0, tailStaged: snapTree !== runTree };
   }
 
@@ -225,6 +242,7 @@ async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Prom
       await git(cwd, ["reset", "--hard", target]);
       return { ok: false, reason: "conflict", detail: "tail does not apply onto the replayed commits" };
     }
+    await pruneDeletedWorktreePaths(git, cwd);
     tailStaged = true;
   }
 
