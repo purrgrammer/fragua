@@ -206,6 +206,12 @@ harness's in-process server, or a standalone `serve`) writes its URL into the
 store's `server_endpoint` row and clears it on shutdown. `@fragua/web` reads that
 row — there is no `serve.json` file and no localhost default.
 
+`harness` supervises the daemon subprocess: an unexpected exit is restarted with
+exponential backoff (500ms doubling to 30s, reset after 60s of healthy uptime),
+and five consecutive fast crashes stop the harness with a non-zero exit. On
+Ctrl-C the daemon is sent SIGTERM and, if it has not stopped within 5s, SIGKILL —
+shutdown is always bounded.
+
 ---
 
 ## maintenance & authoring
