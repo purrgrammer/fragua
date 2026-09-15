@@ -11,39 +11,8 @@ import { afterEach, describe, expect, it, test } from "vitest";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { summaryRow as row } from "../helpers/fixtures.ts";
 import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
-
-const STATUS_TO_RUN_STATUS: Record<RunSummary["status"], RunSummary["runStatus"]> = {
-  queued: "queued",
-  running: "running",
-  paused: "paused",
-  success: "completed",
-  fail: "halted",
-  canceled: "cancelled",
-  unknown: "running",
-};
-
-function row(overrides: Partial<RunSummary> = {}): RunSummary {
-  const status = overrides.status ?? "success";
-  return {
-    runId: overrides.runId ?? "run-x",
-    startedAt: overrides.startedAt ?? "2024-01-01T00:00:00Z",
-    status,
-    runStatus: overrides.runStatus ?? STATUS_TO_RUN_STATUS[status],
-    eventCount: overrides.eventCount ?? 1,
-    costUsd: overrides.costUsd ?? 0,
-    inputTokens: overrides.inputTokens ?? 0,
-    outputTokens: overrides.outputTokens ?? 0,
-    cacheReadTokens: overrides.cacheReadTokens ?? 0,
-    cacheWriteTokens: overrides.cacheWriteTokens ?? 0,
-    ...(overrides.workflow !== undefined ? { workflow: overrides.workflow } : {}),
-    ...(overrides.workflowName !== undefined ? { workflowName: overrides.workflowName } : {}),
-    ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
-    ...(overrides.inboxStatus !== undefined ? { inboxStatus: overrides.inboxStatus } : {}),
-    ...(overrides.changeStat !== undefined ? { changeStat: overrides.changeStat } : {}),
-    ...(overrides.baseGitRef !== undefined ? { baseGitRef: overrides.baseGitRef } : {}),
-  };
-}
 
 function mount(client = createTestQueryClient(), path = "/") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });

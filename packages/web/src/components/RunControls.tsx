@@ -1,12 +1,16 @@
 // RunControls — operator-driven Pause / Resume / Cancel for a run.
 //
-// Specialized banners own the action for their substatus:
-//   - paused                → RunPausedNotice (Resume + Cancel; budget reason has Raise & Resume)
-//   - paused_human           → HitlChoice (option buttons)
-// RunControls handles the generic operator surface: pause a running run,
-// resume an operator-paused run (`paused`/`paused_human` with no options),
-// and cancel any non-terminal run. Returns null when no action applies
-// (terminal runs, or imported runs).
+// Ownership boundary: specialized banners own the action surface for the
+// substatuses they render, and RunControls stays out of their way:
+//   - paused / paused_auto   → RunPausedNotice (Resume + Cancel; budget
+//                              reason adds Raise & Resume). RunControls
+//                              renders NOTHING for these — no duplicate
+//                              buttons in the header.
+//   - paused_human (options) → HitlChoice (option buttons).
+// RunControls owns only what no banner claims: pause a running run, resume
+// an operator-driven `paused_human` pause (empty options — no HitlChoice),
+// and cancel a running/queued run. It returns null when no action applies
+// (terminal runs, banner-owned pauses, or imported runs).
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, X } from "lucide-react";
@@ -87,8 +91,8 @@ export function RunControls({
   const canPause = status === "running";
   const isOperatorHitlPause = runStatus === "paused_human" && (hitlOptionsCount ?? 0) === 0;
   const canResume =
-    status === "paused" && (runStatus === "paused" || runStatus !== "paused_human" || isOperatorHitlPause);
-  const canCancel = status === "running" || status === "queued" || status === "paused";
+    status === "paused" && runStatus !== "paused" && (runStatus !== "paused_human" || isOperatorHitlPause);
+  const canCancel = (status === "running" || status === "queued" || status === "paused") && runStatus !== "paused";
 
   if (!canPause && !canResume && !canCancel) return null;
 

@@ -83,8 +83,10 @@ describe("StatsStrip — Cache hit rate tile", () => {
   });
 
   test("renders — when cacheReadTokens is undefined (missing from payload)", () => {
-    const detailWithoutCache = { ...baseDetail, cacheReadTokens: undefined as unknown as number };
-    const { container } = render(<StatsStrip detail={detailWithoutCache} />);
+    // Key-ABSENT, not key-present-undefined: a `"cacheReadTokens" in detail`
+    // guard added later must still see the field genuinely missing.
+    const { cacheReadTokens: _omit, ...detailWithoutCache } = baseDetail;
+    const { container } = render(<StatsStrip detail={detailWithoutCache as unknown as RunDetail} />);
     const tile = within(container).getByTestId("detail-cache-tile");
     expect(tile.textContent).toContain("—");
   });

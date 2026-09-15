@@ -34,11 +34,7 @@ import { Skeleton } from "./ui/skeleton.tsx";
 /** Raw lifecycle statuses an operator can act on. Exported so
  * `useInboxCounts` and tests can reference the canonical list without
  * duplicating it. Module-scope keeps the queryKey reference stable. */
-export const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus"]>> = [
-  "paused_human",
-  "paused",
-  "quarantined",
-];
+export const ATTENTION_STATUSES: ReadonlyArray<RunSummary["runStatus"]> = ["paused_human", "paused", "quarantined"];
 
 interface ReasonMeta {
   Icon: typeof Pause;
@@ -54,7 +50,7 @@ interface ReasonMeta {
 //   paused      → yellow  (operator must act)
 // quarantined stays destructive (red): it's a code-contract failure,
 // not a recoverable pause.
-const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | undefined> = {
+const REASON_META: Record<RunSummary["runStatus"], ReasonMeta | undefined> = {
   paused_human: {
     Icon: Pause,
     label: "needs input",
@@ -156,7 +152,7 @@ export function Inbox({ limit, viewAllHref, title, testId }: InboxProps): JSX.El
 }
 
 export function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.Element | null {
-  const meta = row.runStatus ? REASON_META[row.runStatus] : undefined;
+  const meta = REASON_META[row.runStatus];
   if (!meta) return null;
   const { Icon, label, iconClass, borderVar } = meta;
   const wf = row.workflowName ?? row.workflow;
