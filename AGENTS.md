@@ -37,6 +37,12 @@ bun run fragua daemon --db <path>         # CI primitive: executor only against 
 bun run fragua serve  --db <path>         # CI primitive: standalone HTTP + SSE, default :3000
 bun run fragua run <workflow|name> [--input "…"]    # upload + enqueue + stream events; bare names resolve against ~/.fragua/workflows/, then <cwd>/.fragua/workflows/
 bun run fragua validate <workflow.yaml>   # parse + lint, no execution
+bun run fragua doctor                      # store liveness + provider-credential check
+bun run fragua runs wait <id...> [--all-running]  # block until a set of runs settles
+bun run fragua show <bundle>               # validate + summarize a portable .fragua bundle (no store)
+bun run fragua import <bundle>             # merge a .fragua bundle's runs into a store
+bun run fragua mcp [login|logout] <server>  # inspect / manage this project's MCP servers
+bun run fragua upgrade                      # self-update the fragua binary
 bun run fragua db {vacuum,gc-blobs,backup --to <path>,migrate [--dry-run]}
 bun run dev:web                          # Vite dev server (:5173), proxies /api/** to harness; run harness first
 ```
@@ -53,10 +59,10 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 | `@fragua/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
 | `@fragua/agent` | `src/{backend,handler-bridge,system-prompt,thread,event-bridge,tool-adapter}.ts` | `PiLlmBackend`; pi-ai → handler bridge; per-run system-prompt builder |
 | `@fragua/workspace` | `src/{worktree-env,local-env,tools,run-actions}.ts`, `src/skills/`, `src/mcp/{config,connector,oauth}.ts` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery; `run-actions.ts` = shared git for accept/discard/diff (`applyAccept`/`applyDiscard` with the state gate folded in, `gitDiff`) called by both the server route and the CLI; `mcp/` = MCP client (`.mcp.json` load + `${VAR}` resolve, stdio/http connector + tool materialisation, store-backed OAuth provider) |
-| `@fragua/server` | `src/index.ts`, `src/store/{routes,runs-routes,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE **for the Web UI**; routes go through the intent plane (writes) + read plane (reads). `store/{runs-adapter,steps}.ts` are re-export shims → `@fragua/core/read-plane` |
+| `@fragua/server` | `src/index.ts`, `src/store/{routes,runs-routes,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE **for the Web UI**; routes go through the intent plane (writes) + read plane (reads). |
 | `@fragua/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Fragua primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
 | `@fragua/test-utils` | `src/index.ts`, `src/source-hash-gate.ts` | Test-only shared helpers (`sourceHashGate` / `extractDeclarations` / `normalizeSource`) for the source-scan lint tests; `private`, pulled in as a devDependency only |
-| `@fragua/cli` | `bin/fragua.ts`, `src/{store-client,executor-deps,env-creds,route-picker}.ts`, `src/commands/` | Direct store-client (no HTTP): `harness` (default) / `daemon` / `serve` / `run` / `runs <verb>` / `ci` / `schedule` / `validate` / `init` / `providers` / `db` / `gc`. `store-client.ts` (`withStoreClient`: open `migrate:false` + build both planes) is the seam; `run`/`runs`/`schedule` write via the intent plane + read via the read plane. `executor-deps.ts` (`buildExecutorDeps`) is the shared executor assembly behind both `daemon` and `ci`; `ci` embeds the executor over an ephemeral store (`env-creds.ts` seeds creds from env) |
+| `@fragua/cli` | `bin/fragua.ts`, `src/{store-client,executor-deps,env-creds,route-picker}.ts`, `src/commands/` | Direct store-client (no HTTP): `harness` (default) / `daemon` / `serve` / `run` / `runs <verb>` / `ci` / `schedule` / `validate` / `init` / `providers` / `db` / `gc` / `doctor` (store liveness + provider check) / `mcp` (MCP server login/logout) / `show` (inspect an exported bundle) / `import` (ingest a bundle into the store) / `upgrade` (self-update the binary). `runs wait` blocks until a set of runs settles. `store-client.ts` (`withStoreClient`: open `migrate:false` + build both planes) is the seam; `run`/`runs`/`schedule` write via the intent plane + read via the read plane. `executor-deps.ts` (`buildExecutorDeps`) is the shared executor assembly behind both `daemon` and `ci`; `ci` embeds the executor over an ephemeral store (`env-creds.ts` seeds creds from env) |
 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
 

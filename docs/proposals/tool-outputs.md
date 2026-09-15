@@ -833,7 +833,7 @@ producers; Ernesto's four glue phases become four `tool` steps whose emitted
 structs are validated and replayable rather than four model turns.
 
 **Parallel-branch legality stays closed — and this names and overrides a prior
-open lean, not just the producing case.** [`fan-out-nodes.md`](fan-out-nodes.md)
+open lean, not just the producing case.** [`fan-out-nodes.md`](archive/fan-out-nodes.md)
 §Open left the tool-in-branch door ajar and leaned *toward* admitting a
 non-producing read-class tool in a branch: "Read-class `tool` node in a branch in
 v1, or `llm`-only (E041)? Lean: allow a read-class `tool` (it's deterministic and
