@@ -84,8 +84,24 @@ describe("run-fact-type consumers (Set/array literals)", () => {
     // The medium defect this consolidation fixed was a run-state fact that
     // passed the set guard but had no switch arm. Pin the lockstep: every
     // owned run-state literal must appear as a `case "…"` label in the reducer.
-    const reducerSrc = readFileSync(join(REPO_ROOT, "packages", "store", "src", "reducers.ts"), "utf8");
+    // `normalizeSource` strips comments so a stale arm left in prose can't
+    // false-pass.
+    const reducerSrc = normalizeSource(
+      readFileSync(join(REPO_ROOT, "packages", "store", "src", "reducers.ts"), "utf8"),
+    );
     const missing = [...RUN_STATE_FACT_TYPES].filter((lit) => !reducerSrc.includes(`case "${lit}"`));
+    expect(missing).toEqual([]);
+  });
+
+  test("deriveOutcome folds every RUN_STATE_FACT_TYPES member in a `case` arm", () => {
+    // `deriveOutcome` gates its switch on the same set (a `default: break` that
+    // falls through to `{ kind: "running" }`), so a member added without a
+    // matching arm would silently report a terminal/paused run as running.
+    // Pin the same lockstep on the read-plane fold site.
+    const explainSrc = normalizeSource(
+      readFileSync(join(REPO_ROOT, "packages", "core", "src", "read-plane", "explain.ts"), "utf8"),
+    );
+    const missing = [...RUN_STATE_FACT_TYPES].filter((lit) => !explainSrc.includes(`case "${lit}"`));
     expect(missing).toEqual([]);
   });
 });

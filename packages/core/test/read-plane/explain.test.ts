@@ -215,6 +215,40 @@ describe("read-plane explain", () => {
     }
   });
 
+  test("non-run-state events after a terminal fact don't override the outcome", () => {
+    // A `budget.warn` / `llm.start` at a higher seq than the terminal fact
+    // must be skipped by the RUN_STATE_FACT_TYPES guard, not fall through to
+    // `running`.
+    const events = [
+      {
+        seq: 1,
+        ts: 1000,
+        type: "fact.run_terminated",
+        payload: { status: "completed" },
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+      {
+        seq: 2,
+        ts: 1001,
+        type: "budget.warn",
+        payload: { scope: "run", metric: "cost_usd", limit: 1, actual: 0.9, ratio: 0.9 },
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+      {
+        seq: 3,
+        ts: 1002,
+        type: "llm.start",
+        payload: { nodeId: "n1" },
+        runId: "r1",
+        writer: "daemon" as const,
+      },
+    ];
+    const exp = buildExplanation(baseDetail(), events, [], []);
+    expect(exp.outcome.kind).toBe("completed");
+  });
+
   test("cancelled outcome captures reason", () => {
     const events = [
       {
