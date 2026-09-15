@@ -276,6 +276,17 @@ with a ~6h TTL (so it hits the network at most ~4×/day). Set
 `check_for_updates: false` in `~/.fragua/config.yaml` to disable it; a `version:`
 pin or a `bun run` (dev) checkout suppresses it too.
 
+`bash.env-passthrough: [NAME, ...]` in `.fragua/config.yaml` (merged global ⊕
+project, whole-array replace) re-admits named environment variables into `bash`
+tool subprocesses. By default the daemon/harness strips every
+provider-credential-named variable (`*_API_KEY`, `*_TOKEN`, `*_SECRET`,
+`ANTHROPIC_*`, `OPENAI_*`, …, plus the env-var names of providers configured in
+the store) so workflow shell steps can't read the operator's keys. List a
+non-credential var here to let it through (e.g. `GH_TOKEN` for a `gh` step);
+provider credentials are never re-admitted regardless. See
+`docs/execution-model.md` §2c. This is the daemon counterpart of `fragua ci
+--allow-env`; `fragua ci` behaviour is unchanged.
+
 ---
 
 ## Exit codes

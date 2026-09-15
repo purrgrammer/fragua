@@ -73,6 +73,37 @@ order, `allowed_tools` order, or server response order.
 
 ---
 
+## 2c. Bash env-strip — provider credentials never reach shell steps
+
+Every `bash` call spawns `/bin/sh -c` with a filtered copy of the daemon's
+`process.env`. Under `fragua daemon` (and hence `fragua harness`) the filter
+strips, by default, every variable whose **name** looks like a credential —
+provider API-key/token/secret patterns (`*_API_KEY`, `*_TOKEN`, `*_SECRET`,
+`ANTHROPIC_*`, `OPENAI_*`, …) plus the env-var names of any provider the daemon
+holds credentials for in its store. This is the same rule `fragua ci` applies, so
+a workflow's shell steps can't read the operator's LLM-provider keys. The strip
+is applied at spawn time, so a secret-named variable set *after* the daemon
+started is still removed.
+
+To re-admit a specific non-credential variable — e.g. `GH_TOKEN` for a step that
+shells out to `gh` — list it under `bash.env-passthrough` in
+`.fragua/config.yaml`:
+
+```yaml
+bash:
+  env-passthrough:
+    - GH_TOKEN
+    - CI
+```
+
+The list merges global ⊕ project as a **whole-array replace** (a project list
+overrides the global one; it does not append). Provider credentials are never
+re-admitted even if named here — the spawn-time predicate strips them regardless
+(same rail as `fragua ci --allow-env`). `fragua ci` is unaffected by this key; it
+keeps its own `--allow-env` flag.
+
+---
+
 ## 3. Worktree lifecycle
 
 | Phase | What happens |

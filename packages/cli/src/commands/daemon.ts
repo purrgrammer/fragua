@@ -13,7 +13,8 @@ import { parseDurationMs } from "@fragua/core";
 import { AutoTitler, type Provisioner, startDaemon, WorktreeProvisioner } from "@fragua/daemon";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
-import { loadConfig, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
+import { loadConfig, resolveEnvPassthrough, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
+import { daemonEnvDeny } from "../env-creds.ts";
 import { buildExecutorDeps, type SummariserInfo } from "../executor-deps.ts";
 
 /**
@@ -171,13 +172,26 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // daemon's own startup cwd is irrelevant — a run from a git-repo
   // cwd gets a worktree, a run from a non-git cwd gets a
   // LocalEnvironment rooted at *its own* cwd.
+  // Default env-strip for every bash-tool subprocess: reuse the ci
+  // secret-name rule so a workflow's shell steps never inherit the operator's
+  // provider credentials (API keys, tokens, secrets, plus the env-var names of
+  // providers the daemon holds creds for in its store). `bash.env-passthrough`
+  // re-admits named non-credential vars (e.g. GH_TOKEN for a `gh` step).
+  const passthrough = resolveEnvPassthrough(config);
+  const { names: envDenyNames, predicate: envDenyPredicate } = daemonEnvDeny({
+    storeProviders: deps.authStorage.list(),
+    passthrough,
+  });
   const provisioner: Provisioner = new WorktreeProvisioner({
     resolveRunBootstrap: resolveProjectBootstrap,
+    envDenyNames,
+    envDenyPredicate,
     ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
   });
+  const passthroughLabel = passthrough.size > 0 ? `, passthrough: ${[...passthrough].join(", ")}` : "";
   const provisionerLabel =
     `worktree per-run when run cwd is a git repo, else LocalEnvironment rooted at run cwd ` +
-    `(bootstrap: per-run from <project>/.fragua/config.yaml)`;
+    `(bootstrap: per-run from <project>/.fragua/config.yaml; bash env-strip: provider credentials${passthroughLabel})`;
 
   console.log(chalk.green(`fragua daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));

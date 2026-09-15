@@ -333,4 +333,51 @@ describe("LocalEnvironment", () => {
       expect(r.stdout).toContain("V=visible-value");
     });
   });
+
+  // The daemon assembly (see `daemonEnvDeny` in @fragua/cli) wires a
+  // provider-credential-name predicate into every worktree's LocalEnvironment.
+  // This exercises that shape without importing the CLI (dep-direction rule):
+  // a var named like a provider key is stripped; a passthrough-listed var
+  // survives.
+  describe("daemon-style provider-credential env-strip", () => {
+    const CRED_VAR = "ANTHROPIC_API_KEY";
+    const PASS_VAR = "GH_TOKEN";
+    let savedCred: string | undefined;
+    let savedPass: string | undefined;
+
+    beforeEach(() => {
+      savedCred = process.env[CRED_VAR];
+      savedPass = process.env[PASS_VAR];
+    });
+
+    afterEach(() => {
+      if (savedCred === undefined) delete process.env[CRED_VAR];
+      else process.env[CRED_VAR] = savedCred;
+      if (savedPass === undefined) delete process.env[PASS_VAR];
+      else process.env[PASS_VAR] = savedPass;
+    });
+
+    test("(g) a var named like ANTHROPIC_API_KEY is absent from the bash subprocess", async () => {
+      process.env[CRED_VAR] = "sk-ant-must-not-leak-abcdef";
+      const passthrough = new Set([PASS_VAR]);
+      const denyEnv = new LocalEnvironment({
+        cwd: scratch,
+        envDenyPredicate: (n) => !passthrough.has(n) && (n.endsWith("_API_KEY") || n.endsWith("_TOKEN")),
+      });
+      const r = await denyEnv.exec(`echo "V=${"$"}{${CRED_VAR}:-MISSING}"`);
+      expect(r.stdout).toContain("V=MISSING");
+      expect(r.stdout).not.toContain("sk-ant-must-not-leak-abcdef");
+    });
+
+    test("(h) a passthrough-listed var IS visible in the bash subprocess", async () => {
+      process.env[PASS_VAR] = "ghs-passthrough-visible-abcdef";
+      const passthrough = new Set([PASS_VAR]);
+      const denyEnv = new LocalEnvironment({
+        cwd: scratch,
+        envDenyPredicate: (n) => !passthrough.has(n) && (n.endsWith("_API_KEY") || n.endsWith("_TOKEN")),
+      });
+      const r = await denyEnv.exec(`echo "V=${"$"}{${PASS_VAR}:-MISSING}"`);
+      expect(r.stdout).toContain("V=ghs-passthrough-visible-abcdef");
+    });
+  });
 });

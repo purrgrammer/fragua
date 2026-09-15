@@ -14,6 +14,7 @@ import {
   captureCiEnvSecrets,
   ciEnvDenyNames,
   ciEnvDenyPredicate,
+  daemonEnvDeny,
   seedCredsFromEnv,
   seedCredsFromGlobalStore,
   unsafeAllowEnvNames,
@@ -431,6 +432,57 @@ describe("--allow-env (ciEnvDeny* allow-set)", () => {
     const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678" };
     expect(ciEnvDenyNames(env).has("GH_TOKEN")).toBe(true);
     expect(ciEnvDenyPredicate()("GH_TOKEN")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// daemonEnvDeny — the default env-strip for `fragua daemon` / harness. Reuses
+// the ci secret-name rule; adds store-provider env-var names; honours the
+// `bash.env-passthrough` allow-set (but never re-admits provider creds).
+// ---------------------------------------------------------------------------
+
+describe("daemonEnvDeny", () => {
+  test("(daemon-deny) strips ANTHROPIC_API_KEY and generic secret-suffixed names", () => {
+    const env: NodeJS.ProcessEnv = {
+      ANTHROPIC_API_KEY: "sk-ant-value-12345678",
+      MY_SECRET_TOKEN: "secret-value-12345678",
+      NODE_ENV: "production",
+    };
+    const { names, predicate } = daemonEnvDeny({ env });
+    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
+    expect(names.has("MY_SECRET_TOKEN")).toBe(true);
+    expect(names.has("NODE_ENV")).toBe(false);
+    // predicate catches a secret-named var set after capture.
+    expect(predicate("MY_SECRET_TOKEN")).toBe(true);
+    expect(predicate("ANTHROPIC_API_KEY")).toBe(true);
+    expect(predicate("NODE_ENV")).toBe(false);
+  });
+
+  test("(daemon-deny-passthrough) a passthrough-listed name is excluded from names and predicate", () => {
+    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678", OTHER_TOKEN: "other-value-12345678" };
+    const { names, predicate } = daemonEnvDeny({ env, passthrough: new Set(["GH_TOKEN"]) });
+    expect(names.has("GH_TOKEN")).toBe(false);
+    expect(names.has("OTHER_TOKEN")).toBe(true);
+    expect(predicate("GH_TOKEN")).toBe(false);
+    expect(predicate("OTHER_TOKEN")).toBe(true);
+  });
+
+  test("(daemon-deny-store-creds) provider env var names from storeProviders are added to the deny set", () => {
+    const { names } = daemonEnvDeny({ env: {}, storeProviders: ["anthropic"] });
+    // pi-ai maps anthropic to ANTHROPIC_API_KEY (and OAuth token) — at least one
+    // anthropic env-var name lands in the strip even though env is empty.
+    expect([...names].some((n) => n.startsWith("ANTHROPIC_"))).toBe(true);
+  });
+
+  test("(daemon-deny-refuse-provider-cred) a provider credential in passthrough is refused — still stripped", () => {
+    const env: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: "sk-ant-value-12345678" };
+    const { names, predicate } = daemonEnvDeny({
+      env,
+      storeProviders: ["anthropic"],
+      passthrough: new Set(["ANTHROPIC_API_KEY"]),
+    });
+    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
+    expect(predicate("ANTHROPIC_API_KEY")).toBe(true);
   });
 });
 

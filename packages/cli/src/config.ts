@@ -83,6 +83,22 @@ const Web = Type.Object(
   { additionalProperties: false },
 );
 
+const Bash = Type.Object(
+  {
+    // Env var names re-allowed into bash-tool subprocesses under the daemon
+    // (and hence the harness). By default the daemon strips every
+    // provider-credential-named var (API keys, tokens, secrets, plus the
+    // env-var names of providers configured in the store) so a workflow's
+    // shell steps can't read the operator's credentials. List a name here to
+    // re-admit it — e.g. `GH_TOKEN` for a workflow that shells out to `gh`.
+    // Provider credentials are never re-admitted (the spawn-time predicate
+    // strips them regardless). Merged as a whole-array replace: a project
+    // list overrides the global list, it does not append.
+    "env-passthrough": Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: false },
+);
+
 export const FraguaConfigSchema = Type.Object(
   {
     // UUIDv7 stable project identity, minted by `fragua init`. Optional
@@ -152,6 +168,7 @@ export const FraguaConfigSchema = Type.Object(
     skills: Type.Optional(Skills),
     timeouts: Type.Optional(Timeouts),
     web: Type.Optional(Web),
+    bash: Type.Optional(Bash),
   },
   { additionalProperties: false },
 );
@@ -204,6 +221,13 @@ export function resolveTimeouts(cfg: FraguaConfig): ResolvedTimeouts {
     }
   }
   return out;
+}
+
+/** Resolve the set of env var names re-allowed into bash-tool subprocesses.
+ * Empty when unset. Consumed by `daemonEnvDeny` to exempt these names from
+ * the default provider-credential strip (`fragua daemon` / harness). */
+export function resolveEnvPassthrough(cfg: FraguaConfig): Set<string> {
+  return new Set(cfg.bash?.["env-passthrough"] ?? []);
 }
 
 function formatValidationErrors(errors: Iterable<{ path: string; message: string }>): string {

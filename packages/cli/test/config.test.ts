@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
-import { loadConfig, loadProjectConfig, resolveTimeouts } from "../src/config.ts";
+import { loadConfig, loadProjectConfig, resolveEnvPassthrough, resolveTimeouts } from "../src/config.ts";
 
 describe("loadConfig", () => {
   let scratch: string;
@@ -218,6 +218,23 @@ defaults:
     expect(cfg.blocklist).toEqual(["sudo "]); // global only
   });
 
+  test("bash.env-passthrough: project list replaces global (whole-array replace)", async () => {
+    await writeGlobal(`
+bash:
+  env-passthrough:
+    - GH_TOKEN
+    - GLOBAL_ONLY
+`);
+    await write(`
+bash:
+  env-passthrough:
+    - CI
+`);
+    const cfg = await load();
+    expect(cfg.bash?.["env-passthrough"]).toEqual(["CI"]);
+    expect(resolveEnvPassthrough(cfg)).toEqual(new Set(["CI"]));
+  });
+
   test("hoisted summariser key validates at the top level (not under defaults)", async () => {
     await writeGlobal(`
 summariser:
@@ -396,6 +413,19 @@ describe("loadProjectConfig", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe("resolveEnvPassthrough", () => {
+  test("absent section → empty set", () => {
+    expect(resolveEnvPassthrough({})).toEqual(new Set());
+  });
+
+  test("reads bash.env-passthrough into a Set", () => {
+    const s = resolveEnvPassthrough({ bash: { "env-passthrough": ["GH_TOKEN", "CI"] } });
+    expect(s.has("GH_TOKEN")).toBe(true);
+    expect(s.has("CI")).toBe(true);
+    expect(s.size).toBe(2);
   });
 });
 

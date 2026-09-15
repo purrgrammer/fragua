@@ -10,6 +10,16 @@ guarantee.
 
 ### Changed
 
+- **Workflow `bash` steps under `fragua daemon`/`harness` no longer inherit the
+  operator's provider credentials.** The daemon now applies the same env-strip
+  `fragua ci` uses: every variable whose name matches a provider-credential
+  pattern (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `ANTHROPIC_*`, `OPENAI_*`, …),
+  plus the env-var names of providers configured in the store, is removed from
+  every shell subprocess. A new `bash.env-passthrough: [NAME, ...]` config key
+  (merged global ⊕ project as a whole-array replace) re-admits named
+  non-credential variables (e.g. `GH_TOKEN` for a step that shells out to `gh`);
+  provider credentials are never re-admitted. `fragua ci` behaviour is
+  unchanged.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site

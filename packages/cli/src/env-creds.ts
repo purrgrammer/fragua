@@ -172,6 +172,50 @@ export function ciEnvDenyPredicate(allow: ReadonlySet<string> = NO_ALLOW): (name
 const NO_ALLOW: ReadonlySet<string> = new Set();
 
 /**
+ * Build the env-strip for `fragua daemon` (hence the harness). Reuses the same
+ * secret-name rule as `fragua ci` — no separate list — so a workflow's bash
+ * steps never inherit the operator's provider credentials.
+ *
+ * Returns a `names` set (captured against the passed env) AND a spawn-time
+ * `predicate` (catches secret-named vars set after capture). Both mirror the
+ * ci pair (`ciEnvDenyNames` / `ciEnvDenyPredicate`).
+ *
+ * `storeProviders` adds the pi-ai env-var names of every provider the daemon
+ * holds credentials for in its store — belt over the predicate, whose
+ * provider-var set is registration-gated and can be empty early. `passthrough`
+ * (from `bash.env-passthrough`) re-admits named vars; it never re-admits a
+ * provider credential — the predicate strips those regardless of passthrough,
+ * matching the ci `unsafeAllowEnvNames` rail.
+ */
+export function daemonEnvDeny(
+  opts: { env?: NodeJS.ProcessEnv; storeProviders?: Iterable<string>; passthrough?: ReadonlySet<string> } = {},
+): { names: Set<string>; predicate: (name: string) => boolean } {
+  const env = opts.env ?? process.env;
+  const requested = opts.passthrough ?? NO_ALLOW;
+  // Refuse provider credentials in the passthrough — same rail as ci's
+  // `--allow-env` (`unsafeAllowEnvNames`). A workflow may re-admit generic
+  // secrets (GH_TOKEN, …) but never an LLM-provider key fragua reads directly.
+  const refused = new Set(unsafeAllowEnvNames(requested));
+  const passthrough: ReadonlySet<string> =
+    refused.size === 0 ? requested : new Set([...requested].filter((n) => !refused.has(n)));
+  const names = ciEnvDenyNames(env, passthrough);
+  for (const provider of opts.storeProviders ?? []) {
+    // pi-ai's `findEnvKeys` only reports env keys currently SET (it's
+    // registration/env-gated), which the suffix rule already covers. To strip a
+    // held provider's credential even when it isn't in this process's env, also
+    // add its conventional `<PROVIDER>_API_KEY` name.
+    const candidates = new Set<string>(findEnvKeys(provider) ?? []);
+    candidates.add(`${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`);
+    for (const name of candidates) {
+      if (COPILOT_AMBIENT_ENV.has(name)) continue;
+      if (passthrough.has(name)) continue;
+      names.add(name);
+    }
+  }
+  return { names, predicate: ciEnvDenyPredicate(passthrough) };
+}
+
+/**
  * Validate a `--allow-env` request: return the names that must NOT be exempted
  * from the CI env-strip. A provider-credential var (e.g. `ANTHROPIC_API_KEY`,
  * `ANTHROPIC_OAUTH_TOKEN`) must never reach a tool subprocess — fragua reads it
