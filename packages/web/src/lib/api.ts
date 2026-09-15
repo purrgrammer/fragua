@@ -1084,6 +1084,7 @@ function isRunSummary(v: unknown): v is RunSummary {
     runId?: unknown;
     startedAt?: unknown;
     status?: unknown;
+    runStatus?: unknown;
     eventCount?: unknown;
     costUsd?: unknown;
     inputTokens?: unknown;
@@ -1100,6 +1101,7 @@ function isRunSummary(v: unknown): v is RunSummary {
     typeof o.runId === "string" &&
     typeof o.startedAt === "string" &&
     typeof o.status === "string" &&
+    typeof o.runStatus === "string" &&
     typeof o.eventCount === "number" &&
     (o.projectId === undefined || typeof o.projectId === "string") &&
     (o.projectName === undefined || typeof o.projectName === "string") &&
@@ -1120,6 +1122,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     runId?: unknown;
     startedAt?: unknown;
     status?: unknown;
+    runStatus?: unknown;
     lastEventSeq?: unknown;
     nodes?: unknown;
     selectedEdges?: unknown;
@@ -1140,6 +1143,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     typeof o.runId === "string" &&
     typeof o.startedAt === "string" &&
     typeof o.status === "string" &&
+    typeof o.runStatus === "string" &&
     typeof o.lastEventSeq === "number" &&
     (o.projectId === undefined || typeof o.projectId === "string") &&
     (o.projectName === undefined || typeof o.projectName === "string") &&

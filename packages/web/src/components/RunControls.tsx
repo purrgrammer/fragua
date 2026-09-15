@@ -90,9 +90,10 @@ export function RunControls({
 
   const canPause = status === "running";
   const isOperatorHitlPause = runStatus === "paused_human" && (hitlOptionsCount ?? 0) === 0;
-  const canResume =
-    status === "paused" && runStatus !== "paused" && (runStatus !== "paused_human" || isOperatorHitlPause);
-  const canCancel = (status === "running" || status === "queued" || status === "paused") && runStatus !== "paused";
+  // RunPausedNotice owns the action surface for both banner-rendered pauses.
+  const isPausedNotice = runStatus === "paused" || runStatus === "paused_auto";
+  const canResume = status === "paused" && !isPausedNotice && (runStatus !== "paused_human" || isOperatorHitlPause);
+  const canCancel = (status === "running" || status === "queued" || status === "paused") && !isPausedNotice;
 
   if (!canPause && !canResume && !canCancel) return null;
 

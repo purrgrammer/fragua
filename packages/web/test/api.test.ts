@@ -46,8 +46,8 @@ describe("api — /health", () => {
 describe("api — /runs", () => {
   it("listRuns GETs /api/runs and parses the array", async () => {
     const rows = [
-      { runId: "r1", startedAt: "2024-01-01T00:00:00Z", status: "success", eventCount: 3 },
-      { runId: "r2", startedAt: "2024-01-02T00:00:00Z", status: "running", eventCount: 1 },
+      { runId: "r1", startedAt: "2024-01-01T00:00:00Z", status: "success", runStatus: "completed", eventCount: 3 },
+      { runId: "r2", startedAt: "2024-01-02T00:00:00Z", status: "running", runStatus: "running", eventCount: 1 },
     ];
     mock = installFetchMock({ "/api/runs": () => json(rows) });
     const out = await api.listRuns();
@@ -61,6 +61,7 @@ describe("api — /runs", () => {
       runId: "abc/weird",
       startedAt: "2024-01-01T00:00:00Z",
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 5,
       nodes: [],
       selectedEdges: [],
@@ -85,6 +86,7 @@ describe("api — /runs", () => {
           runId: "r1",
           startedAt: "2024-01-01T00:00:00Z",
           status: "running",
+          runStatus: "running",
           lastEventSeq: 2,
           nodes: [],
           selectedEdges: [],
@@ -104,6 +106,7 @@ describe("api — /runs", () => {
           runId: "r1",
           startedAt: "2024-01-01T00:00:00Z",
           status: "unknown",
+          runStatus: "running",
           lastEventSeq: 0,
           nodes: [],
           selectedEdges: [],

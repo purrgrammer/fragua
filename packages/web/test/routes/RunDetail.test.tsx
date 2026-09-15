@@ -7,29 +7,16 @@ import { snapshotLabel } from "../../src/components/RunDiffTab.tsx";
 import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { makeRunDetail } from "../helpers/fixtures.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Minimal RunDetail factory. Defaults cover every required field so a
-// future field-addition lands here once rather than across every site;
-// tests pass only the fields they assert on.
+// future field-addition lands in `test/helpers/fixtures.ts` once rather
+// than across every site; tests pass only the fields they assert on.
 function makeDetail(overrides: Partial<RunDetailT> = {}): RunDetailT {
-  return {
-    runId: "r1",
-    startedAt: "2024-01-01T00:00:00Z",
-    status: "running",
-    runStatus: "running",
-    lastEventSeq: 1,
-    nodes: [],
-    selectedEdges: [],
-    costUsd: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    ...overrides,
-  };
+  return makeRunDetail(overrides);
 }
 
 // ─── FakeEventSource ─────────────────────────────────────────────

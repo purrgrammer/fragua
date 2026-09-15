@@ -212,6 +212,32 @@ describe("RunControls — cancel dialog", () => {
   });
 });
 
+describe("RunControls — banner-owned pauses render nothing", () => {
+  afterEach(() => cleanup());
+
+  test("renders no action buttons when runStatus is paused (RunPausedNotice owns them)", () => {
+    const { queryByTestId, restore } = renderControls({}, "paused", "paused");
+    try {
+      expect(queryByTestId("run-controls-pause")).toBeNull();
+      expect(queryByTestId("run-controls-resume")).toBeNull();
+      expect(queryByTestId("run-controls-cancel")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  test("renders no action buttons when runStatus is paused_auto (RunPausedNotice owns them)", () => {
+    const { queryByTestId, restore } = renderControls({}, "paused", "paused_auto");
+    try {
+      expect(queryByTestId("run-controls-pause")).toBeNull();
+      expect(queryByTestId("run-controls-resume")).toBeNull();
+      expect(queryByTestId("run-controls-cancel")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("RunControls — imported runs", () => {
   afterEach(() => cleanup());
 
@@ -229,8 +255,8 @@ describe("RunControls — imported runs", () => {
     }
   });
 
-  test("still renders operate controls when imported is false (existing behavior unchanged)", () => {
-    const { queryByTestId, restore } = renderControls({}, "paused", "paused_auto", false);
+  test("still renders operate controls when imported is false (operator-driven paused_human)", () => {
+    const { queryByTestId, restore } = renderControls({}, "paused", "paused_human", false);
     try {
       expect(queryByTestId("imported-badge")).toBeNull();
       expect(queryByTestId("run-controls-resume")).not.toBeNull();

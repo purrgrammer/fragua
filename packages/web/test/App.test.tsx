@@ -123,6 +123,7 @@ describe("App", () => {
               workflow: "wf",
               startedAt: "2024-01-01T00:00:00Z",
               status: "success",
+              runStatus: "completed",
               eventCount: 10,
               costUsd: 0,
               inputTokens: 0,

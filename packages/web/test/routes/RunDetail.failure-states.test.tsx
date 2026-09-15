@@ -9,6 +9,7 @@ import { RunConversation } from "../../src/components/RunConversation.tsx";
 import type { RunDetail as RunDetailT, RunMessageRow } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { makeRunDetail } from "../helpers/fixtures.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 // ─── FakeEventSource with error injection ────────────────────────
@@ -80,21 +81,7 @@ function mount(client: ReturnType<typeof createTestQueryClient>, path: string) {
 }
 
 function runningDetail(runId: string): RunDetailT {
-  return {
-    runId,
-    workflowName: "demo",
-    startedAt: "2024-01-01T00:00:00Z",
-    status: "running",
-    runStatus: "running",
-    lastEventSeq: 1,
-    nodes: [],
-    selectedEdges: [],
-    costUsd: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-  };
+  return makeRunDetail({ runId, workflowName: "demo" });
 }
 
 describe("RunDetail — failure states are surfaced, not swallowed", () => {

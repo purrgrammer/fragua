@@ -30,6 +30,7 @@ import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
 import type { RunDetail } from "../../src/lib/api.ts";
+import { makeRunDetail } from "../helpers/fixtures.ts";
 import { renderWithClient as render } from "../helpers/with-query-client.tsx";
 
 // start → middle → exit (middle is the only declared step; the parser
@@ -44,11 +45,8 @@ steps:
 `;
 
 function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
-  return {
-    runId: "r1",
+  return makeRunDetail({
     startedAt: "2024-01-01T00:00:00.000Z",
-    status: "running",
-    runStatus: "running",
     lastEventSeq: 2,
     nodes: [
       { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
@@ -56,13 +54,8 @@ function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
     ],
     selectedEdges: [{ from: "start", to: "middle", iteration: 0, pass: 0 }],
     workflowSource: WORKFLOW_SOURCE,
-    costUsd: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
     ...overrides,
-  };
+  });
 }
 
 describe("toFlowGraph — pure transform", () => {

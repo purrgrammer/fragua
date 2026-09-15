@@ -17,21 +17,18 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
 import { WorktreeInbox } from "../../src/components/WorktreeInbox.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
+import { summaryRow } from "../helpers/fixtures.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 // ── Fixtures ──────────────────────────────────────────────────────────
 
-const PENDING_ROW_1: RunSummary = {
+const PENDING_ROW_1: RunSummary = summaryRow({
   runId: "run-aaa",
-  startedAt: "2024-01-01T00:00:00Z",
   status: "success",
-  runStatus: "completed",
   eventCount: 10,
   costUsd: 0.01,
   inputTokens: 100,
   outputTokens: 50,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
   title: "Fix the widget",
   inboxStatus: "pending",
   baseGitRef: "main",
@@ -39,27 +36,24 @@ const PENDING_ROW_1: RunSummary = {
     committed: { filesChanged: 2, insertions: 12, deletions: 3 },
     uncommitted: null,
   },
-};
+});
 
 // PENDING_ROW_2 has no committed stat — Branch/Merge should not be offered
-const PENDING_ROW_2: RunSummary = {
+const PENDING_ROW_2: RunSummary = summaryRow({
   runId: "run-bbb",
   startedAt: "2024-01-02T00:00:00Z",
   status: "fail",
-  runStatus: "halted",
   eventCount: 5,
   costUsd: 0.005,
   inputTokens: 40,
   outputTokens: 20,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
   title: "Add tests",
   inboxStatus: "pending",
   changeStat: {
     committed: null,
     uncommitted: { filesChanged: 1, insertions: 4, deletions: 0 },
   },
-};
+});
 
 // URL produced by listRuns({ inbox: "pending", order: "oldest", excludeImported: true })
 // order param is set before inbox, excludeImported comes last.

@@ -1,11 +1,13 @@
-// Shared test fixtures for RunSummary rows.
+// Shared test fixtures for RunSummary / RunDetail rows.
 //
-// `STATUS_TO_RUN_STATUS` is the coarse `status → runStatus` collapse the
-// server projection performs; it lived duplicated across the suite until
-// this shared source. `summaryRow` builds a minimal RunSummary and defaults
-// runStatus through the map, so a new required field is added in one place.
+// `STATUS_TO_RUN_STATUS` is a test-only reverse approximation of the
+// server projection's `runStatus → status` collapse (the projection maps
+// raw runStatus down to the coarse UI status; here we invert it to pick a
+// plausible default runStatus from a status). `summaryRow` / `makeRunDetail`
+// build a minimal row and default runStatus through the map, so a new
+// required field is added in one place instead of scattered across suites.
 
-import type { RunSummary } from "../../src/lib/api.ts";
+import type { RunDetail, RunSummary } from "../../src/lib/api.ts";
 
 export const STATUS_TO_RUN_STATUS: Record<RunSummary["status"], RunSummary["runStatus"]> = {
   queued: "queued",
@@ -14,27 +16,72 @@ export const STATUS_TO_RUN_STATUS: Record<RunSummary["status"], RunSummary["runS
   success: "completed",
   fail: "halted",
   canceled: "cancelled",
+  // No status collapses to `running` from the server; `unknown` has no
+  // faithful inverse, so callers depending on it should pass runStatus
+  // explicitly rather than trust this arbitrary default.
   unknown: "running",
 };
 
 export function summaryRow(overrides: Partial<RunSummary> = {}): RunSummary {
-  const status = overrides.status ?? "success";
-  return {
-    runId: overrides.runId ?? "r",
-    startedAt: overrides.startedAt ?? "2024-01-01T00:00:00Z",
+  const {
+    runId,
+    startedAt,
     status,
-    runStatus: overrides.runStatus ?? STATUS_TO_RUN_STATUS[status],
-    eventCount: overrides.eventCount ?? 1,
-    costUsd: overrides.costUsd ?? 0,
-    inputTokens: overrides.inputTokens ?? 0,
-    outputTokens: overrides.outputTokens ?? 0,
-    cacheReadTokens: overrides.cacheReadTokens ?? 0,
-    cacheWriteTokens: overrides.cacheWriteTokens ?? 0,
-    ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
-    ...(overrides.workflow !== undefined ? { workflow: overrides.workflow } : {}),
-    ...(overrides.workflowName !== undefined ? { workflowName: overrides.workflowName } : {}),
-    ...(overrides.inboxStatus !== undefined ? { inboxStatus: overrides.inboxStatus } : {}),
-    ...(overrides.changeStat !== undefined ? { changeStat: overrides.changeStat } : {}),
-    ...(overrides.baseGitRef !== undefined ? { baseGitRef: overrides.baseGitRef } : {}),
+    runStatus,
+    eventCount,
+    costUsd,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    ...rest
+  } = overrides;
+  const resolvedStatus = status ?? "success";
+  return {
+    runId: runId ?? "r",
+    startedAt: startedAt ?? "2024-01-01T00:00:00Z",
+    status: resolvedStatus,
+    runStatus: runStatus ?? STATUS_TO_RUN_STATUS[resolvedStatus],
+    eventCount: eventCount ?? 1,
+    costUsd: costUsd ?? 0,
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    cacheReadTokens: cacheReadTokens ?? 0,
+    cacheWriteTokens: cacheWriteTokens ?? 0,
+    ...rest,
+  };
+}
+
+export function makeRunDetail(overrides: Partial<RunDetail> = {}): RunDetail {
+  const {
+    runId,
+    startedAt,
+    status,
+    runStatus,
+    lastEventSeq,
+    nodes,
+    selectedEdges,
+    costUsd,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    ...rest
+  } = overrides;
+  const resolvedStatus = status ?? "running";
+  return {
+    runId: runId ?? "r1",
+    startedAt: startedAt ?? "2024-01-01T00:00:00Z",
+    status: resolvedStatus,
+    runStatus: runStatus ?? STATUS_TO_RUN_STATUS[resolvedStatus],
+    lastEventSeq: lastEventSeq ?? 1,
+    nodes: nodes ?? [],
+    selectedEdges: selectedEdges ?? [],
+    costUsd: costUsd ?? 0,
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    cacheReadTokens: cacheReadTokens ?? 0,
+    cacheWriteTokens: cacheWriteTokens ?? 0,
+    ...rest,
   };
 }
