@@ -10,6 +10,7 @@
 import type { ToolResultMessage } from "@fragua/types";
 import { OctagonXIcon } from "lucide-react";
 import type { JSX } from "react";
+import { toolData } from "./tool-result-helpers.ts";
 
 export interface AbortToolParams {
   reason?: string;
@@ -27,7 +28,7 @@ interface AbortToolResultProps {
 export function AbortToolResult({ params, result }: AbortToolResultProps): JSX.Element {
   // `params.reason` is what the agent passed; `data.reason` is what the
   // tool echoed back. They agree — prefer the agent's input.
-  const data = ((result?.details as { data?: AbortToolData } | undefined)?.data ?? {}) as AbortToolData;
+  const data = toolData<AbortToolData>(result);
   const reason = params?.reason ?? data.reason ?? "(no reason given)";
 
   return (
