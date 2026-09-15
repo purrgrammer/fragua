@@ -35,6 +35,7 @@ const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
  * 6767 is occupied, `startServer` walks up one port at a time (see
  * `portRetries` below) so a stray collision doesn't kill startup. */
 export const DEFAULT_WEB_PORT = 6767;
+export const DEFAULT_WEB_HOST = "127.0.0.1";
 
 /**
  * Locate the built web bundle by walking up from this file.
@@ -64,7 +65,9 @@ export interface ServeCommandOptions {
   /** Provenance tag stamped onto `server_endpoint.harness_version`. The
    * harness passes its version; a standalone `fragua serve` leaves it null. */
   version?: string | null;
-  /** Hostname to bind. Default `"::"` (dual-stack IPv4+IPv6). */
+  /** Address to bind. Resolution: this > `web.host` in config >
+   * `DEFAULT_WEB_HOST` (loopback). Pass `"::"` or `"0.0.0.0"` to expose the
+   * unauthenticated API to the network deliberately. */
   hostname?: string;
   /** Optional port overrides forwarded to `createServer`. */
   ports?: ServerPorts;
@@ -98,6 +101,8 @@ export interface ServerHandle {
    * or `origin` in API-only mode. Mirrors the discovery file's `url`. */
   url: string;
   port: number;
+  /** Address the listener is bound to (loopback unless overridden). */
+  hostname: string;
   /** Absolute path of the SQLite store this server is reading from. */
   storePath: string;
   /** Absolute path of the web bundle mounted at `/`, or `undefined` when
@@ -166,11 +171,14 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     ...(webDistDir !== undefined ? { webDistDir } : {}),
     ...(COMPILED ? { webBundle: EMBEDDED_WEB_ASSETS } : {}),
   });
-  // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections
-  // (kernel default IPV6_V6ONLY=0 on Linux/macOS). This makes EADDRINUSE fire
-  // regardless of which address family an existing listener is using, so the
-  // printed `http://localhost:<port>` URL is actually the one we own.
-  const hostname = opts.hostname ?? "::";
+  // Loopback by default: the API has no auth, so anything reachable on the
+  // LAN could enqueue runs, write provider credentials, or `accept` into the
+  // operator's git tree. Wide binds ("::" / "0.0.0.0") are opt-in via
+  // `--host` or `web.host`. A dual-stack or 0.0.0.0 occupant still trips
+  // EADDRINUSE against 127.0.0.1, so port auto-bump keeps working; only an
+  // `::1`-only listener slips past, and the printed localhost URL could then
+  // resolve to it.
+  const hostname = opts.hostname ?? cfg.web?.host ?? DEFAULT_WEB_HOST;
   const portExplicit = opts.port !== undefined;
   // Resolution: explicit caller arg > config.web.port > DEFAULT_WEB_PORT.
   // Keeping this here (not in the bin layer) means `fragua serve`,
@@ -222,6 +230,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     origin,
     url,
     port,
+    hostname,
     storePath,
     webDistDir: webSource ?? undefined,
     async close() {

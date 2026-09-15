@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_WEB_PORT, serveCommand, startServer } from "../src/commands/serve.ts";
+import { DEFAULT_WEB_HOST, DEFAULT_WEB_PORT, serveCommand, startServer } from "../src/commands/serve.ts";
 
 describe("startServer", () => {
   let handle: Awaited<ReturnType<typeof startServer>> | undefined;
@@ -93,6 +93,34 @@ describe("startServer", () => {
     handle = await startServer({ cwd: scratch, homeDir: scratchHome });
     expect(handle.port).toBeGreaterThanOrEqual(DEFAULT_WEB_PORT);
     expect(handle.port).toBeLessThan(DEFAULT_WEB_PORT + 20);
+  });
+
+  test("binds loopback by default", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
+    expect(DEFAULT_WEB_HOST).toBe("127.0.0.1");
+    expect(handle.hostname).toBe(DEFAULT_WEB_HOST);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/health`);
+    expect(res.status).toBe(200);
+  });
+
+  test("config.web.host widens the bind when --host is omitted", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.yaml"), 'web:\n  host: "::"\n');
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
+    expect(handle.hostname).toBe("::");
+  });
+
+  test("explicit hostname wins over config.web.host", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua/config.yaml"), 'web:\n  host: "::"\n');
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, hostname: "127.0.0.1" });
+    expect(handle.hostname).toBe("127.0.0.1");
   });
 
   test("explicit --port disables the auto-bump (hard fail on EADDRINUSE)", async () => {

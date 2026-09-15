@@ -49,6 +49,9 @@ export interface HarnessCommandOptions {
    * via `web.port` from `~/.fragua/config.yaml`, then `DEFAULT_WEB_PORT`
    * (6767). Pass 0 for an ephemeral bind. */
   port?: number;
+  /** Bind address. When omitted, `startServer` resolves via `web.host`,
+   * then loopback. */
+  host?: string;
 }
 
 export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<number> {
@@ -77,6 +80,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   try {
     const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir, version: FRAGUA_VERSION };
     if (opts.port !== undefined) startOpts.port = opts.port;
+    if (opts.host !== undefined) startOpts.hostname = opts.host;
     serverHandle = await startServer(startOpts);
   } catch (err) {
     console.error(chalk.red(`harness: failed to bind HTTP — ${(err as Error).message}`));

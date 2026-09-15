@@ -79,6 +79,10 @@ const Web = Type.Object(
     // (6767). When the resolved port is in use, the server bumps to the
     // next free port so a stray collision doesn't kill startup.
     port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
+    // Bind address for the harness / serve HTTP. CLI `--host` wins; absent
+    // here falls through to loopback. The API is unauthenticated, so a wide
+    // bind ("::" / "0.0.0.0") is a deliberate choice, never a default.
+    host: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },
 );
