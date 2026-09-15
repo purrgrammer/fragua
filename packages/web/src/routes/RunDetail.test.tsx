@@ -8,6 +8,7 @@ import { StatsStrip } from "./RunDetail.tsx";
 const baseDetail = {
   runId: "run-abc123",
   status: "success" as const,
+  runStatus: "completed" as const,
   startedAt: new Date().toISOString(),
   lastEventSeq: 0,
   nodes: [],
@@ -82,7 +83,7 @@ describe("StatsStrip — Cache hit rate tile", () => {
   });
 
   test("renders — when cacheReadTokens is undefined (missing from payload)", () => {
-    const { cacheReadTokens: _omitted, ...detailWithoutCache } = baseDetail;
+    const detailWithoutCache = { ...baseDetail, cacheReadTokens: undefined as unknown as number };
     const { container } = render(<StatsStrip detail={detailWithoutCache} />);
     const tile = within(container).getByTestId("detail-cache-tile");
     expect(tile.textContent).toContain("—");

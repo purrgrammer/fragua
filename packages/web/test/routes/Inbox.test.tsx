@@ -32,6 +32,8 @@ function blockedRun(id: string): RunSummary {
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   };
 }
 
@@ -45,6 +47,8 @@ function pendingRun(id: string): RunSummary {
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     inboxStatus: "pending",
     changeStat: {
       committed: { filesChanged: 1, insertions: 2, deletions: 0 },

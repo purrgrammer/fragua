@@ -30,6 +30,8 @@ const PENDING_ROW_1: RunSummary = {
   costUsd: 0.01,
   inputTokens: 100,
   outputTokens: 50,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
   title: "Fix the widget",
   inboxStatus: "pending",
   baseGitRef: "main",
@@ -49,6 +51,8 @@ const PENDING_ROW_2: RunSummary = {
   costUsd: 0.005,
   inputTokens: 40,
   outputTokens: 20,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
   title: "Add tests",
   inboxStatus: "pending",
   changeStat: {

@@ -85,12 +85,15 @@ function runningDetail(runId: string): RunDetailT {
     workflowName: "demo",
     startedAt: "2024-01-01T00:00:00Z",
     status: "running",
+    runStatus: "running",
     lastEventSeq: 1,
     nodes: [],
     selectedEdges: [],
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   };
 }
 

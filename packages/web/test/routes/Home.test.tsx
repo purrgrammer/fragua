@@ -13,21 +13,32 @@ import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
 
+const STATUS_TO_RUN_STATUS: Record<RunSummary["status"], RunSummary["runStatus"]> = {
+  queued: "queued",
+  running: "running",
+  paused: "paused",
+  success: "completed",
+  fail: "halted",
+  canceled: "cancelled",
+  unknown: "running",
+};
+
 function row(overrides: Partial<RunSummary> = {}): RunSummary {
+  const status = overrides.status ?? "success";
   return {
     runId: overrides.runId ?? "run-x",
     startedAt: overrides.startedAt ?? "2024-01-01T00:00:00Z",
-    status: overrides.status ?? "success",
+    status,
+    runStatus: overrides.runStatus ?? STATUS_TO_RUN_STATUS[status],
     eventCount: overrides.eventCount ?? 1,
     costUsd: overrides.costUsd ?? 0,
     inputTokens: overrides.inputTokens ?? 0,
     outputTokens: overrides.outputTokens ?? 0,
-    ...(overrides.cacheReadTokens !== undefined ? { cacheReadTokens: overrides.cacheReadTokens } : {}),
-    ...(overrides.cacheWriteTokens !== undefined ? { cacheWriteTokens: overrides.cacheWriteTokens } : {}),
+    cacheReadTokens: overrides.cacheReadTokens ?? 0,
+    cacheWriteTokens: overrides.cacheWriteTokens ?? 0,
     ...(overrides.workflow !== undefined ? { workflow: overrides.workflow } : {}),
     ...(overrides.workflowName !== undefined ? { workflowName: overrides.workflowName } : {}),
     ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
-    ...(overrides.runStatus !== undefined ? { runStatus: overrides.runStatus } : {}),
     ...(overrides.inboxStatus !== undefined ? { inboxStatus: overrides.inboxStatus } : {}),
     ...(overrides.changeStat !== undefined ? { changeStat: overrides.changeStat } : {}),
     ...(overrides.baseGitRef !== undefined ? { baseGitRef: overrides.baseGitRef } : {}),

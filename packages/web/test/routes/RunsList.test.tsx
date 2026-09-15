@@ -28,10 +28,13 @@ describe("RunsList", () => {
         workflow: "wf-A",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         eventCount: 1,
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       },
     ] satisfies RunSummary[]);
 
@@ -60,10 +63,13 @@ describe("RunsList", () => {
         workflow: "wf-A",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         eventCount: 3,
         costUsd: 0.12,
         inputTokens: 3000,
         outputTokens: 1200,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         durationMs: 45_000,
       },
       {
@@ -72,10 +78,13 @@ describe("RunsList", () => {
         workflow: "wf-B",
         startedAt: "2024-01-02T00:00:00Z",
         status: "running",
+        runStatus: "running",
         eventCount: 1,
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       },
     ];
     const client = createTestQueryClient();
@@ -119,10 +128,13 @@ describe("RunsList", () => {
         title: "Ad-hoc run",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         eventCount: 1,
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       },
     ];
     const client = createTestQueryClient();
@@ -199,6 +211,8 @@ function importedRow(overrides: Partial<RunSummary> = {}): RunSummary {
     costUsd: 0.01,
     inputTokens: 100,
     outputTokens: 50,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     imported: true,
     title: "Imported run",
     ...overrides,
@@ -215,6 +229,8 @@ function normalRow(overrides: Partial<RunSummary> = {}): RunSummary {
     costUsd: 0.01,
     inputTokens: 100,
     outputTokens: 50,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     title: "Normal run",
     ...overrides,
   };

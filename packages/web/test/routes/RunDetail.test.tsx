@@ -121,12 +121,15 @@ describe("RunDetail", () => {
       workflowName: "build-feature",
       startedAt: "2024-01-01T00:00:00Z",
       status: "running",
+      runStatus: "running",
       lastEventSeq: 3,
       nodes: [],
       selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     const { client, mock } = prepare("abc12345xyz", detail);
     try {
@@ -151,12 +154,15 @@ describe("RunDetail", () => {
       workflowName: "w",
       startedAt: "2024-01-01T00:00:00Z",
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 4,
       nodes: [],
       selectedEdges: [],
       costUsd: 0.42,
       inputTokens: 2500,
       outputTokens: 500,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       durationMs: 75_000,
     };
     const { client, mock } = prepare("run-metrics", detail);
@@ -188,12 +194,15 @@ describe("RunDetail", () => {
       runId: "run-empty",
       startedAt: "2024-01-01T00:00:00Z",
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 1,
       nodes: [],
       selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     const { client, mock } = prepare("run-empty", detail);
     try {
@@ -214,12 +223,15 @@ describe("RunDetail", () => {
       runId: "run-dates",
       startedAt: "2024-06-01T12:34:56Z",
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 2,
       nodes: [],
       selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     const { client, mock } = prepare("run-dates", detail);
     try {
@@ -276,12 +288,15 @@ describe("RunDetail", () => {
       runId: "run-ticking",
       startedAt,
       status: "running",
+      runStatus: "running",
       lastEventSeq: 1,
       nodes: [],
       selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     const { client, mock } = prepare("run-ticking", detail);
     try {
@@ -321,12 +336,15 @@ describe("RunDetail", () => {
       runId: "run-terminal",
       startedAt,
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 5,
       nodes: [],
       selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       // Server durationMs is authoritative for terminal runs.
       durationMs: 3_000,
     };
@@ -359,6 +377,7 @@ describe("RunDetail", () => {
       runId: "run-live-cost",
       startedAt: "2024-01-01T00:00:00Z",
       status: "running",
+      runStatus: "running",
       lastEventSeq: 1,
       nodes: [],
       selectedEdges: [],
@@ -366,6 +385,7 @@ describe("RunDetail", () => {
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheWriteTokens: 0,
       cacheReadTokens: 0,
     };
     const { client, mock } = prepare("run-live-cost", detail);
@@ -451,12 +471,14 @@ describe("RunDetail", () => {
       runId: "run-cost-overlap",
       startedAt: "2024-01-01T00:00:00Z",
       status: "running",
+      runStatus: "running",
       lastEventSeq: 100,
       nodes: [],
       selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheWriteTokens: 0,
       cacheReadTokens: 0,
     };
     const { client, mock } = prepare("run-cost-overlap", detailV1);
@@ -517,9 +539,10 @@ describe("RunDetail", () => {
       workflowName: "demo",
       startedAt: "2024-01-01T00:00:00Z",
       status: "running",
+      runStatus: "running",
       lastEventSeq: 1,
-      nodes: [{ nodeId: "implement", iteration: 0, state: "running", lastEventSeq: 1 }],
-      selectedEdges: [{ from: "start", to: "implement", iteration: 0 }],
+      nodes: [{ nodeId: "implement", iteration: 0, state: "running", lastEventSeq: 1, pass: 0 }],
+      selectedEdges: [{ from: "start", to: "implement", iteration: 0, pass: 0 }],
       workflowSource: `name: demo
 steps:
   implement:
@@ -530,6 +553,8 @@ steps:
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     const { client, mock } = prepare("run-graph", detail);
     try {
@@ -558,6 +583,8 @@ steps:
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       };
       const { client, mock } = prepare("run-running", detail);
       try {
@@ -579,12 +606,15 @@ steps:
         runId: "run-paused-op",
         startedAt: "2024-01-01T00:00:00Z",
         status: "paused",
+        runStatus: "paused",
         lastEventSeq: 1,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       };
       const { client, mock } = prepare("run-paused-op", detail);
       try {
@@ -613,6 +643,8 @@ steps:
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         hitlNodeId: "gate",
         hitlLabel: "Approve?",
         hitlOptions: ["approve", "reject"],
@@ -643,6 +675,8 @@ steps:
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       };
       const client = createTestQueryClient();
       client.setQueryData(queries.runs.detail("run-cancel-confirm").queryKey, detail);
@@ -703,6 +737,8 @@ steps:
         costUsd: 0.01,
         inputTokens: 100,
         outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         imported: true,
       };
       const { client, mock } = prepare("run-imported", detail);
@@ -736,6 +772,8 @@ steps:
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         haltReason: "error",
         haltDetail: "handler threw: boom",
       };
@@ -769,6 +807,8 @@ steps:
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         haltReason: "worktree_error",
         haltDetail: "worktree_provision_failed: no disk space",
       };
@@ -805,6 +845,8 @@ steps:
           costUsd: 0,
           inputTokens: 0,
           outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
         };
         const { client, mock } = prepare(id, detail);
         try {
@@ -833,6 +875,8 @@ steps:
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       };
       const { client, mock } = prepare("run-live-halt", detail);
       const fakeEs = installFakeEventSource();
@@ -916,12 +960,15 @@ steps:
         runId: "run-diff-cwd",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const { client, mock } = prepareWithDiff("run-diff-cwd", detail);
@@ -941,12 +988,15 @@ steps:
         runId: "run-diff-nocwd",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 1,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         // no cwd field
       };
       const { client, mock } = prepareWithDiff("run-diff-nocwd", detail);
@@ -966,12 +1016,15 @@ steps:
         runId: "run-diff-redir",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 1,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       };
       const { client, mock } = prepareWithDiff("run-diff-redir", detail);
       try {
@@ -990,12 +1043,15 @@ steps:
         runId: "run-diff-latest",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const diffText = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
@@ -1029,12 +1085,15 @@ steps:
         runId: "run-diff-empty",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 1,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const client = createTestQueryClient();
@@ -1067,12 +1126,15 @@ steps:
         runId: "run-diff-disabled",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 1,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const client = createTestQueryClient();
@@ -1106,12 +1168,15 @@ steps:
         runId: "run-diff-enabled",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const { client, mock } = prepareWithDiff("run-diff-enabled", detail);
@@ -1132,12 +1197,15 @@ steps:
         runId: "run-diff-node-inv",
         startedAt: "2024-01-01T00:00:00Z",
         status: "running",
+        runStatus: "running",
         lastEventSeq: 5,
-        nodes: [{ nodeId: "build", iteration: 0, state: "running", lastEventSeq: 5 }],
+        nodes: [{ nodeId: "build", iteration: 0, state: "running", lastEventSeq: 5, pass: 0 }],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const { client, mock } = prepareWithDiff("run-diff-node-inv", detail);
@@ -1167,12 +1235,15 @@ steps:
         runId: "run-diff-run-inv",
         startedAt: "2024-01-01T00:00:00Z",
         status: "running",
+        runStatus: "running",
         lastEventSeq: 5,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const { client, mock } = prepareWithDiff("run-diff-run-inv", detail);
@@ -1199,12 +1270,15 @@ steps:
         runId: "run-diff-selector",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const { client, mock } = prepareWithDiff("run-diff-selector", detail);
@@ -1234,12 +1308,15 @@ steps:
         runId: "run-diff-default",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const latestDiff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
@@ -1267,12 +1344,15 @@ steps:
         runId: "run-diff-pick",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         cwd: "/home/user/project",
       };
       const latestDiff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
@@ -1321,12 +1401,15 @@ steps:
         runId: "run-git-base",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 5,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         baseGitRef: "main",
         baseGitSha: "abcdef1234567890",
       };
@@ -1351,12 +1434,15 @@ steps:
         runId: "run-sha-only",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 5,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         baseGitSha: "abcdef1234567890",
       };
       const { client, mock } = prepare("run-sha-only", detail);
@@ -1379,12 +1465,15 @@ steps:
         runId: "run-no-git",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 5,
         nodes: [],
         selectedEdges: [],
         costUsd: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       };
       const { client, mock } = prepare("run-no-git", detail);
       try {

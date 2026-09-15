@@ -3,10 +3,10 @@
 // Specialized banners own the action for their substatus:
 //   - paused                → RunPausedNotice (Resume + Cancel; budget reason has Raise & Resume)
 //   - paused_human           → HitlChoice (option buttons)
-// RunControls handles the "everything else" surface: generic operator
-// pause, resume of an operator-paused run, and cancel-from-anywhere on
-// non-terminal runs. Returns null when no action applies (terminal
-// runs, or when a specialized banner already owns every action).
+// RunControls handles the generic operator surface: pause a running run,
+// resume an operator-paused run (`paused`/`paused_human` with no options),
+// and cancel any non-terminal run. Returns null when no action applies
+// (terminal runs, or imported runs).
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, X } from "lucide-react";
@@ -87,11 +87,8 @@ export function RunControls({
   const canPause = status === "running";
   const isOperatorHitlPause = runStatus === "paused_human" && (hitlOptionsCount ?? 0) === 0;
   const canResume =
-    status === "paused" && runStatus !== "paused" && (runStatus !== "paused_human" || isOperatorHitlPause);
-  // Cancel is available everywhere non-terminal. RunPausedNotice
-  // already exposes a Cancel for `paused` — hide ours there to avoid
-  // two adjacent Cancel buttons.
-  const canCancel = (status === "running" || status === "queued" || status === "paused") && runStatus !== "paused";
+    status === "paused" && (runStatus === "paused" || runStatus !== "paused_human" || isOperatorHitlPause);
+  const canCancel = status === "running" || status === "queued" || status === "paused";
 
   if (!canPause && !canResume && !canCancel) return null;
 

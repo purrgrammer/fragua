@@ -48,16 +48,19 @@ function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
     runId: "r1",
     startedAt: "2024-01-01T00:00:00.000Z",
     status: "running",
+    runStatus: "running",
     lastEventSeq: 2,
     nodes: [
-      { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-      { nodeId: "middle", iteration: 0, state: "running", lastEventSeq: 2 },
+      { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+      { nodeId: "middle", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 },
     ],
-    selectedEdges: [{ from: "start", to: "middle", iteration: 0 }],
+    selectedEdges: [{ from: "start", to: "middle", iteration: 0, pass: 0 }],
     workflowSource: WORKFLOW_SOURCE,
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     ...overrides,
   };
 }
@@ -251,16 +254,19 @@ steps:
       runId: "r-tool",
       startedAt: "2024-01-01T00:00:00.000Z",
       status: "running",
+      runStatus: "running",
       lastEventSeq: 2,
       nodes: [
-        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 2 },
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+        { nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 },
       ],
-      selectedEdges: [{ from: "start", to: "find_pr", iteration: 0 }],
+      selectedEdges: [{ from: "start", to: "find_pr", iteration: 0, pass: 0 }],
       workflowSource: src,
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     const { container } = render(<GraphView detail={detail} activeNodeIds={new Set(["find_pr"])} />);
     const canvas = await waitFor(() => within(container).getByTestId("graphview"));
@@ -785,16 +791,16 @@ steps:
     const graph = parseWorkflow(src);
     const detail = makeDetail({
       nodes: [
-        { nodeId: "audit", iteration: 2, state: "completed", lastEventSeq: 9 },
-        { nodeId: "review", iteration: 2, state: "completed", lastEventSeq: 10 },
+        { nodeId: "audit", iteration: 2, state: "completed", lastEventSeq: 9, pass: 0 },
+        { nodeId: "review", iteration: 2, state: "completed", lastEventSeq: 10, pass: 0 },
       ],
       selectedEdges: [
-        { from: "audit", to: "review", iteration: 0 },
-        { from: "review", to: "audit", iteration: 0 },
-        { from: "audit", to: "review", iteration: 1 },
-        { from: "review", to: "audit", iteration: 1 },
-        { from: "audit", to: "review", iteration: 2 },
-        { from: "review", to: "exit", iteration: 0 },
+        { from: "audit", to: "review", iteration: 0, pass: 0 },
+        { from: "review", to: "audit", iteration: 0, pass: 0 },
+        { from: "audit", to: "review", iteration: 1, pass: 0 },
+        { from: "review", to: "audit", iteration: 1, pass: 0 },
+        { from: "audit", to: "review", iteration: 2, pass: 0 },
+        { from: "review", to: "exit", iteration: 0, pass: 0 },
       ],
       workflowSource: src,
     });
@@ -821,15 +827,15 @@ steps:
     const graph = parseWorkflow(src);
     const detail = makeDetail({
       nodes: [
-        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "a", iteration: 0, state: "completed", lastEventSeq: 2 },
-        { nodeId: "b", iteration: 0, state: "completed", lastEventSeq: 3 },
-        { nodeId: "exit", iteration: 0, state: "completed", lastEventSeq: 4 },
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+        { nodeId: "a", iteration: 0, state: "completed", lastEventSeq: 2, pass: 0 },
+        { nodeId: "b", iteration: 0, state: "completed", lastEventSeq: 3, pass: 0 },
+        { nodeId: "exit", iteration: 0, state: "completed", lastEventSeq: 4, pass: 0 },
       ],
       selectedEdges: [
-        { from: "start", to: "a", iteration: 0 },
-        { from: "a", to: "b", iteration: 0 },
-        { from: "b", to: "exit", iteration: 0 },
+        { from: "start", to: "a", iteration: 0, pass: 0 },
+        { from: "a", to: "b", iteration: 0, pass: 0 },
+        { from: "b", to: "exit", iteration: 0, pass: 0 },
       ],
       workflowSource: src,
       status: "success",
@@ -861,15 +867,15 @@ steps:
 
     const runDetail = makeDetail({
       nodes: [
-        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "audit", iteration: 0, state: "completed", lastEventSeq: 2 },
-        { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 3 },
-        { nodeId: "exit", iteration: 0, state: "completed", lastEventSeq: 4 },
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+        { nodeId: "audit", iteration: 0, state: "completed", lastEventSeq: 2, pass: 0 },
+        { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 3, pass: 0 },
+        { nodeId: "exit", iteration: 0, state: "completed", lastEventSeq: 4, pass: 0 },
       ],
       selectedEdges: [
-        { from: "start", to: "audit", iteration: 0 },
-        { from: "audit", to: "review", iteration: 0 }, // success branch
-        { from: "review", to: "exit", iteration: 0 },
+        { from: "start", to: "audit", iteration: 0, pass: 0 },
+        { from: "audit", to: "review", iteration: 0, pass: 0 }, // success branch
+        { from: "review", to: "exit", iteration: 0, pass: 0 },
       ],
       workflowSource: src,
       status: "success",
@@ -968,12 +974,12 @@ steps:
     const detail: RunDetail = makeDetail({
       workflowSource: FANOUT_SOURCE,
       nodes: [
-        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2 },
-        { nodeId: "security", iteration: 0, state: "running", lastEventSeq: 3 },
-        { nodeId: "quality", iteration: 0, state: "running", lastEventSeq: 4 },
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+        { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 },
+        { nodeId: "security", iteration: 0, state: "running", lastEventSeq: 3, pass: 0 },
+        { nodeId: "quality", iteration: 0, state: "running", lastEventSeq: 4, pass: 0 },
       ],
-      selectedEdges: [{ from: "start", to: "review", iteration: 0 }],
+      selectedEdges: [{ from: "start", to: "review", iteration: 0, pass: 0 }],
     });
     const activeNodeIds = new Set(detail.nodes.filter((n) => n.state === "running").map((n) => n.nodeId));
     const { flowNodes } = toFlowGraph(detail, graph, { activeNodeIds });
@@ -992,12 +998,12 @@ steps:
     const detail: RunDetail = makeDetail({
       workflowSource: FANOUT_SOURCE,
       nodes: [
-        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2 },
-        { nodeId: "security", iteration: 0, state: "running", lastEventSeq: 3 },
-        { nodeId: "quality", iteration: 0, state: "running", lastEventSeq: 4 },
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+        { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 },
+        { nodeId: "security", iteration: 0, state: "running", lastEventSeq: 3, pass: 0 },
+        { nodeId: "quality", iteration: 0, state: "running", lastEventSeq: 4, pass: 0 },
       ],
-      selectedEdges: [{ from: "start", to: "review", iteration: 0 }], // NO parallel→branch selection event
+      selectedEdges: [{ from: "start", to: "review", iteration: 0, pass: 0 }], // NO parallel→branch selection event
     });
     const { flowEdges } = toFlowGraph(detail, graph);
     const takeAll = flowEdges.filter((e) => e.source === "review");
