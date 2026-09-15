@@ -19,9 +19,13 @@ import {
   getLimits,
   OPERATOR_NOTES_KEY,
   type OutputsValue,
+  PENDING_STEER_KEY,
+  PENDING_STEER_MAX_BYTES,
   readGoalGateRetries,
   readOperatorNotes,
+  readPendingSteer,
   retryCountKey,
+  truncateOperatorNote,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import {
@@ -712,27 +716,28 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
         startRoutingPatch[GRAPH_GOAL_KEY] = startGraph.attrs.goal;
       }
+      // Thread a pre-claim steer through routing rather than holding its seq back
+      // on the intent log. `last_applied_seq` is a watermark, so a steer at a
+      // lower seq than a co-arriving non-steer pre-claim intent (e.g. a
+      // `budget_adjusted` at a higher seq) can't be left unapplied while the
+      // later intent advances — advancing past the later one would bury the
+      // steer below the watermark, and holding the watermark below the steer
+      // would leave the later intent unapplied (tripping the supervisor). We
+      // therefore advance past EVERY pre-claim intent and stash the steer text
+      // in `internal.pending_steer` (twin of the operator-notes path); the
+      // first-node dispatch surfaces it as `ctx.steering` and the transition
+      // planner clears it once an llm step consumes it.
+      if (decision.steering !== undefined && decision.steering.length > 0) {
+        startRoutingPatch[PENDING_STEER_KEY] = truncateOperatorNote(decision.steering, PENDING_STEER_MAX_BYTES);
+      }
       // Advance lastAppliedSeq on run_started so the supervisor doesn't
       // mistake the synthetic `intent.run_enqueued` (the queue marker
       // that caused this run to exist) for a fresh operator intent
       // mid-handler. Without this, the supervisor's first tick can land
       // mid-LLM-call and trip the controller (cause: "aborted",
-      // tokens=0), causing a spurious re-dispatch. Fold's `applied`
-      // already includes the run_enqueued seq; we just need to actually
-      // persist it.
-      // Advance past every folded intent EXCEPT a pre-claim steer: leave
-      // `intent.steering_requested` unapplied so the first node's dispatch
-      // fold picks it up and delivers it as `ctx.steering` (the llm handler
-      // bridge injects it into the first user turn). The synthetic
-      // `intent.run_enqueued` marker and every other pre-claim intent still
-      // advance so the supervisor doesn't mistake them for a fresh operator
-      // intent mid-handler.
-      const startSteerSeqs = unapplied.filter((e) => e.type === "intent.steering_requested").map((e) => e.seq);
-      const startAppliedSeqs =
-        startSteerSeqs.length > 0
-          ? decision.appliedSeqs.filter((s) => s < Math.min(...startSteerSeqs))
-          : decision.appliedSeqs;
-      const startAdvanceTo = computeAdvanceAppliedTo(startAppliedSeqs);
+      // tokens=0), causing a spurious re-dispatch. Every pre-claim intent
+      // (including the steer, now carried in routing) advances here.
+      const startAdvanceTo = computeAdvanceAppliedTo(decision.appliedSeqs);
       const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
       if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
       if (startAdvanceTo !== undefined) startAppendOpts.advanceAppliedTo = startAdvanceTo;
@@ -966,7 +971,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     if (decision.humanInput !== undefined) ctxOpts.humanInput = decision.humanInput;
-    if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
+    // Steer delivery merges two sources: a pre-claim steer threaded through
+    // `internal.pending_steer` at run_started (carried until an llm step
+    // consumes it) and any steer the fold just consumed from the intent log
+    // (mid-flight / buffered-on-pause). Both surface through `ctx.steering`.
+    const pendingSteer = readPendingSteer(effectiveRouting);
+    const mergedSteer = [pendingSteer, decision.steering].filter((s): s is string => s != null && s.length > 0);
+    if (mergedSteer.length > 0) ctxOpts.steering = mergedSteer.join("\n");
     if (runEnv !== undefined) ctxOpts.env = runEnv;
     // Budget snapshot at dispatch time. The backend embeds this verbatim
     // into `llm.start.budget` so the UI can render "X of Y used" without

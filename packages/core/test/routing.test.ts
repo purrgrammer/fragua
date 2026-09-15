@@ -30,9 +30,11 @@ import {
   OPERATOR_NOTE_MAX_BYTES,
   OPERATOR_NOTES_KEY,
   OPERATOR_NOTES_MAX_BYTES,
+  PENDING_STEER_KEY,
   PROVIDER_RETRY_ATTEMPT_KEY,
   PROVIDER_RETRY_CUMULATIVE_MS_KEY,
   readOperatorNotes,
+  readPendingSteer,
   retryCountKey,
   timeoutRetriesKey,
   truncateOperatorNote,
@@ -165,6 +167,14 @@ describe("routing accessors", () => {
     expect(readOperatorNotes(r)).toEqual([good]);
     expect(readOperatorNotes({ [OPERATOR_NOTES_KEY]: "junk" })).toEqual([]);
     expect(readOperatorNotes({})).toEqual([]);
+  });
+
+  test("readPendingSteer reads a string and degrades empty/non-string to undefined", () => {
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: "focus on auth" })).toBe("focus on auth");
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: "" })).toBeUndefined(); // cleared sentinel
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: 7 })).toBeUndefined();
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: null })).toBeUndefined();
+    expect(readPendingSteer({})).toBeUndefined();
   });
 
   test("truncateOperatorNote bounds by UTF-8 bytes and marks the cut", () => {

@@ -766,6 +766,57 @@ describe("buildRoutingPatch", () => {
       });
       expect(patch?.["internal.operator_notes"]).toBeUndefined();
     });
+
+    const withSteer = (): Record<string, unknown> => ({ "internal.pending_steer": "focus on auth" });
+
+    test("an llm node completing with success clears the pending steer to the empty sentinel", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(patch?.["internal.pending_steer"]).toBe("");
+    });
+
+    test("a fail/retry outcome keeps the pending steer for the next attempt", () => {
+      const failPatch = buildRoutingPatch({
+        result: transition({ nextNode: "redo", outcomeStatus: "fail" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(failPatch?.["internal.pending_steer"]).toBeUndefined();
+      const retryPatch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", outcomeStatus: "retry" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(retryPatch?.["internal.pending_steer"]).toBeUndefined();
+    });
+
+    test("a non-llm node advancing carries the pending steer forward (does not clear it)", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", route: "approve" }),
+        decision: emptyDecision,
+        state: mkState("gate"),
+        currentNode: "gate",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(patch?.["internal.pending_steer"]).toBeUndefined();
+    });
   });
 });
 

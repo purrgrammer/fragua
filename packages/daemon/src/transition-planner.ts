@@ -22,9 +22,11 @@ import {
   goalGateStep,
   OPERATOR_NOTES_KEY,
   OPERATOR_NOTES_MAX_BYTES,
+  PENDING_STEER_KEY,
   readGateOutcomes,
   readGoalGateRetries,
   readOperatorNotes,
+  readPendingSteer,
   resolveFailRetarget,
   retryCountKey,
   retryStep,
@@ -1018,6 +1020,21 @@ export function buildRoutingPatch(args: {
     readOperatorNotes(effectiveRouting).length > 0
   ) {
     routingPatch = { ...(routingPatch ?? {}), [OPERATOR_NOTES_KEY]: [] };
+  }
+  // Pending pre-claim steer (`internal.pending_steer`): an llm turn that
+  // completes with a success outcome has consumed it (surfaced via
+  // `ctx.steering`) and clears it to the empty sentinel. `fail`/`retry` keep it
+  // (the redirect still applies on the next attempt); a non-llm node keeps it
+  // (the handler ignores `ctx.steering`, so the steer carries forward to the
+  // first llm step). Mirrors the operator-notes consume rule above.
+  if (
+    result.kind === "transition" &&
+    result.outcomeStatus !== "fail" &&
+    result.outcomeStatus !== "retry" &&
+    graph?.nodes[currentNode]?.type === "llm" &&
+    readPendingSteer(effectiveRouting) !== undefined
+  ) {
+    routingPatch = { ...(routingPatch ?? {}), [PENDING_STEER_KEY]: "" };
   }
   return routingPatch;
 }

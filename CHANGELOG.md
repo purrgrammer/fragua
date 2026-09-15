@@ -42,13 +42,20 @@ guarantee.
   locale- or ICU-version-dependent order made the cache prefix differ between
   machines for the same project.
 
+- Steer text (`POST /runs/:id/steer`) is now bounded at 2000 characters and
+  rejected with a validation error at the plane boundary. A near-payload-cap
+  steer previously failed deep in the store write path instead of cleanly at
+  validation.
+
 ### Fixed
 
 - Operator intents sent while a run is still `queued` (before the executor
   claims it) are no longer silently discarded on the run-start turn. A pre-claim
   budget/priority/retry-cap raise now lands in the run's routing before the
   first node dispatches, and a pre-claim steer is delivered to the first `llm`
-  step—injected at the head of its first user turn—rather than dropped.
+  step—injected at the head of its first user turn—rather than dropped, even
+  when it co-arrives with a later cap raise or when the first node is not an
+  `llm` step (it carries forward to the first one that is).
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`

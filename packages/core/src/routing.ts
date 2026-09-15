@@ -101,6 +101,17 @@ export const PRIORITY_KEY = "priority";
  * {@link truncateOperatorNote}); the full text stays on the intent for audit. */
 export const OPERATOR_NOTES_KEY = "internal.operator_notes";
 
+/** A pre-claim steer (`intent.steering_requested` queued while the run was
+ * `queued`) awaiting delivery to the first llm step. Written into the run-start
+ * routing patch instead of being held back on the intent log: `last_applied_seq`
+ * is a watermark, so a steer at a lower seq than a co-arriving non-steer
+ * pre-claim intent (e.g. `budget_adjusted`) cannot be left unapplied while the
+ * later intent advances. Threaded through routing (twin of
+ * {@link OPERATOR_NOTES_KEY}), the executor surfaces it as `ctx.steering` on each
+ * dispatch and the transition planner clears it once an llm step consumes it
+ * (completes with a success outcome). Byte-truncated at write time. */
+export const PENDING_STEER_KEY = "internal.pending_steer";
+
 // ── Value-checked union + documentary schema ─────────────────────────────────
 
 /** The goal-gate outcome union. A value-checked TypeBox union exercised by
@@ -153,6 +164,7 @@ const EXACT_ROUTING_KINDS = new Map<string, RoutingValueKind>([
   [GRAPH_RUN_ID_KEY, "string"],
   [PRIORITY_KEY, "number"],
   [OPERATOR_NOTES_KEY, "operator-notes"],
+  [PENDING_STEER_KEY, "string"],
 ]);
 
 /** Resolve a routing key to its expected value kind, or `undefined` when the key
@@ -250,6 +262,7 @@ export const RoutingStruct = Type.Object({
   timer: Type.Object({ autoResumeAt: Type.Optional(Type.Number()) }),
   context: Type.Object({ goal: Type.Optional(Type.String()), runId: Type.Optional(Type.String()) }),
   operatorNotes: Type.Array(Type.Object({ gateNodeId: Type.String(), route: Type.String(), note: Type.String() })),
+  pendingSteer: Type.Optional(Type.String()),
 });
 export type RoutingStruct = Static<typeof RoutingStruct>;
 
@@ -456,12 +469,25 @@ export function readOperatorNotes(routing: Record<string, unknown>): OperatorNot
   return v.filter(isOperatorNote).filter((n) => n.note.length > 0);
 }
 
+/** Read the pending pre-claim steer awaiting delivery to the first llm step
+ * ({@link PENDING_STEER_KEY}). Degrades a non-string or an empty string (the
+ * cleared sentinel a consuming llm step writes) to undefined, so a tampered
+ * bundle or a consumed key reads as "no steer" rather than delivering junk. */
+export function readPendingSteer(routing: Record<string, unknown>): string | undefined {
+  const v = routing[PENDING_STEER_KEY];
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
 const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 // Byte budgets, not char: the routing column's CHECK is UTF-8 `length < 8192`,
 // so a 2000-char CJK/emoji note (~4-6 KB) would breach a char-only cap.
 export const OPERATOR_NOTE_MAX_BYTES = 2000;
 export const OPERATOR_NOTES_MAX_BYTES = 4096;
+
+// Byte budget for a pending steer written into routing. Matches the operator-
+// note per-note budget so a steer can't monopolise the shared routing column.
+export const PENDING_STEER_MAX_BYTES = 2000;
 
 const TRUNCATION_MARKER = " [truncated]";
 

@@ -108,9 +108,14 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // at the head of the first user turn so the model sees the operator's
     // redirection ahead of the task prompt. Mid-flight steers ride
     // pi-agent-core's queue instead (supervisor onSteer); this is the
-    // pre-dispatch delivery path.
+    // pre-dispatch delivery path. The steer is the HIGHEST-priority prefix: it
+    // sits above the operator gate notes prepended just above, so a live
+    // operator redirect supersedes an earlier gate correction. The text is
+    // fenced in an `[operator-steer]` delimiter (matching the operator-notes
+    // label convention) so attacker-influenceable steer text can't pose as
+    // task content at the head of the prompt.
     if (ctx.steering !== undefined && ctx.steering.length > 0) {
-      prompt = `${ctx.steering}\n\n${prompt}`;
+      prompt = `[operator-steer]\n${ctx.steering}\n[/operator-steer]\n\n${prompt}`;
     }
     const graphGoal = getContext(ctx.routing).goal;
 
