@@ -252,12 +252,24 @@ export function daemonEnvDeny(
     // pi-ai's `findEnvKeys` only reports env keys currently SET (it's
     // registration/env-gated), which the suffix rule already covers. To strip a
     // held provider's credential even when it isn't in this process's env, also
-    // add its conventional `<PROVIDER>_API_KEY` name.
-    const candidates = new Set<string>(findEnvKeys(provider) ?? []);
+    // add its conventional `<PROVIDER>_API_KEY` name. `storeProviders` can carry
+    // custom/unknown provider names (from `authStorage.list()`); pi-ai's
+    // contract for those is unasserted here, so a throw must not crash startup.
+    let piNames: string[] = [];
+    try {
+      piNames = findEnvKeys(provider) ?? [];
+    } catch {
+      // Unknown/custom provider — no pi-ai env-var mapping. The synthetic
+      // `<PROVIDER>_API_KEY` name below still covers the conventional shape.
+    }
+    const candidates = new Set<string>(piNames);
     candidates.add(`${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`);
     for (const name of candidates) {
       if (COPILOT_AMBIENT_ENV.has(name)) continue;
-      if (passthrough.has(name)) continue;
+      // A provider credential is stripped regardless of passthrough — same rail
+      // as the refusal filter above. Only non-credential candidates honour the
+      // passthrough gate, which lets an operator re-admit e.g. GH_TOKEN.
+      if (!isProviderCredential(name, providerVars) && passthrough.has(name)) continue;
       names.add(name);
     }
   }

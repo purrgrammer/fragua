@@ -495,6 +495,20 @@ describe("daemonEnvDeny", () => {
     expect(predicate("OPENAI_OAUTH_TOKEN")).toBe(true);
   });
 
+  test("(daemon-deny-store-cred-ignores-passthrough) a store provider's credential is stripped even if passthrough-listed", () => {
+    // A provider credential surfaced by the storeProviders loop must be denied
+    // regardless of passthrough — the passthrough gate applies only to
+    // non-credential candidates, mirroring the refusal filter.
+    process.env["ANTHROPIC_OAUTH_TOKEN"] = "sk-ant-oat-FAKE123456";
+    const { names } = daemonEnvDeny({
+      env: { ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-FAKE123456" },
+      storeProviders: ["anthropic"],
+      passthrough: new Set(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]),
+    });
+    expect(names.has("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
+    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
+  });
+
   test("(daemon-deny-effective-passthrough) returns the post-refusal passthrough set", () => {
     const { passthrough } = daemonEnvDeny({
       env: {},

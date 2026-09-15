@@ -252,6 +252,38 @@ describe("WorktreeEnvironment", () => {
     }
   });
 
+  test("envDenyPredicate: predicate-denied var is absent from git subprocess env", async () => {
+    // Mirror the envDenyNames case, but exercise the predicate branch of
+    // buildGitEnv — the path the daemon uses in production for spawn-time
+    // stripping of secret-named vars set after the deny Set was captured.
+    const fakeGitDir = await mkdtemp(join(tmpdir(), "fragua-fakegit-"));
+    const envLogFile = join(fakeGitDir, "env.log");
+    const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+    const fakeGitScript = join(fakeGitDir, "git");
+    writeFileSync(fakeGitScript, `#!/bin/sh\nenv >> "${envLogFile}"\nexec "${realGit}" "$@"\n`);
+    chmodSync(fakeGitScript, 0o755);
+
+    const secretVarName = `FRAGUA_TEST_PRED_${Date.now()}_API_KEY`;
+    const originalPath = process.env["PATH"];
+    process.env[secretVarName] = "supersecret";
+    process.env["PATH"] = `${fakeGitDir}:${originalPath ?? ""}`;
+    try {
+      const env = new WorktreeEnvironment({
+        repoRoot: repo,
+        runId: "deny-pred",
+        envDenyPredicate: (n) => n.endsWith("_API_KEY"),
+      });
+      await env.init();
+      await env.dispose();
+      expect(await readFile(envLogFile, "utf8")).not.toContain(secretVarName);
+    } finally {
+      if (originalPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = originalPath;
+      delete process.env[secretVarName];
+      await rm(fakeGitDir, { recursive: true, force: true });
+    }
+  });
+
   test("init is idempotent across process restarts — reuses existing worktree", async () => {
     // Simulate a daemon restart: the first env init()s, then a fresh
     // env instance (no shared state) calls init() against the same

@@ -67,6 +67,10 @@ describe("daemon wires resolveEnvPassthrough → daemonEnvDeny → WorktreeProvi
     expect(warnings.join(" ")).toContain("fragua providers");
 
     // The pair wires into the provisioner without error — the daemon's exact call shape.
+    // This asserts only that the constructor accepts the options; the end-to-end
+    // proof that `envDenyPredicate` actually reaches the spawned subprocess env
+    // lives in `@fragua/workspace`'s `worktree-env.test.ts`
+    // ("envDenyPredicate: predicate-denied var is absent from git subprocess env").
     const provisioner = new WorktreeProvisioner({ envDenyNames: names, envDenyPredicate: predicate });
     expect(provisioner).toBeInstanceOf(WorktreeProvisioner);
   });

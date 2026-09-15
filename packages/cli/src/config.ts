@@ -2,14 +2,15 @@
 //   global   ~/.fragua/config.yaml   — generic preferences (LLM defaults,
 //                                      auto-title, blocklist, concurrency,
 //                                      timeouts, blob GC, skills paths, …)
-//   project  <cwd>/.fragua/config.yaml — project-specific knobs only
-//                                      (today: `bootstrap`). Overlays
-//                                      global; project keys win.
+//   project  <cwd>/.fragua/config.yaml — project-specific overrides
+//                                      (`bootstrap`, `bash.env-passthrough`, …).
+//                                      Overlays global; project keys win.
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
-// (`defaults`, `blob-gc`, `skills`, `timeouts`, `summariser`) merge one level
-// deep so a project config can override `defaults.model` without losing
-// the global `summariser` block.
+// (`defaults`, `blob-gc`, `skills`, `timeouts`, `summariser`, `bash`) merge one
+// level deep so a project config can override `defaults.model` without losing
+// the global `summariser` block. (`bash.env-passthrough` is an array, replaced
+// wholesale — not merged element-wise.)
 //
 // Missing files → `{}` (first-run UX). Malformed file or schema-invalid
 // content → throw with a caller-friendly message; silent fallback would

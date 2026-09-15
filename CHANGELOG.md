@@ -12,14 +12,22 @@ guarantee.
 
 - **Workflow `bash` steps under `fragua daemon`/`harness` no longer inherit the
   operator's provider credentials.** The daemon now applies the same env-strip
-  `fragua ci` uses: every variable whose name matches a provider-credential
-  pattern (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `ANTHROPIC_*`, `OPENAI_*`, …),
-  plus the env-var names of providers configured in the store, is removed from
-  every shell subprocess. A new `bash.env-passthrough: [NAME, ...]` config key
-  (merged global ⊕ project as a whole-array replace) re-admits named
-  non-credential variables (e.g. `GH_TOKEN` for a step that shells out to `gh`);
-  provider credentials are never re-admitted. `fragua ci` behaviour is
-  unchanged.
+  `fragua ci` uses: every variable whose name ends in one of eight
+  secret-shaped suffixes — `*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`,
+  `*_CREDENTIAL`, `*_PASS`, `*_AUTH`, `*_PASSPHRASE` (case-insensitive) — plus
+  the env-var names of providers configured in the store, is removed from every
+  shell subprocess. This is broader than provider credentials alone: generic
+  secrets like `DATABASE_PASSWORD`, `REDIS_AUTH`, or `SIGNING_KEY` are also
+  stripped. The **worktree bootstrap command runs under this same strip**, so a
+  `bun install` needing `NPM_TOKEN` or a `pip install` against a
+  `*_PASSWORD`-shaped index URL loses those vars unless re-admitted. A new
+  `bash.env-passthrough: [NAME, ...]` config key (merged global ⊕ project as a
+  whole-array replace) re-admits named non-credential variables (e.g. `GH_TOKEN`
+  for a step that shells out to `gh`); provider credentials are never
+  re-admitted — hold those with `fragua providers`. `fragua ci`'s default
+  behaviour is unchanged, but `--allow-env` now also refuses provider-prefixed
+  `*_TOKEN`/`*_SECRET` names (e.g. `OPENAI_OAUTH_TOKEN`), not just `*_API_KEY`
+  ones, matching the daemon's passthrough rail.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
