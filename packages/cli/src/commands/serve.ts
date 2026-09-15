@@ -36,6 +36,16 @@ const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
  * `portRetries` below) so a stray collision doesn't kill startup. */
 export const DEFAULT_WEB_PORT = 6767;
 export const DEFAULT_WEB_HOST = "127.0.0.1";
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/** Host part of the URL we publish for a given bind address. A wildcard bind
+ * is reachable as `localhost`; a concrete address must be printed verbatim
+ * (bracketed when IPv6), because `localhost` may resolve to the other family
+ * and land on nothing. */
+export function originHost(bind: string): string {
+  if (bind === "::" || bind === "0.0.0.0") return "localhost";
+  return bind.includes(":") ? `[${bind}]` : bind;
+}
 
 /**
  * Locate the built web bundle by walking up from this file.
@@ -176,9 +186,10 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // LAN could enqueue runs, write provider credentials, or `accept` into the
   // operator's git tree. Wide binds ("::" / "0.0.0.0") are opt-in via
   // `--host` or `web.host`. A dual-stack or 0.0.0.0 occupant still trips
-  // EADDRINUSE against 127.0.0.1, so port auto-bump keeps working; only an
-  // `::1`-only listener slips past, and the printed localhost URL could then
-  // resolve to it. The config layer is global-only: a repo's committed
+  // EADDRINUSE against 127.0.0.1, so port auto-bump keeps working. An
+  // `::1`-only occupant on the same port is not detected, but it is also
+  // harmless: the published origin names the bound address, never
+  // `localhost`, so clients reach this listener and not the occupant. The config layer is global-only: a repo's committed
   // .fragua/config.yaml must not be able to widen the bind for whoever runs
   // the harness from it.
   const globalCfg = await loadGlobalConfig(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
@@ -218,7 +229,10 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   }
   void lastErr;
   const port = server.port ?? 0;
-  const origin = `http://localhost:${port}`;
+  const origin = `http://${originHost(hostname)}:${port}`;
+  if (!LOOPBACK_HOSTS.has(hostname)) {
+    console.warn(chalk.yellow(`serve: binding ${hostname} exposes the unauthenticated API beyond this machine`));
+  }
   // In web mode the API is scoped under `/api/*`; API-only mode keeps bare
   // paths. Discovery publishes the prefix so `fragua run` appends routes
   // verbatim (e.g. `${url}/runs`) regardless of mode. The compiled binary

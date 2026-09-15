@@ -5,11 +5,11 @@
 // install SIGINT handlers in these tests — they exercise `startServer`
 // directly, which is the test-friendly half of the module.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_WEB_HOST, DEFAULT_WEB_PORT, serveCommand, startServer } from "../src/commands/serve.ts";
+import { DEFAULT_WEB_HOST, DEFAULT_WEB_PORT, originHost, serveCommand, startServer } from "../src/commands/serve.ts";
 
 describe("startServer", () => {
   let handle: Awaited<ReturnType<typeof startServer>> | undefined;
@@ -36,7 +36,7 @@ describe("startServer", () => {
     scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
     expect(handle.port).toBeGreaterThan(0);
-    expect(handle.origin).toBe(`http://localhost:${handle.port}`);
+    expect(handle.origin).toBe(`http://127.0.0.1:${handle.port}`);
     // In web mode the canonical API URL is scoped under `/api`; in API-only
     // mode it equals origin. Either is fine — we just care both are set.
     expect(handle.url.startsWith(handle.origin)).toBe(true);
@@ -130,6 +130,38 @@ describe("startServer", () => {
     await writeFile(join(scratchHome, ".fragua/config.yaml"), 'web:\n  host: "::"\n');
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, hostname: "127.0.0.1" });
     expect(handle.hostname).toBe("127.0.0.1");
+  });
+
+  test("origin names the bound address, not localhost", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, hostname: "::1" });
+    expect(handle.origin).toBe(`http://[::1]:${handle.port}`);
+    const res = await fetch(`${handle.origin}/health`);
+    expect(res.status).toBe(200);
+  });
+
+  test("originHost maps wildcard binds to localhost and brackets IPv6", () => {
+    expect(originHost("::")).toBe("localhost");
+    expect(originHost("0.0.0.0")).toBe("localhost");
+    expect(originHost("127.0.0.1")).toBe("127.0.0.1");
+    expect(originHost("::1")).toBe("[::1]");
+    expect(originHost("192.168.1.20")).toBe("192.168.1.20");
+  });
+
+  test("a non-loopback bind warns; loopback does not", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("exposes"))).toBe(false);
+      await handle.close();
+      handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, hostname: "::" });
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("exposes"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("explicit --port disables the auto-bump (hard fail on EADDRINUSE)", async () => {
