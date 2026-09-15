@@ -1317,6 +1317,42 @@ export const TERMINAL_FACT_TYPES: ReadonlySet<FactEvent["type"]> = new Set<FactE
   Object.values(SETTLED_STATUS_TERMINAL_FACT),
 );
 
+/** Run-state-changing facts — the ones the store reducer folds into a status
+ * transition. Includes the v4 emission facts and the LEGACY (≤v3) read-only
+ * fold paths that ground rule 11 keeps folding forever, so the set stays in
+ * lockstep with the reducer's switch arms. A `fact.run_paused` is the *active*
+ * pause only when it's the latest of these in a run's trail — a later
+ * resume/terminal/human-pause supersedes it. Single source of truth: the store
+ * reducer and every read-plane consumer (projections/explain) share this set
+ * instead of re-listing the literals. Typed `ReadonlySet<string>` for
+ * `StoredEvent.type` callers; the source array is `satisfies`-checked against
+ * `FactEvent["type"]` so a mistyped literal is a compile error. */
+export const RUN_STATE_FACT_TYPES: ReadonlySet<string> = new Set([
+  "fact.run_paused",
+  "fact.run_resumed",
+  "fact.run_terminated",
+  "fact.run_quarantined",
+  // LEGACY (≤v3) read-only fold paths — superseded in emission by the v4
+  // facts above, but still fold for runs pinned below contract v4.
+  "fact.run_paused_human",
+  "fact.run_completed",
+  "fact.run_halted",
+  "fact.run_cancelled",
+] as const satisfies readonly FactEvent["type"][]);
+
+/** Terminal run facts, v4 + LEGACY (≤v3). A run ends on exactly one of these;
+ * the read-plane node-state fold uses its seq to downgrade still-`running`
+ * nodes. Same provenance and typing rules as {@link RUN_STATE_FACT_TYPES}.
+ * Distinct from {@link TERMINAL_FACT_TYPES} (v4-only, `fact.run_paused`-aware
+ * follow/tail set) in that it also folds the LEGACY terminal facts. */
+export const TERMINAL_RUN_FACT_TYPES: ReadonlySet<string> = new Set([
+  "fact.run_terminated",
+  "fact.run_quarantined",
+  "fact.run_completed",
+  "fact.run_halted",
+  "fact.run_cancelled",
+] as const satisfies readonly FactEvent["type"][]);
+
 /**
  * Operator-relevant event kinds for the global Home feed. Facts only —
  * the things that *happened*. Operator intents (pause, cancel, steer,
