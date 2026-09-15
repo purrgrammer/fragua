@@ -66,6 +66,28 @@ export interface DaemonProcess {
 
 export type SpawnDaemon = (argv: string[]) => DaemonProcess;
 
+/** Timing + wiring the supervisor needs. All fields required — production
+ *  defaults live in `harnessCommand`; tests pass shortened waits directly to
+ *  `superviseDaemon` so these knobs never leak onto the operator-facing
+ *  `HarnessCommandOptions`. */
+export interface SupervisorConfig {
+  /** Store path — reopened `migrate: false` for each readiness probe. */
+  dbPath: string;
+  /** Bound HTTP server; `superviseDaemon` closes it (clearing
+   * `server_endpoint`) when it stops. */
+  serverHandle: Awaited<ReturnType<typeof startServer>>;
+  /** First-restart backoff; each subsequent fast failure doubles it. */
+  restartInitialBackoffMs: number;
+  /** Backoff ceiling. */
+  restartMaxBackoffMs: number;
+  /** A daemon that stayed up at least this long resets the backoff + counter. */
+  healthyResetMs: number;
+  /** Consecutive fast failures before giving up and exiting non-zero. */
+  maxFastFailures: number;
+  /** SIGTERM→SIGKILL grace on shutdown. */
+  shutdownGraceMs: number;
+}
+
 export interface HarnessCommandOptions {
   /** Store path. Default `~/.fragua/fragua.db`. */
   dbPath?: string;
@@ -76,16 +98,6 @@ export interface HarnessCommandOptions {
   /** Spawn seam for the daemon subprocess. Defaults to `Bun.spawn` with
    * inherited stdio; injected by tests to simulate crashes / hung shutdown. */
   spawn?: SpawnDaemon;
-  /** First-restart backoff. Default RESTART_INITIAL_BACKOFF_MS (500ms). */
-  restartInitialBackoffMs?: number;
-  /** Backoff ceiling. Default RESTART_MAX_BACKOFF_MS (30s). */
-  restartMaxBackoffMs?: number;
-  /** Healthy-uptime threshold that resets the backoff. Default HEALTHY_RESET_MS (60s). */
-  healthyResetMs?: number;
-  /** Consecutive fast crashes before giving up. Default MAX_FAST_FAILURES (5). */
-  maxFastFailures?: number;
-  /** SIGTERM→SIGKILL grace on shutdown. Default SHUTDOWN_GRACE_MS (5s). */
-  shutdownGraceMs?: number;
 }
 
 export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<number> {
@@ -130,93 +142,153 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     : [process.execPath, process.argv[1]!, "daemon", "start", "--db", dbPath];
   const spawnDaemon: SpawnDaemon =
     opts.spawn ?? ((argv) => Bun.spawn(argv, { stdio: ["ignore", "inherit", "inherit"] }));
-  let daemonProc = spawnDaemon(daemonArgv);
 
-  // 3. Wait for daemon_lock to appear (daemon's startup acquires it). The
-  //    daemon owns migrations; this readiness probe must not open a second
-  //    migrating handle beside it — `migrate: false`.
-  const lockStore = new SqliteStore({ path: dbPath, migrate: false });
-  const lockAcquired = await waitForLock(lockStore);
-  if (!lockAcquired) {
-    console.error(chalk.red(`harness: daemon failed to acquire lock within ${LOCK_WAIT_MS}ms`));
-    daemonProc.kill();
-    lockStore.close();
-    await serverHandle.close();
-    return 1;
+  // 3. Hand off to the supervisor: it spawns the daemon, gates on
+  //    `daemon_lock` readiness, then watches / restarts / shuts down. The
+  //    server already published its `server_endpoint` row when it bound (in
+  //    `startServer`); `superviseDaemon` closes the server on stop, clearing
+  //    that row.
+  return await superviseDaemon(spawnDaemon, daemonArgv, {
+    dbPath,
+    serverHandle,
+    restartInitialBackoffMs: RESTART_INITIAL_BACKOFF_MS,
+    restartMaxBackoffMs: RESTART_MAX_BACKOFF_MS,
+    healthyResetMs: HEALTHY_RESET_MS,
+    maxFastFailures: MAX_FAST_FAILURES,
+    shutdownGraceMs: SHUTDOWN_GRACE_MS,
+  });
+}
+
+/** Spawn + supervise the daemon subprocess: gate on `daemon_lock` readiness,
+ *  restart on unexpected exit with exponential backoff, give up after
+ *  `maxFastFailures` consecutive fast crashes, and stop cleanly on
+ *  SIGINT / SIGTERM. Resolves with the harness exit code. */
+export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: SupervisorConfig): Promise<number> {
+  const { serverHandle } = cfg;
+
+  let daemonProc = spawn(argv);
+  let lastStart = Date.now();
+  let daemonAlive = true;
+
+  // Flip `daemonAlive` false when the current daemon exits, guarding against a
+  // stale prior proc clearing the flag for its replacement. Drives shutdown's
+  // kill gate so we never signal an already-exited process.
+  function trackAlive() {
+    const proc = daemonProc;
+    const clear = () => {
+      if (daemonProc === proc) daemonAlive = false;
+    };
+    proc.exited.then(clear, clear);
   }
 
-  // 4. The server already published its `server_endpoint` row when it bound
-  //    (in `startServer`). That row is independent of the daemon lock, so the
-  //    daemon's lock insert/release can't clobber it — no re-assert loop, and
-  //    `serverHandle.close()` clears it on shutdown.
-  lockStore.close();
+  trackAlive();
+
+  // Initial readiness gate: report ready only once the daemon holds the lock.
+  const ready = await gateReady(cfg.dbPath);
+  if (!ready) {
+    console.error(chalk.red(`harness: daemon failed to acquire lock within ${LOCK_WAIT_MS}ms`));
+    await shutdown(daemonProc, serverHandle, cfg.shutdownGraceMs, () => daemonAlive);
+    return 1;
+  }
 
   console.log("");
   console.log(chalk.green(`fragua harness ready — ${chalk.bold.underline(hyperlink(serverHandle.origin))}`));
   console.log(chalk.dim(`  api:  ${hyperlink(serverHandle.url)}`));
   console.log(chalk.dim("  press Ctrl-C to stop"));
 
-  // 5. Supervise + block until shutdown.
-  const initialBackoff = opts.restartInitialBackoffMs ?? RESTART_INITIAL_BACKOFF_MS;
-  const maxBackoff = opts.restartMaxBackoffMs ?? RESTART_MAX_BACKOFF_MS;
-  const healthyResetMs = opts.healthyResetMs ?? HEALTHY_RESET_MS;
-  const maxFastFailures = opts.maxFastFailures ?? MAX_FAST_FAILURES;
-  const shutdownGraceMs = opts.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
-
   return await new Promise<number>((resolveExit) => {
     let stopping = false;
-    let backoff = initialBackoff;
+    let backoff = cfg.restartInitialBackoffMs;
     let fastFailures = 0;
-    let lastStart = Date.now();
+    let restartTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const onSigint = () => finish("SIGINT", 0);
+    const onSigterm = () => finish("SIGTERM", 0);
 
     const finish = (label: string, code: number) => {
       if (stopping) return;
       stopping = true;
+      if (restartTimer) clearTimeout(restartTimer);
+      process.removeListener("SIGINT", onSigint);
+      process.removeListener("SIGTERM", onSigterm);
       console.log(chalk.dim(`\n${label} — shutting down...`));
-      void shutdown(daemonProc, serverHandle, shutdownGraceMs).finally(() => resolveExit(code));
+      void shutdown(daemonProc, serverHandle, cfg.shutdownGraceMs, () => daemonAlive).finally(() => resolveExit(code));
     };
 
-    process.once("SIGINT", () => finish("SIGINT", 0));
-    process.once("SIGTERM", () => finish("SIGTERM", 0));
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+
+    // Count one failure, then either give up or schedule a backed-off restart.
+    const registerFailure = (label: string) => {
+      fastFailures += 1;
+      if (fastFailures >= cfg.maxFastFailures) {
+        console.error(chalk.red(`harness: ${label} — ${fastFailures} fast failures in a row, giving up`));
+        finish("daemon unstable", 1);
+        return;
+      }
+      console.warn(
+        chalk.yellow(`harness: ${label} — restarting in ${backoff}ms (failure ${fastFailures}/${cfg.maxFastFailures})`),
+      );
+      const waitMs = backoff;
+      backoff = Math.min(backoff * 2, cfg.restartMaxBackoffMs);
+      restartTimer = setTimeout(() => {
+        restartTimer = undefined;
+        if (stopping) return;
+        void restart();
+      }, waitMs);
+    };
+
+    const restart = async () => {
+      lastStart = Date.now();
+      daemonProc = spawn(argv);
+      daemonAlive = true;
+      trackAlive();
+      // A restarted daemon replays events + runs the startup sweep before it
+      // takes the lock; re-gate so "ready" keeps meaning "daemon is up".
+      const restartReady = await gateReady(cfg.dbPath);
+      if (stopping) return;
+      if (!restartReady) {
+        try {
+          daemonProc.kill();
+        } catch {
+          /* ESRCH — already gone */
+        }
+        registerFailure(`daemon failed to acquire lock within ${LOCK_WAIT_MS}ms on restart`);
+        return;
+      }
+      watch(daemonProc);
+    };
 
     const watch = (proc: DaemonProcess) => {
-      proc.exited.then((code) => {
-        // A clean exit during shutdown must not restart.
-        if (stopping) return;
-
-        const uptime = Date.now() - lastStart;
-        if (uptime >= healthyResetMs) {
-          backoff = initialBackoff;
-          fastFailures = 0;
-        }
-        fastFailures += 1;
-
-        if (fastFailures >= maxFastFailures) {
-          console.error(
-            chalk.red(`harness: daemon exited (${code}) — ${fastFailures} fast failures in a row, giving up`),
-          );
-          finish("daemon unstable", 1);
-          return;
-        }
-
-        console.warn(
-          chalk.yellow(
-            `harness: daemon exited (${code}) — restarting in ${backoff}ms (failure ${fastFailures}/${maxFastFailures})`,
-          ),
-        );
-        const nextBackoff = Math.min(backoff * 2, maxBackoff);
-        setTimeout(() => {
+      proc.exited.then(
+        (code) => {
+          // A clean exit during shutdown must not restart.
           if (stopping) return;
-          lastStart = Date.now();
-          daemonProc = spawnDaemon(daemonArgv);
-          backoff = nextBackoff;
-          watch(daemonProc);
-        }, backoff);
-      });
+          const uptime = Date.now() - lastStart;
+          if (uptime >= cfg.healthyResetMs) {
+            backoff = cfg.restartInitialBackoffMs;
+            fastFailures = 0;
+          }
+          registerFailure(`daemon exited (${code})`);
+        },
+        (err) => finish(`daemon watch error: ${err}`, 1),
+      );
     };
 
     watch(daemonProc);
   });
+}
+
+/** Open a short-lived `migrate: false` handle and poll `daemon_lock` for
+ *  readiness. The daemon owns migrations; this probe must not open a second
+ *  migrating handle beside it. */
+async function gateReady(dbPath: string): Promise<boolean> {
+  const lockStore = new SqliteStore({ path: dbPath, migrate: false });
+  try {
+    return await waitForLock(lockStore);
+  } finally {
+    lockStore.close();
+  }
 }
 
 /** OSC 8 terminal hyperlink. Modern terminals (iTerm2, macOS Terminal,
@@ -239,19 +311,27 @@ async function shutdown(
   daemonProc: DaemonProcess,
   serverHandle: Awaited<ReturnType<typeof startServer>>,
   graceMs: number,
+  isAlive: () => boolean,
 ): Promise<void> {
   // Stop daemon child. SIGTERM triggers its graceful shutdown (lock
   // release, sweep state). Bound the wait: a hung daemon must not hang
-  // Ctrl-C — escalate to SIGKILL after `graceMs`.
-  if (!daemonProc.killed) {
-    daemonProc.kill();
-    const exitedInTime = await raceExit(daemonProc.exited, graceMs);
-    if (exitedInTime) {
-      console.log(chalk.dim("harness: daemon stopped"));
-    } else {
-      console.log(chalk.dim(`harness: daemon did not stop within ${graceMs}ms — sending SIGKILL`));
-      daemonProc.kill(9);
-      await daemonProc.exited;
+  // Ctrl-C — escalate to SIGKILL after `graceMs`. A daemon that already
+  // exited (natural crash) is skipped — signalling it would raise ESRCH; the
+  // try/catch covers the TOCTOU where it exits between the gate and the kill
+  // so `serverHandle.close()` always runs and clears `server_endpoint`.
+  if (isAlive()) {
+    try {
+      daemonProc.kill();
+      const exitedInTime = await raceExit(daemonProc.exited, graceMs);
+      if (exitedInTime) {
+        console.log(chalk.dim("harness: daemon stopped"));
+      } else {
+        console.log(chalk.dim(`harness: daemon did not stop within ${graceMs}ms — sending SIGKILL`));
+        daemonProc.kill(9);
+        await daemonProc.exited;
+      }
+    } catch {
+      /* ESRCH — process already gone; fall through to close the server */
     }
   }
 
@@ -266,10 +346,12 @@ async function shutdown(
 /** Resolve `true` if `exited` settles within `ms`, `false` on timeout. */
 async function raceExit(exited: Promise<number>, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<boolean>((r) => {
-    timer = setTimeout(() => r(false), ms);
-  });
-  const result = await Promise.race([exited.then(() => true), timeout]);
-  if (timer) clearTimeout(timer);
-  return result;
+  try {
+    const timeout = new Promise<boolean>((r) => {
+      timer = setTimeout(() => r(false), ms);
+    });
+    return await Promise.race([exited.then(() => true), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
