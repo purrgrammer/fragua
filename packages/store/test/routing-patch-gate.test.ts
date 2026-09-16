@@ -140,4 +140,33 @@ describe("appendFact routing-patch gate", () => {
     expect(thrown).toBeInstanceOf(RoutingPatchError);
     expect((thrown as RoutingPatchError).violation).toBe("wrong-type");
   });
+
+  test("accepts a boolean pause-after-dispatch marker (set + clear)", async () => {
+    const { store, runId, version } = await startedRun();
+
+    const res = store.appendFact(runId, [noop], version, {
+      routingPatch: { "internal.pause_after_dispatch": true },
+    });
+    expect(store.getState(runId)!.routing["internal.pause_after_dispatch"]).toBe(true);
+
+    store.appendFact(runId, [noop], res.newVersion, {
+      routingPatch: { "internal.pause_after_dispatch": false },
+    });
+    expect(store.getState(runId)!.routing["internal.pause_after_dispatch"]).toBe(false);
+  });
+
+  test("rejects a non-boolean pause-after-dispatch value", async () => {
+    const { store, runId, version } = await startedRun();
+
+    let thrown: unknown;
+    try {
+      store.appendFact(runId, [noop], version, {
+        routingPatch: { "internal.pause_after_dispatch": "yes" },
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(RoutingPatchError);
+    expect((thrown as RoutingPatchError).violation).toBe("wrong-type");
+  });
 });

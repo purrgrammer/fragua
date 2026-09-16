@@ -115,7 +115,12 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // label convention) so attacker-influenceable steer text can't pose as
     // task content at the head of the prompt.
     if (ctx.steering !== undefined && ctx.steering.length > 0) {
-      prompt = `[operator-steer]\n${ctx.steering}\n[/operator-steer]\n\n${prompt}`;
+      // Strip the fence literals from the (operator-influenceable) steer body so
+      // an embedded `[/operator-steer]` can't close the fence early and let the
+      // trailing bytes pose as task content. The fence is purely structural
+      // markup, so the tokens carry no meaning inside the body.
+      const fencedSteer = ctx.steering.replaceAll("[operator-steer]", "").replaceAll("[/operator-steer]", "");
+      prompt = `[operator-steer]\n${fencedSteer}\n[/operator-steer]\n\n${prompt}`;
     }
     const graphGoal = getContext(ctx.routing).goal;
 

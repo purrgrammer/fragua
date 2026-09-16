@@ -827,9 +827,8 @@ describe("buildRoutingPatch", () => {
         state: mkState("n1"),
         currentNode: "n1",
         graph: spine(),
-        effectiveRouting: {},
+        effectiveRouting: { "internal.pause_after_dispatch": true },
         budgetWarnedTags: [],
-        deferredPause: true,
       });
       expect(patch?.["internal.pause_after_dispatch"]).toBe(false);
     });
@@ -841,9 +840,8 @@ describe("buildRoutingPatch", () => {
         state: mkState("n1"),
         currentNode: "n1",
         graph: spine(),
-        effectiveRouting: {},
+        effectiveRouting: { "internal.pause_after_dispatch": true },
         budgetWarnedTags: [],
-        deferredPause: true,
       });
       expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
     });

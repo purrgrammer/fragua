@@ -27,6 +27,7 @@ import {
   readGateOutcomes,
   readGoalGateRetries,
   readOperatorNotes,
+  readPauseAfterDispatch,
   readPendingSteer,
   resolveFailRetarget,
   retryCountKey,
@@ -105,12 +106,6 @@ export interface TransitionInput {
   now: number;
   /** Injectable RNG for retry / provider backoff jitter. */
   random: () => number;
-  /** A pre-claim pause deferred at `run_started` (a steer+pause pair) rides
-   * `PAUSE_AFTER_DISPATCH_KEY` in routing, not the fold. When set, the executor
-   * forces `decision.shouldPauseAfterDispatch` so the planner's R3 swap fires;
-   * the planner then clears the marker (buildRoutingPatch) once the pause has
-   * actually landed, so the run doesn't re-pause on resume. */
-  deferredPause?: boolean;
 }
 
 export interface TransitionPlan {
@@ -930,7 +925,6 @@ export function buildRoutingPatch(args: {
   providerRetryDecision?: ProviderRetryDecision;
   goalGateRetargetTarget?: string;
   goalGateRetriesPatch?: number;
-  deferredPause?: boolean;
 }): Record<string, unknown> | undefined {
   const {
     result,
@@ -945,7 +939,6 @@ export function buildRoutingPatch(args: {
     providerRetryDecision,
     goalGateRetargetTarget,
     goalGateRetriesPatch,
-    deferredPause,
   } = args;
   let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
   if (budgetWarnedTags.length > 0) {
@@ -1051,8 +1044,14 @@ export function buildRoutingPatch(args: {
   // here — the twin of the steer clear above — once the pause has actually
   // landed, so the run doesn't re-pause on resume. Only clear when the swap
   // fired (transition result + operator pause): a halt or a non-transition turn
-  // leaves the marker for the next dispatch to honour.
-  if (deferredPause === true && result.kind === "transition" && decision.shouldPauseAfterDispatch) {
+  // leaves the marker for the next dispatch to honour. The marker lives in
+  // `effectiveRouting` (already in scope), so read it here rather than threading
+  // a param a future call site could forget to pass.
+  if (
+    readPauseAfterDispatch(effectiveRouting as Record<string, unknown>) &&
+    result.kind === "transition" &&
+    decision.shouldPauseAfterDispatch
+  ) {
     routingPatch = { ...(routingPatch ?? {}), [PAUSE_AFTER_DISPATCH_KEY]: false };
   }
   return routingPatch;
@@ -1198,7 +1197,6 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     ...(retargetApplied && goalGate.goalGateRetriesPatch !== undefined
       ? { goalGateRetriesPatch: goalGate.goalGateRetriesPatch }
       : {}),
-    ...(input.deferredPause === true ? { deferredPause: true } : {}),
   });
 
   // Stage 8 — the applied-seq watermark advance.

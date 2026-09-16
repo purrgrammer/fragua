@@ -1219,7 +1219,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       iteration,
       now: clock(),
       random,
-      ...(deferredPause ? { deferredPause: true } : {}),
     });
 
     // Drain the planner's trail (budget warns, goal-gate, retry-scheduled,
@@ -1315,6 +1314,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     baseState: RunState,
     branchRouting: Readonly<Record<string, unknown>>,
     branchTimeoutMs: number,
+    foldSteer: string | undefined,
   ): Promise<BranchOutcome> => {
     const graph = graphFor(baseState.workflowSha);
     const spec = opts.dispatcher.get(baseState.workflowSha, branchNode);
@@ -1375,13 +1375,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     if (runEnv !== undefined) ctxOpts.env = runEnv;
-    // Deliver any pending pre-claim steer to the branch handler before the
-    // transition planner clears it. `buildRoutingPatch` fires the clear
-    // (pending_steer -> "") per llm branch, so without this mirror of the
-    // main-path merge the first branch to commit would strip the steer from
-    // routing and every sibling would dispatch without ever seeing ctx.steering.
-    const pendingBranchSteer = readPendingSteer(branchRouting as Record<string, unknown>);
-    if (pendingBranchSteer != null) ctxOpts.steering = pendingBranchSteer;
+    // Deliver steer to the branch handler, mirroring the linear path's merge of
+    // the run-start pending steer (`internal.pending_steer`, carried in routing)
+    // with this turn's freshly folded steer (`decision.steering` for a mid-run
+    // steer that lands while parked at the parallel node). `buildRoutingPatch`
+    // fires the pending clear (pending_steer -> "") per llm branch, so without
+    // this mirror the first branch to commit would strip the steer from routing
+    // and every sibling would dispatch without ever seeing ctx.steering; and the
+    // fold consumes the mid-run steer's seq once, so a dropped `foldSteer` is
+    // gone for good.
+    const branchSteer = [readPendingSteer(branchRouting as Record<string, unknown>), foldSteer].filter(
+      (s): s is string => s != null && s.length > 0,
+    );
+    if (branchSteer.length > 0) ctxOpts.steering = branchSteer.join("\n");
     const ctx = core.buildHandlerContext(ctxOpts);
 
     const invocation = await invokeHandler({
@@ -1567,8 +1573,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // effectiveRouting. Without the delta merge a resume that raised the cap
       // re-trips this gate against the PRE-fold routing on its own wake turn and
       // re-pauses forever — the operator's raise never taking effect because the
-      // fold hasn't committed yet when the barrier check runs.
-      const overrideRouting = foldPending ? { ...folded.routing, ...decision.routingDelta } : folded.routing;
+      // fold hasn't committed yet when the barrier check runs. Gate on the delta
+      // itself (idempotent post-commit) rather than `foldPending`, which
+      // `takeFold()` clears before the commit resolves — so a future early-return
+      // path added before the join can't read stale routing overrides.
+      const overrideRouting =
+        Object.keys(decision.routingDelta).length > 0
+          ? { ...folded.routing, ...decision.routingDelta }
+          : folded.routing;
       const overrides = readBudgetOverrides(overrideRouting);
       let nodeCumulativeCostUsd = 0;
       let nodeCumulativeTokens = 0;
@@ -1638,6 +1650,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // turn's state read and the seed append is a `status` stop (yield the turn),
     // not an OCC conflict to feed the controller.
     if (plan.kind === "seed") {
+      // Seed and dispatch are separate supersteps: `takeFold()` here advances
+      // `last_applied_seq` past a mid-run steer folded THIS turn, so the seed
+      // must carry that steer into `pending_steer` routing (exactly as
+      // run_started does for a pre-claim steer) or the next turn's branch
+      // dispatch reads a cleared fold and drops it. The re-dispatch/direct
+      // arms dispatch in the SAME turn the steer folds, so their
+      // executeBranchNode `decision.steering` thread covers them instead.
+      let seedOpts = takeFold();
+      if (decision.steering !== undefined && decision.steering.length > 0) {
+        seedOpts = {
+          ...seedOpts,
+          routingPatch: {
+            ...(seedOpts.routingPatch ?? {}),
+            [PENDING_STEER_KEY]: utf8Truncate(decision.steering, PENDING_STEER_MAX_BYTES),
+          },
+        };
+      }
       const res = await commitFanoutFact(
         [
           {
@@ -1645,7 +1674,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             payload: { nodeId: parallelNode, iteration, ...passField(pass), branches: [...plan.branches] },
           },
         ],
-        takeFold(),
+        seedOpts,
       );
       if (!res.ok) {
         if (res.reason !== "occ") return { kind: "continue" };
@@ -1842,7 +1871,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             // strips pending operator notes for non-entry sub-nodes.
             return {
               nodeId,
-              outcome: await executeBranchNode(nodeId, freshState, routingForBranch(nodeId), branchTimeoutMs),
+              outcome: await executeBranchNode(
+                nodeId,
+                freshState,
+                routingForBranch(nodeId),
+                branchTimeoutMs,
+                decision.steering,
+              ),
             };
           } finally {
             sem.release();

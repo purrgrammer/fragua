@@ -1960,4 +1960,71 @@ steps:
     expect(seenSteering["b"]).toEqual(["focus on the auth module"]);
     r.store.close();
   });
+
+  // Regression (High): a MID-RUN operator steer that arrives while the run is
+  // parked at a parallel node must reach EVERY branch handler's ctx.steering. On
+  // resume the steer folds to `decision.steering` (not the pending_steer routing
+  // key, which only carries pre-claim run-start steers), and executeBranchNode
+  // must thread `decision.steering` into each branch's ctxOpts. The steer's seq
+  // is consumed by takeFold() once (advancing last_applied_seq), so if it isn't
+  // threaded it is silently dropped from every branch handler.
+  test("a mid-run steer while parked at a parallel node reaches every branch, seq applied once", async () => {
+    const STEER_YAML = `name: fomidsteer
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: tool, run: noop, next: fan }
+  fan: { type: parallel, branches: [a, b], next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+    const r = rig({ yaml: STEER_YAML });
+    const seenSteering: Record<string, Array<string | undefined>> = { a: [], b: [] };
+    // `begin` runs first (the run is well past run_started), then an operator
+    // steer lands on the log mid-run — right as the frontier reaches the
+    // parallel node. On the fan turn the steer folds to `decision.steering`
+    // (NOT the pending_steer routing key, which only carries run-start steers).
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "tool",
+      sideEffect: "none",
+      maxMs: 1000,
+      handler: async () => {
+        r.store.appendIntent("fms1", {
+          type: "intent.steering_requested",
+          payload: { text: "focus on the auth module" },
+        });
+        return { kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 };
+      },
+    });
+    for (const id of ["a", "b"]) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seenSteering[id]!.push(ctx.steering);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "exit", tokens: 1, costUsd: 0.001 }),
+    });
+
+    enqueue(r, "fms1", "begin");
+    await drive(r, "fms1");
+
+    expect(r.store.getState("fms1")!.status).toBe("completed");
+    // Every branch observes the mid-run steer.
+    expect(seenSteering["a"]).toContain("focus on the auth module");
+    expect(seenSteering["b"]).toContain("focus on the auth module");
+    // The steer's seq is consumed exactly once — last_applied_seq advances past
+    // it and no branch re-reads it on a later superstep.
+    const applied = r.store.getState("fms1")!;
+    expect(applied.lastAppliedSeq).toBeGreaterThan(0);
+    r.store.close();
+  });
 });
