@@ -89,6 +89,11 @@ export interface SupervisorConfig {
   healthyResetMs: number;
   /** Consecutive fast failures before giving up and exiting non-zero. */
   maxFastFailures: number;
+  /** Daemon-lock heartbeat TTL. The harness will not give up on a crash loop
+   *  until this window has elapsed since the first failure, so the store's
+   *  unconditional TTL eviction arm gets a chance to fire even when a crashed
+   *  daemon's pid was recycled by an unrelated live process. */
+  lockTtlMs: number;
   /** SIGTERM→SIGKILL grace on shutdown. */
   shutdownGraceMs: number;
   /** How long the readiness gate polls `daemon_lock` for the child's pid
@@ -164,6 +169,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     restartMaxBackoffMs: RESTART_MAX_BACKOFF_MS,
     healthyResetMs: HEALTHY_RESET_MS,
     maxFastFailures: MAX_FAST_FAILURES,
+    lockTtlMs: DAEMON_LOCK_TTL_MS,
     shutdownGraceMs: SHUTDOWN_GRACE_MS,
     lockWaitMs: LOCK_WAIT_MS,
   });
@@ -185,6 +191,7 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
     let stopping = false;
     let backoff = cfg.restartInitialBackoffMs;
     let fastFailures = 0;
+    let firstFailureAt: number | undefined;
     let firstReady = false;
     let restartTimer: ReturnType<typeof setTimeout> | undefined;
     // Per-spawn outcome, so the readiness gate and the exit watcher can't both
@@ -219,7 +226,15 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
     // Count one failure, then either give up or schedule a backed-off restart.
     const registerFailure = (label: string) => {
       fastFailures += 1;
-      if (fastFailures >= cfg.maxFastFailures) {
+      firstFailureAt ??= Date.now();
+      // Don't give up until BOTH the fast-failure count is exhausted AND the
+      // lock TTL window has elapsed since the first failure. A crashed daemon
+      // whose pid was recycled by a live process reads as "alive" to the
+      // liveness probe, so eviction only happens once the heartbeat crosses
+      // `lockTtlMs` — giving up before then would strand the stale lock the
+      // TTL arm is about to clear.
+      const windowElapsed = Date.now() - firstFailureAt;
+      if (fastFailures >= cfg.maxFastFailures && windowElapsed >= cfg.lockTtlMs) {
         console.error(chalk.red(`harness: ${label} — ${fastFailures} fast failures in a row, giving up`));
         finish("daemon unstable", 1);
         return;
@@ -296,6 +311,7 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
           if (uptime >= cfg.healthyResetMs) {
             backoff = cfg.restartInitialBackoffMs;
             fastFailures = 0;
+            firstFailureAt = undefined;
           }
           registerFailure(`daemon exited (${code})`);
         },
@@ -335,15 +351,26 @@ async function gateReady(
 }
 
 /** `process.kill(pid, 0)` liveness probe: send no signal, just test whether the
- *  pid is reachable. `ESRCH` → the process is gone (dead); `EPERM` → it exists
- *  but we lack permission (still alive). Any other error is treated as dead. */
-function pidAlive(pid: number): boolean {
+ *  pid is reachable. `ESRCH` → the process is gone (`"dead"`); a successful
+ *  probe → `"alive"`; `EPERM` → the pid exists but belongs to another user, so
+ *  we can't attribute it to our crashed daemon (a recycled pid is common in
+ *  small PID namespaces) — `"unknown"`, decided by the TTL instead. Any other
+ *  error is treated as `"dead"`. */
+function probePidState(pid: number): "alive" | "dead" | "unknown" {
   try {
     process.kill(pid, 0);
-    return true;
+    return "alive";
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return (err as NodeJS.ErrnoException).code === "EPERM" ? "unknown" : "dead";
   }
+}
+
+/** Liveness adapter for `evictDaemonLockIfStale`: only a provably-dead pid
+ *  (`"dead"`) accelerates eviction of a still-fresh lock. `"alive"` and
+ *  `"unknown"` both defer to the store's TTL arm — an EPERM pid is never
+ *  asserted alive, but nor is a possibly-live daemon evicted early. */
+function pidHolderAlive(pid: number): boolean {
+  return probePidState(pid) !== "dead";
 }
 
 /** Evict a stale `daemon_lock` row left by a hard-crashed child so the
@@ -361,7 +388,7 @@ export function evictStaleLock(
   dbPath: string,
   opts?: { now?: () => number; isPidAlive?: (pid: number) => boolean },
 ): void {
-  const isPidAlive = opts?.isPidAlive ?? pidAlive;
+  const isPidAlive = opts?.isPidAlive ?? pidHolderAlive;
   const store = new SqliteStore({ path: dbPath, migrate: false });
   try {
     store.evictDaemonLockIfStale({

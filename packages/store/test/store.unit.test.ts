@@ -638,7 +638,8 @@ describe("SqliteStore — daemon lock", () => {
     store.forceAcquireDaemonLock(202, "host-b");
     const res = store.evictDaemonLockIfStale({ ttlMs: 30_000, isHolderAlive: () => true });
     expect(res.evicted).toBe(false);
-    expect(res.stalePid).toBe(202);
+    // A live holder is not stale: `stalePid` is only populated on eviction.
+    expect(res.stalePid).toBeUndefined();
     expect(store.currentDaemonLock()!.pid).toBe(202);
     store.close();
   });
@@ -669,6 +670,26 @@ describe("SqliteStore — daemon lock", () => {
     store.close();
   });
 
+  test("evictDaemonLockIfStale spares a lock re-acquired between snapshot and delete", () => {
+    const store = freshStore();
+    store.forceAcquireDaemonLock(202, "host-b");
+    // Race: a fresh daemon takes the lock after the liveness snapshot is read
+    // but before the delete lands. The probe hook fires in that exact window.
+    const res = store.evictDaemonLockIfStale({
+      ttlMs: 30_000,
+      isHolderAlive: () => {
+        store.forceAcquireDaemonLock(303, "host-c");
+        return false;
+      },
+    });
+    // The fresh holder (303) must survive — only the snapshotted pid+heartbeat
+    // is deletable, so the racing acquire is never clobbered.
+    expect(res.evicted).toBe(false);
+    expect(store.currentDaemonLock()).not.toBeNull();
+    expect(store.currentDaemonLock()!.pid).toBe(303);
+    store.close();
+  });
+
   test("evictDaemonLockIfStale runs the sweep before deleting the lock", async () => {
     const store = freshStore();
     const sha = await seedWorkflow(store);
@@ -679,6 +700,36 @@ describe("SqliteStore — daemon lock", () => {
     expect(res.evicted).toBe(true);
     expect(res.swept?.requeued).toContain("sweep-run");
     expect(store.currentDaemonLock()).toBeNull();
+    store.close();
+  });
+
+  test("evictDaemonLockIfStale emits reaper_took_over + a truthful sweep_completed", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "audit-run", workflowSha: sha });
+    store.claimNextRun(1); // status → running
+    store.forceAcquireDaemonLock(777, "dead-host");
+    const heartbeatAt = store.currentDaemonLock()!.heartbeatAt;
+    const res = store.evictDaemonLockIfStale({
+      ttlMs: 30_000,
+      now: () => heartbeatAt + 45_000,
+      isHolderAlive: () => true,
+    });
+    expect(res.evicted).toBe(true);
+
+    const events = store.getDaemonEvents();
+    const takeover = events.find((e) => e.type === "daemon.reaper_took_over");
+    expect(takeover).toBeDefined();
+    const tPayload = takeover!.payload as { priorPid: number; priorHeartbeatAt: number; staleForMs: number };
+    expect(tPayload.priorPid).toBe(777);
+    expect(tPayload.priorHeartbeatAt).toBe(heartbeatAt);
+    expect(tPayload.staleForMs).toBe(45_000);
+
+    const sweep = events.find((e) => e.type === "daemon.sweep_completed");
+    expect(sweep).toBeDefined();
+    const sPayload = sweep!.payload as { requeued: number };
+    expect(sPayload.requeued).toBe(1);
+    expect(takeover!.seq).toBeLessThan(sweep!.seq);
     store.close();
   });
 

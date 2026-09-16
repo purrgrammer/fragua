@@ -56,9 +56,11 @@ export async function daemonStopCommand(opts: { cwd?: string; dbPath?: string } 
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       // Pid is already gone; lock row is stale. Release it so the next
-      // start doesn't have to wait for the heartbeat TTL.
+      // start doesn't have to wait for the heartbeat TTL. Guard on the pid we
+      // snapshotted so a daemon that re-acquired between the read and here
+      // (fresh pid) is never clobbered by an unconditional delete.
       if (code === "ESRCH") {
-        store.forceDeleteDaemonLock();
+        store.releaseDaemonLock(pid);
         console.log(chalk.dim(`stale lock cleared (pid=${pid} not running)`));
         return 0;
       }

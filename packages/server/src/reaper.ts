@@ -15,12 +15,12 @@
 // The reaper is IDEMPOTENT: calling it while a live daemon is heart-
 // beating is a no-op (the TTL check exits early).
 
-import type { IDaemonCoordinator, IEventWriter, SweepResult } from "@fragua/store";
+import { DAEMON_LOCK_TTL_MS, type IDaemonCoordinator, type IEventWriter, type SweepResult } from "@fragua/store";
 
-/** Heartbeats are ~10s; 30s without one is the established "dead" line.
- * Kept here (not imported from /routes/health.ts) so the reaper has no
- * circular dep on the health module. */
-export const DEFAULT_REAP_TTL_MS = 30_000;
+/** Heartbeat staleness threshold. One source of truth with the daemon lock's
+ * own TTL so the reaper and the daemon can't drift; re-exported under the
+ * reaper's historical name for existing callers. */
+export { DAEMON_LOCK_TTL_MS as DEFAULT_REAP_TTL_MS };
 
 export interface ReapResult {
   /** True when the reaper actually ran a sweep + cleared the lock. */
@@ -33,7 +33,7 @@ export interface ReapResult {
 
 export interface ReapOptions {
   store: IEventWriter & IDaemonCoordinator;
-  /** Heartbeat staleness threshold. Defaults to {@link DEFAULT_REAP_TTL_MS}. */
+  /** Heartbeat staleness threshold. Defaults to {@link DAEMON_LOCK_TTL_MS}. */
   ttlMs?: number;
   /** Wall-clock provider (testing). */
   now?: () => number;
@@ -44,18 +44,22 @@ export interface ReapOptions {
  * release the lock. Safe to call from any process; the sweep runs inside
  * the store's own transaction. Returns `{reaped: false}` when the lock
  * is fresh or absent.
+ *
+ * Delegates to the store's `evictDaemonLockIfStale` so the TTL check, the
+ * sweep (crediting pre-crash active time via `priorHeartbeatAt`), the
+ * pid+heartbeat-guarded delete, and the `daemon.reaper_took_over` /
+ * `daemon.sweep_completed` audit events all land in one place — the reaper
+ * and the daemon can't disagree about what a stale-lock recovery does.
  */
 export function reapStaleDaemon(opts: ReapOptions): ReapResult {
-  const ttl = opts.ttlMs ?? DEFAULT_REAP_TTL_MS;
-  const now = opts.now ?? Date.now;
-  const lock = opts.store.currentDaemonLock();
-  if (lock == null) return { reaped: false };
-  if (now() - lock.heartbeatAt <= ttl) return { reaped: false };
-
-  const swept = opts.store.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
-  opts.store.forceDeleteDaemonLock();
-  // priorHeartbeatAt credits pre-crash active time to requeued runs, matching
-  // the daemon's own TTL-takeover path.
-
-  return { reaped: true, swept, stalePid: lock.pid };
+  const evictOpts: Parameters<IDaemonCoordinator["evictDaemonLockIfStale"]>[0] = {
+    ttlMs: opts.ttlMs ?? DAEMON_LOCK_TTL_MS,
+  };
+  if (opts.now) evictOpts.now = opts.now;
+  const r = opts.store.evictDaemonLockIfStale(evictOpts);
+  if (!r.evicted) return { reaped: false };
+  const result: ReapResult = { reaped: true };
+  if (r.swept) result.swept = r.swept;
+  if (r.stalePid != null) result.stalePid = r.stalePid;
+  return result;
 }

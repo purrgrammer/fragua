@@ -1138,8 +1138,13 @@ export interface IDaemonCoordinator {
    * holder dead. A fresh heartbeat with a live (or unprobed) holder is left
    * untouched — never evict a live daemon. When it does evict, `startupSweep`
    * runs FIRST (crediting the dead lock's heartbeat as `priorHeartbeatAt` to
-   * in-flight runs), THEN the row is deleted, so a crash between the two leaves
-   * the stale row for the next boot to re-detect (mirroring the server reaper).
+   * in-flight runs), THEN the row is deleted in a single pid+heartbeat-guarded
+   * `DELETE`, so a daemon that re-acquired between the liveness snapshot and
+   * the delete is spared (its fresh pid/heartbeat fails the guard). On a
+   * successful eviction it emits `daemon.reaper_took_over` + a truthful
+   * `daemon.sweep_completed` so harness-supervised and server-reaper recoveries
+   * are audit-visible, mirroring the daemon's direct-takeover path.
+   * `stalePid` / `priorHeartbeatAt` are populated only when `evicted` is true.
    */
   evictDaemonLockIfStale(opts: {
     ttlMs: number;

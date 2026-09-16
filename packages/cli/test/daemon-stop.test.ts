@@ -52,8 +52,8 @@ describe("daemonStopCommand", () => {
     const code = await daemonStopCommand({ dbPath });
     expect(code).toBe(0);
 
-    // Lock row should now be clear (or point at a different pid — the
-    // stale-cleanup path force-acquires then releases).
+    // Lock row should now be clear: the ESRCH path releases the stale row
+    // via the pid-guarded `releaseDaemonLock(pid)`.
     const s2 = new SqliteStore({ path: dbPath });
     expect(s2.currentDaemonLock()).toBeNull();
     s2.close();

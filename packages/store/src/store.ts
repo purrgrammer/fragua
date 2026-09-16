@@ -64,6 +64,7 @@ import {
 } from "./bundle.ts";
 import {
   deleteDaemonLock,
+  deleteDaemonLockIfMatches,
   deleteServerEndpoint,
   forceDeleteDaemonLockRow,
   insertDaemonEvent,
@@ -1350,17 +1351,45 @@ export class SqliteStore implements IEventStore {
     const lock = this.currentDaemonLock();
     if (lock == null) return { evicted: false };
     const now = opts.now ?? this.now;
-    const stale = now() - lock.heartbeatAt > opts.ttlMs;
+    const nowMs = now();
+    const stale = nowMs - lock.heartbeatAt > opts.ttlMs;
     // Keep a live holder's lock: skip only when the heartbeat is fresh AND
     // (no liveness probe was supplied, or the probe says the holder is alive).
     // A stale heartbeat evicts regardless of the probe (TTL takes precedence).
     if (!stale && (opts.isHolderAlive == null || opts.isHolderAlive(lock))) {
-      return { evicted: false, stalePid: lock.pid };
+      return { evicted: false };
     }
     // Sweep BEFORE clearing so a crash between the two leaves the stale row in
     // place for the next boot to re-detect (mirroring the server reaper).
+    const sweepStart = this.now();
     const swept = this.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
-    this.forceDeleteDaemonLock();
+    // Guarded delete in ONE statement: a daemon that re-acquired between the
+    // snapshot above and this write installed a fresh pid/heartbeat, so the
+    // WHERE clause misses and its live lock is never clobbered.
+    let deleted = false;
+    this.writeTxn(() => {
+      deleted = deleteDaemonLockIfMatches(this.db, lock.pid, lock.heartbeatAt);
+    });
+    if (!deleted) return { evicted: false };
+    // Mirror the daemon's direct-takeover audit trail so a harness-supervised
+    // (or server-reaper) recovery is visible in `daemon_events`.
+    this.appendDaemonEvent({
+      type: "daemon.reaper_took_over",
+      payload: {
+        priorPid: lock.pid,
+        priorHostname: lock.hostname,
+        priorHeartbeatAt: lock.heartbeatAt,
+        staleForMs: Math.max(0, nowMs - lock.heartbeatAt),
+      },
+    });
+    this.appendDaemonEvent({
+      type: "daemon.sweep_completed",
+      payload: {
+        requeued: swept.requeued.length,
+        quarantined: swept.quarantined.length,
+        durationMs: Math.max(0, this.now() - sweepStart),
+      },
+    });
     return { evicted: true, swept, stalePid: lock.pid, priorHeartbeatAt: lock.heartbeatAt };
   }
 

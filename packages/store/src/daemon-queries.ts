@@ -202,6 +202,19 @@ export function deleteDaemonLock(db: Database, pid: number): void {
   db.query(DELETE_DAEMON_LOCK_SQL).run(pid);
 }
 
+const DELETE_DAEMON_LOCK_IF_MATCHES_SQL = `
+  DELETE FROM daemon_lock WHERE id = 1 AND pid = ? AND heartbeat_at = ?
+`;
+
+/** Delete the singleton lock only when it still names the snapshotted
+ *  `pid` + `heartbeatAt`. Returns `true` when a row was removed, `false`
+ *  when the guard missed — a daemon that re-acquired between the caller's
+ *  liveness snapshot and this delete leaves a fresh pid/heartbeat, so the
+ *  guard spares it. One statement, no read-then-write race. */
+export function deleteDaemonLockIfMatches(db: Database, pid: number, heartbeatAt: number): boolean {
+  return db.query(DELETE_DAEMON_LOCK_IF_MATCHES_SQL).run(pid, heartbeatAt).changes > 0;
+}
+
 const FORCE_DELETE_DAEMON_LOCK_SQL = `
   DELETE FROM daemon_lock WHERE id = 1
 `;

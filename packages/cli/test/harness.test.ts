@@ -120,6 +120,9 @@ describe("superviseDaemon", () => {
       restartMaxBackoffMs: 1_000,
       healthyResetMs: 60_000,
       maxFastFailures: 5,
+      // Default off: most tests assert the give-up policy on fast-failure count
+      // alone. The recycled-pid case sets a non-zero window explicitly.
+      lockTtlMs: 0,
       shutdownGraceMs: 5_000,
       lockWaitMs: 5_000,
       ...overrides,
@@ -337,6 +340,36 @@ describe("superviseDaemon", () => {
 
     expect(code).toBe(1);
     expect(procs.length).toBe(5);
+  });
+
+  test("keeps retrying past maxFastFailures until the lock TTL window elapses", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      procs.push(p);
+      queueMicrotask(() => p.crash(1));
+      return p;
+    };
+
+    // maxFastFailures=2 would give up after 2 crashes, but a non-zero lockTtlMs
+    // holds the harness open until the TTL window elapses so the store's
+    // unconditional TTL eviction arm gets its chance — so more than 2 procs
+    // must be spawned before it finally exits non-zero.
+    const cfg = await makeConfig(dbPath, {
+      restartInitialBackoffMs: 5,
+      restartMaxBackoffMs: 20,
+      maxFastFailures: 2,
+      lockTtlMs: 150,
+    });
+    const startedAt = Date.now();
+    const code = await superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(code).toBe(1);
+    expect(procs.length).toBeGreaterThan(cfg.maxFastFailures);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(150);
   });
 
   test("resets the failure budget after a daemon survives past healthyResetMs", async () => {
