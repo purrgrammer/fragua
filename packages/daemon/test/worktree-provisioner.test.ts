@@ -184,6 +184,59 @@ describe("WorktreeProvisioner — bootstrap resolution", () => {
   });
 });
 
+describe("WorktreeProvisioner — per-run env-strip resolution", () => {
+  test("no resolver → constructor envDeny values pass through", async () => {
+    const names = new Set(["ANTHROPIC_API_KEY"]);
+    const predicate = (n: string) => n === "SECRET";
+    const p = new WorktreeProvisioner({ envDenyNames: names, envDenyPredicate: predicate });
+    const out = await p.resolveEnvDenyFor("/any/cwd");
+    expect(out.names).toBe(names);
+    expect(out.predicate).toBe(predicate);
+  });
+
+  test("resolver is authoritative and receives each run's cwd", async () => {
+    // Mirrors bootstrap: one daemon serving many projects resolves the env-strip
+    // per run, so each project's own bash.env-passthrough takes effect.
+    const seen: string[] = [];
+    const namesA = new Set(["A_TOKEN"]);
+    const namesB = new Set(["B_TOKEN"]);
+    const p = new WorktreeProvisioner({
+      envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
+      resolveRunEnvDeny: async (cwd) => {
+        seen.push(cwd);
+        return { names: cwd === "/project/a" ? namesA : namesB };
+      },
+    });
+    expect((await p.resolveEnvDenyFor("/project/a")).names).toBe(namesA);
+    expect((await p.resolveEnvDenyFor("/project/b")).names).toBe(namesB);
+    expect(seen).toEqual(["/project/a", "/project/b"]);
+  });
+
+  // Regression guard: `create()` must forward the resolver's env-strip into the
+  // provisioned environment, not the constructor fallback. A LocalEnvironment
+  // that stripped `SHOULD_NOT_LEAK` (the constructor value) instead of
+  // `RUN_TOKEN` (the resolver value) would leave the direct-resolver tests green.
+  test("create() applies resolveRunEnvDeny to the provisioned environment (not the fallback)", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-envdeny-"));
+    try {
+      const p = new WorktreeProvisioner({
+        envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
+        resolveRunEnvDeny: async () => ({ names: new Set(["RUN_TOKEN"]) }),
+      });
+      const env = await p.ensure("r-envdeny", { cwd: nonGit });
+      expect(env).toBeInstanceOf(LocalEnvironment);
+      const res = await env.exec('echo "[$RUN_TOKEN][$SHOULD_NOT_LEAK]"', {
+        env: { RUN_TOKEN: "from-resolver", SHOULD_NOT_LEAK: "from-constructor" },
+      });
+      // Resolver's name is stripped; the constructor fallback name survives.
+      expect(res.stdout).not.toContain("from-resolver");
+      expect(res.stdout).toContain("from-constructor");
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
   // The daemon serves runs from many cwds. The provisioner type is decided
   // per run against the run's own cwd — NOT once, at boot, against the

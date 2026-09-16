@@ -10,6 +10,32 @@ guarantee.
 
 ### Changed
 
+- **Workflow `bash` steps under `fragua daemon`/`harness` no longer inherit the
+  operator's provider credentials.** The daemon now applies the same env-strip
+  `fragua ci` uses: every variable whose name ends in one of eight
+  secret-shaped suffixes — `*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`,
+  `*_CREDENTIAL`, `*_PASS`, `*_AUTH`, `*_PASSPHRASE` (case-insensitive) — plus
+  the env-var names of providers configured in the store, is removed from every
+  shell subprocess. This is broader than provider credentials alone: generic
+  secrets like `DATABASE_PASSWORD`, `REDIS_AUTH`, or `SIGNING_KEY` are also
+  stripped. The **worktree bootstrap command runs under this same strip**, so a
+  `bun install` needing `NPM_TOKEN` or a `pip install` against a
+  `*_PASSWORD`-shaped index URL loses those vars unless re-admitted. A new
+  `bash.env-passthrough: [NAME, ...]` config key (merged global ⊕ project as a
+  whole-array replace) re-admits named non-credential variables (e.g. `GH_TOKEN`
+  for a step that shells out to `gh`); provider credentials are never
+  re-admitted — hold those with `fragua providers`. The passthrough list is
+  resolved **per run** from the run's project config merged over global (the
+  same per-run seam `bootstrap` uses), so one daemon serving many projects gives
+  each its own passthrough regardless of the daemon's launch directory. `fragua
+  ci`'s default behaviour is unchanged, but `--allow-env` now also refuses
+  non-`_API_KEY` provider credentials — the anthropic OAuth token
+  (`ANTHROPIC_OAUTH_TOKEN`) and any `<provider-prefix>_<secret-suffix>` name, plus
+  the credential names of providers configured in the store — not just `*_API_KEY`
+  ones. It refuses with a pointer to `fragua providers add <provider>` so the
+  credential can be configured instead. A name that merely starts with a provider
+  prefix (e.g. `OPENAI_PROXY_AUTH`) is treated as a generic secret, not a provider
+  credential, and stays re-admittable.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
