@@ -20,7 +20,7 @@ import {
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig, resolveEnvPassthrough, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
-import { daemonEnvDeny } from "../env-creds.ts";
+import { buildProviderCredentialContext, daemonEnvDeny } from "../env-creds.ts";
 import { buildExecutorDeps, type SummariserInfo } from "../executor-deps.ts";
 
 /**
@@ -185,17 +185,38 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // providers the daemon holds creds for in its store). `bash.env-passthrough`
     // re-admits named non-credential vars (e.g. GH_TOKEN for a `gh` step).
     //
-    // `bash.env-passthrough` is resolved **per run** — the same seam `bootstrap`
-    // uses — from the run's project config (`<run.cwd>/.fragua/config.yaml`)
-    // merged over the global `~/.fragua/config.yaml`. One daemon can therefore
-    // serve many projects, each honouring its own passthrough regardless of the
-    // daemon's launch cwd. The held-provider snapshot is captured once at startup.
+    // `bash.env-passthrough` is resolved **per run** but with a DIFFERENT
+    // config seam than `bootstrap`: passthrough merges the global
+    // `~/.fragua/config.yaml` ⊕ the run's project config
+    // (`<run.cwd>/.fragua/config.yaml`) via `loadConfig`, so a global
+    // passthrough applies everywhere; `bootstrap` (via `resolveProjectBootstrap`
+    // → `loadProjectConfig`) is project-only, so a global bootstrap never leaks
+    // into a project that doesn't declare one. One daemon can therefore serve
+    // many projects, each honouring its own passthrough regardless of the
+    // daemon's launch cwd. The held-provider snapshot and the pi-ai registry
+    // context are both captured once at startup (the registry is static).
     const storeProviders = deps.authStorage.list();
+    const credCtx = buildProviderCredentialContext();
+    // One-time startup dry-run against the daemon's own cwd: surface any
+    // provider-credential names listed in `bash.env-passthrough` that will be
+    // refused, so the operator catches the misconfiguration in ONE place
+    // instead of a warning that repeats on every provision. The per-run
+    // `daemonEnvDeny` below no longer warns (a module-level dedup would still
+    // interleave with run output).
+    const startupDeny = daemonEnvDeny({
+      storeProviders,
+      passthrough: resolveEnvPassthrough(config),
+      ctx: credCtx,
+      warn: false,
+    });
+    const startupRefused = [...resolveEnvPassthrough(config)].filter((n) => !startupDeny.passthrough.has(n));
     const resolveRunEnvDeny = async (runCwd: string): Promise<ResolvedRunEnvDeny> => {
       const runConfig = await loadConfig(runCwd);
       const { names, predicate } = daemonEnvDeny({
         storeProviders,
         passthrough: resolveEnvPassthrough(runConfig),
+        ctx: credCtx,
+        warn: false,
       });
       return { names, predicate };
     };
@@ -240,6 +261,14 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       console.log(chalk.dim(`  auto-title: ${autoTitler.label}`));
     }
     console.log(chalk.dim(`  runtime: ${provisionerLabel}`));
+    if (startupRefused.length > 0) {
+      console.log(
+        chalk.yellow(
+          `  bash.env-passthrough: refusing provider credential(s) ${JSON.stringify(startupRefused)} — ` +
+            `hold them with \`fragua providers\`, not env-passthrough`,
+        ),
+      );
+    }
     console.log(chalk.dim(`  press Ctrl-C to stop`));
 
     let exitCode = 0;

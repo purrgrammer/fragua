@@ -111,8 +111,9 @@ bash:
 The list merges global ⊕ project as a **whole-array replace** (a project list
 overrides the global one; it does not append). Provider credentials are never
 re-admitted even if named here — a provider credential listed under
-`bash.env-passthrough` is refused (logged once, pointing at `fragua providers`)
-and still stripped regardless (same rail as `fragua ci --allow-env`). A name is
+`bash.env-passthrough` is refused (surfaced once in the daemon's startup log,
+pointing at `fragua providers`) and still stripped regardless (same rail as
+`fragua ci --allow-env`). A name is
 treated as a provider credential by the `*_API_KEY` shape, the pi-ai registry, an
 `ANTHROPIC_OAUTH_TOKEN`-style always-refused name, or an **exact** provider
 prefix followed by a secret suffix (`OPENAI_SECRET` → `OPENAI`). The prefix match
@@ -125,9 +126,12 @@ flag.
 
 Two daemon-scoping notes. First, `bash.env-passthrough` is resolved **per run**
 from the run's project config (`<run.cwd>/.fragua/config.yaml`) merged over the
-global `~/.fragua/config.yaml` — the same per-run seam `bootstrap` uses — so each
-project served by one daemon picks up its own passthrough regardless of the
-daemon's launch cwd. Second, the store-provider env-var names added to the strip
+global `~/.fragua/config.yaml` — so each project served by one daemon picks up
+its own passthrough regardless of the daemon's launch cwd. This is a *different*
+config seam from `bootstrap`: passthrough merges global ⊕ project (a global
+passthrough applies everywhere), whereas `bootstrap` is **project-only** (a
+global bootstrap never leaks into a project that doesn't declare one). Second,
+the store-provider env-var names added to the strip
 are a **startup snapshot** of the daemon's held credentials; the suffix/prefix
 predicate covers virtually every real provider regardless, but a provider whose
 credential is added after startup is only covered by the predicate, not the

@@ -70,14 +70,17 @@ const CI_ENV_SECRET_SUFFIXES = [
  * (`openai` → `OPENAI`). Build once per operation and thread through the gates
  * so a single call can't walk `getProviders()` several times or observe a
  * registry that changed mid-flight. */
-interface ProviderCredentialContext {
+export interface ProviderCredentialContext {
   varNames: Set<string>;
   prefixes: Set<string>;
 }
 
 /** Walk pi-ai's provider registry once, collecting both the known env-var
- * names (minus COPILOT_AMBIENT_ENV) and the per-provider prefixes. */
-function buildProviderCredentialContext(): ProviderCredentialContext {
+ * names (minus COPILOT_AMBIENT_ENV) and the per-provider prefixes. Exported so
+ * a caller with several gate calls (both CI deny sites, the daemon startup)
+ * can build the static context ONCE and thread it through, instead of each
+ * function re-walking `getProviders()`. */
+export function buildProviderCredentialContext(): ProviderCredentialContext {
   const varNames = new Set<string>();
   const prefixes = new Set<string>();
   for (const provider of getProviders()) {
@@ -119,6 +122,33 @@ function isProviderCredential(name: string, ctx: ProviderCredentialContext): boo
   if (suffix === undefined) return false;
   const prefix = upper.slice(0, -suffix.length);
   return ctx.prefixes.has(prefix);
+}
+
+/** The conventional env-var prefix for a provider NAME (`custom-ai` →
+ * `CUSTOM_AI`). Shared by the storeProviders loop and the refusal gate so both
+ * derive the prefix identically. */
+function providerEnvPrefix(provider: string): string {
+  return provider.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+}
+
+/** True when a name is a held-provider credential fragua reads directly but
+ * pi-ai's static registry can't name — a secret-shaped var carrying the
+ * `<PREFIX>_` of a store-held provider (`CUSTOMAI_OAUTH_TOKEN`,
+ * `ANTHROPIC_RATE_LIMIT_TOKEN`). Complements {@link isProviderCredential}'s
+ * exact-prefix gate 4: this is the ONE decision function the daemon deny surface
+ * uses so `names`, `predicate`, and the passthrough refusal filter can't
+ * disagree on the same input. */
+function matchesStoreProviderPrefix(
+  name: string,
+  storeProviderPrefixes: ReadonlySet<string>,
+  ctx: ProviderCredentialContext,
+): boolean {
+  if (storeProviderPrefixes.size === 0) return false;
+  const upper = name.toUpperCase();
+  for (const prefix of storeProviderPrefixes) {
+    if (upper.startsWith(`${prefix}_`) && isSecretEnvName(name, ctx)) return true;
+  }
+  return false;
 }
 
 /** Returns true when an env var NAME indicates it is secret, regardless
@@ -243,18 +273,38 @@ const NO_ALLOW: ReadonlySet<string> = new Set();
  * once, pointing at `fragua providers` as the right place to hold a credential.
  */
 export function daemonEnvDeny(
-  opts: { env?: NodeJS.ProcessEnv; storeProviders?: Iterable<string>; passthrough?: ReadonlySet<string> } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    storeProviders?: Iterable<string>;
+    passthrough?: ReadonlySet<string>;
+    ctx?: ProviderCredentialContext;
+    /** Emit a `console.warn` naming refused passthrough entries. Default true.
+     * The daemon sets `false` and surfaces refusals ONCE in its startup log
+     * instead of on every per-run provision. */
+    warn?: boolean;
+  } = {},
 ): { names: Set<string>; predicate: (name: string) => boolean; passthrough: ReadonlySet<string> } {
   const env = opts.env ?? process.env;
   const requested = opts.passthrough ?? NO_ALLOW;
-  const ctx = buildProviderCredentialContext();
+  const ctx = opts.ctx ?? buildProviderCredentialContext();
+  const storeProviderPrefixes = new Set<string>();
+  for (const provider of opts.storeProviders ?? []) storeProviderPrefixes.add(providerEnvPrefix(provider));
   // Refuse provider credentials in the passthrough — same rail as ci's
   // `--allow-env` (`unsafeAllowEnvNames`). A workflow may re-admit generic
   // secrets (GH_TOKEN, …) but never an LLM-provider key fragua reads directly.
-  const refused = new Set([...requested].filter((n) => isProviderCredential(n, ctx)));
+  // Fold the storeProviders prefix scan into the SAME filter as gate-4's
+  // exact-prefix match: a `<HELD-PREFIX>_<WORD>_<SECRET-SUFFIX>` var (which
+  // gate 4 cannot classify) is refused up front, so it never lingers in the
+  // effective passthrough — the one place `names` and `predicate` could
+  // otherwise disagree on the same input.
+  const refused = new Set(
+    [...requested].filter(
+      (n) => isProviderCredential(n, ctx) || matchesStoreProviderPrefix(n, storeProviderPrefixes, ctx),
+    ),
+  );
   const passthrough: ReadonlySet<string> =
     refused.size === 0 ? requested : new Set([...requested].filter((n) => !refused.has(n)));
-  if (refused.size > 0) {
+  if (refused.size > 0 && (opts.warn ?? true)) {
     console.warn(
       `fragua: refusing to pass provider credential(s) through bash.env-passthrough: ${JSON.stringify([...refused])} — ` +
         `hold provider credentials with \`fragua providers\`, not env-passthrough`,
@@ -271,7 +321,7 @@ export function daemonEnvDeny(
     // env-var pi-ai maps to the provider, and — crucially for custom providers
     // — every secret-shaped env var carrying this provider's prefix (e.g.
     // `CUSTOMAI_OAUTH_TOKEN`, which gate 4's exact-prefix match cannot catch).
-    const prefix = provider.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    const prefix = providerEnvPrefix(provider);
     const candidates = new Set<string>([`${prefix}_API_KEY`]);
     try {
       for (const n of findEnvKeys(provider) ?? []) candidates.add(n);
@@ -300,18 +350,44 @@ export function daemonEnvDeny(
  * exfiltration target. Generic `*_TOKEN` / `*_KEY` secrets (GH_TOKEN, …) ARE
  * allowed through — that's the flag's purpose. The caller refuses the run when
  * this returns a non-empty list.
+ *
+ * `storeProviders` (the global store's `authStorage.list()` snapshot) extends
+ * the gate to custom, store-only providers pi-ai's static registry can't name:
+ * a secret-shaped var carrying a held provider's prefix (`CUSTOMAI_OAUTH_TOKEN`
+ * for a `customai` provider) is refused too — the same prefix scan
+ * {@link daemonEnvDeny} uses, so the CI `--allow-env` rail and the daemon deny
+ * surface agree on which names are provider credentials.
  */
-export function unsafeAllowEnvNames(allow: Iterable<string>): string[] {
+export function unsafeAllowEnvNames(allow: Iterable<string>, storeProviders: Iterable<string> = []): string[] {
   const ctx = buildProviderCredentialContext();
+  const storeProviderPrefixes = new Set<string>();
+  for (const provider of storeProviders) storeProviderPrefixes.add(providerEnvPrefix(provider));
   const bad: string[] = [];
   for (const name of allow) {
     // Shared with `daemonEnvDeny`'s refusal filter. The legitimate allow case
     // is CI platform tokens (GH_TOKEN, …) which attribute to no provider.
-    if (isProviderCredential(name, ctx)) {
+    if (isProviderCredential(name, ctx) || matchesStoreProviderPrefix(name, storeProviderPrefixes, ctx)) {
       bad.push(name);
     }
   }
   return bad;
+}
+
+/**
+ * List the provider names held in the GLOBAL store (what `fragua providers add`
+ * wrote), for threading into {@link unsafeAllowEnvNames} so `fragua ci
+ * --allow-env` refuses a custom provider's credentials too. Returns `[]` when
+ * there is no global store (a fresh CI machine). Opens the store read-only and
+ * closes it — a one-shot snapshot, not a live subscription.
+ */
+export function listGlobalStoreProviders(globalPath: string = resolve(getFraguaHome(), "fragua.db")): string[] {
+  if (!existsSync(globalPath)) return [];
+  const store = new SqliteStore({ path: globalPath, migrate: false });
+  try {
+    return AuthStorage.fromStore(store).list();
+  } finally {
+    store.close();
+  }
 }
 
 /**

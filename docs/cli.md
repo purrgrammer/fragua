@@ -287,8 +287,10 @@ generic infra secrets like `DATABASE_PASSWORD`, `REDIS_AUTH`, or `S3_ACCESS_KEY`
 are stripped too. List a non-credential var here to let it through (e.g.
 `GH_TOKEN` for a `gh` step); provider credentials are never re-admitted
 regardless. The passthrough list is resolved **per run** from the run's project
-config merged over global (mirroring `bootstrap`), so each project served by one
-daemon gets its own passthrough regardless of the daemon's launch cwd. See
+config merged over global, so each project served by one daemon gets its own
+passthrough regardless of the daemon's launch cwd — a *different* config seam
+from `bootstrap` (passthrough merges global ⊕ project; `bootstrap` is
+project-only). See
 `docs/execution-model.md` §2c. This is the daemon counterpart of `fragua ci
 --allow-env`; `fragua ci`'s default behaviour is unchanged, though `--allow-env`
 now refuses non-`_API_KEY` provider creds too (e.g. `ANTHROPIC_OAUTH_TOKEN`).

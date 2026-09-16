@@ -535,6 +535,24 @@ describe("daemonEnvDeny", () => {
     expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
   });
 
+  test("(daemon-deny-store-passthrough-agree) names and predicate agree on a <PROVIDER>_<WORD>_<SECRET-SUFFIX> passthrough entry for a storeProvider", () => {
+    // ANTHROPIC_RATE_LIMIT_TOKEN is a secret-shaped var carrying a held
+    // provider's prefix, but gate 4's exact-prefix match cannot classify it as
+    // a provider credential (prefix ANTHROPIC_RATE_LIMIT ≠ ANTHROPIC). Listing
+    // it in bash.env-passthrough must NOT let names and predicate disagree: the
+    // storeProviders prefix scan strips it, so both surfaces must deny it.
+    const env: NodeJS.ProcessEnv = { ANTHROPIC_RATE_LIMIT_TOKEN: "held-prefix-value-12345678" };
+    const { names, predicate, passthrough } = daemonEnvDeny({
+      env,
+      storeProviders: ["anthropic"],
+      passthrough: new Set(["ANTHROPIC_RATE_LIMIT_TOKEN"]),
+    });
+    expect(names.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(predicate("ANTHROPIC_RATE_LIMIT_TOKEN"));
+    expect(names.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
+    expect(predicate("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
+    expect(passthrough.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(false);
+  });
+
   test("(daemon-deny-effective-passthrough) returns the post-refusal passthrough set", () => {
     const { passthrough } = daemonEnvDeny({
       env: {},
@@ -584,6 +602,20 @@ describe("unsafeAllowEnvNames (provider-cred rail)", () => {
 
   test("generic CI platform tokens (GH_TOKEN / GITHUB_TOKEN) still pass the provider-prefix gate", () => {
     expect(unsafeAllowEnvNames(["GH_TOKEN", "GITHUB_TOKEN"])).toEqual([]);
+  });
+
+  test("(store-provider) a custom store-only provider's credential is refused via the storeProviders prefix scan", () => {
+    // CUSTOMAI is absent from pi-ai's registry, so all four pi-ai gates miss
+    // CUSTOMAI_OAUTH_TOKEN — only the storeProviders prefix scan catches it.
+    expect(unsafeAllowEnvNames(["CUSTOMAI_OAUTH_TOKEN"], ["customai"])).toContain("CUSTOMAI_OAUTH_TOKEN");
+    // Without the snapshot the pi-ai-only gate can't classify it — the exact
+    // divergence the fix closes.
+    expect(unsafeAllowEnvNames(["CUSTOMAI_OAUTH_TOKEN"])).toEqual([]);
+  });
+
+  test("(store-provider) a non-secret var carrying a held provider's prefix is NOT refused", () => {
+    // CUSTOMAI_ENDPOINT has the prefix but no secret suffix — allow-able.
+    expect(unsafeAllowEnvNames(["CUSTOMAI_ENDPOINT"], ["customai"])).toEqual([]);
   });
 });
 

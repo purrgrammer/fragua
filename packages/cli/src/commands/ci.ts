@@ -34,9 +34,11 @@ import { buildCiResult, type CiRunResult } from "../ci-result.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 import {
+  buildProviderCredentialContext,
   captureCiEnvSecrets,
   ciEnvDenyNames,
   ciEnvDenyPredicate,
+  listGlobalStoreProviders,
   seedCredsFromEnv,
   seedCredsFromGlobalStore,
   unsafeAllowEnvNames,
@@ -127,7 +129,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const { dotPath, name, scope } = resolved;
 
   const allowEnv = new Set(opts.allowEnv ?? []);
-  const unsafe = unsafeAllowEnvNames(allowEnv);
+  // The global store's held providers extend the provider-cred rail to custom,
+  // store-only providers (`fragua providers add`) pi-ai can't name.
+  const storeProviders = listGlobalStoreProviders();
+  const unsafe = unsafeAllowEnvNames(allowEnv, storeProviders);
   if (unsafe.length > 0) {
     for (const name of unsafe) {
       console.error(
@@ -164,9 +169,13 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const onSig = () => shutdown.abort();
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
+  // Build pi-ai's registry context once and thread it through both deny sites
+  // so the strip name-set and the spawn-time predicate can't observe a
+  // registry that changed between the two adjacent calls.
+  const credCtx = buildProviderCredentialContext();
   const provisioner = new WorktreeProvisioner({
-    envDenyNames: ciEnvDenyNames(process.env, allowEnv),
-    envDenyPredicate: ciEnvDenyPredicate(allowEnv),
+    envDenyNames: ciEnvDenyNames(process.env, allowEnv, credCtx),
+    envDenyPredicate: ciEnvDenyPredicate(allowEnv, credCtx),
   });
   let runId: string | undefined;
   // Captured at seed time so mid-run rotation can't desync the registry.
