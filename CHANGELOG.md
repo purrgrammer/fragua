@@ -42,10 +42,12 @@ guarantee.
   locale- or ICU-version-dependent order made the cache prefix differ between
   machines for the same project.
 
-- Steer text (`POST /runs/:id/steer`) is now bounded at 2000 characters and
-  rejected with a validation error at the plane boundary. A near-payload-cap
-  steer previously failed deep in the store write path instead of cleanly at
-  validation.
+- Steer text (`POST /runs/:id/steer`) is now bounded at 2000 code points, so an
+  over-long ASCII steer is rejected with a clean validation error at the plane
+  boundary rather than failing deep in the store write path. A steer whose
+  multi-byte encoding still exceeds the event-payload cap surfaces as a `413`
+  from the store, and a steer that passes both limits is now stashed for
+  delivery without silent truncation.
 
 ### Fixed
 
@@ -55,7 +57,11 @@ guarantee.
   first node dispatches, and a pre-claim steer is delivered to the first `llm`
   step—injected at the head of its first user turn—rather than dropped, even
   when it co-arrives with a later cap raise or when the first node is not an
-  `llm` step (it carries forward to the first one that is).
+  `llm` step (it carries forward to the first one that is). A pre-claim steer
+  paired with a pre-claim pause now honours both — the steer reaches the handler
+  and the run still pauses after that dispatch — and a steer carried into a
+  `parallel` node reaches every branch handler rather than only the first to
+  commit.
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`

@@ -19,10 +19,12 @@ import {
   getLimits,
   OPERATOR_NOTES_KEY,
   type OutputsValue,
+  PAUSE_AFTER_DISPATCH_KEY,
   PENDING_STEER_KEY,
   PENDING_STEER_MAX_BYTES,
   readGoalGateRetries,
   readOperatorNotes,
+  readPauseAfterDispatch,
   readPendingSteer,
   retryCountKey,
   truncateOperatorNote,
@@ -730,6 +732,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (decision.steering !== undefined && decision.steering.length > 0) {
         startRoutingPatch[PENDING_STEER_KEY] = truncateOperatorNote(decision.steering, PENDING_STEER_MAX_BYTES);
       }
+      // A pre-claim pause co-arriving with a steer folds to shouldPauseAfterDispatch
+      // (R3): run_started advances past BOTH intents, so the deferred pause has no
+      // other carrier into the next turn. Stash a marker the first running-turn
+      // dispatch reads (twin of how later turns consult decision.shouldPauseAfterDispatch)
+      // so the operator's concurrent pause isn't silently swallowed by the steer.
+      if (decision.shouldPauseAfterDispatch) {
+        startRoutingPatch[PAUSE_AFTER_DISPATCH_KEY] = true;
+      }
       // Advance lastAppliedSeq on run_started so the supervisor doesn't
       // mistake the synthetic `intent.run_enqueued` (the queue marker
       // that caused this run to exist) for a fresh operator intent
@@ -1170,9 +1180,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // retry → provider retry → resultToFacts → fact-list rewrites → routing
     // patch. See transition-planner.ts. The commit + OCC + snapshot below
     // stay here — the planner has no store, clock, or I/O.
+    // A deferred pause stashed at run_started (a pre-claim pause+steer pair) is
+    // carried in routing, not in the fold — this turn's decision folds clean.
+    // Surface the marker as shouldPauseAfterDispatch so the planner swaps the
+    // success continuation for fact.run_paused exactly as it does when a running-
+    // turn fold produces it.
+    const deferredPause = readPauseAfterDispatch(effectiveRouting);
+    const planDecision =
+      deferredPause && !decision.shouldPauseAfterDispatch ? { ...decision, shouldPauseAfterDispatch: true } : decision;
     const plan = planTransition({
       state,
-      decision,
+      decision: planDecision,
       graph: graphFor(state.workflowSha),
       handlerResult: result,
       accounting: usage.totals(),
@@ -1191,7 +1209,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     obs.flush();
 
     const facts = plan.facts;
-    const routingPatch = plan.routingPatch;
+    // Clear the deferred-pause marker once consumed so the run doesn't re-pause on
+    // resume. Only clear when the pause actually landed (the planner swapped in a
+    // fact.run_paused) — an abort path never reaches here, so the marker survives
+    // to the next dispatch as intended.
+    const consumedDeferredPause = deferredPause && facts.some((f) => f.type === "fact.run_paused");
+    const routingPatch = consumedDeferredPause
+      ? { ...(plan.routingPatch ?? {}), [PAUSE_AFTER_DISPATCH_KEY]: false }
+      : plan.routingPatch;
     const advanceAppliedTo = plan.advanceAppliedTo;
     const appendOpts: {
       routingPatch?: Record<string, unknown>;
@@ -1336,6 +1361,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     if (runEnv !== undefined) ctxOpts.env = runEnv;
+    // Deliver any pending pre-claim steer to the branch handler before the
+    // transition planner clears it. `buildRoutingPatch` fires the clear
+    // (pending_steer -> "") per llm branch, so without this mirror of the
+    // main-path merge the first branch to commit would strip the steer from
+    // routing and every sibling would dispatch without ever seeing ctx.steering.
+    const pendingBranchSteer = readPendingSteer(branchRouting as Record<string, unknown>);
+    if (pendingBranchSteer != null) ctxOpts.steering = pendingBranchSteer;
     const ctx = core.buildHandlerContext(ctxOpts);
 
     const invocation = await invokeHandler({

@@ -1784,4 +1784,56 @@ steps:
     expect(seen).toEqual({ a_scan: [], b_scan: [], a_verify: [], synth: [] });
     r.store.close();
   });
+
+  // Regression: a pending pre-claim steer carried to a parallel node must reach
+  // EVERY branch handler's ctx.steering, not just the first branch to commit.
+  // The buildRoutingPatch clear (pending_steer -> "") fires per-branch, so if
+  // executeBranchNode doesn't deliver the steer, later branches dispatch blind.
+  test("a pending steer reaches every fan-out branch handler's ctx.steering", async () => {
+    const STEER_YAML = `name: fosteer
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: tool, run: noop, next: fan }
+  fan: { type: parallel, branches: [a, b], next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+    const r = rig({ yaml: STEER_YAML });
+    const seenSteering: Record<string, Array<string | undefined>> = { a: [], b: [] };
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "tool",
+      sideEffect: "none",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    for (const id of ["a", "b"]) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seenSteering[id]!.push(ctx.steering);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "exit", tokens: 1, costUsd: 0.001 }),
+    });
+    enqueue(r, "fst1", "begin");
+    r.store.appendIntent("fst1", {
+      type: "intent.steering_requested",
+      payload: { text: "focus on the auth module" },
+    });
+    await drive(r, "fst1");
+
+    expect(r.store.getState("fst1")!.status).toBe("completed");
+    expect(seenSteering["a"]).toEqual(["focus on the auth module"]);
+    expect(seenSteering["b"]).toEqual(["focus on the auth module"]);
+    r.store.close();
+  });
 });

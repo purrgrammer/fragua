@@ -112,6 +112,15 @@ export const OPERATOR_NOTES_KEY = "internal.operator_notes";
  * (completes with a success outcome). Byte-truncated at write time. */
 export const PENDING_STEER_KEY = "internal.pending_steer";
 
+/** A deferred operator pause carried across the `run_started` boundary. When a
+ * pre-claim `intent.pause_requested` co-arrives with a `intent.steering_requested`
+ * the fold returns `shouldPauseAfterDispatch` (R3): the steer is stashed and the
+ * run must pause after the first dispatch. `run_started` advances past both
+ * intents, so this marker is the only carrier of the deferred pause into the
+ * next turn — the first running-turn dispatch reads it (twin of how later turns
+ * consult `decision.shouldPauseAfterDispatch`) and clears it. */
+export const PAUSE_AFTER_DISPATCH_KEY = "internal.pause_after_dispatch";
+
 // ── Value-checked union + documentary schema ─────────────────────────────────
 
 /** The goal-gate outcome union. A value-checked TypeBox union exercised by
@@ -137,7 +146,14 @@ function isOutcomeStatus(v: unknown): v is OutcomeStatus {
 // the writer is allowed to spread into `run_state.routing`.
 
 /** The value shape a routing-key family expects. */
-type RoutingValueKind = "number" | "string" | "string-array" | "object" | "outcome-status" | "operator-notes";
+type RoutingValueKind =
+  | "number"
+  | "string"
+  | "boolean"
+  | "string-array"
+  | "object"
+  | "outcome-status"
+  | "operator-notes";
 
 const BUDGET_SCOPES = ["run", "node"] as const;
 const BUDGET_METRICS = ["cost", "tokens"] as const;
@@ -165,6 +181,7 @@ const EXACT_ROUTING_KINDS = new Map<string, RoutingValueKind>([
   [PRIORITY_KEY, "number"],
   [OPERATOR_NOTES_KEY, "operator-notes"],
   [PENDING_STEER_KEY, "string"],
+  [PAUSE_AFTER_DISPATCH_KEY, "boolean"],
 ]);
 
 /** Resolve a routing key to its expected value kind, or `undefined` when the key
@@ -189,6 +206,8 @@ function matchesRoutingKind(value: unknown, kind: RoutingValueKind): boolean {
       return typeof value === "number" && Number.isFinite(value);
     case "string":
       return typeof value === "string";
+    case "boolean":
+      return typeof value === "boolean";
     case "string-array":
       return Array.isArray(value) && value.every((e) => typeof e === "string");
     case "object":
@@ -263,6 +282,7 @@ export const RoutingStruct = Type.Object({
   context: Type.Object({ goal: Type.Optional(Type.String()), runId: Type.Optional(Type.String()) }),
   operatorNotes: Type.Array(Type.Object({ gateNodeId: Type.String(), route: Type.String(), note: Type.String() })),
   pendingSteer: Type.Optional(Type.String()),
+  pauseAfterDispatch: Type.Optional(Type.Boolean()),
 });
 export type RoutingStruct = Static<typeof RoutingStruct>;
 
@@ -478,6 +498,13 @@ export function readPendingSteer(routing: Record<string, unknown>): string | und
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
+/** Read the deferred-pause marker ({@link PAUSE_AFTER_DISPATCH_KEY}). Any value
+ * other than a literal `true` reads as "no deferred pause", so a cleared (`false`
+ * / absent) or tampered marker never manufactures a pause. */
+export function readPauseAfterDispatch(routing: Record<string, unknown>): boolean {
+  return routing[PAUSE_AFTER_DISPATCH_KEY] === true;
+}
+
 const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 // Byte budgets, not char: the routing column's CHECK is UTF-8 `length < 8192`,
@@ -485,9 +512,13 @@ const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 export const OPERATOR_NOTE_MAX_BYTES = 2000;
 export const OPERATOR_NOTES_MAX_BYTES = 4096;
 
-// Byte budget for a pending steer written into routing. Matches the operator-
-// note per-note budget so a steer can't monopolise the shared routing column.
-export const PENDING_STEER_MAX_BYTES = 2000;
+// Byte budget for a pending steer written into routing. Sized to exceed the
+// intent-payload cap (`MAX_EVENT_PAYLOAD_BYTES` = 4 KiB) so that any steer which
+// survived `appendIntent` is stored verbatim rather than silently halved: the
+// `SteerText` schema bounds by code points, so a valid multi-byte steer can be
+// ~4 KiB, and a byte budget below that would truncate a control-plane message
+// the operator got a 2xx for. 8000 covers 4-byte codepoints across the cap.
+export const PENDING_STEER_MAX_BYTES = 8000;
 
 const TRUNCATION_MARKER = " [truncated]";
 

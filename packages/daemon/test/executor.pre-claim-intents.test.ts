@@ -157,6 +157,48 @@ describe("executor — pre-claim intents", () => {
     r.store.close();
   });
 
+  // A pre-claim steer co-arriving with a pre-claim pause folds to
+  // shouldPauseAfterDispatch (R3): run_started advances past both, so the
+  // deferred pause must be carried across the boundary. Both intents must be
+  // honoured — the steer reaches the handler AND the run pauses after the turn.
+  test("pre-claim steer + pause: steer delivered and the run pauses after dispatch", async () => {
+    const r = rig();
+    const seenSteering: Array<string | undefined> = [];
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "llm",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async (ctx) => {
+        seenSteering.push(ctx.steering);
+        return { kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 };
+      },
+    });
+    enqueue(r, "rp5", "start");
+    r.store.appendIntent("rp5", {
+      type: "intent.steering_requested",
+      payload: { text: "focus on the auth module" },
+    });
+    r.store.appendIntent("rp5", { type: "intent.pause_requested", payload: {} });
+    r.store.claimNextRun(1);
+    await runOne("rp5", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    // The steer reached the first dispatch.
+    expect(seenSteering).toContain("focus on the auth module");
+    // The operator's concurrent pause was honoured rather than swallowed.
+    expect(r.store.getState("rp5")!.status).toBe("paused");
+
+    r.store.close();
+  });
+
   // Medium: a pre-claim steer whose first dispatched node is non-llm (tool /
   // human) must carry forward to the first llm step rather than being consumed.
   test("pre-claim steer with a non-llm first node carries forward to the first llm step", async () => {
