@@ -19,6 +19,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import chalk from "chalk";
+import { resolveBaseRef } from "../git-base.ts";
 import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
 import { followRun } from "../run-follow.ts";
@@ -40,6 +41,11 @@ export interface RunCommandOptions {
   /** Whole inputs object as one JSON value (`--input-json '<json>'`). The
    * programmatic-caller path; merged under per-`--input` overrides. */
   inputJson?: string;
+  /** Pin the worktree base to this ref (branch, tag, or sha). Resolved to a
+   * commit sha at enqueue against the project root; the provisioner provisions
+   * the worktree detached at that sha. Unresolvable refs reject the enqueue.
+   * Omitted = default (cwd HEAD at provision time). */
+  base?: string;
   /** Exit after the run enters a terminal state. Default true. */
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
@@ -103,6 +109,16 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     client.plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
     console.log(chalk.dim(`workflow ${name} -> ${mint.sha.slice(0, 12)}`));
 
+    let base: { sha: string; ref: string } | undefined;
+    if (opts.base !== undefined) {
+      const resolved = await resolveBaseRef(cwd, opts.base);
+      if (!resolved.ok) {
+        console.error(chalk.red(`run: ${resolved.error}`));
+        return 1;
+      }
+      base = { sha: resolved.sha, ref: resolved.ref };
+    }
+
     const inputDecls = mint.graph.attrs.inputs ?? [];
     let inputs: Record<string, unknown>;
     try {
@@ -124,6 +140,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
       ...(opts.routing !== undefined ? { routing: opts.routing } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(base !== undefined ? { baseGitSha: base.sha, baseGitRef: base.ref } : {}),
     });
     if (!enq.ok) {
       console.error(chalk.red(`run: ${enq.error}`));
@@ -132,6 +149,9 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     client.plane.commitEnqueue(enq.params);
     if (opts.title !== undefined && opts.title.length > 0) client.store.setRunTitle(enq.runId, opts.title);
     console.log(chalk.green(`run queued: ${enq.runId}`));
+    if (base !== undefined) {
+      console.log(chalk.dim(`base ${base.ref} -> ${base.sha.slice(0, 12)}`));
+    }
 
     if (opts.follow === false) return 0;
     return followRun(client, enq.runId);

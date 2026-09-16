@@ -813,6 +813,8 @@ export class SqliteStore implements IEventStore {
       ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
       ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
       ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
+      ...(params.baseGitSha != null ? { baseGitSha: params.baseGitSha } : {}),
+      ...(params.baseGitRef != null ? { baseGitRef: params.baseGitRef } : {}),
     } satisfies RunEnqueuedPayload);
     const genesisBytes = utf8ByteLength(genesisPayload);
     if (genesisBytes >= MAX_EVENT_PAYLOAD_BYTES) {
@@ -847,6 +849,8 @@ export class SqliteStore implements IEventStore {
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
         scheduleId: params.scheduleId ?? null,
+        baseGitSha: params.baseGitSha ?? null,
+        baseGitRef: params.baseGitRef ?? null,
       });
 
       const seq = bumpRunSeq(this.db, params.runId);
@@ -2167,6 +2171,8 @@ export class SqliteStore implements IEventStore {
               workflowScope: d.workflowScope,
               workflowPath: d.workflowPath,
               scheduleId: d.scheduleId,
+              baseGitSha: d.baseGitSha,
+              baseGitRef: d.baseGitRef,
             });
             writeRunStateProjection(this.db, {
               runId: d.runId,

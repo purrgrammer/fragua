@@ -342,6 +342,48 @@ describe("applyAccept across a squash-merged base (base not ancestor of HEAD)", 
   });
 });
 
+// A run pinned to branch X (`fragua run --base X`): its `baseGitSha` is X's
+// tip. Accepting while the operator's checkout is on X exercises the
+// ancestor (replay) path; accepting onto a divergent branch (main) where X's
+// tip is NOT an ancestor exercises the non-ancestor 3-way path.
+describe("applyAccept with a pinned branch base", () => {
+  /** main@base, then branch `x` gains a commit editing L10 → returns x's tip. */
+  async function branchX(): Promise<{ cwd: string; base: string; xTip: string }> {
+    const { cwd, base } = await setupRepo();
+    await must(cwd, ["checkout", "-qb", "x", base]);
+    writeFileSync(join(cwd, "f.txt"), lines().replace("L10\n", "L10-X\n"));
+    await must(cwd, ["commit", "-qam", "x: edit L10"]);
+    return { cwd, base, xTip: await must(cwd, ["rev-parse", "HEAD"]) };
+  }
+
+  test("run based on X, accepted while HEAD is on X → replays cleanly (ancestor path)", async () => {
+    const { cwd, xTip } = await branchX();
+    await makeRun(cwd, xTip, 1, false); // run commit edits L02 off X's tip
+    // HEAD is still on x at xTip → base is an ancestor of HEAD.
+    expect((await git(cwd, ["merge-base", "--is-ancestor", xTip, "HEAD"])).exitCode).toBe(0);
+    const r = await applyAccept(git, gate(cwd, xTip));
+    expect(r).toMatchObject({ ok: true, replayed: 1 }); // ancestor → replay path
+    expect(await has(cwd, "L02-RUN")).toBe(true); // the run's commit landed
+    expect(await must(cwd, ["log", "-1", "--format=%ae"])).toBe("bot@fragua"); // author preserved
+    expect(await clean(cwd)).toBe(true);
+  });
+
+  test("run based on X, accepted onto a different branch → non-ancestor 3-way path", async () => {
+    const { cwd, base, xTip } = await branchX();
+    await makeRun(cwd, xTip, 0, true); // dirt-only run (edits L06) off X's tip
+    // Switch the operator's checkout back to main@base: X's tip is NOT an
+    // ancestor of HEAD, so accept must take the 3-way-across-divergent-base path.
+    await must(cwd, ["checkout", "-q", "main"]);
+    expect((await git(cwd, ["merge-base", "--is-ancestor", xTip, "HEAD"])).exitCode).not.toBe(0);
+    const head = await must(cwd, ["rev-parse", "HEAD"]);
+    const r = await applyAccept(git, gate(cwd, xTip));
+    expect(r).toEqual({ ok: true, sha: head, replayed: 0, tailStaged: true });
+    expect(await staged(cwd)).toBe("f.txt");
+    expect((await must(cwd, ["show", ":f.txt"])).includes("L06-DIRT")).toBe(true);
+    expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(base); // no commit authored
+  });
+});
+
 describe("applyDiscard", () => {
   test("deletes both refs; idempotent", async () => {
     const { cwd, base } = await setupRepo();

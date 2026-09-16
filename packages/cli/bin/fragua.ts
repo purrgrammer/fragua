@@ -516,6 +516,10 @@ cli
   )
   .option("--title <text>", "Explicit run title (skips auto-titling)")
   .option("--priority <n>", "Priority tie-breaker (default 0)")
+  .option(
+    "--base <ref>",
+    "Pin the worktree base to this branch/tag/sha, resolved to a sha at enqueue (default: cwd HEAD at provision)",
+  )
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
   .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
@@ -547,6 +551,7 @@ cli
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(pick("title") !== undefined ? { title: pick("title")! } : {}),
+      ...(pick("base") !== undefined ? { base: pick("base")! } : {}),
       ...(pick("inputJson") !== undefined ? { inputJson: pick("inputJson")! } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
