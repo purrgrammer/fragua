@@ -184,6 +184,21 @@ fragua runs discard <id>   # drop the run's refs/fragua/{snapshots,heads}/<id> (
 
 `accept` runs synchronously and prints `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` on a discarded run exits non-zero with `discarded`.
 
+### Converging a branch
+
+A `review` run that re-scans a branch from scratch each round re-litigates its own prior fixes and never converges. Feed each round the previous report so it verifies the fixes and scans only for regressions, and shell the report straight into the fix run — no hand-editing a task file:
+
+```sh
+fragua run work --input task="…"                             # 1. build the change
+fragua run review --input target="<branch>"                  # 2. first review round (note the run id it prints)
+fragua runs review-report <review_id> --out review.md       # capture the report (prints to stdout without --out)
+
+fragua run work --input task="…" --input review=@review.md     # 3. apply the report as a fix checklist
+fragua run review --input target="<branch>" --input previous_review=@review.md  # 4. follow-up round
+```
+
+Step 3's `work` run turns the report into a numbered fix checklist (`apply_review` preamble) and judges completeness against it. Step 4's `review` run enters **follow-up mode**: it verifies each prior finding (resolved / partial / unresolved) and scans only for regressions and new defects — not fresh improvements — writing a `## Previous findings` table plus `## New defects`. **Ship when `review.md`'s `## Verdict` line reads `converged`** (no High/Critical defect remains); otherwise it states the count — feed the new report into another `work --input review=…` round. `fragua runs review-report <id>` prefers a recorded `review.md` artifact and falls back to the run's worktree file, so you never touch worktree paths; chain it inline with `--input review=@<(fragua runs review-report <id>)`.
+
 ---
 
 ## 8. Schedules — recurring runs

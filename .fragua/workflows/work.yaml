@@ -38,12 +38,35 @@ inputs:
     type: string
     required: true
     description: The task to work on
+  review:
+    type: string
+    default: ""
+    description: "A review report to act on (pass `--input review=@review.md`, e.g. from `fragua runs review-report <id>`); non-empty routes through `apply_review`, which turns it into a fix checklist the run implements and judges completeness against."
 
 defaults:
   provider: anthropic
   model: claude-opus-4-8
 
 steps:
+  review_gate:                         # entry gate — divert a review-driven run before triage ever sees the review body
+    type: llm
+    model: claude-sonnet-4-6           # cheap non-emptiness routing; keeps the KB-scale review body out of triage's narrow budget
+    allowed-tools: []
+    prompt: |
+      Route on ONE fact: is a review report present?
+
+      A review report IS present unless the delimited block below is empty or whitespace-only. Do NOT read, analyse, or act on its content — only decide present vs absent.
+      ---
+      ${{ inputs.review }}
+      ---
+
+      Call the `route` tool once:
+        review  — the block is non-empty (a review report to act on)
+        task    — the block is empty (a fresh task; classify it in triage)
+    routes:
+      review: {to: apply_review, label: "Act on a review"}
+      task:   {to: triage,       label: "Fresh task"}
+
   triage:                              # pure classifier — isolated, no shared thread
     type: llm
     model: claude-sonnet-4-6           # classifier strength follows the cost of misclassifying: haiku fumbled 3/3 meta-briefing tasks (route_not_picked); a dead run costs more than the sonnet delta
@@ -59,9 +82,9 @@ steps:
       Not a workable software task (empty / illegible / off-topic / ambiguous / already-shipped) → `abort` with the reason instead of routing.
       The statement is a WORK ORDER, not a hypothesis: its claims are the implementer's to verify, never yours — do not check citations, do not itemize sub-tasks back. Docs/test/CI-only changes are `small` regardless of how many files they touch. Torn between two tiers → pick the deeper. Don't plan, reproduce, or implement. Read at most 2-3 files to SIZE the task. Your final action is exactly one `route` (or `abort`) call on its own response; never end with prose.
     routes:
-      small:   {to: implement, label: "Small change"}
-      feature: {to: plan,      label: "Feature scope"}
-      bugfix:  {to: reproduce, label: "Bug fix"}
+      small:        {to: implement,    label: "Small change"}
+      feature:      {to: plan,         label: "Feature scope"}
+      bugfix:       {to: reproduce,     label: "Bug fix"}
 
   plan:                                # feature preamble — writes the plan into `build`
     type: llm
@@ -90,6 +113,19 @@ steps:
       Cannot localise after a reasonable read → `abort` with `cannot reproduce: <why>`.
     next: implement
 
+  apply_review:                        # review-driven preamble — turn the report into a fix checklist in `build`
+    type: llm
+    thread: build                      # its checklist lands in `build` for implement + review; it reads NO upstream thread (first `build` member on this path), so it is isolated on input
+    allowed-tools: [read, grep, find]
+    prompt: |
+      A code review report to act on:
+      ---
+      ${{ inputs.review }}
+      ---
+
+      Turn EVERY actionable defect/finding in it into a numbered checklist of concrete fixes (skip items the report itself marks non-blocking / already-resolved / out-of-scope). Each item: the file/area, what to change, and the one-line acceptance check. Don't implement anything here — just produce the checklist as `FIX_CHECKLIST:` followed by the numbered list. If the report has no actionable items, say so with an empty checklist.
+    next: implement
+
   implement:                           # shared spine — realises whatever `build` establishes
     type: llm
     thread: build
@@ -100,6 +136,7 @@ steps:
 
       Plan in this thread → realise it exactly, only the package(s) it names.
       Failing test in this thread → make it pass without weakening it.
+      A FIX_CHECKLIST in this thread → realise every item, only the scope it names.
       Neither → triaged small; scope it yourself.
 
       Per modified package: run that package's typecheck (in a workspace, e.g. `bun run --filter='<pkg>' typecheck`); cap fixes at 5 cycles, then `abort` with `typecheck blocked: <top error>`.
@@ -114,8 +151,8 @@ steps:
     next: format
     allowed-tools: [read, grep, bash]
     prompt: |
-      Judge `git diff HEAD` — against PLAN_REALISED if present, else on its own merits.
-        (a) diff matches PLAN_REALISED, nothing extra.
+      Judge `git diff HEAD` — against the FIX_CHECKLIST if one is in this thread, else against PLAN_REALISED if present, else on its own merits. When a FIX_CHECKLIST is present, judge completeness against IT (every checklist item addressed) rather than running a fresh scan.
+        (a) diff matches PLAN_REALISED / the FIX_CHECKLIST, nothing extra.
         (b) every promised test realised (exists, named, non-trivial); for a bugfix, the reproduced test now passes.
         (c) bugs, type errors, security.
         (d) scope creep past the plan / the bug.

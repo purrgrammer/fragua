@@ -10,7 +10,7 @@
 // resolves the commit range through `readPlane.diffRange` and runs the git diff
 // inline with the same `@fragua/workspace` `gitDiff` the server uses.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
 import type { DiffRange, FleetSummary, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
@@ -622,6 +622,65 @@ export function worktreeCommand(opts: WorktreeOptions): Promise<number> {
       return 1;
     }
     console.log(wt);
+    return 0;
+  });
+}
+
+export interface ReviewReportOptions extends DiscoveryOpts {
+  runId: string;
+  out?: string;
+}
+
+/** Print (or write with `--out`) a review run's `review.md`. Prefers an
+ * artifact the run recorded under the `review.md` key (latest iteration wins);
+ * falls back to the file the `write` tool left in the run's worktree
+ * (`<cwd>/.fragua/worktrees/<runId>/review.md`). Lets the operator chain
+ * `fragua run work --input review=@<(fragua runs review-report <id>)` without
+ * knowing worktree paths. */
+export function reviewReportCommand(opts: ReviewReportOptions): Promise<number> {
+  return withStoreClient(opts, ({ readPlane }) => {
+    const detail = readPlane.runDetail(opts.runId);
+    if (detail == null) {
+      console.error(chalk.red("review-report: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+
+    let body: Uint8Array | null = null;
+
+    // Artifact-first: a run that recorded review.md as an artifact wins over the
+    // worktree file (survives worktree GC). Pick the latest iteration.
+    const rows = (readPlane.artifacts(opts.runId) ?? []).filter((a) => a.key === "review.md");
+    if (rows.length > 0) {
+      const latest = rows.reduce((a, b) => (b.iteration >= a.iteration ? b : a));
+      body = readPlane.artifactBody({
+        runId: opts.runId,
+        nodeId: latest.nodeId,
+        key: "review.md",
+        iteration: latest.iteration,
+      });
+    }
+
+    // Fallback: the file the `write` tool left in the worktree. `worktreePath`
+    // is the read plane's authoritative worktree path (single source of truth).
+    if (body == null && detail.worktreePath != null) {
+      const path = join(detail.worktreePath, "review.md");
+      if (existsSync(path)) body = readFileSync(path);
+    }
+
+    if (body == null) {
+      console.error(
+        chalk.red("review-report: no review.md found") +
+          chalk.dim(` (no "review.md" artifact and none in the run's worktree — ${opts.runId})`),
+      );
+      return 1;
+    }
+
+    if (opts.out != null && opts.out.length > 0) {
+      writeFileSync(opts.out, body);
+      console.log(chalk.green("wrote review report") + chalk.dim(` (${opts.out}, ${body.byteLength}B)`));
+      return 0;
+    }
+    process.stdout.write(body);
     return 0;
   });
 }

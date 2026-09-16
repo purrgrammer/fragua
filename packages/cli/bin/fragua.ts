@@ -39,6 +39,7 @@ import {
   priorityCommand,
   respondCommand,
   resumeCommand,
+  reviewReportCommand,
   statusCommand,
   steerCommand,
   stepsCommand,
@@ -677,6 +678,7 @@ function runsHelp(): void {
     messages  <id> [--node <id>] [--json]                   the LLM-visible transcript (one preview line each)
     artifacts <id>                                          list a run's artifacts (metadata)
     artifact  <id> <nodeId> --key <k> [--iteration N]       write one artifact's bytes to stdout
+    review-report <id> [--out <path>]                       print (or write) a review run's review.md
 
   Portability (move a run between stores as a secret-free .fragua bundle):
     export    <id> --to <file.fragua>                       write the run as a portable bundle
@@ -715,6 +717,7 @@ cli
   .option("--key <k>", "artifact: the artifact key to fetch")
   .option("--iteration <n>", "artifact: node iteration (default 0)")
   .option("--to <path>", "export: destination path for the .fragua bundle")
+  .option("--out <path>", "review-report: write the report to a file instead of stdout")
   .option("--cwd <dir>", "Project root (scopes ls/inbox; resolves diff worktrees)")
   .option("--db <path>", "Store path (default: the harness store ~/.fragua/fragua.db)")
   .action(
@@ -1014,6 +1017,15 @@ cli
           break;
         case "worktree":
           process.exit(await worktreeCommand({ runId: needId(), ...discovery(options) }));
+          break;
+        case "review-report":
+          process.exit(
+            await reviewReportCommand({
+              runId: needId(),
+              ...(pickStr(options, "out") !== undefined ? { out: pickStr(options, "out")! } : {}),
+              ...discovery(options),
+            }),
+          );
           break;
         case "wait": {
           // Variadic ids: cac binds the first two positionals to runId/arg; any
