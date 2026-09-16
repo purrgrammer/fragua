@@ -1335,6 +1335,14 @@ export class SqliteStore implements IEventStore {
     });
   }
 
+  clearDaemonLock(pid: number): void {
+    const now = this.now();
+    this.writeTxn(() => {
+      upsertDaemonLock(this.db, pid, "clear", now);
+      deleteDaemonLock(this.db, pid);
+    });
+  }
+
   runStateCounts(): { running: number; queued: number } {
     return { running: countRunningRuns(this.db), queued: countQueuedRuns(this.db) };
   }

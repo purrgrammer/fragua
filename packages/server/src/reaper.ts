@@ -52,12 +52,10 @@ export function reapStaleDaemon(opts: ReapOptions): ReapResult {
   if (lock == null) return { reaped: false };
   if (now() - lock.heartbeatAt <= ttl) return { reaped: false };
 
-  const swept = opts.store.startupSweep();
-  // Delete the stale row via force-acquire + release. There is no
-  // direct "clear any lock" primitive; this is the store's sanctioned
-  // compound that force-acquireDaemonLock exists for (daemon takeover).
-  opts.store.forceAcquireDaemonLock(process.pid, "reaper");
-  opts.store.releaseDaemonLock(process.pid);
+  const swept = opts.store.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
+  opts.store.clearDaemonLock(process.pid);
+  // priorHeartbeatAt credits pre-crash active time to requeued runs, matching
+  // the daemon's own TTL-takeover path.
 
   return { reaped: true, swept, stalePid: lock.pid };
 }

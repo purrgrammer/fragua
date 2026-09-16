@@ -1124,6 +1124,15 @@ export interface IDaemonCoordinator {
   forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
+  /**
+   * Clear whatever `daemon_lock` row currently exists, regardless of which pid
+   * holds it, in a single transaction. The takeover/eviction primitive: a
+   * supervisor evicting a stale lock left by a hard-crashed child, or the
+   * reaper releasing a dead daemon's lock, calls this instead of the
+   * `forceAcquireDaemonLock` + `releaseDaemonLock` compound. `pid` is the
+   * caller's own pid, used only for the transient upsert before the delete.
+   */
+  clearDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
   currentServerEndpoint(): ServerEndpointRow | null;
   setServerEndpoint(args: { url: string; port: number; pid: number; version: string | null }): void;

@@ -618,6 +618,21 @@ describe("SqliteStore — daemon lock", () => {
     store.close();
   });
 
+  test("clearDaemonLock removes any lock row regardless of prior holder", () => {
+    const store = freshStore();
+    store.forceAcquireDaemonLock(202, "host-b");
+    expect(store.currentDaemonLock()!.pid).toBe(202);
+
+    // A different pid clears the row it never held.
+    store.clearDaemonLock(999);
+    expect(store.currentDaemonLock()).toBeNull();
+
+    // Idempotent on an already-empty table.
+    store.clearDaemonLock(999);
+    expect(store.currentDaemonLock()).toBeNull();
+    store.close();
+  });
+
   test("heartbeat advances heartbeat_at only for the current owner", () => {
     const store = freshStore();
     store.acquireDaemonLock(1, "h");

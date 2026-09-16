@@ -29,7 +29,7 @@
 //      HTTP server.
 
 import { mkdirSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
@@ -91,6 +91,10 @@ export interface SupervisorConfig {
   maxFastFailures: number;
   /** SIGTERM→SIGKILL grace on shutdown. */
   shutdownGraceMs: number;
+  /** How long the readiness gate polls `daemon_lock` for the child's pid
+   *  before declaring failure. Cancellable: a shutdown mid-gate breaks the
+   *  poll early rather than blocking the full deadline. */
+  lockWaitMs: number;
 }
 
 export interface HarnessCommandOptions {
@@ -161,6 +165,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     healthyResetMs: HEALTHY_RESET_MS,
     maxFastFailures: MAX_FAST_FAILURES,
     shutdownGraceMs: SHUTDOWN_GRACE_MS,
+    lockWaitMs: LOCK_WAIT_MS,
   });
 }
 
@@ -171,14 +176,21 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
 export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: SupervisorConfig): Promise<number> {
   const { serverHandle } = cfg;
 
+  // A prior harness/daemon that hard-crashed within the heartbeat TTL leaves a
+  // stale `daemon_lock` row that would make this child's `acquireDaemonLock`
+  // throw — the daemon only self-heals *after* the TTL. Evict it (crediting any
+  // pre-crash active time to in-flight runs) so the first child acquires
+  // cleanly, exactly as every restart path does.
+  evictStaleLock(cfg.dbPath);
+
   let daemonProc = spawn(argv);
   // Initial readiness gate: report ready only once *this* child holds the lock
   // (its pid, not a stale predecessor's). `lastStart` is credited after the
-  // gate so the up-to-LOCK_WAIT_MS wait never counts as daemon uptime.
-  const ready = await gateReady(cfg.dbPath, daemonProc.pid);
+  // gate so the up-to-lockWaitMs wait never counts as daemon uptime.
+  const ready = await gateReady(cfg.dbPath, daemonProc.pid, cfg.lockWaitMs);
   let lastStart = Date.now();
   if (!ready) {
-    console.error(chalk.red(`harness: daemon failed to acquire lock within ${LOCK_WAIT_MS}ms`));
+    console.error(chalk.red(`harness: daemon failed to acquire lock within ${cfg.lockWaitMs}ms`));
     await shutdown(daemonProc, serverHandle, cfg.shutdownGraceMs);
     return 1;
   }
@@ -198,13 +210,22 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
     const onSigterm = () => finish("SIGTERM", 0);
 
     const finish = (label: string, code: number) => {
+      // `stopping` (not `process.removeListener`) is the double-invocation
+      // barrier: a SIGINT+SIGTERM pair, or a crash racing a signal, both land
+      // here — the first flips `stopping` and the rest return immediately, so
+      // `shutdown` runs once. It also cancels an in-flight readiness gate.
       if (stopping) return;
       stopping = true;
       if (restartTimer) clearTimeout(restartTimer);
       process.removeListener("SIGINT", onSigint);
       process.removeListener("SIGTERM", onSigterm);
       console.log(chalk.dim(`\n${label} — shutting down...`));
-      void shutdown(daemonProc, serverHandle, cfg.shutdownGraceMs).finally(() => resolveExit(code));
+      // `.catch` neutralises a SIGKILL-path ESRCH: `shutdown`'s `kill(9)` may
+      // reject if the child exits first, and this promise is `void`-discarded,
+      // so an unhandled rejection would otherwise defeat the bounded shutdown.
+      void shutdown(daemonProc, serverHandle, cfg.shutdownGraceMs)
+        .catch(() => {})
+        .finally(() => resolveExit(code));
     };
 
     process.once("SIGINT", onSigint);
@@ -239,9 +260,9 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
       daemonProc = spawn(argv);
       // A restarted daemon replays events + runs the startup sweep before it
       // takes the lock; re-gate on *this* child's pid so "ready" keeps meaning
-      // "the daemon we just spawned is up".
-      const restartReady = await gateReady(cfg.dbPath, daemonProc.pid);
-      lastStart = Date.now();
+      // "the daemon we just spawned is up". The gate cancels the moment
+      // `stopping` flips so a SIGINT mid-restart isn't blocked on the deadline.
+      const restartReady = await gateReady(cfg.dbPath, daemonProc.pid, cfg.lockWaitMs, () => stopping);
       if (stopping) return;
       if (!restartReady) {
         try {
@@ -249,9 +270,12 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
         } catch {
           /* ESRCH — already gone */
         }
-        registerFailure(`daemon failed to acquire lock within ${LOCK_WAIT_MS}ms on restart`);
+        registerFailure(`daemon failed to acquire lock within ${cfg.lockWaitMs}ms on restart`);
         return;
       }
+      // Credit uptime only once the gate confirms the child is up, so a failed
+      // gate never advances the healthy-reset clock.
+      lastStart = Date.now();
       watch(daemonProc);
     };
 
@@ -278,24 +302,32 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
 /** Open a short-lived `migrate: false` handle and poll `daemon_lock` until the
  *  child with `expectedPid` holds it. The daemon owns migrations; this probe
  *  must not open a second migrating handle beside it. */
-async function gateReady(dbPath: string, expectedPid: number): Promise<boolean> {
+async function gateReady(
+  dbPath: string,
+  expectedPid: number,
+  lockWaitMs: number,
+  shouldCancel?: () => boolean,
+): Promise<boolean> {
   const lockStore = new SqliteStore({ path: dbPath, migrate: false });
   try {
-    return await waitForLock(lockStore, expectedPid);
+    return await waitForLock(lockStore, expectedPid, lockWaitMs, shouldCancel);
   } finally {
     lockStore.close();
   }
 }
 
-/** Clear a stale `daemon_lock` row left by a hard-crashed child. Force-acquire
- *  under the harness's own pid to overwrite whatever pid is there, then release
- *  it, leaving the row gone so the replacement daemon acquires cleanly. Opened
- *  `migrate: false`: the daemon owns migrations. */
+/** Clear a stale `daemon_lock` row left by a hard-crashed child so the
+ *  replacement daemon acquires cleanly, and run the startup sweep with the
+ *  dead daemon's last heartbeat as `priorHeartbeatAt` so in-flight runs keep
+ *  their pre-crash active-time credit (mirroring the server reaper). The
+ *  daemon will sweep again on boot — idempotent, finding nothing left to
+ *  requeue. Opened `migrate: false`: the daemon owns migrations. */
 function evictStaleLock(dbPath: string): void {
   const store = new SqliteStore({ path: dbPath, migrate: false });
   try {
-    store.forceAcquireDaemonLock(process.pid, hostname());
-    store.releaseDaemonLock(process.pid);
+    const priorHeartbeatAt = store.currentDaemonLock()?.heartbeatAt;
+    store.clearDaemonLock(process.pid);
+    store.startupSweep(priorHeartbeatAt != null ? { priorHeartbeatAt } : undefined);
   } finally {
     store.close();
   }
@@ -308,9 +340,15 @@ function hyperlink(url: string, label?: string): string {
   return `\x1b]8;;${url}\x1b\\${label ?? url}\x1b]8;;\x1b\\`;
 }
 
-async function waitForLock(store: SqliteStore, expectedPid: number): Promise<boolean> {
-  const deadline = Date.now() + LOCK_WAIT_MS;
+async function waitForLock(
+  store: SqliteStore,
+  expectedPid: number,
+  lockWaitMs: number,
+  shouldCancel?: () => boolean,
+): Promise<boolean> {
+  const deadline = Date.now() + lockWaitMs;
   while (Date.now() < deadline) {
+    if (shouldCancel?.()) return false;
     if (store.currentDaemonLock()?.pid === expectedPid) return true;
     await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
   }
@@ -325,9 +363,10 @@ async function shutdown(
   // Stop daemon child. SIGTERM triggers its graceful shutdown (lock
   // release, sweep state). Bound the wait: a hung daemon must not hang
   // Ctrl-C — escalate to SIGKILL after `graceMs`. A daemon that already
-  // exited (natural crash) is skipped via `exitCode`. Only `kill()` is guarded
-  // for the TOCTOU where the child exits between the gate and the signal
-  // (ESRCH); the SIGKILL escalation must still raise on its own.
+  // exited (natural crash) is skipped via `exitCode`. Both the SIGTERM and the
+  // SIGKILL escalation guard against the TOCTOU where the child exits between
+  // the gate and the signal (ESRCH) — the caller `void`-discards this promise,
+  // so an escaping rejection would surface as an unhandledRejection.
   if (daemonProc.exitCode === null) {
     try {
       daemonProc.kill();
@@ -339,7 +378,11 @@ async function shutdown(
       console.log(chalk.dim("harness: daemon stopped"));
     } else {
       console.log(chalk.dim(`harness: daemon did not stop within ${graceMs}ms — sending SIGKILL`));
-      daemonProc.kill(9);
+      try {
+        daemonProc.kill(9);
+      } catch {
+        /* ESRCH — the child exited between the grace timeout and the SIGKILL */
+      }
       await daemonProc.exited;
     }
   }

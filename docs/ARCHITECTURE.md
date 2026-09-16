@@ -299,7 +299,7 @@ because no transaction overlaps with run state; the tables are
 independent. This is the cleanest interface to extract first if you
 ever want a separate process holding the daemon lock.
 
-It covers the `daemon_events` append/read, the `daemon_lock` lifecycle (`acquire` / `forceAcquire` TTL-reclaim / `heartbeat` / `release` / `currentDaemonLock`), and schedule CRUD + the two daemon-side advancers (`recordScheduleFire`, `recordScheduleSkipped`). See `packages/store/src/types.ts`.
+It covers the `daemon_events` append/read, the `daemon_lock` lifecycle (`acquire` / `forceAcquire` TTL-reclaim / `heartbeat` / `release` / `clearDaemonLock` / `currentDaemonLock`), and schedule CRUD + the two daemon-side advancers (`recordScheduleFire`, `recordScheduleSkipped`). See `packages/store/src/types.ts`. `clearDaemonLock(pid)` is the single eviction primitive — it deletes whatever lock row exists in one transaction; the harness supervisor and the server reaper call it (paired with a `startupSweep`) instead of the `forceAcquire` + `release` compound.
 
 Schedule methods are CRUD over the `schedules` table plus two
 daemon-side advancers (`recordScheduleFire`, `recordScheduleSkipped`)
