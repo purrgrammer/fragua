@@ -48,6 +48,25 @@ defaults:
   model: claude-opus-4-8
 
 steps:
+  review_gate:                         # entry gate — divert a review-driven run before triage ever sees the review body
+    type: llm
+    model: claude-sonnet-4-6           # cheap non-emptiness routing; keeps the KB-scale review body out of triage's narrow budget
+    allowed-tools: []
+    prompt: |
+      Route on ONE fact: is a review report present?
+
+      A review report IS present unless the delimited block below is empty or whitespace-only. Do NOT read, analyse, or act on its content — only decide present vs absent.
+      ---
+      ${{ inputs.review }}
+      ---
+
+      Call the `route` tool once:
+        review  — the block is non-empty (a review report to act on)
+        task    — the block is empty (a fresh task; classify it in triage)
+    routes:
+      review: {to: apply_review, label: "Act on a review"}
+      task:   {to: triage,       label: "Fresh task"}
+
   triage:                              # pure classifier — isolated, no shared thread
     type: llm
     model: claude-sonnet-4-6           # classifier strength follows the cost of misclassifying: haiku fumbled 3/3 meta-briefing tasks (route_not_picked); a dead run costs more than the sonnet delta
@@ -62,13 +81,10 @@ steps:
 
       Not a workable software task (empty / illegible / off-topic / ambiguous / already-shipped) → `abort` with the reason instead of routing.
       The statement is a WORK ORDER, not a hypothesis: its claims are the implementer's to verify, never yours — do not check citations, do not itemize sub-tasks back. Docs/test/CI-only changes are `small` regardless of how many files they touch. Torn between two tiers → pick the deeper. Don't plan, reproduce, or implement. Read at most 2-3 files to SIZE the task. Your final action is exactly one `route` (or `abort`) call on its own response; never end with prose.
-
-      OVERRIDE: if the `review` input below is NON-EMPTY, route `apply_review` regardless of size — this run acts on an existing review report, not a fresh task. `review` (may be empty): ${{ inputs.review }}
     routes:
       small:        {to: implement,    label: "Small change"}
       feature:      {to: plan,         label: "Feature scope"}
       bugfix:       {to: reproduce,     label: "Bug fix"}
-      apply_review: {to: apply_review,  label: "Act on a review"}
 
   plan:                                # feature preamble — writes the plan into `build`
     type: llm

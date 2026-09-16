@@ -91,6 +91,7 @@ steps:
         items: { type: string }
       focus:     { type: string }      # focus hint, or "general"
       mode:      { type: choice, options: [fresh, followup] }  # followup iff previous_review is non-empty
+      followup_instructions: { type: string }  # the shared FOLLOW-UP protocol block every lens injects; "" in fresh mode
     prompt: |
       Resolve the review target from `${{ inputs.target }}` and prep the tree, then emit the review context for the downstream steps (which run on fresh context and have ONLY what you emit).
 
@@ -98,6 +99,9 @@ steps:
       ---
       ${{ inputs.previous_review }}
       ---
+
+      Emit `followup_instructions` VERBATIM — do NOT paraphrase, summarise, or add to it (every lens injects this exact string; drift here is drift everywhere). In `fresh` mode emit the empty string `""`. In `followup` mode emit EXACTLY this block and nothing else:
+      FOLLOW-UP: this is a fix diff over the previous review shown below. (1) For each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line. (2) Scan ONLY for regressions the fix introduced and for defects, NOT new improvements. (3) Don't re-raise a finding the previous review already listed unless the fix made it worse.
 
       Classify the target: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).
         PR/branch: if `git status --porcelain` is non-empty, `abort` with `working tree dirty`. Then `gh pr checkout <n>` (or `git fetch origin <branch> && git checkout <branch>`); resolve base via `gh pr view --json baseRefName` or `git merge-base HEAD origin/main`. Commit ranges: don't switch branches.
@@ -139,7 +143,8 @@ steps:
     prompt: |
       Quick review of the change: `git diff --end-of-options ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty). Focus: ${{ outputs.resolve.focus }}. One focused pass: correctness first, plus anything that jumps out on security, performance, duplication of an existing helper, or a behavior change shipped without a test. Single pass — no exhaustive sweep.
 
-      FOLLOW-UP (`${{ outputs.resolve.mode }}`): if `followup`, this is a fix diff over the previous review below. Then (1) for each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line; (2) look ONLY for regressions the fix introduced and for defects, NOT new improvements; (3) don't re-raise a finding the previous review already listed unless the fix made it worse. If `fresh`, ignore this block. Previous review (may be empty):
+      ${{ outputs.resolve.followup_instructions }}
+      Previous review (empty in fresh mode — ignore this block if empty):
       ---
       ${{ inputs.previous_review }}
       ---
@@ -223,7 +228,8 @@ steps:
     prompt: |
       Read `review-diff.patch` (the change; if empty, read the files at `${{ outputs.resolve.paths }}`). Review it through the **correctness** lens ONLY. Focus: ${{ outputs.resolve.focus }}.
 
-      FOLLOW-UP (`${{ outputs.resolve.mode }}`): if `followup`, this is a fix diff over the previous review below. Then (1) for each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line; (2) scan ONLY for regressions the fix introduced and for defects, NOT new improvements; (3) don't re-raise a finding the previous review already listed unless the fix made it worse. If `fresh`, ignore this block. Previous review (may be empty):
+      ${{ outputs.resolve.followup_instructions }}
+      Previous review (empty in fresh mode — ignore this block if empty):
       ---
       ${{ inputs.previous_review }}
       ---
@@ -275,7 +281,8 @@ steps:
     prompt: |
       Read `review-diff.patch` (the change; if empty, read `${{ outputs.resolve.paths }}`). Review it through the **integration** lens ONLY — not the changed lines themselves, but what they break around them. Focus: ${{ outputs.resolve.focus }}.
 
-      FOLLOW-UP (`${{ outputs.resolve.mode }}`): if `followup`, this is a fix diff over the previous review below. Then (1) for each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line; (2) scan ONLY for regressions the fix introduced and for defects, NOT new improvements; (3) don't re-raise a finding the previous review already listed unless the fix made it worse. If `fresh`, ignore this block. Previous review (may be empty):
+      ${{ outputs.resolve.followup_instructions }}
+      Previous review (empty in fresh mode — ignore this block if empty):
       ---
       ${{ inputs.previous_review }}
       ---
@@ -329,7 +336,8 @@ steps:
     prompt: |
       Read `review-diff.patch` (the change; if empty, read `${{ outputs.resolve.paths }}`). Review it through the **security** lens ONLY, and only where it touches a trust boundary (auth / input parsing / shell or SQL construction / crypto / secrets / external I/O / deserialisation). If it doesn't, emit an empty `findings` array — say so in one line first. Look for: injection (SQL/shell/XSS/path traversal — especially values that travel from model output or user input into a command or query), unvalidated input across trust boundaries, auth/authz gaps, secret leaks into logs or artifacts, unsafe deserialisation, weak crypto, SSRF. Check surrounding sanitisation before flagging.
 
-      FOLLOW-UP (`${{ outputs.resolve.mode }}`): if `followup`, this is a fix diff over the previous review below. Then (1) for each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line; (2) scan ONLY for regressions the fix introduced and for defects, NOT new improvements; (3) don't re-raise a finding the previous review already listed unless the fix made it worse. If `fresh`, ignore this block. Previous review (may be empty):
+      ${{ outputs.resolve.followup_instructions }}
+      Previous review (empty in fresh mode — ignore this block if empty):
       ---
       ${{ inputs.previous_review }}
       ---
@@ -379,7 +387,8 @@ steps:
     prompt: |
       Read `review-diff.patch` (the change; if empty, read `${{ outputs.resolve.paths }}`). Review it through the **performance & resource retention** lens ONLY, and only where the change touches a hot path / data layer / loops / long-lived process state. If it doesn't, emit an empty `findings` array — say so in one line first. Look for: complexity surprises (O(n²) on a hot path), N+1 queries, unbounded reads where a bounded query exists, repeated work inside per-event or per-render paths, blocking I/O on a hot loop — and RETENTION: timers/listeners armed but never cleared, closures capturing large scopes for long-lived objects, maps/sets that accumulate per-item entries with no cleanup. Confidence proportional to evidence; no cold-path constant-factor nits.
 
-      FOLLOW-UP (`${{ outputs.resolve.mode }}`): if `followup`, this is a fix diff over the previous review below. Then (1) for each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line; (2) scan ONLY for regressions the fix introduced and for defects, NOT new improvements; (3) don't re-raise a finding the previous review already listed unless the fix made it worse. If `fresh`, ignore this block. Previous review (may be empty):
+      ${{ outputs.resolve.followup_instructions }}
+      Previous review (empty in fresh mode — ignore this block if empty):
       ---
       ${{ inputs.previous_review }}
       ---
@@ -430,7 +439,8 @@ steps:
     prompt: |
       Read `review-diff.patch` (the change; if empty, read `${{ outputs.resolve.paths }}`). Review it through the **quality** lens ONLY — design debt, not defects. Focus: ${{ outputs.resolve.focus }}.
 
-      FOLLOW-UP (`${{ outputs.resolve.mode }}`): if `followup`, this is a fix diff over the previous review below. Then (1) for each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line; (2) scan ONLY for regressions the fix introduced and for defects, NOT new improvements (quality debt is not a regression unless the fix created it); (3) don't re-raise a finding the previous review already listed unless the fix made it worse. If `fresh`, ignore this block. Previous review (may be empty):
+      ${{ outputs.resolve.followup_instructions }}
+      Previous review (empty in fresh mode — ignore this block if empty):
       ---
       ${{ inputs.previous_review }}
       ---
@@ -486,7 +496,8 @@ steps:
     prompt: |
       Read `review-diff.patch` (the change; if empty, read `${{ outputs.resolve.paths }}`). Review it through the **coherence** lens ONLY: does the change carry its obligations?
 
-      FOLLOW-UP (`${{ outputs.resolve.mode }}`): if `followup`, this is a fix diff over the previous review below. Then (1) for each previous finding, state RESOLVED / PARTIAL / UNRESOLVED citing the line; (2) scan ONLY for regressions the fix introduced and for defects, NOT new improvements; (3) don't re-raise a finding the previous review already listed unless the fix made it worse. If `fresh`, ignore this block. Previous review (may be empty):
+      ${{ outputs.resolve.followup_instructions }}
+      Previous review (empty in fresh mode — ignore this block if empty):
       ---
       ${{ inputs.previous_review }}
       ---

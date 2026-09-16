@@ -660,9 +660,10 @@ export function reviewReportCommand(opts: ReviewReportOptions): Promise<number> 
       });
     }
 
-    // Fallback: the file the `write` tool left in the worktree.
-    if (body == null && detail.cwd != null) {
-      const path = join(detail.cwd, ".fragua", "worktrees", opts.runId, "review.md");
+    // Fallback: the file the `write` tool left in the worktree. `worktreePath`
+    // is the read plane's authoritative worktree path (single source of truth).
+    if (body == null && detail.worktreePath != null) {
+      const path = join(detail.worktreePath, "review.md");
       if (existsSync(path)) body = readFileSync(path);
     }
 
