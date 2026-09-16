@@ -152,7 +152,7 @@ export class PiLlmBackend implements LlmBackend {
   constructor(opts: PiLlmBackendOptions) {
     this.registry = opts.registry;
     this.env = opts.env;
-    // biome-ignore lint/suspicious/noExplicitAny: getModel is overloaded with KnownProvider; we intentionally accept any string so custom/faux providers work.
+    // biome-ignore lint/suspicious/noExplicitAny: getModel (imported from @earendil-works/pi-ai/compat) is generically constrained to BuiltinProvider; we intentionally accept any string so custom/faux providers work.
     this.resolveModel = opts.resolveModel ?? ((provider, modelId) => (getModel as any)(provider, modelId));
     this.getApiKey = opts.getApiKey;
     this.defaultModel = opts.defaultModel ?? { provider: "anthropic", model: "claude-opus-4-7" };

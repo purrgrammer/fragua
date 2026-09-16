@@ -11,6 +11,14 @@ last-reviewed: 2026-07-29
 > API may drift before we land the bump. Nothing here is built — fragua is
 > pinned at **0.80.7**, the last version whose `@earendil-works/pi-ai/oauth`
 > subpath still exports the runtime registry.
+>
+> Verified against the installed **0.80.7** package: `/oauth` runtime-exports
+> `registerOAuthProvider` / `resetOAuthProviders` / `getOAuthProvider` (etc.)
+> **and** re-exports the `OAuthProviderInterface` type (via `export * from
+> "./utils/oauth/types.ts"`). fragua now imports both the function and the type
+> from `/oauth` so they share a module. This does **not** change the migration
+> shape below: 0.85.1 still makes `/oauth` type-only and drops the registry, so
+> §5's PRs are unchanged.
 
 ## 1. Why this exists
 

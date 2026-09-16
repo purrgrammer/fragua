@@ -4,30 +4,27 @@
 // authoritative gate is at enqueue).
 
 import { describe, expect, test } from "bun:test";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { BuiltinProvider } from "@earendil-works/pi-ai/compat";
-import { getModels, getProviders } from "@earendil-works/pi-ai/compat";
+import { allModels, realPair } from "@fragua/test-utils";
 import { validateWorkflowModelsOffline } from "../src/workflow-model-validator.ts";
-
-function allModels(): Model<Api>[] {
-  return getProviders().flatMap((p) => getModels(p) as Model<Api>[]);
-}
-
-/** A real (provider, id) pair from the bundled registry. */
-function realPair(): { provider: string; id: string } {
-  const m = allModels()[0];
-  if (!m) throw new Error("bundled pi-ai registry is empty");
-  return { provider: m.provider, id: m.id };
-}
 
 /** A separator typo of a real id: every `-` swapped to `.`, guaranteed
  * not to be an exact id anywhere in the registry. */
 function nearMissPair(): { provider: string; id: string; typo: string } {
-  const ids = new Set(allModels().map((m) => m.id));
-  for (const m of allModels()) {
+  const models = allModels();
+  const ids = new Set(models.map((m) => m.id));
+  const grouped = new Map<string, Set<string>>();
+  for (const m of models) {
+    let set = grouped.get(m.provider);
+    if (!set) {
+      set = new Set();
+      grouped.set(m.provider, set);
+    }
+    set.add(m.id);
+  }
+  for (const m of models) {
     if (!m.id.includes("-")) continue;
     const typo = m.id.replace(/-/g, ".");
-    const providerIds = new Set((getModels(m.provider as BuiltinProvider) as Model<Api>[]).map((x) => x.id));
+    const providerIds = grouped.get(m.provider) ?? new Set<string>();
     if (!providerIds.has(typo) && !ids.has(typo)) return { provider: m.provider, id: m.id, typo };
   }
   throw new Error("no hyphenated model id in the bundled registry");

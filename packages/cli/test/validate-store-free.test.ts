@@ -8,8 +8,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { getModels, getProviders } from "@earendil-works/pi-ai/compat";
+import { allModels, realPair } from "@fragua/test-utils";
 import { validateCommand } from "../src/commands/validate.ts";
 
 interface Rig {
@@ -29,16 +28,6 @@ function rig(): Rig {
     },
     close: () => rmSync(dir, { recursive: true, force: true }),
   };
-}
-
-function allModels(): Model<Api>[] {
-  return getProviders().flatMap((p) => getModels(p) as Model<Api>[]);
-}
-
-function realPair(): { provider: string; id: string } {
-  const m = allModels()[0];
-  if (!m) throw new Error("bundled pi-ai registry is empty");
-  return { provider: m.provider, id: m.id };
 }
 
 /** Separator typo of a real id — `-` swapped to `.` — that is not an

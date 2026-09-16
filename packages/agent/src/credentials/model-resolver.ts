@@ -5,8 +5,9 @@
 // thinking-level suffix parsing. Fragua only needs the small subset
 // wired into the workflow validator + daemon autodetect path today:
 //
-//   - defaultModelPerProvider: one valid id per KnownProvider, used
-//     when the user omits --model.
+//   - defaultModelPerProvider: one valid id per static-catalog
+//     KnownProvider (partial — dynamic-only providers such as `radius`
+//     are omitted), used when the user omits --model.
 //   - findByBareId: iterate the registry for "model `claude-opus-4-7`
 //     under any provider" (catches workflow nodes that declare a model
 //     but no provider).
@@ -88,7 +89,7 @@ export function firstCredentialedProvider(
 ): { provider: string; model: Model<Api> } | undefined {
   const available = registry.getAvailable();
   for (const m of available) {
-    const def = (defaultModelPerProvider as Record<string, string>)[m.provider];
+    const def: string | undefined = defaultModelPerProvider[m.provider as KnownProvider];
     if (def && m.id === def) return { provider: m.provider, model: m };
   }
   // Fallback: no model matched the default list exactly — take any

@@ -39,7 +39,7 @@ export interface ProvidersRouteOptions {
   modelRegistry: ModelRegistry;
   /** Default model id per provider — the CLI injects @fragua/agent's
    * `defaultModelPerProvider` so the server doesn't import it. */
-  defaultModels: Readonly<Record<string, string>>;
+  defaultModels: Readonly<Partial<Record<string, string>>>;
   /** Runs the 1-token probe behind `POST /providers/:name/test`. */
   testProvider: ProviderTester;
 }
@@ -68,7 +68,7 @@ function summarize(
   model_count: number,
   auth: AuthStorage,
   oauthIds: Set<string>,
-  defaultModels: Readonly<Record<string, string>>,
+  defaultModels: Readonly<Partial<Record<string, string>>>,
 ): ProviderSummary {
   const cred = auth.get(name);
   return {
