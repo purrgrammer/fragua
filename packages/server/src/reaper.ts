@@ -53,7 +53,7 @@ export function reapStaleDaemon(opts: ReapOptions): ReapResult {
   if (now() - lock.heartbeatAt <= ttl) return { reaped: false };
 
   const swept = opts.store.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
-  opts.store.clearDaemonLock(process.pid);
+  opts.store.forceDeleteDaemonLock();
   // priorHeartbeatAt credits pre-crash active time to requeued runs, matching
   // the daemon's own TTL-takeover path.
 

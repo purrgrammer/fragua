@@ -1125,14 +1125,27 @@ export interface IDaemonCoordinator {
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
   /**
-   * Clear whatever `daemon_lock` row currently exists, regardless of which pid
-   * holds it, in a single transaction. The takeover/eviction primitive: a
-   * supervisor evicting a stale lock left by a hard-crashed child, or the
-   * reaper releasing a dead daemon's lock, calls this instead of the
-   * `forceAcquireDaemonLock` + `releaseDaemonLock` compound. `pid` is the
-   * caller's own pid, used only for the transient upsert before the delete.
+   * Unconditionally delete whatever `daemon_lock` row exists, in a single
+   * `DELETE FROM daemon_lock WHERE id = 1` statement. The low-level eviction
+   * primitive: the server reaper (after its own TTL check) and
+   * {@link evictDaemonLockIfStale} call it. Prefer `evictDaemonLockIfStale`
+   * over calling this directly so the TTL/liveness gate can't be skipped.
    */
-  clearDaemonLock(pid: number): void;
+  forceDeleteDaemonLock(): void;
+  /**
+   * TTL-gated eviction: read the current lock, and delete it only when its
+   * heartbeat is past `ttlMs` OR the supplied `isHolderAlive` probe reports the
+   * holder dead. A fresh heartbeat with a live (or unprobed) holder is left
+   * untouched — never evict a live daemon. When it does evict, `startupSweep`
+   * runs FIRST (crediting the dead lock's heartbeat as `priorHeartbeatAt` to
+   * in-flight runs), THEN the row is deleted, so a crash between the two leaves
+   * the stale row for the next boot to re-detect (mirroring the server reaper).
+   */
+  evictDaemonLockIfStale(opts: {
+    ttlMs: number;
+    now?: () => number;
+    isHolderAlive?: (lock: DaemonLockRow) => boolean;
+  }): { evicted: boolean; swept?: SweepResult; stalePid?: number; priorHeartbeatAt?: number };
   currentDaemonLock(): DaemonLockRow | null;
   currentServerEndpoint(): ServerEndpointRow | null;
   setServerEndpoint(args: { url: string; port: number; pid: number; version: string | null }): void;

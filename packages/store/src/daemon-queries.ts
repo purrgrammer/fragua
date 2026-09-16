@@ -201,3 +201,14 @@ const DELETE_DAEMON_LOCK_SQL = `
 export function deleteDaemonLock(db: Database, pid: number): void {
   db.query(DELETE_DAEMON_LOCK_SQL).run(pid);
 }
+
+const FORCE_DELETE_DAEMON_LOCK_SQL = `
+  DELETE FROM daemon_lock WHERE id = 1
+`;
+
+/** Unconditional eviction — drops whatever singleton lock row exists,
+ *  regardless of which pid holds it, in a single statement. The
+ *  takeover/eviction primitive behind `forceDeleteDaemonLock`. */
+export function forceDeleteDaemonLockRow(db: Database): void {
+  db.query(FORCE_DELETE_DAEMON_LOCK_SQL).run();
+}

@@ -618,17 +618,66 @@ describe("SqliteStore — daemon lock", () => {
     store.close();
   });
 
-  test("clearDaemonLock removes any lock row regardless of prior holder", () => {
+  test("forceDeleteDaemonLock removes any lock row regardless of prior holder", () => {
     const store = freshStore();
     store.forceAcquireDaemonLock(202, "host-b");
     expect(store.currentDaemonLock()!.pid).toBe(202);
 
-    // A different pid clears the row it never held.
-    store.clearDaemonLock(999);
+    // Deletes the singleton row without naming the holder.
+    store.forceDeleteDaemonLock();
     expect(store.currentDaemonLock()).toBeNull();
 
     // Idempotent on an already-empty table.
-    store.clearDaemonLock(999);
+    store.forceDeleteDaemonLock();
+    expect(store.currentDaemonLock()).toBeNull();
+    store.close();
+  });
+
+  test("evictDaemonLockIfStale skips a fresh lock whose holder is alive", () => {
+    const store = freshStore();
+    store.forceAcquireDaemonLock(202, "host-b");
+    const res = store.evictDaemonLockIfStale({ ttlMs: 30_000, isHolderAlive: () => true });
+    expect(res.evicted).toBe(false);
+    expect(res.stalePid).toBe(202);
+    expect(store.currentDaemonLock()!.pid).toBe(202);
+    store.close();
+  });
+
+  test("evictDaemonLockIfStale evicts once the heartbeat is past the TTL", () => {
+    const store = freshStore();
+    store.forceAcquireDaemonLock(202, "host-b");
+    const heartbeatAt = store.currentDaemonLock()!.heartbeatAt;
+    // TTL wins over a claimed-live holder.
+    const res = store.evictDaemonLockIfStale({
+      ttlMs: 30_000,
+      now: () => heartbeatAt + 30_001,
+      isHolderAlive: () => true,
+    });
+    expect(res.evicted).toBe(true);
+    expect(res.priorHeartbeatAt).toBe(heartbeatAt);
+    expect(store.currentDaemonLock()).toBeNull();
+    store.close();
+  });
+
+  test("evictDaemonLockIfStale evicts a fresh lock whose holder is dead", () => {
+    const store = freshStore();
+    store.forceAcquireDaemonLock(202, "host-b");
+    const res = store.evictDaemonLockIfStale({ ttlMs: 30_000, isHolderAlive: () => false });
+    expect(res.evicted).toBe(true);
+    expect(res.stalePid).toBe(202);
+    expect(store.currentDaemonLock()).toBeNull();
+    store.close();
+  });
+
+  test("evictDaemonLockIfStale runs the sweep before deleting the lock", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "sweep-run", workflowSha: sha });
+    store.claimNextRun(1); // status → running
+    store.forceAcquireDaemonLock(999, "dead-host");
+    const res = store.evictDaemonLockIfStale({ ttlMs: 30_000, isHolderAlive: () => false });
+    expect(res.evicted).toBe(true);
+    expect(res.swept?.requeued).toContain("sweep-run");
     expect(store.currentDaemonLock()).toBeNull();
     store.close();
   });

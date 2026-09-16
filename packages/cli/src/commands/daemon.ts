@@ -10,11 +10,10 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseDurationMs } from "@fragua/core";
 import { AutoTitler, type Provisioner, startDaemon, WorktreeProvisioner } from "@fragua/daemon";
-import { SqliteStore } from "@fragua/store";
+import { hostnameSafe, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
 import { buildExecutorDeps, type SummariserInfo } from "../executor-deps.ts";
-import { hostnameSafe } from "../hostname.ts";
 
 /**
  * Poll interval for `fragua daemon stop` — how often we check whether
@@ -59,7 +58,7 @@ export async function daemonStopCommand(opts: { cwd?: string; dbPath?: string } 
       // Pid is already gone; lock row is stale. Release it so the next
       // start doesn't have to wait for the heartbeat TTL.
       if (code === "ESRCH") {
-        store.clearDaemonLock(process.pid);
+        store.forceDeleteDaemonLock();
         console.log(chalk.dim(`stale lock cleared (pid=${pid} not running)`));
         return 0;
       }

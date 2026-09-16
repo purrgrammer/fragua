@@ -16,6 +16,7 @@ import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core"
 import { SqliteStore } from "@fragua/store";
 import {
   type DaemonProcess,
+  evictStaleLock,
   type SpawnDaemon,
   type SupervisorConfig,
   superviseDaemon,
@@ -278,6 +279,12 @@ describe("superviseDaemon", () => {
     // the harness resolves 0 rather than defeating the bounded shutdown.
     expect(await done).toBe(0);
     expect(procs[0]!.lastSignal).toBe(9);
+    // The server must still be closed on the SIGKILL branch — a skipped
+    // `serverHandle.close()` would leave the endpoint row behind.
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
   });
 
   test("fails fast when the daemon never acquires within lockWaitMs", async () => {
@@ -399,6 +406,11 @@ describe("superviseDaemon", () => {
     const code = await done;
     expect(code).toBe(0);
     expect(procs[0]!.lastSignal).toBe(9);
+    // Server closed even when the daemon only died on the SIGKILL escalation.
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
   });
 
   test("shutdown tolerates ESRCH when the daemon dies between the gate and the signal", async () => {
@@ -441,5 +453,125 @@ describe("superviseDaemon", () => {
     const endpoint = check.currentServerEndpoint();
     check.close();
     expect(endpoint).toBeNull();
+  });
+
+  test("resolves exit 1 and clears server_endpoint when the initial spawn throws", async () => {
+    const dbPath = await freshDbPath();
+    const spawn: SpawnDaemon = () => {
+      throw new Error("spawn ENOENT");
+    };
+    const cfg = await makeConfig(dbPath);
+    // The pre-gate throw must land in the supervisor's error path — resolve a
+    // harness exit code AND close the server — not leak past the ready gate.
+    const code = await superviseDaemon(spawn, ["dummy"], cfg);
+    expect(code).toBe(1);
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
+  });
+
+  test("restarts with backoff when the daemon crashes during boot", async () => {
+    const dbPath = await freshDbPath();
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      procs.push(p);
+      // First child crashes before ever acquiring the lock (boot-time crash);
+      // the replacement acquires cleanly and stays up.
+      if (procs.length === 1) queueMicrotask(() => p.crash(1));
+      else acquireLock(dbPath, p.pid);
+      return p;
+    };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { restartInitialBackoffMs: 5 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+    // A boot-time crash must route through registerFailure (backoff + respawn),
+    // not fall through to a bare exit 1: a second proc must appear.
+    expect(await waitFor(() => procs.length >= 2)).toBe(true);
+    expect(await waitFor(() => currentLockPid(dbPath) === procs[1]!.pid)).toBe(true);
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
+
+  test("bounds the wait after SIGKILL when the daemon never exits", async () => {
+    const dbPath = await freshDbPath();
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      // Ignore SIGTERM AND SIGKILL: `exited` never resolves (a D-state hang).
+      // The bounded post-SIGKILL wait must let shutdown finish regardless.
+      p.kill = (signal?: number) => {
+        p.killed = true;
+        p.lastSignal = signal;
+      };
+      procs.push(p);
+      return p;
+    };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { shutdownGraceMs: 40 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    await emitSigintWhenReady(sigintBefore);
+    // Never blocks on the unresolving `exited`: the harness still resolves and
+    // the server is closed.
+    expect(await done).toBe(0);
+    expect(procs[0]!.lastSignal).toBe(9);
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
+  });
+});
+
+describe("evictStaleLock", () => {
+  let scratch: string | undefined;
+
+  afterEach(async () => {
+    if (scratch) {
+      await rm(scratch, { recursive: true, force: true });
+      scratch = undefined;
+    }
+  });
+
+  async function seedLock(pid: number, host: string): Promise<{ dbPath: string; heartbeatAt: number }> {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-evict-"));
+    const dbPath = join(scratch, "fragua.db");
+    const store = new SqliteStore({ path: dbPath });
+    store.forceAcquireDaemonLock(pid, host);
+    const heartbeatAt = store.currentDaemonLock()!.heartbeatAt;
+    store.close();
+    return { dbPath, heartbeatAt };
+  }
+
+  function lockPid(dbPath: string): number | null {
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      return store.currentDaemonLock()?.pid ?? null;
+    } finally {
+      store.close();
+    }
+  }
+
+  test("evicts a lock whose heartbeat is past the TTL", async () => {
+    const { dbPath, heartbeatAt } = await seedLock(4242, "some-host");
+    // Heartbeat is stale; the (claimed-alive) holder is evicted anyway.
+    evictStaleLock(dbPath, { now: () => heartbeatAt + 30_001, isPidAlive: () => true });
+    expect(lockPid(dbPath)).toBeNull();
+  });
+
+  test("evicts a fresh lock whose pid is provably dead", async () => {
+    const { dbPath } = await seedLock(4242, "some-host");
+    // Fresh heartbeat, but the pid is gone (kill(pid,0) → ESRCH).
+    evictStaleLock(dbPath, { isPidAlive: () => false });
+    expect(lockPid(dbPath)).toBeNull();
+  });
+
+  test("leaves a fresh lock whose pid is alive (live daemon from another harness)", async () => {
+    const { dbPath } = await seedLock(4242, "some-host");
+    // Fresh heartbeat AND a reachable pid — never evict a live daemon.
+    evictStaleLock(dbPath, { isPidAlive: () => true });
+    expect(lockPid(dbPath)).toBe(4242);
   });
 });

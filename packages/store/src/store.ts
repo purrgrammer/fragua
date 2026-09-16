@@ -65,6 +65,7 @@ import {
 import {
   deleteDaemonLock,
   deleteServerEndpoint,
+  forceDeleteDaemonLockRow,
   insertDaemonEvent,
   insertDaemonLock,
   selectDaemonEvents,
@@ -1335,12 +1336,32 @@ export class SqliteStore implements IEventStore {
     });
   }
 
-  clearDaemonLock(pid: number): void {
-    const now = this.now();
+  forceDeleteDaemonLock(): void {
     this.writeTxn(() => {
-      upsertDaemonLock(this.db, pid, "clear", now);
-      deleteDaemonLock(this.db, pid);
+      forceDeleteDaemonLockRow(this.db);
     });
+  }
+
+  evictDaemonLockIfStale(opts: {
+    ttlMs: number;
+    now?: () => number;
+    isHolderAlive?: (lock: DaemonLockRow) => boolean;
+  }): { evicted: boolean; swept?: SweepResult; stalePid?: number; priorHeartbeatAt?: number } {
+    const lock = this.currentDaemonLock();
+    if (lock == null) return { evicted: false };
+    const now = opts.now ?? this.now;
+    const stale = now() - lock.heartbeatAt > opts.ttlMs;
+    // Keep a live holder's lock: skip only when the heartbeat is fresh AND
+    // (no liveness probe was supplied, or the probe says the holder is alive).
+    // A stale heartbeat evicts regardless of the probe (TTL takes precedence).
+    if (!stale && (opts.isHolderAlive == null || opts.isHolderAlive(lock))) {
+      return { evicted: false, stalePid: lock.pid };
+    }
+    // Sweep BEFORE clearing so a crash between the two leaves the stale row in
+    // place for the next boot to re-detect (mirroring the server reaper).
+    const swept = this.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
+    this.forceDeleteDaemonLock();
+    return { evicted: true, swept, stalePid: lock.pid, priorHeartbeatAt: lock.heartbeatAt };
   }
 
   runStateCounts(): { running: number; queued: number } {
