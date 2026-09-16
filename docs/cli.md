@@ -195,8 +195,8 @@ fragua schedule list | pause <id> | resume <id> | rm <id>
 ## server / daemon primitives
 
 ```sh
-fragua harness [--port <n>] [--db <path>]                 # daemon + HTTP under one supervisor (:6767)
-fragua serve   [--port <n>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only
+fragua harness [--port <n>] [--host <addr>] [--db <path>]   # daemon + HTTP under one supervisor (127.0.0.1:6767)
+fragua serve   [--port <n>] [--host <addr>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only
 fragua daemon  start [--concurrency <n>] [--provider <name>] [--model <id>] [--cwd <dir>] [--db <path>]
 fragua daemon  stop                                       # SIGTERM the daemon holding the store lock
 ```

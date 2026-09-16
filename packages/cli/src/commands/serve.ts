@@ -19,7 +19,7 @@ import { AuthStorage, defaultModelPerProvider, ModelRegistry, validateWorkflowMo
 import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@fragua/server";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
-import { loadConfig } from "../config.ts";
+import { loadConfig, loadGlobalConfig } from "../config.ts";
 import { streamSimpleProviderTester } from "../provider-tester.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
@@ -35,6 +35,17 @@ const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
  * 6767 is occupied, `startServer` walks up one port at a time (see
  * `portRetries` below) so a stray collision doesn't kill startup. */
 export const DEFAULT_WEB_PORT = 6767;
+export const DEFAULT_WEB_HOST = "127.0.0.1";
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/** Host part of the URL we publish for a given bind address. A wildcard bind
+ * is reachable as `localhost`; a concrete address must be printed verbatim
+ * (bracketed when IPv6), because `localhost` may resolve to the other family
+ * and land on nothing. */
+export function originHost(bind: string): string {
+  if (bind === "::" || bind === "0.0.0.0") return "localhost";
+  return bind.includes(":") ? `[${bind}]` : bind;
+}
 
 /**
  * Locate the built web bundle by walking up from this file.
@@ -64,7 +75,10 @@ export interface ServeCommandOptions {
   /** Provenance tag stamped onto `server_endpoint.harness_version`. The
    * harness passes its version; a standalone `fragua serve` leaves it null. */
   version?: string | null;
-  /** Hostname to bind. Default `"::"` (dual-stack IPv4+IPv6). */
+  /** Address to bind. Resolution: this > `web.host` in the GLOBAL config
+   * (`~/.fragua/config.yaml` only — a project file cannot widen it) >
+   * `DEFAULT_WEB_HOST` (loopback). Pass `"::"` or `"0.0.0.0"` to expose the
+   * unauthenticated API to the network deliberately. */
   hostname?: string;
   /** Optional port overrides forwarded to `createServer`. */
   ports?: ServerPorts;
@@ -98,6 +112,8 @@ export interface ServerHandle {
    * or `origin` in API-only mode. Mirrors the discovery file's `url`. */
   url: string;
   port: number;
+  /** Address the listener is bound to (loopback unless overridden). */
+  hostname: string;
   /** Absolute path of the SQLite store this server is reading from. */
   storePath: string;
   /** Absolute path of the web bundle mounted at `/`, or `undefined` when
@@ -166,11 +182,18 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     ...(webDistDir !== undefined ? { webDistDir } : {}),
     ...(COMPILED ? { webBundle: EMBEDDED_WEB_ASSETS } : {}),
   });
-  // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections
-  // (kernel default IPV6_V6ONLY=0 on Linux/macOS). This makes EADDRINUSE fire
-  // regardless of which address family an existing listener is using, so the
-  // printed `http://localhost:<port>` URL is actually the one we own.
-  const hostname = opts.hostname ?? "::";
+  // Loopback by default: the API has no auth, so anything reachable on the
+  // LAN could enqueue runs, write provider credentials, or `accept` into the
+  // operator's git tree. Wide binds ("::" / "0.0.0.0") are opt-in via
+  // `--host` or `web.host`. A dual-stack or 0.0.0.0 occupant still trips
+  // EADDRINUSE against 127.0.0.1, so port auto-bump keeps working. An
+  // `::1`-only occupant on the same port is not detected, but it is also
+  // harmless: the published origin names the bound address, never
+  // `localhost`, so clients reach this listener and not the occupant. The config layer is global-only: a repo's committed
+  // .fragua/config.yaml must not be able to widen the bind for whoever runs
+  // the harness from it.
+  const globalCfg = await loadGlobalConfig(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
+  const hostname = opts.hostname ?? globalCfg.web?.host ?? DEFAULT_WEB_HOST;
   const portExplicit = opts.port !== undefined;
   // Resolution: explicit caller arg > config.web.port > DEFAULT_WEB_PORT.
   // Keeping this here (not in the bin layer) means `fragua serve`,
@@ -206,7 +229,10 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   }
   void lastErr;
   const port = server.port ?? 0;
-  const origin = `http://localhost:${port}`;
+  const origin = `http://${originHost(hostname)}:${port}`;
+  if (!LOOPBACK_HOSTS.has(hostname)) {
+    console.warn(chalk.yellow(`serve: binding ${hostname} exposes the unauthenticated API beyond this machine`));
+  }
   // In web mode the API is scoped under `/api/*`; API-only mode keeps bare
   // paths. Discovery publishes the prefix so `fragua run` appends routes
   // verbatim (e.g. `${url}/runs`) regardless of mode. The compiled binary
@@ -222,6 +248,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     origin,
     url,
     port,
+    hostname,
     storePath,
     webDistDir: webSource ?? undefined,
     async close() {
