@@ -30,22 +30,19 @@
 // - Extension registration (custom streamSimple + OAuth provider) is
 //   preserved since summariser / custom-provider flows may need it.
 
-import {
-  type AnthropicMessagesCompat,
-  type Api,
-  type AssistantMessageEventStream,
-  type Context,
-  getModels,
-  getProviders,
-  type KnownProvider,
-  type Model,
-  type OAuthProviderInterface,
-  type OpenAICompletionsCompat,
-  type OpenAIResponsesCompat,
-  registerApiProvider,
-  resetApiProviders,
-  type SimpleStreamOptions,
+import type {
+  AnthropicMessagesCompat,
+  Api,
+  AssistantMessageEventStream,
+  Context,
+  Model,
+  OAuthProviderInterface,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+  SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import type { BuiltinProvider } from "@earendil-works/pi-ai/compat";
+import { getModels, getProviders, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai/compat";
 import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import type { IProviderConfigStore } from "@fragua/store";
 import { type Static, Type } from "@sinclair/typebox";
@@ -110,6 +107,7 @@ const ThinkingLevelMapSchema = Type.Object({
   medium: Type.Optional(ThinkingLevelMapValueSchema),
   high: Type.Optional(ThinkingLevelMapValueSchema),
   xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+  max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({
@@ -404,7 +402,7 @@ export class ModelRegistry {
     modelOverrides: Map<string, Map<string, ModelOverride>>,
   ): Model<Api>[] {
     return getProviders().flatMap((provider) => {
-      const models = getModels(provider as KnownProvider) as Model<Api>[];
+      const models = getModels(provider) as Model<Api>[];
       const providerOverride = overrides.get(provider);
       const perModelOverrides = modelOverrides.get(provider);
       return models.map((m) => {
@@ -535,7 +533,7 @@ export class ModelRegistry {
     const getBuiltInDefaults = (providerName: string): { api: string; baseUrl: string } | undefined => {
       if (!builtInProviders.has(providerName)) return undefined;
       if (builtInDefaultsCache.has(providerName)) return builtInDefaultsCache.get(providerName);
-      const builtIn = getModels(providerName as KnownProvider) as Model<Api>[];
+      const builtIn = getModels(providerName as BuiltinProvider) as Model<Api>[];
       const first = builtIn[0];
       if (!first) return undefined;
       const defaults = { api: first.api, baseUrl: first.baseUrl };

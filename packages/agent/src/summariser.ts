@@ -12,7 +12,8 @@
 //   summary.started → summary.text_delta × N → cost.recorded → summary.completed
 // No state persists between calls — the backend is a pure adapter.
 
-import { type AssistantMessage, getModel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
+import { getModel, streamSimple } from "@earendil-works/pi-ai/compat";
 import type { SummariseInput, SummariseOutput, SummariserBackend } from "@fragua/core";
 import { costPayload } from "./event-bridge.ts";
 

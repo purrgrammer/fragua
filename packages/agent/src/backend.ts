@@ -8,7 +8,8 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, getModel, type Model, streamSimple } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
+import { getModel, streamSimple } from "@earendil-works/pi-ai/compat";
 import type {
   EventType,
   LlmBackend,

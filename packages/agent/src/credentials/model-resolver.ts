@@ -26,8 +26,10 @@ import type { ModelRegistry } from "./model-registry.ts";
 /** Default model id per known pi-ai provider. Used when the user
  * passes `--provider <name>` without `--model`. Kept in sync with
  * pi-coding-agent's upstream. Every entry must exist in pi-ai's
- * built-in registry (enforced by tests). */
-export const defaultModelPerProvider: Record<KnownProvider, string> = {
+ * built-in registry (enforced by tests). Partial because purely
+ * dynamic providers (e.g. `radius`) carry no static catalog entry,
+ * so no built-in default id can resolve for them. */
+export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
   "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
   "ant-ling": "Ring-2.6-1T",
   anthropic: "claude-opus-4-8",

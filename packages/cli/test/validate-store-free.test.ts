@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Api, getModels, getProviders, type KnownProvider, type Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { getModels, getProviders } from "@earendil-works/pi-ai/compat";
 import { validateCommand } from "../src/commands/validate.ts";
 
 interface Rig {
@@ -31,7 +32,7 @@ function rig(): Rig {
 }
 
 function allModels(): Model<Api>[] {
-  return getProviders().flatMap((p) => getModels(p as KnownProvider) as Model<Api>[]);
+  return getProviders().flatMap((p) => getModels(p) as Model<Api>[]);
 }
 
 function realPair(): { provider: string; id: string } {

@@ -4,11 +4,13 @@
 // authoritative gate is at enqueue).
 
 import { describe, expect, test } from "bun:test";
-import { type Api, getModels, getProviders, type KnownProvider, type Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { BuiltinProvider } from "@earendil-works/pi-ai/compat";
+import { getModels, getProviders } from "@earendil-works/pi-ai/compat";
 import { validateWorkflowModelsOffline } from "../src/workflow-model-validator.ts";
 
 function allModels(): Model<Api>[] {
-  return getProviders().flatMap((p) => getModels(p as KnownProvider) as Model<Api>[]);
+  return getProviders().flatMap((p) => getModels(p) as Model<Api>[]);
 }
 
 /** A real (provider, id) pair from the bundled registry. */
@@ -25,7 +27,7 @@ function nearMissPair(): { provider: string; id: string; typo: string } {
   for (const m of allModels()) {
     if (!m.id.includes("-")) continue;
     const typo = m.id.replace(/-/g, ".");
-    const providerIds = new Set((getModels(m.provider as KnownProvider) as Model<Api>[]).map((x) => x.id));
+    const providerIds = new Set((getModels(m.provider as BuiltinProvider) as Model<Api>[]).map((x) => x.id));
     if (!providerIds.has(typo) && !ids.has(typo)) return { provider: m.provider, id: m.id, typo };
   }
   throw new Error("no hyphenated model id in the bundled registry");
