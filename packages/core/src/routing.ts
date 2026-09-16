@@ -522,28 +522,42 @@ export const PENDING_STEER_MAX_BYTES = 8000;
 
 const TRUNCATION_MARKER = " [truncated]";
 
-/** Truncate to `maxBytes` UTF-8 bytes on a codepoint boundary. Defaults to
- * {@link OPERATOR_NOTE_MAX_BYTES}; {@link capOperatorNotes} passes a tighter
- * budget when the routing column can't seat a full-size note. The marker is
- * dropped when the budget is too small to be worth spending on it.
+/** Truncate `text` to at most `maxBytes` UTF-8 bytes on a codepoint boundary —
+ * a domain-free primitive with no marker and no default. Returns the input
+ * unchanged when it already fits, and `""` when the budget can't seat a single
+ * codepoint. Callers that want the operator-note policy (default budget +
+ * ` [truncated]` marker) go through {@link truncateOperatorNote}; the steer
+ * write path calls this directly so a future note-only policy split can't
+ * silently reshape a control-plane steer.
  *
- * The loop is O(n²) in the note length. That is bounded, not overlooked: a note
- * only reaches here off `intent.human_input`, and `appendIntent` rejects any
- * payload at or above `MAX_EVENT_PAYLOAD_BYTES` (4 KiB), so `note` is always a
+ * The loop is O(n²) in the input length. That is bounded, not overlooked: every
+ * caller feeds a value off an `intent.*` payload, and `appendIntent` rejects any
+ * payload at or above `MAX_EVENT_PAYLOAD_BYTES` (4 KiB), so `text` is always a
  * few thousand bytes. Do not call this on unbounded input. */
-export function truncateOperatorNote(note: string, maxBytes: number = OPERATOR_NOTE_MAX_BYTES): string {
-  if (utf8Bytes(note) <= maxBytes) return note;
-  const marker = maxBytes > utf8Bytes(TRUNCATION_MARKER) * 2 ? TRUNCATION_MARKER : "";
-  const budget = maxBytes - utf8Bytes(marker);
-  if (budget <= 0) return "";
-  let end = note.length;
-  while (end > 0 && utf8Bytes(note.slice(0, end)) > budget) end--;
-  if (end > 0 && end < note.length) {
-    const code = note.charCodeAt(end - 1);
+export function utf8Truncate(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (utf8Bytes(text) <= maxBytes) return text;
+  let end = text.length;
+  while (end > 0 && utf8Bytes(text.slice(0, end)) > maxBytes) end--;
+  if (end > 0 && end < text.length) {
+    const code = text.charCodeAt(end - 1);
     if (code >= 0xd800 && code <= 0xdbff) end--; // don't split a surrogate pair
   }
   if (end === 0) return "";
-  return note.slice(0, end) + marker;
+  return text.slice(0, end);
+}
+
+/** Truncate to `maxBytes` UTF-8 bytes on a codepoint boundary, appending a
+ * ` [truncated]` marker. Defaults to {@link OPERATOR_NOTE_MAX_BYTES};
+ * {@link capOperatorNotes} passes a tighter budget when the routing column can't
+ * seat a full-size note. The marker is dropped when the budget is too small to
+ * be worth spending on it. Built on {@link utf8Truncate}. */
+export function truncateOperatorNote(note: string, maxBytes: number = OPERATOR_NOTE_MAX_BYTES): string {
+  if (utf8Bytes(note) <= maxBytes) return note;
+  const marker = maxBytes > utf8Bytes(TRUNCATION_MARKER) * 2 ? TRUNCATION_MARKER : "";
+  const truncated = utf8Truncate(note, maxBytes - utf8Bytes(marker));
+  if (truncated === "") return "";
+  return truncated + marker;
 }
 
 /** Bound the serialized array to `maxBytes`, dropping oldest first. Defaults to

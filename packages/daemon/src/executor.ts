@@ -27,7 +27,7 @@ import {
   readPauseAfterDispatch,
   readPendingSteer,
   retryCountKey,
-  truncateOperatorNote,
+  utf8Truncate,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import {
@@ -730,7 +730,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // first-node dispatch surfaces it as `ctx.steering` and the transition
       // planner clears it once an llm step consumes it.
       if (decision.steering !== undefined && decision.steering.length > 0) {
-        startRoutingPatch[PENDING_STEER_KEY] = truncateOperatorNote(decision.steering, PENDING_STEER_MAX_BYTES);
+        startRoutingPatch[PENDING_STEER_KEY] = utf8Truncate(decision.steering, PENDING_STEER_MAX_BYTES);
       }
       // A pre-claim pause co-arriving with a steer folds to shouldPauseAfterDispatch
       // (R3): run_started advances past BOTH intents, so the deferred pause has no
@@ -788,13 +788,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (currentNode == null) return { kind: "terminal" };
 
+    // A deferred pre-claim pause (a steer+pause pair stashed at run_started) rides
+    // routing across the boundary; resolve it before the fan-out branch so a
+    // parallel FIRST node honours it at the join, exactly as the linear path
+    // honours it after the dispatch (surfaced again below for the linear turn).
+    const deferredPause = readPauseAfterDispatch(effectiveRouting);
+
     // `type: parallel` fan-out (Model A, docs/proposals/fan-out-nodes.md). The
     // frontier loop owns dispatch + barrier; `current_node` stays pinned to the
     // parallel node until the join. Branches run concurrently through the same
     // store, each sub-node durable on the log (the linearization invariant —
     // concurrent execute, serialized commit).
     if (graphFor(state.workflowSha)?.nodes[currentNode]?.type === "parallel") {
-      return await runFanout(state, decision, currentNode, effectiveRouting);
+      return await runFanout(state, decision, currentNode, effectiveRouting, deferredPause);
     }
 
     // Stamp dispatchStartedAt before handing control to the handler
@@ -1184,8 +1190,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // carried in routing, not in the fold — this turn's decision folds clean.
     // Surface the marker as shouldPauseAfterDispatch so the planner swaps the
     // success continuation for fact.run_paused exactly as it does when a running-
-    // turn fold produces it.
-    const deferredPause = readPauseAfterDispatch(effectiveRouting);
+    // turn fold produces it; the planner also clears the marker once the pause
+    // has landed (buildRoutingPatch), so the run doesn't re-pause on resume.
+    // `deferredPause` is resolved once at the top of the dispatch (shared with
+    // the fan-out path).
     const planDecision =
       deferredPause && !decision.shouldPauseAfterDispatch ? { ...decision, shouldPauseAfterDispatch: true } : decision;
     const plan = planTransition({
@@ -1199,6 +1207,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       iteration,
       now: clock(),
       random,
+      ...(deferredPause ? { deferredPause: true } : {}),
     });
 
     // Drain the planner's trail (budget warns, goal-gate, retry-scheduled,
@@ -1209,14 +1218,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     obs.flush();
 
     const facts = plan.facts;
-    // Clear the deferred-pause marker once consumed so the run doesn't re-pause on
-    // resume. Only clear when the pause actually landed (the planner swapped in a
-    // fact.run_paused) — an abort path never reaches here, so the marker survives
-    // to the next dispatch as intended.
-    const consumedDeferredPause = deferredPause && facts.some((f) => f.type === "fact.run_paused");
-    const routingPatch = consumedDeferredPause
-      ? { ...(plan.routingPatch ?? {}), [PAUSE_AFTER_DISPATCH_KEY]: false }
-      : plan.routingPatch;
+    const routingPatch = plan.routingPatch;
     const advanceAppliedTo = plan.advanceAppliedTo;
     const appendOpts: {
       routingPatch?: Record<string, unknown>;
@@ -1444,6 +1446,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     decision: Extract<core.IntentDecision, { kind: "proceed" }>,
     parallelNode: string,
     effectiveRouting: Readonly<Record<string, unknown>>,
+    deferredPause: boolean,
   ): Promise<DispatchOutcome> => {
     const graph = graphFor(state.workflowSha);
     const node = graph?.nodes[parallelNode];
@@ -1636,9 +1639,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (plan.kind === "join") {
       const drainedBarrier = fanoutBudgetDisposition({ fresh: true });
       if (drainedBarrier !== undefined) return commitParkOrTerminal([drainedBarrier]);
-      const res = await commitFanoutFact(
-        [
-          {
+      // A deferred pre-claim pause (a steer+pause pair stashed at run_started)
+      // must land HERE: the fan-out join is this path's success continuation, the
+      // twin of the linear planner's node_started→run_paused swap. Emit
+      // fact.run_paused instead of fact.fanout_joined and clear the marker in the
+      // same commit — resume re-enters runFanout, re-drains to the join with the
+      // marker cleared, and advances past it cleanly. The commit still serializes
+      // through commitFanoutFact (the linearization point).
+      const joinFact: FactEvent = deferredPause
+        ? { type: "fact.run_paused", payload: { reason: "operator", nodeId: parallelNode } }
+        : {
             type: "fact.fanout_joined",
             payload: {
               nodeId: parallelNode,
@@ -1647,15 +1657,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               nextNode: plan.nextNode,
               branchesCompleted: plan.branchesCompleted,
             },
-          },
-        ],
-        takeFold(),
-      );
+          };
+      let joinOpts = takeFold();
+      if (deferredPause) {
+        joinOpts = {
+          ...joinOpts,
+          routingPatch: { ...(joinOpts.routingPatch ?? {}), [PAUSE_AFTER_DISPATCH_KEY]: false },
+        };
+      }
+      const res = await commitFanoutFact([joinFact], joinOpts);
       if (!res.ok) {
         // Status-stop ⇒ the run is already leaving `running`; just yield the
         // turn. Only true OCC exhaustion feeds the conflict controller.
         if (res.reason !== "occ") return { kind: "continue" };
-        const { halted } = await onOccConflict("fact.fanout_joined", parallelNode, iteration, state.version);
+        const { halted } = await onOccConflict(joinFact.type, parallelNode, iteration, state.version);
         return halted ? { kind: "terminal" } : { kind: "continue" };
       }
       onOccResolved(parallelNode, iteration);

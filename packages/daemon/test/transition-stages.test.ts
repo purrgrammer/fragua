@@ -818,6 +818,36 @@ describe("buildRoutingPatch", () => {
       expect(patch?.["internal.pending_steer"]).toBeUndefined();
     });
   });
+
+  describe("deferred pre-claim pause", () => {
+    test("clears internal.pause_after_dispatch once the operator pause lands (transition + shouldPauseAfterDispatch)", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: {},
+        budgetWarnedTags: [],
+        deferredPause: true,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBe(false);
+    });
+
+    test("does not clear the marker when the turn did not pause (no shouldPauseAfterDispatch)", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: {},
+        budgetWarnedTags: [],
+        deferredPause: true,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
+    });
+  });
 });
 
 describe("computeAdvanceAppliedTo", () => {

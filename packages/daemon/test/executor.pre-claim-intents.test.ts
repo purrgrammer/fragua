@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { startSupervisor } from "../src/supervisor.ts";
+import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
 
 describe("executor — pre-claim intents", () => {
@@ -195,6 +196,93 @@ describe("executor — pre-claim intents", () => {
     expect(seenSteering).toContain("focus on the auth module");
     // The operator's concurrent pause was honoured rather than swallowed.
     expect(r.store.getState("rp5")!.status).toBe("paused");
+
+    r.store.close();
+  });
+
+  // High: a pre-claim steer + pause whose FIRST dispatched node is `type: parallel`
+  // must still honour the deferred pause. run_started stashes the marker in routing,
+  // but the fan-out path (runFanout) never consults it — so the pause was silently
+  // dropped and the run ran to completion. The steer must reach the branches AND the
+  // run must pause after the fan-out joins.
+  test("pre-claim steer + pause with a parallel first node: steer delivered and the run pauses after the join", async () => {
+    const yaml = [
+      "name: pfp",
+      "defaults: { provider: anthropic, model: m }",
+      "steps:",
+      "  fan: { type: parallel, branches: [a, b], next: synth }",
+      "  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }",
+      "  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }",
+      "  synth: { type: llm, prompt: done, next: exit }",
+    ].join("\n");
+    const r = rig({ yaml });
+    const seenSteering: Record<string, Array<string | undefined>> = { a: [], b: [] };
+    let synthRan = false;
+    for (const id of ["a", "b"]) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1_000,
+        handler: async (ctx) => {
+          seenSteering[id]!.push(ctx.steering);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async () => {
+        synthRan = true;
+        return { kind: "transition", nextNode: "exit", tokens: 1, costUsd: 0.001 };
+      },
+    });
+    enqueue(r, "rp6", "fan");
+    r.store.appendIntent("rp6", {
+      type: "intent.steering_requested",
+      payload: { text: "focus on the auth module" },
+    });
+    r.store.appendIntent("rp6", { type: "intent.pause_requested", payload: {} });
+    r.store.claimNextRun(1);
+    await runOne("rp6", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 20,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    // The steer reached both fan-out branches.
+    expect(seenSteering["a"]).toContain("focus on the auth module");
+    expect(seenSteering["b"]).toContain("focus on the auth module");
+    // The operator's concurrent pause is honoured AT the join: the run pauses
+    // after the fan-out joins and the join's successor never dispatches. Before
+    // the fix the deferred-pause marker leaked past the fan-out and `synth` ran.
+    expect(synthRan).toBe(false);
+    expect(r.store.getState("rp6")!.status).toBe("paused");
+
+    // Resume: the marker was cleared with the pause, so the run re-drains to the
+    // join, advances past it, dispatches `synth`, and completes — no phantom
+    // re-pause.
+    r.store.appendIntent("rp6", { type: "intent.resume", payload: {} });
+    expect(wakePending(r.store).resumed).toContain("rp6");
+    r.store.claimNextRun(1);
+    await runOne("rp6", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 20,
+      shutdownSignal: new AbortController().signal,
+    });
+    expect(synthRan).toBe(true);
+    expect(r.store.getState("rp6")!.status).toBe("completed");
 
     r.store.close();
   });
