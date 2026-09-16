@@ -603,6 +603,14 @@ export interface EnqueueRunParams {
    * leaves it undefined. Surfaced on `run_state.schedule_id`. Schedule
    * deletion does NOT cascade here; lineage outlives the schedule. */
   scheduleId?: string;
+  /** Pinned worktree base, resolved to a commit sha at enqueue from
+   * `fragua run --base <ref>`. Seeds `run_state.base_git_sha`; the provisioner
+   * reads it and provisions the worktree detached at this sha. Omitted =
+   * default (cwd HEAD at provision time). */
+  baseGitSha?: string;
+  /** The `--base` ref as typed (branch/tag/sha). Seeds
+   * `run_state.base_git_ref`; the human label for `baseGitSha`. */
+  baseGitRef?: string;
 }
 
 export interface GetEventsOpts {

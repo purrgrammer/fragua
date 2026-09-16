@@ -656,8 +656,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // idempotent but we avoid the extra lookup.
     if (opts.provisioner && runEnv === undefined) {
       try {
-        const provisionOpts: { cwd?: string } = {};
+        const provisionOpts: { cwd?: string; baseRef?: string } = {};
         if (state.cwd != null) provisionOpts.cwd = state.cwd;
+        if (state.baseGitSha != null) provisionOpts.baseRef = state.baseGitSha;
         runEnv = await opts.provisioner.ensure(runId, provisionOpts);
         opts.store.appendDaemonEvent({ type: "daemon.worktree_provisioned", payload: { runId, ok: true } }, { runId });
       } catch (err) {
@@ -682,8 +683,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (needsStart) {
       const start = routingString(state.routing, "start_node") ?? "start";
-      const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
-      const baseGitRef = opts.provisioner?.baseGitRef(runId) ?? undefined;
+      // Prefer the pinned base (seeded from the genesis payload onto run_state)
+      // over the provisioner's live read — the provisioner's `baseGitRef` reads
+      // the source repo's symbolic-ref, which would clobber a pinned branch/tag.
+      const baseGitSha = state.baseGitSha ?? opts.provisioner?.baseGitSha(runId) ?? undefined;
+      const baseGitRef = state.baseGitRef ?? opts.provisioner?.baseGitRef(runId) ?? undefined;
       const startFacts: FactEvent[] = [
         {
           type: "fact.run_started",

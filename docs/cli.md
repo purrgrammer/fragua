@@ -36,14 +36,21 @@ fragua providers {ls,add,rm,edit}-model  <provider> <id> [flags]
 ## create runs — `fragua run <workflow>`
 
 ```sh
-fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--no-follow]
-                      [--cwd <dir>] [--db <path>]
+fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--base <ref>]
+                      [--no-follow] [--cwd <dir>] [--db <path>]
 ```
 
 `<workflow>` resolves: a bare name → `~/.fragua/workflows/<name>.yaml` then
 `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or a `.yaml` suffix is a
 literal path. `-i name=value` binds the typed inputs declared in the workflow's
-`inputs:` block (`@path` reads a file, `@-` reads stdin). Saves + enqueues, then
+`inputs:` block (`@path` reads a file, `@-` reads stdin). `--base <ref>` pins the
+run's worktree base to a branch, tag, or sha: the ref is resolved to a commit sha
+**at enqueue** (`git -C <cwd> rev-parse --verify <ref>^{commit}`) and stored on the
+run, so the worktree is provisioned from that sha (`git worktree add --detach`)
+regardless of where the cwd's HEAD moves afterward; an unresolvable ref is rejected
+before the run is minted, and the resolved sha is printed in the enqueue output.
+Without `--base`, the worktree defaults to the cwd's HEAD at provision time. The
+pinned base surfaces on `fragua runs status`. Saves + enqueues, then
 **follows by default** (streams the event log to terminal, answering HITL gates
 inline on a TTY); `--no-follow` prints the run id and exits. The exit code
 reflects the run's outcome (see [Exit codes](#exit-codes)).
