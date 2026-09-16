@@ -1,16 +1,12 @@
 // RunControls — operator-driven Pause / Resume / Cancel for a run.
 //
-// Ownership boundary: specialized banners own the action surface for the
-// substatuses they render, and RunControls stays out of their way:
-//   - paused / paused_auto   → RunPausedNotice (Resume + Cancel; budget
-//                              reason adds Raise & Resume). RunControls
-//                              renders NOTHING for these — no duplicate
-//                              buttons in the header.
-//   - paused_human (options) → HitlChoice (option buttons).
-// RunControls owns only what no banner claims: pause a running run, resume
-// an operator-driven `paused_human` pause (empty options — no HitlChoice),
-// and cancel a running/queued run. It returns null when no action applies
-// (terminal runs, banner-owned pauses, or imported runs).
+// Specialized banners own the action for their substatus:
+//   - paused                → RunPausedNotice (Resume + Cancel; budget reason has Raise & Resume)
+//   - paused_human           → HitlChoice (option buttons)
+// RunControls handles the "everything else" surface: generic operator
+// pause, resume of an operator-paused run, and cancel-from-anywhere on
+// non-terminal runs. Returns null when no action applies (terminal
+// runs, or when a specialized banner already owns every action).
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, X } from "lucide-react";
@@ -90,10 +86,12 @@ export function RunControls({
 
   const canPause = status === "running";
   const isOperatorHitlPause = runStatus === "paused_human" && (hitlOptionsCount ?? 0) === 0;
-  // RunPausedNotice owns the action surface for both banner-rendered pauses.
-  const isPausedNotice = runStatus === "paused" || runStatus === "paused_auto";
-  const canResume = status === "paused" && !isPausedNotice && (runStatus !== "paused_human" || isOperatorHitlPause);
-  const canCancel = (status === "running" || status === "queued" || status === "paused") && !isPausedNotice;
+  const canResume =
+    status === "paused" && runStatus !== "paused" && (runStatus !== "paused_human" || isOperatorHitlPause);
+  // Cancel is available everywhere non-terminal. RunPausedNotice
+  // already exposes a Cancel for `paused` — hide ours there to avoid
+  // two adjacent Cancel buttons.
+  const canCancel = (status === "running" || status === "queued" || status === "paused") && runStatus !== "paused";
 
   if (!canPause && !canResume && !canCancel) return null;
 

@@ -243,24 +243,14 @@ steps:
     type: tool
     run: gh pr list --head l10n_crowdin
 `;
-    const detail: RunDetail = {
-      runId: "r-tool",
-      startedAt: "2024-01-01T00:00:00.000Z",
-      status: "running",
-      runStatus: "running",
-      lastEventSeq: 2,
+    const detail = makeDetail({
+      workflowSource: src,
       nodes: [
         { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
         { nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 },
       ],
       selectedEdges: [{ from: "start", to: "find_pr", iteration: 0, pass: 0 }],
-      workflowSource: src,
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    };
+    });
     const { container } = render(<GraphView detail={detail} activeNodeIds={new Set(["find_pr"])} />);
     const canvas = await waitFor(() => within(container).getByTestId("graphview"));
     const node = canvas.querySelector('[data-node-id="find_pr"]') as HTMLElement | null;

@@ -56,6 +56,30 @@ describe("api — /runs", () => {
     expect(out[0]?.runId).toBe("r1");
   });
 
+  it("listRuns tolerates rows that omit runStatus (old-daemon soft-compat)", async () => {
+    const rows = [{ runId: "r1", startedAt: "2024-01-01T00:00:00Z", status: "success", eventCount: 3 }];
+    mock = installFetchMock({ "/api/runs": () => json(rows) });
+    const out = await api.listRuns();
+    expect(out).toHaveLength(1);
+    expect(out[0]?.runStatus).toBeUndefined();
+  });
+
+  it("getRun tolerates a response that omits runStatus (old-daemon soft-compat)", async () => {
+    mock = installFetchMock({
+      "/api/runs/r1": () =>
+        json({
+          runId: "r1",
+          startedAt: "2024-01-01T00:00:00Z",
+          status: "success",
+          lastEventSeq: 0,
+          nodes: [],
+          selectedEdges: [],
+        }),
+    });
+    const res = await api.getRun("r1");
+    expect(res.runStatus).toBeUndefined();
+  });
+
   it("getRun encodes the id and GETs /api/runs/:id", async () => {
     const body = {
       runId: "abc/weird",
