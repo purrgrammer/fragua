@@ -168,6 +168,27 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
+  test("bootstrap failure names the stripped var and bash.env-passthrough when the env-strip is active", async () => {
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "boot-fail-strip",
+      bootstrap: "echo $NPM_TOKEN; exit 3",
+      envDenyNames: new Set(["NPM_TOKEN"]),
+    });
+    let error: Error | undefined;
+    try {
+      await env.init();
+    } catch (err) {
+      error = err as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error?.message).toContain("bootstrap command failed");
+    // The note names the referenced stripped var and points at the escape hatch.
+    expect(error?.message).toContain("NPM_TOKEN");
+    expect(error?.message).toContain("bash.env-passthrough");
+    await env.dispose();
+  });
+
   test("keepAfterDispose preserves the worktree for inspection", async () => {
     const env = new WorktreeEnvironment({
       repoRoot: repo,

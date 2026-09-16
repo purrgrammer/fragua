@@ -486,13 +486,39 @@ describe("daemonEnvDeny", () => {
   });
 
   test("(daemon-deny-oauth-token) a non-_API_KEY provider credential in passthrough is refused — still stripped", () => {
-    const env: NodeJS.ProcessEnv = { OPENAI_OAUTH_TOKEN: "sk-oai-oauth-value-12345678" };
+    // ANTHROPIC_OAUTH_TOKEN is caught registry-independently via ALWAYS_PROVIDER_CRED.
+    const env: NodeJS.ProcessEnv = { ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-value-12345678" };
     const { names, predicate } = daemonEnvDeny({
       env,
-      passthrough: new Set(["OPENAI_OAUTH_TOKEN"]),
+      passthrough: new Set(["ANTHROPIC_OAUTH_TOKEN"]),
     });
-    expect(names.has("OPENAI_OAUTH_TOKEN")).toBe(true);
-    expect(predicate("OPENAI_OAUTH_TOKEN")).toBe(true);
+    expect(names.has("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
+    expect(predicate("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
+  });
+
+  test("(daemon-deny-gate4-exact) gate 4 refuses an exact-prefix secret but not a prefix-prefixed one", () => {
+    // GROQ_SECRET = exact provider prefix (GROQ) + secret suffix → refused.
+    // OPENAI_PROXY_AUTH = prefix OPENAI_PROXY (merely STARTS WITH a provider
+    // prefix) → NOT a provider credential, stays re-admittable.
+    const { passthrough } = daemonEnvDeny({
+      env: {},
+      passthrough: new Set(["GROQ_SECRET", "OPENAI_PROXY_AUTH", "ANTHROPIC_RATE_LIMIT_TOKEN"]),
+    });
+    expect(passthrough.has("GROQ_SECRET")).toBe(false);
+    expect(passthrough.has("OPENAI_PROXY_AUTH")).toBe(true);
+    expect(passthrough.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
+  });
+
+  test("(daemon-deny-store-custom) a store-only custom provider's non-_API_KEY cred is stripped", () => {
+    // customai is not in pi-ai's registry, so gate 1/3/4 all miss CUSTOMAI_OAUTH_TOKEN.
+    // The storeProviders prefix scan must still strip it (secret-shaped + prefix match),
+    // while leaving a non-secret var carrying the same prefix untouched.
+    const { names } = daemonEnvDeny({
+      env: { CUSTOMAI_OAUTH_TOKEN: "custom-oauth-value-12345678", CUSTOMAI_ENDPOINT: "https://api.example" },
+      storeProviders: ["customai"],
+    });
+    expect(names.has("CUSTOMAI_OAUTH_TOKEN")).toBe(true);
+    expect(names.has("CUSTOMAI_ENDPOINT")).toBe(false);
   });
 
   test("(daemon-deny-store-cred-ignores-passthrough) a store provider's credential is stripped even if passthrough-listed", () => {
@@ -512,11 +538,11 @@ describe("daemonEnvDeny", () => {
   test("(daemon-deny-effective-passthrough) returns the post-refusal passthrough set", () => {
     const { passthrough } = daemonEnvDeny({
       env: {},
-      passthrough: new Set(["GH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_OAUTH_TOKEN"]),
+      passthrough: new Set(["GH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     });
     expect(passthrough.has("GH_TOKEN")).toBe(true);
     expect(passthrough.has("ANTHROPIC_API_KEY")).toBe(false);
-    expect(passthrough.has("OPENAI_OAUTH_TOKEN")).toBe(false);
+    expect(passthrough.has("ANTHROPIC_OAUTH_TOKEN")).toBe(false);
   });
 
   test("(daemon-deny-warn-refused) refused provider creds warn once naming each and pointing at `fragua providers`", () => {
@@ -524,13 +550,13 @@ describe("daemonEnvDeny", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
     try {
-      daemonEnvDeny({ env: {}, passthrough: new Set(["ANTHROPIC_API_KEY", "OPENAI_OAUTH_TOKEN"]) });
+      daemonEnvDeny({ env: {}, passthrough: new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) });
     } finally {
       console.warn = origWarn;
     }
     const combined = warnings.join(" ");
     expect(combined).toContain("ANTHROPIC_API_KEY");
-    expect(combined).toContain("OPENAI_OAUTH_TOKEN");
+    expect(combined).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(combined).toContain("fragua providers");
   });
 });
@@ -548,8 +574,12 @@ describe("unsafeAllowEnvNames (provider-cred rail)", () => {
     expect(unsafeAllowEnvNames(["GH_TOKEN", "ANTHROPIC_API_KEY"])).toEqual(["ANTHROPIC_API_KEY"]);
   });
 
-  test("non-_API_KEY provider credentials (OPENAI_OAUTH_TOKEN) are refused via provider-prefix gate", () => {
-    expect(unsafeAllowEnvNames(["OPENAI_OAUTH_TOKEN"])).toContain("OPENAI_OAUTH_TOKEN");
+  test("non-_API_KEY provider credentials (ANTHROPIC_OAUTH_TOKEN) are refused", () => {
+    expect(unsafeAllowEnvNames(["ANTHROPIC_OAUTH_TOKEN"])).toContain("ANTHROPIC_OAUTH_TOKEN");
+  });
+
+  test("a provider-prefix-prefixed var (OPENAI_PROXY_AUTH) is NOT refused — gate 4 requires an exact prefix", () => {
+    expect(unsafeAllowEnvNames(["OPENAI_PROXY_AUTH", "ANTHROPIC_RATE_LIMIT_TOKEN"])).toEqual([]);
   });
 
   test("generic CI platform tokens (GH_TOKEN / GITHUB_TOKEN) still pass the provider-prefix gate", () => {

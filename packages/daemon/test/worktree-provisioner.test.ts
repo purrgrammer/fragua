@@ -184,6 +184,35 @@ describe("WorktreeProvisioner — bootstrap resolution", () => {
   });
 });
 
+describe("WorktreeProvisioner — per-run env-strip resolution", () => {
+  test("no resolver → constructor envDeny values pass through", async () => {
+    const names = new Set(["ANTHROPIC_API_KEY"]);
+    const predicate = (n: string) => n === "SECRET";
+    const p = new WorktreeProvisioner({ envDenyNames: names, envDenyPredicate: predicate });
+    const out = await p.resolveEnvDenyFor("/any/cwd");
+    expect(out.names).toBe(names);
+    expect(out.predicate).toBe(predicate);
+  });
+
+  test("resolver is authoritative and receives each run's cwd", async () => {
+    // Mirrors bootstrap: one daemon serving many projects resolves the env-strip
+    // per run, so each project's own bash.env-passthrough takes effect.
+    const seen: string[] = [];
+    const namesA = new Set(["A_TOKEN"]);
+    const namesB = new Set(["B_TOKEN"]);
+    const p = new WorktreeProvisioner({
+      envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
+      resolveRunEnvDeny: async (cwd) => {
+        seen.push(cwd);
+        return { names: cwd === "/project/a" ? namesA : namesB };
+      },
+    });
+    expect((await p.resolveEnvDenyFor("/project/a")).names).toBe(namesA);
+    expect((await p.resolveEnvDenyFor("/project/b")).names).toBe(namesB);
+    expect(seen).toEqual(["/project/a", "/project/b"]);
+  });
+});
+
 describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
   // The daemon serves runs from many cwds. The provisioner type is decided
   // per run against the run's own cwd — NOT once, at boot, against the

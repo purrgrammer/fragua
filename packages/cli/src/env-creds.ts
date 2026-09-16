@@ -32,6 +32,16 @@ import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
 // dedicated COPILOT_GITHUB_TOKEN is what resolved.
 const COPILOT_AMBIENT_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
 
+/**
+ * Provider-credential env names refused regardless of whether pi-ai's provider
+ * registry is loaded. `buildProviderCredentialContext()` is registration-gated
+ * — empty early in `fragua ci` and in unit tests — so the rail can't rely on it
+ * alone. These are the LLM-provider creds fragua reads directly; they must never
+ * reach a tool subprocess. (`_API_KEY` covers the shape virtually every provider
+ * key follows; the explicit names cover non-`_API_KEY` creds like the OAuth token.)
+ */
+const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]);
+
 // ---------------------------------------------------------------------------
 // CI env secret capture
 // ---------------------------------------------------------------------------
@@ -54,32 +64,31 @@ const CI_ENV_SECRET_SUFFIXES = [
   "_PASSPHRASE",
 ] as const;
 
-/** Build the set of known provider env-var names from pi-ai's registry.
- * Memoised: called once at capture time, not on every check. */
-function knownProviderVarNames(): Set<string> {
-  const names = new Set<string>();
-  for (const provider of getProviders()) {
-    for (const name of findEnvKeys(provider) ?? []) {
-      // Apply the same COPILOT_AMBIENT_ENV denial as seedCredsFromEnv so we
-      // don't accidentally admit GH_TOKEN / GITHUB_TOKEN as needles when the
-      // caller hasn't set COPILOT_GITHUB_TOKEN.
-      if (!COPILOT_AMBIENT_ENV.has(name)) {
-        names.add(name);
-      }
-    }
-  }
-  return names;
+/** Pre-computed provider-credential lookup context: pi-ai's registry walked
+ * ONCE. `varNames` = the env-var names pi-ai maps to a provider (minus the
+ * ambient CI tokens); `prefixes` = each provider's conventional env-var prefix
+ * (`openai` → `OPENAI`). Build once per operation and thread through the gates
+ * so a single call can't walk `getProviders()` several times or observe a
+ * registry that changed mid-flight. */
+interface ProviderCredentialContext {
+  varNames: Set<string>;
+  prefixes: Set<string>;
 }
 
-/** The env-var prefix each provider's credentials conventionally carry, e.g.
- * `openai` → `OPENAI`, `github-copilot` → `GITHUB_COPILOT`. Same normalisation
- * `daemonEnvDeny` uses to synthesise a held provider's `<PREFIX>_API_KEY`. */
-function providerEnvPrefixes(): Set<string> {
+/** Walk pi-ai's provider registry once, collecting both the known env-var
+ * names (minus COPILOT_AMBIENT_ENV) and the per-provider prefixes. */
+function buildProviderCredentialContext(): ProviderCredentialContext {
+  const varNames = new Set<string>();
   const prefixes = new Set<string>();
   for (const provider of getProviders()) {
     prefixes.add(provider.toUpperCase().replace(/[^A-Z0-9]/g, "_"));
+    for (const name of findEnvKeys(provider) ?? []) {
+      // Same COPILOT_AMBIENT_ENV denial as seedCredsFromEnv so GH_TOKEN /
+      // GITHUB_TOKEN aren't admitted as needles when COPILOT_GITHUB_TOKEN is unset.
+      if (!COPILOT_AMBIENT_ENV.has(name)) varNames.add(name);
+    }
   }
-  return prefixes;
+  return { varNames, prefixes };
 }
 
 /**
@@ -87,37 +96,39 @@ function providerEnvPrefixes(): Set<string> {
  * — the shape that must NEVER reach a bash subprocess or an exported bundle.
  * Four independent gates so provider attribution doesn't hinge on registry
  * timing or a single suffix:
- *  1. present in pi-ai's live env-var registry (`providerVars`);
+ *  1. present in pi-ai's live env-var registry (`ctx.varNames`);
  *  2. one of the always-refused static names (`ALWAYS_PROVIDER_CRED`);
  *  3. `_API_KEY` shape (virtually every provider key);
- *  4. a `CI_ENV_SECRET_SUFFIXES` suffix stripped off leaves a prefix that
- *     attributes to a provider (`OPENAI_OAUTH_TOKEN` → `OPENAI_OAUTH` starts
- *     with `OPENAI_`), catching non-`_API_KEY` creds absent from the registry.
- * Generic CI tokens (`GH_TOKEN`, `GITHUB_TOKEN`) pass all four.
+ *  4. a `CI_ENV_SECRET_SUFFIXES` suffix stripped off leaves a prefix that is
+ *     EXACTLY a provider prefix (`OPENAI_SECRET` → `OPENAI`), catching
+ *     non-`_API_KEY` creds absent from the registry. The match is exact — a var
+ *     whose prefix merely *starts with* a provider prefix (`OPENAI_PROXY_AUTH`)
+ *     is NOT a provider credential and stays re-admittable. A held custom
+ *     provider's odd-shaped creds are covered separately by the storeProviders
+ *     prefix scan in {@link daemonEnvDeny}.
+ * The ambient CI tokens (`GH_TOKEN`, `GITHUB_TOKEN`) are short-circuited to
+ * non-credential so a future bare `github` provider prefix can't reclassify them.
  */
-function isProviderCredential(name: string, providerVars: Set<string>): boolean {
+function isProviderCredential(name: string, ctx: ProviderCredentialContext): boolean {
+  if (COPILOT_AMBIENT_ENV.has(name)) return false;
   const upper = name.toUpperCase();
-  if (providerVars.has(name) || ALWAYS_PROVIDER_CRED.has(upper) || upper.endsWith("_API_KEY")) {
+  if (ctx.varNames.has(name) || ALWAYS_PROVIDER_CRED.has(upper) || upper.endsWith("_API_KEY")) {
     return true;
   }
   const suffix = CI_ENV_SECRET_SUFFIXES.find((s) => upper.endsWith(s));
   if (suffix === undefined) return false;
   const prefix = upper.slice(0, -suffix.length);
-  for (const p of providerEnvPrefixes()) {
-    if (prefix === p || prefix.startsWith(`${p}_`)) return true;
-  }
-  return false;
+  return ctx.prefixes.has(prefix);
 }
 
 /** Returns true when an env var NAME indicates it is secret, regardless
  * of the value. Shared predicate for both `captureCiEnvSecrets` (which
  * also checks the value is non-empty) and `ciEnvDenyNames` (strip by
  * name unconditionally — an attacker could set the var later). */
-function isSecretEnvName(name: string, providerVars: Set<string>): boolean {
+function isSecretEnvName(name: string, ctx: ProviderCredentialContext): boolean {
   const upper = name.toUpperCase();
   const isSecretSuffix = CI_ENV_SECRET_SUFFIXES.some((suffix) => upper.endsWith(suffix));
-  const isProviderVar = providerVars.has(name);
-  return isSecretSuffix || isProviderVar;
+  return isSecretSuffix || ctx.varNames.has(name);
 }
 
 /**
@@ -134,12 +145,12 @@ function isSecretEnvName(name: string, providerVars: Set<string>): boolean {
  * @param env - defaults to `process.env`; injectable for tests.
  */
 export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array<{ name: string; value: string }> {
-  const providerVars = knownProviderVarNames();
+  const ctx = buildProviderCredentialContext();
   const result: Array<{ name: string; value: string }> = [];
   let skipped = 0;
   for (const [name, value] of Object.entries(env)) {
     if (!value) continue;
-    if (!isSecretEnvName(name, providerVars)) continue;
+    if (!isSecretEnvName(name, ctx)) continue;
     if (value.length < 8 || /\s/.test(value)) {
       skipped++;
       continue;
@@ -154,7 +165,7 @@ export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array
 
 /**
  * Build the set of env var NAMES that should be stripped from bash-tool
- * subprocesses in `fragua ci` (proposal §6 unit 9b — perimeter env-strip).
+ * subprocesses in `fragua ci` (perimeter env-strip).
  *
  * Uses the same predicate as `captureCiEnvSecrets` so the strip set ≡ the
  * scrub-needle name set ("one list, two consumers"). Unlike `captureCiEnvSecrets`,
@@ -176,12 +187,12 @@ export function captureCiEnvSecrets(env: NodeJS.ProcessEnv = process.env): Array
 export function ciEnvDenyNames(
   env: NodeJS.ProcessEnv = process.env,
   allow: ReadonlySet<string> = NO_ALLOW,
+  ctx: ProviderCredentialContext = buildProviderCredentialContext(),
 ): Set<string> {
-  const providerVars = knownProviderVarNames();
   const result = new Set<string>();
   for (const name of Object.keys(env)) {
     if (allow.has(name)) continue;
-    if (isSecretEnvName(name, providerVars)) result.add(name);
+    if (isSecretEnvName(name, ctx)) result.add(name);
   }
   return result;
 }
@@ -201,9 +212,11 @@ export function ciEnvDenyNames(
  *   scrubbed from the exported bundle (allow ≠ declassify). Default: none. See
  *   {@link ciEnvDenyNames} — provider creds must never be allowed through.
  */
-export function ciEnvDenyPredicate(allow: ReadonlySet<string> = NO_ALLOW): (name: string) => boolean {
-  const providerVars = knownProviderVarNames();
-  return (name: string) => !allow.has(name) && isSecretEnvName(name, providerVars);
+export function ciEnvDenyPredicate(
+  allow: ReadonlySet<string> = NO_ALLOW,
+  ctx: ProviderCredentialContext = buildProviderCredentialContext(),
+): (name: string) => boolean {
+  return (name: string) => !allow.has(name) && isSecretEnvName(name, ctx);
 }
 
 /** Shared empty allow-set so the default path allocates nothing. */
@@ -234,46 +247,49 @@ export function daemonEnvDeny(
 ): { names: Set<string>; predicate: (name: string) => boolean; passthrough: ReadonlySet<string> } {
   const env = opts.env ?? process.env;
   const requested = opts.passthrough ?? NO_ALLOW;
+  const ctx = buildProviderCredentialContext();
   // Refuse provider credentials in the passthrough — same rail as ci's
   // `--allow-env` (`unsafeAllowEnvNames`). A workflow may re-admit generic
   // secrets (GH_TOKEN, …) but never an LLM-provider key fragua reads directly.
-  const providerVars = knownProviderVarNames();
-  const refused = new Set([...requested].filter((n) => isProviderCredential(n, providerVars)));
+  const refused = new Set([...requested].filter((n) => isProviderCredential(n, ctx)));
   const passthrough: ReadonlySet<string> =
     refused.size === 0 ? requested : new Set([...requested].filter((n) => !refused.has(n)));
   if (refused.size > 0) {
     console.warn(
-      `fragua: refusing to pass provider credential(s) through bash.env-passthrough: ${[...refused].join(", ")} — ` +
+      `fragua: refusing to pass provider credential(s) through bash.env-passthrough: ${JSON.stringify([...refused])} — ` +
         `hold provider credentials with \`fragua providers\`, not env-passthrough`,
     );
   }
-  const names = ciEnvDenyNames(env, passthrough);
+  const names = ciEnvDenyNames(env, passthrough, ctx);
+  const envNames = Object.keys(env);
   for (const provider of opts.storeProviders ?? []) {
-    // pi-ai's `findEnvKeys` only reports env keys currently SET (it's
-    // registration/env-gated), which the suffix rule already covers. To strip a
-    // held provider's credential even when it isn't in this process's env, also
-    // add its conventional `<PROVIDER>_API_KEY` name. `storeProviders` can carry
-    // custom/unknown provider names (from `authStorage.list()`); pi-ai's
-    // contract for those is unasserted here, so a throw must not crash startup.
-    let piNames: string[] = [];
+    // A held provider's credential is stripped regardless of passthrough — same
+    // rail as the refusal filter above. `storeProviders` holds provider NAMES
+    // (from `authStorage.list()`), including custom store-only providers pi-ai's
+    // static registry can't name. For each we synthesise the conventional
+    // `<PREFIX>_API_KEY` (covers a cred absent from this process's env), add any
+    // env-var pi-ai maps to the provider, and — crucially for custom providers
+    // — every secret-shaped env var carrying this provider's prefix (e.g.
+    // `CUSTOMAI_OAUTH_TOKEN`, which gate 4's exact-prefix match cannot catch).
+    const prefix = provider.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    const candidates = new Set<string>([`${prefix}_API_KEY`]);
     try {
-      piNames = findEnvKeys(provider) ?? [];
+      for (const n of findEnvKeys(provider) ?? []) candidates.add(n);
     } catch {
-      // Unknown/custom provider — no pi-ai env-var mapping. The synthetic
-      // `<PROVIDER>_API_KEY` name below still covers the conventional shape.
+      // Unknown/custom provider — pi-ai has no env-var mapping. The synthetic
+      // and prefix-scanned names below still cover it. A throw must not crash startup.
     }
-    const candidates = new Set<string>(piNames);
-    candidates.add(`${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`);
+    for (const envName of envNames) {
+      if (envName.toUpperCase().startsWith(`${prefix}_`) && isSecretEnvName(envName, ctx)) {
+        candidates.add(envName);
+      }
+    }
     for (const name of candidates) {
       if (COPILOT_AMBIENT_ENV.has(name)) continue;
-      // A provider credential is stripped regardless of passthrough — same rail
-      // as the refusal filter above. Only non-credential candidates honour the
-      // passthrough gate, which lets an operator re-admit e.g. GH_TOKEN.
-      if (!isProviderCredential(name, providerVars) && passthrough.has(name)) continue;
       names.add(name);
     }
   }
-  return { names, predicate: ciEnvDenyPredicate(passthrough), passthrough };
+  return { names, predicate: ciEnvDenyPredicate(passthrough, ctx), passthrough };
 }
 
 /**
@@ -285,23 +301,13 @@ export function daemonEnvDeny(
  * allowed through — that's the flag's purpose. The caller refuses the run when
  * this returns a non-empty list.
  */
-/**
- * Provider-credential env names refused regardless of whether pi-ai's provider
- * registry is loaded. `knownProviderVarNames()` is registration-gated — empty
- * early in `fragua ci` and in unit tests — so the rail can't rely on it alone.
- * These are the LLM-provider creds fragua reads directly; they must never reach
- * a tool subprocess. (`_API_KEY` covers the shape virtually every provider key
- * follows; the explicit names cover non-`_API_KEY` creds like the OAuth token.)
- */
-const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]);
-
 export function unsafeAllowEnvNames(allow: Iterable<string>): string[] {
-  const providerVars = knownProviderVarNames();
+  const ctx = buildProviderCredentialContext();
   const bad: string[] = [];
   for (const name of allow) {
     // Shared with `daemonEnvDeny`'s refusal filter. The legitimate allow case
     // is CI platform tokens (GH_TOKEN, …) which attribute to no provider.
-    if (isProviderCredential(name, providerVars)) {
+    if (isProviderCredential(name, ctx)) {
       bad.push(name);
     }
   }

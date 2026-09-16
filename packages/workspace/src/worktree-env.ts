@@ -144,11 +144,25 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     // at best and churns lockfiles at worst.
     if (this.bootstrap !== undefined && !alreadyProvisioned) {
       if (typeof this.bootstrap === "string") {
-        const result = await this.local.exec(this.bootstrap, { timeoutMs: this.bootstrapTimeoutMs });
+        const cmd = this.bootstrap;
+        const result = await this.local.exec(cmd, { timeoutMs: this.bootstrapTimeoutMs });
         if (result.exitCode !== 0) {
-          throw new Error(
-            `bootstrap command failed (exit ${result.exitCode}): ${this.bootstrap}\n${result.stderr.trim()}`,
-          );
+          // The bootstrap ran under the bash env-strip. If the command references
+          // a stripped var (or the strip is active at all), tell the operator so
+          // they don't chase a missing NPM_TOKEN / GITHUB_TOKEN as a mystery.
+          const denied = this.envDenyNames ? [...this.envDenyNames] : [];
+          const referenced = denied.filter((n) => cmd.includes(n));
+          let note = "";
+          if (referenced.length > 0) {
+            note =
+              `\n(note: bootstrap references env var(s) removed by the bash env-strip: ${referenced.join(", ")} — ` +
+              `re-admit a non-credential var via bash.env-passthrough in .fragua/config.yaml)`;
+          } else if (denied.length > 0) {
+            note =
+              `\n(note: the bash env-strip removed provider-credential-shaped vars from the bootstrap env; ` +
+              `re-admit a non-credential var via bash.env-passthrough in .fragua/config.yaml)`;
+          }
+          throw new Error(`bootstrap command failed (exit ${result.exitCode}): ${cmd}\n${result.stderr.trim()}${note}`);
         }
       } else {
         await this.bootstrap(this.local);

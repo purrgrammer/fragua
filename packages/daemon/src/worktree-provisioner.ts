@@ -43,6 +43,15 @@ export interface ResolvedRunBootstrap {
   bootstrapTimeoutMs?: number;
 }
 
+/** Env-strip pair resolved for a single run against its project root.
+ * Mirrors `ResolvedRunBootstrap`: lets one daemon apply each project's own
+ * `bash.env-passthrough` (merged over global) to the runs it serves, instead
+ * of a single strip fixed at daemon-launch cwd. */
+export interface ResolvedRunEnvDeny {
+  names?: ReadonlySet<string>;
+  predicate?: (name: string) => boolean;
+}
+
 export interface WorktreeProvisionerOptions {
   /** Shell command (or callback) run inside each fresh worktree before
    * the first node fires. Missing = no-op.
@@ -78,11 +87,11 @@ export interface WorktreeProvisionerOptions {
    * this run. Lets one daemon honour `<project>/.fragua/config.yaml`
    * for runs from many projects, with no global default leaking in. */
   resolveRunBootstrap?: (cwd: string) => Promise<ResolvedRunBootstrap>;
-  /** Set by `fragua ci` (proposal §6 unit 9b — full perimeter env-strip +
-   * scrub-needles) and by `fragua daemon` / harness (provider-credential-only
-   * strip, via `daemonEnvDeny`). Forwarded into each fresh `LocalEnvironment` /
-   * `WorktreeEnvironment` so the bash-tool subprocess never inherits the
-   * stripped env vars. */
+  /** Set by `fragua ci` (full perimeter env-strip + scrub-needles) and, as the
+   * fallback when no `resolveRunEnvDeny` is supplied, by `fragua daemon` /
+   * harness (provider-credential-only strip, via `daemonEnvDeny`). Forwarded
+   * into each fresh `LocalEnvironment` / `WorktreeEnvironment` so the bash-tool
+   * subprocess never inherits the stripped env vars. */
   envDenyNames?: ReadonlySet<string>;
   /** Set alongside `envDenyNames` by the same writers (`fragua ci` and
    * `fragua daemon` / harness). Applied at SPAWN TIME over the live merged env
@@ -90,6 +99,13 @@ export interface WorktreeProvisionerOptions {
    * stripped. `envDenyNames` is the value-capture path (drives scrub needles);
    * this predicate is the live-rule path. */
   envDenyPredicate?: (name: string) => boolean;
+  /** Resolve the per-run env-strip against the run's project root. Called once
+   * per fresh environment right before it is constructed. Authoritative when
+   * set: its return replaces the constructor `envDenyNames` / `envDenyPredicate`.
+   * Lets one daemon honour each project's `bash.env-passthrough`
+   * (`<run.cwd>/.fragua/config.yaml` merged over global) for runs from many
+   * projects, exactly as `resolveRunBootstrap` does for `bootstrap`. */
+  resolveRunEnvDeny?: (cwd: string) => Promise<ResolvedRunEnvDeny>;
 }
 
 export interface ProvisionOpts {
@@ -132,6 +148,7 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly resolveRunBootstrap: ((cwd: string) => Promise<ResolvedRunBootstrap>) | undefined;
   private readonly envDenyNames: ReadonlySet<string> | undefined;
   private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
+  private readonly resolveRunEnvDeny: ((cwd: string) => Promise<ResolvedRunEnvDeny>) | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
   /** Lineage cursor per run: the last recorded snapshot's commit + tree shas.
@@ -150,6 +167,22 @@ export class WorktreeProvisioner implements Provisioner {
     if (opts.resolveRunBootstrap !== undefined) this.resolveRunBootstrap = opts.resolveRunBootstrap;
     if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
     if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
+    if (opts.resolveRunEnvDeny !== undefined) this.resolveRunEnvDeny = opts.resolveRunEnvDeny;
+  }
+
+  /** Resolve the env-strip pair for a fresh environment at `cwd`. When
+   * `resolveRunEnvDeny` is set its return is authoritative — no fallback to the
+   * constructor `envDenyNames` / `envDenyPredicate`, so each project served by
+   * one daemon gets its own `bash.env-passthrough`. When unset, the constructor
+   * values are returned. Exposed for tests. */
+  async resolveEnvDenyFor(cwd: string): Promise<ResolvedRunEnvDeny> {
+    if (this.resolveRunEnvDeny !== undefined) {
+      return await this.resolveRunEnvDeny(cwd);
+    }
+    const out: ResolvedRunEnvDeny = {};
+    if (this.envDenyNames !== undefined) out.names = this.envDenyNames;
+    if (this.envDenyPredicate !== undefined) out.predicate = this.envDenyPredicate;
+    return out;
   }
 
   /** Resolve the bootstrap pair for a fresh worktree at `cwd`. When
@@ -241,11 +274,13 @@ export class WorktreeProvisioner implements Provisioner {
       throw new Error("worktree provision: run has no cwd (imported / ephemeral runs must carry a cwd)");
     }
 
+    const envDeny = await this.resolveEnvDenyFor(repoRoot);
+
     if (!(await isGitRepo(repoRoot))) {
       const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: repoRoot };
       if (this.defaultShellTimeoutMs !== undefined) localOpts.defaultTimeoutMs = this.defaultShellTimeoutMs;
-      if (this.envDenyNames !== undefined) localOpts.envDenyNames = this.envDenyNames;
-      if (this.envDenyPredicate !== undefined) localOpts.envDenyPredicate = this.envDenyPredicate;
+      if (envDeny.names !== undefined) localOpts.envDenyNames = envDeny.names;
+      if (envDeny.predicate !== undefined) localOpts.envDenyPredicate = envDeny.predicate;
       return new LocalEnvironment(localOpts);
     }
 
@@ -259,8 +294,8 @@ export class WorktreeProvisioner implements Provisioner {
     if (bootstrap !== undefined) opts.bootstrap = bootstrap;
     if (bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = bootstrapTimeoutMs;
     if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
-    if (this.envDenyNames !== undefined) opts.envDenyNames = this.envDenyNames;
-    if (this.envDenyPredicate !== undefined) opts.envDenyPredicate = this.envDenyPredicate;
+    if (envDeny.names !== undefined) opts.envDenyNames = envDeny.names;
+    if (envDeny.predicate !== undefined) opts.envDenyPredicate = envDeny.predicate;
     const env = new WorktreeEnvironment(opts);
     await env.init();
     return env;

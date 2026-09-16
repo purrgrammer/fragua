@@ -129,7 +129,14 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const allowEnv = new Set(opts.allowEnv ?? []);
   const unsafe = unsafeAllowEnvNames(allowEnv);
   if (unsafe.length > 0) {
-    console.error(chalk.red(`ci: --allow-env refuses provider credential(s): ${unsafe.join(", ")}`));
+    for (const name of unsafe) {
+      console.error(
+        chalk.red(
+          `ci: ${name} matches a provider-credential shape — configure the credential via ` +
+            `\`fragua providers add <provider>\` instead of --allow-env`,
+        ),
+      );
+    }
     console.error(chalk.dim("  provider keys are read directly by fragua and must never reach a tool subprocess."));
     return CLI_EXIT.usage;
   }

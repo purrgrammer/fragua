@@ -113,19 +113,25 @@ overrides the global one; it does not append). Provider credentials are never
 re-admitted even if named here — a provider credential listed under
 `bash.env-passthrough` is refused (logged once, pointing at `fragua providers`)
 and still stripped regardless (same rail as `fragua ci --allow-env`). A name is
-treated as a provider credential by the `*_API_KEY` shape, the pi-ai registry, or
-a provider-attributed prefix (`OPENAI_OAUTH_TOKEN` → `OPENAI_`), so non-`_API_KEY`
-credentials like OAuth tokens are caught too. `fragua ci` is unaffected by this
-key; it keeps its own `--allow-env` flag.
+treated as a provider credential by the `*_API_KEY` shape, the pi-ai registry, an
+`ANTHROPIC_OAUTH_TOKEN`-style always-refused name, or an **exact** provider
+prefix followed by a secret suffix (`OPENAI_SECRET` → `OPENAI`). The prefix match
+is exact: a name that merely *starts with* a provider prefix (`OPENAI_PROXY_AUTH`)
+is NOT a provider credential and stays re-admittable. A custom store-only
+provider's odd-shaped creds are caught separately — any secret-shaped env var
+carrying that provider's prefix is stripped whenever the provider is held in the
+store. `fragua ci` is unaffected by this key; it keeps its own `--allow-env`
+flag.
 
-Two daemon-scoping caveats. First, `bash.env-passthrough` is resolved **once**
-from the daemon-launch cwd's merged config at startup — unlike `bootstrap`, which
-is resolved per-run against each run's project root — so a multi-project daemon
-applies the launch project's passthrough to every run. Second, the store-provider
-env-var names added to the strip are a **startup snapshot** of the daemon's held
-credentials; the suffix/prefix predicate covers virtually every real provider
-regardless, but a provider whose credential is added after startup is only
-covered by the predicate, not the snapshot.
+Two daemon-scoping notes. First, `bash.env-passthrough` is resolved **per run**
+from the run's project config (`<run.cwd>/.fragua/config.yaml`) merged over the
+global `~/.fragua/config.yaml` — the same per-run seam `bootstrap` uses — so each
+project served by one daemon picks up its own passthrough regardless of the
+daemon's launch cwd. Second, the store-provider env-var names added to the strip
+are a **startup snapshot** of the daemon's held credentials; the suffix/prefix
+predicate covers virtually every real provider regardless, but a provider whose
+credential is added after startup is only covered by the predicate, not the
+snapshot.
 
 ---
 
