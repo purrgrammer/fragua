@@ -51,6 +51,13 @@ guarantee.
 
 ### Fixed
 
+- A budget raise + resume on a run paused for budget at a `parallel` step no
+  longer loops. The fan-out dispatch now lands the operator's cap raise in
+  routing and marks the resume intent applied on the same commit — even when the
+  budget check re-trips on the wake turn — so the wake-pending sweeper stops
+  re-waking the run, and a sufficient raise lets the fan-out proceed. A resume
+  also no longer re-emits `daemon.worktree_provisioned` when the run's worktree
+  already exists.
 - Operator intents sent while a run is still `queued` (before the executor
   claims it) are no longer silently discarded on the run-start turn. A pre-claim
   budget/priority/retry-cap raise now lands in the run's routing before the

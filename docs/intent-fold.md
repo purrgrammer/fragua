@@ -19,6 +19,16 @@ The first turn of a freshly-claimed run emits `fact.run_started` before any hand
 
 Mid-flight steers (issued while a handler is running) ride pi-agent-core's steering queue via the supervisor's `onSteer` instead; the `ctx.steering` path is the pre-dispatch delivery mechanism.
 
+### The wake-consumption invariant
+
+`wakePending` emits `fact.run_resumed` for a resume/human wake but leaves the wake intent **unapplied** — `last_applied_seq` stays put so the next dispatch's fold can process it (and any earlier unapplied intent queued before it, e.g. a `budget_adjusted` that must land in `routing.budget_override.*`). This delegates a durable obligation to the woken turn:
+
+> **A wake intent is consumed by the turn it wakes, whatever that turn decides.**
+
+The dispatch that runs after a wake MUST advance `last_applied_seq` past the wake intent's seq on its commit — whether it proceeds, pauses again, or re-pauses on the *same* reason with no node progress. If it does not, `wakePending` sees the still-unapplied resume on the next tick and re-wakes the run, producing a hot loop that never makes progress (the paused → resumed → paused cycle). The fold's `appliedSeqs` (including the resume seq) therefore ride every terminal/pause commit via `advanceAppliedTo`, and the fold's `routingDelta` (the cap raise) rides the same commit via the routing patch — so a re-pause still lands the override and still consumes the intent.
+
+This holds on both dispatch paths. The linear path applies the fold on its post-handler commit (and on the pause / abort commits). The `parallel` fan-out path (`runFanout`) applies it on the **first** commit of the turn, including the park/terminal disposition commit (`commitParkOrTerminal`) that lands a re-pause — so a budget raise + resume on a run paused at a parallel step advances the watermark and lands `budget_override` even when the barrier budget check immediately re-trips. The barrier budget check also reads its overrides from the fold-applied routing view (durable routing ⊕ this turn's uncommitted `routingDelta`), so a *sufficient* raise lets the join proceed instead of re-pausing on the pre-fold cap.
+
 ---
 
 ## Per-intent table

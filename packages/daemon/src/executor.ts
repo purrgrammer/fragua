@@ -664,8 +664,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       try {
         const provisionOpts: { cwd?: string } = {};
         if (state.cwd != null) provisionOpts.cwd = state.cwd;
+        // `runEnv` is a per-runOne-pass local, so every resume re-enters with it
+        // undefined and calls `ensure` again — idempotent on the provisioner, but
+        // the daemon event must NOT re-fire on a cache hit or a paused→resumed
+        // loop floods `daemon_events` with `daemon.worktree_provisioned` (the
+        // production symptom). Only emit when this is a genuine first provision
+        // (the provisioner has no cached env for the run yet).
+        const alreadyProvisioned = opts.provisioner.envFor(runId) !== undefined;
         runEnv = await opts.provisioner.ensure(runId, provisionOpts);
-        opts.store.appendDaemonEvent({ type: "daemon.worktree_provisioned", payload: { runId, ok: true } }, { runId });
+        if (!alreadyProvisioned) {
+          opts.store.appendDaemonEvent(
+            { type: "daemon.worktree_provisioned", payload: { runId, ok: true } },
+            { runId },
+          );
+        }
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         opts.store.appendDaemonEvent(
@@ -1484,15 +1496,32 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
+    // This turn's operator fold (budget raise / resume) — applied on the FIRST
+    // commit so the override lands AND `last_applied_seq` advances past the
+    // queued intents (else wake-pending re-resumes forever).
+    const foldOpts: FanoutAppendOpts = {};
+    if (Object.keys(decision.routingDelta).length > 0) foldOpts.routingPatch = decision.routingDelta;
+    if (decision.appliedSeqs.length > 0) foldOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
+    let foldPending = foldOpts.routingPatch !== undefined || foldOpts.advanceAppliedTo !== undefined;
+    const takeFold = (): FanoutAppendOpts => {
+      if (!foldPending) return {};
+      foldPending = false;
+      return foldOpts;
+    };
+
     // A park/terminal fact must actually LAND before the turn reports
     // terminal — a silently failed commit would strand the run `running`
     // with no executor (a zombie until daemon restart). status-stop ⇒ the
     // run is already parked, terminal is correct; OCC exhaustion ⇒ park the
     // facts in `pendingFanoutDisposition` and retry at the next turn's entry
     // (they are NOT re-derivable from durable state once the branch outcomes
-    // that produced them are gone).
+    // that produced them are gone). The disposition commit RIDES `takeFold()`
+    // so a resume that immediately re-pauses (the budget check re-tripping in
+    // the same turn) still advances `last_applied_seq` past the resume intent
+    // and lands the budget override — else the intents stay unapplied and
+    // wake-pending re-wakes the run forever (the parallel-node budget loop).
     const commitParkOrTerminal = async (facts: FactEvent[]): Promise<DispatchOutcome> => {
-      const res = await commitFanoutFact(facts, {});
+      const res = await commitFanoutFact(facts, takeFold());
       if (!res.ok && res.reason === "occ") {
         const { halted } = await onOccConflict(
           facts[0]?.type ?? "fact.unknown",
@@ -1514,19 +1543,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Land last turn's lost disposition before seeding/dispatching anything.
     if (pendingFanoutDisposition !== undefined) return commitParkOrTerminal(pendingFanoutDisposition);
 
-    // This turn's operator fold (budget raise / resume) — applied on the FIRST
-    // commit so the override lands AND `last_applied_seq` advances past the
-    // queued intents (else wake-pending re-resumes forever).
-    const foldOpts: FanoutAppendOpts = {};
-    if (Object.keys(decision.routingDelta).length > 0) foldOpts.routingPatch = decision.routingDelta;
-    if (decision.appliedSeqs.length > 0) foldOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
-    let foldPending = foldOpts.routingPatch !== undefined || foldOpts.advanceAppliedTo !== undefined;
-    const takeFold = (): FanoutAppendOpts => {
-      if (!foldPending) return {};
-      foldPending = false;
-      return foldOpts;
-    };
-
     // The parallel node's per-node cost/token cap sums over its fan-out closure
     // (branches + their non-fanout descendants up to the join — the shared
     // `fanoutClosureUnion` walk, so the cap scope can't drift from the set the
@@ -1546,7 +1562,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Hot per-commit gate reuses the just-committed projection; the cold once-per-fan-out
       // barrier forces a fresh read so its budget check never trusts a possibly-stale snapshot.
       const folded = (gate.fresh ? opts.store.getState(runId) : lastFanoutState) ?? opts.store.getState(runId) ?? state;
-      const overrides = readBudgetOverrides(folded.routing);
+      // Read overrides from the fold-applied view (durable routing ⊕ this turn's
+      // uncommitted routingDelta) exactly as the linear path reads them off
+      // effectiveRouting. Without the delta merge a resume that raised the cap
+      // re-trips this gate against the PRE-fold routing on its own wake turn and
+      // re-pauses forever — the operator's raise never taking effect because the
+      // fold hasn't committed yet when the barrier check runs.
+      const overrideRouting = foldPending ? { ...folded.routing, ...decision.routingDelta } : folded.routing;
+      const overrides = readBudgetOverrides(overrideRouting);
       let nodeCumulativeCostUsd = 0;
       let nodeCumulativeTokens = 0;
       for (const id of closureNodes) {

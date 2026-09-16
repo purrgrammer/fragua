@@ -781,6 +781,130 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     r.store.close();
   });
 
+  test("a run-level budget raise + resume at a parallel node's join barrier applies the fold and does not loop", async () => {
+    // Repro of the production hot-loop: a run paused for run-level budget at a
+    // parallel node whose branches have all COMPLETED (the drain-barrier shape).
+    // On resume the join-barrier budget re-check reads fresh routing (pre-fold),
+    // re-trips, and parks WITHOUT committing the operator fold — so the budget
+    // raise never reaches routing and the resume intent stays unapplied, so
+    // wake-pending re-wakes it forever.
+    const r = rig({
+      yaml: `name: loopbfo
+budget: 0.015
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a_scan, b_scan], next: synth }
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const spend = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 }),
+      });
+    spend("a_scan");
+    spend("b_scan");
+    spend("synth");
+    enqueue(r, "loop1", "begin");
+
+    await drive(r, "loop1");
+    expect(r.store.getState("loop1")!.status).toBe("paused");
+
+    // Raise & Resume: the run-level cap adjustment folds into the NEXT turn's
+    // decision. After one turn it must land in routing and its seqs must be
+    // marked applied so wake-pending stops re-waking the run.
+    const { seq: adjSeq } = r.store.appendIntent("loop1", {
+      type: "intent.budget_adjusted",
+      payload: { scope: "run", metric: "cost", newLimit: 0.5 },
+    });
+    const { seq: resumeSeq } = r.store.appendIntent("loop1", { type: "intent.resume", payload: {} });
+    wakePending(r.store);
+    expect(r.store.getState("loop1")!.status).toBe("queued");
+
+    await drive(r, "loop1", { maxTurns: 1 });
+    const final = r.store.getState("loop1")!;
+    expect(final.routing["budget_override.run.cost"]).toBe(0.5);
+    expect(final.lastAppliedSeq).toBeGreaterThanOrEqual(Math.max(adjSeq, resumeSeq));
+    r.store.close();
+  });
+
+  test("a resume at a parallel node that immediately re-pauses (insufficient raise) consumes its intent — no wake loop", async () => {
+    // Liveness invariant (docs/intent-fold.md): a wake intent is consumed by the
+    // turn it wakes, WHATEVER that turn decides. Here the operator's raise is
+    // still below the actual spend, so the join-barrier budget check re-trips —
+    // but the resume intent must STILL be marked applied so wake-pending does
+    // not re-wake the run every tick (the 1,799-cycle production hot loop).
+    const r = rig({
+      yaml: `name: loopbfo2
+budget: 0.015
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a_scan, b_scan], next: synth }
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const spend = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 }),
+      });
+    spend("a_scan");
+    spend("b_scan");
+    spend("synth");
+    enqueue(r, "loop2", "begin");
+
+    await drive(r, "loop2");
+    expect(r.store.getState("loop2")!.status).toBe("paused");
+
+    // Raise to 0.018 — STILL below the ~0.02 already spent, so the run must
+    // re-pause on resume rather than proceed.
+    r.store.appendIntent("loop2", {
+      type: "intent.budget_adjusted",
+      payload: { scope: "run", metric: "cost", newLimit: 0.018 },
+    });
+    const { seq: resumeSeq } = r.store.appendIntent("loop2", { type: "intent.resume", payload: {} });
+
+    // Simulate the daemon loop: sweep + dispatch repeatedly. Pre-fix this
+    // re-woke the run every iteration (a new fact.run_resumed each time).
+    for (let i = 0; i < 5; i++) {
+      wakePending(r.store);
+      await drive(r, "loop2", { maxTurns: 1 });
+    }
+
+    const final = r.store.getState("loop2")!;
+    expect(final.status).toBe("paused");
+    // The override landed AND the resume intent is applied — so wake-pending
+    // stops re-waking it.
+    expect(final.routing["budget_override.run.cost"]).toBe(0.018);
+    expect(final.lastAppliedSeq).toBeGreaterThanOrEqual(resumeSeq);
+    // Exactly ONE resume happened — no hot loop.
+    const resumes = r.store.getEvents("loop2").filter((e) => e.type === "fact.run_resumed");
+    expect(resumes.length).toBe(1);
+    r.store.close();
+  });
+
   test("a parallel node crossing 80% of its max-cost emits budget.warn ONCE (not silent, not repeated)", async () => {
     const r = rig({
       yaml: `name: wfo
