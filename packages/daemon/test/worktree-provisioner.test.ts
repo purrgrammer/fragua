@@ -211,6 +211,30 @@ describe("WorktreeProvisioner — per-run env-strip resolution", () => {
     expect((await p.resolveEnvDenyFor("/project/b")).names).toBe(namesB);
     expect(seen).toEqual(["/project/a", "/project/b"]);
   });
+
+  // Regression guard: `create()` must forward the resolver's env-strip into the
+  // provisioned environment, not the constructor fallback. A LocalEnvironment
+  // that stripped `SHOULD_NOT_LEAK` (the constructor value) instead of
+  // `RUN_TOKEN` (the resolver value) would leave the direct-resolver tests green.
+  test("create() applies resolveRunEnvDeny to the provisioned environment (not the fallback)", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-envdeny-"));
+    try {
+      const p = new WorktreeProvisioner({
+        envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
+        resolveRunEnvDeny: async () => ({ names: new Set(["RUN_TOKEN"]) }),
+      });
+      const env = await p.ensure("r-envdeny", { cwd: nonGit });
+      expect(env).toBeInstanceOf(LocalEnvironment);
+      const res = await env.exec('echo "[$RUN_TOKEN][$SHOULD_NOT_LEAK]"', {
+        env: { RUN_TOKEN: "from-resolver", SHOULD_NOT_LEAK: "from-constructor" },
+      });
+      // Resolver's name is stripped; the constructor fallback name survives.
+      expect(res.stdout).not.toContain("from-resolver");
+      expect(res.stdout).toContain("from-constructor");
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {

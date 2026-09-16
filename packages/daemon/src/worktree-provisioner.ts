@@ -106,6 +106,11 @@ export interface WorktreeProvisionerOptions {
    * (`<run.cwd>/.fragua/config.yaml` merged over global) for runs from many
    * projects, exactly as `resolveRunBootstrap` does for `bootstrap`. */
   resolveRunEnvDeny?: (cwd: string) => Promise<ResolvedRunEnvDeny>;
+  /** Forwarded into each fresh `WorktreeEnvironment` as its bootstrap-failure
+   * escape-hatch label. The daemon passes `bash.env-passthrough in
+   * .fragua/config.yaml`; `fragua ci` passes `--allow-env`. Lets the workspace
+   * layer name the right re-admit surface without knowing CLI config keys. */
+  envPassthroughHint?: string;
 }
 
 export interface ProvisionOpts {
@@ -149,6 +154,7 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly envDenyNames: ReadonlySet<string> | undefined;
   private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
   private readonly resolveRunEnvDeny: ((cwd: string) => Promise<ResolvedRunEnvDeny>) | undefined;
+  private readonly envPassthroughHint: string | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
   /** Lineage cursor per run: the last recorded snapshot's commit + tree shas.
@@ -168,6 +174,7 @@ export class WorktreeProvisioner implements Provisioner {
     if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
     if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
     if (opts.resolveRunEnvDeny !== undefined) this.resolveRunEnvDeny = opts.resolveRunEnvDeny;
+    if (opts.envPassthroughHint !== undefined) this.envPassthroughHint = opts.envPassthroughHint;
   }
 
   /** Resolve the env-strip pair for a fresh environment at `cwd`. When
@@ -296,6 +303,7 @@ export class WorktreeProvisioner implements Provisioner {
     if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
     if (envDeny.names !== undefined) opts.envDenyNames = envDeny.names;
     if (envDeny.predicate !== undefined) opts.envDenyPredicate = envDeny.predicate;
+    if (this.envPassthroughHint !== undefined) opts.envPassthroughHint = this.envPassthroughHint;
     const env = new WorktreeEnvironment(opts);
     await env.init();
     return env;

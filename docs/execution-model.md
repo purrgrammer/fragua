@@ -111,9 +111,13 @@ bash:
 The list merges global ⊕ project as a **whole-array replace** (a project list
 overrides the global one; it does not append). Provider credentials are never
 re-admitted even if named here — a provider credential listed under
-`bash.env-passthrough` is refused (surfaced once in the daemon's startup log,
-pointing at `fragua providers`) and still stripped regardless (same rail as
-`fragua ci --allow-env`). A name is
+`bash.env-passthrough` is refused (surfaced in the daemon log, pointing at
+`fragua providers`) and still stripped regardless (same rail as
+`fragua ci --allow-env`). Refusals from the daemon's own launch-cwd config are
+surfaced once at startup; refusals discovered per-run from **another project's**
+config are warned once per unique name on first sight (deduped for the daemon's
+lifetime), so a project silently losing a provider credential still appears in
+the log without repeating on every provision. A name is
 treated as a provider credential by the `*_API_KEY` shape, the pi-ai registry, an
 `ANTHROPIC_OAUTH_TOKEN`-style always-refused name, or an **exact** provider
 prefix followed by a secret suffix (`OPENAI_SECRET` → `OPENAI`). The prefix match

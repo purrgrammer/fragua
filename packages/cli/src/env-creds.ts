@@ -24,6 +24,7 @@ import { resolve } from "node:path";
 import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai";
 import { AuthStorage, getFraguaHome } from "@fragua/agent";
 import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
+import chalk from "chalk";
 
 // pi-ai's github-copilot env fallback includes the generic GH_TOKEN /
 // GITHUB_TOKEN, which are set in virtually every GitHub Actions job for the
@@ -84,7 +85,7 @@ export function buildProviderCredentialContext(): ProviderCredentialContext {
   const varNames = new Set<string>();
   const prefixes = new Set<string>();
   for (const provider of getProviders()) {
-    prefixes.add(provider.toUpperCase().replace(/[^A-Z0-9]/g, "_"));
+    prefixes.add(providerEnvPrefix(provider));
     for (const name of findEnvKeys(provider) ?? []) {
       // Same COPILOT_AMBIENT_ENV denial as seedCredsFromEnv so GH_TOKEN /
       // GITHUB_TOKEN aren't admitted as needles when COPILOT_GITHUB_TOKEN is unset.
@@ -143,12 +144,40 @@ function matchesStoreProviderPrefix(
   storeProviderPrefixes: ReadonlySet<string>,
   ctx: ProviderCredentialContext,
 ): boolean {
+  // Same COPILOT_AMBIENT_ENV short-circuit as `isProviderCredential` — without
+  // it, a `github`-prefixed store provider would reclassify the ambient CI
+  // tokens (GH_TOKEN / GITHUB_TOKEN) as provider credentials and silently strip
+  // them, even though the first refusal branch spares them.
+  if (COPILOT_AMBIENT_ENV.has(name)) return false;
   if (storeProviderPrefixes.size === 0) return false;
   const upper = name.toUpperCase();
   for (const prefix of storeProviderPrefixes) {
     if (upper.startsWith(`${prefix}_`) && isSecretEnvName(name, ctx)) return true;
   }
   return false;
+}
+
+/** Build the set of per-provider env-var prefixes for the held-provider prefix
+ * scan (`custom-ai` → `CUSTOM_AI`). Shared by both the CI `--allow-env` rail
+ * and the daemon deny rail so the two can't disagree on the prefix set. */
+export function buildStoreProviderPrefixes(providers: Iterable<string>): Set<string> {
+  const prefixes = new Set<string>();
+  for (const provider of providers) prefixes.add(providerEnvPrefix(provider));
+  return prefixes;
+}
+
+/** The ONE classification gate both provider-credential rails call: true when a
+ * name is refused from bash env-passthrough / `--allow-env` because fragua reads
+ * it directly as a provider credential. Collapses the two-branch compound
+ * predicate (`isProviderCredential` OR the held-provider prefix scan) so a new
+ * gate added here can't miss one rail — CI and daemon must never disagree at
+ * this security boundary. */
+export function isDeniedEnvName(
+  name: string,
+  ctx: ProviderCredentialContext,
+  storeProviderPrefixes: ReadonlySet<string>,
+): boolean {
+  return isProviderCredential(name, ctx) || matchesStoreProviderPrefix(name, storeProviderPrefixes, ctx);
 }
 
 /** Returns true when an env var NAME indicates it is secret, regardless
@@ -287,8 +316,8 @@ export function daemonEnvDeny(
   const env = opts.env ?? process.env;
   const requested = opts.passthrough ?? NO_ALLOW;
   const ctx = opts.ctx ?? buildProviderCredentialContext();
-  const storeProviderPrefixes = new Set<string>();
-  for (const provider of opts.storeProviders ?? []) storeProviderPrefixes.add(providerEnvPrefix(provider));
+  const providers = [...(opts.storeProviders ?? [])];
+  const storeProviderPrefixes = buildStoreProviderPrefixes(providers);
   // Refuse provider credentials in the passthrough — same rail as ci's
   // `--allow-env` (`unsafeAllowEnvNames`). A workflow may re-admit generic
   // secrets (GH_TOKEN, …) but never an LLM-provider key fragua reads directly.
@@ -297,11 +326,7 @@ export function daemonEnvDeny(
   // gate 4 cannot classify) is refused up front, so it never lingers in the
   // effective passthrough — the one place `names` and `predicate` could
   // otherwise disagree on the same input.
-  const refused = new Set(
-    [...requested].filter(
-      (n) => isProviderCredential(n, ctx) || matchesStoreProviderPrefix(n, storeProviderPrefixes, ctx),
-    ),
-  );
+  const refused = new Set([...requested].filter((n) => isDeniedEnvName(n, ctx, storeProviderPrefixes)));
   const passthrough: ReadonlySet<string> =
     refused.size === 0 ? requested : new Set([...requested].filter((n) => !refused.has(n)));
   if (refused.size > 0 && (opts.warn ?? true)) {
@@ -312,7 +337,7 @@ export function daemonEnvDeny(
   }
   const names = ciEnvDenyNames(env, passthrough, ctx);
   const envNames = Object.keys(env);
-  for (const provider of opts.storeProviders ?? []) {
+  for (const provider of providers) {
     // A held provider's credential is stripped regardless of passthrough — same
     // rail as the refusal filter above. `storeProviders` holds provider NAMES
     // (from `authStorage.list()`), including custom store-only providers pi-ai's
@@ -360,15 +385,13 @@ export function daemonEnvDeny(
  */
 export function unsafeAllowEnvNames(allow: Iterable<string>, storeProviders: Iterable<string> = []): string[] {
   const ctx = buildProviderCredentialContext();
-  const storeProviderPrefixes = new Set<string>();
-  for (const provider of storeProviders) storeProviderPrefixes.add(providerEnvPrefix(provider));
+  const storeProviderPrefixes = buildStoreProviderPrefixes(storeProviders);
   const bad: string[] = [];
   for (const name of allow) {
-    // Shared with `daemonEnvDeny`'s refusal filter. The legitimate allow case
-    // is CI platform tokens (GH_TOKEN, …) which attribute to no provider.
-    if (isProviderCredential(name, ctx) || matchesStoreProviderPrefix(name, storeProviderPrefixes, ctx)) {
-      bad.push(name);
-    }
+    // Shared with `daemonEnvDeny`'s refusal filter via `isDeniedEnvName`. The
+    // legitimate allow case is CI platform tokens (GH_TOKEN, …) which attribute
+    // to no provider.
+    if (isDeniedEnvName(name, ctx, storeProviderPrefixes)) bad.push(name);
   }
   return bad;
 }
@@ -382,11 +405,19 @@ export function unsafeAllowEnvNames(allow: Iterable<string>, storeProviders: Ite
  */
 export function listGlobalStoreProviders(globalPath: string = resolve(getFraguaHome(), "fragua.db")): string[] {
   if (!existsSync(globalPath)) return [];
-  const store = new SqliteStore({ path: globalPath, migrate: false });
+  let store: SqliteStore | undefined;
   try {
+    store = new SqliteStore({ path: globalPath, migrate: false });
     return AuthStorage.fromStore(store).list();
+  } catch (err) {
+    // A schema/binary mismatch or an open failure on the global store must not
+    // take out `fragua ci` before the workflow is read — the rail already treats
+    // "no global store" as `[]`, and a version-mismatch store is safely
+    // equivalent (the custom-provider prefix extension just goes unused).
+    console.warn(chalk.yellow(`fragua: ignoring unreadable global store at ${globalPath}: ${(err as Error).message}`));
+    return [];
   } finally {
-    store.close();
+    store?.close();
   }
 }
 

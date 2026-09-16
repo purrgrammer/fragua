@@ -45,6 +45,11 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
   bootstrap?: BootstrapSpec;
   /** Timeout for the bootstrap command. Default 10 minutes. */
   bootstrapTimeoutMs?: number;
+  /** Escape-hatch label for the bootstrap-failure diagnostic note, naming the
+   * CLI-layer surface that re-admits a stripped var. The daemon passes
+   * `bash.env-passthrough in .fragua/config.yaml`; `fragua ci` passes
+   * `--allow-env`. Keeps this layer ignorant of CLI-layer config keys. */
+  envPassthroughHint?: string;
 }
 
 export class WorktreeEnvironment implements ExecutionEnvironment {
@@ -67,6 +72,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   private readonly keepAfterDispose: boolean;
   private readonly bootstrap: BootstrapSpec | undefined;
   private readonly bootstrapTimeoutMs: number;
+  private readonly envPassthroughHint: string | undefined;
   private readonly local: LocalEnvironment;
   private readonly envDenyNames: ReadonlySet<string> | undefined;
   private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
@@ -83,6 +89,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
     this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs ?? 10 * 60 * 1000;
     if (typeof opts.bootstrap === "string") this.bootstrapCommand = opts.bootstrap;
+    if (opts.envPassthroughHint !== undefined) this.envPassthroughHint = opts.envPassthroughHint;
     if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
     if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
     this.local = new LocalEnvironment({
@@ -147,20 +154,27 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
         const cmd = this.bootstrap;
         const result = await this.local.exec(cmd, { timeoutMs: this.bootstrapTimeoutMs });
         if (result.exitCode !== 0) {
-          // The bootstrap ran under the bash env-strip. If the command references
-          // a stripped var (or the strip is active at all), tell the operator so
-          // they don't chase a missing NPM_TOKEN / GITHUB_TOKEN as a mystery.
+          // The bootstrap ran under the bash env-strip. Only surface the strip as
+          // a suspect when the failure plausibly involves it — a stripped var
+          // named in the command, or a `command not found` (exit 127, the shape
+          // a stripped PATH-adjacent credential helper produces). An unrelated
+          // failure (network timeout, wrong cwd) must NOT get the note, since the
+          // daemon always populates envDenyNames with provider names.
           const denied = this.envDenyNames ? [...this.envDenyNames] : [];
           const referenced = denied.filter((n) => cmd.includes(n));
+          const hint = this.envPassthroughHint;
           let note = "";
           if (referenced.length > 0) {
             note =
-              `\n(note: bootstrap references env var(s) removed by the bash env-strip: ${referenced.join(", ")} — ` +
-              `re-admit a non-credential var via bash.env-passthrough in .fragua/config.yaml)`;
-          } else if (denied.length > 0) {
+              `\n(note: bootstrap references env var(s) removed by the bash env-strip: ${referenced.join(", ")}` +
+              (hint ? ` — re-admit a non-credential var via ${hint}` : "") +
+              `)`;
+          } else if (result.exitCode === 127 && denied.length > 0) {
             note =
-              `\n(note: the bash env-strip removed provider-credential-shaped vars from the bootstrap env; ` +
-              `re-admit a non-credential var via bash.env-passthrough in .fragua/config.yaml)`;
+              `\n(note: exit 127 (command not found) with the bash env-strip active — it removed ` +
+              `provider-credential-shaped vars from the bootstrap env` +
+              (hint ? `; re-admit a non-credential var via ${hint}` : "") +
+              `)`;
           }
           throw new Error(`bootstrap command failed (exit ${result.exitCode}): ${cmd}\n${result.stderr.trim()}${note}`);
         }

@@ -5,16 +5,20 @@
 // GH_TOKEN doesn't masquerade as a Copilot credential.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthStorage } from "@fragua/agent";
 import { SqliteStore } from "@fragua/store";
 import {
+  buildProviderCredentialContext,
+  buildStoreProviderPrefixes,
   captureCiEnvSecrets,
   ciEnvDenyNames,
   ciEnvDenyPredicate,
   daemonEnvDeny,
+  isDeniedEnvName,
+  listGlobalStoreProviders,
   seedCredsFromEnv,
   seedCredsFromGlobalStore,
   unsafeAllowEnvNames,
@@ -695,5 +699,88 @@ describe("(review-5/finding-5) captureCiEnvSecrets — skip warning must not rev
     const combined = errors.join(" ");
     // A count ("2") must appear somewhere in the warning.
     expect(combined).toMatch(/\d+/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isDeniedEnvName + buildStoreProviderPrefixes — the single classification gate
+// both rails share, including the COPILOT_AMBIENT_ENV guard inside the
+// held-provider prefix scan.
+// ---------------------------------------------------------------------------
+
+describe("isDeniedEnvName (shared refusal gate)", () => {
+  test("provider credentials are denied", () => {
+    const ctx = buildProviderCredentialContext();
+    expect(isDeniedEnvName("ANTHROPIC_API_KEY", ctx, new Set())).toBe(true);
+  });
+
+  test("generic CI tokens are NOT denied", () => {
+    const ctx = buildProviderCredentialContext();
+    expect(isDeniedEnvName("GH_TOKEN", ctx, new Set())).toBe(false);
+    expect(isDeniedEnvName("GITHUB_TOKEN", ctx, new Set())).toBe(false);
+  });
+
+  test("a held-provider-prefixed secret is denied via the prefix scan", () => {
+    const ctx = buildProviderCredentialContext();
+    const prefixes = buildStoreProviderPrefixes(["customai"]);
+    expect(isDeniedEnvName("CUSTOMAI_OAUTH_TOKEN", ctx, prefixes)).toBe(true);
+  });
+
+  test("COPILOT_AMBIENT_ENV names survive even a github-prefixed store provider", () => {
+    // A `github`-prefixed store provider would otherwise reclassify GH_TOKEN /
+    // GITHUB_TOKEN (which carry the GITHUB_ prefix + a secret suffix) as
+    // provider credentials. The guard inside matchesStoreProviderPrefix spares them.
+    const ctx = buildProviderCredentialContext();
+    const prefixes = buildStoreProviderPrefixes(["github"]);
+    expect(isDeniedEnvName("GH_TOKEN", ctx, prefixes)).toBe(false);
+    expect(isDeniedEnvName("GITHUB_TOKEN", ctx, prefixes)).toBe(false);
+  });
+});
+
+describe("daemonEnvDeny — COPILOT_AMBIENT_ENV survives a github store provider", () => {
+  test("GH_TOKEN / GITHUB_TOKEN stay re-admittable when a github provider is held", () => {
+    const env: NodeJS.ProcessEnv = {
+      GH_TOKEN: "ghs_token_value_12345678",
+      GITHUB_TOKEN: "ghs_github_value_12345678",
+    };
+    const { passthrough } = daemonEnvDeny({
+      env,
+      storeProviders: ["github"],
+      passthrough: new Set(["GH_TOKEN", "GITHUB_TOKEN"]),
+    });
+    expect(passthrough.has("GH_TOKEN")).toBe(true);
+    expect(passthrough.has("GITHUB_TOKEN")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listGlobalStoreProviders — never throws out of `fragua ci`.
+// ---------------------------------------------------------------------------
+
+describe("listGlobalStoreProviders (fault tolerance)", () => {
+  test("returns [] for a missing global store", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-nostore-"));
+    try {
+      expect(listGlobalStoreProviders(join(dir, "does-not-exist.db"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns [] and warns (does not throw) on an unreadable / schema-mismatch store", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-badstore-"));
+    const badPath = join(dir, "fragua.db");
+    // A non-SQLite file: opening it or reading auth rows must fail cleanly.
+    writeFileSync(badPath, "not a sqlite database at all");
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+    try {
+      expect(listGlobalStoreProviders(badPath)).toEqual([]);
+    } finally {
+      console.warn = origWarn;
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(warnings.join(" ")).toContain(badPath);
   });
 });

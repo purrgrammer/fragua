@@ -176,6 +176,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const provisioner = new WorktreeProvisioner({
     envDenyNames: ciEnvDenyNames(process.env, allowEnv, credCtx),
     envDenyPredicate: ciEnvDenyPredicate(allowEnv, credCtx),
+    envPassthroughHint: "--allow-env",
   });
   let runId: string | undefined;
   // Captured at seed time so mid-run rotation can't desync the registry.

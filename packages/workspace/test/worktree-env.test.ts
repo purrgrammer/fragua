@@ -168,12 +168,13 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
-  test("bootstrap failure names the stripped var and bash.env-passthrough when the env-strip is active", async () => {
+  test("bootstrap failure names the stripped var and the envPassthroughHint when the env-strip is active", async () => {
     const env = new WorktreeEnvironment({
       repoRoot: repo,
       runId: "boot-fail-strip",
       bootstrap: "echo $NPM_TOKEN; exit 3",
       envDenyNames: new Set(["NPM_TOKEN"]),
+      envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
     });
     let error: Error | undefined;
     try {
@@ -185,6 +186,66 @@ describe("WorktreeEnvironment", () => {
     expect(error?.message).toContain("bootstrap command failed");
     // The note names the referenced stripped var and points at the escape hatch.
     expect(error?.message).toContain("NPM_TOKEN");
+    expect(error?.message).toContain("bash.env-passthrough");
+    await env.dispose();
+  });
+
+  test("ci-mode hint (--allow-env) is used instead of the daemon config key", async () => {
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "boot-fail-ci-hint",
+      bootstrap: "echo $NPM_TOKEN; exit 3",
+      envDenyNames: new Set(["NPM_TOKEN"]),
+      envPassthroughHint: "--allow-env",
+    });
+    let error: Error | undefined;
+    try {
+      await env.init();
+    } catch (err) {
+      error = err as Error;
+    }
+    expect(error?.message).toContain("--allow-env");
+    expect(error?.message).not.toContain("bash.env-passthrough");
+    await env.dispose();
+  });
+
+  test("unrelated bootstrap failure (exit != 127, no referenced var) gets NO env-strip note", async () => {
+    // The daemon always populates envDenyNames with provider names, so an
+    // unrelated failure must not be blamed on the env-strip.
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "boot-fail-unrelated",
+      bootstrap: "exit 3",
+      envDenyNames: new Set(["ANTHROPIC_API_KEY"]),
+      envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
+    });
+    let error: Error | undefined;
+    try {
+      await env.init();
+    } catch (err) {
+      error = err as Error;
+    }
+    expect(error?.message).toContain("bootstrap command failed");
+    expect(error?.message).not.toContain("note:");
+    await env.dispose();
+  });
+
+  test("exit 127 with the env-strip active gets the command-not-found note", async () => {
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "boot-fail-127",
+      bootstrap: "this-binary-does-not-exist-xyz",
+      envDenyNames: new Set(["ANTHROPIC_API_KEY"]),
+      envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
+    });
+    let error: Error | undefined;
+    try {
+      await env.init();
+    } catch (err) {
+      error = err as Error;
+    }
+    expect(error?.message).toContain("127");
+    expect(error?.message).toContain("note:");
     expect(error?.message).toContain("bash.env-passthrough");
     await env.dispose();
   });

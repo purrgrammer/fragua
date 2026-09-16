@@ -203,26 +203,46 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // instead of a warning that repeats on every provision. The per-run
     // `daemonEnvDeny` below no longer warns (a module-level dedup would still
     // interleave with run output).
+    const startupPassthrough = resolveEnvPassthrough(config);
     const startupDeny = daemonEnvDeny({
       storeProviders,
-      passthrough: resolveEnvPassthrough(config),
+      passthrough: startupPassthrough,
       ctx: credCtx,
       warn: false,
     });
-    const startupRefused = [...resolveEnvPassthrough(config)].filter((n) => !startupDeny.passthrough.has(n));
+    const startupRefused = [...startupPassthrough].filter((n) => !startupDeny.passthrough.has(n));
+    // Per-run refusals from a NON-launch-cwd project's `bash.env-passthrough`
+    // aren't visible in the startup dry-run above, which only inspects the
+    // daemon's own cwd. Dedupe by name across the daemon's lifetime and warn
+    // once per unique refused name so a project silently losing a provider cred
+    // still surfaces in the daemon log — without repeating on every provision.
+    const refusedSeen = new Set<string>(startupRefused);
     const resolveRunEnvDeny = async (runCwd: string): Promise<ResolvedRunEnvDeny> => {
       const runConfig = await loadConfig(runCwd);
-      const { names, predicate } = daemonEnvDeny({
+      const requested = resolveEnvPassthrough(runConfig);
+      const { names, predicate, passthrough } = daemonEnvDeny({
         storeProviders,
-        passthrough: resolveEnvPassthrough(runConfig),
+        passthrough: requested,
         ctx: credCtx,
         warn: false,
       });
+      for (const n of requested) {
+        if (!passthrough.has(n) && !refusedSeen.has(n)) {
+          refusedSeen.add(n);
+          console.warn(
+            chalk.yellow(
+              `daemon: refusing provider credential "${n}" from bash.env-passthrough in ${runCwd} — ` +
+                `hold it with \`fragua providers\`, not env-passthrough`,
+            ),
+          );
+        }
+      }
       return { names, predicate };
     };
     const provisioner: Provisioner = new WorktreeProvisioner({
       resolveRunBootstrap: resolveProjectBootstrap,
       resolveRunEnvDeny,
+      envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
       ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
     });
     const provisionerLabel =
