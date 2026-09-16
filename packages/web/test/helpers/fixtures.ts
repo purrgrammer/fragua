@@ -19,6 +19,12 @@ export const STATUS_TO_RUN_STATUS: Record<RunSummary["status"], RunSummary["runS
   // No status collapses to `running` from the server; `unknown` has no
   // faithful inverse, so callers depending on it should pass runStatus
   // explicitly rather than trust this arbitrary default.
+  //
+  // `fail` and `paused` are likewise ambiguous: the coarse `fail` collapses
+  // both `halted` and `quarantined` (defaulted to `halted` here), and
+  // `paused` collapses `paused` / `paused_human` / `paused_auto` (defaulted
+  // to `paused`). A test exercising quarantined or a pause sub-state must
+  // pass `runStatus` explicitly rather than trust these defaults.
   unknown: "running",
 };
 
@@ -51,6 +57,22 @@ export function summaryRow(overrides: Partial<RunSummary> = {}): RunSummary {
     ...rest,
   };
 }
+
+/** "Needs attention" row — an operator-paused run for Inbox / sidebar tests. */
+export const blockedRun = (id: string): RunSummary => summaryRow({ runId: id, status: "paused", eventCount: 2 });
+
+/** "Ready to land" row — a terminal worktree run awaiting an operator primitive. */
+export const pendingRun = (id: string): RunSummary =>
+  summaryRow({
+    runId: id,
+    status: "success",
+    eventCount: 1,
+    inboxStatus: "pending",
+    changeStat: {
+      committed: { filesChanged: 1, insertions: 2, deletions: 0 },
+      uncommitted: null,
+    },
+  });
 
 export function makeRunDetail(overrides: Partial<RunDetail> = {}): RunDetail {
   const {

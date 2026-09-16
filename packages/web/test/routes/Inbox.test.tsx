@@ -10,7 +10,7 @@ import { cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
 import { InboxPage } from "../../src/routes/Inbox.tsx";
-import { summaryRow } from "../helpers/fixtures.ts";
+import { blockedRun, pendingRun } from "../helpers/fixtures.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 // ── Query URLs ────────────────────────────────────────────────────────
@@ -19,22 +19,6 @@ import { installFetchMock, json, renderWithClient } from "../helpers/with-query-
 // statuses are sorted alphabetically before joining.
 const BLOCKED_URL = "/api/runs?status=paused%2Cpaused_human%2Cquarantined&order=oldest&exclude_imported=true";
 const WORKTREE_URL = "/api/runs?order=oldest&inbox=pending&exclude_imported=true";
-
-// ── Fixtures ──────────────────────────────────────────────────────────
-
-const blockedRun = (id: string) => summaryRow({ runId: id, status: "paused", eventCount: 2 });
-
-const pendingRun = (id: string) =>
-  summaryRow({
-    runId: id,
-    status: "success",
-    eventCount: 1,
-    inboxStatus: "pending",
-    changeStat: {
-      committed: { filesChanged: 1, insertions: 2, deletions: 0 },
-      uncommitted: null,
-    },
-  });
 
 function renderPage(mocks: Record<string, () => Response | Promise<Response>>) {
   const { restore } = installFetchMock(mocks);

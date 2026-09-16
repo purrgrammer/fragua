@@ -21,10 +21,10 @@
 // injection seam required.
 
 import type {
+  RunDetail as CoreRunDetail,
+  RunSummary as CoreRunSummary,
   StepSnapshot as CoreStepSnapshot,
   NodeState,
-  RunDetail,
-  RunSummary,
   SelectedEdge,
 } from "@fragua/core/read-plane";
 import type { AgentMessage, FeedEvent, RunStatus, SnapshotStat } from "@fragua/types";
@@ -35,7 +35,18 @@ export type { FeedEvent };
 // Run-read DTOs are the read plane's schemas — the exact shapes every read
 // client hands back. Re-exported here so component call sites keep importing
 // them from `../lib/api.ts`; never re-declare them.
-export type { NodeState, RunDetail, RunSummary, SelectedEdge };
+//
+// `runStatus` is widened to optional at the web boundary. The shape
+// validators (`isRunSummary` / `isRunDetail`) soft-accept old-daemon
+// payloads that omit `runStatus`, so at runtime the field can be absent.
+// Making it optional here forces every consumer to guard the missing case.
+export type RunSummary = Omit<CoreRunSummary, "runStatus"> & {
+  runStatus?: CoreRunSummary["runStatus"] | undefined;
+};
+export type RunDetail = Omit<CoreRunDetail, "runStatus"> & {
+  runStatus?: CoreRunDetail["runStatus"] | undefined;
+};
+export type { NodeState, SelectedEdge };
 
 const BASE_URL = "/api";
 

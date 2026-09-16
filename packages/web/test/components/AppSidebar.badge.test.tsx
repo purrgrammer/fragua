@@ -8,22 +8,8 @@ import { createMemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
 import { App } from "../../src/App.tsx";
 import { createRoutes } from "../../src/lib/router.tsx";
-import { summaryRow } from "../helpers/fixtures.ts";
+import { blockedRun, pendingRun } from "../helpers/fixtures.ts";
 import { createTestQueryClient, installFetchMock, json } from "../helpers/with-query-client.tsx";
-
-const blockedRun = (id: string) => summaryRow({ runId: id, status: "paused", eventCount: 2 });
-
-const pendingRun = (id: string) =>
-  summaryRow({
-    runId: id,
-    status: "success",
-    eventCount: 1,
-    inboxStatus: "pending",
-    changeStat: {
-      committed: { filesChanged: 1, insertions: 2, deletions: 0 },
-      uncommitted: null,
-    },
-  });
 
 function mountApp(mocks: Record<string, () => Response | Promise<Response>>, path = "/inbox") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
