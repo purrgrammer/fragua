@@ -188,3 +188,14 @@ steps:
   [`execution-model.md`](./execution-model.md).
 - **Shipped production examples** → `.fragua/workflows/` (`work.yaml`,
   `review.yaml`, …) — full-rigor references, not starting points.
+  - `review.yaml` takes an optional `previous_review` input (`--input
+    previous_review=@review.md`): non-empty switches it into follow-up mode,
+    where it verifies the prior round's findings and scans only for regressions
+    the fix introduced instead of re-reviewing the whole branch — so successive
+    rounds converge (ship when the report's `## Verdict` line reads
+    `converged`).
+  - `work.yaml` takes an optional `review` input (`--input review=@review.md`,
+    e.g. from `fragua runs review-report <id>`): non-empty turns the report
+    into a numbered fix checklist the run implements and judges completeness
+    against. See the `operate` skill's “Converging a branch” recipe for the
+    full loop.

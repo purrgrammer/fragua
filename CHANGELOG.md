@@ -8,6 +8,28 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **`review` converges across rounds.** `review.yaml` takes an optional
+  `previous_review` input (`--input previous_review=@review.md`). Non-empty
+  switches the run into follow-up mode: each lens verifies the prior round's
+  findings (resolved / partial / unresolved) and scans only for regressions and
+  new defects the fix introduced — not fresh improvements — and the report gains
+  a `## Previous findings` table plus a `## New defects` section. `classify`
+  prefers the quick tier for small fix diffs, and every report now carries a
+  one-line `## Verdict` (`converged` when no High/Critical defect remains, else
+  the count) so there is a mechanical stopping rule.
+- **Review-driven fixes are one command.** `work.yaml` takes an optional
+  `review` input (`--input review=@review.md`). Non-empty routes through a new
+  `apply_review` preamble that turns the report into a numbered fix checklist;
+  `implement` realises it and `review` judges completeness against the checklist
+  instead of a fresh scan. Behaviour is unchanged when `review` is empty.
+- **`fragua runs review-report <id> [--out <path>]`** prints (or writes) a
+  review run's `review.md` — preferring a recorded artifact, else the run's
+  worktree file — so a fix run can be chained as
+  `fragua run work --input review=@<(fragua runs review-report <id>)` without
+  knowing worktree paths.
+
 ### Changed
 
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
