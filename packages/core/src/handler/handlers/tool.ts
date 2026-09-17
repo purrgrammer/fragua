@@ -218,6 +218,15 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       tokens: 0,
       costUsd: 0,
     };
+    // A failing tool step's last line of output is the reason an operator
+    // wants on the halt banner — not just "failed with no fail route".
+    if (outcomeStatus === "fail") {
+      result.failureReason =
+        `exit ${ranResult.exitCode}: ${lastLine(ranResult.stderr) ?? lastLine(ranResult.stdout) ?? "no output"}`.slice(
+          0,
+          400,
+        );
+    }
     if (cfg.nextNode !== undefined) result.nextNode = cfg.nextNode;
     return result;
   };
@@ -236,6 +245,14 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
  * agent-tool's `DEFAULT_MAX_BYTES` so the UI behaviour reads the same
  * regardless of which path produced the output. */
 const INLINE_OUTPUT_BYTES = 50 * 1024;
+
+function lastLine(text: string): string | undefined {
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  return lines.length > 0 ? lines[lines.length - 1] : undefined;
+}
 
 function truncateTail(text: string, maxBytes: number): { text: string; truncated: boolean } {
   if (text.length <= maxBytes) return { text, truncated: false };

@@ -187,18 +187,31 @@ export function parseJudgeDecide(raw: unknown): JudgeDecide {
     return { route: { question, min_confidence: unitInterval(minC, "decide.route.min-confidence"), below } };
   }
   const o = raw["outcome"];
-  if (!isPlainObject(o)) throw new JudgeParseError("`decide.outcome` must be a mapping {question, min}");
+  if (!isPlainObject(o)) throw new JudgeParseError("`decide.outcome` must be a mapping {question | questions, min}");
   for (const k of Object.keys(o)) {
-    if (k !== "question" && k !== "min") {
-      throw new JudgeParseError(`\`decide.outcome\` has unknown key "${k}" (expected question / min)`);
+    if (k !== "question" && k !== "questions" && k !== "min") {
+      throw new JudgeParseError(`\`decide.outcome\` has unknown key "${k}" (expected question / questions / min)`);
     }
   }
-  return {
-    outcome: {
-      question: questionRef(o["question"], "decide.outcome.question"),
-      min: unitInterval(o["min"], "decide.outcome.min"),
-    },
-  };
+  if ((o["question"] === undefined) === (o["questions"] === undefined)) {
+    throw new JudgeParseError(
+      "`decide.outcome` needs exactly one of `question:` (one noul) or `questions:` (a list — every one must pass)",
+    );
+  }
+  let questions: string[];
+  if (o["question"] !== undefined) {
+    questions = [questionRef(o["question"], "decide.outcome.question")];
+  } else {
+    const list = o["questions"];
+    if (!Array.isArray(list) || list.length === 0) {
+      throw new JudgeParseError("`decide.outcome.questions` must be a non-empty list of noul question ids");
+    }
+    questions = list.map((q, i) => questionRef(q, `decide.outcome.questions[${i}]`));
+    if (new Set(questions).size !== questions.length) {
+      throw new JudgeParseError("`decide.outcome.questions` lists a question twice");
+    }
+  }
+  return { outcome: { questions, min: unitInterval(o["min"], "decide.outcome.min") } };
 }
 
 export function parseJudgeStateMaxBytes(raw: unknown): number {

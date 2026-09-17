@@ -166,6 +166,8 @@ describe("makeToolHandler — happy path", () => {
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
+      // the last output line rides along as the halt reason
+      expect(result.failureReason).toBe("exit 1: 2 tests failed");
     }
     expect(ctx.__artifacts.find((a) => a.key === "tests:stderr")?.content).toBe("2 tests failed\n");
   });

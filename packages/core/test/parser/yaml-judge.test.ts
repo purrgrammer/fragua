@@ -91,7 +91,7 @@ describe("parseWorkflow — judge steps", () => {
         criteria: ["superficial", "adequate", "thorough"],
       },
     });
-    expect(n.attrs.judge_decide).toEqual({ outcome: { question: "schema_ok", min: 0.7 } });
+    expect(n.attrs.judge_decide).toEqual({ outcome: { questions: ["schema_ok"], min: 0.7 } });
     expect(n.attrs.judge_state_max_bytes).toBe(JUDGE_DEFAULT_STATE_MAX_BYTES);
     expect(n.attrs.goal_gate).toBe(true);
     expect(n.attrs.retry_target).toBe("synthesize");
@@ -282,5 +282,37 @@ describe("parseWorkflow — judge step rejections", () => {
       expect(err).toBeInstanceOf(ParseError);
       expect((err as ParseError).line).toBeGreaterThanOrEqual(6);
     }
+  });
+});
+
+describe("parseWorkflow — decide.outcome over several nouls", () => {
+  const src = (decide: string) => `
+name: wf
+steps:
+  j:
+    type: judge
+    state: x
+    questions:
+      a: {type: noul, instructions: a?}
+      b: {type: noul, instructions: b?}
+    decide:
+${decide}
+    next: exit
+`;
+  test("questions: [a, b] lowers to a list", () => {
+    const g = parseWorkflow(src("      outcome: {questions: [a, b], min: 0.6}"));
+    expect(g.nodes["j"]!.attrs.judge_decide).toEqual({ outcome: { questions: ["a", "b"], min: 0.6 } });
+  });
+  test("question: a lowers to a one-element list", () => {
+    const g = parseWorkflow(src("      outcome: {question: a, min: 0.6}"));
+    expect(g.nodes["j"]!.attrs.judge_decide).toEqual({ outcome: { questions: ["a"], min: 0.6 } });
+  });
+  test.each<[string, string, RegExp]>([
+    ["both forms", "      outcome: {question: a, questions: [b], min: 0.6}", /exactly one of/],
+    ["neither form", "      outcome: {min: 0.6}", /exactly one of/],
+    ["empty list", "      outcome: {questions: [], min: 0.6}", /non-empty list/],
+    ["duplicate", "      outcome: {questions: [a, a], min: 0.6}", /lists a question twice/],
+  ])("%s is rejected", (_n, decide, re) => {
+    expect(() => parseWorkflow(src(decide))).toThrow(re);
   });
 });

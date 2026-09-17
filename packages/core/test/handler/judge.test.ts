@@ -240,7 +240,7 @@ describe("judge handler — happy paths", () => {
         nodeId: "j",
         state: "x",
         questions: { ok: OK },
-        decide: { outcome: { question: "ok", min: 0.7 } },
+        decide: { outcome: { questions: ["ok"], min: 0.7 } },
       });
     const capA = fresh();
     const pass = await mk().handler(stubCtx(capA, { judge: stubJudge({ ok: { type: "noul", noul: 0.7 } }, capA) }));
@@ -392,6 +392,37 @@ describe("judge handler — failure modes", () => {
       expect(result).toMatchObject({ kind: "halt", reason: "error" });
       if (result.kind === "halt") expect(result.detail).toMatch(re);
       expect(cap.messages).toHaveLength(0);
+    }
+  });
+});
+
+describe("judge handler — decide.outcome over several nouls (all-of)", () => {
+  const Q = { calibrated: OK, bar_held: OK, schema_ok: OK };
+  const mk = () =>
+    makeJudgeHandler({
+      nodeId: "verify",
+      state: "x",
+      questions: Q,
+      decide: { outcome: { questions: ["calibrated", "bar_held", "schema_ok"], min: 0.6 } },
+    });
+  const answers = (c: number, b: number, s: number): Record<string, JudgeAnswer> => ({
+    calibrated: { type: "noul", noul: c },
+    bar_held: { type: "noul", noul: b },
+    schema_ok: { type: "noul", noul: s },
+  });
+
+  test("every noul at or above min → success, reason lists them all", async () => {
+    const cap = fresh();
+    const r = await mk().handler(stubCtx(cap, { judge: stubJudge(answers(0.74, 0.62, 0.78), cap) }));
+    expect(r).toMatchObject({ kind: "transition", outcomeStatus: "success" });
+  });
+
+  test("one noul below min → fail, reason names only the failing ones", async () => {
+    const cap = fresh();
+    const r = await mk().handler(stubCtx(cap, { judge: stubJudge(answers(0.74, 0.41, 0.78), cap) }));
+    expect(r).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    if (r.kind === "transition") {
+      expect(r.failureReason).toBe("bar_held=0.41 < min 0.6");
     }
   });
 });

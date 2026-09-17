@@ -269,3 +269,25 @@ steps:
     expect(codes(src, "W021")).toEqual(["W021"]);
   });
 });
+
+describe("judge — decide.outcome with a question list (E048 per entry)", () => {
+  test("a non-noul or undeclared entry in the list is flagged, valid entries are not", () => {
+    const src = `
+name: wf
+steps:
+  j:
+    type: judge
+    state: x
+    questions:
+      a: {type: noul, instructions: a?}
+      s: {type: score, instructions: s?, criteria: [lo, hi]}
+    decide:
+      outcome: {questions: [a, s, ghost], min: 0.6}
+    next: exit
+`;
+    const m = messages(src, "E048").join("\n");
+    expect(m).toMatch(/question "s" is a `score`/);
+    expect(m).toMatch(/names question "ghost"/);
+    expect(m).not.toMatch(/question "a"/);
+  });
+});

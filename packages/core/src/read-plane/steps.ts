@@ -293,6 +293,15 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
+    if (ev.type === "judge.answered") {
+      // The request carries the alias the author wrote (`jev-latest`); the
+      // answer carries the resolved id. Show the resolved one on the step.
+      const idx = nodeId !== "" ? lastStepIdxForNode.get(nodeId) : undefined;
+      const resolved = data["model"];
+      if (idx !== undefined && typeof resolved === "string" && steps[idx] !== undefined) steps[idx].model = resolved;
+      continue;
+    }
+
     if (ev.type === "llm.start" || ev.type === "judge.requested") {
       // This node opened an LLM call (or a judge call — same step shape,
       // one row in the Cost breakdown with its own `cost.recorded`). Not a

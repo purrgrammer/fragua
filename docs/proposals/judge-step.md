@@ -284,16 +284,25 @@ and adds a pause-reason arm for what the graph can already say. Declaring the
 landing in `routes:` keeps the control flow *in the graph*, reuses the human
 step and its `intent.human_input` protocol, and costs nothing new.
 
-### 3.4 `decide.outcome` — a `noul` answer becomes success / fail
+### 3.4 `decide.outcome` — one or more `noul` answers become success / fail
 
 ```yaml
 decide:
-  outcome: {question: <id>, min: <0..1>}
+  outcome: {question: <id>, min: <0..1>}            # one noul
+  outcome: {questions: [<id>, <id>, …], min: <0..1>} # several — every one must clear min
 ```
 
-- `question` must name a `noul` question (E048). `min` is the probability floor
-  for `success`: `noul ≥ min → outcomeStatus: "success"`, else `"fail"` with
-  `failureReason: "<id>=0.18 < min 0.7"`.
+- Each named question must be a `noul` (E048, per entry). `min` is the
+  probability floor for `success`: every listed `noul ≥ min →
+  outcomeStatus: "success"`, else `"fail"` with `failureReason` naming the
+  ones that fell short (`"bar_held=0.41 < min 0.6"`).
+- **Prefer several narrow nouls over one composite.** In the first full-tier
+  experiment a single "does the review pass ALL of (1) (2) (3)" noul sat at
+  0.48 on a review whose three narrow checks scored 0.74 / 0.62 / 0.78. A noul
+  near 0.5 means "yes and no are similarly likely", so a conjunction phrased as
+  one question degrades toward undecided as it grows. The all-of list keeps
+  each judgment atomic (the docs' central design rule) and gates on the
+  weakest one.
 - Everything downstream is the shipped **outcome-case** machinery: `on:
   {success, fail}` edges, `goal-gate: true`, `retry: <step>` / `max-retries`,
   the `paused{reason:"goal_gate"}` cap. The `review.yaml` `verify` step loses its

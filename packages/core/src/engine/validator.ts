@@ -774,17 +774,19 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       }
     } else if (decide !== undefined && "outcome" in decide) {
       const o = decide.outcome;
-      const q = questions[o.question];
-      if (q === undefined) {
-        err(
-          "E048",
-          `judge "${n.id}" \`decide.outcome\` names question "${o.question}", which is not declared in \`questions:\``,
-        );
-      } else if (q.type !== "noul") {
-        err(
-          "E048",
-          `judge "${n.id}" \`decide.outcome\` question "${o.question}" is a \`${q.type}\` — only a \`noul\` thresholds into success / fail`,
-        );
+      for (const qid of o.questions) {
+        const q = questions[qid];
+        if (q === undefined) {
+          err(
+            "E048",
+            `judge "${n.id}" \`decide.outcome\` names question "${qid}", which is not declared in \`questions:\``,
+          );
+        } else if (q.type !== "noul") {
+          err(
+            "E048",
+            `judge "${n.id}" \`decide.outcome\` question "${qid}" is a \`${q.type}\` — only a \`noul\` thresholds into success / fail`,
+          );
+        }
       }
       if (routes.length > 0) {
         err(

@@ -38,7 +38,13 @@ function judgeRow(
           probabilities: { accept: 0.01, revise: 0.99, escalate: 0 },
         },
         goal_met: { type: "noul", noul: 0.2 },
-        risk: { type: "score", score: 0, confidence: 1, legend: {}, probabilities: { "0": 1, "1": 0, "2": 0 } },
+        risk: {
+          type: "score",
+          score: 0,
+          confidence: 1,
+          legend: { "0": "trivial", "1": "moderate", "2": "high" },
+          probabilities: { "0": 1, "1": 0, "2": 0 },
+        },
       },
       ...(decision !== undefined ? { decision } : {}),
       durationMs: 687,
@@ -50,7 +56,7 @@ function judgeRow(
 describe("RunConversation — judge_node row", () => {
   afterEach(() => cleanup());
 
-  it("renders one row per question with the typed answer, and the route decision", () => {
+  it("shows each question's text, every option as a bar with the chosen one first, and the route decision", () => {
     const nodeStates: NodeState[] = [{ nodeId: "triage", iteration: 0, state: "completed", lastEventSeq: 1 }];
     const { container } = renderWithClient(
       <RunConversation
@@ -61,14 +67,18 @@ describe("RunConversation — judge_node row", () => {
     const q = within(container);
     const row = q.getByTestId("message-1");
     expect(row.textContent).toContain("jev-1.13.0");
-    expect(row.textContent).toContain("next_step");
-    expect(row.textContent).toContain("revise — conf 0.98");
-    expect(row.textContent).toContain("revise 0.99");
-    expect(row.textContent).toContain("goal_met");
-    expect(row.textContent).toContain("p(yes) 0.20");
-    expect(row.textContent).toContain("score 0.00");
-    expect(row.textContent).toContain("route revise");
-    expect(row.textContent).not.toContain("below confidence floor");
+    expect(row.textContent).toContain("Decide the next step.");
+    expect(row.textContent).toContain("confidence 0.98");
+    // choice options sorted by probability, chosen first
+    const labels = Array.from(row.querySelectorAll("[data-option-label]")).map((el) => el.textContent);
+    expect(labels.slice(0, 3)).toEqual(["revise", "accept", "escalate"]);
+    // noul renders as yes / no
+    expect(row.textContent).toContain("yes");
+    expect(row.textContent).toContain("0.20");
+    // score renders legend labels when present
+    expect(row.textContent).toContain("0 · trivial");
+    expect(row.textContent).toContain("routed to revise");
+    expect(row.textContent).not.toContain("confidence floor");
     expect(q.queryByTestId("terminal")).toBeNull();
   });
 
@@ -76,16 +86,18 @@ describe("RunConversation — judge_node row", () => {
     const below = renderWithClient(
       <RunConversation messages={[judgeRow({ kind: "route", route: "unsure", belowThreshold: true })]} />,
     );
-    expect(below.container.textContent).toContain("route unsure (below confidence floor)");
+    expect(below.container.textContent).toContain(
+      "routed to unsure — the chosen option was below the confidence floor",
+    );
     cleanup();
     const failed = renderWithClient(<RunConversation messages={[judgeRow({ kind: "outcome", status: "fail" })]} />);
-    expect(failed.container.textContent).toContain("outcome fail");
+    expect(failed.container.textContent).toContain("gate failed — outcome fail");
   });
 
   it("a decide-less judge renders answers with no decision line", () => {
     const { container } = renderWithClient(<RunConversation messages={[judgeRow()]} />);
-    expect(container.textContent).toContain("p(yes) 0.20");
-    expect(container.textContent).not.toContain("route ");
-    expect(container.textContent).not.toContain("outcome ");
+    expect(container.textContent).toContain("yes");
+    expect(container.textContent).not.toContain("routed to");
+    expect(container.textContent).not.toContain("gate ");
   });
 });

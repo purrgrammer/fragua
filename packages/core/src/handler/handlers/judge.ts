@@ -263,15 +263,20 @@ function applyDecide(decide: JudgeDecide | undefined, answers: Record<string, Ju
       a.confidence < decide.route.min_confidence;
     return { kind: "route", route: below ? (decide.route.below as string) : a.choice, belowThreshold: below };
   }
-  const a = answers[decide.outcome.question];
-  if (a === undefined || a.type !== "noul") {
-    return { error: `decide.outcome question "${decide.outcome.question}" has no noul answer` };
+  const min = decide.outcome.min;
+  const parts: string[] = [];
+  const failed: string[] = [];
+  for (const qid of decide.outcome.questions) {
+    const a = answers[qid];
+    if (a === undefined || a.type !== "noul") return { error: `decide.outcome question "${qid}" has no noul answer` };
+    parts.push(`${qid}=${a.noul.toFixed(2)}`);
+    if (a.noul < min) failed.push(`${qid}=${a.noul.toFixed(2)}`);
   }
-  const pass = a.noul >= decide.outcome.min;
+  const pass = failed.length === 0;
   return {
     kind: "outcome",
     status: pass ? "success" : "fail",
-    reason: `${decide.outcome.question}=${a.noul.toFixed(2)} ${pass ? "≥" : "<"} min ${decide.outcome.min}`,
+    reason: pass ? `${parts.join(", ")} all ≥ min ${min}` : `${failed.join(", ")} < min ${min}`,
   };
 }
 

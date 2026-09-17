@@ -31,9 +31,11 @@ export interface JudgeRouteDecision {
   below?: string;
 }
 
-/** `decide.outcome` — a `noul` answer thresholds into `success` / `fail`. */
+/** `decide.outcome` — one or more `noul` answers threshold into `success` /
+ * `fail`: every listed noul must reach `min` (all-of). Authored as
+ * `question: <id>` or `questions: [<id>, …]`; the parser normalises to a list. */
 export interface JudgeOutcomeDecision {
-  question: string;
+  questions: string[];
   min: number;
 }
 

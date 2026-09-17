@@ -430,7 +430,8 @@ describe("eventsToSteps — judge steps", () => {
     expect(s.nodeId).toBe("triage");
     expect(s.startSeq).toBe(1010);
     expect(s.provider).toBe("typesafe");
-    expect(s.model).toBe("jev-latest");
+    // the answer's resolved model id replaces the requested alias
+    expect(s.model).toBe("jev-1.13.0");
     expect(s.startedAt).toBe(new Date(1000).toISOString());
   });
 });
