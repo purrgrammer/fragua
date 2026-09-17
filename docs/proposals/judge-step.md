@@ -1,6 +1,6 @@
 ---
 title: Judge steps — deterministic typed judgments (classify / score / verify / route) without an agent turn
-summary: "A `type: judge` step asks a System One model (TypeSafe's Jev) a map of narrow, typed questions — `choice`, `score`, `noul` — over a `state:` assembled from `${{ inputs.* }}`, `${{ outputs.* }}`, literal text, and bounded read-only worktree files. One HTTP call, no tools, no thread, no agent loop; answers arrive as calibrated probabilities in well under a second at ~$0.00002 per call. The step produces typed `outputs:` derived from its `questions:` (never authored), so `${{ outputs.<judge>.<q>.choice }}` and friends ride the shipped structured-outputs spine unchanged. One optional `decide:` block turns a judgment into control flow deterministically: `decide.route` keys edge selection on a `choice` answer (with a confidence floor and a declared fallback route), and `decide.outcome` thresholds a `noul` into `success` / `fail` so `goal_gate` and `retry:` compose unchanged. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; a new `NodeType`, a pre-wired `ctx.judge` client, one credential row, and validator codes E047–E051 / W020–W021."
+summary: "A `type: judge` step asks a System One model (TypeSafe's Jev) a map of narrow, typed questions — `choice`, `score`, `noul` — over a `state:` assembled from `${{ inputs.* }}`, `${{ outputs.* }}`, literal text, and bounded read-only worktree files. One HTTP call, no tools, no thread, no agent loop; answers arrive as calibrated probabilities in well under a second at ~$0.00002 per call. The step produces typed `outputs:` derived from its `questions:` (never authored), so `${{ outputs.<judge>.<q>.choice }}` and friends ride the shipped structured-outputs spine unchanged. One optional `decide:` block turns a judgment into control flow deterministically: `decide.route` keys edge selection on a `choice` answer (with a confidence floor and a declared fallback route), and `decide.outcome` thresholds a `noul` into `success` / `fail` so `goal_gate` and `retry:` compose unchanged. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; a new `NodeType`, a pre-wired `ctx.judge` client, one credential row, and validator codes E047–E048 / W020–W021."
 status: proposal
 maturity: draft
 last-reviewed: 2026-09-17
@@ -136,7 +136,7 @@ steps:
       skip:   {to: signoff,       label: "Trivial"}
       quick:  {to: review_quick,  label: "Quick review"}
       full:   {to: prep_diff,     label: "Full review"}
-      unsure: {to: ask_operator,  label: "Ask"}         # the below-threshold landing; not a criteria key
+      unsure: {to: ask_operator,  label: "Ask"}         # the below-threshold landing (may also be a criteria key, e.g. `below: full`)
 ```
 
 A judge step is a **deterministic, read-class, turn-less** node:
@@ -189,7 +189,7 @@ are one of:
 | literal text | itself | `${{ … }}` tokens substitute; a bare `$x` is literal |
 | `${{ inputs.<name>[.<f>] }}` | the run input | lenient dotted reads, as everywhere |
 | `${{ outputs.<step>.<f> }}` | a typed upstream output | **fail-closed**; a record/array leaf interpolates as JSON text (the API takes text values) |
-| `{file: <cwd-relative path>}` | the file's UTF-8 content from the run's worktree via `ctx.env` | read-only, resolved at dispatch, bounded by `state-max-bytes` (default **64 KiB**, hard cap 1 MiB; the cap covers the whole serialised `state`, not just files). A missing or oversized file is `outcome=fail` with a named reason. The default is small on purpose: Jev bills input tokens (64 KiB ≈ 16k tokens ≈ $0.0007, so cost is not the reason) but the docs are explicit that extra context degrades judgment ("include only the context relevant to the current questions"). W021 warns when a literal `state:` exceeds 16 KiB; authors opt up with `state-max-bytes`. Path must be relative and may not escape the worktree (`..`, absolute, symlink out) — E049 at parse for the static cases, the same `fail` at dispatch for the dynamic ones. |
+| `{file: <cwd-relative path>}` | the file's UTF-8 content from the run's worktree via `ctx.env` | read-only, resolved at dispatch, bounded by `state-max-bytes` (default **64 KiB**, hard cap 1 MiB; the cap covers the whole serialised `state`, not just files). A missing or oversized file is `outcome=fail` with a named reason. The default is small on purpose: Jev bills input tokens (64 KiB ≈ 16k tokens ≈ $0.0007, so cost is not the reason) but the docs are explicit that extra context degrades judgment ("include only the context relevant to the current questions"). W021 warns when a literal `state:` exceeds 16 KiB; authors opt up with `state-max-bytes`. Path must be relative and may not escape the worktree (`..`, absolute, symlink out) — a parse error for the static cases, the same `fail` at dispatch for the dynamic ones. |
 
 That third row is the honest answer to "how does `classify` get the diff":
 today `classify` runs `git diff` inside an llm turn, and **nothing in the graph
@@ -245,10 +245,12 @@ decide:
 routes: { … }
 ```
 
-- `question` must name a `choice` question (E050). Its `criteria` keys must be
-  a subset of the declared `routes:` names, and every `routes:` name must be
-  either a criteria key or the `below:` route (E050 again; E021 already
-  demands every route be discharged by an edge).
+- `question` must name a `choice` question (E047). Its `criteria` keys must be
+  a subset of the declared `routes:` names, every `routes:` name must be
+  either a criteria key or the `below:` route, and `below` must be in
+  `routes:` — it **may** coincide with a criteria key (`below: full` = "when
+  torn, go deeper") (E047; E021 already demands every route be discharged by
+  an edge).
 - On completion the handler returns `transition{ route: answer.choice }` and
   the existing **route-case** edge selector (`edge-selection.ts`) picks the
   edge. Nothing new in the engine.
@@ -257,7 +259,7 @@ routes: { … }
   `below` must be declared in `routes:` and is typically a `human` step (the
   TypeSafe *confidence-routing* pattern: "the answer tells you what; confidence
   tells you whether to act" — escalate uncertain cases to a person). Setting
-  `min-confidence` without `below` is E050. Omitting both means "always take
+  `min-confidence` without `below` is a parse error. Omitting both means "always take
   the choice", which is right for harmless preferences where a spread
   distribution is fine.
 - `min-confidence` is **only** defined for `choice` (and `score`, unused here)
@@ -284,7 +286,7 @@ decide:
   outcome: {question: <id>, min: <0..1>}
 ```
 
-- `question` must name a `noul` question (E051). `min` is the probability floor
+- `question` must name a `noul` question (E048). `min` is the probability floor
   for `success`: `noul ≥ min → outcomeStatus: "success"`, else `"fail"` with
   `failureReason: "<id>=0.18 < min 0.7"`.
 - Everything downstream is the shipped **outcome-case** machinery: `on:
@@ -292,7 +294,7 @@ decide:
   the `paused{reason:"goal_gate"}` cap. The `review.yaml` `verify` step loses its
   "reply EXACTLY `APPROVE`" contract and its `abort` and gains a number the
   operator can tune.
-- `decide.route` and `decide.outcome` are **mutually exclusive** (E050): a routing node's
+- `decide.route` and `decide.outcome` are **mutually exclusive** (a parse error): a routing node's
   edges are route-keyed, an outcome node's are outcome-keyed; one node cannot
   be both (this is the existing `routes:` ⊕ `on:` rule, restated for the two
   bindings). A judge with no `decide:` is a pure producer that always succeeds
@@ -314,7 +316,7 @@ check). One record per question, over the shipped profile grammar (scalars,
 
 | Question | Derived record |
 |---|---|
-| `choice` | `{choice: choice(<criteria keys>), confidence: number, probabilities: {fields: {<key>: number …}}}` — keys are identifiers by E050's route rule when routed; when not routed they still must be identifiers (E048) so `${{ outputs.j.q.probabilities.accept }}` is a valid dotted read |
+| `choice` | `{choice: choice(<criteria keys>), confidence: number, probabilities: {fields: {<key>: number …}}}` — keys must be identifiers (parse error otherwise) so `${{ outputs.j.q.probabilities.accept }}` is a valid dotted read |
 | `score` | `{score: number, level: number, confidence: number, probabilities: array<number>}` — `level` is the argmax index, `probabilities[i]` is the probability of level *i*. The API's `legend` / `probabilities` keys are the string digits `"0"`, `"1"`… which are **not** valid field identifiers, so the handler re-indexes them into a positional array; the labels are already in the workflow |
 | `noul` | `{noul: number}` |
 
@@ -458,16 +460,17 @@ No `EVENT_CONTRACT_VERSION` bump: no new fact type, no changed payload shape,
 no reducer change — `route?` and `outputs?` on `fact.node_completed` are
 already there. `MIN_COMPATIBLE_CONTRACT_VERSION` does not move.
 
-**Validator codes** (continuing from E046 / W018):
+**Validator codes** (continuing from E046 / W018). Shape errors — an
+agent-only attr on a judge, a malformed question, a bad `state:` leaf, a
+malformed `decide:` — are **parse errors** with a line number (the same tier
+as an authored `outputs:` on a tool step), not coded diagnostics; the codes
+below are the cross-attribute rules a well-shaped graph can still break:
 
 | Code | Rule |
 |---|---|
-| E047 | judge declares an agent-only attr (`prompt`, `thread`, `allowed-tools`, `denied-tools`, `skills`, `mcp-servers`, `summary`, `effort`, authored `outputs`) or lacks `state:` / `questions:` |
-| E048 | question shape: unknown `type`; missing `instructions`; `choice.criteria` not a map / empty / key not an identifier; `score.criteria` not a list of ≥ 2; `noul.criteria` present but not `{true, false}`; question id not an identifier or duplicated |
-| E049 | `state:` leaf is not text / `${{…}}` / `{file}`; `{file}` path absolute, contains `..`, or `state-max-bytes` > 1 MiB; `state:` empty |
-| E050 | `decide.route` names a non-`choice` question; criteria keys ⊄ `routes:`; a `routes:` name is neither a criteria key nor `below`; `min-confidence` without `below` or outside `[0,1]`; `below` not in `routes:`; `decide.route` and `decide.outcome` both present; `decide.route` without `routes:` (or `routes:` on a judge without `decide.route`); `decide:` not a mapping |
-| E051 | `decide.outcome` names a non-`noul` question; `min` outside `[0,1]`; `decide.outcome` with `routes:` |
-| W020 | a `choice` used for `decide.route` has no `min-confidence` and ≥ 3 options — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
+| E047 | `decide.route`: names an undeclared question or a non-`choice`; `decide.route` without `routes:` (or `routes:` on a judge without `decide.route`); an option with no route; a route that is neither an option nor `below`; `below` not in `routes:` |
+| E048 | `decide.outcome`: names an undeclared question or a non-`noul`; `decide.outcome` together with `routes:` |
+| W020 | a routed `choice` with ≥ 3 options and no `min-confidence` — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
 | W021 | literal `state:` text exceeds 16 KiB — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately |
 
 E035 / W015 (broken / not-on-every-path output refs) cover a judge's derived
@@ -543,7 +546,7 @@ worked example in §3 assumes it.
 instructions/criteria); derived `outputs:`; `decide.route` with `min-confidence` /
 `below`; `decide.outcome` with `min`; `ctx.judge` + the `typesafe` credential row +
 `fragua providers` verbs + `TYPESAFE_API_KEY` seeding; cost / `judge.*`
-observability / `judge_node` message role; judges admitted in `parallel` branches (E041); parser + E047–E051 / W020–W021; `ir_version`
+observability / `judge_node` message role; judges admitted in `parallel` branches (E041); parser + E047–E048 / W020–W021; `ir_version`
 v4 identity converter; `auto-dispatcher` case; web: icon + inspector + message
 row rendering; a `--json` `fragua providers test typesafe`.
 

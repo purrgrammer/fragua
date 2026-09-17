@@ -245,6 +245,21 @@ function specForNode(
         maxMs: 50,
         handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
       };
+    case "judge":
+      // Not yet dispatchable: the parser + validator accept judge steps
+      // ahead of the handler. Halting here beats the default pass-through
+      // transition, which would silently take the first edge with no
+      // judgment made.
+      return {
+        kind: "judge",
+        sideEffect: "none",
+        maxMs: 50,
+        handler: async () => ({
+          kind: "halt",
+          reason: "error",
+          detail: `judge step "${nodeId}": the judge handler is not implemented yet`,
+        }),
+      };
     default:
       return transitionSpec(kind, first);
   }

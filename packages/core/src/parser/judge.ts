@@ -2,7 +2,7 @@
 // `state-max-bytes`. Structural shape only: what the System One API would
 // reject with a 422 is rejected here with a line number instead. Graph-level
 // consistency (a `decide.route` question exists and is a `choice`, its
-// criteria keys match `routes:`, …) is the validator's (E047–E051).
+// criteria keys match `routes:`, …) is the validator's (E047–E048).
 
 import {
   isJudgeIdentifier,

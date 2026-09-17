@@ -2,6 +2,7 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import type { Edge, Graph, NodeAttrs } from "../types/graph.ts";
+import type { JudgeState } from "../types/judge.ts";
 import { isOutputRecord, type OutputProfile } from "../types/outputs.ts";
 import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
@@ -494,7 +495,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // Human steps are covered by E009 (no outgoing edges); start/exit are
   // the synthesized source/sink.
   for (const n of nodes) {
-    if (n.type !== "llm" && n.type !== "tool") continue;
+    if (n.type !== "llm" && n.type !== "tool" && n.type !== "judge") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
     // A step has a success path if it has any outgoing edge that can fire on
     // success: an explicit `outcome: success`, a `route`, or a bare
@@ -707,6 +708,102 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E006",
         message: `cycle ${sccNodes.join(" → ")} has no reachable exit node`,
+      });
+    }
+  }
+
+  // ---- judge steps: `decide:` ↔ `questions:` ↔ `routes:` consistency ----
+  // Shape is the parser's; these are the cross-attr rules a graph can still
+  // get wrong. See docs/proposals/judge-step.md §3.3 / §3.4.
+  for (const n of nodes) {
+    if (n.type !== "judge") continue;
+    const questions = n.attrs.judge_questions ?? {};
+    const decide = n.attrs.judge_decide;
+    const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
+    const nodeLoc = n.loc !== undefined ? { loc: n.loc } : {};
+    const err = (code: string, message: string): void => {
+      diags.push({ severity: "error", code, message, nodeId: n.id, ...nodeLoc });
+    };
+
+    if (decide !== undefined && "route" in decide) {
+      const r = decide.route;
+      const q = questions[r.question];
+      if (q === undefined) {
+        err(
+          "E047",
+          `judge "${n.id}" \`decide.route\` names question "${r.question}", which is not declared in \`questions:\``,
+        );
+      } else if (q.type !== "choice") {
+        err(
+          "E047",
+          `judge "${n.id}" \`decide.route\` question "${r.question}" is a \`${q.type}\` — only a \`choice\` can drive routing`,
+        );
+      }
+      if (routes.length === 0) {
+        err(
+          "E047",
+          `judge "${n.id}" has \`decide.route\` but no \`routes:\` — declare one route per option (plus the \`below:\` landing)`,
+        );
+      } else {
+        const options = q !== undefined && q.type === "choice" ? Object.keys(q.criteria) : [];
+        for (const o of options) {
+          if (!routes.includes(o)) {
+            err("E047", `judge "${n.id}" question "${r.question}" option "${o}" has no matching entry in \`routes:\``);
+          }
+        }
+        for (const rn of routes) {
+          if (!options.includes(rn) && rn !== r.below) {
+            err(
+              "E047",
+              `judge "${n.id}" route "${rn}" is neither an option of question "${r.question}" nor its \`below:\` landing`,
+            );
+          }
+        }
+        if (r.below !== undefined && !routes.includes(r.below)) {
+          err("E047", `judge "${n.id}" \`decide.route.below\` "${r.below}" is not declared in \`routes:\``);
+        }
+        if (r.min_confidence === undefined && options.length >= 3) {
+          diags.push({
+            severity: "warning",
+            code: "W020",
+            message: `judge "${n.id}" routes on a ${options.length}-way choice with no \`min-confidence\` — a spread distribution routes silently; add \`min-confidence\` + \`below:\` to escalate uncertain cases`,
+            nodeId: n.id,
+            ...nodeLoc,
+          });
+        }
+      }
+    } else if (decide !== undefined && "outcome" in decide) {
+      const o = decide.outcome;
+      const q = questions[o.question];
+      if (q === undefined) {
+        err(
+          "E048",
+          `judge "${n.id}" \`decide.outcome\` names question "${o.question}", which is not declared in \`questions:\``,
+        );
+      } else if (q.type !== "noul") {
+        err(
+          "E048",
+          `judge "${n.id}" \`decide.outcome\` question "${o.question}" is a \`${q.type}\` — only a \`noul\` thresholds into success / fail`,
+        );
+      }
+      if (routes.length > 0) {
+        err(
+          "E048",
+          `judge "${n.id}" has \`decide.outcome\` and \`routes:\` — an outcome judge branches on \`on: {success, fail}\`, not routes`,
+        );
+      }
+    } else if (routes.length > 0) {
+      err("E047", `judge "${n.id}" declares \`routes:\` but no \`decide.route\` — nothing would pick a route`);
+    }
+
+    const literalBytes = judgeLiteralStateBytes(n.attrs.judge_state);
+    if (literalBytes > JUDGE_LITERAL_STATE_WARN_BYTES) {
+      diags.push({
+        severity: "warning",
+        code: "W021",
+        message: `judge "${n.id}" carries ${literalBytes} bytes of literal \`state:\` text (> ${JUDGE_LITERAL_STATE_WARN_BYTES}) — extra context degrades judgment; trim it or raise \`state-max-bytes\` deliberately`,
+        nodeId: n.id,
+        ...nodeLoc,
       });
     }
   }
@@ -1102,18 +1199,19 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             nodeId,
             ...loc,
           });
-        } else if (cn.type !== "llm") {
-          // E041: deliberation-only — branch nodes must be llm.
+        } else if (cn.type !== "llm" && cn.type !== "judge") {
+          // E041: deliberation-only — branch nodes must be llm or judge (a
+          // judge is read-class by construction: no tools, `{file}` reads only).
           diags.push({
             severity: "error",
             code: "E041",
-            message: `branch node "${nodeId}" of parallel "${p.id}" is \`type: ${cn.type}\` — v1 branch nodes must be \`type: llm\``,
+            message: `branch node "${nodeId}" of parallel "${p.id}" is \`type: ${cn.type}\` — branch nodes must be \`type: llm\` or \`type: judge\``,
             nodeId,
             ...loc,
           });
-        } else {
-          // `llm` is the only valid branch kind; the tool / thread constraints
-          // apply to it alone. Running them on a node that already failed E040/
+        } else if (cn.type === "llm") {
+          // The tool / thread constraints apply to llm branch nodes alone; a
+          // judge carries neither (the parser rejects them). Running them on a node that already failed E040/
           // E041 double-fires — e.g. a nested `parallel` has no `allowed_tools`,
           // so `writeReachableTools` returns EVERY write-class tool and E042
           // piles on top of E040.
@@ -1268,6 +1366,19 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 }
 
 /** Throw if any `error`-severity diagnostics exist. */
+const JUDGE_LITERAL_STATE_WARN_BYTES = 16 * 1024;
+
+/** Bytes of literal text in a judge `state:` — substitution tokens and `{file}`
+ * leaves are excluded (their size is only known at dispatch). */
+function judgeLiteralStateBytes(state: JudgeState | undefined): number {
+  if (state === undefined) return 0;
+  if (typeof state === "string") return state.includes("${{") ? 0 : new TextEncoder().encode(state).byteLength;
+  if ("file" in state && typeof state.file === "string" && Object.keys(state).length === 1) return 0;
+  let n = 0;
+  for (const v of Object.values(state)) n += judgeLiteralStateBytes(v as JudgeState);
+  return n;
+}
+
 export function validateOrThrow(graph: Graph, opts: ValidateOptions = {}): void {
   const diags = validate(graph, opts);
   const errors = diags.filter((d) => d.severity === "error");
