@@ -643,6 +643,34 @@ Division of labour: the agent keeps *reasoning and evidence-gathering*; the
 judge supplies *calibrated verdicts over a batch*. Whether that beats the
 agent's own per-item judgment is the next experiment (§8.1 row 6).
 
+## 8.3 Where the tool applies: every rubric an llm step scores by feel
+
+A scan of the canonical workflows for `choice`-typed fields that llm steps
+emit inside arrays — a severity, a cost class, a confidence, a verdict — is a
+list of judgments currently made as prose and typed afterwards:
+
+| Workflow | Field | Options | Steps emitting it |
+|---|---|---|---|
+| `pr_review` | `findings[].severity` | critical / high / medium (architecture: high / medium) | 10 (five scan + five verify lenses) |
+| `review` | `findings[].severity` | critical / high / medium / low (quality, coherence: high / medium / low) | 12 (six scan + six verify lenses) |
+| `appraise` | `bets[].cost`, `bets[].leverage` | S / M / L / XL; high / medium / low | 10 (five scan + five verify lenses) |
+| `analyze` | `hypotheses[].confidence` | low / medium / high | 3 lenses |
+| `propose` | `verdict` | approve / revise | 5 panel lenses |
+
+Every one is a `score` (ordered levels) or a `choice` the judge tool can
+answer per item with a distribution, from evidence the agent has already
+gathered. The pattern for a verify lens: keep the step an llm (it opens the
+cited code), then before `emit_output` make **one** `judge` call — one
+`noul` per finding ("does the cited code support the claim"), one `score`
+per finding over the severity rubric as criteria — and set `severity` to the
+judge's level unless the agent names a reason to override. The verdict
+distributions ride the transcript, so a synthesiser (or the operator) can see
+a finding that scored `high` at 0.51 versus one at 0.97.
+
+Which of these earn the change is the same empirical question as §8.1: run
+the lens with and without the tool on the same PR and compare the severity
+distribution the synthesiser receives.
+
 ## 9. Doors — deferred, sound
 
 - **Thread-as-state.** `${{ thread.<id>.last }}` / `.all` tokens exposing a
