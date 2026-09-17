@@ -541,7 +541,14 @@ export function utf8Truncate(text: string, maxBytes: number): string {
   while (end > 0 && utf8Bytes(text.slice(0, end)) > maxBytes) end--;
   if (end > 0 && end < text.length) {
     const code = text.charCodeAt(end - 1);
-    if (code >= 0xd800 && code <= 0xdbff) end--; // don't split a surrogate pair
+    if (code >= 0xd800 && code <= 0xdbff)
+      end--; // don't split a surrogate pair
+    else if (code >= 0xdc00 && code <= 0xdfff) {
+      // A low surrogate is only well-formed behind a high one; a lone low
+      // surrogate on the boundary would encode as U+FFFD, so drop it instead.
+      const prev = end >= 2 ? text.charCodeAt(end - 2) : 0;
+      if (!(prev >= 0xd800 && prev <= 0xdbff)) end--;
+    }
   }
   if (end === 0) return "";
   return text.slice(0, end);

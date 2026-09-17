@@ -178,6 +178,18 @@ describe("routing accessors", () => {
     expect(readPendingSteer({})).toBeUndefined();
   });
 
+  test("utf8Truncate drops a lone low surrogate that lands on the boundary", () => {
+    // "ab" + lone low surrogate + padding: cutting right after the surrogate
+    // must not keep it (it would encode as a 3-byte U+FFFD).
+    const lone = `ab\udc00${"x".repeat(20)}`;
+    const cut = utf8Truncate(lone, 5);
+    expect(cut).toBe("ab");
+    // An intact pair on the boundary is kept whole.
+    const pair = `ab\ud83d\ude00${"x".repeat(20)}`;
+    expect(utf8Truncate(pair, 6)).toBe("ab\ud83d\ude00");
+    expect(utf8Truncate(pair, 5)).toBe("ab");
+  });
+
   test("utf8Truncate bounds by UTF-8 bytes on a codepoint boundary, with no marker", () => {
     // Fits verbatim — no marker, no default budget.
     expect(utf8Truncate("fits", 100)).toBe("fits");

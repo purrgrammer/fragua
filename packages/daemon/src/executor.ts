@@ -629,7 +629,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // Advance lastAppliedSeq so the pause intent (and any hitched-along
         // intents that were folded into appliedSeqs) doesn't refire on
         // the next dispatch after wakePending moves the run back to queued.
-        decision.appliedSeqs.length > 0 ? { advanceAppliedTo: Math.max(...decision.appliedSeqs) } : undefined,
+        (() => {
+          const advanceAppliedTo = computeAdvanceAppliedTo(decision.appliedSeqs);
+          return advanceAppliedTo !== undefined ? { advanceAppliedTo } : undefined;
+        })(),
       );
       // Same OCC handling as the cancel arm above: a swallowed conflict here
       // dropped the pause AND exited the executor — a `running` zombie with
@@ -1507,7 +1510,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // queued intents (else wake-pending re-resumes forever).
     const foldOpts: FanoutAppendOpts = {};
     if (Object.keys(decision.routingDelta).length > 0) foldOpts.routingPatch = decision.routingDelta;
-    if (decision.appliedSeqs.length > 0) foldOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
+    const foldAdvanceTo = computeAdvanceAppliedTo(decision.appliedSeqs);
+    if (foldAdvanceTo !== undefined) foldOpts.advanceAppliedTo = foldAdvanceTo;
     let foldPending = foldOpts.routingPatch !== undefined || foldOpts.advanceAppliedTo !== undefined;
     const takeFold = (): FanoutAppendOpts => {
       if (!foldPending) return {};
