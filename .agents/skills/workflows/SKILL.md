@@ -361,6 +361,38 @@ ci:
 
 Side-effect-only: exit 0 → `success`, non-zero → `fail`. The exit code is the entire result — **tool steps don't feed data forward**. stdout/stderr are kept as artifacts for debugging. If you need to run a script *and reason about its output*, call it from inside an `llm` step's `bash` tool instead (E008 rejects an empty `run`).
 
+### Judge steps
+
+```yaml
+verify:
+  type: judge
+  state:
+    review: {file: review.md}                # bounded read-only worktree file
+    focus: ${{ outputs.resolve.focus }}      # typed upstream output, fail-closed
+  questions:
+    schema_ok:
+      type: noul
+      instructions: Does `review` follow the required schema?
+    depth:
+      type: score
+      instructions: How thoroughly does `review` cover `focus`?
+      criteria: [superficial, adequate, thorough]   # ordered list, lowest first
+  decide:
+    outcome: {question: schema_ok, min: 0.7}       # noul → success / fail
+  retry: synthesize
+  max-retries: 2
+  next: signoff
+```
+
+A judge is a **decision**, not a turn: one call to a System One model (TypeSafe's Jev), no tools, no thread, sub-second, ~$0.00002. It asks `questions:` — `choice` (criteria is a **map** of option id → description), `score` (criteria is an **ordered list** of levels), `noul` (yes/no probability) — over a `state:` built from literal text, `${{ inputs }}` / `${{ outputs }}` (fail-closed), and `{file: <path>}` leaves read from the worktree. It cannot read the repo or run a command: whatever it judges must already be addressable — an upstream `outputs:` field, or a file a `tool` / `llm` step wrote (`tool → judge` through a file under `.fragua/scratch/` is the cheapest classify-and-route pipeline).
+
+Every question becomes a typed output: `${{ outputs.verify.schema_ok.noul }}`, `${{ outputs.verify.depth.level }}`, `${{ outputs.<judge>.<q>.choice }}` / `.confidence` / `.probabilities.<option>`. `decide:` (optional, one of) turns an answer into control flow:
+
+- `decide.route: {question: <choice>, min-confidence?: 0..1, below?: <route>}` + `routes:` — the chosen option is the route; under the floor, `below` is taken instead (point it at a `human` step to escalate, or at an option like `full` for "when torn, go deeper"). Options must match `routes:` (E047); W020 nags a ≥3-way choice with no floor.
+- `decide.outcome: {question: <noul>, min: 0..1}` — `success` when `p(yes) ≥ min`, else `fail`; composes with `on: {fail}`, `retry:`, `goal-gate` unchanged (E048).
+
+No `decide:` ⇒ a pure producer that always succeeds — the shape for **shadow mode**: insert it before the llm gate it might replace, compare in the log, then swap. Write facts in `state`, the judgment in `instructions`, the answers in `criteria`; reference state fields with backticks (`` `review` ``); give a `choice` an `other` option when the input may not fit. Thresholds are yours to tune on real runs. Needs `fragua providers add typesafe` (or `TYPESAFE_API_KEY` in CI).
+
 ---
 
 ## 8. Human steps (operator gates)

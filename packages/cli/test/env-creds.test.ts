@@ -24,6 +24,7 @@ import {
 const PROVIDER_ENV_VARS = [
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_API_KEY",
+  "TYPESAFE_API_KEY",
   "OPENAI_API_KEY",
   "AZURE_OPENAI_API_KEY",
   "DEEPSEEK_API_KEY",
@@ -135,6 +136,14 @@ describe("seedCredsFromEnv", () => {
     process.env["AWS_PROFILE"] = "default";
     const seeded = seedCredsFromEnv(store);
     expect(seeded).not.toContain("amazon-bedrock");
+  });
+
+  test("TYPESAFE_API_KEY seeds the typesafe judge provider", async () => {
+    process.env["TYPESAFE_API_KEY"] = "ts-key";
+    const seeded = seedCredsFromEnv(store);
+    expect(seeded).toContain("typesafe");
+    const auth = AuthStorage.fromStore(store);
+    expect(await auth.getApiKey("typesafe")).toBe("ts-key");
   });
 
   test("empty env seeds nothing", () => {

@@ -87,3 +87,61 @@ export function deriveJudgeOutputs(questions: Record<string, JudgeQuestion>): Ou
   }
   return decl;
 }
+
+// ─────────────── Client contract (System One API) ───────────────
+
+export interface JudgeRequest {
+  model: string;
+  state: JudgeJson;
+  questions: Record<string, JudgeQuestion>;
+}
+
+export type JudgeAnswer =
+  | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number }
+  | {
+      type: "score";
+      score: number;
+      legend: Record<string, string>;
+      probabilities: Record<string, number>;
+      confidence: number;
+    }
+  | { type: "noul"; noul: number };
+
+export interface JudgeResponse {
+  /** Resolved model id (`jev-1.13.0`), never the alias the author wrote. */
+  model: string;
+  answers: Record<string, JudgeAnswer>;
+  usage: { input_tokens: number; output_tokens: number };
+}
+
+/** Pre-wired System One client on `ctx.judge`. Handlers may not `fetch`. */
+export interface JudgeClient {
+  readonly provider: string;
+  ask(req: JudgeRequest, signal: AbortSignal): Promise<JudgeResponse>;
+}
+
+/** A provider-side failure the handler maps onto a result: 401/403 → a
+ * non-retryable fail, 422 → an error halt, 429/529/network → `pause_provider`. */
+export class JudgeProviderError extends Error {
+  constructor(
+    message: string,
+    public readonly provider: string,
+    public readonly httpStatus: number | null,
+    public readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = "JudgeProviderError";
+  }
+}
+
+/** Thrown when no credential row exists for the judge provider. */
+export class JudgeNotCredentialedError extends Error {
+  constructor(public readonly provider: string) {
+    super(`provider "${provider}" is not credentialed — run \`fragua providers add ${provider}\``);
+    this.name = "JudgeNotCredentialedError";
+  }
+}
+
+/** Input-token price for Jev; output tokens are free. Per-provider constant
+ * until a second System One model exists. */
+export const JUDGE_USD_PER_INPUT_TOKEN = 0.042 / 1_000_000;

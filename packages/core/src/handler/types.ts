@@ -8,6 +8,7 @@
 import type { AgentMessage, Message as PiMessage } from "@fragua/types";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
+import type { JudgeClient } from "../types/judge.ts";
 import type { OutputsValue } from "../types/outputs.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
@@ -198,6 +199,10 @@ export interface HandlerContext {
    * surface "X of Y used" on `llm.start.budget`. Undefined when no
    * ceiling is configured for this run. */
   readonly budgetSnapshot?: BudgetSnapshotInput;
+  /** Pre-wired System One client for `type: judge` steps. Optional like
+   * `env`: absent when no judge provider is configured, and the judge
+   * handler halts with a named error rather than falling back to `fetch`. */
+  readonly judge?: JudgeClient;
 }
 
 /** Operator-supplied input to a paused human node. The structured

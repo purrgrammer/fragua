@@ -383,7 +383,9 @@ function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): read
   const byNode = graphLevel.filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : graphLevel;
   if (rows.length === 0) return undefined;
-  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
+  const messages = rows
+    .map((row) => row.content)
+    .filter((m) => m.role !== "system" && m.role !== "tool_node" && m.role !== "judge_node");
   return messages.length > 0 ? messages : undefined;
 }
 
@@ -398,7 +400,9 @@ function loadPriorMessagesForNode(ctx: HandlerContext, pass: number): readonly A
     .since(0)
     .filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration && m.pass === pass);
   if (rows.length === 0) return undefined;
-  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
+  const messages = rows
+    .map((row) => row.content)
+    .filter((m) => m.role !== "system" && m.role !== "tool_node" && m.role !== "judge_node");
   return messages.length > 0 ? messages : undefined;
 }
 

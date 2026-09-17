@@ -73,6 +73,9 @@ export type EventType =
   | "budget.stop"
   // Cost
   | "cost.recorded"
+  // Judge steps (System One calls)
+  | "judge.requested"
+  | "judge.answered"
   // Worktree tree snapshot at a step / HITL boundary (observability).
   // The Diff scrubber's feed. Terminal snapshots are the
   // `fact.snapshot_recorded` fact, not this.
@@ -131,6 +134,8 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "budget.warn",
   "budget.stop",
   "cost.recorded",
+  "judge.requested",
+  "judge.answered",
   "snapshot.captured",
 ];
 

@@ -117,10 +117,34 @@ export interface ToolNodeMessage {
   timestamp: number;
 }
 
+/** Row appended by a `type: judge` graph step — the questions asked and the
+ * typed answers a System One model returned. Like `tool_node`, never feeds
+ * back into an LLM context; the daemon filters it out of priorMessages. */
+export interface JudgeNodeMessage {
+  role: "judge_node";
+  provider: string;
+  /** Resolved model id from the response (`jev-1.13.0`). */
+  model: string;
+  /** Head of the serialised state, capped; the full state is never stored. */
+  statePreview: string;
+  stateBytes: number;
+  /** question id → `{ type, instructions }` as sent (criteria omitted). */
+  questions: Record<string, { type: "choice" | "score" | "noul"; instructions: unknown }>;
+  /** question id → answer as returned by the API. */
+  answers: Record<string, unknown>;
+  /** What `decide:` made of it, when present. */
+  decision?:
+    | { kind: "route"; route: string; belowThreshold: boolean }
+    | { kind: "outcome"; status: "success" | "fail" };
+  durationMs: number;
+  timestamp: number;
+}
+
 declare module "@earendil-works/pi-agent-core" {
   interface CustomAgentMessages {
     system: SystemPromptMessage;
     tool_node: ToolNodeMessage;
+    judge_node: JudgeNodeMessage;
   }
 }
 

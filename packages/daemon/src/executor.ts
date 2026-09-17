@@ -192,6 +192,9 @@ export interface ExecutorOpts {
   registry: AbortRegistry;
   tools: core.ToolRegistry;
   llmCall: LlmCallFn;
+  /** System One client for `type: judge` steps; absent ⇒ judge nodes halt
+   * with a "not configured" error. */
+  judgeClient?: core.JudgeClient;
   maxConcurrentRuns: number;
   /** Upper bound on node-less poll waits in ms. Tests inject a smaller value. */
   pollIntervalMs?: number;
@@ -951,6 +954,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (decision.humanInput !== undefined) ctxOpts.humanInput = decision.humanInput;
     if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
     if (runEnv !== undefined) ctxOpts.env = runEnv;
+    if (opts.judgeClient !== undefined) ctxOpts.judge = opts.judgeClient;
     // Budget snapshot at dispatch time. The backend embeds this verbatim
     // into `llm.start.budget` so the UI can render "X of Y used" without
     // cross-referencing the graph attrs. Only populated when at least one
@@ -1308,6 +1312,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     if (runEnv !== undefined) ctxOpts.env = runEnv;
+    if (opts.judgeClient !== undefined) ctxOpts.judge = opts.judgeClient;
     const ctx = core.buildHandlerContext(ctxOpts);
 
     const invocation = await invokeHandler({

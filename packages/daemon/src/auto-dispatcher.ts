@@ -36,7 +36,7 @@ export interface AutoDispatcherOpts {
   /** Per-kind fallback `maxMs` when the workflow node declares neither
    * `timeout` nor `max_ms`. Keyed by handler kind (`llm`, `tool`).
    * Absent kind → handler's own built-in default applies. */
-  defaultMaxMs?: { llm?: number; tool?: number };
+  defaultMaxMs?: { llm?: number; tool?: number; judge?: number };
 }
 
 /**
@@ -125,7 +125,14 @@ function specsForGraph(
     const first = edges[0]?.to ?? "__end__";
     let resolvedMaxMs: number | undefined;
     try {
-      const fallback = kind === "llm" ? defaultMaxMs?.llm : kind === "tool" ? defaultMaxMs?.tool : undefined;
+      const fallback =
+        kind === "llm"
+          ? defaultMaxMs?.llm
+          : kind === "tool"
+            ? defaultMaxMs?.tool
+            : kind === "judge"
+              ? defaultMaxMs?.judge
+              : undefined;
       resolvedMaxMs = resolveMaxMs(node.attrs, fallback);
     } catch (err) {
       if (err instanceof InvalidDurationError) {
@@ -161,6 +168,19 @@ function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
   };
 }
 
+function malformedJudgeSpec(nodeId: string, message: string): HandlerSpec {
+  return {
+    kind: "judge",
+    sideEffect: "none",
+    maxMs: 50,
+    handler: async () => ({
+      kind: "halt",
+      reason: "error",
+      detail: `judge node "${nodeId}": ${message}`,
+    }),
+  };
+}
+
 function malformedHumanSpec(nodeId: string, message: string): HandlerSpec {
   return {
     kind: "human",
@@ -178,13 +198,7 @@ function specForNode(
   nodeId: string,
   kind: string,
   edges: Array<{ to: string; label?: string; route?: string }>,
-  attrs: {
-    prompt?: string;
-    label?: string;
-    text?: string;
-    routes?: string[];
-    tool_command?: string;
-  },
+  attrs: NodeAttrs,
   resolvedMaxMs: number | undefined,
 ): HandlerSpec {
   const first = edges[0]?.to ?? "__end__";
@@ -245,21 +259,21 @@ function specForNode(
         maxMs: 50,
         handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
       };
-    case "judge":
-      // Not yet dispatchable: the parser + validator accept judge steps
-      // ahead of the handler. Halting here beats the default pass-through
-      // transition, which would silently take the first edge with no
-      // judgment made.
-      return {
-        kind: "judge",
-        sideEffect: "none",
-        maxMs: 50,
-        handler: async () => ({
-          kind: "halt",
-          reason: "error",
-          detail: `judge step "${nodeId}": the judge handler is not implemented yet`,
-        }),
+    case "judge": {
+      if (attrs.judge_state === undefined || attrs.judge_questions === undefined) {
+        return malformedJudgeSpec(nodeId, "missing judge_state / judge_questions (parsed without validation?)");
+      }
+      const judgeOpts: handler.JudgeConfig = {
+        nodeId,
+        state: attrs.judge_state,
+        questions: attrs.judge_questions,
       };
+      if (attrs.judge_decide !== undefined) judgeOpts.decide = attrs.judge_decide;
+      if (attrs.judge_state_max_bytes !== undefined) judgeOpts.stateMaxBytes = attrs.judge_state_max_bytes;
+      if (typeof attrs.model === "string") judgeOpts.model = attrs.model;
+      if (resolvedMaxMs !== undefined) judgeOpts.maxMs = resolvedMaxMs;
+      return handler.makeJudgeHandler(judgeOpts);
+    }
     default:
       return transitionSpec(kind, first);
   }
