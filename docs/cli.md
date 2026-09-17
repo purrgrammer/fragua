@@ -24,7 +24,7 @@ and a follow/tail waits.
 ```sh
 fragua providers add [provider]          # add credentials; --custom for an OpenAI-compatible provider
 fragua providers ls                      # configured providers + default models
-fragua providers rm | test | login | logout <provider>
+fragua providers rm | test | login | logout <provider>   # `test typesafe` makes one judge call
 fragua providers {ls,add,rm,edit}-model  <provider> <id> [flags]
 ```
 
