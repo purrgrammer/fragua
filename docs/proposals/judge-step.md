@@ -589,7 +589,7 @@ shadows, per §10.
 | 2 | `pr_review.verify` | sonnet / low, `[read, grep]`, `retry: synthesize` | **drop-in** | The §3 / §6 example verbatim. Its one repo read (spot-check cited `path:line`) is redundant on the full tier — five upstream `*_verify` lenses already re-opened every citation. Exercises `decide.outcome` + `retry:`. |
 | 3 | `pr_review.scope` → then `review.classify` | sonnet / low, `routes: skip \| quick \| full` | **one-line ×2** | The §2.2 target and the biggest latency win, but needs (i) a `tool` step producing `gh pr diff --stat` (or `diff_stat` on `resolve.outputs` for `review`) and (ii) the `skip` branch's LGTM file write moved to a `tool` step — a judge cannot write. Exercises `decide.route` + `min-confidence` + `below: full`. |
 | 4 | `review.verify` | sonnet / low, `retry: synthesize` | drop-in | Same as 2 over `review.md`; second-wave because `review` runs less often than `pr_review`. |
-| 6 | lens verifies via the `judge` **tool** (§8.2) | sonnet / medium, `[read, grep]` | tool, not step | Keep the lens verify an llm step; add `judge` to its toolset and instruct: after reading each cited location, one `noul` per finding ("does the cited code support the claim") in one call, drop below 0.5, escalate 0.5–0.7 into the review as uncertain. Measures whether calibrated per-item verdicts beat the agent's own drop/keep. |
+| 6 | lens verifies via the `judge` **tool** (§8.2) | sonnet / medium, `[read, grep]` | tool, not step | Keep the lens verify an llm step; add `judge` to its toolset and instruct: after reading each cited location, one `noul` per finding ("does the cited code support the claim") in one call, drop below 0.5, escalate 0.5–0.7 into the review as uncertain. Measures whether calibrated per-item verdicts beat the agent's own drop/keep. **Result (§8.3):** the citation `noul` agrees with human triage 10/10; the severity `score` ranks correctly but its argmax runs a level hot — use it as a contest flag. |
 | 5 | `work.triage` | sonnet, `routes: small \| feature \| bugfix` | one-line + a decision | Criteria ("≤3 packages", "shared contracts") need a package map dumped to a file. Its "not a workable task" `abort` has no judge equivalent — **decided:** add a fourth `blocked` option to the `choice` (routed to a terminal `human` or `exit`), so "not workable" is a judged outcome like the other three. Header comment records haiku misrouting 3/3 here, so `min-confidence` is not optional. |
 
 Together 1–3 cover the whole `decide:` surface inside one workflow, so a
@@ -659,17 +659,60 @@ list of judgments currently made as prose and typed afterwards:
 
 Every one is a `score` (ordered levels) or a `choice` the judge tool can
 answer per item with a distribution, from evidence the agent has already
-gathered. The pattern for a verify lens: keep the step an llm (it opens the
-cited code), then before `emit_output` make **one** `judge` call — one
-`noul` per finding ("does the cited code support the claim"), one `score`
-per finding over the severity rubric as criteria — and set `severity` to the
-judge's level unless the agent names a reason to override. The verdict
-distributions ride the transcript, so a synthesiser (or the operator) can see
-a finding that scored `high` at 0.51 versus one at 0.97.
+gathered. Two experiments over fragua's own review of the judge PR (ten
+findings, every cited `path:line` re-read by the agent, one `judge` call
+each) measure the two halves of the pattern separately:
 
-Which of these earn the change is the same empirical question as §8.1: run
-the lens with and without the tool on the same PR and compare the severity
-distribution the synthesiser receives.
+**Citation check — one `noul` per finding, "does the cited code support the
+claim".** All ten held: nine at 0.87–0.97, one at 0.74 (the review's own Low,
+a "silent zero" in the fold). A second run asked the same question phrased
+with the claim inline and got the same ordering, with that Low at 0.47 — the
+one finding a human triage had also marked as arguable. $0.18 for the agent's
+reading, $0.0001–0.0002 for the judgments. **This half works as authored**:
+the noul agrees with a careful human on all ten and singles out the same
+weakest one.
+
+**Severity calibration — one `score` per finding over the review's rubric.**
+Here the answer is a distribution, and reading it as a level is a mistake:
+
+| Finding (review's level) | judge argmax | conf | p(low, med, high, crit) |
+|---|---|---|---|
+| halt on 401/403 (high) | high | 0.63 | 0, .22, .64, .14 |
+| E047 cascade (medium) | high | 0.50 | 0, .47, .50, .03 |
+| literal state bytes (medium) | high | 0.52 | 0, .30, .53, .17 |
+| probabilities truncation (medium) | critical | 0.45 | 0, .17, .21, .62 |
+| silent zero in fold (low) | critical | 0.15 | 0, .23, .38, .39 |
+| terminal-node dupe (improvement) | medium | 0.62 | .26, .63, .10, .01 |
+| file-leaf reimplemented (improvement) | medium | 0.69 | .21, .71, .07, .01 |
+| malformed-spec dupe (improvement) | low | 0.47 | .49, .49, .02, 0 |
+| optional-ctx dupe (improvement) | medium | 0.73 | .06, .74, .18, .02 |
+| providers `--json` (improvement) | medium | 0.75 | .16, .76, .08, 0 |
+
+Three things fall out. (i) The **ordering** is right: the five real defects
+score 1.6–2.5 on a 0–3 scale, the five duplications 0.5–1.2; the expected
+value ranks findings the way the reviewer did. (ii) The **argmax level is
+inflated by about one** and the confidence is low (0.15–0.75) because
+probability spreads over adjacent levels — that is the primitive working as
+documented (a score is a probability-weighted position, not a pick), not a
+miscalibration. Part of the shift is the agent's rubric: it wrote four levels
+(low … critical) and dropped the review's `improvement`, so five findings had
+no honest home. (iii) The two findings where the judge disagrees hardest
+(silent zero: conf 0.15, p(holds) 0.47; probabilities truncation: p(crit)
+0.62 against the review's medium) are exactly the two a human would want
+re-read. **So severity is not something to hand the judge.** It is a
+contest signal: emit the reviewer's level, attach the judge's expected value
+and confidence, and let the synthesiser surface any finding where the two
+disagree by a level or the confidence is under 0.5.
+
+The pattern for a verify lens, revised: keep the step an llm (it opens the
+cited code); before `emit_output` make **one** `judge` call with a `noul` per
+finding (drop below 0.5, mark 0.5–0.7 as uncertain in the review) and a
+`score` per finding whose criteria are the field's **own** options, verbatim;
+keep the agent's `severity`, add `severity_contested: boolean` when the
+judge's expected level differs by ≥ 1 or its confidence is < 0.5. The
+citation `noul` is the part that earns the tool today; the score earns a
+flag, not a decision. `appraise`'s `cost` / `leverage` and `analyze`'s
+`confidence` are the same shape and should expect the same split.
 
 ## 9. Doors — deferred, sound
 
