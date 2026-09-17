@@ -585,6 +585,11 @@ shadows, per §10.
 Together 1–3 cover the whole `decide:` surface inside one workflow, so a
 single `fragua ci pr_review` run validates the DSL end to end.
 
+Side findings from building the MVP: the executor had `done` / `end` as silent
+terminal aliases (a `tool` step named `done` never ran — fixed, only `exit`
+terminates); the per-step cost window keyed on `llm.start` only (fixed:
+`judge.requested` / `judge.answered` open and close a step).
+
 **Not candidates, though they look like it** (the survey's negative results,
 kept so nobody re-derives them): the eleven `*_verify` lens steps in `review` /
 `pr_review` / `appraise` (their whole job is opening cited `path:line`s in the

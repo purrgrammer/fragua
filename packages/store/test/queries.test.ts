@@ -663,3 +663,51 @@ describe("selectEventsTail (store.getEventsTail)", () => {
     store.close();
   });
 });
+
+describe("getStepAggregates — judge steps", () => {
+  function judgeReq(nodeId: string): ObservabilityEvent {
+    return { type: "judge.requested", payload: { nodeId, iteration: 0, provider: "typesafe", model: "jev-latest" } };
+  }
+  function judgeAns(nodeId: string): ObservabilityEvent {
+    return { type: "judge.answered", payload: { nodeId, iteration: 0, provider: "typesafe", model: "jev-1.13.0" } };
+  }
+
+  test("judge.requested opens a step; its cost.recorded and judge.answered land on it", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      judgeReq("triage"),
+      judgeAns("triage"),
+      costEv("triage", { input_tokens: 509, output_tokens: 74, total_tokens: 583, cost_usd: 0.0000214 }),
+    ]);
+    const aggs = store.getStepAggregates(runId);
+    expect(aggs).toHaveLength(1);
+    const [a] = aggs;
+    expect(a!.nodeId).toBe("triage");
+    expect(a!.inputTokens).toBe(509);
+    expect(a!.billedTokens).toBe(583);
+    expect(a!.costUsd).toBeCloseTo(0.0000214, 9);
+    expect(a!.costEventCount).toBe(1);
+    expect(a!.endedAtMs).not.toBeNull();
+    expect(a!.stopReason).toBeNull();
+    store.close();
+  });
+
+  test("a judge step and an llm step on different nodes stay separate rows", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      judgeReq("triage"),
+      costEv("triage", { input_tokens: 500, output_tokens: 70, total_tokens: 570, cost_usd: 0.00002 }),
+      startEv("review"),
+      doneEv("review", { stop_reason: "end_turn" }),
+      costEv("review", { input_tokens: 1000, output_tokens: 200, total_tokens: 1200, cost_usd: 0.03 }),
+    ]);
+    const aggs = store.getStepAggregates(runId);
+    expect(aggs.map((a) => [a.nodeId, a.inputTokens])).toEqual([
+      ["triage", 500],
+      ["review", 1000],
+    ]);
+    store.close();
+  });
+});

@@ -8,6 +8,29 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **`type: judge` steps.** A turn-less decision step: `state:` (literal text,
+  `${{ inputs }}` / `${{ outputs }}`, or `{file: <path>}` leaves read from the
+  worktree) plus `questions:` of `choice` / `score` / `noul`, asked of a System
+  One model (TypeSafe Jev) in one call. Every question becomes a typed output
+  (`${{ outputs.<judge>.<q>.choice }}`, `.confidence`, `.probabilities.<opt>`,
+  `.noul`, `.score` / `.level`). An optional `decide:` binds a `choice` to
+  routing (`decide.route` with `min-confidence` + a `below:` landing) or a `noul`
+  to success / fail (`decide.outcome`), so `routes:`, `on:`, `retry:` and
+  `goal-gate` compose unchanged. Judges may run as `parallel` branches.
+  Validator codes E047 / E048 and W020 / W021. Credential: `fragua providers add
+  typesafe` (or `TYPESAFE_API_KEY` for `fragua ci`); `fragua providers test
+  typesafe` makes one call. Experimental — see `docs/proposals/judge-step.md`.
+
+### Fixed
+
+- A step named `done` or `end` now executes. Both names were silent terminal
+  aliases in the executor, so a workflow that validated clean skipped such a step
+  and ended the run. Only `exit` (and the internal `__end__`) end a run.
+- Per-step cost breakdown now includes judge steps (their spend already counted
+  in run totals but had no step row).
+
 ### Changed
 
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a

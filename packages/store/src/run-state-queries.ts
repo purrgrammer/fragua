@@ -719,9 +719,10 @@ export function writeRunStateProjection(
 // ─────────────────────────────────────────────────────────────────────
 
 /**
- * One row per `llm.start` event for a run. Cost / token sums and the
- * final `llm.done` are computed over the window
- *   (this llm.start, next llm.start for the same nodeId)
+ * One row per step-opening event for a run — `llm.start` (an agent turn) or
+ * `judge.requested` (a judge call, which never emits `llm.*`). Cost / token
+ * sums and the final `llm.done` / `judge.answered` are computed over the window
+ *   (this opener, next opener for the same nodeId)
  * which is the correct boundary for `cost.recorded` events that fire
  * AFTER `llm.done` (one llm.start opens the step; the agent emits
  * multiple message_end → cost.recorded inside it on tool-using turns).
@@ -756,7 +757,7 @@ const STEP_AGGREGATES_SQL = `
         ORDER BY seq
       ) AS next_seq
     FROM events
-    WHERE run_id = ?1 AND type = 'llm.start'
+    WHERE run_id = ?1 AND type IN ('llm.start', 'judge.requested')
   )
   SELECT
     s.seq                                                                         AS startSeq,
@@ -772,7 +773,7 @@ const STEP_AGGREGATES_SQL = `
     (
       SELECT MAX(d.ts) FROM events d
       WHERE d.run_id = ?1
-        AND d.type   = 'llm.done'
+        AND d.type   IN ('llm.done', 'judge.answered')
         AND json_extract(d.payload, '$.nodeId') = s.node_id
         AND d.seq    > s.seq
         AND (s.next_seq IS NULL OR d.seq < s.next_seq)
@@ -780,7 +781,7 @@ const STEP_AGGREGATES_SQL = `
     (
       SELECT json_extract(d.payload, '$.stop_reason') FROM events d
       WHERE d.run_id = ?1
-        AND d.type   = 'llm.done'
+        AND d.type   IN ('llm.done', 'judge.answered')
         AND json_extract(d.payload, '$.nodeId') = s.node_id
         AND d.seq    > s.seq
         AND (s.next_seq IS NULL OR d.seq < s.next_seq)

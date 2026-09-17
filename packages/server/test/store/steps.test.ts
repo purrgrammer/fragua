@@ -414,3 +414,23 @@ describe("fillOrphanDurations", () => {
     expect(filled[0]!.durationMs).toBe(4_000); // 5000 − 1000
   });
 });
+
+describe("eventsToSteps — judge steps", () => {
+  test("judge.requested opens a step with provider/model and suppresses the synthetic tool row", () => {
+    const events = [
+      ev("fact.node_started", 1000, { nodeId: "triage" }),
+      ev("judge.requested", 1010, { nodeId: "triage", iteration: 0, provider: "typesafe", model: "jev-latest" }),
+      ev("judge.answered", 1700, { nodeId: "triage", iteration: 0, provider: "typesafe", model: "jev-1.13.0" }),
+      ev("cost.recorded", 1701, { nodeId: "triage", iteration: 0, cost_usd: 0.00002, input_tokens: 509 }),
+      ev("fact.node_completed", 1702, { nodeId: "triage", nextNode: "report" }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(1);
+    const s = steps[0]!;
+    expect(s.nodeId).toBe("triage");
+    expect(s.startSeq).toBe(1010);
+    expect(s.provider).toBe("typesafe");
+    expect(s.model).toBe("jev-latest");
+    expect(s.startedAt).toBe(new Date(1000).toISOString());
+  });
+});

@@ -293,9 +293,10 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
-    if (ev.type === "llm.start") {
-      // This node opened an LLM call — it's a llm, not a tool
-      // node. Clear any pending tool-step entry so we don't emit a
+    if (ev.type === "llm.start" || ev.type === "judge.requested") {
+      // This node opened an LLM call (or a judge call — same step shape,
+      // one row in the Cost breakdown with its own `cost.recorded`). Not a
+      // tool node: clear any pending tool-step entry so we don't emit a
       // duplicate row at fact.node_completed time.
       if (nodeId !== "") pendingToolNode.delete(nodeId);
       // Resume-fold: a paused node has just re-emitted `fact.node_started`

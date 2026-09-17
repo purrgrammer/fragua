@@ -323,9 +323,10 @@ function nodeRetryCount(routing: Record<string, unknown>, nodeId: string): numbe
   return getRetry(routing).count(nodeId);
 }
 
-/** Sentinel convention: a transition with nextNode === "__end__" terminates the run.
- * `exit` is the canonical reserved-sink name in the new GHA-style authoring
- * shape; `end` / `done` are historical aliases retained for compat. */
+/** A transition with nextNode === "__end__" (the executor's sentinel) or
+ * `exit` (the reserved sink; parser E028 pins the name to `type: exit`)
+ * terminates the run. No other name is terminal — a step called `done`
+ * or `end` is an ordinary step and must dispatch. */
 function isTerminalNode(nodeId: string): boolean {
-  return nodeId === "__end__" || nodeId === "exit" || nodeId === "end" || nodeId === "done";
+  return nodeId === "__end__" || nodeId === "exit";
 }

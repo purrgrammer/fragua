@@ -114,12 +114,12 @@ steps:
       kind: "llm",
       sideEffect: "external",
       maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "done", tokens: 100, costUsd: 1.5 }),
+      handler: async () => ({ kind: "transition", nextNode: "exit", tokens: 100, costUsd: 1.5 }),
     });
-    // Deliberately do NOT register a handler for `done` — exit
-    // terminals have no handlers in real workflows. If the fix
-    // regresses, the executor will try to dispatch `done` on resume
-    // and crash; this test catches that by asserting `completed`.
+    // Deliberately do NOT register a handler for `exit` — the reserved
+    // sink has no handler in real workflows. If the fix regresses, the
+    // executor will try to dispatch `exit` on resume and crash; this test
+    // catches that by asserting `completed`.
     enqueue(r, "rb-term", "start");
     r.store.claimNextRun(1);
     await runOne("rb-term", {

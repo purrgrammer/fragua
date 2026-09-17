@@ -399,10 +399,7 @@ export function applyGoalGate(args: {
     const completedNode = graph?.nodes[currentNode];
     if (graph != null && completedNode != null) {
       const isTerminalNext =
-        result.nextNode === "__end__" ||
-        result.nextNode === "end" ||
-        result.nextNode === "done" ||
-        (result.nextNode != null && graph.nodes[result.nextNode]?.type === "exit");
+        result.nextNode === "__end__" || (result.nextNode != null && graph.nodes[result.nextNode]?.type === "exit");
       // Synthetic outcome map: prior gates from routing + this turn's gate.
       const priorOutcomes = readGateOutcomes(state.routing);
       const synthOutcomes = new Map(priorOutcomes);

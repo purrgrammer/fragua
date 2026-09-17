@@ -359,7 +359,7 @@ ci:
   max-retries: 5
 ```
 
-Side-effect-only: exit 0 → `success`, non-zero → `fail`. The exit code is the entire result — **tool steps don't feed data forward**. stdout/stderr are kept as artifacts for debugging. If you need to run a script *and reason about its output*, call it from inside an `llm` step's `bash` tool instead (E008 rejects an empty `run`).
+Side-effect-only: exit 0 → `success`, non-zero → `fail`. The exit code is the entire result — **tool steps don't feed data forward** (except through files a later step reads, e.g. under `.fragua/scratch/`). Substituted `${{ inputs.x }}` values arrive **single-quoted** (`'event taxonomy'`), so they are safe as bare arguments or assignments (`focus=${{ inputs.focus }}`) but must **not** be placed inside another quoted string — `"…points>${{ inputs.min-points }}"` renders as `"…points>'120'"`. Bind to a shell variable first and interpolate that. stdout/stderr are kept as artifacts for debugging. If you need to run a script *and reason about its output*, call it from inside an `llm` step's `bash` tool instead (E008 rejects an empty `run`).
 
 ### Judge steps
 
