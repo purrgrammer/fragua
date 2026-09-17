@@ -743,6 +743,7 @@ export interface StepAggregateRow {
   billedTokens: number;
   costEventCount: number;
   endedAtMs: number | null;
+  /** Last `llm.done.stop_reason` in the window; always null for a judge step. */
   stopReason: string | null;
 }
 

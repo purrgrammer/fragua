@@ -103,6 +103,18 @@ const FANOUT_COMMIT_ATTEMPTS = 8;
 
 type FanoutAppendOpts = { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number };
 
+/** The optional per-run context fields, applied identically at the linear
+ * and the fan-out-branch dispatch sites so a field added to one can't be
+ * silently missing inside a `parallel` branch. */
+function applyOptionalCtxFields(
+  ctxOpts: core.BuildContextOpts,
+  runEnv: ExecutionEnvironment | undefined,
+  judgeClient: core.JudgeClient | undefined,
+): void {
+  if (runEnv !== undefined) ctxOpts.env = runEnv;
+  if (judgeClient !== undefined) ctxOpts.judge = judgeClient;
+}
+
 /** Outcome of a serialized fan-out commit. A tagged `false`: `occ` is genuine
  * OCC exhaustion (feed the conflict controller), `status` is the run leaving
  * `running` under us (don't — it's already parked). */
@@ -953,8 +965,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     if (decision.humanInput !== undefined) ctxOpts.humanInput = decision.humanInput;
     if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
-    if (runEnv !== undefined) ctxOpts.env = runEnv;
-    if (opts.judgeClient !== undefined) ctxOpts.judge = opts.judgeClient;
+    applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
     // Budget snapshot at dispatch time. The backend embeds this verbatim
     // into `llm.start.budget` so the UI can render "X of Y used" without
     // cross-referencing the graph attrs. Only populated when at least one
@@ -1311,8 +1322,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     };
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
-    if (runEnv !== undefined) ctxOpts.env = runEnv;
-    if (opts.judgeClient !== undefined) ctxOpts.judge = opts.judgeClient;
+    applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
     const ctx = core.buildHandlerContext(ctxOpts);
 
     const invocation = await invokeHandler({

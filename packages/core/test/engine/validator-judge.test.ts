@@ -291,3 +291,28 @@ steps:
     expect(m).not.toMatch(/question "a"/);
   });
 });
+
+describe("judge — review follow-ups", () => {
+  test("E047 on an undeclared route question does not cascade into one error per route", () => {
+    const src = ROUTED("decide:\n      route: {question: nope}", OK_ROUTES);
+    const m = messages(src, "E047");
+    expect(m).toHaveLength(1);
+    expect(m[0]).toMatch(/names question "nope"/);
+  });
+
+  test("W021 counts the literal spans of a mixed literal + token string", () => {
+    const big = "x".repeat(17 * 1024);
+    const src = `
+name: wf
+steps:
+  j:
+    type: judge
+    state:
+      a: "${big} \${{ inputs.z }}"
+    questions:
+      ok: {type: noul, instructions: ok?}
+    next: exit
+`;
+    expect(codes(src, "W021")).toEqual(["W021"]);
+  });
+});

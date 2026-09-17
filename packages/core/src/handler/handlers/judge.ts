@@ -12,6 +12,7 @@ import type { JudgeNodeMessage } from "@fragua/types";
 import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
 import { substitute } from "../../engine/substitution.ts";
 import {
+  isJudgeFileLeaf,
   JUDGE_DEFAULT_MODEL,
   JUDGE_DEFAULT_STATE_MAX_BYTES,
   JUDGE_USD_PER_INPUT_TOKEN,
@@ -73,7 +74,9 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       if (err instanceof JudgeNotCredentialedError) return halt(err.message);
       if (err instanceof JudgeProviderError) {
         if (err.httpStatus === 401 || err.httpStatus === 403) {
-          return halt(`judge provider "${err.provider}" rejected the credential (${err.httpStatus}) — ${err.message}`);
+          // A rotated / expired key is routine; like an llm boundary auth
+          // failure it is a node `fail` an `on: {fail}` edge can route, not a halt.
+          return fail(`judge provider "${err.provider}" rejected the credential (${err.httpStatus}) — ${err.message}`);
         }
         if (err.httpStatus === 422 || err.httpStatus === 400) {
           return halt(`judge request rejected by "${err.provider}" (${err.httpStatus}) — ${err.message}`);
@@ -129,7 +132,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       provider: judge.provider,
       model: response.model,
       durationMs,
-      answers: response.answers,
+      answers: capAnswersForEvent(response.answers),
       ...(recordedDecision !== undefined ? { decision: recordedDecision } : {}),
     });
     ctx.emit("cost.recorded", {
@@ -184,7 +187,7 @@ async function resolveState(state: JudgeState, ctx: HandlerContext, nodeId: stri
         throw err;
       }
     }
-    if ("file" in s && typeof s.file === "string" && Object.keys(s).length === 1) {
+    if (isJudgeFileLeaf(s)) {
       if (ctx.env === undefined) {
         return {
           halt: `judge step "${nodeId}": \`${path}\` is a {file} leaf but no execution environment is wired (this is a bug — every dispatch must carry ctx.env)`,
@@ -207,6 +210,29 @@ async function resolveState(state: JudgeState, ctx: HandlerContext, nodeId: stri
     return { state: out };
   };
   return walk(state, "state");
+}
+
+// ─────────────── observability ───────────────
+
+/** Widest `probabilities` map kept on the `judge.answered` event. A 255-option
+ * choice would push the payload past the 4 KiB observability cap and be
+ * replaced by a truncation marker; the `judge_node` message row keeps the
+ * full distribution. */
+export const JUDGE_EVENT_MAX_OPTIONS = 32;
+
+function capAnswersForEvent(answers: Record<string, JudgeAnswer>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [id, a] of Object.entries(answers)) {
+    if (a.type !== "choice" || Object.keys(a.probabilities).length <= JUDGE_EVENT_MAX_OPTIONS) {
+      out[id] = a;
+      continue;
+    }
+    const top = Object.entries(a.probabilities)
+      .sort((x, y) => y[1] - x[1])
+      .slice(0, JUDGE_EVENT_MAX_OPTIONS);
+    out[id] = { ...a, probabilities: Object.fromEntries(top), truncated: true };
+  }
+  return out;
 }
 
 // ─────────────── answers → derived outputs ───────────────

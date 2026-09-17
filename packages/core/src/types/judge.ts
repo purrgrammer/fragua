@@ -23,6 +23,13 @@ export type JudgeQuestionType = JudgeQuestion["type"];
 export type JudgeStateLeaf = string | { file: string };
 export type JudgeState = JudgeStateLeaf | { [k: string]: JudgeState };
 
+/** The one `{file}` leaf test, shared by parser, validator and handler. */
+export function isJudgeFileLeaf(s: JudgeState): s is { file: string } {
+  return (
+    typeof s === "object" && s !== null && "file" in s && typeof s.file === "string" && Object.keys(s).length === 1
+  );
+}
+
 /** `decide.route` — a `choice` answer drives route-case edge selection. Below
  * `min_confidence` the handler takes `below` instead of the chosen option. */
 export interface JudgeRouteDecision {

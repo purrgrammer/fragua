@@ -134,3 +134,35 @@ describe("makeJudgeClient", () => {
     await expect(client.ask(REQ, ctrl.signal)).rejects.toBeDefined();
   });
 });
+
+describe("makeJudgeClient — answer shape validation", () => {
+  const body = (answers: unknown, model = "jev-1.13.0") =>
+    JSON.stringify({ model, answers, usage: { input_tokens: 1, output_tokens: 1 } });
+  const ask = async (b: string) => {
+    const { fetch: f } = fetchSeq([new Response(b, { status: 200 })]);
+    const client = makeJudgeClient({ getApiKey: async () => "k", fetch: f, sleep: noSleep });
+    return client.ask(REQ, signal()).catch((e: unknown) => e);
+  };
+
+  test.each<[string, unknown, RegExp]>([
+    ["choice without probabilities", { q: { type: "choice", choice: "a", confidence: 0.9 } }, /probabilities/],
+    [
+      "choice with a non-numeric probability",
+      { q: { type: "choice", choice: "a", confidence: 0.9, probabilities: { a: "high" } } },
+      /probabilities/,
+    ],
+    ["noul without a number", { q: { type: "noul", noul: "yes" } }, /`noul`/],
+    ["score without confidence", { q: { type: "score", score: 1, probabilities: { "0": 1 } } }, /confidence/],
+    ["unknown type", { q: { type: "rank" } }, /unknown answer type/],
+  ])("%s → JudgeProviderError", async (_n, answers, re) => {
+    const err = await ask(body(answers));
+    expect(err).toBeInstanceOf(JudgeProviderError);
+    expect((err as JudgeProviderError).message).toMatch(re);
+  });
+
+  test("an implausibly long model id is rejected", async () => {
+    const err = await ask(body({ q: { type: "noul", noul: 0.5 } }, "x".repeat(200)));
+    expect(err).toBeInstanceOf(JudgeProviderError);
+    expect((err as JudgeProviderError).message).toMatch(/model/);
+  });
+});

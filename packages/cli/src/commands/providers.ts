@@ -267,6 +267,8 @@ async function testJudgeProvider(auth: AuthStorage, modelOverride: string | unde
     return 1;
   }
   const model = modelOverride ?? JUDGE_DEFAULT_MODEL;
+  // One attempt on purpose: this is a credential check, and a 429 should read
+  // as "rate limited" now, not as a 3-attempt backoff.
   const client = makeJudgeClient({ getApiKey: () => auth.getApiKey(provider), maxAttempts: 1 });
   console.log(chalk.dim(`testing ${provider}/${model} …`));
   const started = Date.now();

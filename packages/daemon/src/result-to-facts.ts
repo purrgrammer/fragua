@@ -3,7 +3,7 @@
 // (intent / done / failed) are NOT included — they're already durable via
 // the pre-commit recorder before this function runs.
 
-import { getRetry, readGoalGateRetries } from "@fragua/core";
+import { getRetry, isTerminalNextNode, readGoalGateRetries } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 import { passField, type UsageTotals } from "./executor-helpers.ts";
@@ -92,10 +92,10 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       Object.assign(payload, passField(pass));
       if (result.modelName != null) payload.modelName = result.modelName;
       if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
-      // Route field lands on the fact only when a routing-node llm
-      // committed to a branch via the synthesised `route` tool.
-      // Non-routing nodes leave
-      // `result.route` undefined; the field stays absent from the JSON.
+      // Route field lands on the fact when a routing node picked a branch —
+      // an llm via the synthesised `route` tool, or a judge via
+      // `decide.route`. Non-routing nodes leave `result.route` undefined;
+      // the field stays absent from the JSON.
       if (result.route != null && result.route.length > 0) payload.route = result.route;
       // Structured outputs: attach unconditionally. The store spills an
       // oversized struct to the blob CAS at append time (the event keeps a tiny
@@ -323,10 +323,9 @@ function nodeRetryCount(routing: Record<string, unknown>, nodeId: string): numbe
   return getRetry(routing).count(nodeId);
 }
 
-/** A transition with nextNode === "__end__" (the executor's sentinel) or
- * `exit` (the reserved sink; parser E028 pins the name to `type: exit`)
- * terminates the run. No other name is terminal — a step called `done`
- * or `end` is an ordinary step and must dispatch. */
+/** See `isTerminalNextNode` in `@fragua/core` — the one predicate both this
+ * fold and the transition planner use. Without a graph in hand this arm
+ * relies on the parser pinning the name `exit` to `type: exit` (E028). */
 function isTerminalNode(nodeId: string): boolean {
-  return nodeId === "__end__" || nodeId === "exit";
+  return isTerminalNextNode(nodeId, null);
 }

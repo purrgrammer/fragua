@@ -346,9 +346,8 @@ describe("judge handler — failure modes", () => {
     }
   });
 
-  test("401 / 422 / not-credentialed → error halt with the provider detail", async () => {
+  test("422 / not-credentialed → error halt with the provider detail", async () => {
     const cases: Array<[unknown, RegExp]> = [
-      [new JudgeProviderError("bad key", "typesafe", 401), /rejected the credential \(401\)/],
       [
         new JudgeProviderError("Input should be a valid list", "typesafe", 422),
         /rejected by "typesafe" \(422\).*valid list/,
@@ -423,6 +422,48 @@ describe("judge handler — decide.outcome over several nouls (all-of)", () => {
     expect(r).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
     if (r.kind === "transition") {
       expect(r.failureReason).toBe("bar_held=0.41 < min 0.6");
+    }
+  });
+});
+
+describe("judge handler — review follow-ups", () => {
+  test("401 is a node fail (routable), not a halt", async () => {
+    const cap = fresh();
+    const spec = makeJudgeHandler({ nodeId: "j", state: "x", questions: { ok: OK } });
+    const result = await spec.handler(
+      stubCtx(cap, { judge: throwingJudge(new JudgeProviderError("bad key", "typesafe", 401)) }),
+    );
+    expect(result).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    if (result.kind === "transition") expect(result.failureReason).toMatch(/rejected the credential \(401\)/);
+  });
+
+  test("judge.answered caps a wide choice distribution to the top options and flags it", async () => {
+    const cap = fresh();
+    const opts: Record<string, string> = {};
+    const probs: Record<string, number> = {};
+    for (let i = 0; i < 60; i++) {
+      opts[`o${i}`] = `option ${i}`;
+      probs[`o${i}`] = i === 7 ? 0.41 : 0.01;
+    }
+    const spec = makeJudgeHandler({
+      nodeId: "j",
+      state: "x",
+      questions: { pick: { type: "choice", instructions: "pick", criteria: opts } },
+    });
+    const answers: Record<string, JudgeAnswer> = {
+      pick: { type: "choice", choice: "o7", confidence: 0.4, probabilities: probs },
+    };
+    const result = await spec.handler(stubCtx(cap, { judge: stubJudge(answers, cap) }));
+    expect(result.kind).toBe("transition");
+    const ev = cap.events.find((e) => e.type === "judge.answered")!;
+    const emitted = (ev.payload["answers"] as Record<string, Record<string, unknown>>)["pick"]!;
+    expect(Object.keys(emitted["probabilities"] as object)).toHaveLength(32);
+    expect((emitted["probabilities"] as Record<string, number>)["o7"]).toBe(0.41);
+    expect(emitted["truncated"]).toBe(true);
+    // the message row keeps the full distribution
+    const msg = cap.messages[0]!;
+    if (msg.role === "judge_node") {
+      expect(Object.keys((msg.answers["pick"] as { probabilities: object }).probabilities)).toHaveLength(60);
     }
   });
 });

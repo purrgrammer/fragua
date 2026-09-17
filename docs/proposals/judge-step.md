@@ -562,7 +562,7 @@ instructions/criteria); derived `outputs:`; `decide.route` with `min-confidence`
 `fragua providers` verbs + `TYPESAFE_API_KEY` seeding; cost / `judge.*`
 observability / `judge_node` message role; judges admitted in `parallel` branches (E041); parser + E047–E048 / W020–W021; `ir_version`
 v4 identity converter; `auto-dispatcher` case; web: icon + inspector + message
-row rendering; a `--json` `fragua providers test typesafe`.
+row rendering. (`--json` output for `fragua providers test typesafe` is deferred to §9.)
 
 **Out (doors, §9):** thread-as-state; a
 `command:` state source; a second System One provider; `score`-driven routing;
@@ -633,6 +633,8 @@ run that need no model at all.
   accepts objects; the substitution resolver would need a non-string mode.
 - **SDK.** `@typesafe-ai/sdk` if retries / typing / a second model make the
   hand-rolled client grow past its rationale.
+- **`--json` on `fragua providers test typesafe`.** `{provider, model, noul,
+  inputTokens, latencyMs}` for scripted credential checks.
 
 ## 10. Risks
 

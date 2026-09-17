@@ -91,6 +91,13 @@ function parseResponse(text: string, provider: string): JudgeResponse {
   if (typeof answers !== "object" || answers === null || typeof r["model"] !== "string") {
     throw new JudgeProviderError("response missing `model` / `answers`", provider, 200);
   }
+  if (r["model"].length > MAX_MODEL_ID_CHARS) {
+    throw new JudgeProviderError("response `model` id is implausibly long", provider, 200);
+  }
+  for (const [id, a] of Object.entries(answers as Record<string, unknown>)) {
+    const problem = answerShapeProblem(a);
+    if (problem !== undefined) throw new JudgeProviderError(`answer "${id}": ${problem}`, provider, 200);
+  }
   return {
     model: r["model"],
     answers: answers as JudgeResponse["answers"],
@@ -99,6 +106,41 @@ function parseResponse(text: string, provider: string): JudgeResponse {
       output_tokens: typeof usage?.["output_tokens"] === "number" ? usage["output_tokens"] : 0,
     },
   };
+}
+
+/** Bounds the resolved model id so a hostile response can't push the
+ * `judge.answered` / `cost.recorded` payloads or the message row past caps. */
+const MAX_MODEL_ID_CHARS = 128;
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function isProbabilityMap(v: unknown): v is Record<string, number> {
+  return typeof v === "object" && v !== null && !Array.isArray(v) && Object.values(v).every(isFiniteNumber);
+}
+
+/** Structural check per answer — the shapes the API documents. Returns a
+ * one-line problem or undefined when the answer is well-formed. */
+function answerShapeProblem(a: unknown): string | undefined {
+  if (typeof a !== "object" || a === null) return "not an object";
+  const o = a as Record<string, unknown>;
+  switch (o["type"]) {
+    case "noul":
+      return isFiniteNumber(o["noul"]) ? undefined : "`noul` is not a number";
+    case "choice":
+      if (typeof o["choice"] !== "string") return "`choice` is not a string";
+      if (!isProbabilityMap(o["probabilities"])) return "`probabilities` is not a map of numbers";
+      if (!isFiniteNumber(o["confidence"])) return "`confidence` is not a number";
+      return undefined;
+    case "score":
+      if (!isFiniteNumber(o["score"])) return "`score` is not a number";
+      if (!isProbabilityMap(o["probabilities"])) return "`probabilities` is not a map of numbers";
+      if (!isFiniteNumber(o["confidence"])) return "`confidence` is not a number";
+      return undefined;
+    default:
+      return `unknown answer type ${JSON.stringify(o["type"])}`;
+  }
 }
 
 function statusLabel(status: number): string {

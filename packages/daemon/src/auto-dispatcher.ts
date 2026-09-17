@@ -136,7 +136,7 @@ function specsForGraph(
       resolvedMaxMs = resolveMaxMs(node.attrs, fallback);
     } catch (err) {
       if (err instanceof InvalidDurationError) {
-        specs.set(node.id, malformedTimeoutSpec(node.id, err.message));
+        specs.set(node.id, errorSpec(kind, node.id, err.message));
         continue;
       }
       throw err;
@@ -155,41 +155,18 @@ function specsForGraph(
   return specs;
 }
 
-function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
+/** A spec whose only job is to halt the run with a clean, named error — for a
+ * node whose attrs failed to resolve at dispatch (malformed timeout, a judge
+ * missing its blocks, a human step with no usable routes). */
+function errorSpec(kind: string, nodeId: string, message: string): HandlerSpec {
   return {
-    kind: "llm",
+    kind,
     sideEffect: "none",
     maxMs: 50,
     handler: async () => ({
       kind: "halt",
       reason: "error",
-      detail: `node "${nodeId}": ${message}`,
-    }),
-  };
-}
-
-function malformedJudgeSpec(nodeId: string, message: string): HandlerSpec {
-  return {
-    kind: "judge",
-    sideEffect: "none",
-    maxMs: 50,
-    handler: async () => ({
-      kind: "halt",
-      reason: "error",
-      detail: `judge node "${nodeId}": ${message}`,
-    }),
-  };
-}
-
-function malformedHumanSpec(nodeId: string, message: string): HandlerSpec {
-  return {
-    kind: "human",
-    sideEffect: "none",
-    maxMs: 50,
-    handler: async () => ({
-      kind: "halt",
-      reason: "error",
-      detail: `human node "${nodeId}": ${message}`,
+      detail: `${kind} node "${nodeId}": ${message}`,
     }),
   };
 }
@@ -227,7 +204,7 @@ function specForNode(
           edges: humanEdges,
         });
       } catch (err) {
-        return malformedHumanSpec(nodeId, err instanceof Error ? err.message : String(err));
+        return errorSpec("human", nodeId, err instanceof Error ? err.message : String(err));
       }
     }
     case "tool": {
@@ -261,7 +238,7 @@ function specForNode(
       };
     case "judge": {
       if (attrs.judge_state === undefined || attrs.judge_questions === undefined) {
-        return malformedJudgeSpec(nodeId, "missing judge_state / judge_questions (parsed without validation?)");
+        return errorSpec("judge", nodeId, "missing judge_state / judge_questions (parsed without validation?)");
       }
       const judgeOpts: handler.JudgeConfig = {
         nodeId,

@@ -2,7 +2,7 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import type { Edge, Graph, NodeAttrs } from "../types/graph.ts";
-import type { JudgeState } from "../types/judge.ts";
+import { isJudgeFileLeaf, type JudgeState } from "../types/judge.ts";
 import { isOutputRecord, type OutputProfile } from "../types/outputs.ts";
 import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
@@ -739,6 +739,9 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           `judge "${n.id}" \`decide.route\` question "${r.question}" is a \`${q.type}\` — only a \`choice\` can drive routing`,
         );
       }
+      // With no usable choice the option ⇄ route cross-checks would flag every
+      // route and bury the diagnostic above; the one error is the whole story.
+      if (q === undefined || q.type !== "choice") continue;
       if (routes.length === 0) {
         err(
           "E047",
@@ -1374,8 +1377,11 @@ const JUDGE_LITERAL_STATE_WARN_BYTES = 16 * 1024;
  * leaves are excluded (their size is only known at dispatch). */
 function judgeLiteralStateBytes(state: JudgeState | undefined): number {
   if (state === undefined) return 0;
-  if (typeof state === "string") return state.includes("${{") ? 0 : new TextEncoder().encode(state).byteLength;
-  if ("file" in state && typeof state.file === "string" && Object.keys(state).length === 1) return 0;
+  if (typeof state === "string") {
+    // Count only the literal spans; a `${{ … }}` token's size is unknown until dispatch.
+    return new TextEncoder().encode(state.replace(/\$\{\{[^}]*\}\}/g, "")).byteLength;
+  }
+  if (isJudgeFileLeaf(state)) return 0;
   let n = 0;
   for (const v of Object.values(state)) n += judgeLiteralStateBytes(v as JudgeState);
   return n;
