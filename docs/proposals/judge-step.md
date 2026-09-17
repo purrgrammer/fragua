@@ -811,6 +811,27 @@ so with numbers. (iii) Faster and cheaper because the read step does one thing
 free. (iv) The empty-list path ran twice (security, performance: no scan
 findings ⇒ no call, `kept: []`).
 
+**`pr_review` on the same PR, posts stubbed — three runs, two lessons.** The
+unattended bar is a third per-item gate, and its first two phrasings failed
+in instructive ways. (1) `in_scope` asked "per `item.bar`, is this not on the
+kill list?" — it echoed the reader's own note (`bar: clears` → 0.84 / 0.79)
+for two architecture findings that the review-level `bar_held` then rejected
+at 0.32, so `synthesize` re-rendered the same two items until the gate's
+retries ran out. A noul pointed at the agent's verdict returns the agent's
+verdict. (2) Rephrased as one structured "is it none of these five kill-list
+items" question, it sat at 0.42–0.50 on every finding — the composite-noul
+drift measured in §8.1 — and `keep` dropped everything for the wrong reason.
+(3) Two narrow positive nouls, `concrete` (names a reachable consequence, not
+a preference) and `touched` (in code this PR changed), each answerable, gated
+all-of with `holds`: the three integration candidates fell at 0.28–0.58 on
+one gate or another — including the `run-follow.ts` staleness `review` had
+kept, which under the unattended bar's "unchanged code" rule is out of scope
+by design — the review came back `All clear`, the gate passed first time
+(`bar_held` 0.84), verdict `comment`, $4.22 against $5.34 for main's lenses
+on the same PR. The integration scan hit its 15-minute branch timeout on all
+three runs, as it did on every earlier `pr_review` run of this PR; unrelated
+to the judge and noted in §10.
+
 Two quick-tier runs on merged PR #90 (both routed `quick` at 0.66) exercised
 the resolve script end to end: `diff_spec` came back as the PR's own range and
 both reviews landed at signoff for $0.26.
