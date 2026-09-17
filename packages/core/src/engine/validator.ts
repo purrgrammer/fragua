@@ -3,7 +3,7 @@
 
 import type { Edge, Graph, NodeAttrs } from "../types/graph.ts";
 import { isJudgeFileLeaf, type JudgeState } from "../types/judge.ts";
-import { isOutputRecord, type OutputProfile } from "../types/outputs.ts";
+import { isOutputRecord, type OutputProfile, resolveOutputProfile } from "../types/outputs.ts";
 import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
@@ -78,6 +78,9 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "judge_questions",
   "judge_decide",
   "judge_state_max_bytes",
+  "judge_for_each",
+  "judge_keep",
+  "judge_for_each_max_items",
   "outputs",
   "branches",
   "concurrency",
@@ -581,7 +584,13 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     };
     for (const n of nodes) {
       if (n.type === "start" || n.type === "exit") continue;
-      const fields = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
+      const fields = [
+        n.attrs.prompt,
+        n.attrs.text,
+        n.attrs.tool_command,
+        n.attrs.judge_for_each,
+        ...judgeStateStrings(n.attrs.judge_state),
+      ];
       for (const f of fields) {
         if (typeof f !== "string") continue;
         for (const ref of outputReferences(f)) {
@@ -799,6 +808,47 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       }
     } else if (routes.length > 0) {
       err("E047", `judge "${n.id}" declares \`routes:\` but no \`decide.route\` — nothing would pick a route`);
+    }
+
+    // E049: a `for-each` judge must point at an array-typed output, and its
+    // `keep:` at one of its own nouls. The parser typed `kept` / `dropped`
+    // from the same lookup; when it could not, this is the diagnostic.
+    const forEach = n.attrs.judge_for_each;
+    if (forEach !== undefined) {
+      const ref = outputReferences(forEach)[0];
+      const producer = ref === undefined ? undefined : graph.nodes[ref.producer];
+      const profile =
+        ref === undefined || producer?.attrs.outputs === undefined
+          ? undefined
+          : resolveOutputProfile(producer.attrs.outputs, ref.path);
+      if (ref === undefined || producer === undefined) {
+        err("E049", `judge "${n.id}" \`for-each\` references \`${forEach}\` but that step does not exist`);
+      } else if (profile === undefined) {
+        err(
+          "E049",
+          `judge "${n.id}" \`for-each\` references \`${forEach}\` but "${ref.producer}" declares no such output`,
+        );
+      } else if (profile.kind !== "array") {
+        err(
+          "E049",
+          `judge "${n.id}" \`for-each\` references \`${forEach}\`, a \`${profile.kind}\` — for-each needs an array-typed output`,
+        );
+      }
+      const keep = n.attrs.judge_keep;
+      if (keep !== undefined) {
+        const q = questions[keep.question];
+        if (q === undefined) {
+          err(
+            "E049",
+            `judge "${n.id}" \`keep.question\` names "${keep.question}", which is not declared in \`questions:\``,
+          );
+        } else if (q.type !== "noul") {
+          err(
+            "E049",
+            `judge "${n.id}" \`keep.question\` "${keep.question}" is a \`${q.type}\` — only a \`noul\` thresholds an item in or out`,
+          );
+        }
+      }
     }
 
     const literalBytes = judgeLiteralStateBytes(n.attrs.judge_state);
@@ -1375,6 +1425,16 @@ const JUDGE_LITERAL_STATE_WARN_BYTES = 16 * 1024;
 
 /** Bytes of literal text in a judge `state:` — substitution tokens and `{file}`
  * leaves are excluded (their size is only known at dispatch). */
+/** Every string leaf of a judge `state:` — the substitution surfaces E035 checks. */
+function judgeStateStrings(state: JudgeState | undefined): string[] {
+  if (state === undefined) return [];
+  if (typeof state === "string") return [state];
+  if (isJudgeFileLeaf(state)) return [];
+  const out: string[] = [];
+  for (const v of Object.values(state)) out.push(...judgeStateStrings(v as JudgeState));
+  return out;
+}
+
 function judgeLiteralStateBytes(state: JudgeState | undefined): number {
   if (state === undefined) return 0;
   if (typeof state === "string") {

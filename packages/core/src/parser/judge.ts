@@ -4,12 +4,16 @@
 // consistency (a `decide.route` question exists and is a `choice`, its
 // criteria keys match `routes:`, …) is the validator's (E047–E048).
 
+import { OUTPUT_REF_RE } from "../engine/outputs-substitution.ts";
 import {
   isJudgeIdentifier,
+  JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS,
   JUDGE_DEFAULT_STATE_MAX_BYTES,
+  JUDGE_HARD_FOR_EACH_MAX_ITEMS,
   JUDGE_HARD_STATE_MAX_BYTES,
   type JudgeDecide,
   type JudgeJson,
+  type JudgeKeep,
   type JudgeQuestion,
   type JudgeState,
 } from "../types/judge.ts";
@@ -212,6 +216,44 @@ export function parseJudgeDecide(raw: unknown): JudgeDecide {
     }
   }
   return { outcome: { questions, min: unitInterval(o["min"], "decide.outcome.min") } };
+}
+
+/** `for-each:` — exactly one `${{ outputs.<step>.<field…> }}` token and
+ * nothing else; the validator checks that it resolves to an array. */
+export function parseJudgeForEach(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new JudgeParseError("`for-each` must be an `${{ outputs.<step>.<field> }}` reference");
+  }
+  const trimmed = raw.trim();
+  const refs = [...trimmed.matchAll(OUTPUT_REF_RE)];
+  if (refs.length !== 1 || refs[0]?.[0] !== trimmed) {
+    throw new JudgeParseError(
+      `\`for-each\` must be exactly one \`\${{ outputs.<step>.<field> }}\` reference (got ${JSON.stringify(raw)})`,
+    );
+  }
+  return trimmed;
+}
+
+/** `keep:` — `{question: <noul id>, min: <0..1>}`. */
+export function parseJudgeKeep(raw: unknown): JudgeKeep {
+  if (!isPlainObject(raw)) throw new JudgeParseError("`keep` must be a mapping `{question: <id>, min: <0..1>}`");
+  const known = new Set(["question", "min"]);
+  for (const k of Object.keys(raw)) {
+    if (!known.has(k)) throw new JudgeParseError(`\`keep.${k}\` is not a recognised key (question, min)`);
+  }
+  const question = raw["question"];
+  if (typeof question !== "string" || !isJudgeIdentifier(question)) {
+    throw new JudgeParseError("`keep.question` must name a declared `noul` question");
+  }
+  return { question, min: unitInterval(raw["min"], "keep.min") };
+}
+
+export function parseJudgeForEachMaxItems(raw: unknown): number {
+  if (raw === undefined) return JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0 || raw > JUDGE_HARD_FOR_EACH_MAX_ITEMS) {
+    throw new JudgeParseError(`\`for-each-max-items\` must be a positive integer ≤ ${JUDGE_HARD_FOR_EACH_MAX_ITEMS}`);
+  }
+  return raw;
 }
 
 export function parseJudgeStateMaxBytes(raw: unknown): number {

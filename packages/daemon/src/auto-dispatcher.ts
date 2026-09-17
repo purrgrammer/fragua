@@ -237,14 +237,20 @@ function specForNode(
         handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
       };
     case "judge": {
-      if (attrs.judge_state === undefined || attrs.judge_questions === undefined) {
+      if (
+        attrs.judge_questions === undefined ||
+        (attrs.judge_state === undefined && attrs.judge_for_each === undefined)
+      ) {
         return errorSpec("judge", nodeId, "missing judge_state / judge_questions (parsed without validation?)");
       }
       const judgeOpts: handler.JudgeConfig = {
         nodeId,
-        state: attrs.judge_state,
         questions: attrs.judge_questions,
       };
+      if (attrs.judge_state !== undefined) judgeOpts.state = attrs.judge_state;
+      if (attrs.judge_for_each !== undefined) judgeOpts.forEach = attrs.judge_for_each;
+      if (attrs.judge_keep !== undefined) judgeOpts.keep = attrs.judge_keep;
+      if (attrs.judge_for_each_max_items !== undefined) judgeOpts.forEachMaxItems = attrs.judge_for_each_max_items;
       if (attrs.judge_decide !== undefined) judgeOpts.decide = attrs.judge_decide;
       if (attrs.judge_state_max_bytes !== undefined) judgeOpts.stateMaxBytes = attrs.judge_state_max_bytes;
       if (typeof attrs.model === "string") judgeOpts.model = attrs.model;

@@ -22,11 +22,69 @@ export function JudgeNodeRow({ message, nodeId, testid }: JudgeNodeRowProps): JS
         <span className="flex-1">judge</span>
         <span className="truncate">{meta}</span>
       </div>
-      {Object.entries(message.questions).map(([id, q]) => (
-        <QuestionBlock key={id} id={id} type={q.type} instructions={q.instructions} answer={message.answers[id]} />
-      ))}
+      {message.forEach !== undefined ? (
+        <ForEachBlocks message={message} forEach={message.forEach} />
+      ) : (
+        Object.entries(message.questions).map(([id, q]) => (
+          <QuestionBlock key={id} id={id} type={q.type} instructions={q.instructions} answer={message.answers[id]} />
+        ))
+      )}
       {message.decision !== undefined ? <DecisionLine decision={message.decision} /> : null}
     </div>
+  );
+}
+
+// ─── for-each: one group per item ──────────────────────────────────────
+//
+// A list judge asks every question once per item; the answers come back keyed
+// `<q>__<i>`. Group them by item so the card reads "item 3 — kept: holds 0.91,
+// severity high" rather than 2N interleaved blocks.
+
+function ForEachBlocks({
+  message,
+  forEach,
+}: {
+  message: JudgeNodeMessage;
+  forEach: NonNullable<JudgeNodeMessage["forEach"]>;
+}): JSX.Element {
+  const keptSet = forEach.kept === undefined ? undefined : new Set(forEach.kept);
+  const indices = Array.from({ length: forEach.count }, (_, i) => i);
+  return (
+    <>
+      {indices.map((i) => {
+        const verdict = keptSet === undefined ? undefined : keptSet.has(i) ? "kept" : "dropped";
+        return (
+          <div
+            key={i}
+            data-testid="judge-item"
+            data-verdict={verdict}
+            className="border-b border-sw-border last:border-b-0"
+          >
+            <div className="flex items-center gap-2 px-3 pt-3 text-sw-xs uppercase tracking-[0.06em] text-sw-muted">
+              <span>item {i}</span>
+              {verdict !== undefined ? (
+                <>
+                  <span
+                    aria-hidden
+                    className={`size-1.5 rounded-full ${verdict === "kept" ? "bg-sw-accent-success" : "bg-sw-accent-idle"}`}
+                  />
+                  <span>{verdict}</span>
+                </>
+              ) : null}
+            </div>
+            {Object.entries(message.questions).map(([id, q]) => (
+              <QuestionBlock
+                key={id}
+                id={id}
+                type={q.type}
+                instructions={q.instructions}
+                answer={message.answers[`${id}__${i}`]}
+              />
+            ))}
+          </div>
+        );
+      })}
+    </>
   );
 }
 

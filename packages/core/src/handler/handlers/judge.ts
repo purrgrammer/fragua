@@ -12,12 +12,17 @@ import type { JudgeNodeMessage } from "@fragua/types";
 import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
 import { substitute } from "../../engine/substitution.ts";
 import {
+  expandForEachQuestions,
+  forEachQuestionId,
   isJudgeFileLeaf,
+  JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS,
   JUDGE_DEFAULT_MODEL,
   JUDGE_DEFAULT_STATE_MAX_BYTES,
+  JUDGE_FOR_EACH_ITEMS_KEY,
   type JudgeAnswer,
   type JudgeDecide,
   type JudgeJson,
+  type JudgeKeep,
   JudgeNotCredentialedError,
   JudgeProviderError,
   type JudgeQuestion,
@@ -29,9 +34,14 @@ import type { Handler, HandlerContext, HandlerResult, HandlerSpec } from "../typ
 
 export interface JudgeConfig {
   nodeId: string;
-  state: JudgeState;
+  /** Optional when `forEach` is set (the list is the state). */
+  state?: JudgeState;
   questions: Record<string, JudgeQuestion>;
   decide?: JudgeDecide;
+  /** `for-each:` — an `${{ outputs.X.f }}` reference to an array output. */
+  forEach?: string;
+  keep?: JudgeKeep;
+  forEachMaxItems?: number;
   stateMaxBytes?: number;
   model?: string;
   maxMs?: number;
@@ -53,22 +63,64 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       );
     }
 
-    const resolved = await resolveState(cfg.state, ctx, cfg.nodeId);
-    if ("fail" in resolved) return fail(resolved.fail);
-    if ("halt" in resolved) return halt(resolved.halt);
-    const stateText = JSON.stringify(resolved.state);
+    let state: JudgeJson;
+    let items: JudgeJson[] | undefined;
+    if (cfg.forEach !== undefined) {
+      const list = resolveList(cfg.forEach, ctx);
+      if ("fail" in list) return fail(list.fail);
+      items = list.items;
+      const max = cfg.forEachMaxItems ?? JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS;
+      if (items.length > max) {
+        return fail(`judge for-each list has ${items.length} items, over the ${max}-item cap (for-each-max-items)`);
+      }
+      if (items.length === 0) {
+        // Nothing to judge: no call, no cost. The outputs are the empty lists
+        // a consumer expects, so `${{ outputs.X.kept }}` reads as `[]`.
+        const empty: OutputsValue = { answers: [] };
+        if (cfg.keep !== undefined) {
+          empty["kept"] = [];
+          empty["dropped"] = [];
+        }
+        return { kind: "transition", tokens: 0, costUsd: 0, outputs: empty };
+      }
+      let shared: { [k: string]: JudgeJson } = {};
+      if (cfg.state !== undefined) {
+        const resolved = await resolveState(cfg.state, ctx, cfg.nodeId);
+        if ("fail" in resolved) return fail(resolved.fail);
+        if ("halt" in resolved) return halt(resolved.halt);
+        shared =
+          typeof resolved.state === "object" && resolved.state !== null && !Array.isArray(resolved.state)
+            ? resolved.state
+            : { context: resolved.state };
+      }
+      state = { ...shared, [JUDGE_FOR_EACH_ITEMS_KEY]: items };
+    } else {
+      if (cfg.state === undefined) return halt(`judge step "${cfg.nodeId}": neither state nor for-each configured`);
+      const resolved = await resolveState(cfg.state, ctx, cfg.nodeId);
+      if ("fail" in resolved) return fail(resolved.fail);
+      if ("halt" in resolved) return halt(resolved.halt);
+      state = resolved.state;
+    }
+    const stateText = JSON.stringify(state);
     const stateBytes = new TextEncoder().encode(stateText).byteLength;
     if (stateBytes > stateMaxBytes) {
       return fail(`judge state is ${stateBytes} bytes, over the ${stateMaxBytes}-byte cap (state-max-bytes)`);
     }
 
-    const questionIds = Object.keys(cfg.questions);
-    ctx.emit("judge.requested", { provider: judge.provider, model, questionIds, stateBytes });
+    const sent = items === undefined ? cfg.questions : expandForEachQuestions(cfg.questions, items.length);
+    const questionIds = Object.keys(sent);
+    ctx.emit("judge.requested", {
+      provider: judge.provider,
+      model,
+      questionIds,
+      stateBytes,
+      ...(items !== undefined ? { forEachCount: items.length } : {}),
+    });
 
     const startedAt = Date.now();
     let response: Awaited<ReturnType<typeof judge.ask>>;
     try {
-      response = await judge.ask({ model, state: resolved.state, questions: cfg.questions }, ctx.signal);
+      response = await judge.ask({ model, state, questions: sent }, ctx.signal);
     } catch (err) {
       if (ctx.signal.aborted) return halt("judge aborted");
       if (err instanceof JudgeNotCredentialedError) return halt(err.message);
@@ -101,9 +153,18 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     }
     const durationMs = Date.now() - startedAt;
 
-    const folded = foldAnswers(cfg.questions, response.answers);
-    if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
-    const outputs = folded.outputs;
+    let outputs: OutputsValue;
+    let forEachMeta: JudgeNodeMessage["forEach"];
+    if (items !== undefined) {
+      const folded = foldForEach(cfg.questions, response.answers, items, cfg.keep);
+      if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
+      outputs = folded.outputs;
+      forEachMeta = { count: items.length, ...(folded.kept !== undefined ? { kept: folded.kept } : {}) };
+    } else {
+      const folded = foldAnswers(cfg.questions, response.answers);
+      if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
+      outputs = folded.outputs;
+    }
 
     const decision = applyDecide(cfg.decide, response.answers);
     if (decision !== undefined && "error" in decision) return halt(decision.error);
@@ -129,6 +190,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       ),
       answers: response.answers,
       ...(recordedDecision !== undefined ? { decision: recordedDecision } : {}),
+      ...(forEachMeta !== undefined ? { forEach: forEachMeta } : {}),
       durationMs,
       timestamp: Date.now(),
     };
@@ -140,6 +202,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       durationMs,
       answers: capAnswersForEvent(response.answers),
       ...(recordedDecision !== undefined ? { decision: recordedDecision } : {}),
+      ...(forEachMeta !== undefined ? { forEach: forEachMeta } : {}),
     });
     ctx.emit("cost.recorded", judgeCostPayload(judge.provider, response));
 
@@ -204,6 +267,26 @@ async function resolveState(state: JudgeState, ctx: HandlerContext, nodeId: stri
   return walk(state, "state");
 }
 
+/** The `for-each` list: the reference substitutes to the array's JSON (an
+ * output read, so an unpopulated producer fails closed like any other). */
+function resolveList(ref: string, ctx: HandlerContext): { items: JudgeJson[] } | { fail: string } {
+  let text: string;
+  try {
+    text = substitute(ref, { args: ctx.args });
+  } catch (err) {
+    if (err instanceof UnpopulatedOutputError) return { fail: err.message };
+    throw err;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { fail: `judge for-each \`${ref}\` did not resolve to a JSON array` };
+  }
+  if (!Array.isArray(value)) return { fail: `judge for-each \`${ref}\` resolved to a ${typeof value}, not an array` };
+  return { items: value as JudgeJson[] };
+}
+
 // ─────────────── observability ───────────────
 
 /** Widest `probabilities` map kept on the `judge.answered` event. A 255-option
@@ -255,6 +338,50 @@ function foldAnswers(
     }
   }
   return { outputs };
+}
+
+/** Per-item fold of a `for-each` response: `answers[i]` is the fold of item
+ * `i`'s expanded questions; with `keep`, items split into `kept` / `dropped`,
+ * each carrying its own fields (or `item` for a non-record) plus `judge`. */
+function foldForEach(
+  questions: Record<string, JudgeQuestion>,
+  answers: Record<string, JudgeAnswer>,
+  items: readonly JudgeJson[],
+  keep: JudgeKeep | undefined,
+): { outputs: OutputsValue; kept?: number[] } | { error: string } {
+  const perItem: OutputStructValue[] = [];
+  const kept: OutputStructValue[] = [];
+  const dropped: OutputStructValue[] = [];
+  const keptIdx: number[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const own: Record<string, JudgeAnswer> = {};
+    for (const id of Object.keys(questions)) {
+      const a = answers[forEachQuestionId(id, i)];
+      if (a !== undefined) own[id] = a;
+    }
+    const folded = foldAnswers(questions, own);
+    if ("error" in folded) return { error: `item ${i}: ${folded.error}` };
+    perItem.push(folded.outputs);
+    if (keep === undefined) continue;
+    const verdict = own[keep.question];
+    if (verdict === undefined || verdict.type !== "noul")
+      return { error: `item ${i}: keep question has no noul answer` };
+    const item = items[i] as OutputStructValue;
+    const fields: { [k: string]: OutputStructValue } =
+      typeof item === "object" && item !== null && !Array.isArray(item) ? { ...item } : { item };
+    fields["judge"] = folded.outputs;
+    if (verdict.noul >= keep.min) {
+      kept.push(fields);
+      keptIdx.push(i);
+    } else {
+      dropped.push(fields);
+    }
+  }
+  const outputs: OutputsValue = { answers: perItem };
+  if (keep === undefined) return { outputs };
+  outputs["kept"] = kept;
+  outputs["dropped"] = dropped;
+  return { outputs, kept: keptIdx };
 }
 
 function num(v: unknown): number {

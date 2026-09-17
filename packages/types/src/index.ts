@@ -136,6 +136,9 @@ export interface JudgeNodeMessage {
   decision?:
     | { kind: "route"; route: string; belowThreshold: boolean }
     | { kind: "outcome"; status: "success" | "fail" };
+  /** Set on a `for-each` judge: how many items were judged and, with a
+   * `keep:`, which indices stayed. `answers` is then keyed `<q>__<i>`. */
+  forEach?: { count: number; kept?: number[] };
   durationMs: number;
   timestamp: number;
 }

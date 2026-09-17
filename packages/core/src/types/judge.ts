@@ -2,7 +2,7 @@
 // docs/proposals/judge-step.md). The IR shapes the parser lowers a judge step
 // to; the handler and validator read these.
 
-import type { OutputsDecl } from "./outputs.ts";
+import type { OutputProfile, OutputsDecl } from "./outputs.ts";
 
 /** A `choice` / `score` / `noul` question as the System One API accepts it.
  * `instructions` and criteria values are opaque JSON: the API takes a string
@@ -49,6 +49,19 @@ export interface JudgeOutcomeDecision {
 /** The `decide:` block. The parser enforces at most one of the two arms. */
 export type JudgeDecide = { route: JudgeRouteDecision } | { outcome: JudgeOutcomeDecision };
 
+/** `keep:` on a `for-each` judge — the per-item decision: an item stays in
+ * `kept` when its `noul` answer to `question` reaches `min`. */
+export interface JudgeKeep {
+  question: string;
+  min: number;
+}
+
+export const JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS = 50;
+export const JUDGE_HARD_FOR_EACH_MAX_ITEMS = 500;
+
+/** The key the list travels under in a `for-each` request's state. */
+export const JUDGE_FOR_EACH_ITEMS_KEY = "items";
+
 export const JUDGE_DEFAULT_MODEL = "jev-latest";
 export const JUDGE_DEFAULT_PROVIDER = "typesafe";
 export const JUDGE_DEFAULT_STATE_MAX_BYTES = 64 * 1024;
@@ -62,8 +75,68 @@ export function isJudgeIdentifier(s: string): boolean {
 
 /** The typed `outputs:` decl a judge produces, derived from its questions —
  * one record per question. Score probabilities are positional (the API keys
- * them by string digit, which is not a valid output identifier). */
-export function deriveJudgeOutputs(questions: Record<string, JudgeQuestion>): OutputsDecl {
+ * them by string digit, which is not a valid output identifier).
+ *
+ * With `forEach` the decl is `answers: array<record{<q>: …}>` aligned with
+ * the input list, plus `kept` / `dropped` (each item's own fields under the
+ * producer's declared item profile, and the answers under `judge`) when a
+ * `keep:` is set. An item profile that is not a record sits under `item`. */
+export function deriveJudgeOutputs(
+  questions: Record<string, JudgeQuestion>,
+  forEach?: { itemProfile: OutputProfile | undefined; keep: boolean },
+): OutputsDecl {
+  const perQuestion = deriveAnswerRecords(questions);
+  if (forEach === undefined) return perQuestion;
+  const answerRecord: OutputProfile = {
+    kind: "record",
+    fields: perQuestion,
+    required: Object.keys(perQuestion).sort(),
+  };
+  const decl: OutputsDecl = { answers: { kind: "array", items: answerRecord } };
+  if (!forEach.keep) return decl;
+  const item = forEach.itemProfile;
+  const itemFields: Record<string, OutputProfile> =
+    item !== undefined && item.kind === "record" ? { ...item.fields } : { item: item ?? { kind: "string" } };
+  const itemRequired = item !== undefined && item.kind === "record" ? [...item.required] : ["item"];
+  const judged: OutputProfile = {
+    kind: "record",
+    fields: { ...itemFields, judge: answerRecord },
+    required: [...itemRequired, "judge"].sort(),
+  };
+  decl["kept"] = { kind: "array", items: judged };
+  decl["dropped"] = { kind: "array", items: judged };
+  return decl;
+}
+
+/** Question id → question, for item `i` of a `for-each` list: the id gets a
+ * positional suffix and every backticked path that starts with `item` is
+ * re-aimed at `items[i]`, in instructions and criteria alike. */
+export function expandForEachQuestions(
+  questions: Record<string, JudgeQuestion>,
+  count: number,
+): Record<string, JudgeQuestion> {
+  const out: Record<string, JudgeQuestion> = {};
+  for (let i = 0; i < count; i++) {
+    const target = `\`${JUDGE_FOR_EACH_ITEMS_KEY}[${i}]`;
+    for (const [id, q] of Object.entries(questions)) {
+      out[forEachQuestionId(id, i)] = JSON.parse(JSON.stringify(q).replace(/`item(?=[.[`])/g, target)) as JudgeQuestion;
+    }
+  }
+  return out;
+}
+
+export function forEachQuestionId(id: string, index: number): string {
+  return `${id}__${index}`;
+}
+
+/** Inverse of `forEachQuestionId`; `undefined` for an id without the suffix. */
+export function splitForEachQuestionId(expanded: string): { id: string; index: number } | undefined {
+  const m = /^(.*)__(\d+)$/.exec(expanded);
+  if (m === null || m[1] === undefined || m[2] === undefined) return undefined;
+  return { id: m[1], index: Number(m[2]) };
+}
+
+function deriveAnswerRecords(questions: Record<string, JudgeQuestion>): OutputsDecl {
   const decl: OutputsDecl = {};
   for (const [id, q] of Object.entries(questions)) {
     if (q.type === "choice") {

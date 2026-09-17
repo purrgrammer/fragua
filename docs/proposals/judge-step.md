@@ -1,6 +1,6 @@
 ---
 title: Judge steps — deterministic typed judgments (classify / score / verify / route) without an agent turn
-summary: "A `type: judge` step asks a System One model (TypeSafe's Jev) a map of narrow, typed questions — `choice`, `score`, `noul` — over a `state:` assembled from `${{ inputs.* }}`, `${{ outputs.* }}`, literal text, and bounded read-only worktree files. One HTTP call, no tools, no thread, no agent loop; answers arrive as calibrated probabilities in well under a second at ~$0.00002 per call. The step produces typed `outputs:` derived from its `questions:` (never authored), so `${{ outputs.<judge>.<q>.choice }}` and friends ride the shipped structured-outputs spine unchanged. One optional `decide:` block turns a judgment into control flow deterministically: `decide.route` keys edge selection on a `choice` answer (with a confidence floor and a declared fallback route), and `decide.outcome` thresholds a `noul` into `success` / `fail` so `goal_gate` and `retry:` compose unchanged. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; a new `NodeType`, a pre-wired `ctx.judge` client, one credential row, and validator codes E047–E048 / W020–W021."
+summary: "A `type: judge` step asks a System One model (TypeSafe's Jev) a map of narrow, typed questions — `choice`, `score`, `noul` — over a `state:` assembled from `${{ inputs.* }}`, `${{ outputs.* }}`, literal text, and bounded read-only worktree files. One HTTP call, no tools, no thread, no agent loop; answers arrive as calibrated probabilities in well under a second at ~$0.00002 per call. The step produces typed `outputs:` derived from its `questions:` (never authored), so `${{ outputs.<judge>.<q>.choice }}` and friends ride the shipped structured-outputs spine unchanged. One optional `decide:` block turns a judgment into control flow deterministically: `decide.route` keys edge selection on a `choice` answer (with a confidence floor and a declared fallback route), and `decide.outcome` thresholds a `noul` into `success` / `fail` so `goal_gate` and `retry:` compose unchanged. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; a new `NodeType`, a pre-wired `ctx.judge` client, one credential row, and validator codes E047–E049 / W020–W021. A `for-each:` judge asks every question once per item of an array output in one call and splits the list into typed `kept` / `dropped` with a `keep:` threshold (§3.7)."
 status: proposal
 maturity: draft
 last-reviewed: 2026-09-17
@@ -9,7 +9,7 @@ last-reviewed: 2026-09-17
 # Judge steps
 
 > **Status: in-progress — MVP built, unreviewed.** Parser (`type: judge`, derived
-> outputs, `decide:`), validator (E047/E048, W020/W021, fan-out admission),
+> outputs, `decide:`, `for-each:` / `keep:`), validator (E047–E049, W020/W021, fan-out admission),
 > handler + `ctx.judge` client, `typesafe` credential row, `judge_node` message
 > row + web rendering, `TYPESAFE_API_KEY` seeding for `fragua ci`, and
 > `fragua providers test typesafe` are in. Verified end to end: a judge-only
@@ -349,6 +349,65 @@ as independent optional fields (ARCHITECTURE §3), so a fact carrying both is
 already in-contract; the reducer and read plane fold each independently. The
 exclusivity stays for `llm` steps, where the reason still holds.
 
+### 3.7 `for-each:` — the same questions over every item of a list
+
+The lens verifies, and every other "judge each item of a list the previous
+step produced" shape, are one call with N × Q questions (TypeSafe's
+speculative fan-out: questions run in parallel, extra questions add no
+latency). A judge step declares it with `for-each:`:
+
+```yaml
+correctness_judge:
+  type: judge
+  for-each: ${{ outputs.correctness_read.findings }}    # an array-typed output of an upstream step
+  state:                                                # optional shared context, sent once
+    change: {file: review-diff.patch}
+  questions:
+    holds:
+      type: noul
+      instructions: Does `item.cited_code` show the problem described by `item.claim`?
+    severity:
+      type: score
+      instructions: Given `item.cited_code`, `item.claim` and `item.why`, how severe is the finding?
+      criteria: [ "low — …", "medium — …", "high — …", "critical — …" ]   # the lens's own options, verbatim
+  keep: {question: holds, min: 0.6}
+  next: synthesize
+```
+
+- **State.** The array is read at dispatch (fail-closed like every output
+  read) and sent as `items`, next to any `state:` leaves: `{items: [...],
+  change: "…"}`. `state:` is optional when `for-each` is set.
+- **Questions.** Each question is asked once per item, in one request. The
+  question for item *i* is the authored question with every backticked path
+  that starts with `` `item `` rewritten to `` `items[i] `` — instructions and
+  criteria alike, so a `` `item.cited_code` `` reference points at the right
+  element. Ids never reach the model; the rewrite is what aims the question.
+- **Empty list.** No call, no cost, empty output arrays, outcome `success`.
+- **Cap.** `for-each-max-items` (default 50). Over it the node fails
+  (routable); the state byte cap applies to the whole request.
+- **Derived outputs** (§3.5 extended):
+  - `answers: array<record{<q>: <answer record>, …}>` — aligned with the input.
+  - With `keep:`, `kept` and `dropped`: `array<record{…item fields, judge:
+    record{<q>: …}}>` — the producer's declared item fields plus the answers
+    under `judge`. An item type that is not a record sits under `item`.
+    `${{ outputs.correctness_judge.kept }}` is the list a synthesiser wants:
+    the findings that held, each carrying `judge.holds.noul` and
+    `judge.severity.{level,confidence,probabilities}` as numbers it can compare.
+- **`keep`.** `{question: <noul id>, min}` — the per-item decision; E049 if the
+  question is not a declared `noul`. **`decide:` is not allowed with
+  `for-each`** (E049): a run-level decision over a list is a second judge, or
+  the consumer's threshold.
+- **Validator.** `for-each` must be an `${{ outputs.X.f }}` reference that
+  resolves to an array-typed field (E049); the E035 / W015 reachability rules
+  apply to it, and to string `state:` leaves, exactly as to a `prompt:`.
+- **Message / UI.** The `judge_node` row carries `forEach: {count, kept?}`; the
+  card groups the blocks per item, kept or dropped named on the header.
+
+This is the code-owns-control-flow shape from TypeSafe's guide applied to a
+list: the llm step gathers (opens the cited code, emits it as data), the judge
+answers atomic questions per item, `keep` and the consumer's thresholds are the
+`if` statements — written in the workflow, not in an agent's prose.
+
 ### 3.6 Cost, observability, the message row
 
 - **Cost.** `costUsd = usage.input_tokens × 0.042 / 1e6`; output tokens are
@@ -484,6 +543,7 @@ below are the cross-attribute rules a well-shaped graph can still break:
 |---|---|
 | E047 | `decide.route`: names an undeclared question or a non-`choice`; `decide.route` without `routes:` (or `routes:` on a judge without `decide.route`); an option with no route; a route that is neither an option nor `below`; `below` not in `routes:` |
 | E048 | `decide.outcome`: names an undeclared question or a non-`noul`; `decide.outcome` together with `routes:` |
+| E049 | `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, a scalar / record); `keep.question` is not one of the judge's own `noul`s. Shape errors (`decide:` with `for-each:`, `keep:` without it, a reference that is not exactly one token) are parse errors |
 | W020 | a routed `choice` with ≥ 3 options and no `min-confidence` — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
 | W021 | literal `state:` text exceeds 16 KiB — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately |
 

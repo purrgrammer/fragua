@@ -320,7 +320,7 @@ Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-p
 | `find` | filename search | |
 | `ls` | list a directory | |
 | `web_fetch` | fetch a URL | opt-in |
-| `judge` | ask a System One model a batch of typed `choice` / `score` / `noul` questions over evidence the agent has gathered, get probabilities back | present only when a judge provider is credentialed; the agent-side counterpart of the `judge` step — the agent reads the repo, the judge scores each item (one `noul` per citation, one `score` per finding) in one ~1s call |
+| `judge` | ask a System One model a batch of typed `choice` / `score` / `noul` questions over evidence the agent has gathered, get probabilities back | present only when a judge provider is credentialed. Reach for it only when the next read depends on the answer; when the list is known up front, emit it as an output and use a `for-each` judge **step** (§7) so the probabilities land in the graph |
 
 Two tools are **always force-included** and need not be listed — they're available even if `allowed-tools` omits them (and survive `denied-tools`): `abort` (fail the step with a reason, §4) and `route` (synthesised per-call on a node that declares `routes:`). The `skill` tool is **conditionally** force-included: present when the node's effective skill catalogue is non-empty, stripped when `skills_disabled: true`, an empty `skills:` intersection, or no skills are discovered for the project — in that case neither the catalogue block nor the `skill` tool appears.
 
@@ -393,6 +393,32 @@ Every question becomes a typed output: `${{ outputs.verify.schema_ok.noul }}`, `
 
 - `decide.route: {question: <choice>, min-confidence?: 0..1, below?: <route>}` + `routes:` — the chosen option is the route; under the floor, `below` is taken instead (point it at a `human` step to escalate, or at an option like `full` for "when torn, go deeper"). Options must match `routes:` (E047); W020 nags a ≥3-way choice with no floor.
 - `decide.outcome: {question: <noul>, min: 0..1}` or `{questions: [<noul>, …], min}` — `success` when every listed `p(yes) ≥ min`, else `fail` naming the ones that fell short; composes with `on: {fail}`, `retry:`, `goal-gate` unchanged (E048). Prefer several narrow nouls gated all-of over one composite "does it pass ALL of…" noul — a conjunction asked as one question drifts toward 0.5 (undecided) as it grows.
+
+**Judge a list — `for-each:`.** When the previous step produced an array (`findings[]`, `candidates[]`) and every item needs the same judgment, one judge step asks every question once per item **in one call**:
+
+```yaml
+correctness_read:                  # llm: opens each cited location, emits what it saw — no verdicts
+  prompt: For EACH finding open the cited path:line and copy the ±15 lines into `cited_code`. Do not judge.
+  outputs:
+    findings: {type: array, items: {type: object, fields: {severity: {type: choice, options: [critical, high, medium, low]}, location: {type: string}, claim: {type: string}, why: {type: string}, cited_code: {type: string}}}}
+  next: correctness_judge
+correctness_judge:                 # judge: N × Q atomic questions, one request, ~free
+  type: judge
+  for-each: ${{ outputs.correctness_read.findings }}
+  questions:
+    holds:    {type: noul,  instructions: "Does `item.cited_code` show the problem described by `item.claim`?"}
+    severity: {type: score, instructions: "Given `item.cited_code`, `item.claim` and `item.why`, how severe is the finding?", criteria: [low — …, medium — …, high — …, critical — …]}
+  keep: {question: holds, min: 0.6}
+  next: synthesize
+synthesize:
+  prompt: |
+    Verified findings, each with `judge.holds.noul` and `judge.severity.{level,confidence}`:
+    ${{ outputs.correctness_judge.kept }}
+```
+
+The list travels as `items`; write `` `item.field` `` in a question and the engine aims it at `items[i]` for each item. Outputs: `answers` (aligned with the input), and with `keep:` the input split into `kept` / `dropped`, each item carrying its own fields plus the answers under `judge` — numbers the consumer thresholds (`holds.noul ≥ 0.6`, `severity.confidence < 0.5` ⇒ contested). `keep.question` must be a `noul` (E049); `decide:` and `for-each` are exclusive — the per-item decision is `keep`, a run-level one is a second judge. Empty list ⇒ no call, empty arrays. Cap `for-each-max-items` (default 50); the 32k-token input cap covers the whole request. **Criteria are the field's own options, verbatim** — a rubric that drops a level (`improvement`) forces items into the wrong one.
+
+**One yes/no over evidence a step already holds is a `judge` step, not a `judge` tool call.** An agent that asks the tool one `noul` and then acts on the answer in prose has hidden an `if` inside a turn: the probability never reaches the graph, nothing can threshold or audit it. Emit the evidence as an output, judge it in a `judge` step, route or gate with `decide:` / `keep:`. The tool is for read-then-judge over a variable-length list *when the reading and the judging cannot be separated* (the agent must see the answer to know what to read next).
 
 No `decide:` ⇒ a pure producer that always succeeds — the shape for **shadow mode**: insert it before the llm gate it might replace, compare in the log, then swap. Write facts in `state`, the judgment in `instructions`, the answers in `criteria`; reference state fields with backticks (`` `review` ``); give a `choice` an `other` option when the input may not fit. Thresholds are yours to tune on real runs. Needs `fragua providers add typesafe` (or `TYPESAFE_API_KEY` in CI).
 

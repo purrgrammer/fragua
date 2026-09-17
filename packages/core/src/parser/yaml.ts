@@ -90,6 +90,7 @@
 
 import * as YAML from "yaml";
 import { OutputsProfileError, parseOutputsDecl, parseProfileNode } from "../engine/outputs-profile.ts";
+import { outputReferences } from "../engine/outputs-substitution.ts";
 import type {
   Edge,
   EdgeAttrs,
@@ -102,9 +103,13 @@ import type {
   RunOutputDecl,
 } from "../types/graph.ts";
 import { deriveJudgeOutputs } from "../types/judge.ts";
+import { resolveOutputProfile } from "../types/outputs.ts";
 import {
   JudgeParseError,
   parseJudgeDecide,
+  parseJudgeForEach,
+  parseJudgeForEachMaxItems,
+  parseJudgeKeep,
   parseJudgeQuestions,
   parseJudgeState,
   parseJudgeStateMaxBytes,
@@ -188,6 +193,9 @@ const STEP_RESERVED = new Set([
   "questions",
   "decide",
   "state-max-bytes",
+  "for-each",
+  "keep",
+  "for-each-max-items",
 ]);
 
 /** Step keys a `judge` may not carry — they configure an agent turn it never runs. */
@@ -489,11 +497,16 @@ function parseJudgeBlocks(
     }
   };
 
+  const forEach = block("for-each");
+  if (forEach.node !== undefined) {
+    attrs["judge_for_each"] = lift("for-each", forEach.node, () => parseJudgeForEach(forEach.raw));
+  }
+
   const state = block("state");
-  if (state.node === undefined) {
+  if (state.node === undefined && forEach.node === undefined) {
     throw new ParseError(`judge step "${stepId}" needs a \`state:\` block`, ...locArr(locOf(body, lineCounter)));
   }
-  attrs["judge_state"] = lift("state", state.node, () => parseJudgeState(state.raw));
+  if (state.node !== undefined) attrs["judge_state"] = lift("state", state.node, () => parseJudgeState(state.raw));
 
   const questions = block("questions");
   if (questions.node === undefined) {
@@ -501,15 +514,72 @@ function parseJudgeBlocks(
   }
   const parsedQuestions = lift("questions", questions.node, () => parseJudgeQuestions(questions.raw));
   attrs["judge_questions"] = parsedQuestions;
-  attrs["outputs"] = deriveJudgeOutputs(parsedQuestions);
+
+  const keep = block("keep");
+  if (keep.node !== undefined) {
+    if (forEach.node === undefined) {
+      throw new ParseError(
+        `judge step "${stepId}" declares \`keep:\` without \`for-each:\` — keep is the per-item decision of a list judge`,
+        ...locArr(locOf(keep.node, lineCounter)),
+      );
+    }
+    attrs["judge_keep"] = lift("keep", keep.node, () => parseJudgeKeep(keep.raw));
+  }
 
   const decide = block("decide");
   if (decide.node !== undefined) {
+    if (forEach.node !== undefined) {
+      throw new ParseError(
+        `judge step "${stepId}" declares both \`for-each:\` and \`decide:\` — a list judge decides per item with \`keep:\`; a run-level decision over the list is a second judge or the consumer's threshold`,
+        ...locArr(locOf(decide.node, lineCounter)),
+      );
+    }
     attrs["judge_decide"] = lift("decide", decide.node, () => parseJudgeDecide(decide.raw));
   }
 
+  const maxItems = block("for-each-max-items");
+  if (maxItems.node !== undefined && forEach.node === undefined) {
+    throw new ParseError(
+      `judge step "${stepId}" declares \`for-each-max-items:\` without \`for-each:\``,
+      ...locArr(locOf(maxItems.node, lineCounter)),
+    );
+  }
+  if (forEach.node !== undefined) {
+    attrs["judge_for_each_max_items"] = lift("for-each-max-items", maxItems.node, () =>
+      parseJudgeForEachMaxItems(maxItems.raw),
+    );
+  }
+
+  // A plain judge's outputs derive from its questions alone. A `for-each`
+  // judge's `kept` / `dropped` carry the producer's item fields, which are
+  // known only once every step is parsed — `attachForEachOutputs` fills them.
+  attrs["outputs"] =
+    forEach.node === undefined
+      ? deriveJudgeOutputs(parsedQuestions)
+      : deriveJudgeOutputs(parsedQuestions, { itemProfile: undefined, keep: keep.node !== undefined });
+
   const smb = block("state-max-bytes");
   attrs["judge_state_max_bytes"] = lift("state-max-bytes", smb.node, () => parseJudgeStateMaxBytes(smb.raw));
+}
+
+/** Second pass for `for-each` judges: type `kept` / `dropped` items with the
+ * producer's declared item profile. An unresolvable reference leaves the
+ * fallback decl in place — the validator names the problem (E049). */
+function attachForEachOutputs(nodes: Record<string, Node>): void {
+  for (const n of Object.values(nodes)) {
+    if (n.type !== "judge") continue;
+    const ref = n.attrs.judge_for_each;
+    const questions = n.attrs.judge_questions;
+    if (ref === undefined || questions === undefined) continue;
+    const parsed = outputReferences(ref)[0];
+    const producer = parsed === undefined ? undefined : nodes[parsed.producer];
+    const profile =
+      parsed === undefined || producer?.attrs.outputs === undefined
+        ? undefined
+        : resolveOutputProfile(producer.attrs.outputs, parsed.path);
+    const itemProfile = profile !== undefined && profile.kind === "array" ? profile.items : undefined;
+    n.attrs.outputs = deriveJudgeOutputs(questions, { itemProfile, keep: n.attrs.judge_keep !== undefined });
+  }
 }
 
 // ---- Top-level parser -------------------------------------------------
@@ -805,6 +875,8 @@ export function parseWorkflow(source: string): Graph {
       loc: locOf(stepBodies.get(stepId), lineCounter),
     };
   }
+
+  attachForEachOutputs(nodes);
 
   // Synthesise the reserved exit sink iff anything routes to it.
   if (needExit && !nodes["exit"]) {

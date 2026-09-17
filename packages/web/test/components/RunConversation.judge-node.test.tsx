@@ -101,3 +101,41 @@ describe("RunConversation — judge_node row", () => {
     expect(container.textContent).not.toContain("gate ");
   });
 });
+
+describe("RunConversation — judge_node for-each row", () => {
+  afterEach(() => cleanup());
+
+  it("groups the expanded answers per item and names kept / dropped", () => {
+    const row: RunMessageRow = {
+      ordinal: 1,
+      nodeId: "correctness_judge",
+      iteration: 0,
+      content: {
+        role: "judge_node",
+        provider: "typesafe",
+        model: "jev-1.13.0",
+        statePreview: '{"items":[…]}',
+        stateBytes: 900,
+        questions: { holds: { type: "noul", instructions: "Does `item.cited_code` show `item.claim`?" } },
+        answers: {
+          holds__0: { type: "noul", noul: 0.91 },
+          holds__1: { type: "noul", noul: 0.2 },
+        },
+        forEach: { count: 2, kept: [0] },
+        durationMs: 800,
+        timestamp: 0,
+      },
+    };
+    const nodeStates: NodeState[] = [
+      { nodeId: "correctness_judge", iteration: 0, state: "completed", lastEventSeq: 1 },
+    ];
+    const { container } = renderWithClient(<RunConversation messages={[row]} nodeStates={nodeStates} />);
+    const items = Array.from(within(container).getByTestId("message-1").querySelectorAll("[data-testid='judge-item']"));
+    expect(items).toHaveLength(2);
+    expect(items[0]!.getAttribute("data-verdict")).toBe("kept");
+    expect(items[0]!.textContent).toContain("item 0");
+    expect(items[0]!.textContent).toContain("0.91");
+    expect(items[1]!.getAttribute("data-verdict")).toBe("dropped");
+    expect(items[1]!.textContent).toContain("0.20");
+  });
+});

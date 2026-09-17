@@ -22,6 +22,12 @@ guarantee.
   Validator codes E047 / E048 and W020 / W021. Credential: `fragua providers add
   typesafe` (or `TYPESAFE_API_KEY` for `fragua ci`); `fragua providers test
   typesafe` makes one call. Experimental — see `docs/proposals/judge-step.md`.
+- **`for-each:` on judge steps.** Point a judge at an array-typed output and every
+  question is asked once per item in one call; `` `item.field` `` in a question
+  addresses the current item. Outputs: `answers` aligned with the input, and with
+  `keep: {question: <noul>, min}` the input split into `kept` / `dropped`, each
+  item carrying its fields plus the answers under `judge`. Empty list ⇒ no call.
+  `for-each-max-items` caps the list (default 50). Validator E049.
 - **`judge` agent tool.** The same primitives inside any `llm` step:
   `judge({ state, questions })` asks a batch of typed questions over evidence
   the agent has gathered and returns the answers with probabilities; cost lands

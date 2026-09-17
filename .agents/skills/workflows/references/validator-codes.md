@@ -44,6 +44,9 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E043 | A branch-closure step sets an explicit `thread:` — branch transcripts are per-branch synthetic threads. |
 | E044 | A step is shared by two branches' closures — closures must be disjoint. |
 | E045 | A `parallel` step's serialized branch list exceeds the 4 KiB event-payload budget (~hundreds of branches) — the seed fact embeds it whole. Split the fan-out. |
+| E047 | `judge` `decide.route`: names an undeclared question or a non-`choice`; `decide.route` without `routes:` (or `routes:` on a judge without it); an option with no route; a route that is neither an option nor `below`; `below` not in `routes:`. |
+| E048 | `judge` `decide.outcome`: names an undeclared question or a non-`noul`; `decide.outcome` together with `routes:`. |
+| E049 | `judge` `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, or a scalar / record); or `keep.question` is not one of the judge's own `noul`s. |
 
 ## Warnings
 
@@ -58,6 +61,8 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W014 | A step's `retry-policy:` or the graph-level `default-retry-policy:` names an unknown preset. Expected one of `none` / `standard` / `aggressive` / `linear` / `patient`. Unknown values silently fall back to `none` at runtime. |
 | W015 | A `${{ outputs.X.f }}` reference where producer `X` can reach the consumer but doesn't dominate its success path — on some run path the producer didn't run, so the read fails closed at runtime (a node failure, never a silent `""`). Advisory: re-wire so the producer always precedes the consumer, or accept the fail-closed branch. Suppressed when `X` is reached only on a path where it did run (e.g. a recovery step behind another node's `fail:` edge). |
 | W016 | A `${{ outputs.X.f }}` reference that reaches *through* an `optional:` field (the leaf, or any record segment along the path). The producer dominates the consumer (so W015 is silent), but it may legitimately emit without that field — and a direct read of the absent value fails closed at runtime. Advisory and mutually exclusive with W015 (one ref never draws both). Fix by modelling it as a **required field with a sentinel** (e.g. `"none"`) when you always read it, or by reading the enclosing record/array **whole** (an `optional:` field inside a whole-read structure is safe — it just renders as omitted/`null` JSON). A direct optional read is only ever safe where the taken branch guarantees the field; there's no fallback syntax yet, so until then this stays a warning. |
+| W020 | A `judge` routes on a ≥ 3-way `choice` with no `min-confidence` — a spread distribution routes silently; add `min-confidence` + `below:` to escalate torn cases. |
+| W021 | A `judge` carries more than 16 KiB of literal `state:` text — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately. |
 
 ## Removed codes — these no longer fire
 
