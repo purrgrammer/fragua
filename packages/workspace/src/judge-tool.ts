@@ -48,7 +48,8 @@ export const judgeTool: Tool<JudgeToolArgs, JudgeToolData> = {
   name: "judge",
   description:
     "Ask a calibrated System One model a batch of narrow, typed questions about `state` and get back typed answers with probabilities — no prose, no reasoning, ~1s, ~free. " +
-    "Use it for decisions you would otherwise make by feel: does each cited location support its claim (one `noul` per citation), which severity does each finding deserve (one `score` per finding), which of N candidates matches (one `choice`). " +
+    "Use it when what you read NEXT depends on the answer — which of N candidates to open (one `choice`), whether a claim survives what you just read before you go further (one `noul`). " +
+    "When the list to judge is known up front (every finding, every citation), do not call this: emit the list as a typed output and let a `for-each` judge step ask the questions, so the probabilities land in the graph where `keep:` and the next step can threshold them. " +
     "Put the evidence in `state` (text or a JSON object — file excerpts, the claim, the diff hunk), one judgment per question, and ask everything you need in ONE call: questions are answered in parallel and extra questions cost nothing in latency. " +
     "Answers: choice → {choice, probabilities, confidence}; score → {score, level probabilities, confidence}; noul → {noul: p(yes)}. A noul near 0.5 is undecided, not medium. " +
     "The model cannot read files or run commands — gather the evidence first, then judge. Input is capped near 32k tokens (~64 KB of code).",

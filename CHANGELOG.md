@@ -41,6 +41,11 @@ guarantee.
   wrong rate; the step total still includes them.
 
 ### Fixed
+- `review` on a merged PR now diffs the PR's own change (its head over the point
+  it forked from the base) instead of `origin/main..HEAD`, which ran backwards
+  once the PR had merged; the worktree lands on the merge commit.
+- `intent.dropped` is in the typed event list, so SSE consumers that register
+  per event type now see it.
 
 - A step named `done` or `end` now executes. Both names were silent terminal
   aliases in the executor, so a workflow that validated clean skipped such a step
@@ -49,6 +54,13 @@ guarantee.
   in run totals but had no step row).
 
 ### Changed
+- **`review` / `pr_review` lenses judge per finding.** On the full tier each lens
+  is now scan → read → judge: the read step opens the cited code and records the
+  evidence without a verdict, a `for-each` judge asks whether the finding holds
+  and how severe it is (pr_review also: is it concrete, is it in changed code),
+  and `keep` drops what falls under 0.6. `synthesize` receives the kept findings
+  with the judge's probabilities and applies stated thresholds for weak evidence
+  and contested severity.
 
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
