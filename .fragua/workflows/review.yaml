@@ -127,7 +127,8 @@ steps:
       focus:      ${{ outputs.resolve.focus }}
       stat:       {file: .fragua/scratch/review/stat.txt}
       patch_head: {file: .fragua/scratch/review/patch-head.diff}
-    state-max-bytes: 131072
+    # 64 KiB default kept: the provider caps input near 32k tokens and diff text
+    # runs ~2.2 bytes/token, so the 48 KB patch head + summary + stat sits under it.
     questions:
       depth:
         type: choice

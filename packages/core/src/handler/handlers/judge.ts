@@ -78,7 +78,13 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
           // failure it is a node `fail` an `on: {fail}` edge can route, not a halt.
           return fail(`judge provider "${err.provider}" rejected the credential (${err.httpStatus}) — ${err.message}`);
         }
-        if (err.httpStatus === 422 || err.httpStatus === 400) {
+        if (err.httpStatus === 400) {
+          // Data-dependent rejection (measured: the provider's input ceiling is
+          // ~32k tokens ≈ 64 KB of diff text) — a node fail an `on: {fail}`
+          // edge or a smaller `state-max-bytes` can address, not a halt.
+          return fail(`judge state rejected by "${err.provider}" (400) — ${err.message}`);
+        }
+        if (err.httpStatus === 422) {
           return halt(`judge request rejected by "${err.provider}" (${err.httpStatus}) — ${err.message}`);
         }
         if (err.httpStatus === 200)

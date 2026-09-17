@@ -467,3 +467,14 @@ describe("judge handler — review follow-ups", () => {
     }
   });
 });
+
+describe("judge handler — oversized state at the provider", () => {
+  test("400 max_tokens_exceeded is a node fail naming the cause, not a halt", async () => {
+    const cap = fresh();
+    const spec = makeJudgeHandler({ nodeId: "j", state: "x", questions: { ok: OK } });
+    const err = new JudgeProviderError('400: {"detail":{"error_type":"max_tokens_exceeded"}}', "typesafe", 400);
+    const result = await spec.handler(stubCtx(cap, { judge: throwingJudge(err) }));
+    expect(result).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    if (result.kind === "transition") expect(result.failureReason).toMatch(/max_tokens_exceeded/);
+  });
+});

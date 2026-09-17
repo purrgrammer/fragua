@@ -89,7 +89,8 @@ steps:
       summary:    {file: .fragua/scratch/pr/summary.md}
       stat:       {file: .fragua/scratch/pr/stat.txt}
       patch_head: {file: .fragua/scratch/pr/patch-head.diff}
-    state-max-bytes: 131072
+    # 64 KiB default kept: the provider caps input near 32k tokens and diff text
+    # runs ~2.2 bytes/token, so the 48 KB patch head + summary + stat sits under it.
     questions:
       depth:
         type: choice
