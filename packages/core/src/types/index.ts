@@ -2,6 +2,7 @@ export * from "./context.ts";
 export * from "./events.ts";
 export * from "./execution.ts";
 export * from "./graph.ts";
+export * from "./judge.ts";
 export * from "./outcome.ts";
 export * from "./outputs.ts";
 export * from "./read-only-env.ts";

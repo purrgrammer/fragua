@@ -1,6 +1,7 @@
 // Graph model: Nodes, Edges, and the Graph itself. See docs/SPEC.md §3.1.
 
 import type { RetryPresetName } from "../engine/retry-policy.ts";
+import type { JudgeDecide, JudgeQuestion, JudgeState } from "./judge.ts";
 import type { OutputProfile, OutputsDecl } from "./outputs.ts";
 import type { SummaryLevel } from "./summary.ts";
 
@@ -8,7 +9,7 @@ import type { SummaryLevel } from "./summary.ts";
  * parser (the entry and the reserved graceful-halt sink); authors only
  * declare `llm` / `human` / `tool` / `exit` (when an explicit type:exit
  * is canonical). */
-export type NodeType = "start" | "exit" | "llm" | "human" | "tool" | "parallel";
+export type NodeType = "start" | "exit" | "llm" | "human" | "tool" | "parallel" | "judge";
 
 /** Alias for legacy callsites; `HandlerType` and `NodeType` are now the
  * same vocabulary post-codergen-rename. */
@@ -97,6 +98,20 @@ export interface NodeAttrs {
   outputs?: OutputsDecl;
   /** Free-form text shown to the operator for type:human steps. */
   text?: string;
+  /** `type: judge` — the state the questions are asked over (authoring: `state:`).
+   * String leaves substitute `${{ … }}`; `{file}` leaves are read from the
+   * worktree at dispatch. See docs/proposals/judge-step.md §3.2. */
+  judge_state?: JudgeState;
+  /** `type: judge` — question id → typed question (authoring: `questions:`).
+   * The node's `outputs` decl is derived from this, never authored. */
+  judge_questions?: Record<string, JudgeQuestion>;
+  /** `type: judge` — how an answer becomes control flow (authoring: `decide:`):
+   * a `choice` drives route-case edge selection, or a `noul` thresholds into
+   * success / fail. Absent ⇒ pure producer. */
+  judge_decide?: JudgeDecide;
+  /** `type: judge` — byte cap on the serialised state (authoring:
+   * `state-max-bytes`). Parser fills the default. */
+  judge_state_max_bytes?: number;
   /** Backoff preset for handler retries (authoring: `retry-policy`). Resolution
    * order: node → graph.default_retry_policy → "none". */
   retry_policy?: RetryPresetName;

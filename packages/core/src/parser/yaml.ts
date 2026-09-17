@@ -101,6 +101,14 @@ import type {
   NodeType,
   RunOutputDecl,
 } from "../types/graph.ts";
+import { deriveJudgeOutputs } from "../types/judge.ts";
+import {
+  JudgeParseError,
+  parseJudgeDecide,
+  parseJudgeQuestions,
+  parseJudgeState,
+  parseJudgeStateMaxBytes,
+} from "./judge.ts";
 
 export type { InputDecl } from "../types/graph.ts";
 
@@ -115,7 +123,7 @@ export class ParseError extends Error {
   }
 }
 
-const KNOWN_TYPES: ReadonlySet<NodeType> = new Set(["llm", "human", "tool", "exit", "parallel"] as const);
+const KNOWN_TYPES: ReadonlySet<NodeType> = new Set(["llm", "human", "tool", "exit", "parallel", "judge"] as const);
 
 // ---- Authoring-key → IR-key rename table ------------------------------
 //
@@ -168,7 +176,39 @@ const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
 export const DEFAULT_TOOL_MAX_MS = 5 * 60 * 1000;
 
 // Keys consumed by the parser at the step level (not stored in attrs):
-const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes", "outputs"]);
+const STEP_RESERVED = new Set([
+  "type",
+  "next",
+  "on",
+  "routes",
+  "retry",
+  "timeout-minutes",
+  "outputs",
+  "state",
+  "questions",
+  "decide",
+  "state-max-bytes",
+]);
+
+/** Step keys a `judge` may not carry — they configure an agent turn it never runs. */
+const JUDGE_FORBIDDEN_IR_ATTRS: ReadonlySet<string> = new Set([
+  "prompt",
+  "text",
+  "system_prompt",
+  "context_files",
+  "thread_id",
+  "summary",
+  "reasoning_effort",
+  "allowed_tools",
+  "denied_tools",
+  "mcp_servers",
+  "skills",
+  "skills_disabled",
+  "tool_command",
+  "branches",
+  "concurrency",
+]);
+const JUDGE_ONLY_STEP_KEYS = ["state", "questions", "decide", "state-max-bytes"] as const;
 // Keys consumed at the graph level (not stored in attrs):
 const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults", "outputs"]);
 
@@ -414,6 +454,64 @@ function parseDefaults(node: unknown, lineCounter: YAML.LineCounter): Record<str
   return out;
 }
 
+// ---- Judge blocks -------------------------------------------------------
+
+function parseJudgeBlocks(
+  stepId: string,
+  body: YAML.YAMLMap,
+  attrs: Record<string, unknown>,
+  lineCounter: YAML.LineCounter,
+): void {
+  for (const k of Object.keys(attrs)) {
+    if (JUDGE_FORBIDDEN_IR_ATTRS.has(k)) {
+      const authored = Object.entries(STEP_KEY_TO_IR).find(([, ir]) => ir === k)?.[0] ?? k;
+      throw new ParseError(
+        `judge step "${stepId}" declares \`${authored}:\` — a judge runs no agent turn; it takes \`state:\` + \`questions:\` (+ \`decide:\`) only`,
+        ...locArr(locOf(body.get(authored, true) ?? body, lineCounter)),
+      );
+    }
+  }
+  const block = (key: string): { node: unknown; raw: unknown } => {
+    const node = body.get(key, true);
+    return { node, raw: YAML.isNode(node) ? node.toJSON() : scalarValue(node) };
+  };
+  const lift = <T>(key: string, node: unknown, fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof JudgeParseError) {
+        throw new ParseError(
+          `judge step "${stepId}" \`${key}:\` — ${err.message}`,
+          ...locArr(locOf(node ?? body, lineCounter)),
+        );
+      }
+      throw err;
+    }
+  };
+
+  const state = block("state");
+  if (state.node === undefined) {
+    throw new ParseError(`judge step "${stepId}" needs a \`state:\` block`, ...locArr(locOf(body, lineCounter)));
+  }
+  attrs["judge_state"] = lift("state", state.node, () => parseJudgeState(state.raw));
+
+  const questions = block("questions");
+  if (questions.node === undefined) {
+    throw new ParseError(`judge step "${stepId}" needs a \`questions:\` block`, ...locArr(locOf(body, lineCounter)));
+  }
+  const parsedQuestions = lift("questions", questions.node, () => parseJudgeQuestions(questions.raw));
+  attrs["judge_questions"] = parsedQuestions;
+  attrs["outputs"] = deriveJudgeOutputs(parsedQuestions);
+
+  const decide = block("decide");
+  if (decide.node !== undefined) {
+    attrs["judge_decide"] = lift("decide", decide.node, () => parseJudgeDecide(decide.raw));
+  }
+
+  const smb = block("state-max-bytes");
+  attrs["judge_state_max_bytes"] = lift("state-max-bytes", smb.node, () => parseJudgeStateMaxBytes(smb.raw));
+}
+
 // ---- Top-level parser -------------------------------------------------
 
 export function parseWorkflow(source: string): Graph {
@@ -512,7 +610,7 @@ export function parseWorkflow(source: string): Graph {
     const typeStr = typeof typeRaw === "string" ? typeRaw : "llm"; // implicit llm
     if (!KNOWN_TYPES.has(typeStr as NodeType)) {
       throw new ParseError(
-        `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit / parallel)`,
+        `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit / parallel / judge)`,
         ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
       );
     }
@@ -672,6 +770,21 @@ export function parseWorkflow(source: string): Graph {
           `step "${stepId}" \`outputs:\` parse error: ${msg}`,
           ...locArr(locOf(outputsNode, lineCounter)),
         );
+      }
+    }
+
+    // ---- judge blocks (state / questions / decide) ----
+    if (nodeType === "judge") {
+      parseJudgeBlocks(stepId, body, attrs, lineCounter);
+    } else {
+      for (const k of JUDGE_ONLY_STEP_KEYS) {
+        const n = body.get(k, true);
+        if (n !== undefined) {
+          throw new ParseError(
+            `step "${stepId}" declares \`${k}:\` but has type "${nodeType}" — \`${k}:\` is only supported on \`judge\` steps`,
+            ...locArr(locOf(n, lineCounter)),
+          );
+        }
       }
     }
 

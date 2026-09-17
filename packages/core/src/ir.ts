@@ -17,8 +17,10 @@ import type { Graph, Node } from "./types/graph.ts";
  * converter is a no-op structural identity. v3 adds the top-level run-level
  * `outputs:` block on `GraphAttrs` (projects step outputs into the run's
  * typed result, additive); a v2 IR without it is equivalent to a v3 IR
- * declaring no run-level outputs, so the v2→v3 converter is identity too. */
-export const CURRENT_IR_VERSION = 3;
+ * declaring no run-level outputs, so the v2→v3 converter is identity too.
+ * v4 adds the `judge` node type with its `judge_*` attrs (additive); a v3 IR
+ * contains no judge nodes and is executor-equivalent at v4, identity again. */
+export const CURRENT_IR_VERSION = 4;
 
 /** IR version up-converter chain. Each entry is a function that takes a
  * parsed-but-unvalidated IR JSON value at `fromVersion` and returns the
@@ -33,6 +35,8 @@ export const IR_CONVERTERS: Array<(json: unknown) => unknown> = [
   // v1 → v2: additive per-step outputs field, no structural change needed.
   (json: unknown) => json,
   // v2 → v3: additive run-level outputs block on GraphAttrs, identity.
+  (json: unknown) => json,
+  // v3 → v4: additive `judge` node type + judge_* attrs, identity.
   (json: unknown) => json,
 ];
 
