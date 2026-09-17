@@ -108,7 +108,10 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     }
 
     const sent = items === undefined ? cfg.questions : expandForEachQuestions(cfg.questions, items.length);
-    const questionIds = Object.keys(sent);
+    // The authored ids, not the N×Q expansion: at 50 items the expanded list
+    // alone would push the event past the 4 KiB cap and truncate away the
+    // provider / model fields the read plane opens the step with.
+    const questionIds = Object.keys(cfg.questions);
     ctx.emit("judge.requested", {
       provider: judge.provider,
       model,

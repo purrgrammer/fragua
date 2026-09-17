@@ -158,7 +158,9 @@ describe("judge handler — for-each", () => {
     const msg = c.messages[0] as JudgeNodeMessage;
     expect(msg.forEach).toEqual({ count: 3, kept: [0, 2] });
     expect(Object.keys(msg.questions)).toEqual(["holds", "sev"]);
-    expect(c.events.find((e) => e.type === "judge.requested")!.payload["forEachCount"]).toBe(3);
+    const requested = c.events.find((e) => e.type === "judge.requested")!.payload;
+    expect(requested["forEachCount"]).toBe(3);
+    expect(requested["questionIds"]).toEqual(["holds", "sev"]);
     expect(c.events.find((e) => e.type === "judge.answered")!.payload["forEach"]).toEqual({ count: 3, kept: [0, 2] });
   });
 
