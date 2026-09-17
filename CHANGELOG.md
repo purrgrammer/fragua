@@ -35,6 +35,10 @@ guarantee.
   provider is credentialed. The conversation view renders each call as a card:
   the state as a tree, every question with its answer as probability bars, the
   model and cost.
+- **Cost tab: judge tool spend per step.** An llm step's cost popover shows the
+  `judge` tool calls it made as their own row (calls, input tokens, recorded
+  cost) instead of folding their tokens into the step's model buckets at the
+  wrong rate; the step total still includes them.
 
 ### Fixed
 

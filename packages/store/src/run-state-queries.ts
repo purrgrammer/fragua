@@ -742,6 +742,13 @@ export interface StepAggregateRow {
   cacheWriteTokens: number;
   billedTokens: number;
   costEventCount: number;
+  /** Spend of `judge` tool calls made inside an llm step's window — recorded
+   * by the System One provider, so kept out of the token buckets above (which
+   * are priced at the step's own model rate) and reported beside them. Zero
+   * for a judge step, whose call IS the step. */
+  judgeCostUsd: number;
+  judgeInputTokens: number;
+  judgeCalls: number;
   endedAtMs: number | null;
   /** Last `llm.done.stop_reason` in the window; always null for a judge step. */
   stopReason: string | null;
@@ -752,6 +759,7 @@ const STEP_AGGREGATES_SQL = `
     SELECT
       seq,
       ts,
+      type,
       json_extract(payload, '$.nodeId') AS node_id,
       LEAD(seq) OVER (
         PARTITION BY json_extract(payload, '$.nodeId')
@@ -759,18 +767,36 @@ const STEP_AGGREGATES_SQL = `
       ) AS next_seq
     FROM events
     WHERE run_id = ?1 AND type IN ('llm.start', 'judge.requested')
+  ),
+  -- A cost event is a judge TOOL call when it is marked kind='judge' inside an
+  -- llm window (a judge step's own call is the step's cost, not a split).
+  costs AS (
+    SELECT
+      s.seq AS start_seq,
+      c.payload,
+      (s.type = 'llm.start' AND json_extract(c.payload, '$.kind') = 'judge') AS is_judge
+    FROM starts s
+    JOIN events c
+      ON c.run_id = ?1
+     AND c.type   = 'cost.recorded'
+     AND json_extract(c.payload, '$.nodeId') = s.node_id
+     AND c.seq    > s.seq
+     AND (s.next_seq IS NULL OR c.seq < s.next_seq)
   )
   SELECT
     s.seq                                                                         AS startSeq,
     s.ts                                                                          AS startTs,
     s.node_id                                                                     AS nodeId,
     COALESCE(SUM(CAST(json_extract(c.payload, '$.cost_usd')           AS REAL))   , 0) AS costUsd,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.input_tokens')       AS INTEGER)), 0) AS inputTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.output_tokens')      AS INTEGER)), 0) AS outputTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_read_tokens')  AS INTEGER)), 0) AS cacheReadTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER)), 0) AS cacheWriteTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.input_tokens')       AS INTEGER) END), 0) AS inputTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.output_tokens')      AS INTEGER) END), 0) AS outputTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_read_tokens')  AS INTEGER) END), 0) AS cacheReadTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER) END), 0) AS cacheWriteTokens,
     COALESCE(SUM(CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER)), 0) AS billedTokens,
-    COUNT(c.seq)                                                                  AS costEventCount,
+    COUNT(c.payload)                                                              AS costEventCount,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.cost_usd')     AS REAL)    ELSE 0 END), 0) AS judgeCostUsd,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.input_tokens') AS INTEGER) ELSE 0 END), 0) AS judgeInputTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 1 ELSE 0 END), 0)                                                          AS judgeCalls,
     (
       SELECT MAX(d.ts) FROM events d
       WHERE d.run_id = ?1
@@ -790,12 +816,7 @@ const STEP_AGGREGATES_SQL = `
       LIMIT 1
     )                                                                             AS stopReason
   FROM starts s
-  LEFT JOIN events c
-    ON c.run_id = ?1
-   AND c.type   = 'cost.recorded'
-   AND json_extract(c.payload, '$.nodeId') = s.node_id
-   AND c.seq    > s.seq
-   AND (s.next_seq IS NULL OR c.seq < s.next_seq)
+  LEFT JOIN costs c ON c.start_seq = s.seq
   GROUP BY s.seq, s.ts, s.node_id
   ORDER BY s.seq
 `;

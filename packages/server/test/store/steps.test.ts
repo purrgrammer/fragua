@@ -148,6 +148,9 @@ describe("eventsToSteps", () => {
         cacheWriteTokens: 0,
         billedTokens: 750,
         costEventCount: 2,
+        judgeCostUsd: 0,
+        judgeInputTokens: 0,
+        judgeCalls: 0,
       },
       {
         startSeq: 20,
@@ -158,6 +161,9 @@ describe("eventsToSteps", () => {
         cacheWriteTokens: 0,
         billedTokens: 0,
         costEventCount: 0,
+        judgeCostUsd: 0,
+        judgeInputTokens: 0,
+        judgeCalls: 0,
       },
     ]);
     expect(merged[0]!.cost).toEqual({
@@ -170,6 +176,30 @@ describe("eventsToSteps", () => {
     });
     // No cost events → no cost attached, even with a row present.
     expect(merged[1]!.cost).toBeUndefined();
+  });
+
+  test("attachStepAggregates carries a judge tool split beside the step's own buckets", () => {
+    const events = [
+      { type: "fact.node_started", ts: 900, seq: 5, payload: { nodeId: "n1" } },
+      { type: "llm.start", ts: 1000, seq: 10, payload: { nodeId: "n1" } },
+    ];
+    const merged = attachStepAggregates(eventsToSteps(events), [
+      {
+        startSeq: 10,
+        costUsd: 0.2931,
+        inputTokens: 40,
+        outputTokens: 5000,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        billedTokens: 6240,
+        costEventCount: 3,
+        judgeCostUsd: 0.0002,
+        judgeInputTokens: 1200,
+        judgeCalls: 1,
+      },
+    ]);
+    expect(merged[0]!.cost?.judge).toEqual({ cost_usd: 0.0002, input_tokens: 1200, calls: 1 });
+    expect(merged[0]!.cost?.input_tokens).toBe(40);
   });
 
   test("a node paused then resumed coalesces into a single step (cost breakdown unifies pause/resume halves)", () => {

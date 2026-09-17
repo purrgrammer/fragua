@@ -238,6 +238,10 @@ export function judgeCostPayload(provider: string, res: JudgeResponse): Record<s
   return {
     provider,
     model: res.model,
+    // Marks the event as a System One call so a step's cost aggregate can
+    // report it beside the step's own model spend instead of pricing the
+    // tokens at that model's rate.
+    kind: "judge",
     stop_reason: "stop",
     input_tokens: res.usage.input_tokens,
     output_tokens: res.usage.output_tokens,

@@ -693,6 +693,49 @@ describe("getStepAggregates — judge steps", () => {
     store.close();
   });
 
+  test("a judge TOOL call inside an llm window is split out of the step's token buckets, inside its total", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      startEv("calibrate"),
+      costEv("calibrate", { input_tokens: 30, output_tokens: 2000, total_tokens: 2030, cost_usd: 0.05 }),
+      costEv("calibrate", {
+        kind: "judge",
+        provider: "typesafe",
+        input_tokens: 1200,
+        output_tokens: 40,
+        total_tokens: 1240,
+        cost_usd: 0.0000504,
+      }),
+      costEv("calibrate", { input_tokens: 10, output_tokens: 3000, total_tokens: 3010, cost_usd: 0.08 }),
+      doneEv("calibrate", { stop_reason: "end_turn" }),
+      // a judge STEP's own call is never a split
+      judgeReq("triage"),
+      costEv("triage", {
+        kind: "judge",
+        provider: "typesafe",
+        input_tokens: 500,
+        output_tokens: 70,
+        total_tokens: 570,
+        cost_usd: 0.00002,
+      }),
+    ]);
+    const [llm, judge] = store.getStepAggregates(runId);
+    expect(llm!.nodeId).toBe("calibrate");
+    expect(llm!.inputTokens).toBe(40);
+    expect(llm!.outputTokens).toBe(5000);
+    expect(llm!.billedTokens).toBe(6280);
+    expect(llm!.costUsd).toBeCloseTo(0.1300504, 9);
+    expect(llm!.costEventCount).toBe(3);
+    expect(llm!.judgeCalls).toBe(1);
+    expect(llm!.judgeInputTokens).toBe(1200);
+    expect(llm!.judgeCostUsd).toBeCloseTo(0.0000504, 9);
+    expect(judge!.nodeId).toBe("triage");
+    expect(judge!.inputTokens).toBe(500);
+    expect(judge!.judgeCalls).toBe(0);
+    store.close();
+  });
+
   test("a judge step and an llm step on different nodes stay separate rows", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
