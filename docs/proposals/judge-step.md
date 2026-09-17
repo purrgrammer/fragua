@@ -8,16 +8,17 @@ last-reviewed: 2026-09-17
 
 # Judge steps
 
-> **Status: in-progress — MVP built, unreviewed.** Parser (`type: judge`, derived
-> outputs, `decide:`, `for-each:` / `keep:`), validator (E047–E049, W020/W021, fan-out admission),
-> handler + `ctx.judge` client, `typesafe` credential row, `judge_node` message
-> row + web rendering, `TYPESAFE_API_KEY` seeding for `fragua ci`, and
-> `fragua providers test typesafe` are in. Verified end to end: a judge-only
-> workflow under `fragua ci` routed on a live Jev `choice` and a downstream
-> `tool` step read `${{ outputs.<judge>.* }}`. Not yet run against a shipped
-> workflow (§8.1 experiments). Design claims below are still candidates. The one experiment behind it: the routing + gate decision a fragua
-> `llm` step spends a full agent turn on today came back from Jev in 0.74 s for
-> 498 input tokens with a correct answer and a calibrated distribution.
+> **Status: built and exercised — awaiting review (PR #107).** Parser (`type: judge`,
+> derived outputs, `decide:`, `for-each:` / `keep:`), validator (E047–E049,
+> W020/W021, fan-out admission), handler + `ctx.judge` client, the `judge` agent
+> tool, `typesafe` credential row, `judge_node` message row + web rendering
+> (step and tool cards, per-item groups), per-step cost split, `TYPESAFE_API_KEY`
+> seeding for `fragua ci`, and `fragua providers test typesafe` are in.
+> Converted and run against real PRs: `pr_review` (scope / verify / verdict +
+> five `for-each` lenses), `review` (classify / verify + six `for-each` lenses),
+> `work.triage`, `dependencies.review`. Evidence: §2.2 (the first call), §8.1
+> (classifier A/B, end-to-end tiers), §8.3 (citation check, severity
+> calibration), §8.4 (baseline vs `for-each` lenses on PR #94).
 
 ## 1. The problem
 
