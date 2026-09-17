@@ -68,25 +68,49 @@ defaults:
   model: claude-sonnet-4-6
 
 steps:
-  scope:                               # size the change and route by depth
-    type: llm
-    effort: low
-    allowed-tools: [read, grep, find, bash, write]
+  scope_diff:                          # materialise what `scope` judges — a failing/empty diff exits non-zero and halts the run
+    type: tool
+    run: |
+      set -euo pipefail
+      out=.fragua/scratch/pr
+      rm -rf "$out" && mkdir -p "$out"
+      pr=${{ inputs.pr }}
+      gh pr view "$pr" --json title,body,changedFiles,additions,deletions \
+        --jq '"# \(.title)\n\n\(.body)\n\nfiles changed: \(.changedFiles)  +\(.additions) -\(.deletions)"' > "$out/summary.md"
+      gh pr diff "$pr" > "$out/patch.diff"
+      test -s "$out/patch.diff"
+      git apply --stat "$out/patch.diff" > "$out/stat.txt"
+      head -c 49152 "$out/patch.diff" > "$out/patch-head.diff"
+    next: scope
+
+  scope:                               # size the change and route by depth — a judge over the materialised diff
+    type: judge
+    state:
+      summary:    {file: .fragua/scratch/pr/summary.md}
+      stat:       {file: .fragua/scratch/pr/stat.txt}
+      patch_head: {file: .fragua/scratch/pr/patch-head.diff}
+    state-max-bytes: 131072
+    questions:
+      depth:
+        type: choice
+        instructions: |
+          Size the change described by `summary`, `stat`, and `patch_head` (the first 48 KB of the patch) for review depth. The costs are asymmetric: under-reviewing a real change loses the review; over-reviewing a small one wastes a dollar.
+        criteria:
+          skip:  doc-only / typo / whitespace / comments / generated / version-bump; no semantic code change
+          quick: small, single-concern change (a contained fix or minor change)
+          full:  feature-scale, cross-cutting, or risk-bearing CODE change (auth / input parsing / data layer / shared contracts / concurrency / a large code diff); documentation-only changes are never full, however large
+    decide:
+      route: {question: depth, min-confidence: 0.6, below: quick}   # torn (in practice skip-vs-quick on docs-heavy diffs) → the middle tier, never a $5 full pass
     routes:
-      skip:  {to: verdict,    label: "Trivial"}
+      skip:  {to: lgtm,         label: "Trivial"}
       quick: {to: review_quick, label: "Quick review"}
-      full:  {to: prep_diff,  label: "Full review"}
-    prompt: |
-      Size PR #${{ inputs.pr }} and route. Its files are already checked out on disk. Get the diff with `gh pr diff ${{ inputs.pr }}`; empty or failing diff → `abort` with `no diff for PR ${{ inputs.pr }}`.
+      full:  {to: prep_diff,    label: "Full review"}
 
-      Call the `route` tool once (state the deciding factor in one line first):
-        skip  — doc-only / typo / whitespace / comments / generated / version-bump; no semantic code change
-        quick — small, single-concern change (a contained fix or minor change)
-        full  — feature-scale, cross-cutting, or risk-bearing (auth / input parsing / data layer / shared contracts / concurrency / large diff)
-
-      The costs are asymmetric: under-reviewing a real change loses the review; over-reviewing a small one wastes a dollar. When torn between two tiers, pick the deeper one.
-
-      Before routing `skip`: WRITE `pr-review.md` (cwd-relative, `write` tool) containing a clean `# Code Review` + `## All clear` with a one-line `LGTM: <reason>` — the `verdict` node reads that file.
+  lgtm:                                # skip tier — the review body `verdict` reads
+    type: tool
+    run: |
+      printf '# Code Review\n\n## All clear\n\nLGTM: trivial change — doc / typo / whitespace / comments / generated / version bump; no semantic code change to review.\n' > pr-review.md
+    next: verdict
 
   review_quick:                        # quick tier — one focused pass → pr-review.md
     # Intentionally routes straight to `verdict` with NO `verify` gate: this tier
@@ -406,34 +430,53 @@ steps:
 
       Do NOT print the review as your reply (the `verdict` step reads the file; re-emitting the body burns cost twice). After the file is written, emit only `WROTE`.
 
-  verify:                              # full tier — automated evidence-quality gate
-    type: llm
-    effort: low
-    retry: synthesize                  # REJECT ⇒ re-synthesise from the same verified findings (capped)
+  verify:                              # full tier — evidence-quality gate over pr-review.md, judged (no turn)
+    # The former llm gate also spot-checked 2-3 cited path:lines against the tree; a judge cannot
+    # read the repo, and on the full tier every citation was already re-opened by the five lens
+    # verifies, so that check is dropped here rather than re-bought.
+    type: judge
+    state:
+      review: {file: pr-review.md}
+    questions:
+      passes:
+        type: noul
+        instructions: |
+          Does `review` pass ALL of the following? (1) Severity calibration is sane: no Critical for a contained issue; a cross-flagged item is at least High; no nitpick dressed as High to force a changes verdict. (2) THE BAR held: no recorded finding is a formatting/naming/doc-wording nit, a "consider …" preference, a speculative future-author or hypothetical concern, an intra-workspace API-stability opinion, a guard against an input that can't occur, or a pre-existing issue this diff did not introduce or expose. (3) Schema followed: a Scope section naming the lens coverage; Critical/High/Medium sections in that order (no Low tier) or replaced by All clear; a Next steps section.
+      calibrated:
+        type: noul
+        instructions: Is severity calibration in `review` sane — no Critical for a contained issue, cross-flagged items at least High, no nitpick dressed as High?
+      bar_held:
+        type: noul
+        instructions: Does every recorded finding in `review` clear the bar — none is a formatting/naming/doc-wording nit, a "consider …" preference, a speculative or hypothetical concern, an intra-workspace API-stability opinion, a guard against an impossible input, or a pre-existing issue this diff did not introduce?
+      schema_ok:
+        type: noul
+        instructions: Does `review` follow the schema — Scope naming lens coverage; Critical/High/Medium in order (no Low) or All clear; Next steps present?
+    decide:
+      # Gate on the three narrow checks, every one ≥ 0.6. A single composite "passes ALL of"
+      # noul sat near 0.5 (undecided) on a review the narrow checks each cleared — and near-0.5
+      # is "yes and no are similarly likely", not "no". `passes` stays as a diagnostic.
+      outcome: {questions: [calibrated, bar_held, schema_ok], min: 0.6}
+    retry: synthesize                  # fail ⇒ re-synthesise from the same verified findings (capped)
     max-retries: 2
-    allowed-tools: [read, grep]
     next: verdict
-    prompt: |
-      Read `pr-review.md` (the review under gate). Judge on its own merits.
-        1. Every finding's path:line is verifiable — spot-check 2-3 by reading the cited path.
-        2. Severity calibration sane (no Critical for a contained issue; cross-flagged ≥ High; and no nitpick dressed as High to force a `changes` verdict).
-        3. THE BAR held — NO recorded finding is a formatting/naming/doc-wording nit, a "consider …" preference, a speculative future-author or hypothetical concern, an intra-workspace API-stability opinion, a guard against an input that can't occur, or a PRE-EXISTING issue this diff did not introduce or expose. Those must be DROPPED, not recorded at any severity.
-        4. Schema followed — Scope present and names the lens coverage; Critical/High/Medium ordered (no Low tier) or replaced by All clear; Next steps present.
-      All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>` (e.g. "nitpick recorded as Medium", "over-severe High", "unverifiable claim").
 
   verdict:                             # classify the written review → route to one of two posts.
-    # A cheap isolated classifier: reads pr-review.md fresh and decides the GitHub review
-    # action by worst severity. The route is the verdict — first-class + auditable, no verdict file.
+    # A judge over pr-review.md decides the GitHub review action by worst severity. The route is
+    # the verdict — first-class + auditable (choice + probabilities on the fact), no verdict file.
     # Only `changes` and `comment` — a GITHUB_TOKEN bot cannot post an APPROVED state, so a clean
     # review is a `comment` (its body says All clear / LGTM); there is no approve post.
-    type: llm
-    model: claude-haiku-4-5
-    allowed-tools: [read]
-    prompt: |
-      Read `pr-review.md`. Classify it by its WORST finding and call `route` once (state the deciding severity in one line first):
-        changes  — there is any Critical or High finding
-        comment  — everything else (only Medium findings, an `All clear`, or an `LGTM`)
-      You MUST end by calling the `route` tool exactly once. Do not reply with prose instead of routing.
+    type: judge
+    state:
+      review: {file: pr-review.md}
+    questions:
+      action:
+        type: choice
+        instructions: Classify `review` by its WORST finding.
+        criteria:
+          changes: there is any Critical or High finding
+          comment: everything else — only Medium findings, an All clear, or an LGTM
+    decide:
+      route: {question: action}
     routes:
       comment: {to: post_comment, label: "Comment"}
       changes: {to: post_changes, label: "Request changes"}

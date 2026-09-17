@@ -32,16 +32,18 @@ Three smells that mean you've drawn the boundary wrong:
 - **Divergent parameter** (urgency, target, scope) → that's an *input*, not a branch. `--input urgent=true`, read where it matters.
 - **Re-classified-from-a-thread** → classification belongs in the **topology** (the path the run takes), never as a label re-read from a shared thread downstream. A run's position in the graph *is* its classification.
 
-### Classifiers are pure functions
+### Classifiers are pure functions — and usually `judge` steps
 
-A node that decides *which* branch to take (a `routes:` step, or any triage) is a pure function: **evidence in → one route out**. Give it its own isolated context (no shared thread to pollute its decision) and the cheapest model that gets the call right — scale model strength to the *cost of misclassifying*, not a blanket "cheap". Classify from fresh evidence at the point of decision (e.g. an approval gate reads the diff, not "what triage said").
+A node that decides *which* branch to take (a `routes:` step, or any triage) is a pure function: **evidence in → one route out**. Give it its own isolated context (no shared thread to pollute its decision). Classify from fresh evidence at the point of decision (e.g. an approval gate reads the diff, not "what triage said").
+
+**Default a pure decision to a `judge` step** (§7 · Judge steps) **when a judge provider is credentialed** (`fragua providers ls` shows `typesafe`; CI needs `TYPESAFE_API_KEY`), not an `llm` step: a classifier, a router, a yes/no gate, a severity or quality score, a "which of these N" pick. A judge is one call to a System One model — no tools, no turn, sub-second, ~$0.00002 — that returns a typed answer **with a probability distribution**, so the graph can threshold it (`min-confidence` → escalate to a human, `decide.outcome.min` → success/fail) instead of trusting a `route` call that carries no margin. The `llm` classifier stays right only when the decision needs **evidence the graph does not yet hold** — reading the repo, running a command, following citations. Then either make an upstream `tool` step materialise that evidence into a file the judge reads (`tool → judge`, the cheapest classify-and-route pipeline), or keep the `llm` step and scale its model to the *cost of misclassifying*, not a blanket "cheap".
 
 ### Patterns (names from Anthropic's "Building Effective Agents")
 
 - **Augmented LLM** — one `llm` step, broad tool pool, the agent loop lives in its tool-use cycle. `merge`.
 - **Prompt chaining** — linear `A → B → C`. `analyze`, `drift`.
-- **Routing** — a step declares `routes:` and exits via the `route` tool; edges fan out per route. `work::triage`.
-- **Evaluator-optimizer** — a step generates, the next judges, rejection retargets the generator (`retry:`). The daily-driver pattern. `work::review`, `review::verify`.
+- **Routing** — a step declares `routes:` and picks one; edges fan out per route. A `judge` step routes on a `choice` answer (`work::triage`, `review::classify`, `pr_review::scope` / `verdict`); an `llm` step exits via the `route` tool when the decision needs tool use.
+- **Evaluator-optimizer** — a step generates, the next judges, rejection retargets the generator (`retry:`). The daily-driver pattern. The judge is a `judge` step thresholding a `noul` when the artifact is a file (`review::verify`, `pr_review::verify`), an `llm` step when judging needs the repo (`work::review`).
 
 A real workflow usually **mixes** these — the patterns name the *shape of an edge or step*, not the whole graph. `work` is routing (`triage`) → prompt chaining (`plan → implement → review`) → evaluator-optimizer (`review` retargets `implement`) → tool steps (`format`, `ci`). `review` is routing (`scope`) → a deep review pass (`review_full`) → evaluator-optimizer (`verify` retargets `review_full`). Reach for whichever pattern fits each seam; don't force one over the whole run.
 
@@ -85,7 +87,7 @@ steps:
     next: exit
 ```
 
-**Step types:** `llm` (default), `tool`, `human`, `exit`. `start` is synthesized from the first declared step — never declare it (E029). `exit` is the reserved graceful-completion sink — target it, don't declare a regular step named `exit` (E028).
+**Step types:** `llm` (default), `tool`, `human`, `judge`, `parallel`, `exit`. `start` is synthesized from the first declared step — never declare it (E029). `exit` is the reserved graceful-completion sink — target it, don't declare a regular step named `exit` (E028).
 
 **Flow is explicit:** every step declares its success successor via `next:` / `on:` / `routes:`. There is no linear fall-through — a step left without a success successor is a validation error (E032). Terminate a branch by routing to the reserved `exit` sink (`next: exit`).
 
@@ -284,7 +286,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 
 | Key | Type | Why |
 |---|---|---|
-| `type` | enum | `llm` (default) / `tool` / `human` / `exit`. |
+| `type` | enum | `llm` (default) / `tool` / `human` / `judge` / `parallel` / `exit`. |
 | `prompt` | string | The user-message content (`llm`). |
 | `model` | string | Provider-native model id (must be registered). |
 | `provider` | string | Provider key (defaults to daemon default / `defaults:`). |
@@ -389,7 +391,7 @@ A judge is a **decision**, not a turn: one call to a System One model (TypeSafe'
 Every question becomes a typed output: `${{ outputs.verify.schema_ok.noul }}`, `${{ outputs.verify.depth.level }}`, `${{ outputs.<judge>.<q>.choice }}` / `.confidence` / `.probabilities.<option>`. `decide:` (optional, one of) turns an answer into control flow:
 
 - `decide.route: {question: <choice>, min-confidence?: 0..1, below?: <route>}` + `routes:` — the chosen option is the route; under the floor, `below` is taken instead (point it at a `human` step to escalate, or at an option like `full` for "when torn, go deeper"). Options must match `routes:` (E047); W020 nags a ≥3-way choice with no floor.
-- `decide.outcome: {question: <noul>, min: 0..1}` — `success` when `p(yes) ≥ min`, else `fail`; composes with `on: {fail}`, `retry:`, `goal-gate` unchanged (E048).
+- `decide.outcome: {question: <noul>, min: 0..1}` or `{questions: [<noul>, …], min}` — `success` when every listed `p(yes) ≥ min`, else `fail` naming the ones that fell short; composes with `on: {fail}`, `retry:`, `goal-gate` unchanged (E048). Prefer several narrow nouls gated all-of over one composite "does it pass ALL of…" noul — a conjunction asked as one question drifts toward 0.5 (undecided) as it grows.
 
 No `decide:` ⇒ a pure producer that always succeeds — the shape for **shadow mode**: insert it before the llm gate it might replace, compare in the log, then swap. Write facts in `state`, the judgment in `instructions`, the answers in `criteria`; reference state fields with backticks (`` `review` ``); give a `choice` an `other` option when the input may not fit. Thresholds are yours to tune on real runs. Needs `fragua providers add typesafe` (or `TYPESAFE_API_KEY` in CI).
 
@@ -500,6 +502,7 @@ Full table, including removed codes: `references/validator-codes.md`.
 - **A heavy collector that's also a goal-gate retarget target.** Each retarget re-runs it. Split `collect` out so only the analyser re-runs.
 - **Typing data the thread already carries.** `outputs:` between two steps that share a `thread:` is usually the smell — the data is already present. Reach for `outputs:` for a verbatim machine hand-off or a multi-producer synthesis (§6), not to make a conversation "structured".
 - **Uniform max rigor.** Scale the work to the change (§11).
+- **An `llm` step that only decides.** A classifier / router / yes-no gate / scorer whose evidence is already in the graph (an output, a file) is a `judge` step. An agent turn for a decision costs seconds and cents and returns no probability to threshold; the judge costs ~$0.00002, returns a distribution, and can escalate on low confidence. Reach for `llm` only when the decision needs tools — or when no judge provider is available to the daemon running the workflow.
 - **Leaking plumbing into prompts.** No "previous turn", "your context contains", "in a single message".
 - **Editing a workflow mid-run.** `workflow_sha` is pinned at enqueue; edits apply to future runs.
 
@@ -517,16 +520,31 @@ defaults:
   model: claude-sonnet-4-6
 
 steps:
-  triage:                          # classifier — isolated, cheap, routes by topology
-    model: claude-haiku-4-5
-    allowed-tools: [read, grep, find]
-    prompt: |
-      Classify ${{ inputs.task }} with the `route` tool (once, on its own response):
-        small — contained change   |   feature — multi-package / shared contracts
-      Not a workable task → `abort` with the reason.
+  triage:                          # classifier — a judge: isolated, ~free, routes by topology with a confidence floor
+    type: judge
+    state:
+      task: ${{ inputs.task }}
+    questions:
+      scope:
+        type: choice
+        instructions: Classify `task` for the work pipeline.
+        criteria:
+          small:   contained change, ≤3 packages, no shared contracts
+          feature: multi-package or shared contracts
+          blocked: not a workable software task (empty / illegible / off-topic)
+    decide:
+      route: {question: scope, min-confidence: 0.6, below: feature}
     routes:
       small:   {to: implement, label: "Small change"}
       feature: {to: plan,      label: "Feature scope"}
+      blocked: {to: blocked,   label: "Not workable"}
+
+  blocked:                         # a non-zero exit with no fail route halts the run with the reason
+    type: tool
+    run: |
+      echo "triage: not a workable task" >&2
+      exit 1
+    next: exit
 
   plan:
     model: claude-opus-4-7

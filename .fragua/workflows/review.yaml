@@ -78,7 +78,7 @@ steps:
     type: llm
     effort: low
     allowed-tools: [read, grep, find, bash]
-    next: classify
+    next: classify_diff
     outputs:
       pr:        { type: string }      # PR number, or "none"
       diff_spec: { type: string }      # exact `git diff` argument (e.g. "origin/main..HEAD", "HEAD"); "" ⇒ review PATHS directly
@@ -99,25 +99,56 @@ steps:
         paths     — an array of repo-relative paths actually touched.
         focus     — the focus hint, or "general".
 
-  classify:                            # size the change and route by depth (fresh context; reads the diff)
-    type: llm
-    effort: low
-    allowed-tools: [read, grep, bash, write]
+  classify_diff:                       # materialise what `classify` judges (DIFF mode: the patch; FILES mode: the files themselves)
+    type: tool
+    run: |
+      set -euo pipefail
+      out=.fragua/scratch/review
+      rm -rf "$out" && mkdir -p "$out"
+      spec=${{ outputs.resolve.diff_spec }}
+      if [ -n "$spec" ]; then
+        git diff --end-of-options "$spec" > "$out/patch.diff"
+        git diff --stat --end-of-options "$spec" > "$out/stat.txt"
+      else
+        printf '%s' ${{ outputs.resolve.paths }} | jq -r '.[]' > "$out/files.txt"
+        : > "$out/patch.diff"
+        while IFS= read -r f; do
+          printf '=== %s\n' "$f" >> "$out/patch.diff"
+          head -c 8192 -- "$f" >> "$out/patch.diff" || true
+        done < "$out/files.txt"
+        xargs -a "$out/files.txt" wc -c > "$out/stat.txt" 2>/dev/null || wc -c $(cat "$out/files.txt") > "$out/stat.txt"
+      fi
+      head -c 49152 "$out/patch.diff" > "$out/patch-head.diff"
+    next: classify
+
+  classify:                            # size the change and route by depth — a judge over the materialised change
+    type: judge
+    state:
+      focus:      ${{ outputs.resolve.focus }}
+      stat:       {file: .fragua/scratch/review/stat.txt}
+      patch_head: {file: .fragua/scratch/review/patch-head.diff}
+    state-max-bytes: 131072
+    questions:
+      depth:
+        type: choice
+        instructions: |
+          Size the change described by `stat` and `patch_head` (the first 48 KB of the change; `focus` is the reviewer's hint) for review depth. The costs are asymmetric: under-reviewing a real change loses the review; over-reviewing a small one wastes a dollar.
+        criteria:
+          skip:  doc-only / typo / whitespace / comments / generated / version-bump; no semantic code change
+          quick: small, single-concern change (a contained fix or minor change)
+          full:  feature-scale, cross-cutting, or risk-bearing CODE change (auth / input parsing / data layer / shared contracts / concurrency / a large code diff); documentation-only changes are never full, however large
+    decide:
+      route: {question: depth, min-confidence: 0.6, below: quick}   # torn (in practice skip-vs-quick on docs-heavy diffs) → the middle tier, never a $5 full pass
     routes:
-      skip:  {to: signoff,        label: "Trivial"}
+      skip:  {to: lgtm,           label: "Trivial"}
       quick: {to: review_quick,   label: "Quick review"}
       full:  {to: prep_diff,      label: "Full review"}
-    prompt: |
-      Size the change and route. Get the change with `git diff --end-of-options ${{ outputs.resolve.diff_spec }}` (if diff_spec is empty, read the files at `${{ outputs.resolve.paths }}`). Focus: ${{ outputs.resolve.focus }}.
 
-      Call the `route` tool once (state the deciding factor in one line first):
-        skip  — doc-only / typo / whitespace / comments / generated / version-bump; no semantic code change
-        quick — small, single-concern change (a contained fix or minor change)
-        full  — feature-scale, cross-cutting, or risk-bearing (auth / input parsing / data layer / shared contracts / concurrency / large diff)
-
-      The costs are asymmetric: under-reviewing a real change loses the review; over-reviewing a small one wastes a dollar. When torn between two tiers, pick the deeper one.
-
-      Before routing `skip`: WRITE `review.md` (cwd-relative, `write` tool) containing a clean `# Code Review` + `## All clear` with a one-line `LGTM: <reason>` — the signoff/post steps read that file.
+  lgtm:                                # skip tier — the review body signoff / the post steps read
+    type: tool
+    run: |
+      printf '# Code Review\n\n## All clear\n\nLGTM: trivial change — doc / typo / whitespace / comments / generated / version bump; no semantic code change to review.\n' > review.md
+    next: signoff
 
   review_quick:                        # quick tier — one focused pass → review.md
     type: llm
@@ -499,20 +530,29 @@ steps:
 
       Emit only `WROTE`.
 
-  verify:                              # full tier — automated evidence-quality gate over review.md
-    type: llm
-    effort: low
-    retry: synthesize                  # REJECT ⇒ re-synthesise (capped)
+  verify:                              # full tier — evidence-quality gate over review.md, judged (no turn)
+    # The former llm gate also spot-checked 3 cited path:lines against the tree; a judge cannot read
+    # the repo, and on the full tier every citation was already re-opened by the six lens verifies,
+    # so that check is dropped here rather than re-bought.
+    type: judge
+    state:
+      review: {file: review.md}
+    questions:
+      passes:
+        type: noul
+        instructions: |
+          Does `review` pass BOTH of the following? (1) Severity calibration is sane: no `low` for a data-loss claim, no `critical` nitpicks; quality/coherence items live under Improvements, never inflated into Defects. (2) Schema followed: a Scope section naming the lens coverage; Defects/Improvements sections (or All clear); optional Follow-ups / Pre-existing sections are allowed; a Next steps section. A TIGHT, blocker-focused review is CORRECT — an item demoted to Follow-ups (non-blocking) or Pre-existing is the value bar working, not an omission; brevity, a short Defects section, or relegating defense-in-depth / micro-perf / extra-test items is never a failure.
+      calibrated:
+        type: noul
+        instructions: Is severity calibration in `review` sane — no `low` for a data-loss claim, no `critical` nitpicks, quality/coherence items under Improvements rather than inflated into Defects?
+      schema_ok:
+        type: noul
+        instructions: Does `review` follow the schema — Scope naming lens coverage; Defects/Improvements (or All clear); Next steps present?
+    decide:
+      outcome: {questions: [calibrated, schema_ok], min: 0.6}   # every narrow check must clear the floor; `passes` is a diagnostic
+    retry: synthesize                  # fail ⇒ re-synthesise (capped)
     max-retries: 2
-    allowed-tools: [read, grep]
     next: signoff
-    prompt: |
-      Read `review.md` (cwd-relative) — the review under gate. Judge on its own merits.
-        1. Every finding's path:line is verifiable — spot-check 3 by reading the cited path.
-        2. Severity calibration sane (no `low` for a data-loss claim, no `critical` nitpicks; quality/coherence items live under Improvements, never inflated into Defects).
-        3. Schema followed — Scope present and names the lens coverage; Defects/Improvements (or All clear); optional Follow-ups / Pre-existing sections allowed; Next steps present.
-        4. A TIGHT, blocker-focused review is CORRECT. An item demoted to `## Follow-ups (non-blocking)` or `## Pre-existing` is the value bar working, not an omission. NEVER REJECT for brevity, a short Defects section, or for relegating defense-in-depth / micro-perf / extra-test items. Only 1–3 gate.
-      All pass → reply EXACTLY `APPROVE`. Else `abort` with `REJECT: <one-line worst violation>`.
 
   signoff:                             # human gate after skip / quick / full
     type: human
