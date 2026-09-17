@@ -94,7 +94,8 @@ steps:
       Resolve the review target from `${{ inputs.target }}` and prep the tree, then emit the review context for the downstream steps (which run on fresh context and have ONLY what you emit).
 
       Classify the target: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).
-        PR/branch: if `git status --porcelain` is non-empty, `abort` with `working tree dirty`. Then `gh pr checkout <n>` (or `git fetch origin <branch> && git checkout <branch>`); resolve base via `gh pr view --json baseRefName` or `git merge-base HEAD origin/main`. Commit ranges: don't switch branches.
+        PR: run `bash .fragua/scripts/review/resolve-pr.sh <n>` and emit its `pr`, `diff_spec`, `paths` VERBATIM — it checks out the PR (open: the branch; merged: its merge commit, detached) and computes the PR's own diff spec, correct for merged PRs where `origin/main..HEAD` would run backwards. A non-zero exit → `abort` with its stderr (e.g. `working tree dirty`).
+        Branch: if `git status --porcelain` is non-empty, `abort` with `working tree dirty`. Then `git fetch origin <branch> && git checkout <branch>`; base is `git merge-base HEAD origin/main`; diff_spec `<base>..HEAD`. Commit ranges: don't switch branches.
         Empty target → `abort` with `nothing to review`.
 
       Review context for downstream steps:
