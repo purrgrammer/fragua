@@ -59,6 +59,9 @@ export type EventType =
   // Steering (legacy — replay only)
   | "steering.requested"
   | "steering.injected"
+  // Intent fold — an intent the executor could not apply (wrong state,
+  // superseded by a cancel in the same batch); executor-emitted
+  | "intent.dropped"
   // Control channel (steer / pause / resume / cancel)
   | "control.requested"
   | "control.applied"
@@ -124,6 +127,7 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "tool.execution_end",
   "steering.requested",
   "steering.injected",
+  "intent.dropped",
   "control.requested",
   "control.applied",
   "control.rejected",
