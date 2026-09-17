@@ -1,7 +1,8 @@
 // PiMockBackend — full agent loop against pi-ai's faux provider. Use this in
 // tests to exercise the real Agent + tool path without real API calls.
 
-import { type FauxResponseStep, fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { SummariserBackend } from "@fragua/core";
 import type { Skill } from "@fragua/types";
 import type { ExecutionEnvironment, ToolRegistry } from "@fragua/workspace";

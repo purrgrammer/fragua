@@ -12,7 +12,8 @@
 //   summary.started → summary.text_delta × N → cost.recorded → summary.completed
 // No state persists between calls — the backend is a pure adapter.
 
-import { type AssistantMessage, getModel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
+import { getModel, streamSimple } from "@earendil-works/pi-ai/compat";
 import type { SummariseInput, SummariseOutput, SummariserBackend } from "@fragua/core";
 import { costPayload } from "./event-bridge.ts";
 
@@ -65,7 +66,7 @@ export class PiSummariserBackend implements SummariserBackend {
   constructor(opts: PiSummariserBackendOptions) {
     this.provider = opts.provider;
     this.modelId = opts.model;
-    // biome-ignore lint/suspicious/noExplicitAny: getModel is overloaded by KnownProvider; we accept any string so OpenRouter / faux providers work.
+    // biome-ignore lint/suspicious/noExplicitAny: getModel (imported from @earendil-works/pi-ai/compat) is generically constrained to BuiltinProvider; we accept any string so OpenRouter / faux providers work.
     this.resolveModel = opts.resolveModel ?? ((provider, modelId) => (getModel as any)(provider, modelId));
     this.getApiKey = opts.getApiKey;
     this.defaultMaxOutputTokens = opts.default_max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
