@@ -562,6 +562,42 @@ exhaustion → `pause_provider`); `enum-consumers`-style source scan for
 carrying both `route` and `outputs` folds identically to today's reducer;
 one opt-in live smoke behind `TYPESAFE_API_KEY`.
 
+## 8.1 Experiments — where Jev gets measured first
+
+A survey of the ten shipped workflows (`.fragua/workflows/*`, `~/.fragua/workflows/tech-digest.yaml`)
+for pure *decision* steps. Run order is call volume × cleanliness of fit;
+each experiment records latency, cost, and agreement with the llm step it
+shadows, per §10.
+
+| Order | Step | Today | Fit | Why |
+|---|---|---|---|---|
+| 1 | `pr_review.verdict` | haiku, `[read]`, `routes: comment \| changes` | **drop-in** | Reads `pr-review.md`, written on every path. Two-key `choice`, no threshold, zero new steps. Highest volume: runs unattended on every CI PR. If this doesn't work, nothing will. |
+| 2 | `pr_review.verify` | sonnet / low, `[read, grep]`, `retry: synthesize` | **drop-in** | The §3 / §6 example verbatim. Its one repo read (spot-check cited `path:line`) is redundant on the full tier — five upstream `*_verify` lenses already re-opened every citation. Exercises `decide.outcome` + `retry:`. |
+| 3 | `pr_review.scope` → then `review.classify` | sonnet / low, `routes: skip \| quick \| full` | **one-line ×2** | The §2.2 target and the biggest latency win, but needs (i) a `tool` step producing `gh pr diff --stat` (or `diff_stat` on `resolve.outputs` for `review`) and (ii) the `skip` branch's LGTM file write moved to a `tool` step — a judge cannot write. Exercises `decide.route` + `min-confidence` + `below: full`. |
+| 4 | `review.verify` | sonnet / low, `retry: synthesize` | drop-in | Same as 2 over `review.md`; second-wave because `review` runs less often than `pr_review`. |
+| 5 | `work.triage` | sonnet, `routes: small \| feature \| bugfix` | one-line + a gap | Criteria ("≤3 packages", "shared contracts") need a package map dumped to a file. **Gap:** its "not a workable task" `abort` has no judge equivalent — needs a fourth `blocked` route to a terminal, or `below: ask_operator`. Header comment records haiku misrouting 3/3 here, so `min-confidence` is not optional. |
+
+Together 1–3 cover the whole `decide:` surface inside one workflow, so a
+single `fragua ci pr_review` run validates the DSL end to end.
+
+**Not candidates, though they look like it** (the survey's negative results,
+kept so nobody re-derives them): the eleven `*_verify` lens steps in `review` /
+`pr_review` / `appraise` (their whole job is opening cited `path:line`s in the
+repo and rewriting a variable-length list — tool use plus a per-item fan-out,
+neither exists); `work.review` (needs the diff **and** `PLAN_REALISED`, which
+lives only in the shared thread — thread-as-state, §9); `drift.verify` and
+`tech-digest.shortlist` (the input lives in a thread and the output is a
+rewritten document / an N-of-M selection over a list); `propose`'s five panel
+`verdict` fields (mechanically derived from a repo-grounded `blocking` array);
+every `type: human` gate (the decision is the operator's by design).
+
+**Independent of Jev, surfaced by the same survey:** `drift.collect` and
+`tech-digest.collect` are haiku steps that run `bash` and reply exactly
+`collected` — `tool` steps in llm clothing; `dependencies.update`'s
+`routes: updated | none` reports work it just did and is a
+`git diff --quiet` `tool` step with `on: {success, fail}`. Three llm turns per
+run that need no model at all.
+
 ## 9. Doors — deferred, sound
 
 - **Thread-as-state.** `${{ thread.<id>.last }}` / `.all` tokens exposing a
