@@ -650,6 +650,7 @@ shadows, per §10.
 | 3 | `pr_review.scope` → then `review.classify` | sonnet / low, `routes: skip \| quick \| full` | **one-line ×2** | The §2.2 target and the biggest latency win, but needs (i) a `tool` step producing `gh pr diff --stat` (or `diff_stat` on `resolve.outputs` for `review`) and (ii) the `skip` branch's LGTM file write moved to a `tool` step — a judge cannot write. Exercises `decide.route` + `min-confidence` + `below: full`. |
 | 4 | `review.verify` | sonnet / low, `retry: synthesize` | drop-in | Same as 2 over `review.md`; second-wave because `review` runs less often than `pr_review`. |
 | 6 | lens verifies via the `judge` **tool** (§8.2) | sonnet / medium, `[read, grep]` | tool, not step | Keep the lens verify an llm step; add `judge` to its toolset and instruct: after reading each cited location, one `noul` per finding ("does the cited code support the claim") in one call, drop below 0.5, escalate 0.5–0.7 into the review as uncertain. Measures whether calibrated per-item verdicts beat the agent's own drop/keep. **Result (§8.3):** the citation `noul` agrees with human triage 10/10; the severity `score` ranks correctly but its argmax runs a level hot — use it as a contest flag. |
+| 7 | `review` / `pr_review` lens verifies → `*_read` + `*_judge` (`for-each`, §3.7) | sonnet / medium verify per lens | topology | The llm verify splits into an evidence read (opens the cited code, records the lens-specific guards / mitigations / tests, no verdict) and a `for-each` judge asking `holds` + `severity` (+ `in_scope` for the unattended bar) per finding in one call; `keep` drops under 0.6. Measures the drop/keep decision moved from prose into the graph, with a probability the synthesiser reads. **Result (§8.4): cheaper, faster, one real Medium the baseline missed; the three drops were the three weakest claims.** |
 | 5 | `work.triage` | sonnet, `routes: small \| feature \| bugfix` | one-line + a decision | Criteria ("≤3 packages", "shared contracts") need a package map dumped to a file. Its "not a workable task" `abort` has no judge equivalent — **decided:** add a fourth `blocked` option to the `choice` (routed to a terminal `human` or `exit`), so "not workable" is a judged outcome like the other three. Header comment records haiku misrouting 3/3 here, so `min-confidence` is not optional. |
 
 Together 1–3 cover the whole `decide:` surface inside one workflow, so a
@@ -764,15 +765,54 @@ contest signal: emit the reviewer's level, attach the judge's expected value
 and confidence, and let the synthesiser surface any finding where the two
 disagree by a level or the confidence is under 0.5.
 
-The pattern for a verify lens, revised: keep the step an llm (it opens the
-cited code); before `emit_output` make **one** `judge` call with a `noul` per
-finding (drop below 0.5, mark 0.5–0.7 as uncertain in the review) and a
-`score` per finding whose criteria are the field's **own** options, verbatim;
-keep the agent's `severity`, add `severity_contested: boolean` when the
-judge's expected level differs by ≥ 1 or its confidence is < 0.5. The
-citation `noul` is the part that earns the tool today; the score earns a
-flag, not a decision. `appraise`'s `cost` / `leverage` and `analyze`'s
-`confidence` are the same shape and should expect the same split.
+The pattern for a verify lens, as shipped (§3.7, §8.1 row 7): the lens keeps
+an llm step that **reads** — opens the cited code and records the evidence
+the lens cares about, no verdict — and a `for-each` **judge step** asks the
+atomic questions per finding: `holds` (noul), `severity` (score over the
+field's **own** options, verbatim), `in_scope` for the unattended bar. `keep`
+is the drop/keep `if`, in the workflow; the kept items reach `synthesize`
+carrying the scanner's severity and the judge's probabilities, and the
+synthesiser's prompt states the thresholds as numbers (`holds.noul` < 0.75 is
+weak evidence; a judge level ≥ 1 step from the scanner's, or confidence < 0.5,
+is contested). Nothing is decided by an agent reading a probability and acting
+on it in prose — that was the tool-in-a-turn shape, and it hid an `if`.
+
+`appraise`'s `cost` / `leverage` and `analyze`'s `confidence` are the same
+shape (a rubric scored per item after the lens read the evidence) and take the
+same `read → for-each judge` split. **Deferred** past this PR: they run far
+less often than the review workflows, and the conversion should follow one
+round of production reviews on the two that ship here.
+
+## 8.4 Evidence — `review` on merged PR #94, baseline vs `for-each` lenses
+
+Same PR, same `resolve` fix (the merged-PR script), same models; the only
+difference is the lens topology: main's `scan → llm verify` against this
+branch's `scan → read → for-each judge`. Posts stubbed behind the signoff gate.
+
+| | baseline (llm verify) | converted (read + for-each judge) |
+|---|---|---|
+| cost | $4.72 | $4.48 (judge: 6 calls, $0.0009) |
+| wall clock | 19m 45s | 14m 49s |
+| scan findings → kept | 11 → 8 | 14 → 11 (3 dropped at p(holds) 0.47, 0.56, 0.59) |
+| Defects section | none | one Medium: `run-follow.ts` still uses `TERMINAL_FACT_TYPES`, so LEGACY-tail runs never settle — a real bug the baseline did not surface |
+| gate (`calibrated`, `schema_ok`) | passed | passed (0.82, 0.96) |
+
+What the numbers say. (i) The drops are the right ones: the three the judge
+cut were the weakest claims (a comment misdescription, a test that pins the
+wrong thing, a "spreads a superset" no-op) and sat at p(holds) 0.47–0.59 —
+below 0.6 and visibly torn, exactly where a threshold should bite. Every kept
+item scored ≥ 0.60 and the ones a human would call solid scored ≥ 0.83. (ii)
+The severity score agreed with the scanner on 9 of 11 kept items; the two it
+contested (a `high` it put at medium/0.58, a `medium` it put at 0.52 vs 0.48)
+are the two the synthesiser should second-guess, and the prompt now tells it
+so with numbers. (iii) Faster and cheaper because the read step does one thing
+(open, copy, record) where the verify reasoned in prose, and the judgments are
+free. (iv) The empty-list path ran twice (security, performance: no scan
+findings ⇒ no call, `kept: []`).
+
+Two quick-tier runs on merged PR #90 (both routed `quick` at 0.66) exercised
+the resolve script end to end: `diff_spec` came back as the PR's own range and
+both reviews landed at signoff for $0.26.
 
 ## 9. Doors — deferred, sound
 
