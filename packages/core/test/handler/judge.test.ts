@@ -37,7 +37,12 @@ function stubJudge(
     provider: "typesafe",
     async ask(req) {
       captured.requests.push(req);
-      return { model: "jev-1.13.0", answers: typeof answers === "function" ? answers(req) : answers, usage };
+      return {
+        model: "jev-1.13.0",
+        answers: typeof answers === "function" ? answers(req) : answers,
+        usage,
+        costUsd: usage.input_tokens * JUDGE_USD_PER_INPUT_TOKEN,
+      };
     },
   };
 }

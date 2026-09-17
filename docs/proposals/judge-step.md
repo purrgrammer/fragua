@@ -589,6 +589,7 @@ shadows, per §10.
 | 2 | `pr_review.verify` | sonnet / low, `[read, grep]`, `retry: synthesize` | **drop-in** | The §3 / §6 example verbatim. Its one repo read (spot-check cited `path:line`) is redundant on the full tier — five upstream `*_verify` lenses already re-opened every citation. Exercises `decide.outcome` + `retry:`. |
 | 3 | `pr_review.scope` → then `review.classify` | sonnet / low, `routes: skip \| quick \| full` | **one-line ×2** | The §2.2 target and the biggest latency win, but needs (i) a `tool` step producing `gh pr diff --stat` (or `diff_stat` on `resolve.outputs` for `review`) and (ii) the `skip` branch's LGTM file write moved to a `tool` step — a judge cannot write. Exercises `decide.route` + `min-confidence` + `below: full`. |
 | 4 | `review.verify` | sonnet / low, `retry: synthesize` | drop-in | Same as 2 over `review.md`; second-wave because `review` runs less often than `pr_review`. |
+| 6 | lens verifies via the `judge` **tool** (§8.2) | sonnet / medium, `[read, grep]` | tool, not step | Keep the lens verify an llm step; add `judge` to its toolset and instruct: after reading each cited location, one `noul` per finding ("does the cited code support the claim") in one call, drop below 0.5, escalate 0.5–0.7 into the review as uncertain. Measures whether calibrated per-item verdicts beat the agent's own drop/keep. |
 | 5 | `work.triage` | sonnet, `routes: small \| feature \| bugfix` | one-line + a decision | Criteria ("≤3 packages", "shared contracts") need a package map dumped to a file. Its "not a workable task" `abort` has no judge equivalent — **decided:** add a fourth `blocked` option to the `choice` (routed to a terminal `human` or `exit`), so "not workable" is a judged outcome like the other three. Header comment records haiku misrouting 3/3 here, so `min-confidence` is not optional. |
 
 Together 1–3 cover the whole `decide:` surface inside one workflow, so a
@@ -616,6 +617,31 @@ every `type: human` gate (the decision is the operator's by design).
 `routes: updated | none` reports work it just did and is a
 `git diff --quiet` `tool` step with `on: {success, fail}`. Three llm turns per
 run that need no model at all.
+
+## 8.2 The `judge` agent tool — the primitives inside an llm turn
+
+The survey's "not a fit" column was mostly one shape: an llm step that must
+**read the repo** to gather evidence and then make **many small decisions over
+a variable-length list** — the eleven `*_verify` lens steps re-opening every
+cited `path:line`, `work.review` judging a diff against a plan, `drift.verify`
+dropping weak findings. A `judge` *step* cannot do the reading; an llm step
+can, but makes the per-item calls by feel and returns no margin.
+
+So the primitives are also a **tool**: `judge({ state, questions })`, present
+in every llm step's default toolset when the run carries a judge client (and
+stripped when it does not, so a workflow never sees a dead tool). The agent
+gathers the evidence — reads the cited lines, pulls the hunk — puts it in
+`state`, and asks one question per item in a single call (TypeSafe's
+fan-out pattern: parallel evaluation, no added latency). It gets back the
+same typed answers the step gets, and the cost lands on the calling node as
+`cost.recorded`. This is the citation-check cookbook (one `choice`
+supports / contradicts / says_nothing per citation, auto-accept above 0.8)
+and the composite-scoring pattern (one `score` per dimension, code combines),
+available to any lens verify without changing its topology.
+
+Division of labour: the agent keeps *reasoning and evidence-gathering*; the
+judge supplies *calibrated verdicts over a batch*. Whether that beats the
+agent's own per-item judgment is the next experiment (§8.1 row 6).
 
 ## 9. Doors — deferred, sound
 

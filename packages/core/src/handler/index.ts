@@ -1,5 +1,5 @@
 export type { JudgeAnswer, JudgeClient, JudgeRequest, JudgeResponse } from "../types/judge.ts";
-export { JudgeNotCredentialedError, JudgeProviderError } from "../types/judge.ts";
+export { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload } from "../types/judge.ts";
 export type { BuildContextOpts } from "./context.ts";
 export { buildHandlerContext } from "./context.ts";
 export type { MakeExternalCallOpts } from "./external-call.ts";

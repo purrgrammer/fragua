@@ -6,6 +6,7 @@
 
 import {
   JUDGE_DEFAULT_PROVIDER,
+  JUDGE_USD_PER_INPUT_TOKEN,
   type JudgeClient,
   JudgeNotCredentialedError,
   JudgeProviderError,
@@ -98,13 +99,15 @@ function parseResponse(text: string, provider: string): JudgeResponse {
     const problem = answerShapeProblem(a);
     if (problem !== undefined) throw new JudgeProviderError(`answer "${id}": ${problem}`, provider, 200);
   }
+  const inputTokens = typeof usage?.["input_tokens"] === "number" ? usage["input_tokens"] : 0;
   return {
     model: r["model"],
     answers: answers as JudgeResponse["answers"],
     usage: {
-      input_tokens: typeof usage?.["input_tokens"] === "number" ? usage["input_tokens"] : 0,
+      input_tokens: inputTokens,
       output_tokens: typeof usage?.["output_tokens"] === "number" ? usage["output_tokens"] : 0,
     },
+    costUsd: inputTokens * JUDGE_USD_PER_INPUT_TOKEN,
   };
 }
 

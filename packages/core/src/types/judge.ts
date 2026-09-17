@@ -121,6 +121,8 @@ export interface JudgeResponse {
   model: string;
   answers: Record<string, JudgeAnswer>;
   usage: { input_tokens: number; output_tokens: number };
+  /** Priced by the client from `usage` (input tokens only; output is free). */
+  costUsd: number;
 }
 
 /** Pre-wired System One client on `ctx.judge`. Handlers may not `fetch`. */
@@ -154,3 +156,24 @@ export class JudgeNotCredentialedError extends Error {
 /** Input-token price for Jev; output tokens are free. Per-provider constant
  * until a second System One model exists. */
 export const JUDGE_USD_PER_INPUT_TOKEN = 0.042 / 1_000_000;
+
+/** The `cost.recorded` payload for one judge call — the same shape the llm
+ * boundary emits, so the run-level cost fold and the per-step window need no
+ * special case. */
+export function judgeCostPayload(provider: string, res: JudgeResponse): Record<string, unknown> {
+  return {
+    provider,
+    model: res.model,
+    stop_reason: "stop",
+    input_tokens: res.usage.input_tokens,
+    output_tokens: res.usage.output_tokens,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: res.usage.input_tokens + res.usage.output_tokens,
+    cost_usd: res.costUsd,
+    cost_input_usd: res.costUsd,
+    cost_output_usd: 0,
+    cost_cache_read_usd: 0,
+    cost_cache_write_usd: 0,
+  };
+}

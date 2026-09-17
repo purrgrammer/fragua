@@ -320,6 +320,7 @@ Advanced (kebab, see `references/advanced-attrs.md`): `context-files`, `system-p
 | `find` | filename search | |
 | `ls` | list a directory | |
 | `web_fetch` | fetch a URL | opt-in |
+| `judge` | ask a System One model a batch of typed `choice` / `score` / `noul` questions over evidence the agent has gathered, get probabilities back | present only when a judge provider is credentialed; the agent-side counterpart of the `judge` step — the agent reads the repo, the judge scores each item (one `noul` per citation, one `score` per finding) in one ~1s call |
 
 Two tools are **always force-included** and need not be listed — they're available even if `allowed-tools` omits them (and survive `denied-tools`): `abort` (fail the step with a reason, §4) and `route` (synthesised per-call on a node that declares `routes:`). The `skill` tool is **conditionally** force-included: present when the node's effective skill catalogue is non-empty, stripped when `skills_disabled: true`, an empty `skills:` intersection, or no skills are discovered for the project — in that case neither the catalogue block nor the `skill` tool appears.
 

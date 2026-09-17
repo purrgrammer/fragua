@@ -4,17 +4,19 @@
 # the inbox, where the per-bump rationale lives in the run transcript.
 #
 # Shape:
-#   update → changed? → review → typecheck → ci → exit   (green ⇒ done, uncommitted)
-#               ↓none      ↑retry            ↓fail   ↓fail
-#              exit        update             fix ←───┘ → typecheck
+#   update → changed? → lockfile_check → review → typecheck → ci → exit   (green ⇒ done, uncommitted)
+#               ↓none         ↓fail       ↑retry            ↓fail   ↓fail
+#              exit          update       update             fix ←───┘ → typecheck
 #
 # Principles:
 #   - `update` touches MANIFESTS ONLY (package.json + lockfile). Adapting source
 #     to a new API is the downstream `fix` step's job — keeps the bump diff
 #     reviewable and the gate's job crisp.
-#   - `review` is an independent judge: it reads the manifest diff fresh (exact
-#     pins, scope respected, no `workspace:` deps touched), never the author's
-#     reasoning. REJECT is a goal-gate retarget back to `update`.
+#   - `review` is an independent judge — literally a `judge` step over the
+#     manifest diff a tool step materialises (exact pins, scope respected, no
+#     `workspace:` deps touched), never the author's reasoning; the lockfile
+#     consistency check is the tool step itself (`bun install --frozen-lockfile`).
+#     A failed gate is a goal-gate retarget back to `update`.
 #   - `update` + `fix` share `thread: bump` so the fixer sees WHICH deps moved
 #     and the stated breaking changes; the type/CI gates re-derive from the env.
 #   - "Nothing in scope to update" is a graceful no-op → `exit`, not a halt —
@@ -67,23 +69,50 @@ steps:
     type: tool
     run: test -n "$(git status --porcelain)"
     on:
-      success: review
+      success: lockfile_check
       fail: exit
 
-  review:
-    type: llm
+  lockfile_check:                      # (d) of the old review prompt is a command, so it is a tool step: a stale lockfile fails here
+    type: tool
+    run: |
+      set -euo pipefail
+      out=.fragua/scratch/deps
+      rm -rf "$out" && mkdir -p "$out"
+      git diff HEAD --stat > "$out/stat.txt"
+      git diff HEAD -- '*package.json' '**/package.json' > "$out/manifests.diff"
+      bun install --frozen-lockfile
+    on:
+      success: review
+      fail: update                     # lockfile drifted from the manifests ⇒ back to update (capped by its max-retries)
+
+  review:                              # (a)(b)(c) judged over the manifest diff — no repo reads needed, the diff is the evidence
+    type: judge
+    state:
+      scope:     ${{ inputs.scope }}
+      stat:      {file: .fragua/scratch/deps/stat.txt}
+      manifests: {file: .fragua/scratch/deps/manifests.diff}
+    questions:
+      exact_pins:
+        type: noul
+        instructions: In `manifests`, is every changed dependency version an EXACT pin — no `^`, `~`, `>=`, `x`, or range anywhere on a changed line?
+      scope_respected:
+        type: noul
+        instructions: Does every bump in `manifests` respect `scope` — patch means the major and minor parts are unchanged; minor means the major part is unchanged; major allows anything?
+      manifests_only:
+        type: noul
+        instructions: Per `stat`, do the changes touch only package.json files and the lockfile (bun.lock) — no `workspace:` internal dependency altered in `manifests`, no source, test, or doc files changed?
+      breaking_risk:
+        type: score
+        instructions: How likely is it that a bump in `manifests` carries a known breaking change a consumer must adapt to?
+        criteria:
+          - none — patch-level or clearly additive bumps only
+          - possible — a minor bump on a library with a history of behavioural changes
+          - likely — a major bump, or a bump across a documented breaking release
+    decide:
+      outcome: {questions: [exact_pins, scope_respected, manifests_only], min: 0.6}
     retry: update
     max-retries: 2
     next: typecheck
-    allowed-tools: [read, grep, bash]
-    prompt: |
-      Judge `git diff HEAD` — the dependency bumps only (package.json files + lockfile). Fresh read; ignore any prose, trust the diff.
-        (a) every changed pin is EXACT — no `^` / `~` / ranges.
-        (b) each bump respects scope `${{ inputs.scope }}` (no surprise majors when scope is patch/minor).
-        (c) no `workspace:` internal dep altered; no source files changed.
-        (d) the lockfile is consistent with the manifest edits (`bun install --frozen-lockfile` succeeds).
-      Call out any major with known breaking changes in your one line.
-      `APPROVE: <one line>`, or `abort` with `REJECT: <one line>`.
 
   typecheck:
     type: tool

@@ -212,6 +212,7 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       emit,
       ...(priorMessages !== undefined ? { priorMessages } : {}),
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
+      ...(ctx.judge !== undefined ? { judge: ctx.judge } : {}),
       ...(ctx.budgetSnapshot !== undefined ? { budgetSnapshot: ctx.budgetSnapshot } : {}),
       persistMessage: (message) => {
         // Dedup system + initial-user messages against the most

@@ -15,7 +15,6 @@ import {
   isJudgeFileLeaf,
   JUDGE_DEFAULT_MODEL,
   JUDGE_DEFAULT_STATE_MAX_BYTES,
-  JUDGE_USD_PER_INPUT_TOKEN,
   type JudgeAnswer,
   type JudgeDecide,
   type JudgeJson,
@@ -23,6 +22,7 @@ import {
   JudgeProviderError,
   type JudgeQuestion,
   type JudgeState,
+  judgeCostPayload,
 } from "../../types/judge.ts";
 import type { OutputStructValue, OutputsValue } from "../../types/outputs.ts";
 import type { Handler, HandlerContext, HandlerResult, HandlerSpec } from "../types.ts";
@@ -110,7 +110,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
 
     const inputTokens = response.usage.input_tokens;
     const outputTokens = response.usage.output_tokens;
-    const costUsd = inputTokens * JUDGE_USD_PER_INPUT_TOKEN;
+    const costUsd = response.costUsd;
     const recordedDecision: JudgeNodeMessage["decision"] =
       decision === undefined
         ? undefined
@@ -141,21 +141,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       answers: capAnswersForEvent(response.answers),
       ...(recordedDecision !== undefined ? { decision: recordedDecision } : {}),
     });
-    ctx.emit("cost.recorded", {
-      provider: judge.provider,
-      model: response.model,
-      stop_reason: "stop",
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-      total_tokens: inputTokens + outputTokens,
-      cost_usd: costUsd,
-      cost_input_usd: costUsd,
-      cost_output_usd: 0,
-      cost_cache_read_usd: 0,
-      cost_cache_write_usd: 0,
-    });
+    ctx.emit("cost.recorded", judgeCostPayload(judge.provider, response));
 
     const result: HandlerResult = {
       kind: "transition",
