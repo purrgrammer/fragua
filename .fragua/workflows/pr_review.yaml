@@ -450,7 +450,7 @@ steps:
         instructions: Does every recorded finding in `review` clear the bar — none is a formatting/naming/doc-wording nit, a "consider …" preference, a speculative or hypothetical concern, an intra-workspace API-stability opinion, a guard against an impossible input, or a pre-existing issue this diff did not introduce?
       schema_ok:
         type: noul
-        instructions: Does `review` follow the schema — Scope naming lens coverage; Critical/High/Medium in order (no Low) or All clear; Next steps present?
+        instructions: Does `review` follow the schema — a Scope section naming lens coverage; then only the severity sections that have findings, chosen from Critical / High / Medium in that order (a severity with no findings is omitted, there is no Low tier; when there are none at all, an All clear section instead); and a Next steps section?
     decide:
       # Gate on the three narrow checks, every one ≥ 0.6. A single composite "passes ALL of"
       # noul sat near 0.5 (undecided) on a review the narrow checks each cleared — and near-0.5
