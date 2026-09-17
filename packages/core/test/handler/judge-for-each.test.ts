@@ -117,7 +117,7 @@ describe("judge handler — for-each", () => {
       forEach: "${{ outputs.read.findings }}",
       state: { diff: "the diff" },
       questions: { holds: HOLDS, sev: SEV },
-      keep: { question: "holds", min: 0.6 },
+      keep: { questions: ["holds"], min: 0.6 },
     });
     const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
     expect(res.kind).toBe("transition");
@@ -135,7 +135,7 @@ describe("judge handler — for-each", () => {
       nodeId: "j",
       forEach: "${{ outputs.read.findings }}",
       questions: { holds: HOLDS, sev: SEV },
-      keep: { question: "holds", min: 0.6 },
+      keep: { questions: ["holds"], min: 0.6 },
     });
     const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
     if (res.kind !== "transition") throw new Error(res.kind);
@@ -168,7 +168,7 @@ describe("judge handler — for-each", () => {
       nodeId: "j",
       forEach: "${{ outputs.read.findings }}",
       questions: { holds: HOLDS },
-      keep: { question: "holds", min: 0.6 },
+      keep: { questions: ["holds"], min: 0.6 },
     });
     const res = await h.handler(ctxWith(c, { read: { findings: [] } }, stubJudge(perItem, c)));
     if (res.kind !== "transition") throw new Error(res.kind);
@@ -207,7 +207,7 @@ describe("judge handler — for-each", () => {
       nodeId: "j",
       forEach: "${{ outputs.read.paths }}",
       questions: { holds: HOLDS },
-      keep: { question: "holds", min: 0.5 },
+      keep: { questions: ["holds"], min: 0.5 },
     });
     const res = await h.handler(
       ctxWith(

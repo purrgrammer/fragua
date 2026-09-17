@@ -61,7 +61,7 @@ describe("judge for-each — validator (E049)", () => {
   test("keep must name a declared noul", () => {
     expect(
       messages(WF("${{ outputs.read.findings }}", "    keep: {question: nope, min: 0.5}\n"), "E049").join("\n"),
-    ).toMatch(/"nope", which is not declared/);
+    ).toMatch(/names question "nope", which is not declared/);
     expect(
       messages(WF("${{ outputs.read.findings }}", "    keep: {question: sev, min: 0.5}\n"), "E049").join("\n"),
     ).toMatch(/is a `score` — only a `noul`/);

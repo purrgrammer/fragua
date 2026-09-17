@@ -50,9 +50,10 @@ export interface JudgeOutcomeDecision {
 export type JudgeDecide = { route: JudgeRouteDecision } | { outcome: JudgeOutcomeDecision };
 
 /** `keep:` on a `for-each` judge — the per-item decision: an item stays in
- * `kept` when its `noul` answer to `question` reaches `min`. */
+ * `kept` when every listed `noul` answer reaches `min` (all-of). Authored as
+ * `question: <id>` or `questions: [<id>, …]`; the parser normalises to a list. */
 export interface JudgeKeep {
-  question: string;
+  questions: string[];
   min: number;
 }
 

@@ -40,7 +40,7 @@ describe("judge for-each — parser", () => {
     const g = parseWorkflow(FOR_EACH());
     const j = g.nodes["judge"]!;
     expect(j.attrs.judge_for_each).toBe("${{ outputs.read.findings }}");
-    expect(j.attrs.judge_keep).toEqual({ question: "holds", min: 0.6 });
+    expect(j.attrs.judge_keep).toEqual({ questions: ["holds"], min: 0.6 });
     expect(j.attrs.judge_for_each_max_items).toBe(JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS);
     expect(j.attrs.judge_state).toBeUndefined();
   });
@@ -113,6 +113,16 @@ steps:
     );
     const noForEach = FOR_EACH().replace("    for-each: ${{ outputs.read.findings }}\n", "    state: x\n");
     expect(() => parseWorkflow(noForEach)).toThrow(/`keep:` without `for-each:`/);
+  });
+
+  test("keep accepts a question list, all-of", () => {
+    const g = parseWorkflow(
+      FOR_EACH("", "    keep: {questions: [holds, holds2], min: 0.5}\n").replace(
+        "      severity:",
+        "      holds2: {type: noul, instructions: also?}\n      severity:",
+      ),
+    );
+    expect(g.nodes["judge"]!.attrs.judge_keep).toEqual({ questions: ["holds", "holds2"], min: 0.5 });
   });
 
   test("keep shape errors name the key", () => {

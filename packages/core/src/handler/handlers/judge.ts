@@ -363,14 +363,19 @@ function foldForEach(
     if ("error" in folded) return { error: `item ${i}: ${folded.error}` };
     perItem.push(folded.outputs);
     if (keep === undefined) continue;
-    const verdict = own[keep.question];
-    if (verdict === undefined || verdict.type !== "noul")
-      return { error: `item ${i}: keep question has no noul answer` };
+    let pass = true;
+    for (const qid of keep.questions) {
+      const verdict = own[qid];
+      if (verdict === undefined || verdict.type !== "noul") {
+        return { error: `item ${i}: keep question "${qid}" has no noul answer` };
+      }
+      if (verdict.noul < keep.min) pass = false;
+    }
     const item = items[i] as OutputStructValue;
     const fields: { [k: string]: OutputStructValue } =
       typeof item === "object" && item !== null && !Array.isArray(item) ? { ...item } : { item };
     fields["judge"] = folded.outputs;
-    if (verdict.noul >= keep.min) {
+    if (pass) {
       kept.push(fields);
       keptIdx.push(i);
     } else {

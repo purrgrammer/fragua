@@ -234,18 +234,34 @@ export function parseJudgeForEach(raw: unknown): string {
   return trimmed;
 }
 
-/** `keep:` — `{question: <noul id>, min: <0..1>}`. */
+/** `keep:` — `{question: <noul id> | questions: [<noul id>, …], min: <0..1>}`. */
 export function parseJudgeKeep(raw: unknown): JudgeKeep {
-  if (!isPlainObject(raw)) throw new JudgeParseError("`keep` must be a mapping `{question: <id>, min: <0..1>}`");
-  const known = new Set(["question", "min"]);
+  if (!isPlainObject(raw)) {
+    throw new JudgeParseError("`keep` must be a mapping `{question: <id> | questions: [<id>, …], min: <0..1>}`");
+  }
   for (const k of Object.keys(raw)) {
-    if (!known.has(k)) throw new JudgeParseError(`\`keep.${k}\` is not a recognised key (question, min)`);
+    if (k !== "question" && k !== "questions" && k !== "min") {
+      throw new JudgeParseError(`\`keep.${k}\` is not a recognised key (question / questions / min)`);
+    }
   }
-  const question = raw["question"];
-  if (typeof question !== "string" || !isJudgeIdentifier(question)) {
-    throw new JudgeParseError("`keep.question` must name a declared `noul` question");
+  if ((raw["question"] === undefined) === (raw["questions"] === undefined)) {
+    throw new JudgeParseError(
+      "`keep` needs exactly one of `question:` (one noul) or `questions:` (a list — every one must pass)",
+    );
   }
-  return { question, min: unitInterval(raw["min"], "keep.min") };
+  let questions: string[];
+  if (raw["question"] !== undefined) {
+    questions = [questionRef(raw["question"], "keep.question")];
+  } else {
+    const list = raw["questions"];
+    if (!Array.isArray(list) || list.length === 0) {
+      throw new JudgeParseError("`keep.questions` must be a non-empty list of noul question ids");
+    }
+    questions = list.map((q, i) => questionRef(q, `keep.questions[${i}]`));
+    if (new Set(questions).size !== questions.length)
+      throw new JudgeParseError("`keep.questions` repeats a question id");
+  }
+  return { questions, min: unitInterval(raw["min"], "keep.min") };
 }
 
 export function parseJudgeForEachMaxItems(raw: unknown): number {

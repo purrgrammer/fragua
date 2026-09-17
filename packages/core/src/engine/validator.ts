@@ -836,17 +836,16 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       }
       const keep = n.attrs.judge_keep;
       if (keep !== undefined) {
-        const q = questions[keep.question];
-        if (q === undefined) {
-          err(
-            "E049",
-            `judge "${n.id}" \`keep.question\` names "${keep.question}", which is not declared in \`questions:\``,
-          );
-        } else if (q.type !== "noul") {
-          err(
-            "E049",
-            `judge "${n.id}" \`keep.question\` "${keep.question}" is a \`${q.type}\` — only a \`noul\` thresholds an item in or out`,
-          );
+        for (const qid of keep.questions) {
+          const q = questions[qid];
+          if (q === undefined) {
+            err("E049", `judge "${n.id}" \`keep\` names question "${qid}", which is not declared in \`questions:\``);
+          } else if (q.type !== "noul") {
+            err(
+              "E049",
+              `judge "${n.id}" \`keep\` question "${qid}" is a \`${q.type}\` — only a \`noul\` thresholds an item in or out`,
+            );
+          }
         }
       }
     }

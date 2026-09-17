@@ -393,8 +393,8 @@ correctness_judge:
     `${{ outputs.correctness_judge.kept }}` is the list a synthesiser wants:
     the findings that held, each carrying `judge.holds.noul` and
     `judge.severity.{level,confidence,probabilities}` as numbers it can compare.
-- **`keep`.** `{question: <noul id>, min}` — the per-item decision; E049 if the
-  question is not a declared `noul`. **`decide:` is not allowed with
+- **`keep`.** `{question: <noul id> | questions: [<noul id>, …], min}` — the per-item
+  decision, all-of like `decide.outcome`; E049 if a question is not a declared `noul`. **`decide:` is not allowed with
   `for-each`** (E049): a run-level decision over a list is a second judge, or
   the consumer's threshold.
 - **Validator.** `for-each` must be an `${{ outputs.X.f }}` reference that
