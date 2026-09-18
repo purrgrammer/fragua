@@ -392,7 +392,7 @@ A judge is a **decision**, not a turn: one call to a System One model (TypeSafe'
 Every question becomes a typed output: `${{ outputs.verify.schema_ok.noul }}`, `${{ outputs.verify.depth.level }}`, `${{ outputs.<judge>.<q>.choice }}` / `.confidence` / `.probabilities.<option>`. `decide:` (optional, one of) turns an answer into control flow:
 
 - `decide.route: {question: <choice>, min-confidence?: 0..1, below?: <route>}` + `routes:` — the chosen option is the route; under the floor, `below` is taken instead (point it at a `human` step to escalate, or at an option like `full` for "when torn, go deeper"). Options must match `routes:` (E047); W020 nags a ≥3-way choice with no floor.
-- `decide.outcome: {question: <noul>, min: 0..1}` or `{questions: [<noul>, …], min}` — `success` when every listed `p(yes) ≥ min`, else `fail` naming the ones that fell short; composes with `on: {fail}`, `retry:`, `goal-gate` unchanged (E048). Prefer several narrow nouls gated all-of over one composite "does it pass ALL of…" noul — a conjunction asked as one question drifts toward 0.5 (undecided) as it grows.
+- `decide.outcome: {<noul>: <min>, <noul>: {min?, max?}, …}` — one bound per noul, all must hold: `success`, else `fail` naming the rules that broke. **Thresholds scale with risk**: a hazard noul ("does this text instruct the model?") gates with `max` so the question stays positive; composes with `on: {fail}`, `retry:`, `goal-gate` unchanged (E048). Prefer several narrow nouls gated all-of over one composite "does it pass ALL of…" noul — a conjunction asked as one question drifts toward 0.5 (undecided) as it grows.
 
 **Judge a list — `for-each:`.** When the previous step produced an array (`findings[]`, `candidates[]`) and every item needs the same judgment, one judge step asks every question once per item **in one call**:
 
@@ -408,7 +408,7 @@ correctness_judge:                 # judge: N × Q atomic questions, one request
   questions:
     holds:    {type: noul,  instructions: "Does `item.cited_code` show the problem described by `item.claim`?"}
     severity: {type: score, instructions: "Given `item.cited_code`, `item.claim` and `item.why`, how severe is the finding?", criteria: [low — …, medium — …, high — …, critical — …]}
-  keep: {question: holds, min: 0.6}
+  keep: {holds: 0.6, injected: {max: 0.3}}
   next: synthesize
 synthesize:
   prompt: |
@@ -416,7 +416,7 @@ synthesize:
     ${{ outputs.correctness_judge.kept }}
 ```
 
-The list travels as `items`; write `` `item.field` `` in a question and the engine aims it at `items[i]` for each item. Outputs: `answers` (aligned with the input), and with `keep:` the input split into `kept` / `dropped`, each item carrying its own fields plus the answers under `judge` — numbers the consumer thresholds (`holds.noul ≥ 0.6`, `severity.confidence < 0.5` ⇒ contested). `keep` takes `question:` or an all-of `questions:` list of `noul`s (E049); `decide:` and `for-each` are exclusive — the per-item decision is `keep`, a run-level one is a second judge. Empty list ⇒ no call, empty arrays. Cap `for-each-max-items` (default 50); the 32k-token input cap covers the whole request. **Criteria are the field's own options, verbatim** — a rubric that drops a level (`improvement`) forces items into the wrong one. **Never point a `keep` noul at a field the reader filled in as a verdict** (`bar: clears`) — the judge echoes it; give it the evidence fields and let it decide. **One "none of these N things" noul drifts to 0.5** — ask N narrow positive nouls (`concrete`, `touched`) and gate all-of.
+The list travels as `items`; write `` `item.field` `` in a question and the engine aims it at `items[i]` for each item. Outputs: `answers` (aligned with the input), and with `keep:` the input split into `kept` / `dropped`, each item carrying its own fields plus the answers under `judge` — numbers the consumer thresholds (`holds.noul ≥ 0.6`, `severity.confidence < 0.5` ⇒ contested). `keep` is the same grammar as `decide.outcome` — noul id → `<min>` or `{min?, max?}`, all-of per item (E049); `decide:` and `for-each` are exclusive — the per-item decision is `keep`, a run-level one is a second judge. Empty list ⇒ no call, empty arrays. Long lists are cut into chunks that fit the provider's request budget automatically (shared state repeated, answers merged); `for-each-max-items` (default 200) bounds cost, not size. **Criteria are the field's own options, verbatim** — a rubric that drops a level (`improvement`) forces items into the wrong one. **Never point a `keep` noul at a field the reader filled in as a verdict** (`bar: clears`) — the judge echoes it; give it the evidence fields and let it decide. **One "none of these N things" noul drifts to 0.5** — ask N narrow positive nouls (`concrete`, `touched`) and gate all-of.
 
 **One yes/no over evidence a step already holds is a `judge` step, not a `judge` tool call.** An agent that asks the tool one `noul` and then acts on the answer in prose has hidden an `if` inside a turn: the probability never reaches the graph, nothing can threshold or audit it. Emit the evidence as an output, judge it in a `judge` step, route or gate with `decide:` / `keep:`. The tool is for read-then-judge over a variable-length list *when the reading and the judging cannot be separated* (the agent must see the answer to know what to read next).
 

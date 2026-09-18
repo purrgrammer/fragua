@@ -121,7 +121,7 @@ describe("RunConversation — judge_node for-each row", () => {
           holds__0: { type: "noul", noul: 0.91 },
           holds__1: { type: "noul", noul: 0.2 },
         },
-        forEach: { count: 2, kept: [0] },
+        forEach: { count: 2, chunks: 1, kept: [0] },
         durationMs: 800,
         timestamp: 0,
       },

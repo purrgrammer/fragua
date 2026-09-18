@@ -786,7 +786,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       }
     } else if (decide !== undefined && "outcome" in decide) {
       const o = decide.outcome;
-      for (const qid of o.questions) {
+      for (const { question: qid } of o.rules) {
         const q = questions[qid];
         if (q === undefined) {
           err(
@@ -836,7 +836,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       }
       const keep = n.attrs.judge_keep;
       if (keep !== undefined) {
-        for (const qid of keep.questions) {
+        for (const { question: qid } of keep.rules) {
           const q = questions[qid];
           if (q === undefined) {
             err("E049", `judge "${n.id}" \`keep\` names question "${qid}", which is not declared in \`questions:\``);

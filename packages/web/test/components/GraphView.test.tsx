@@ -299,7 +299,7 @@ steps:
     const unparseable: RunDetail = {
       ...detail,
       workflowSource:
-        "name: wf\nsteps:\n  s:\n    type: judge\n    state: x\n    questions:\n      q: {type: noul, instructions: q?}\n    decide:\n      outcome: {frobnicate: 1, min: 0.5}\n    next: exit\n",
+        "name: wf\nsteps:\n  s:\n    type: judge\n    state: x\n    questions:\n      q: {type: noul, instructions: q?}\n    decide:\n      outcome: {q: {min: 0.5, frobnicate: 1}}\n    next: exit\n",
     };
     const { container } = render(<GraphView detail={unparseable} />);
     const empty = within(container).getByTestId("graphview-parse-error");

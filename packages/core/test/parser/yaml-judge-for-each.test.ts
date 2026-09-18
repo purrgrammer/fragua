@@ -18,7 +18,7 @@ const READ = `
     next: judge
 `;
 
-const FOR_EACH = (extra = "", keep = "    keep: {question: holds, min: 0.6}\n") => `
+const FOR_EACH = (extra = "", keep = "    keep: {holds: 0.6}\n") => `
 name: wf
 steps:${READ}
   judge:
@@ -40,7 +40,7 @@ describe("judge for-each — parser", () => {
     const g = parseWorkflow(FOR_EACH());
     const j = g.nodes["judge"]!;
     expect(j.attrs.judge_for_each).toBe("${{ outputs.read.findings }}");
-    expect(j.attrs.judge_keep).toEqual({ questions: ["holds"], min: 0.6 });
+    expect(j.attrs.judge_keep).toEqual({ rules: [{ question: "holds", min: 0.6 }] });
     expect(j.attrs.judge_for_each_max_items).toBe(JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS);
     expect(j.attrs.judge_state).toBeUndefined();
   });
@@ -90,7 +90,7 @@ steps:
     for-each: \${{ outputs.read.paths }}
     questions:
       relevant: {type: noul, instructions: Is \`item\` relevant?}
-    keep: {question: relevant, min: 0.5}
+    keep: {relevant: 0.5}
     next: exit
 `;
     const kept = (parseWorkflow(src).nodes["judge"]!.attrs.outputs!["kept"] as OutputArray).items as OutputRecord;
@@ -108,27 +108,31 @@ steps:
   });
 
   test("decide and for-each are exclusive; keep needs for-each", () => {
-    expect(() => parseWorkflow(FOR_EACH("    decide:\n      outcome: {question: holds, min: 0.5}\n"))).toThrow(
+    expect(() => parseWorkflow(FOR_EACH("    decide:\n      outcome: {holds: 0.5}\n"))).toThrow(
       /both `for-each:` and `decide:`/,
     );
     const noForEach = FOR_EACH().replace("    for-each: ${{ outputs.read.findings }}\n", "    state: x\n");
     expect(() => parseWorkflow(noForEach)).toThrow(/`keep:` without `for-each:`/);
   });
 
-  test("keep accepts a question list, all-of", () => {
+  test("keep accepts several ids with their own bounds", () => {
     const g = parseWorkflow(
-      FOR_EACH("", "    keep: {questions: [holds, holds2], min: 0.5}\n").replace(
+      FOR_EACH("", "    keep: {holds: 0.5, holds2: {max: 0.4}}\n").replace(
         "      severity:",
         "      holds2: {type: noul, instructions: also?}\n      severity:",
       ),
     );
-    expect(g.nodes["judge"]!.attrs.judge_keep).toEqual({ questions: ["holds", "holds2"], min: 0.5 });
+    expect(g.nodes["judge"]!.attrs.judge_keep).toEqual({
+      rules: [
+        { question: "holds", min: 0.5 },
+        { question: "holds2", max: 0.4 },
+      ],
+    });
   });
 
   test("keep shape errors name the key", () => {
-    expect(() => parseWorkflow(FOR_EACH("", "    keep: {question: holds, min: 1.5}\n"))).toThrow(/keep.min/);
-    expect(() => parseWorkflow(FOR_EACH("", "    keep: {question: holds, min: 0.5, extra: 1}\n"))).toThrow(
-      /keep.extra/,
-    );
+    expect(() => parseWorkflow(FOR_EACH("", "    keep: {holds: 1.5}\n"))).toThrow(/keep.holds/);
+    expect(() => parseWorkflow(FOR_EACH("", "    keep: {holds: {min: 0.5, extra: 1}}\n"))).toThrow(/keep.holds.extra/);
+    expect(() => parseWorkflow(FOR_EACH("", "    keep: {holds: {}}\n"))).toThrow(/at least one of min/);
   });
 });

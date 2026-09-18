@@ -172,23 +172,20 @@ ${extra}
 `;
 
   test("well-formed outcome judge validates clean", () => {
-    expect(codes(OUTCOME("decide:\n      outcome: {question: ok, min: 0.7}", "    next: exit"), "E")).toEqual([]);
+    expect(codes(OUTCOME("decide:\n      outcome: {ok: 0.7}", "    next: exit"), "E")).toEqual([]);
   });
 
   test("question not declared / not a noul", () => {
-    expect(
-      messages(OUTCOME("decide:\n      outcome: {question: nope, min: 0.7}", "    next: exit"), "E048").join("\n"),
-    ).toMatch(/names question "nope"/);
-    expect(
-      messages(OUTCOME("decide:\n      outcome: {question: depth, min: 0.7}", "    next: exit"), "E048").join("\n"),
-    ).toMatch(/is a `score` — only a `noul`/);
+    expect(messages(OUTCOME("decide:\n      outcome: {nope: 0.7}", "    next: exit"), "E048").join("\n")).toMatch(
+      /names question "nope"/,
+    );
+    expect(messages(OUTCOME("decide:\n      outcome: {depth: 0.7}", "    next: exit"), "E048").join("\n")).toMatch(
+      /is a `score` — only a `noul`/,
+    );
   });
 
   test("outcome judge with routes: is rejected", () => {
-    const src = OUTCOME(
-      "decide:\n      outcome: {question: ok, min: 0.7}",
-      "    routes:\n      a: exit\n      b: exit",
-    );
+    const src = OUTCOME("decide:\n      outcome: {ok: 0.7}", "    routes:\n      a: exit\n      b: exit");
     expect(messages(src, "E048").join("\n")).toMatch(/has `decide.outcome` and `routes:`/);
   });
 });
@@ -282,7 +279,7 @@ steps:
       a: {type: noul, instructions: a?}
       s: {type: score, instructions: s?, criteria: [lo, hi]}
     decide:
-      outcome: {questions: [a, s, ghost], min: 0.6}
+      outcome: {a: 0.6, s: 0.6, ghost: 0.6}
     next: exit
 `;
     const m = messages(src, "E048").join("\n");

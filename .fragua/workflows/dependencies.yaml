@@ -109,7 +109,7 @@ steps:
           - possible — a minor bump on a library with a history of behavioural changes
           - likely — a major bump, or a bump across a documented breaking release
     decide:
-      outcome: {questions: [exact_pins, scope_respected, manifests_only], min: 0.6}
+      outcome: {exact_pins: 0.6, scope_respected: 0.6, manifests_only: 0.6}
     retry: update
     max-retries: 2
     next: typecheck

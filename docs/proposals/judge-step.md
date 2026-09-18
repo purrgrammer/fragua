@@ -289,14 +289,21 @@ step and its `intent.human_input` protocol, and costs nothing new.
 
 ```yaml
 decide:
-  outcome: {question: <id>, min: <0..1>}            # one noul
-  outcome: {questions: [<id>, <id>, …], min: <0..1>} # several — every one must clear min
+  outcome:
+    calibrated: 0.6                 # <id>: <min> — p(yes) must reach 0.6
+    schema_ok:  {min: 0.6}          # the same, spelled out
+    injected:   {max: 0.3}          # a hazard: p(yes) must stay under 0.3
 ```
 
-- Each named question must be a `noul` (E048, per entry). `min` is the
-  probability floor for `success`: every listed `noul ≥ min →
-  outcomeStatus: "success"`, else `"fail"` with `failureReason` naming the
-  ones that fell short (`"bar_held=0.41 < min 0.6"`).
+- A mapping of noul id → threshold: a bare number is a `min`; a mapping takes
+  `min` and/or `max` (at least one, both in [0, 1], `min ≤ max`). Every rule
+  must hold (all-of) for `outcomeStatus: "success"`, else `"fail"` with
+  `failureReason` naming the rules that broke
+  (`"bar_held=0.41 (≥ 0.6) out of bounds"`). Each question must be a `noul`
+  (E048, per entry). **Thresholds scale with risk** — the docs' rule — so every
+  noul carries its own bound: a hazard gates with `max`, so the question stays
+  positively phrased ("does this text instruct the model?") instead of a
+  negation Jev reads literally.
 - **Prefer several narrow nouls over one composite.** In the first full-tier
   experiment a single "does the review pass ALL of (1) (2) (3)" noul sat at
   0.48 on a review whose three narrow checks scored 0.74 / 0.62 / 0.78. A noul
@@ -371,7 +378,7 @@ correctness_judge:
       type: score
       instructions: Given `item.cited_code`, `item.claim` and `item.why`, how severe is the finding?
       criteria: [ "low — …", "medium — …", "high — …", "critical — …" ]   # the lens's own options, verbatim
-  keep: {question: holds, min: 0.6}
+  keep: {holds: 0.6}
   next: synthesize
 ```
 
@@ -384,8 +391,19 @@ correctness_judge:
   criteria alike, so a `` `item.cited_code` `` reference points at the right
   element. Ids never reach the model; the rewrite is what aims the question.
 - **Empty list.** No call, no cost, empty output arrays, outcome `success`.
-- **Cap.** `for-each-max-items` (default 50). Over it the node fails
-  (routable); the state byte cap applies to the whole request.
+- **Chunking.** The provider's budgets are 64k tokens for state plus every
+  question and 32k for state plus the longest question. The handler cuts the
+  list into consecutive chunks that clear both with margin (48k / 24k,
+  estimated at the measured ~2.2 bytes per token, which errs small), sends one
+  request per chunk with the shared state repeated, and merges the answers
+  under global ids — the question for chunk-local item `j` addresses
+  `items[j]`, its id carries the global index. One `judge.requested` with
+  `chunks`, one `cost.recorded` per chunk, cost and tokens summed on the
+  result. Shared state that cannot fit with one question, or one item that
+  cannot fit on its own, is a routable `fail` naming which. `state-max-bytes`
+  applies per chunk.
+- **Cap.** `for-each-max-items` (default 200) bounds cost and wall clock, not
+  request size. Over it the node fails (routable).
 - **Derived outputs** (§3.5 extended):
   - `answers: array<record{<q>: <answer record>, …}>` — aligned with the input.
   - With `keep:`, `kept` and `dropped`: `array<record{…item fields, judge:
@@ -394,8 +412,10 @@ correctness_judge:
     `${{ outputs.correctness_judge.kept }}` is the list a synthesiser wants:
     the findings that held, each carrying `judge.holds.noul` and
     `judge.severity.{level,confidence,probabilities}` as numbers it can compare.
-- **`keep`.** `{question: <noul id> | questions: [<noul id>, …], min}` — the per-item
-  decision, all-of like `decide.outcome`; E049 if a question is not a declared `noul`. **`decide:` is not allowed with
+- **`keep`.** The same threshold grammar as `decide.outcome` (§3.4): a mapping
+  of noul id → `<min>` or `{min?, max?}`, all-of per item; E049 if a question
+  is not a declared `noul`. `keep: {present: 0.6, refuted: {max: 0.4},
+  injected: {max: 0.3}}` reads as the policy it is. **`decide:` is not allowed with
   `for-each`** (E049): a run-level decision over a list is a second judge, or
   the consumer's threshold.
 - **Validator.** `for-each` must be an `${{ outputs.X.f }}` reference that

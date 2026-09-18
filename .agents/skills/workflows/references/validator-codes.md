@@ -45,8 +45,8 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E044 | A step is shared by two branches' closures — closures must be disjoint. |
 | E045 | A `parallel` step's serialized branch list exceeds the 4 KiB event-payload budget (~hundreds of branches) — the seed fact embeds it whole. Split the fan-out. |
 | E047 | `judge` `decide.route`: names an undeclared question or a non-`choice`; `decide.route` without `routes:` (or `routes:` on a judge without it); an option with no route; a route that is neither an option nor `below`; `below` not in `routes:`. |
-| E048 | `judge` `decide.outcome`: names an undeclared question or a non-`noul`; `decide.outcome` together with `routes:`. |
-| E049 | `judge` `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, or a scalar / record); or `keep.question` is not one of the judge's own `noul`s. |
+| E048 | `judge` `decide.outcome`: a threshold names an undeclared question or a non-`noul`; `decide.outcome` together with `routes:`. Threshold shape errors (no bound, `min` above `max`, out of [0, 1]) are parse errors. |
+| E049 | `judge` `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, or a scalar / record); or a `keep` threshold names a question that is not one of the judge's own `noul`s. |
 
 ## Warnings
 

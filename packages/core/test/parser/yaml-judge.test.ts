@@ -30,7 +30,7 @@ steps:
           - adequate
           - thorough
     decide:
-      outcome: {question: schema_ok, min: 0.7}
+      outcome: {schema_ok: 0.7}
     retry: synthesize
     max-retries: 2
     next: exit
@@ -91,7 +91,7 @@ describe("parseWorkflow — judge steps", () => {
         criteria: ["superficial", "adequate", "thorough"],
       },
     });
-    expect(n.attrs.judge_decide).toEqual({ outcome: { questions: ["schema_ok"], min: 0.7 } });
+    expect(n.attrs.judge_decide).toEqual({ outcome: { rules: [{ question: "schema_ok", min: 0.7 }] } });
     expect(n.attrs.judge_state_max_bytes).toBe(JUDGE_DEFAULT_STATE_MAX_BYTES);
     expect(n.attrs.goal_gate).toBe(true);
     expect(n.attrs.retry_target).toBe("synthesize");
@@ -226,7 +226,7 @@ describe("parseWorkflow — judge step rejections", () => {
     ],
     [
       "decide with both arms",
-      `    state: hi\n${Q}    decide:\n      route: {question: ok}\n      outcome: {question: ok, min: 0.5}\n`,
+      `    state: hi\n${Q}    decide:\n      route: {question: ok}\n      outcome: {ok: 0.5}\n`,
       /exactly one of `route:` \/ `outcome:`/,
     ],
     ["decide empty", `    state: hi\n${Q}    decide: {}\n`, /exactly one of/],
@@ -241,14 +241,14 @@ describe("parseWorkflow — judge step rejections", () => {
       /in \[0, 1\]/,
     ],
     [
-      "decide.outcome missing min",
-      `    state: hi\n${Q}    decide:\n      outcome: {question: ok}\n`,
-      /decide\.outcome\.min/,
+      "decide.outcome no bound",
+      `    state: hi\n${Q}    decide:\n      outcome: {ok: {}}\n`,
+      /at least one of min \/ max/,
     ],
     [
       "decide.outcome unknown key",
-      `    state: hi\n${Q}    decide:\n      outcome: {question: ok, min: 0.5, below: x}\n`,
-      /unknown key "below"/,
+      `    state: hi\n${Q}    decide:\n      outcome: {ok: {min: 0.5, below: 1}}\n`,
+      /decide\.outcome\.ok\.below.*not a recognised key/,
     ],
     [
       "authored outputs on a judge",
@@ -267,7 +267,7 @@ describe("parseWorkflow — judge step rejections", () => {
     for (const [type, key] of [
       ["llm", "state: x"],
       ["tool", "questions: {q: {type: noul, instructions: x}}"],
-      ["human", "decide: {outcome: {question: q, min: 0.5}}"],
+      ["human", "decide: {outcome: {q: 0.5}}"],
     ] as const) {
       const src = `name: wf\nsteps:\n  s:\n    type: ${type}\n    ${type === "tool" ? "run: true" : type === "human" ? "text: hi" : "prompt: hi"}\n    ${key}\n    next: exit\n`;
       expect(() => parseWorkflow(src)).toThrow(/is only supported on `judge` steps/);
@@ -299,19 +299,28 @@ steps:
 ${decide}
     next: exit
 `;
-  test("questions: [a, b] lowers to a list", () => {
-    const g = parseWorkflow(src("      outcome: {questions: [a, b], min: 0.6}"));
-    expect(g.nodes["j"]!.attrs.judge_decide).toEqual({ outcome: { questions: ["a", "b"], min: 0.6 } });
+  test("a mapping of ids lowers to rules, a number is a min, a mapping may carry max", () => {
+    const g = parseWorkflow(src("      outcome: {a: 0.6, b: {min: 0.5, max: 0.9}, c: {max: 0.3}}"));
+    expect(g.nodes["j"]!.attrs.judge_decide).toEqual({
+      outcome: {
+        rules: [
+          { question: "a", min: 0.6 },
+          { question: "b", min: 0.5, max: 0.9 },
+          { question: "c", max: 0.3 },
+        ],
+      },
+    });
   });
-  test("question: a lowers to a one-element list", () => {
-    const g = parseWorkflow(src("      outcome: {question: a, min: 0.6}"));
-    expect(g.nodes["j"]!.attrs.judge_decide).toEqual({ outcome: { questions: ["a"], min: 0.6 } });
+  test("one id lowers to a one-rule list", () => {
+    const g = parseWorkflow(src("      outcome: {a: 0.6}"));
+    expect(g.nodes["j"]!.attrs.judge_decide).toEqual({ outcome: { rules: [{ question: "a", min: 0.6 }] } });
   });
   test.each<[string, string, RegExp]>([
-    ["both forms", "      outcome: {question: a, questions: [b], min: 0.6}", /exactly one of/],
-    ["neither form", "      outcome: {min: 0.6}", /exactly one of/],
-    ["empty list", "      outcome: {questions: [], min: 0.6}", /non-empty list/],
-    ["duplicate", "      outcome: {questions: [a, a], min: 0.6}", /lists a question twice/],
+    ["no bound", "      outcome: {a: {}}", /at least one of min \/ max/],
+    ["unknown key", "      outcome: {a: {min: 0.5, below: 1}}", /not a recognised key/],
+    ["empty mapping", "      outcome: {}", /mapping of noul id/],
+    ["min above max", "      outcome: {a: {min: 0.8, max: 0.2}}", /min 0.8 above max 0.2/],
+    ["out of range", "      outcome: {a: 1.5}", /in \[0, 1\]/],
   ])("%s is rejected", (_n, decide, re) => {
     expect(() => parseWorkflow(src(decide))).toThrow(re);
   });

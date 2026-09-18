@@ -25,9 +25,12 @@ guarantee.
 - **`for-each:` on judge steps.** Point a judge at an array-typed output and every
   question is asked once per item in one call; `` `item.field` `` in a question
   addresses the current item. Outputs: `answers` aligned with the input, and with
-  `keep: {question: <noul> | questions: […], min}` the input split into `kept` / `dropped`, each
+  `keep: {<noul>: <min> | {min, max}, …}` the input split into `kept` / `dropped`, each
   item carrying its fields plus the answers under `judge`. Empty list ⇒ no call.
-  `for-each-max-items` caps the list (default 50). Validator E049.
+  Lists over the provider's request budget are sent in chunks and merged.
+  `for-each-max-items` caps the list (default 200). Validator E049.
+- **Per-question thresholds.** `decide.outcome` and `keep` take a mapping of noul
+  id → `<min>` or `{min, max}`; every rule must hold. A hazard gates with `max`.
 - **`judge` agent tool.** The same primitives inside any `llm` step:
   `judge({ state, questions })` asks a batch of typed questions over evidence
   the agent has gathered and returns the answers with probabilities; cost lands

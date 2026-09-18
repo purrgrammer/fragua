@@ -16,6 +16,7 @@ import {
   type JudgeKeep,
   type JudgeQuestion,
   type JudgeState,
+  type JudgeThreshold,
 } from "../types/judge.ts";
 
 export class JudgeParseError extends Error {
@@ -190,32 +191,43 @@ export function parseJudgeDecide(raw: unknown): JudgeDecide {
     }
     return { route: { question, min_confidence: unitInterval(minC, "decide.route.min-confidence"), below } };
   }
-  const o = raw["outcome"];
-  if (!isPlainObject(o)) throw new JudgeParseError("`decide.outcome` must be a mapping {question | questions, min}");
-  for (const k of Object.keys(o)) {
-    if (k !== "question" && k !== "questions" && k !== "min") {
-      throw new JudgeParseError(`\`decide.outcome\` has unknown key "${k}" (expected question / questions / min)`);
-    }
+  return { outcome: { rules: parseJudgeThresholds(raw["outcome"], "decide.outcome") } };
+}
+
+/** The threshold grammar `decide.outcome` and `keep` share: a mapping of noul
+ * id → `<min>` or `{min?, max?}` (at least one bound, both in [0, 1]). */
+export function parseJudgeThresholds(raw: unknown, path: string): JudgeThreshold[] {
+  if (!isPlainObject(raw) || Object.keys(raw).length === 0) {
+    throw new JudgeParseError(`\`${path}\` must be a mapping of noul id → <min> or {min, max}`);
   }
-  if ((o["question"] === undefined) === (o["questions"] === undefined)) {
-    throw new JudgeParseError(
-      "`decide.outcome` needs exactly one of `question:` (one noul) or `questions:` (a list — every one must pass)",
-    );
-  }
-  let questions: string[];
-  if (o["question"] !== undefined) {
-    questions = [questionRef(o["question"], "decide.outcome.question")];
-  } else {
-    const list = o["questions"];
-    if (!Array.isArray(list) || list.length === 0) {
-      throw new JudgeParseError("`decide.outcome.questions` must be a non-empty list of noul question ids");
+  const rules: JudgeThreshold[] = [];
+  for (const [id, spec] of Object.entries(raw)) {
+    if (!isJudgeIdentifier(id)) {
+      throw new JudgeParseError(`\`${path}.${id}\` is not a question id (letters, digits, _; starts with a letter)`);
     }
-    questions = list.map((q, i) => questionRef(q, `decide.outcome.questions[${i}]`));
-    if (new Set(questions).size !== questions.length) {
-      throw new JudgeParseError("`decide.outcome.questions` lists a question twice");
+    if (typeof spec === "number") {
+      rules.push({ question: id, min: unitInterval(spec, `${path}.${id}`) });
+      continue;
     }
+    if (!isPlainObject(spec)) {
+      throw new JudgeParseError(`\`${path}.${id}\` must be a number (min) or a mapping {min, max}`);
+    }
+    for (const k of Object.keys(spec)) {
+      if (k !== "min" && k !== "max")
+        throw new JudgeParseError(`\`${path}.${id}.${k}\` is not a recognised key (min / max)`);
+    }
+    if (spec["min"] === undefined && spec["max"] === undefined) {
+      throw new JudgeParseError(`\`${path}.${id}\` needs at least one of min / max`);
+    }
+    const rule: JudgeThreshold = { question: id };
+    if (spec["min"] !== undefined) rule.min = unitInterval(spec["min"], `${path}.${id}.min`);
+    if (spec["max"] !== undefined) rule.max = unitInterval(spec["max"], `${path}.${id}.max`);
+    if (rule.min !== undefined && rule.max !== undefined && rule.min > rule.max) {
+      throw new JudgeParseError(`\`${path}.${id}\` has min ${rule.min} above max ${rule.max}`);
+    }
+    rules.push(rule);
   }
-  return { outcome: { questions, min: unitInterval(o["min"], "decide.outcome.min") } };
+  return rules;
 }
 
 /** `for-each:` — exactly one `${{ outputs.<step>.<field…> }}` token and
@@ -234,34 +246,9 @@ export function parseJudgeForEach(raw: unknown): string {
   return trimmed;
 }
 
-/** `keep:` — `{question: <noul id> | questions: [<noul id>, …], min: <0..1>}`. */
+/** `keep:` — the per-item thresholds, same grammar as `decide.outcome`. */
 export function parseJudgeKeep(raw: unknown): JudgeKeep {
-  if (!isPlainObject(raw)) {
-    throw new JudgeParseError("`keep` must be a mapping `{question: <id> | questions: [<id>, …], min: <0..1>}`");
-  }
-  for (const k of Object.keys(raw)) {
-    if (k !== "question" && k !== "questions" && k !== "min") {
-      throw new JudgeParseError(`\`keep.${k}\` is not a recognised key (question / questions / min)`);
-    }
-  }
-  if ((raw["question"] === undefined) === (raw["questions"] === undefined)) {
-    throw new JudgeParseError(
-      "`keep` needs exactly one of `question:` (one noul) or `questions:` (a list — every one must pass)",
-    );
-  }
-  let questions: string[];
-  if (raw["question"] !== undefined) {
-    questions = [questionRef(raw["question"], "keep.question")];
-  } else {
-    const list = raw["questions"];
-    if (!Array.isArray(list) || list.length === 0) {
-      throw new JudgeParseError("`keep.questions` must be a non-empty list of noul question ids");
-    }
-    questions = list.map((q, i) => questionRef(q, `keep.questions[${i}]`));
-    if (new Set(questions).size !== questions.length)
-      throw new JudgeParseError("`keep.questions` repeats a question id");
-  }
-  return { questions, min: unitInterval(raw["min"], "keep.min") };
+  return { rules: parseJudgeThresholds(raw, "keep") };
 }
 
 export function parseJudgeForEachMaxItems(raw: unknown): number {

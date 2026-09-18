@@ -245,7 +245,7 @@ describe("judge handler — happy paths", () => {
         nodeId: "j",
         state: "x",
         questions: { ok: OK },
-        decide: { outcome: { questions: ["ok"], min: 0.7 } },
+        decide: { outcome: { rules: [{ question: "ok", min: 0.7 }] } },
       });
     const capA = fresh();
     const pass = await mk().handler(stubCtx(capA, { judge: stubJudge({ ok: { type: "noul", noul: 0.7 } }, capA) }));
@@ -257,7 +257,7 @@ describe("judge handler — happy paths", () => {
     const failed = await mk().handler(stubCtx(capB, { judge: stubJudge({ ok: { type: "noul", noul: 0.18 } }, capB) }));
     if (failed.kind !== "transition") throw new Error(failed.kind);
     expect(failed.outcomeStatus).toBe("fail");
-    expect(failed.failureReason).toMatch(/ok=0\.18 < min 0\.7/);
+    expect(failed.failureReason).toMatch(/ok=0\.18 \(≥ 0\.7\) out of bounds/);
     expect((failed.outputs as Record<string, unknown>)["ok"]).toEqual({ noul: 0.18 });
     const msg = capB.messages[0]!;
     if (msg.role === "judge_node") expect(msg.decision).toEqual({ kind: "outcome", status: "fail" });
@@ -407,7 +407,15 @@ describe("judge handler — decide.outcome over several nouls (all-of)", () => {
       nodeId: "verify",
       state: "x",
       questions: Q,
-      decide: { outcome: { questions: ["calibrated", "bar_held", "schema_ok"], min: 0.6 } },
+      decide: {
+        outcome: {
+          rules: [
+            { question: "calibrated", min: 0.6 },
+            { question: "bar_held", min: 0.6 },
+            { question: "schema_ok", min: 0.6 },
+          ],
+        },
+      },
     });
   const answers = (c: number, b: number, s: number): Record<string, JudgeAnswer> => ({
     calibrated: { type: "noul", noul: c },
@@ -426,7 +434,7 @@ describe("judge handler — decide.outcome over several nouls (all-of)", () => {
     const r = await mk().handler(stubCtx(cap, { judge: stubJudge(answers(0.74, 0.41, 0.78), cap) }));
     expect(r).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
     if (r.kind === "transition") {
-      expect(r.failureReason).toBe("bar_held=0.41 < min 0.6");
+      expect(r.failureReason).toBe("bar_held=0.41 (≥ 0.6) out of bounds");
     }
   });
 });

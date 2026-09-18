@@ -14,7 +14,7 @@ function errors(yaml: string): string[] {
     .map((d) => d.code);
 }
 
-const WF = (forEach: string, keep = "    keep: {question: holds, min: 0.6}\n", questions?: string) => `
+const WF = (forEach: string, keep = "    keep: {holds: 0.6}\n", questions?: string) => `
 name: wf
 steps:
   read:
@@ -59,12 +59,12 @@ describe("judge for-each — validator (E049)", () => {
   });
 
   test("keep must name a declared noul", () => {
-    expect(
-      messages(WF("${{ outputs.read.findings }}", "    keep: {question: nope, min: 0.5}\n"), "E049").join("\n"),
-    ).toMatch(/names question "nope", which is not declared/);
-    expect(
-      messages(WF("${{ outputs.read.findings }}", "    keep: {question: sev, min: 0.5}\n"), "E049").join("\n"),
-    ).toMatch(/is a `score` — only a `noul`/);
+    expect(messages(WF("${{ outputs.read.findings }}", "    keep: {nope: 0.5}\n"), "E049").join("\n")).toMatch(
+      /names question "nope", which is not declared/,
+    );
+    expect(messages(WF("${{ outputs.read.findings }}", "    keep: {sev: 0.5}\n"), "E049").join("\n")).toMatch(
+      /is a `score` — only a `noul`/,
+    );
   });
 
   test("a consumer reading kept from a keep-less judge is E035", () => {

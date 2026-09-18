@@ -38,27 +38,95 @@ export interface JudgeRouteDecision {
   below?: string;
 }
 
-/** `decide.outcome` — one or more `noul` answers threshold into `success` /
- * `fail`: every listed noul must reach `min` (all-of). Authored as
- * `question: <id>` or `questions: [<id>, …]`; the parser normalises to a list. */
+/** One `noul` threshold: the answer must reach `min` and/or stay under `max`.
+ * Authored as `<id>: <min>` or `<id>: {min?, max?}`; at least one bound. */
+export interface JudgeThreshold {
+  question: string;
+  min?: number;
+  max?: number;
+}
+
+/** `decide.outcome` — every listed threshold must hold (all-of) for
+ * `success`, else `fail`. Thresholds scale with risk, so each noul carries
+ * its own bound. */
 export interface JudgeOutcomeDecision {
-  questions: string[];
-  min: number;
+  rules: JudgeThreshold[];
 }
 
 /** The `decide:` block. The parser enforces at most one of the two arms. */
 export type JudgeDecide = { route: JudgeRouteDecision } | { outcome: JudgeOutcomeDecision };
 
 /** `keep:` on a `for-each` judge — the per-item decision: an item stays in
- * `kept` when every listed `noul` answer reaches `min` (all-of). Authored as
- * `question: <id>` or `questions: [<id>, …]`; the parser normalises to a list. */
+ * `kept` when every threshold holds (all-of), same grammar as `decide.outcome`. */
 export interface JudgeKeep {
-  questions: string[];
-  min: number;
+  rules: JudgeThreshold[];
 }
 
-export const JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS = 50;
-export const JUDGE_HARD_FOR_EACH_MAX_ITEMS = 500;
+/** True when a noul probability satisfies a threshold's bounds. */
+export function thresholdHolds(t: JudgeThreshold, p: number): boolean {
+  if (t.min !== undefined && p < t.min) return false;
+  if (t.max !== undefined && p > t.max) return false;
+  return true;
+}
+
+export function describeThreshold(t: JudgeThreshold): string {
+  const parts: string[] = [];
+  if (t.min !== undefined) parts.push(`≥ ${t.min}`);
+  if (t.max !== undefined) parts.push(`≤ ${t.max}`);
+  return parts.join(" and ");
+}
+
+export const JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS = 200;
+export const JUDGE_HARD_FOR_EACH_MAX_ITEMS = 2000;
+
+/** The provider's request limits: 64k tokens for state plus every question,
+ * 32k for state plus the longest question. A `for-each` list is cut into
+ * chunks that clear both with margin; the estimator uses the measured diff
+ * ratio (~2.2 bytes/token), which errs toward smaller chunks. */
+export const JUDGE_REQUEST_TOKEN_BUDGET = 48_000;
+export const JUDGE_STATE_TOKEN_BUDGET = 24_000;
+export const JUDGE_BYTES_PER_TOKEN = 2.2;
+
+export interface JudgeChunkPlanInput {
+  sharedBytes: number;
+  itemBytes: readonly number[];
+  /** Serialised bytes of the authored questions, expanded once per item. */
+  questionBytesPerItem: number;
+  longestQuestionBytes: number;
+  requestTokenBudget?: number;
+  stateTokenBudget?: number;
+}
+
+/** Cut a list into chunks of consecutive global indices that fit both
+ * budgets. `undefined` when the shared state alone, or one item on its own,
+ * cannot fit — the caller fails the node with the offending size. */
+export function planForEachChunks(input: JudgeChunkPlanInput): number[][] | { tooLarge: "shared" | number } {
+  const reqBudget = (input.requestTokenBudget ?? JUDGE_REQUEST_TOKEN_BUDGET) * JUDGE_BYTES_PER_TOKEN;
+  const stateBudget = (input.stateTokenBudget ?? JUDGE_STATE_TOKEN_BUDGET) * JUDGE_BYTES_PER_TOKEN;
+  if (input.sharedBytes + input.longestQuestionBytes > stateBudget || input.sharedBytes > reqBudget) {
+    return { tooLarge: "shared" };
+  }
+  const chunks: number[][] = [];
+  let current: number[] = [];
+  let bytes = 0;
+  const fits = (itemsBytes: number, count: number): boolean =>
+    input.sharedBytes + itemsBytes + count * input.questionBytesPerItem <= reqBudget &&
+    input.sharedBytes + itemsBytes + input.longestQuestionBytes <= stateBudget;
+  input.itemBytes.forEach((b, i) => {
+    if (!fits(b, 1)) return;
+    if (current.length > 0 && !fits(bytes + b, current.length + 1)) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(i);
+    bytes += b;
+  });
+  const oversized = input.itemBytes.findIndex((b) => !fits(b, 1));
+  if (oversized !== -1) return { tooLarge: oversized };
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
 
 /** The key the list travels under in a `for-each` request's state. */
 export const JUDGE_FOR_EACH_ITEMS_KEY = "items";
@@ -109,20 +177,24 @@ export function deriveJudgeOutputs(
   return decl;
 }
 
-/** Question id → question, for item `i` of a `for-each` list: the id gets a
- * positional suffix and every backticked path that starts with `item` is
- * re-aimed at `items[i]`, in instructions and criteria alike. */
+/** Question id → question, for the items of one `for-each` chunk. `indices`
+ * are the items' positions in the whole list (the id suffix, so answers fold
+ * back to the right item); the state carries only the chunk, so every
+ * backticked path that starts with `item` is re-aimed at `items[j]` with `j`
+ * the chunk-local position. */
 export function expandForEachQuestions(
   questions: Record<string, JudgeQuestion>,
-  count: number,
+  indices: readonly number[],
 ): Record<string, JudgeQuestion> {
   const out: Record<string, JudgeQuestion> = {};
-  for (let i = 0; i < count; i++) {
-    const target = `\`${JUDGE_FOR_EACH_ITEMS_KEY}[${i}]`;
+  indices.forEach((global, local) => {
+    const target = `\`${JUDGE_FOR_EACH_ITEMS_KEY}[${local}]`;
     for (const [id, q] of Object.entries(questions)) {
-      out[forEachQuestionId(id, i)] = JSON.parse(JSON.stringify(q).replace(/`item(?=[.[`])/g, target)) as JudgeQuestion;
+      out[forEachQuestionId(id, global)] = JSON.parse(
+        JSON.stringify(q).replace(/`item(?=[.[`])/g, target),
+      ) as JudgeQuestion;
     }
-  }
+  });
   return out;
 }
 

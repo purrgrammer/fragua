@@ -12,6 +12,7 @@ import type { JudgeNodeMessage } from "@fragua/types";
 import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
 import { substitute } from "../../engine/substitution.ts";
 import {
+  describeThreshold,
   expandForEachQuestions,
   forEachQuestionId,
   isJudgeFileLeaf,
@@ -28,6 +29,8 @@ import {
   type JudgeQuestion,
   type JudgeState,
   judgeCostPayload,
+  planForEachChunks,
+  thresholdHolds,
 } from "../../types/judge.ts";
 import type { OutputStructValue, OutputsValue } from "../../types/outputs.ts";
 import type { Handler, HandlerContext, HandlerResult, HandlerSpec } from "../types.ts";
@@ -42,6 +45,9 @@ export interface JudgeConfig {
   forEach?: string;
   keep?: JudgeKeep;
   forEachMaxItems?: number;
+  /** Test seams: the provider budgets the chunk planner sizes against. */
+  requestTokenBudget?: number;
+  stateTokenBudget?: number;
   stateMaxBytes?: number;
   model?: string;
   maxMs?: number;
@@ -63,7 +69,14 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       );
     }
 
-    let state: JudgeJson;
+    // One request for a plain judge; for a list, one request per chunk that
+    // fits the provider's budgets. Every request shares the model and the
+    // authored questions; answers merge under global ids.
+    interface Planned {
+      state: JudgeJson;
+      questions: Record<string, JudgeQuestion>;
+    }
+    const plan: Planned[] = [];
     let items: JudgeJson[] | undefined;
     if (cfg.forEach !== undefined) {
       const list = resolveList(cfg.forEach, ctx);
@@ -93,21 +106,47 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
             ? resolved.state
             : { context: resolved.state };
       }
-      state = { ...shared, [JUDGE_FOR_EACH_ITEMS_KEY]: items };
+      const bytesOf = (v: unknown): number => new TextEncoder().encode(JSON.stringify(v)).byteLength;
+      const questionSizes = Object.values(cfg.questions).map(bytesOf);
+      const chunks = planForEachChunks({
+        sharedBytes: bytesOf(shared),
+        itemBytes: items.map(bytesOf),
+        questionBytesPerItem: questionSizes.reduce((a, b) => a + b, 0),
+        longestQuestionBytes: Math.max(...questionSizes),
+        ...(cfg.requestTokenBudget !== undefined ? { requestTokenBudget: cfg.requestTokenBudget } : {}),
+        ...(cfg.stateTokenBudget !== undefined ? { stateTokenBudget: cfg.stateTokenBudget } : {}),
+      });
+      if (!Array.isArray(chunks)) {
+        return fail(
+          chunks.tooLarge === "shared"
+            ? `judge for-each shared state does not fit the provider's request budget on its own`
+            : `judge for-each item ${chunks.tooLarge} does not fit the provider's request budget on its own`,
+        );
+      }
+      for (const indices of chunks) {
+        plan.push({
+          state: { ...shared, [JUDGE_FOR_EACH_ITEMS_KEY]: indices.map((i) => (items as JudgeJson[])[i] as JudgeJson) },
+          questions: expandForEachQuestions(cfg.questions, indices),
+        });
+      }
     } else {
       if (cfg.state === undefined) return halt(`judge step "${cfg.nodeId}": neither state nor for-each configured`);
       const resolved = await resolveState(cfg.state, ctx, cfg.nodeId);
       if ("fail" in resolved) return fail(resolved.fail);
       if ("halt" in resolved) return halt(resolved.halt);
-      state = resolved.state;
+      plan.push({ state: resolved.state, questions: cfg.questions });
     }
-    const stateText = JSON.stringify(state);
-    const stateBytes = new TextEncoder().encode(stateText).byteLength;
-    if (stateBytes > stateMaxBytes) {
-      return fail(`judge state is ${stateBytes} bytes, over the ${stateMaxBytes}-byte cap (state-max-bytes)`);
+    const stateTexts = plan.map((p) => JSON.stringify(p.state));
+    const stateText = stateTexts[0] ?? "";
+    let stateBytes = 0;
+    for (const t of stateTexts) {
+      const b = new TextEncoder().encode(t).byteLength;
+      if (b > stateMaxBytes) {
+        return fail(`judge state is ${b} bytes, over the ${stateMaxBytes}-byte cap (state-max-bytes)`);
+      }
+      stateBytes += b;
     }
 
-    const sent = items === undefined ? cfg.questions : expandForEachQuestions(cfg.questions, items.length);
     // The authored ids, not the N×Q expansion: at 50 items the expanded list
     // alone would push the event past the 4 KiB cap and truncate away the
     // provider / model fields the read plane opens the step with.
@@ -117,44 +156,60 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       model,
       questionIds,
       stateBytes,
-      ...(items !== undefined ? { forEachCount: items.length } : {}),
+      ...(items !== undefined ? { forEachCount: items.length, chunks: plan.length } : {}),
     });
 
     const startedAt = Date.now();
-    let response: Awaited<ReturnType<typeof judge.ask>>;
-    try {
-      response = await judge.ask({ model, state, questions: sent }, ctx.signal);
-    } catch (err) {
-      if (ctx.signal.aborted) return halt("judge aborted");
-      if (err instanceof JudgeNotCredentialedError) return halt(err.message);
-      if (err instanceof JudgeProviderError) {
-        if (err.httpStatus === 401 || err.httpStatus === 403) {
-          // A rotated / expired key is routine; like an llm boundary auth
-          // failure it is a node `fail` an `on: {fail}` edge can route, not a halt.
-          return fail(`judge provider "${err.provider}" rejected the credential (${err.httpStatus}) — ${err.message}`);
+    const answers: Record<string, JudgeAnswer> = {};
+    const usage = { input_tokens: 0, output_tokens: 0 };
+    let costUsd = 0;
+    let resolvedModel = model;
+    const costPayloads: Record<string, unknown>[] = [];
+    for (const req of plan) {
+      let response: Awaited<ReturnType<typeof judge.ask>>;
+      try {
+        response = await judge.ask({ model, state: req.state, questions: req.questions }, ctx.signal);
+      } catch (err) {
+        if (ctx.signal.aborted) return halt("judge aborted");
+        if (err instanceof JudgeNotCredentialedError) return halt(err.message);
+        if (err instanceof JudgeProviderError) {
+          if (err.httpStatus === 401 || err.httpStatus === 403) {
+            // A rotated / expired key is routine; like an llm boundary auth
+            // failure it is a node `fail` an `on: {fail}` edge can route, not a halt.
+            return fail(
+              `judge provider "${err.provider}" rejected the credential (${err.httpStatus}) — ${err.message}`,
+            );
+          }
+          if (err.httpStatus === 400) {
+            // Data-dependent rejection (measured: the provider's input ceiling is
+            // ~32k tokens ≈ 64 KB of diff text) — a node fail an `on: {fail}`
+            // edge or a smaller `state-max-bytes` can address, not a halt.
+            return fail(`judge state rejected by "${err.provider}" (400) — ${err.message}`);
+          }
+          if (err.httpStatus === 422) {
+            return halt(`judge request rejected by "${err.provider}" (${err.httpStatus}) — ${err.message}`);
+          }
+          if (err.httpStatus === 200)
+            return halt(`judge provider "${err.provider}" returned a malformed response — ${err.message}`);
+          return {
+            kind: "pause_provider",
+            httpStatus: err.httpStatus,
+            provider: err.provider,
+            errorMessage: err.message,
+            ...(err.retryAfterMs !== undefined ? { retryAfterMs: err.retryAfterMs } : {}),
+          } satisfies HandlerResult;
         }
-        if (err.httpStatus === 400) {
-          // Data-dependent rejection (measured: the provider's input ceiling is
-          // ~32k tokens ≈ 64 KB of diff text) — a node fail an `on: {fail}`
-          // edge or a smaller `state-max-bytes` can address, not a halt.
-          return fail(`judge state rejected by "${err.provider}" (400) — ${err.message}`);
-        }
-        if (err.httpStatus === 422) {
-          return halt(`judge request rejected by "${err.provider}" (${err.httpStatus}) — ${err.message}`);
-        }
-        if (err.httpStatus === 200)
-          return halt(`judge provider "${err.provider}" returned a malformed response — ${err.message}`);
-        return {
-          kind: "pause_provider",
-          httpStatus: err.httpStatus,
-          provider: err.provider,
-          errorMessage: err.message,
-          ...(err.retryAfterMs !== undefined ? { retryAfterMs: err.retryAfterMs } : {}),
-        } satisfies HandlerResult;
+        return halt(`judge call failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-      return halt(`judge call failed: ${err instanceof Error ? err.message : String(err)}`);
+      Object.assign(answers, response.answers);
+      usage.input_tokens += response.usage.input_tokens;
+      usage.output_tokens += response.usage.output_tokens;
+      costUsd += response.costUsd;
+      resolvedModel = response.model;
+      costPayloads.push(judgeCostPayload(judge.provider, response));
     }
     const durationMs = Date.now() - startedAt;
+    const response = { model: resolvedModel, answers, usage, costUsd };
 
     let outputs: OutputsValue;
     let forEachMeta: JudgeNodeMessage["forEach"];
@@ -162,7 +217,11 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       const folded = foldForEach(cfg.questions, response.answers, items, cfg.keep);
       if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
       outputs = folded.outputs;
-      forEachMeta = { count: items.length, ...(folded.kept !== undefined ? { kept: folded.kept } : {}) };
+      forEachMeta = {
+        count: items.length,
+        chunks: plan.length,
+        ...(folded.kept !== undefined ? { kept: folded.kept } : {}),
+      };
     } else {
       const folded = foldAnswers(cfg.questions, response.answers);
       if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
@@ -174,7 +233,6 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
 
     const inputTokens = response.usage.input_tokens;
     const outputTokens = response.usage.output_tokens;
-    const costUsd = response.costUsd;
     const recordedDecision: JudgeNodeMessage["decision"] =
       decision === undefined
         ? undefined
@@ -207,7 +265,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       ...(recordedDecision !== undefined ? { decision: recordedDecision } : {}),
       ...(forEachMeta !== undefined ? { forEach: forEachMeta } : {}),
     });
-    ctx.emit("cost.recorded", judgeCostPayload(judge.provider, response));
+    for (const payload of costPayloads) ctx.emit("cost.recorded", payload);
 
     const result: HandlerResult = {
       kind: "transition",
@@ -367,12 +425,12 @@ function foldForEach(
     perItem.push(folded.outputs);
     if (keep === undefined) continue;
     let pass = true;
-    for (const qid of keep.questions) {
-      const verdict = own[qid];
+    for (const rule of keep.rules) {
+      const verdict = own[rule.question];
       if (verdict === undefined || verdict.type !== "noul") {
-        return { error: `item ${i}: keep question "${qid}" has no noul answer` };
+        return { error: `item ${i}: keep question "${rule.question}" has no noul answer` };
       }
-      if (verdict.noul < keep.min) pass = false;
+      if (!thresholdHolds(rule, verdict.noul)) pass = false;
     }
     const item = items[i] as OutputStructValue;
     const fields: { [k: string]: OutputStructValue } =
@@ -416,20 +474,21 @@ function applyDecide(decide: JudgeDecide | undefined, answers: Record<string, Ju
       a.confidence < decide.route.min_confidence;
     return { kind: "route", route: below ? (decide.route.below as string) : a.choice, belowThreshold: below };
   }
-  const min = decide.outcome.min;
-  const parts: string[] = [];
+  const held: string[] = [];
   const failed: string[] = [];
-  for (const qid of decide.outcome.questions) {
-    const a = answers[qid];
-    if (a === undefined || a.type !== "noul") return { error: `decide.outcome question "${qid}" has no noul answer` };
-    parts.push(`${qid}=${a.noul.toFixed(2)}`);
-    if (a.noul < min) failed.push(`${qid}=${a.noul.toFixed(2)}`);
+  for (const rule of decide.outcome.rules) {
+    const a = answers[rule.question];
+    if (a === undefined || a.type !== "noul") {
+      return { error: `decide.outcome question "${rule.question}" has no noul answer` };
+    }
+    const shown = `${rule.question}=${a.noul.toFixed(2)}`;
+    (thresholdHolds(rule, a.noul) ? held : failed).push(`${shown} (${describeThreshold(rule)})`);
   }
   const pass = failed.length === 0;
   return {
     kind: "outcome",
     status: pass ? "success" : "fail",
-    reason: pass ? `${parts.join(", ")} all ≥ min ${min}` : `${failed.join(", ")} < min ${min}`,
+    reason: pass ? `${held.join(", ")} all within bounds` : `${failed.join(", ")} out of bounds`,
   };
 }
 

@@ -281,7 +281,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {questions: [holds], min: 0.6}
+    keep: {holds: 0.6}
     next: synthesize
 
   # ── Lens 2: integration — what does the change break AROUND it? (deep scan)
@@ -350,7 +350,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {questions: [holds], min: 0.6}
+    keep: {holds: 0.6}
     next: synthesize
 
   # ── Lens 3: security — only where the change touches a trust boundary
@@ -415,7 +415,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {questions: [holds], min: 0.6}
+    keep: {holds: 0.6}
     next: synthesize
 
   # ── Lens 4: performance & resource retention — only where the change has the surface
@@ -480,7 +480,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {questions: [holds], min: 0.6}
+    keep: {holds: 0.6}
     next: synthesize
 
   # ── Lens 5: quality — reuse, simplification, altitude (deep scan; the
@@ -549,7 +549,7 @@ steps:
           - "low — real but small: a local simplification or a missing minor test; cheap to leave"
           - "medium — duplication of an existing helper, a fix at the wrong depth, or a behaviour change with no test pinning it; worth doing before merge"
           - "high — the change is structurally wrong for the codebase (bypasses the mechanism that owns this, or leaves a load-bearing invariant untested); should not land as-is"
-    keep: {questions: [holds], min: 0.6}
+    keep: {holds: 0.6}
     next: synthesize
 
   # ── Lens 6: coherence — tests, docs, and repo conventions
@@ -617,7 +617,7 @@ steps:
           - "low — real but small: a local simplification or a missing minor test; cheap to leave"
           - "medium — duplication of an existing helper, a fix at the wrong depth, or a behaviour change with no test pinning it; worth doing before merge"
           - "high — the change is structurally wrong for the codebase (bypasses the mechanism that owns this, or leaves a load-bearing invariant untested); should not land as-is"
-    keep: {questions: [holds], min: 0.6}
+    keep: {holds: 0.6}
     next: synthesize
 
   synthesize:                          # reconcile the six VERIFIED lens results → write review.md
@@ -675,7 +675,7 @@ steps:
         type: noul
         instructions: Does `review` follow the schema — Scope naming lens coverage; Defects/Improvements (or All clear); Next steps present?
     decide:
-      outcome: {questions: [calibrated, schema_ok], min: 0.6}   # every narrow check must clear the floor; `passes` is a diagnostic
+      outcome: {calibrated: 0.6, schema_ok: 0.6}   # every narrow check must clear the floor; `passes` is a diagnostic
     retry: synthesize                  # fail ⇒ re-synthesise (capped)
     max-retries: 2
     next: signoff

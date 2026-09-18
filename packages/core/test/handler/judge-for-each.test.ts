@@ -117,7 +117,7 @@ describe("judge handler — for-each", () => {
       forEach: "${{ outputs.read.findings }}",
       state: { diff: "the diff" },
       questions: { holds: HOLDS, sev: SEV },
-      keep: { questions: ["holds"], min: 0.6 },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
     });
     const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
     expect(res.kind).toBe("transition");
@@ -135,7 +135,7 @@ describe("judge handler — for-each", () => {
       nodeId: "j",
       forEach: "${{ outputs.read.findings }}",
       questions: { holds: HOLDS, sev: SEV },
-      keep: { questions: ["holds"], min: 0.6 },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
     });
     const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
     if (res.kind !== "transition") throw new Error(res.kind);
@@ -156,12 +156,69 @@ describe("judge handler — for-each", () => {
     });
     expect(res.outcomeStatus).toBeUndefined();
     const msg = c.messages[0] as JudgeNodeMessage;
-    expect(msg.forEach).toEqual({ count: 3, kept: [0, 2] });
+    expect(msg.forEach).toEqual({ count: 3, chunks: 1, kept: [0, 2] });
     expect(Object.keys(msg.questions)).toEqual(["holds", "sev"]);
     const requested = c.events.find((e) => e.type === "judge.requested")!.payload;
     expect(requested["forEachCount"]).toBe(3);
     expect(requested["questionIds"]).toEqual(["holds", "sev"]);
-    expect(c.events.find((e) => e.type === "judge.answered")!.payload["forEach"]).toEqual({ count: 3, kept: [0, 2] });
+    expect(c.events.find((e) => e.type === "judge.answered")!.payload["forEach"]).toEqual({
+      count: 3,
+      chunks: 1,
+      kept: [0, 2],
+    });
+  });
+
+  test("a list over the request budget is cut into chunks: global ids, chunk-local paths, summed cost", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      state: { diff: "shared" },
+      questions: { holds: HOLDS },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
+      // ~250 bytes of budget: shared state + one item + one question fit, two items do not
+      requestTokenBudget: 250 / 2.2,
+      stateTokenBudget: 250 / 2.2,
+    });
+    const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
+    if (res.kind !== "transition") throw new Error(res.kind);
+    expect(c.requests).toHaveLength(3);
+    // every chunk carries the shared state and ONE item at items[0], asked under its global id
+    expect(c.requests.map((r) => Object.keys(r.questions))).toEqual([["holds__0"], ["holds__1"], ["holds__2"]]);
+    for (const r of c.requests) {
+      const st = r.state as { diff: string; items: unknown[] };
+      expect(st.diff).toBe("shared");
+      expect(st.items).toHaveLength(1);
+      expect(Object.values(r.questions)[0]!.instructions).toBe("Does `items[0].cited_code` show `items[0].claim`?");
+    }
+    expect(c.requests.map((r) => (r.state as { items: unknown[] }).items[0])).toEqual(FINDINGS);
+    // answers fold back to the right items
+    const kept = res.outputs!["kept"] as Array<Record<string, unknown>>;
+    expect(kept.map((k) => k["claim"])).toEqual(["off by one", "null deref"]);
+    // cost and tokens are the sum over chunks; one cost.recorded per chunk
+    expect(res.inputTokens).toBe(2700);
+    expect(res.costUsd).toBeCloseTo(3 * 900 * JUDGE_USD_PER_INPUT_TOKEN, 12);
+    expect(c.events.filter((e) => e.type === "cost.recorded")).toHaveLength(3);
+    const msg = c.messages[0] as JudgeNodeMessage;
+    expect(msg.forEach).toEqual({ count: 3, chunks: 3, kept: [0, 2] });
+    expect(c.events.find((e) => e.type === "judge.requested")!.payload["chunks"]).toBe(3);
+  });
+
+  test("an item that cannot fit a request on its own is a routable fail", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      questions: { holds: HOLDS },
+      // shared state + one question fit; any item + a question does not
+      requestTokenBudget: 100 / 2.2,
+      stateTokenBudget: 100 / 2.2,
+    });
+    const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
+    if (res.kind !== "transition") throw new Error(res.kind);
+    expect(res.outcomeStatus).toBe("fail");
+    expect(res.failureReason).toMatch(/item 0 does not fit/);
+    expect(c.requests).toHaveLength(0);
   });
 
   test("an empty list is a free success with empty outputs", async () => {
@@ -170,7 +227,7 @@ describe("judge handler — for-each", () => {
       nodeId: "j",
       forEach: "${{ outputs.read.findings }}",
       questions: { holds: HOLDS },
-      keep: { questions: ["holds"], min: 0.6 },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
     });
     const res = await h.handler(ctxWith(c, { read: { findings: [] } }, stubJudge(perItem, c)));
     if (res.kind !== "transition") throw new Error(res.kind);
@@ -209,7 +266,7 @@ describe("judge handler — for-each", () => {
       nodeId: "j",
       forEach: "${{ outputs.read.paths }}",
       questions: { holds: HOLDS },
-      keep: { questions: ["holds"], min: 0.5 },
+      keep: { rules: [{ question: "holds", min: 0.5 }] },
     });
     const res = await h.handler(
       ctxWith(
