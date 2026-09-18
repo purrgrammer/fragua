@@ -856,6 +856,48 @@ Two quick-tier runs on merged PR #90 (both routed `quick` at 0.66) exercised
 the resolve script end to end: `diff_spec` came back as the PR's own range and
 both reviews landed at signoff for $0.26.
 
+## 8.5 The idiomatic pass — what the docs changed after the evidence
+
+A full read of the TypeSafe documentation against what shipped. Kept: code
+owns control flow, atomic questions, speculative fan-out, confidence-gated
+routing, second requests only on a real dependency. Changed:
+
+- **Every gate noul carries `true` / `false` criteria.** The docs reach for
+  them when the yes / no boundary is subtle; ours all were, and the three
+  phrasing rounds on the `pr_review` bar (§8.4) were what "subtle boundary,
+  no criteria" looks like.
+- **No compound questions.** `holds` asked "present and not refuted" in one
+  breath — a conjunction with a negation, both of which Jev reads literally.
+  It is now `present` (min 0.6) and `refuted` (max 0.4), each a positive
+  question with its own bound.
+- **An injection guard on every lens.** State is data and the model does not
+  treat it as hostile; a PR author controls the code and comments the lenses
+  read. `injected` (max 0.3) asks whether the evidence contains text addressed
+  to a reviewer or a model — the RAG-passages cookbook's "instructs the
+  model?" noul.
+- **Per-question thresholds** (§3.4): thresholds scale with risk, so a hazard
+  gates with `max` and a claim with `min`, in one mapping.
+- **Structured `what` / `not_for` / `examples` on the confusable routers**
+  (`classify`, `scope`, `triage`, `verdict`) — the docs' remedy when two
+  options keep splitting probability, which is what `scope` did on docs-heavy
+  PRs.
+- **`score`, not argmax.** The synthesiser's contest rule now compares the
+  judge's probability-weighted `score` to the scanner's level index; the
+  score page is explicit that the argmax is the least informative reading.
+- **The composite diagnostics are gone.** `passes` ("does the review pass ALL
+  of…") was kept as a diagnostic after it drifted to 0.5; the docs say not to
+  ask it at all.
+- **Chunked `for-each`** (§3.7): the real budgets are 64k tokens for state
+  plus questions and 32k for state plus the longest question, not a byte cap
+  on state alone.
+
+**Not changed, on purpose.** The canonical workflows keep `model: jev-latest`.
+The docs' condition for pinning a versioned id is thresholds tuned against
+that version; ours are still first-cut defaults, and every fact records the
+resolved model id, so a later pin can be made against measured behaviour.
+Composite scoring (weighted sums of normalised scores) stays outside the DSL;
+a workflow that needs it composes in a `tool` step.
+
 ## 9. Doors — deferred, sound
 
 - **Thread-as-state.** `${{ thread.<id>.last }}` / `.all` tokens exposing a

@@ -61,7 +61,9 @@ guarantee.
   is now scan → read → judge: the read step opens the cited code and records the
   evidence without a verdict, a `for-each` judge asks whether the finding holds
   and how severe it is (pr_review also: is it concrete, is it in changed code),
-  and `keep` drops what falls under 0.6. `synthesize` receives the kept findings
+  and `keep` drops what falls under 0.6; every gate noul carries true / false
+  criteria, an injection guard drops evidence that addresses the reviewer, and
+  the routers' options carry what / not-for / examples. `synthesize` receives the kept findings
   with the judge's probabilities and applies stated thresholds for weak evidence
   and contested severity.
 

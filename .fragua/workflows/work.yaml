@@ -66,10 +66,22 @@ steps:
         instructions: |
           Classify `task` for the work pipeline, using `packages` and `codebase_map` to judge how many packages and which shared contracts it touches. The statement is a WORK ORDER, not a hypothesis: its claims are the implementer's to verify. Docs/test/CI-only changes are `small` regardless of how many files they touch.
         criteria:
-          small:   ≤3 packages, no shared-contract changes (public APIs, persisted schemas, cross-package boundaries), ≤500 non-test lines
-          feature: multi-package OR shared contracts OR proposal-backed
-          bugfix:  a reported defect to reproduce, then fix
-          blocked: not a workable software task — empty, illegible, off-topic, ambiguous, or already shipped
+          small:
+            what: a change within at most 3 packages that touches no shared contract (public API, persisted schema, cross-package boundary) and stays under ~500 non-test lines; docs / test / CI-only changes always
+            not_for: a reported defect (that is bugfix); anything that changes a contract, however few lines
+            examples: ["add a --json flag to one CLI verb", "fix a typo in a prompt", "add a unit test for X"]
+          feature:
+            what: spans several packages, changes a shared contract, or is backed by a proposal document
+            not_for: a single-package change with no contract impact; a reproducible defect
+            examples: ["new step type across parser, validator, handler", "schema migration", "implement proposal Y"]
+          bugfix:
+            what: a specific defect with an observed wrong behaviour to reproduce first, then fix
+            not_for: a request for new behaviour phrased as a complaint; a refactor
+            examples: ["runs tail never settles on legacy runs", "cost popover rows don't add up"]
+          blocked:
+            what: not a workable software task — empty, illegible, off-topic, too ambiguous to start, or already shipped
+            not_for: a terse but clear task; a task whose claims the implementer can verify
+            examples: ["", "asdf", "make fragua faster"]
     decide:
       route: {question: scope, min-confidence: 0.6, below: feature}   # torn between tiers → the deeper one
     routes:
