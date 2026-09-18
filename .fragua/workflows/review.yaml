@@ -305,7 +305,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.3}}
+    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.5}}
     next: synthesize
 
   # ── Lens 2: integration — what does the change break AROUND it? (deep scan)
@@ -389,7 +389,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.3}}
+    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.5}}
     next: synthesize
 
   # ── Lens 3: security — only where the change touches a trust boundary
@@ -469,7 +469,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.3}}
+    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.5}}
     next: synthesize
 
   # ── Lens 4: performance & resource retention — only where the change has the surface
@@ -549,7 +549,7 @@ steps:
           - "medium — a real, contained issue worth fixing before merge; wrong output or a missed edge on a reachable path"
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
-    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.3}}
+    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.5}}
     next: synthesize
 
   # ── Lens 5: quality — reuse, simplification, altitude (deep scan; the
@@ -633,7 +633,7 @@ steps:
           - "low — real but small: a local simplification or a missing minor test; cheap to leave"
           - "medium — duplication of an existing helper, a fix at the wrong depth, or a behaviour change with no test pinning it; worth doing before merge"
           - "high — the change is structurally wrong for the codebase (bypasses the mechanism that owns this, or leaves a load-bearing invariant untested); should not land as-is"
-    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.3}}
+    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.5}}
     next: synthesize
 
   # ── Lens 6: coherence — tests, docs, and repo conventions
@@ -716,7 +716,7 @@ steps:
           - "low — real but small: a local simplification or a missing minor test; cheap to leave"
           - "medium — duplication of an existing helper, a fix at the wrong depth, or a behaviour change with no test pinning it; worth doing before merge"
           - "high — the change is structurally wrong for the codebase (bypasses the mechanism that owns this, or leaves a load-bearing invariant untested); should not land as-is"
-    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.3}}
+    keep: {present: 0.6, refuted: {max: 0.4}, injected: {max: 0.5}}
     next: synthesize
 
   synthesize:                          # reconcile the six VERIFIED lens results → write review.md
@@ -735,7 +735,7 @@ steps:
         quality:     ${{ outputs.quality_judge.kept }}
         coherence:   ${{ outputs.coherence_judge.kept }}
 
-      Each item survived its lens judge (`present` ≥ 0.6, `refuted` ≤ 0.4, `injected` ≤ 0.3; one System One call per lens). It carries the scanner's `severity`, the code it cites (`cited_code`, `evidence`), and the judge's numbers: `judge.present.noul` — p(the code shows the problem); `judge.refuted.noul` — p(the evidence already handles it); `judge.severity.score` — the judge's position on the lens rubric, a probability-weighted mean where 0 is the first level and each further level adds 1, ascending (0 low, 1 medium, 2 high, 3 critical; quality / coherence lenses: 0 low, 1 medium, 2 high); `judge.severity.confidence` and `.probabilities`. Use them as signals, not verdicts: `present.noul` < 0.75 or `refuted.noul` > 0.25 is WEAK evidence — keep the item only with `(weak evidence: 0.NN)` on the claim, or demote it to Follow-ups. A severity is CONTESTED when `severity.score` is a full level or more from the scanner's level index (count the scanner's `severity` on the same ascending rubric), or `severity.confidence` < 0.5 — re-read the cited code, decide yourself, and append `(severity contested: judge score <score> at <confidence>)`. The judge ranks findings well; read the score, never the argmax alone; your reading of the whole change sets the final severity.
+      Each item survived its lens judge (`present` ≥ 0.6, `refuted` ≤ 0.4, `injected` ≤ 0.5; one System One call per lens). It carries the scanner's `severity`, the code it cites (`cited_code`, `evidence`), and the judge's numbers: `judge.present.noul` — p(the code shows the problem); `judge.refuted.noul` — p(the evidence already handles it); `judge.severity.score` — the judge's position on the lens rubric, a probability-weighted mean where 0 is the first level and each further level adds 1, ascending (0 low, 1 medium, 2 high, 3 critical; quality / coherence lenses: 0 low, 1 medium, 2 high); `judge.severity.confidence` and `.probabilities`. Use them as signals, not verdicts: `present.noul` < 0.75 or `refuted.noul` > 0.25 is WEAK evidence — keep the item only with `(weak evidence: 0.NN)` on the claim, or demote it to Follow-ups. A severity is CONTESTED when `severity.score` is a full level or more from the scanner's level index (count the scanner's `severity` on the same ascending rubric), or `severity.confidence` < 0.5 — re-read the cited code, decide yourself, and append `(severity contested: judge score <score> at <confidence>)`. The judge ranks findings well; read the score, never the argmax alone; your reading of the whole change sets the final severity.
 
       Merge: a concern surfaced by two lenses is ONE entry at the higher severity, noted `(cross-flagged)`. Re-calibrate severity across the merged set — you see the whole change; the lenses each saw a slice. Where a quality finding and a defect share a root cause, say so (the fix that resolves both leads).
 

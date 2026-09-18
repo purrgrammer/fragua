@@ -292,7 +292,7 @@ decide:
   outcome:
     calibrated: 0.6                 # <id>: <min> — p(yes) must reach 0.6
     schema_ok:  {min: 0.6}          # the same, spelled out
-    injected:   {max: 0.3}          # a hazard: p(yes) must stay under 0.3
+    injected:   {max: 0.5}          # a hazard: p(yes) must stay under 0.5 — a noul leaning yes
 ```
 
 - A mapping of noul id → threshold: a bare number is a `min`; a mapping takes
@@ -415,7 +415,7 @@ correctness_judge:
 - **`keep`.** The same threshold grammar as `decide.outcome` (§3.4): a mapping
   of noul id → `<min>` or `{min?, max?}`, all-of per item; E049 if a question
   is not a declared `noul`. `keep: {present: 0.6, refuted: {max: 0.4},
-  injected: {max: 0.3}}` reads as the policy it is. **`decide:` is not allowed with
+  injected: {max: 0.5}}` reads as the policy it is. **`decide:` is not allowed with
   `for-each`** (E049): a run-level decision over a list is a second judge, or
   the consumer's threshold.
 - **Validator.** `for-each` must be an `${{ outputs.X.f }}` reference that
@@ -872,7 +872,7 @@ routing, second requests only on a real dependency. Changed:
   question with its own bound.
 - **An injection guard on every lens.** State is data and the model does not
   treat it as hostile; a PR author controls the code and comments the lenses
-  read. `injected` (max 0.3) asks whether the evidence contains text addressed
+  read. `injected` (max 0.5) asks whether the evidence contains text addressed
   to a reviewer or a model — the RAG-passages cookbook's "instructs the
   model?" noul.
 - **Per-question thresholds** (§3.4): thresholds scale with risk, so a hazard
@@ -896,7 +896,10 @@ kept, 5 dropped; kept `present` 0.62–0.92, the clear drops 0.20–0.31 — the
 criteria pulled the boundary apart (before: kept 0.60–0.94, drops 0.47–0.59,
 a 0.01 gap). `refuted` did the work `holds` had folded in: one quality item
 at `present` 0.87 fell on `refuted` 0.46. `injected` sat at 0.09–0.27 on all
-33 items across both runs — no false positives on real code. `classify`
+33 items across both runs; the drop line is 0.5, where a noul is at least
+leaning yes — a planted directive should score well above it, and real code
+sits a quarter below it. A hazard gate that drops evidence needs a clear
+signal, not a 0.03 margin. `classify`
 went `full` at 0.94 (0.85 with one-line options). Gate first time, $4.76,
 16m 41s. `pr_review`: 6 scan findings, 1 kept (a Medium the earlier runs had
 not surfaced), `refuted` 0.87 dropped a correctness item whose evidence named
